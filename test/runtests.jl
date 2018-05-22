@@ -1,3 +1,3 @@
 using Tracking
 
-include("disciminators.jl")
+include("discriminators.jl")
