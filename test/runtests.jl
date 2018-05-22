@@ -1,3 +1,3 @@
-using Tracking
+using Base.Test, Tracking
 
 include("discriminators.jl")
