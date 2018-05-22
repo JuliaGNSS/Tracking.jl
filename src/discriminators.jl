@@ -7,7 +7,7 @@ late(x) = x[3]
 """
 $(SIGNATURES)
 
-DLL Diskriminator
+DLL discriminator
 Returns the calculated code offset in chips.
 """
 function dll_disc(x)
@@ -20,7 +20,7 @@ end
 """
 $(SIGNATURES)
 
-PLL Diskriminator
+PLL discriminator
 Returns the calculated Phase error in rad.
 """
 function pll_disc(x)
