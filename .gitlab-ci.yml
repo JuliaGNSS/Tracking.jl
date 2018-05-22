@@ -5,7 +5,6 @@ testjob:
     - julia -e 'Pkg.clone(pwd())'
   script:
     - julia -e 'Pkg.test("Tracking", coverage=true)'
-  after_script:
     - julia -e 'Pkg.add("Coverage"); cd(Pkg.dir("Tracking"));
       using Coverage; cl, tl = get_summary(process_folder());
       println("(", cl/tl*100, "%) covered")'
