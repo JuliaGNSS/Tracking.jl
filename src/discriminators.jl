@@ -12,6 +12,6 @@ end
 
 function pll_disc(x)
     p = prompt(x)
-    atan(imag(p), real(p))
+    atan(imag(p) / real(p))
 end
 
