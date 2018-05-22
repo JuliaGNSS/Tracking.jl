@@ -1,5 +1,5 @@
 module Tracking
     export dll_disc, pll_disc
-    include("Discriminators.jl")
+    include("discriminators.jl")
 
 end
