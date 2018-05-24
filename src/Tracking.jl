@@ -1,5 +1,5 @@
 module Tracking
-    using DocStringExtensions
+    using DocStringExtensions, GNSSSignals
 
     export dll_disc, pll_disc
 
