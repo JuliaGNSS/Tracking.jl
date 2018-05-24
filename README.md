@@ -1,7 +1,7 @@
 [![pipeline status](https://git.rwth-aachen.de/nav/Tracking.jl/badges/master/pipeline.svg)](https://git.rwth-aachen.de/nav/Tracking.jl/commits/master)
 [![coverage report](https://git.rwth-aachen.de/nav/Tracking.jl/badges/master/coverage.svg)](https://git.rwth-aachen.de/nav/Tracking.jl/commits/master)
 # Tracking
-Tracks GNSS signals. Currently it only provides dll and pll discriminators.
+Tracks GNSS signals. Currently it only provides DLL and PLL discriminators.
 
 ## Features
 
@@ -21,7 +21,7 @@ Pkg.clone("git@git.rwth-aachen.de:nav/Tracking.jl.git")
 using Tracking
 chip_error = dll_disc(replica_code_phases)
 phase_error = pll_disc(replica_code_phases)
-loop_filter_function = init_3rd_order_loop_filter(bandwidth,Δt)
+loop_filter_function = init_3rd_order_loop_filter(bandwidth, Δt)
 ```
 
 ## Todo
@@ -34,7 +34,7 @@ This is still missing:
 
 ## Nice to have
 
-* Multi Signal (satallite) support
+* Multi Signal (satellite) support
 
 ## License
 
