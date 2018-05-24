@@ -1,3 +1,5 @@
+
+
 function init_PDLL(disc, loop_filter, calc_phase, calc_signal, init_phase, init_freq, Delta_t, sampling_freq)
     phase = calc_phase(init_phase, init_freq, Delta_t, sampling_freq)
     init_replica = calc_signal(init_phase, init_freq, 1:Delta_t, sampling_freq)
@@ -30,6 +32,14 @@ function get_sat_code_phase(t, f_c, φ₀, f_s, code_length)
 end
 
 function init_PLL(init_phase, init_freq, Delta_t, sampling_freq)
+
+    gen_sampled_code, get_code_phase = GNSSSignals.init_gpsl1_codes()
+    sat_prn = 1
+    code = gen_sampled_code(1:4000, 1023, 20, 4e6, sat_prn)
+    code_phase = get_code_phase(4000, 1023, 20, 4e6)
+    carrier = gen_carrier(1:4000, 1e3, 20 * pi / 180, 4e6)
+    carrier_phase = get_carrier_phase(4000, 1e3, 20 * pi / 180, 4e6)
+
     # loop_filter = init_3rd_order_loop_filter(...)
     # disc = PLL_disc(...)
     # calc_phase = calc_carrier_phase
