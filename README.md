@@ -6,6 +6,7 @@ Tracks GNSS signals. Currently it only provides dll and pll discriminators.
 ## Features
 
 * DLL/PLL Discriminators
+* Loop Filters of 1st, 2nd, and 3rd order
 
 ## Getting started
 
@@ -20,13 +21,12 @@ Pkg.clone("git@git.rwth-aachen.de:nav/Tracking.jl.git")
 using Tracking
 chip_error = dll_disc(replica_code_phases)
 phase_error = pll_disc(replica_code_phases)
+loop_filter_function = init_3rd_order_loop_filter(bandwidth,Δt)
 
 
 ## Todo
 
 This is still missing:
-
-* Loop Filter
 * PLL/DLL
 * Tracking Loop
 * Add carrier aiding
