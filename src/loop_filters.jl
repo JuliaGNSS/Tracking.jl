@@ -52,12 +52,12 @@ Takes the noise `bandwidth` and the loop update time `Δt`.
 Calculates the appropriate matrices for an 2nd order loop_filter and hands them to init_loop_filter
 Returns a 2nd order loop_filter function.
 """
-function init_2nd_order_loop_filter(bandwidth,Δt)
-    ω0 = bandwidth *1.89
+function init_2nd_order_loop_filter(bandwidth, Δt)
+    ω0 = bandwidth * 1.89
     F = 1
-    L = Δt*ω0^2
+    L = Δt * ω0^2
     C = 1
-    D = sqrt(2)*ω0
+    D = sqrt(2) * ω0
     init_loop_filter(F, L, C, D)
 end
 
@@ -69,11 +69,11 @@ Takes the noise `bandwidth` and the loop update time `Δt`.
 Calculates the appropriate matrices for an 2nd order loop_filter and hands them to init_loop_filter
 Returns a 2nd order loop_filter function.
 """
-function init_3rd_order_loop_filter(bandwidth,Δt)
-    ω0 = bandwidth*1.2
+function init_3rd_order_loop_filter(bandwidth, Δt)
+    ω0 = bandwidth * 1.2
     F = [1 Δt; 0 1]
-    L = [Δt*1.1*ω0^2; Δt*ω0^3]
+    L = [Δt * 1.1 * ω0^2; Δt * ω0^3]
     C = [1 0]
-    D = [2.4*ω0]
+    D = [2.4 * ω0]
     init_loop_filter(F, L, C, D)
 end
