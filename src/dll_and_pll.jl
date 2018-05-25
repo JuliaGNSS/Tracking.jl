@@ -48,8 +48,8 @@ Returns the updated _locked_loop function, the updated replicated signal `replic
 """
 function _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, Δt, sampling_freq)
     next_loop_filter, freq_update = loop_filter(disc(signal))
-    replica = calc_signal(1:Δt, init_freq + freq_update, phase, sampling_freq)
-    next_phase = calc_phase(Δt, init_freq + freq_update, phase, sampling_freq)
+    replica = calc_signal(1:Δt, init_freq + freq_update[1], phase, sampling_freq)
+    next_phase = calc_phase(Δt, init_freq + freq_update[1], phase, sampling_freq)
     next_signal -> _locked_loop(next_signal, disc, next_loop_filter, calc_phase, calc_signal, next_phase, init_freq, Δt, sampling_freq), replica, phase
 end
 
@@ -63,7 +63,7 @@ Takes several inputs:
   - the initial signal frequency `init_freq`
   - the loop update time intervall`Δt`
   - the signal samlping frequency `sampling_freq`
-  - the signal aquivalent the noise bandwidth `bandwidth`
+  - the signal aquivalent noise bandwidth `bandwidth` for the loop_filter
 
 Calls the initialization of a PLL locked loop with an appropriate discriminator `disc`
 By calling init_locked_loop the following values are returned:
@@ -86,7 +86,7 @@ Takes several inputs:
   - the initial signal frequency `init_freq`
   - the loop update time intervall`Δt`
   - the signal samlping frequency `sampling_freq`
-  - the signal aquivalent the noise bandwidth `bandwidth`
+  - the signal aquivalent noise bandwidth `bandwidth` for the loop_filter
   - the satellite PRN code number `sat_prn`
 
 Uses functions from the GNSSSignals module.
