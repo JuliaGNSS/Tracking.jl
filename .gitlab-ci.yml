@@ -3,6 +3,7 @@ image: julia:0.6
 testjob:
   before_script:
     - julia -e 'Pkg.clone(pwd())'
+    - julia -e 'Pkg.clone("git@git.rwth-aachen.de:nav/GNSSSignals.jl.git")
   script:
     - julia -e 'Pkg.test("Tracking", coverage=true)'
     - julia -e 'Pkg.add("Coverage"); cd(Pkg.dir("Tracking"));
