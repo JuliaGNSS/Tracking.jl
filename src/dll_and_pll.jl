@@ -65,7 +65,7 @@ Call the initialization of a PLL locked loop and return the `locked_loop` functi
   - `init_phase::Float`: the initial signal phase in rad
   - `init_freq::Float`: the initial signal frequency in Hz
   - `Δt::Float`: the loop update time intervall in seconds
-  - `sampling_freq::Float`: the signal samlping frequency in Hz
+  - `sampling_freq::Float`: the signal sampling frequency in Hz
   - `bandwidth::Float`: the signal aquivalent noise bandwidth  for the loop_filter, in Hz
   - `n_samples::Integer`: the amount of chips per carrier or satellite code 
 
@@ -94,7 +94,7 @@ To initialize the locked_loop folling has to b calculated
   - `init_phase::Float` the initial signal phase in rad
   - `init_freq::Float`: the initial signal frequency in Hz
   - `Δt::Float`: the loop update time intervall in seconds
-  - `sampling_freq::Float`: the signal samlping frequency in Hz
+  - `sampling_freq::Float`: the signal sampling frequency in Hz
   - `bandwidth::Float`: the signal aquivalent noise bandwidth  for the loop_filter, in Hz
   - `n_samples::Integer`: the amount of chips per carrier or satellite code 
   - `sat_prn::Integer`:the satellite PRN code number, choose from 1-32
