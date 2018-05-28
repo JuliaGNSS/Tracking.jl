@@ -10,18 +10,19 @@ Takes several inputs to initialize the _locked_loop function:
   - the signal replication function `calc_signal`
   - the initial signal phase `init_phase`
   - the initial signal frequency `init_freq`
-  - the loop update time intervall`Δt`
   - the signal samlping frequency `sampling_freq`
+  - the amount of chips per carrier or satellite code `n_samples`
+
 
 With the provided inputs and functions the replicated signal and the phase are calculated.
 
 Returns a locked_loop function, the replicated signal `init_replica`, and the calculated phase `phase` 
 
 """
-function init_locked_loop(disc, loop_filter, calc_phase, calc_signal, init_phase, init_freq, Δt, sampling_freq)
-    phase = calc_phase(Δt, init_freq, init_phase, sampling_freq)
-    init_replica = calc_signal(1:Δt, init_freq, init_phase, sampling_freq)
-    signal -> _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, Δt, sampling_freq), init_replica, phase 
+function init_locked_loop(disc, loop_filter, calc_phase, calc_signal, init_phase, init_freq, sampling_freq, n_samples )
+    phase = calc_phase(n_samples , init_freq, init_phase, sampling_freq)
+    init_replica = calc_signal(1:n_samples , init_freq, init_phase, sampling_freq)
+    signal -> _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, n_samples ), init_replica, phase 
 end
 
 
@@ -36,8 +37,9 @@ Takes several inputs :
   - the signal replication function `calc_signal`
   - the calculated signal phase `phase`
   - the initial signal frequency `init_freq`
-  - the loop update time intervall`Δt`
   - the signal samlping frequency `sampling_freq`
+  - the amount of chips per carrier or satellite code `n_samples`
+
 
 Updates its own inputs for the next time step:
   - the replication_signal `replica`
@@ -46,11 +48,11 @@ Updates its own inputs for the next time step:
 
 Returns the updated _locked_loop function, the updated replicated signal `replica`, and the new calculated phase `phase` 
 """
-function _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, Δt, sampling_freq)
+function _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, n_samples )
     next_loop_filter, freq_update = loop_filter(disc(signal))
-    replica = calc_signal(1:Δt, init_freq + freq_update[1], phase, sampling_freq)
-    next_phase = calc_phase(Δt, init_freq + freq_update[1], phase, sampling_freq)
-    next_signal -> _locked_loop(next_signal, disc, next_loop_filter, calc_phase, calc_signal, next_phase, init_freq, Δt, sampling_freq), replica, phase
+    replica = calc_signal(1:n_samples , init_freq + freq_update[1], phase, sampling_freq)
+    next_phase = calc_phase(n_samples , init_freq + freq_update[1], phase, sampling_freq)
+    next_signal -> _locked_loop(next_signal, disc, next_loop_filter, calc_phase, calc_signal, next_phase, init_freq, sampling_freq, n_samples ), replica, phase
 end
 
 
@@ -64,6 +66,7 @@ Takes several inputs:
   - the loop update time intervall`Δt`
   - the signal samlping frequency `sampling_freq`
   - the signal aquivalent noise bandwidth `bandwidth` for the loop_filter
+  - the amount of chips per carrier or satellite code `n_samples`
 
 Calls the initialization of a PLL locked loop with an appropriate discriminator `disc`
 By calling init_locked_loop the following values are returned:
@@ -72,8 +75,8 @@ By calling init_locked_loop the following values are returned:
  - the calculated phase `phase` 
 
 """
-function init_PLL(init_phase, init_freq, Δt, sampling_freq, bandwidth) 
-  init_locked_loop(pll_disc, init_3rd_order_loop_filter(bandwidth ,Δt), GNSSSignals.get_carrier_phase, GNSSSignals.gen_carrier, init_phase, init_freq, Δt, sampling_freq)
+function init_PLL(init_phase, init_freq, n_samples, sampling_freq, bandwidth, Δt) 
+  init_locked_loop(pll_disc, init_3rd_order_loop_filter(bandwidth ,Δt), GNSSSignals.get_carrier_phase, GNSSSignals.gen_carrier, init_phase, init_freq, sampling_freq, n_samples )
 end
 
 
@@ -88,6 +91,7 @@ Takes several inputs:
   - the signal samlping frequency `sampling_freq`
   - the signal aquivalent noise bandwidth `bandwidth` for the loop_filter
   - the satellite PRN code number `sat_prn`
+  - the amount of chips per carrier or satellite code `n_samples`
 
 Uses functions from the GNSSSignals module.
 
@@ -104,12 +108,13 @@ By calling init_locked_loop the following values are returned:
  - the calculated phase `phase` 
 
 """
-function init_DLL(init_phase, init_freq, Δt, sampling_freq, bandwidth, sat_prn)
+function init_DLL(init_phase, init_freq, n_samples, sampling_freq, bandwidth, sat_prn, Δt )
   early_prompt_late_phase = [-0.5, 0, 0.5]
   gen_sampled_code, get_code_phase = GNSSSignals.init_gpsl1_codes()
-  code = gen_sampled_code(1:Δt, init_freq, init_phase, sampling_freq, sat_prn)
-  code_phase = get_code_phase(Δt, init_freq, init_phase, sampling_freq)
+  code = gen_sampled_code(1:n_samples, init_freq, init_phase, sampling_freq, sat_prn)
+  code_phase = get_code_phase(n_samples, init_freq, init_phase, sampling_freq)
   calc_signal(t, f, phase, sampling_freq) = map(phase_shift -> GNSSSignals.gen_sat_code(t, f, code_phase + phase_shift, sampling_freq, code), early_prompt_late_phase)
   loop_filter = init_3rd_order_loop_filter(bandwidth ,Δt)
-  init_locked_loop(dll_disc, loop_filter, get_code_phase, calc_signal, init_phase, init_freq, Δt, sampling_freq)
+  init_locked_loop(dll_disc, loop_filter, get_code_phase, calc_signal, init_phase, init_freq, sampling_freq, n_samples)
 end
+
