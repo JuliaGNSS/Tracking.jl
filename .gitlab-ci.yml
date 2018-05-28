@@ -2,6 +2,7 @@ image: julia:0.6
 
 testjob:
   before_script:
+    - apt-get update && apt-get install bzip2
     - 'which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )'
     - eval $(ssh-agent -s)
     - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add - > /dev/null
