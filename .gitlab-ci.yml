@@ -2,15 +2,12 @@ image: julia:0.6
 
 testjob:
   before_script:
-<<<<<<< HEAD
-=======
     - apt-get update && apt-get install bzip2
     - 'which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )'
     - eval $(ssh-agent -s)
     - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add - > /dev/null
     - mkdir -p ~/.ssh
     - chmod 700 ~/.ssh
->>>>>>> 7d4203d... Install bzip2 so that the from GNSSSignals required yeppp module can be installed properly
     - julia -e 'Pkg.clone(pwd())'
     - julia -e 'Pkg.clone("git@git.rwth-aachen.de:nav/GNSSSignals.jl.git")
   script:
