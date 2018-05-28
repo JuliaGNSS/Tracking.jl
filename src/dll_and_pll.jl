@@ -13,14 +13,12 @@ Initialize the 'locked_loop' function, calculate the replicated signal `init_rep
   - `init_freq::Float`: the initial signal frequency in Hz
   - `sampling_freq::Float`: the signal sampling frequency in Hz
   - `num_samples::Integer`: the amount of samples per carrier or satellite code 
-  
-```
 
 """
-function init_locked_loop(disc, loop_filter, calc_phase, calc_signal, init_phase, init_freq, sampling_freq, num_samples )
-    phase = calc_phase(num_samples , init_freq, init_phase, sampling_freq)
-    init_replica = calc_signal(1:num_samples , init_freq, init_phase, sampling_freq)
-    signal -> _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, num_samples ), init_replica, phase 
+function init_locked_loop(disc, loop_filter, calc_phase, calc_signal, init_phase, init_freq, sampling_freq, num_samples)
+    phase = calc_phase(num_samples, init_freq, init_phase, sampling_freq)
+    init_replica = calc_signal(1:num_samples, init_freq, init_phase, sampling_freq)
+    signal -> _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, num_samples), init_replica, phase 
 end
 
 
@@ -41,11 +39,11 @@ Calculate the replication_signal `replica`, the replication signals phase `next_
   - `num_samples::Integer`: the amount of samples per carrier or satellite code 
 
 """
-function _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, num_samples )
+function _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, num_samples)
     next_loop_filter, freq_update = loop_filter(disc(signal))
-    replica = calc_signal(1:num_samples , init_freq + freq_update[1], phase, sampling_freq)
-    next_phase = calc_phase(num_samples , init_freq + freq_update[1], phase, sampling_freq)
-    next_signal -> _locked_loop(next_signal, disc, next_loop_filter, calc_phase, calc_signal, next_phase, init_freq, sampling_freq, num_samples ), replica, phase
+    replica = calc_signal(1:num_samples, init_freq + freq_update[1], phase, sampling_freq)
+    next_phase = calc_phase(num_samples, init_freq + freq_update[1], phase, sampling_freq)
+    next_signal -> _locked_loop(next_signal, disc, next_loop_filter, calc_phase, calc_signal, next_phase, init_freq, sampling_freq, num_samples), replica, phase
 end
 
 
@@ -68,16 +66,15 @@ Call the initialization of a PLL locked loop and return the replicated signal `i
   julia> PLL, sample_code, phase = Tracking.init_PLL(20.0, 50, 4000, 4e6, 18.0, 1e-3)
   julia> next_PLL, next_sampled_carrier, next_phase = PLL(correlator_output)
   ```
+
 """
 function init_PLL(init_phase, init_freq, num_samples, sampling_freq, bandwidth, Δt) 
-  init_locked_loop(pll_disc, init_3rd_order_loop_filter(bandwidth ,Δt), GNSSSignals.get_carrier_phase, GNSSSignals.gen_carrier, init_phase, init_freq, sampling_freq, num_samples )
+  init_locked_loop(pll_disc, init_3rd_order_loop_filter(bandwidth, Δt), GNSSSignals.get_carrier_phase, GNSSSignals.gen_carrier, init_phase, init_freq, sampling_freq, num_samples)
 end
 
 
 """
 $(SIGNATURES)
-
-init_DLL(init_phase, init_freq, num_samples, sampling_freq, bandwidth, sat_prn, Δt )
 
 Initialize a dll_locked_loop function by calculating the needed parameters and return the replicated signal `init_replica`, the calculated phase `phase`, and a dll_locked_loop function which can be used to calculate the consecutive values.
 
@@ -97,13 +94,11 @@ Initialize a dll_locked_loop function by calculating the needed parameters and r
     julia> next_DLL, next_sampled_code, next_phase = DLL(correlator_output);
     ```
 
- 
-
 """
-function init_DLL(init_phase, init_freq, num_samples, sampling_freq, bandwidth,  Δt, sat_prn )
+function init_DLL(init_phase, init_freq, num_samples, sampling_freq, bandwidth,  Δt, sat_prn)
   early_prompt_late_phase = [-0.5, 0, 0.5]
   gen_sampled_code, get_code_phase = GNSSSignals.init_gpsl1_codes()
-  calc_signal(t, f, phase, sampling_freq) = map(phase_shift -> gen_sampled_code(t, f, phase + phase_shift, sampling_freq, sat_prn), early_prompt_late_phase)
+  calc_signal(samples, f, phase, sampling_freq) = map(phase_shift -> gen_sampled_code(samples, f, phase + phase_shift, sampling_freq, sat_prn), early_prompt_late_phase)
   loop_filter = init_3rd_order_loop_filter(bandwidth, Δt)
   init_locked_loop(dll_disc, loop_filter, get_code_phase, calc_signal, init_phase, init_freq, sampling_freq, num_samples)
 end
