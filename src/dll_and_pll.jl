@@ -58,7 +58,7 @@ Call the initialization of a PLL locked loop and return the replicated signal `i
   - `init_phase::Float`: the initial signal phase in rad
   - `init_freq::Float`: the initial signal frequency in Hz
   - `Δt::Float`: the loop update time intervall in seconds
-  - `sampling_freq::Float`: the signal samlping frequency in Hz
+  - `sampling_freq::Float`: the signal sampling frequency in Hz
   - `bandwidth::Float`: the signal aquivalent noise bandwidth  for the loop_filter, in Hz
   - `num_samples::Integer`: the amount of samples per carrier or satellite code 
 
@@ -85,7 +85,7 @@ Initialize a dll_locked_loop function by calculating the needed parameters and r
   - `init_phase::Float` the initial signal phase in rad
   - `init_freq::Float`: the initial signal frequency in Hz
   - `Δt::Float`: the loop update time intervall in seconds
-  - `sampling_freq::Float`: the signal samlping frequency in Hz
+  - `sampling_freq::Float`: the signal sampling frequency in Hz
   - `bandwidth::Float`: the signal aquivalent noise bandwidth  for the loop_filter, in Hz
   - `num_samples::Integer`: the amount of samples per carrier or satellite code 
   - `sat_prn::Integer`:the satellite PRN code number, choose from 1-32
