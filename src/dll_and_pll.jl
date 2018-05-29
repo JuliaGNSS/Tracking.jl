@@ -79,7 +79,7 @@ $(SIGNATURES)
 Initialize a dll_locked_loop function by calculating the needed parameters and return the replicated signal `init_replica`, the calculated phase `phase`, and a dll_locked_loop function which can be used to calculate the consecutive values.
 
 # Arguments
-  - `init_phase::Float` the initial signal phase in rad
+  - `init_phase::Float` the initial signal offset in chip
   - `init_freq::Float`: the initial signal frequency in Hz
   - `Δt::Float`: the loop update time intervall in seconds
   - `sampling_freq::Float`: the signal sampling frequency in Hz
