@@ -11,7 +11,7 @@ end
 @testset "Loop_filter second order" begin
     loop_filter = Tracking.init_2nd_order_loop_filter(2 / 1.89, 2) 
     loop_filter, current_y = loop_filter(1)
-    @test current_y == 2*sqrt(2)
+    @test current_y == 2 * sqrt(2)
     loop_filter, current_y = loop_filter(2)
     @test current_y == 8.0 + 4 * sqrt(2)
     loop_filter, current_y = loop_filter(3)
