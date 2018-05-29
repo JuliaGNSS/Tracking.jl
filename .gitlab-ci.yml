@@ -8,8 +8,8 @@ testjob:
     - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add - > /dev/null
     - mkdir -p ~/.ssh
     - chmod 700 ~/.ssh
-    - julia -e 'Pkg.clone(pwd())'
     - julia -e 'Pkg.clone("git@git.rwth-aachen.de:nav/GNSSSignals.jl.git")
+    - julia -e 'Pkg.clone(pwd())'
   script:
     - julia -e 'Pkg.test("Tracking", coverage=true)'
     - julia -e 'Pkg.add("Coverage"); cd(Pkg.dir("Tracking"));
