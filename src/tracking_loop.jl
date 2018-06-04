@@ -1,7 +1,7 @@
 """
 $(SIGNATURES)
 
-Take multiple antenna signals 'x' and downgrade them by componantwise multiplying of each individual signal with a complex conjugated carrier replication signal 'replica and return the result.
+Take multiple antenna signals 'x' and downgrade them by componantwise multiplying of each individual signal with a complex conjugated carrier replication signal 'replica' and return the result.
 
 """
 function _downconvert(x, replica)
@@ -21,7 +21,7 @@ end
 """
 $(SIGNATURES)
 
-Initialize the tracking_loop by providing initial inputs to create the replicated carrier and satellite PRN code, the PLL, the DLL, and all the therfore needed componants, return a trackin_loop function.AbstractTrees
+Initialize the tracking_loop by providing initial inputs to create the replicated carrier and satellite PRN code, the PLL, the DLL, and all the therfore needed componants; return a trackin_loop function.
 
 # Arguments
 - `init_carrier_phase::Float`: the initial replicated carrier signal phase in rad
