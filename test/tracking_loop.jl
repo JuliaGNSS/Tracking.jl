@@ -20,7 +20,7 @@ end
 @testset "Tracking_loop" begin
     test_signal = cis.(2 * π * 50 / 4e6 * (1:4000) + 1 / 3 * π)
     incoming_signals = [test_signal, test_signal, test_signal, test_signal]
-    tracking_loop = Tracking.init_tracking(Tracking.init_PLL, Tracking.init_DLL, 1/3 * π, 50, 2.0, 1023e3, 1e-3, 4e6, beamform, 4000, 18.0, 1.0, 1)
+    tracking_loop = Tracking.init_tracking(1/3 * π, 50, 2.0, 1023e3, 1e-3, 4e6, beamform, 4000, 18.0, 1.0, 1)
     next_tracking_loop, code_phase, prompt_correlated_signal, prompt_beamformed_signal = tracking_loop(incoming_signals)
     @test code_phase ≈ 2.0
     @test prompt_beamformed_signal == beamform([prompt_correlated_signal,prompt_correlated_signal,prompt_correlated_signal])[2]

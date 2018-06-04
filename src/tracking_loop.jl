@@ -24,8 +24,6 @@ $(SIGNATURES)
 Initialize the tracking_loop by providing initial inputs to create the replicated carrier and satellite PRN code, the PLL, the DLL, and all the therfore needed componants, return a trackin_loop function.AbstractTrees
 
 # Arguments
-- `init_PLL::Function`: a pll_locked_loop initialization function
-- `init_DLL::Function`: a dll_locked_loop initialization function
 - `init_carrier_phase::Float`: the initial replicated carrier signal phase in rad
 - `init_carrier_freq::Float`: the initial replicated carrier signal frequency in Hz
 - `init_carrier_phase::Float`: the initial replicated PRN code offset in chip
@@ -50,7 +48,7 @@ Initialize the tracking_loop by providing initial inputs to create the replicate
     next_tracking_loop, code_phase, prompt_correlated_signal, prompt_beamformed_signal = tracking_loop(incoming_signals)
 ```
     """
-function init_tracking(init_PLL, init_DLL, init_carrier_phase, init_carrier_freq, init_code_phase, init_code_freq, Δt, f_s, beamform, num_samples, pll_disc_bandwidth, dll_disc_bandwidth, sat_prn)
+function init_tracking(init_carrier_phase, init_carrier_freq, init_code_phase, init_code_freq, Δt, f_s, beamform, num_samples, pll_disc_bandwidth, dll_disc_bandwidth, sat_prn)
     PLL, init_carrier_replica = init_PLL(init_carrier_phase, init_carrier_freq, num_samples,  f_s, pll_disc_bandwidth, Δt)
     DLL, init_code_replicas = init_DLL(init_code_phase, init_code_freq, num_samples,  f_s, dll_disc_bandwidth, Δt, sat_prn)
     signals -> _tracking(signals, PLL, DLL, init_carrier_replica, init_code_replicas, beamform)
