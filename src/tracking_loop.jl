@@ -31,7 +31,6 @@ Initialize the tracking_loop by providing initial inputs to create the replicate
 - `Δt::Float`: the loop update time intervall in seconds
 - `f_s::Float`: the signal sampling frequency in Hz
 - `beamform::Function`: a beamforming function to produce a new early_prompt_late tuple from multiple inputs
-- `num_samples::Integer`: the amount of samples per carrier or satellite code 
 - `pll_disc_bandwidth::Float`: the signal aquivalent noise bandwidth  for the PLL discriminator, in Hz
 - `dll_disc_bandwidth::Float`: the signal aquivalent noise bandwidth  for the DLL discriminator, in Hz
 - `sat_prn::Integer`:the satellite PRN code number, choose from 1-32
@@ -48,9 +47,9 @@ Initialize the tracking_loop by providing initial inputs to create the replicate
     next_tracking_loop, code_phase, prompt_correlated_signal, prompt_beamformed_signal = tracking_loop(incoming_signals)
 ```
     """
-function init_tracking(init_carrier_phase, init_carrier_freq, init_code_phase, init_code_freq, Δt, f_s, beamform, num_samples, pll_disc_bandwidth, dll_disc_bandwidth, sat_prn)
-    PLL, init_carrier_replica = init_PLL(init_carrier_phase, init_carrier_freq, num_samples,  f_s, pll_disc_bandwidth, Δt)
-    DLL, init_code_replicas = init_DLL(init_code_phase, init_code_freq, num_samples,  f_s, dll_disc_bandwidth, Δt, sat_prn)
+function init_tracking(init_carrier_phase, init_carrier_freq, init_code_phase, init_code_freq, Δt, f_s, beamform, pll_disc_bandwidth, dll_disc_bandwidth, sat_prn)
+    PLL, init_carrier_replica = init_PLL(init_carrier_phase, init_carrier_freq,  f_s, pll_disc_bandwidth, Δt)
+    DLL, init_code_replicas = init_DLL(init_code_phase, init_code_freq,  f_s, dll_disc_bandwidth, Δt, sat_prn)
     signals -> _tracking(signals, PLL, DLL, init_carrier_replica, init_code_replicas, beamform)
 end
 
