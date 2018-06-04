@@ -1,21 +1,21 @@
 """
 $(SIGNATURES)
 
-Take multiple antenna signals 'x' and downgrade them by componantwise multiplying of each individual signal with a complex conjugated carrier replication signal 'replica' and return the result.
+Take one or multiple antenna signals 'x' and downgrade them by componantwise multiplying with a complex conjugated carrier replication signal 'replica' and return the result.
 
 """
 function _downconvert(x, replica)
-    map(signal -> signal .* conj(replica), x)
+    x .* conj(replica)
 end
 
 """
 $(SIGNATURES)
 
-Take multiple, allready downconverted antenna signals 'x' and multiple replicated satellite codes (e.g. with different chip offsets), return the scalarproduct of each combination.
+Take one or multiple, allready downconverted antenna signals 'x' and an replicated satellite code , return the scalarproduct of each combination.
 
 """
-function _correlate(x, replicas)
-    map(replica -> map(single_antenna_signal -> replica' * single_antenna_signal, x), replicas)
+function _correlate(x, replica)
+    x *  replica
 end
 
 """
@@ -73,9 +73,10 @@ Returns the _tracking function for the next time step together with the the code
 ```
 """
 function _tracking(signals, PLL, DLL, carrier_replica, code_replicas, beamform)
-    downconverted_signals = _downconvert(signals, carrier_replica)
-    correlated_signals = _correlate(downconverted_signals, code_replicas)
-    beamformed_signal = beamform(correlated_signals)
+    downconverted_signals = _downconvert(signals, carrier_replica')
+    correlated_signals = map(replica -> _correlate(downconverted_signals, replica), code_replicas)
+    beamformed_signal = map(x_per_phaseshift -> beamform(x_per_phaseshift), correlated_signals)
+    beamformed_signal = hcat(beamformed_signal...)
     next_PLL, next_carrier_replica = PLL(beamformed_signal)
     next_DLL, next_code_replicas, code_phase = DLL(beamformed_signal)
     next_signal -> _tracking(next_signal, next_PLL, next_DLL, next_carrier_replica, next_code_replicas, beamform), code_phase, prompt(correlated_signals), prompt(beamformed_signal) 
