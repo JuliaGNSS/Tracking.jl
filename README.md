@@ -1,36 +1,42 @@
 [![pipeline status](https://git.rwth-aachen.de/nav/Tracking.jl/badges/master/pipeline.svg)](https://git.rwth-aachen.de/nav/Tracking.jl/commits/master)
 [![coverage report](https://git.rwth-aachen.de/nav/Tracking.jl/badges/master/coverage.svg)](https://git.rwth-aachen.de/nav/Tracking.jl/commits/master)
 # Tracking
-Tracks GNSS signals. Currently it only provides dll and pll discriminators.
+Tracks GNSS signals. Currently it only provides a tracking loop without carrier aiding and without external velocity aiding.
 
 ## Features
 
 * DLL/PLL Discriminators
 * Loop Filters of 1st, 2nd, and 3rd order
+* DLL/PLL loop functions
+* a tracking_loop without carrier aiding and without external velocity aiding
 
 ## Getting started
 
 Install:
 ```julia
+Pkg.clone("git@git.rwth-aachen.de:nav/GNSSSignals.jl.git")
 Pkg.clone("git@git.rwth-aachen.de:nav/Tracking.jl.git")
 ```
 
 ## Usage
 
 ```julia
-using Tracking
-chip_error = dll_disc(replica_code_phases)
-phase_error = pll_disc(replica_code_phases)
-loop_filter_function = init_3rd_order_loop_filter(bandwidth,Δt)
-
+    using Tracking
+    function beamform(x)
+        beamformed_x = map(x_per_phaseshift -> [0.5 0.5 0.5 0.5] * (x_per_phaseshift), x)
+        hcat(beamformed_x...)
+    end
+    test_signal = cis.(2 * π * 10 / 120 * (1:12))
+    incoming_signals = [test_signal, test_signal, test_signal, test_signal]
+    tracking_loop = Tracking.init_tracking(Tracking.init_PLL, Tracking.init_DLL, 0, 50, 0, 1023e3, 1e-3, 4e6, beamform, 12, 18.0, 1.0, 1)
+    next_tracking_loop, code_phase, prompt_correlated_signal, prompt_beamformed_signal = tracking_loop(incoming_signals)
+```
 
 ## Todo
 
 This is still missing:
-* PLL/DLL
-* Tracking Loop
 * Add carrier aiding
-* external velocity aiding
+* Add external velocity aiding
 
 ## Nice to have
 
