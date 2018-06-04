@@ -57,7 +57,7 @@ end
 """
 $(SIGNATURES)
 
-Should be initialized by init_tracking, uses the provided 'PLL','DLL' and 'beamform' function together with the provided antenna 'signals' and the replicated samples/codes 'carrier_replica' and 'code_replicas' to calculate the functions and samples/codes for the next timestep.
+Should be initialized by init_tracking, uses the provided 'PLL', 'DLL' and 'beamform' function together with the provided antenna 'signals' and the replicated samples/codes 'carrier_replica' and 'code_replicas' to calculate the functions and samples/codes for the next timestep.
 Returns the _tracking function for the next time step together with the the code_phase and the prompt of the correlated and beamformed signals.
 
 
