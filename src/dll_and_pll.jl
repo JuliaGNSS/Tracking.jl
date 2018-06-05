@@ -18,7 +18,7 @@ s- `disc::Function`: the DLL or PLL discriminator function
 function init_locked_loop(disc, loop_filter, calc_phase, calc_signal, init_phase, init_freq, sampling_freq, num_samples)
     phase = calc_phase(num_samples, init_freq, init_phase, sampling_freq)
     init_replica = calc_signal(1:num_samples, init_freq, init_phase, sampling_freq)
-    (signal, carrier_aiding = 0) -> _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, num_samples, carrier_aiding), init_replica, phase 
+    (signal, aiding = 0) -> _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, num_samples, aiding), init_replica, phase 
 end
 
 
@@ -37,14 +37,14 @@ Calculate the replication_signal `replica`, the replication signals phase `next_
   - `init_freq::Float`: the initial signal frequency in Hz
   - `sampling_freq::Float`: the signal sampling frequency in Hz
   - `num_samples::Integer`: the amount of samples per carrier or satellite code 
-  - `carrier_aiding`: the carrier_aiding provided by the PLL, 0 if this is the locked_loop of an PLL
+  - `aiding`: the aiding provided by the PLL, 0 if this is the locked_loop of an PLL
 
 """
-function _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, num_samples, carrier_aiding)
+function _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, num_samples, aiding)
     next_loop_filter, freq_update = loop_filter(disc(signal))
-    replica = calc_signal(1:num_samples, init_freq + freq_update + carrier_aiding, phase, sampling_freq)
-    next_phase = calc_phase(num_samples, init_freq + freq_update + carrier_aiding, phase, sampling_freq)
-    (next_signal, next_carrier_aiding = 0) -> _locked_loop(next_signal, disc, next_loop_filter, calc_phase, calc_signal, next_phase, init_freq, sampling_freq, num_samples, next_carrier_aiding), replica, phase
+    replica = calc_signal(1:num_samples, init_freq + freq_update + aiding, phase, sampling_freq)
+    next_phase = calc_phase(num_samples, init_freq + freq_update + aiding, phase, sampling_freq)
+    (next_signal, next_aiding = 0) -> _locked_loop(next_signal, disc, next_loop_filter, calc_phase, calc_signal, next_phase, init_freq, sampling_freq, num_samples, next_aiding), replica, phase
 end
 
 
