@@ -23,10 +23,9 @@ end
     samples_code = GNSSSignals.gen_sat_code(1:4000, 1.023e6, 2.0, 4e6, SATELLITE_1_CODE)
     incoming_signals = [1,1,1,1] .* (test_signal .* samples_code)'
     tracking_loop = Tracking.init_tracking(1/3 * π, 50, 2.0, 1023e3, 1e-3, 4e6, beamform, 18.0, 1.0, 1)
-    next_tracking_loop, code_phase, prompts_correlated_signals, prompt_beamformed_signal = tracking_loop(incoming_signals)
+    next_tracking_loop, code_phase, prompts_correlated_signals = tracking_loop(incoming_signals)
     @test code_phase ≈ 2.0 atol = 0.001
-    @test @inferred(beamform(prompts_correlated_signals))[1] == prompt_beamformed_signal
-    next_tracking_loop, code_phase, prompts_correlated_signals, prompt_beamformed_signal = next_tracking_loop(incoming_signals)
+    next_tracking_loop, code_phase, prompts_correlated_signals = next_tracking_loop(incoming_signals)
     @test code_phase ≈ 2.0 atol=0.003
-    @test @inferred(beamform(prompts_correlated_signals))[1] == prompt_beamformed_signal
+
 end
