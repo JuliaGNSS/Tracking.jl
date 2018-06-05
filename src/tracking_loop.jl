@@ -56,7 +56,7 @@ end
 $(SIGNATURES)
 
 Should be initialized by init_tracking, uses the provided 'PLL', 'DLL' and 'beamform' function together with the provided antenna 'signals' and the replicated samples/codes 'carrier_replica' and 'code_replicas' to calculate the functions and samples/codes for the next timestep.
-Returns the _tracking function for the next time step together with the the code_phase and the prompt of the correlated and beamformed signals.
+Returns the _tracking function for the next time step together with the the code_phase and the prompt of the correlated signals.
 
 """
 function _tracking(signals, PLL, DLL, carrier_replica, code_replicas, beamform)
@@ -66,5 +66,5 @@ function _tracking(signals, PLL, DLL, carrier_replica, code_replicas, beamform)
     beamformed_signal = hcat(map(beamform, correlated_signals)...)
     next_PLL, next_carrier_replica, carrier_phase = PLL(beamformed_signal)
     next_DLL, next_code_replicas, code_phase = DLL(beamformed_signal, carrier_phase * scale_factor)
-    next_signal -> _tracking(next_signal, next_PLL, next_DLL, next_carrier_replica, next_code_replicas, beamform), code_phase, prompt(correlated_signals), prompt(beamformed_signal) 
+    next_signal -> _tracking(next_signal, next_PLL, next_DLL, next_carrier_replica, next_code_replicas, beamform), code_phase, prompt(correlated_signals)
 end
