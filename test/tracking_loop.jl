@@ -2,7 +2,7 @@
 function beamform(x)
 [0.5 0.5 0.5 0.5] * x
 end
-
+scale_factor = 1.023e6/1575.43e6
 
 @testset "correlate" begin
     x = [1im 2im 3im; 4im 5im 6im]
@@ -22,7 +22,7 @@ end
     test_signal = cis.(2 * π * 50 / 4e6 * (1:4000) + 1 / 3 * π)
     samples_code = GNSSSignals.gen_sat_code(1:4000, 1.023e6, 2.0, 4e6, SATELLITE_1_CODE)
     incoming_signals = [1,1,1,1] .* (test_signal .* samples_code)'
-    tracking_loop = Tracking.init_tracking(1/3 * π, 50, 2.0, 1023e3, 1e-3, 4e6, beamform, 18.0, 1.0, 1)
+    tracking_loop = Tracking.init_tracking(1/3 * π, 50, 2.0, 1023e3, 1e-3, 4e6, beamform, 18.0, 1.0, 1, scale_factor)
     next_tracking_loop, code_phase, prompts_correlated_signals = tracking_loop(incoming_signals)
     @test code_phase ≈ 2.0 atol = 0.001
     next_tracking_loop, code_phase, prompts_correlated_signals = next_tracking_loop(incoming_signals)
