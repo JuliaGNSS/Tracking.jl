@@ -60,10 +60,11 @@ Returns the _tracking function for the next time step together with the the code
 
 """
 function _tracking(signals, PLL, DLL, carrier_replica, code_replicas, beamform)
+    scale_factor = 1.023e6/1575.43e6
     downconverted_signals = downconvert(signals, carrier_replica')
     correlated_signals = map(replica -> correlate(downconverted_signals, replica), code_replicas)
     beamformed_signal = hcat(map(beamform, correlated_signals)...)
-    next_PLL, next_carrier_replica = PLL(beamformed_signal)
-    next_DLL, next_code_replicas, code_phase = DLL(beamformed_signal)
+    next_PLL, next_carrier_replica, carrier_phase = PLL(beamformed_signal)
+    next_DLL, next_code_replicas, code_phase = DLL(beamformed_signal, carrier_phase * scale_factor)
     next_signal -> _tracking(next_signal, next_PLL, next_DLL, next_carrier_replica, next_code_replicas, beamform), code_phase, prompt(correlated_signals), prompt(beamformed_signal) 
 end

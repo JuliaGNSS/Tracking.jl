@@ -18,7 +18,7 @@ Initialize the 'locked_loop' function, calculate the replicated signal `init_rep
 function init_locked_loop(disc, loop_filter, calc_phase, calc_signal, init_phase, init_freq, sampling_freq, num_samples)
     phase = calc_phase(num_samples, init_freq, init_phase, sampling_freq)
     init_replica = calc_signal(1:num_samples, init_freq, init_phase, sampling_freq)
-    signal -> _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, num_samples), init_replica, phase 
+    (signal, carrier_aiding = 0) -> _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, num_samples, carrier_aiding), init_replica, phase 
 end
 
 
@@ -39,11 +39,11 @@ Calculate the replication_signal `replica`, the replication signals phase `next_
   - `num_samples::Integer`: the amount of samples per carrier or satellite code 
 
 """
-function _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, num_samples)
+function _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, num_samples, carrier_aiding)
     next_loop_filter, freq_update = loop_filter(disc(signal))
-    replica = calc_signal(1:num_samples, init_freq + freq_update, phase, sampling_freq)
-    next_phase = calc_phase(num_samples, init_freq + freq_update, phase, sampling_freq)
-    next_signal -> _locked_loop(next_signal, disc, next_loop_filter, calc_phase, calc_signal, next_phase, init_freq, sampling_freq, num_samples), replica, phase
+    replica = calc_signal(1:num_samples, init_freq + freq_update + carrier_aiding, phase, sampling_freq)
+    next_phase = calc_phase(num_samples, init_freq + freq_update + carrier_aiding, phase, sampling_freq)
+    (next_signal, next_carrier_aiding = 0) -> _locked_loop(next_signal, disc, next_loop_filter, calc_phase, calc_signal, next_phase, init_freq, sampling_freq, num_samples, next_carrier_aiding), replica, phase
 end
 
 

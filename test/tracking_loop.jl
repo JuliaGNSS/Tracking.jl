@@ -25,11 +25,8 @@ end
     tracking_loop = Tracking.init_tracking(1/3 * π, 50, 2.0, 1023e3, 1e-3, 4e6, beamform, 18.0, 1.0, 1)
     next_tracking_loop, code_phase, prompts_correlated_signals, prompt_beamformed_signal = tracking_loop(incoming_signals)
     @test code_phase ≈ 2.0 atol = 0.001
-
     @test @inferred(beamform(prompts_correlated_signals))[1] == prompt_beamformed_signal
-
     next_tracking_loop, code_phase, prompts_correlated_signals, prompt_beamformed_signal = next_tracking_loop(incoming_signals)
     @test code_phase ≈ 2.0 atol=0.003
-    println(code_phase)
     @test @inferred(beamform(prompts_correlated_signals))[1] == prompt_beamformed_signal
 end
