@@ -65,6 +65,7 @@ function _tracking(signals, PLL, DLL, carrier_replica, code_replicas, beamform, 
     downconverted_signals = downconvert(signals, carrier_replica')
     correlated_signals = map(replica -> correlate(downconverted_signals, replica), code_replicas)
     beamformed_signal = hcat(map(beamform, correlated_signals)...)
+    println(beamformed_signal)
     next_PLL, next_carrier_replica, carrier_phase, carrier_frequency = PLL(beamformed_signal)
     next_DLL, next_code_replicas, code_phase = DLL(beamformed_signal, carrier_frequency * scale_factor)
     next_signal -> _tracking(next_signal, next_PLL, next_DLL, next_carrier_replica, next_code_replicas, beamform, scale_factor), code_phase, prompt(correlated_signals)

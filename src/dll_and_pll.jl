@@ -18,7 +18,7 @@ s- `disc::Function`: the DLL or PLL discriminator function
 function init_locked_loop(disc, loop_filter, calc_phase, calc_signal, init_phase, init_freq, sampling_freq, num_samples)
     phase = calc_phase(num_samples, init_freq, init_phase, sampling_freq)
     init_replica = calc_signal(1:num_samples, init_freq, init_phase, sampling_freq)
-    (signal, aiding = 0) -> _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, num_samples, aiding), init_replica, phase
+    (signal, aiding = 0.0) -> _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, num_samples, aiding), init_replica, phase
 end
 
 
@@ -42,10 +42,10 @@ Calculate the replication_signal `replica`, the replication signals phase `next_
 """
 function _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, num_samples, aiding)
     next_loop_filter, freq_update = loop_filter(disc(signal))
-    next_freq = init_freq + freq_update + aiding
-    replica = calc_signal(1:num_samples, next_freq, phase, sampling_freq)
-    next_phase = calc_phase(num_samples, next_freq, phase, sampling_freq)
-    (next_signal, next_aiding = 0) -> _locked_loop(next_signal, disc, next_loop_filter, calc_phase, calc_signal, next_phase, init_freq, sampling_freq, num_samples, next_aiding), replica, phase, next_freq
+    println("freq_update", freq_update)
+    replica = calc_signal(1:num_samples, init_freq + freq_update + aiding, phase, sampling_freq)
+    next_phase = calc_phase(num_samples, init_freq + freq_update + aiding, phase, sampling_freq)
+    (next_signal, next_aiding = 0.0) -> _locked_loop(next_signal, disc, next_loop_filter, calc_phase, calc_signal, next_phase, init_freq, sampling_freq, num_samples, next_aiding), replica, phase, freq_update
 end
 
 
@@ -97,7 +97,7 @@ Initialize a dll_locked_loop function by calculating the needed parameters and r
 
 """
 function init_DLL(init_phase, init_freq, sampling_freq, bandwidth, Δt, sat_prn)
-  early_prompt_late_phase = [-0.5, 0, 0.5]
+  early_prompt_late_phase = [-0.5, 0.0, 0.5]
   gen_sampled_code, get_code_phase = GNSSSignals.init_gpsl1_codes()
   calc_signal(samples, f, phase, sampling_freq) = map(phase_shift -> gen_sampled_code(samples, f, phase + phase_shift, sampling_freq, sat_prn), early_prompt_late_phase)
   loop_filter = init_2nd_order_loop_filter(bandwidth, Δt)
