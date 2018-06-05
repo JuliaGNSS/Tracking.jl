@@ -23,8 +23,7 @@ Pkg.clone("git@git.rwth-aachen.de:nav/Tracking.jl.git")
 ```julia
     using Tracking
     function beamform(x)
-        beamformed_x = map(x_per_phaseshift -> [0.5 0.5 0.5 0.5] * (x_per_phaseshift), x)
-        hcat(beamformed_x...)
+        [0.5 0.5 0.5 0.5] * x
     end
     test_signal = cis.(2 * π * 10 / 120 * (1:12))
     incoming_signals = [test_signal, test_signal, test_signal, test_signal]

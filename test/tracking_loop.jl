@@ -24,16 +24,12 @@ end
     incoming_signals = [1,1,1,1] .* (test_signal .* samples_code)'
     tracking_loop = Tracking.init_tracking(1/3 * π, 50, 2.0, 1023e3, 1e-3, 4e6, beamform, 18.0, 1.0, 1)
     next_tracking_loop, code_phase, prompts_correlated_signals, prompt_beamformed_signal = tracking_loop(incoming_signals)
-    @test code_phase ≈ 2.0
+    @test code_phase ≈ 2.0 atol = 0.001
+
     @test @inferred(beamform(prompts_correlated_signals))[1] == prompt_beamformed_signal
 
-    compare_beamformed_signal = [-16.0-2.94209e-15im -24.0+5.55112e-17im -8.0+6.16174e-15im]
-    compareDLL, compareReplica, comparePhase = @inferred Tracking.init_DLL(2.0, 1023e3,  4e6, 1.0, 1e-3, 1)
-    next_compareDLL, next_compareReplica, next_comparePhase = @inferred compareDLL(compare_beamformed_signal)
-    next_compare_beamformed_signal = [-11.4127-3.7082im -19.0211-6.18034im -11.4127-3.7082im]
-
     next_tracking_loop, code_phase, prompts_correlated_signals, prompt_beamformed_signal = next_tracking_loop(incoming_signals)
-    @test @inferred(next_compareDLL(next_compare_beamformed_signal))[3] ≈ code_phase
+    @test code_phase ≈ 2.0 atol=0.003
     println(code_phase)
     @test @inferred(beamform(prompts_correlated_signals))[1] == prompt_beamformed_signal
 end

@@ -50,14 +50,14 @@ end
 """
 $(SIGNATURES)
 
-Call the initialization of a PLL locked loop and return the replicated signal `init_replica`,  the calculated phase `phase`, and a pll_locked_loop function which can be used to calculate the consecutive values.
+Call the initialization of a PLL locked loop and return the replicated signal `init_replica`, the calculated phase `phase`, and a pll_locked_loop function which can be used to calculate the consecutive values.
 
 # Arguments
   - `init_phase::Float`: the initial signal phase in rad
   - `init_freq::Float`: the initial signal frequency in Hz
   - `Δt::Float`: the loop update time intervall in seconds
   - `sampling_freq::Float`: the signal sampling frequency in Hz
-  - `bandwidth::Float`: the signal aquivalent noise bandwidth  for the loop_filter, in Hz
+  - `bandwidth::Float`: the signal aquivalent noise bandwidth for the loop_filter, in Hz
 
   # Examples
   ```julia-repl
@@ -83,7 +83,7 @@ Initialize a dll_locked_loop function by calculating the needed parameters and r
   - `init_freq::Float`: the initial signal frequency in Hz
   - `Δt::Float`: the loop update time intervall in seconds
   - `sampling_freq::Float`: the signal sampling frequency in Hz
-  - `bandwidth::Float`: the signal aquivalent noise bandwidth  for the loop_filter, in Hz
+  - `bandwidth::Float`: the signal aquivalent noise bandwidth for the loop_filter, in Hz
   - `sat_prn::Integer`:the satellite PRN code number, choose from 1-32
 
   # Examples
@@ -94,7 +94,7 @@ Initialize a dll_locked_loop function by calculating the needed parameters and r
     ```
 
 """
-function init_DLL(init_phase, init_freq, sampling_freq, bandwidth,  Δt, sat_prn)
+function init_DLL(init_phase, init_freq, sampling_freq, bandwidth, Δt, sat_prn)
   early_prompt_late_phase = [-0.5, 0, 0.5]
   gen_sampled_code, get_code_phase = GNSSSignals.init_gpsl1_codes()
   calc_signal(samples, f, phase, sampling_freq) = map(phase_shift -> gen_sampled_code(samples, f, phase + phase_shift, sampling_freq, sat_prn), early_prompt_late_phase)
