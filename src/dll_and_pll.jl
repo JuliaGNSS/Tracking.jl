@@ -5,7 +5,7 @@ $(SIGNATURES)
 Initialize the 'locked_loop' function, calculate the replicated signal `init_replica`and its 'phase' and return the function and both values.
 
 # Arguments
-  - `disc::Function`: the DLL or PLL discriminator function 
+s- `disc::Function`: the DLL or PLL discriminator function 
   - `loop_filter::Function`: the loop filter function of 1st, 2nd or 3rd order 
   - `calc_phase::Function`: the phase calculation function 
   - `calc_signal::Function`: the signal replication function 
@@ -37,6 +37,7 @@ Calculate the replication_signal `replica`, the replication signals phase `next_
   - `init_freq::Float`: the initial signal frequency in Hz
   - `sampling_freq::Float`: the signal sampling frequency in Hz
   - `num_samples::Integer`: the amount of samples per carrier or satellite code 
+  - `carrier_aiding`: the carrier_aiding provided by the PLL, 0 if this is the locked_loop of an PLL
 
 """
 function _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, num_samples, carrier_aiding)

@@ -8,7 +8,7 @@ Tracks GNSS signals. Currently it only provides a tracking loop without carrier 
 * DLL/PLL Discriminators
 * Loop Filters of 1st, 2nd, and 3rd order
 * DLL/PLL loop functions
-* a tracking_loop without carrier aiding and without external velocity aiding
+* a tracking_loop with carrier aiding
 
 ## Getting started
 
@@ -34,7 +34,6 @@ Pkg.clone("git@git.rwth-aachen.de:nav/Tracking.jl.git")
 ## Todo
 
 This is still missing:
-* Add carrier aiding
 * Add external velocity aiding
 
 ## Nice to have
