@@ -26,7 +26,7 @@ Pkg.clone("git@git.rwth-aachen.de:nav/Tracking.jl.git")
         [0.5 0.5 0.5 0.5] * x
     end
     scale_factor = 1.023e6/1575.43e6 #for L1 Signal
-    velocity_aiding = 0 #optional
+    velocity_aiding = 0.0 #optional
     test_signal = cis.(2 * π * 10 / 120 * (1:12))
     incoming_signals = [test_signal, test_signal, test_signal, test_signal]
     tracking_loop = Tracking.init_tracking(Tracking.init_PLL, Tracking.init_DLL, 0, 50, 0, 1023e3, 1e-3, 4e6, beamform, 12, 18.0, 1.0, 1, scale_factor)
