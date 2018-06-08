@@ -51,7 +51,7 @@ Initialize the tracking_loop by providing initial inputs to create the replicate
 function init_tracking(init_carrier_phase, init_carrier_freq, init_code_phase, init_code_freq, Δt, f_s, beamform, pll_disc_bandwidth, dll_disc_bandwidth, sat_prn, scale_factor)
     PLL, init_carrier_replica = init_PLL(init_carrier_phase, init_carrier_freq, f_s, pll_disc_bandwidth, Δt)
     DLL, init_code_replicas = init_DLL(init_code_phase, init_code_freq, f_s, dll_disc_bandwidth, Δt, sat_prn)
-    signals -> _tracking(signals, PLL, DLL, init_carrier_replica, init_code_replicas, beamform, scale_factor)
+    (signals, velocity_aiding = 0) -> _tracking(signals, PLL, DLL, init_carrier_replica, init_code_replicas, beamform, scale_factor, velocity_aiding)
 end
 
 """
@@ -61,7 +61,7 @@ Should be initialized by init_tracking, uses the provided 'PLL', 'DLL' and 'beam
 Returns the _tracking function for the next time step together with the the code_phase, the carrier_frequency_update, and the prompt of the correlated signals.
 
 """
-function _tracking(signals, PLL, DLL, carrier_replica, code_replicas, beamform, scale_factor, velocity_aiding = 0)
+function _tracking(signals, PLL, DLL, carrier_replica, code_replicas, beamform, scale_factor, velocity_aiding)
     downconverted_signals = downconvert(signals, carrier_replica')
     correlated_signals = map(replica -> correlate(downconverted_signals, replica), code_replicas)
     println(" \n correlated: ",correlated_signals)
@@ -69,5 +69,5 @@ function _tracking(signals, PLL, DLL, carrier_replica, code_replicas, beamform, 
     println("beamformed: ",beamformed_signal,"  beamformed abs: ",abs(beamformed_signal))
     next_PLL, next_carrier_replica, carrier_phase, carrier_frequency_update = PLL(beamformed_signal, velocity_aiding)
     next_DLL, next_code_replicas, code_phase = DLL(beamformed_signal, carrier_frequency_update * scale_factor)
-    (next_signal, next_velocity_aiding = 0) -> _tracking(next_signal, next_PLL, next_DLL, next_carrier_replica, next_code_replicas, beamform, scale_factor, velocity_aiding), code_phase, prompt(correlated_signals), carrier_frequency_update
+    (next_signal, next_velocity_aiding = 0) -> _tracking(next_signal, next_PLL, next_DLL, next_carrier_replica, next_code_replicas, beamform, scale_factor, next_git velocity_aiding), code_phase, prompt(correlated_signals), carrier_frequency_update
 end
