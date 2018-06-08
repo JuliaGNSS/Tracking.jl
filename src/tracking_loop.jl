@@ -61,13 +61,13 @@ Should be initialized by init_tracking, uses the provided 'PLL', 'DLL' and 'beam
 Returns the _tracking function for the next time step together with the the code_phase and the prompt of the correlated signals.
 
 """
-function _tracking(signals, PLL, DLL, carrier_replica, code_replicas, beamform, scale_factor)
+function _tracking(signals, PLL, DLL, carrier_replica, code_replicas, beamform, scale_factor, velocity_aiding = 0)
     downconverted_signals = downconvert(signals, carrier_replica')
     correlated_signals = map(replica -> correlate(downconverted_signals, replica), code_replicas)
     println(" \n correlated: ",correlated_signals)
     beamformed_signal = hcat(map(beamform, correlated_signals)...)
     println("beamformed: ",beamformed_signal,"  beamformed abs: ",abs(beamformed_signal))
-    next_PLL, next_carrier_replica, carrier_phase, carrier_frequency_update = PLL(beamformed_signal)
+    next_PLL, next_carrier_replica, carrier_phase, carrier_frequency_update = PLL(beamformed_signal, velocity_aiding)
     next_DLL, next_code_replicas, code_phase = DLL(beamformed_signal, carrier_frequency_update * scale_factor)
-    next_signal -> _tracking(next_signal, next_PLL, next_DLL, next_carrier_replica, next_code_replicas, beamform, scale_factor), code_phase, prompt(correlated_signals)
+    (next_signal, next_velocity_aiding = 0) -> _tracking(next_signal, next_PLL, next_DLL, next_carrier_replica, next_code_replicas, beamform, scale_factor, velocity_aiding), code_phase, prompt(correlated_signals)
 end
