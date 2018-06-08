@@ -41,7 +41,6 @@ Calculate the replication_signal `replica`, the replication signals phase `next_
 """
 function _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, num_samples, aiding)
     next_loop_filter, freq_update = loop_filter(disc(signal))
-    println("freq_update", freq_update)
     replica = calc_signal(1:num_samples, init_freq + freq_update + aiding, phase, sampling_freq)
     next_phase = calc_phase(num_samples, init_freq + freq_update + aiding, phase, sampling_freq)
     (next_signal, next_aiding = 0.0) -> _locked_loop(next_signal, disc, next_loop_filter, calc_phase, calc_signal, next_phase, init_freq, sampling_freq, num_samples, next_aiding), replica, phase, freq_update

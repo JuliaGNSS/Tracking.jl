@@ -18,9 +18,7 @@ end
     @test phase == get_code_phase(4000, 1023e3, 2, 4e6)
     @test sampled_code[1] == gen_sampled_code(1:4000, 1023e3, 1.5, 4e6, 1)
     next_DLL, next_sampled_code, next_phase, frequency_update = @inferred DLL(correlator_output, 1);
-    println("next_phase", next_phase)
     @test next_sampled_code[3] == gen_sampled_code(1:4000, 1023e3 + 1 + frequency_update, next_phase + 0.5, 4e6, 1)
     @test next_sampled_code[2] == gen_sampled_code(1:4000, 1023e3 + 1 + frequency_update, next_phase, 4e6, 1)
-    println("frequency_update",frequency_update)
     @test frequency_update == 0.0
 end
