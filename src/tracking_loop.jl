@@ -58,7 +58,7 @@ end
 $(SIGNATURES)
 
 Should be initialized by init_tracking, uses the provided 'PLL', 'DLL' and 'beamform' function together with the provided antenna 'signals', the provided 'scale_factor, and the replicated samples/codes 'carrier_replica' and 'code_replicas' to calculate the functions and samples/codes for the next timestep.
-Returns the _tracking function for the next time step together with the the code_phase and the prompt of the correlated signals.
+Returns the _tracking function for the next time step together with the the code_phase, the carrier_frequency_update, and the prompt of the correlated signals.
 
 """
 function _tracking(signals, PLL, DLL, carrier_replica, code_replicas, beamform, scale_factor, velocity_aiding = 0)
@@ -69,5 +69,5 @@ function _tracking(signals, PLL, DLL, carrier_replica, code_replicas, beamform, 
     println("beamformed: ",beamformed_signal,"  beamformed abs: ",abs(beamformed_signal))
     next_PLL, next_carrier_replica, carrier_phase, carrier_frequency_update = PLL(beamformed_signal, velocity_aiding)
     next_DLL, next_code_replicas, code_phase = DLL(beamformed_signal, carrier_frequency_update * scale_factor)
-    (next_signal, next_velocity_aiding = 0) -> _tracking(next_signal, next_PLL, next_DLL, next_carrier_replica, next_code_replicas, beamform, scale_factor, velocity_aiding), code_phase, prompt(correlated_signals)
+    (next_signal, next_velocity_aiding = 0) -> _tracking(next_signal, next_PLL, next_DLL, next_carrier_replica, next_code_replicas, beamform, scale_factor, velocity_aiding), code_phase, prompt(correlated_signals), carrier_frequency_update
 end
