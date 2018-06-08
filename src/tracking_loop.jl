@@ -42,10 +42,11 @@ Initialize the tracking_loop by providing initial inputs to create the replicate
         [0.5 0.5 0.5 0.5] * x
     end
     scale_factor = 1.023e6/1575.43e6
+    velocity_aiding = 0
     test_signal = cis.(2 * π * 10 / 120 * (1:12))
     incoming_signals = [test_signal, test_signal, test_signal, test_signal]
     tracking_loop = Tracking.init_tracking(Tracking.init_PLL, Tracking.init_DLL, 0, 50, 0, 1023e3, 1e-3, 4e6, beamform, 12, 18.0, 1.0, 1, scale_factor)
-    next_tracking_loop, code_phase, prompt_correlated_signal, prompt_beamformed_signal = tracking_loop(incoming_signals)
+    next_tracking_loop, code_phase, prompt_correlated_signal, prompt_beamformed_signal = tracking_loop(incoming_signals, velocity_aiding)
 ```
     """
 function init_tracking(init_carrier_phase, init_carrier_freq, init_code_phase, init_code_freq, Δt, f_s, beamform, pll_disc_bandwidth, dll_disc_bandwidth, sat_prn, scale_factor)
@@ -57,7 +58,7 @@ end
 """
 $(SIGNATURES)
 
-Should be initialized by init_tracking, uses the provided 'PLL', 'DLL' and 'beamform' function together with the provided antenna 'signals', the provided 'scale_factor, and the replicated samples/codes 'carrier_replica' and 'code_replicas' to calculate the functions and samples/codes for the next timestep.
+Should be initialized by init_tracking, uses the provided 'PLL', 'DLL' and 'beamform' function together with the provided antenna 'signals', the provided 'scale_factor, the 'velocity_aiding', and the replicated samples/codes 'carrier_replica' and 'code_replicas' to calculate the functions and samples/codes for the next timestep.
 Returns the _tracking function for the next time step together with the the code_phase, the carrier_frequency_update, and the prompt of the correlated signals.
 
 """
