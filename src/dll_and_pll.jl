@@ -27,7 +27,7 @@ $(SIGNATURES)
 Calculate the replication_signal `replica`, the replication signals phase `next_phase`, and the loop filter function `next_loop_filter` for the next timestep and return them.
 
 # Arguments
-  - `signal::Array{Float,num_samples}`: the replicated signal 
+  - `signal::Array{Float, num_samples}`: the replicated signal 
   - `disc::Function`: the DLL or PLL discriminator function 
   - `loop_filter::Function`: the loop filter function of 1st, 2nd or 3rd order 
   - `calc_phase::Function`: the phase calculation function 
@@ -41,7 +41,6 @@ Calculate the replication_signal `replica`, the replication signals phase `next_
 """
 function _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, num_samples, aiding)
     next_loop_filter, freq_update = loop_filter(disc(signal))
-    println("aiding ", aiding, "feq_update ", freq_update, "init_freq ", init_freq, "num_samples",num_samples, "sampling_freq",sampling_freq)
     replica = calc_signal(1:num_samples, init_freq + freq_update + aiding, phase, sampling_freq)
     next_phase = calc_phase(num_samples, init_freq + freq_update + aiding, phase, sampling_freq)
     (next_signal, next_aiding = 0.0) -> _locked_loop(next_signal, disc, next_loop_filter, calc_phase, calc_signal, next_phase, init_freq, sampling_freq, num_samples, next_aiding), replica, next_phase, freq_update
