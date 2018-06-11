@@ -26,10 +26,10 @@ end
     gen_sampled_code, get_code_phase = @inferred GNSSSignals.init_gpsl1_codes()
     @test sampled_code[2] == gen_sampled_code(1:4000, 1023e3, 2, 4e6, 1)
     @test phase == get_code_phase(4000, 1023e3, 2, 4e6)
-    @test sampled_code[1] == gen_sampled_code(1:4000, 1023e3, 1.5, 4e6, 1)
+    @test sampled_code[1] ≈ gen_sampled_code(-1:3998, 1023e3, 2.0, 4e6, 1)
     next_DLL, next_sampled_code, next_phase, frequency_update = @inferred DLL(correlator_output);
-    @test next_sampled_code[3] == gen_sampled_code(4001:8000, 1023e3 + frequency_update, next_phase + 0.5, 4e6, 1)
-    @test next_sampled_code[2] == gen_sampled_code(4001:8000, 1023e3 + frequency_update, next_phase, 4e6, 1)
+    @test next_sampled_code[3] == gen_sampled_code(3:4002, 1023e3 + frequency_update, next_phase, 4e6, 1)
+    @test next_sampled_code[2] == gen_sampled_code(1:4000, 1023e3 + frequency_update, next_phase, 4e6, 1)
     @test frequency_update == 0.0
 end
 
@@ -40,9 +40,9 @@ end
     next_DLL, next_sampled_code, next_phase, frequency_update = @inferred DLL(correlator_output, 1);
     @test next_phase ≈ mod((1023e3 + frequency_update + 1) / 4e6 * 4000 + 2.0 + 1023 / 2, 1023) - 1023 / 2
     @test next_sampled_code[2] == gen_sampled_code(1:4000, 1023e3 + 1 + frequency_update, phase, 4e6, 1)
-    @test next_sampled_code[3] == gen_sampled_code(1:4000, 1023e3 + 1 + frequency_update, phase + 0.5, 4e6, 1)
+    @test next_sampled_code[3] == gen_sampled_code(3:4002, 1023e3 + 1 + frequency_update, phase, 4e6, 1)
     next_DLL2, next_sampled_code2, next_phase2, frequency_update2 = @inferred next_DLL(correlator_output, 1);
     @test next_phase2 ≈ mod((1023e3 + frequency_update2 + 1) / 4e6 * 8000 + 2.0 + 1023 / 2, 1023) - 1023 / 2
     @test next_sampled_code2[2] == gen_sampled_code(1:4000, 1023e3 + 1 + frequency_update, next_phase, 4e6, 1)
-    @test next_sampled_code2[3] == gen_sampled_code(1:4000, 1023e3 + 1 + frequency_update, next_phase + 0.5, 4e6, 1)
+    @test next_sampled_code2[3] == gen_sampled_code(3:4002, 1023e3 + 1 + frequency_update, next_phase , 4e6, 1)
 end
