@@ -26,10 +26,17 @@ end
     gen_sampled_code, get_code_phase = @inferred GNSSSignals.init_gpsl1_codes()
     @test sampled_code[2] == gen_sampled_code(1:4000, 1023e3, 2, 4e6, 1)
     @test phase == get_code_phase(4000, 1023e3, 2, 4e6)
+<<<<<<< Updated upstream
     @test sampled_code[1] ≈ gen_sampled_code(-1:3998, 1023e3, 2.0, 4e6, 1)
     next_DLL, next_sampled_code, next_phase, frequency_update = @inferred DLL(correlator_output);
     @test next_sampled_code[3] == gen_sampled_code(3:4002, 1023e3 + frequency_update, next_phase, 4e6, 1)
     @test next_sampled_code[2] == gen_sampled_code(1:4000, 1023e3 + frequency_update, next_phase, 4e6, 1)
+=======
+    @test sampled_code[1] == gen_sampled_code(-1:3998, 1023e3, 2.0, 4e6, 1)
+    next_DLL, next_sampled_code, next_phase, frequency_update = @inferred DLL(correlator_output);
+    @test next_sampled_code[3] == gen_sampled_code(4003:8002, 1023e3 + frequency_update, next_phase, 4e6, 1)
+    @test next_sampled_code[2] == gen_sampled_code(4001:8000, 1023e3 + frequency_update, next_phase, 4e6, 1)
+>>>>>>> Stashed changes
     @test frequency_update == 0.0
 end
 

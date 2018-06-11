@@ -98,8 +98,11 @@ function init_DLL(init_phase, init_freq, sampling_freq, bandwidth, Δt, sat_prn)
   early_prompt_late_phase = [-0.5, 0.0, 0.5]
   num_samples = sampling_freq * Δt
   gen_sampled_code, get_code_phase = GNSSSignals.init_gpsl1_codes()
-  calc_signal(samples, f, phase, sampling_freq) = map(sample_shift -> gen_sampled_code(minimum(samples)+sample_shift:maximum(samples)+sample_shift, f, phase, sampling_freq, sat_prn), early_prompt_late_phase .* round(Int, sampling_freq / f))
+  calc_signal(samples, f, phase, sampling_freq) = begin 
+    sample_shifts = round.(Int,early_prompt_late_phase .* sampling_freq / f)
+    sampled_code = gen_sampled_code(minimum(samples) + sample_shifts[1]:maximum(samples) + sample_shifts[3], f, phase, sampling_freq, sat_prn)
+    map(sample_shift -> sampled_code[round(Int, minimum(samples) - sample_shifts[1] + sample_shift):round(Int, maximum(samples) + sample_shifts[3] + sample_shift)], sample_shifts)
+  end
   loop_filter = init_2nd_order_loop_filter(bandwidth, Δt)
   init_locked_loop(dll_disc, loop_filter, get_code_phase, calc_signal, init_phase, init_freq, sampling_freq, num_samples)
 end
-
