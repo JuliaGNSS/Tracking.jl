@@ -80,27 +80,30 @@ Returns the _tracking function for the next time step together with the the code
 
 function _joined_tracking(gpsl1_signal, gpsl5_signal, gpsl1_aiding, gpsl5_aiding, gpsl1_tracking_loop, gpsl5_tracking_loop, l1_beamform, l5_beamform, l1_beamformed_corr_outs, l5_beamformed_corr_outs)
     
-    next_gpsl1_tracking_loop, gpsl1_code_phase, gpsl1_prompts_corr_signal, gpsl1_carrier_freq_update = gpsl1_tracking_loop(gpsl1_signal, gpsl1_aiding)
-    next_gpsl5_tracking_loop, gpsl5_code_phase, gpsl5_prompts_corr_signal, gpsl5_carrier_freq_update = gpsl5_tracking_loop(gpsl5_signal, gpsl5_aiding)
-    append!(l1_beamformed_corr_outs,l1_beamform(gpsl1_prompts_corr_signal))
-    append!(l5_beamformed_corr_outs, l5_beamform(gpsl5_prompts_corr_signal))
     l1_SNR = estimate_C╱N₀(l1_beamformed_corr_outs, length(l1_beamformed_corr_outs))
     l5_SNR = estimate_C╱N₀(l5_beamformed_corr_outs, length(l5_beamformed_corr_outs))
-    internal_gpsl1_aiding = 0
-    internal_gpsl5_aiding = 0
-#=     
+    gpsl1_aiding = 0
+    gpsl5_aiding = 0
+    l1_use_own_loops = 1
+    l5_use_own_loops = 1
+#=     Evaluate use_own_loops for the signals: 1 for yes, 0 for no, give aiding then, and choose order of execution
     if l1_SNR < 10
         if l5_SNR > 10
-            #internal_gpsl1_aiding = gpsl1_carrier_freq_update ToDO
+                gpsl1_aiding = gpsl1_carrier_freq_update ToDO
         else
             #println("both signals lost")
         end
     else
         if l5_SNR < 10
-            #internal_gpsl5_aiding = gpsl5_carrier_freq_update 
+                gpsl5_aiding = gpsl5_carrier_freq_update 
         end
     end  =#
-    (next_gpsl1_signal, next_gpsl5_signal, next_gpsl1_aiding = 0, next_gpsl5_aiding = 0) -> _joined_tracking(next_gpsl1_signal, next_gpsl5_signal, next_gpsl1_aiding + internal_gpsl1_aiding, next_gpsl5_aiding + internal_gpsl5_aiding, next_gpsl1_tracking_loop, next_gpsl5_tracking_loop, l1_beamform, l5_beamform, l1_beamformed_corr_outs, l5_beamformed_corr_outs),
-    gpsl1_code_phase, gpsl1_carrier_freq_update,
-    gpsl5_code_phase, gpsl5_carrier_freq_update
+    next_gpsl1_tracking_loop, gpsl1_code_phase, gpsl1_prompts_corr_signal, gpsl1_carrier_freq_update = gpsl1_tracking_loop(gpsl1_signal, gpsl1_aiding, l1_use_own_loops)
+    next_gpsl5_tracking_loop, gpsl5_code_phase, gpsl5_prompts_corr_signal, gpsl5_carrier_freq_update = gpsl5_tracking_loop(gpsl5_signal, gpsl5_aiding, l5_use_own_loops)
+    append!(l1_beamformed_corr_outs, l1_beamform(gpsl1_prompts_corr_signal))
+    append!(l5_beamformed_corr_outs, l5_beamform(gpsl5_prompts_corr_signal))
+
+    (next_gpsl1_signal, next_gpsl5_signal, next_gpsl1_aiding = 0, next_gpsl5_aiding = 0) -> _joined_tracking(next_gpsl1_signal, next_gpsl5_signal, next_gpsl1_aiding +  gpsl1_aiding, next_gpsl5_aiding + gpsl5_aiding, next_gpsl1_tracking_loop, next_gpsl5_tracking_loop, l1_beamform, l5_beamform, l1_beamformed_corr_outs, l5_beamformed_corr_outs),
+    gpsl1_code_phase, gpsl1_carrier_freq_update, gpsl1_prompts_corr_signal,
+    gpsl5_code_phase, gpsl5_carrier_freq_update, gpsl5_prompts_corr_signal
 end

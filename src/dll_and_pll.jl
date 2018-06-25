@@ -17,7 +17,7 @@ Initialize the 'locked_loop' function, calculate the replicated signal `init_rep
 function init_locked_loop(disc, loop_filter, calc_phase, calc_signal, init_phase, init_freq, sampling_freq, num_samples)
     phase = calc_phase(num_samples, init_freq, init_phase, sampling_freq)
     init_replica = calc_signal(1:num_samples, init_freq, init_phase, sampling_freq)
-    (signal, aiding = 0.0) -> _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, num_samples, aiding), init_replica, phase
+    (signal, aiding = 0.0, use_own_loops = 1) -> _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, num_samples, aiding, use_own_loops), init_replica, phase
 end
 
 
@@ -39,11 +39,11 @@ Calculate the replication_signal `replica`, the replication signals phase `next_
   - `aiding`: the aiding provided by the PLL, 0 if this is the locked_loop of an PLL
 
 """
-function _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, num_samples, aiding)
+function _locked_loop(signal, disc, loop_filter, calc_phase, calc_signal, phase, init_freq, sampling_freq, num_samples, aiding, use_own_loops)
     next_loop_filter, freq_update = loop_filter(disc(signal))
-    replica = calc_signal(1:num_samples, init_freq + freq_update + aiding, phase, sampling_freq)
-    next_phase = calc_phase(num_samples, init_freq + freq_update + aiding, phase, sampling_freq)
-    (next_signal, next_aiding = 0.0) -> _locked_loop(next_signal, disc, next_loop_filter, calc_phase, calc_signal, next_phase, init_freq, sampling_freq, num_samples, next_aiding), replica, next_phase, freq_update
+    replica = calc_signal(1:num_samples, use_own_loops * (init_freq + freq_update) + aiding, phase, sampling_freq)
+    next_phase = calc_phase(num_samples, use_own_loops * (init_freq + freq_update) + aiding, phase, sampling_freq)
+    (next_signal, next_aiding = 0.0, next_use_own_loops = 1) -> _locked_loop(next_signal, disc, next_loop_filter, calc_phase, calc_signal, next_phase, init_freq, sampling_freq, num_samples, next_aiding, next_use_own_loops), replica, next_phase, freq_update
 end
 
 
