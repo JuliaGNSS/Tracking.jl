@@ -49,24 +49,47 @@ Initialize the tracking_loop by providing initial inputs to create the replicate
     next_tracking_loop, code_phase, prompt_correlated_signal, prompt_beamformed_signal = tracking_loop(incoming_signals, velocity_aiding)
 ```
     """
-function init_tracking(init_carrier_phase, init_carrier_freq, init_code_phase, init_code_freq, Δt, f_s, beamform, pll_disc_bandwidth, dll_disc_bandwidth, sat_prn, scale_factor)
-    PLL, init_carrier_replica = init_PLL(init_carrier_phase, init_carrier_freq, f_s, pll_disc_bandwidth, Δt)
-    DLL, init_code_replicas = init_DLL(init_code_phase, init_code_freq, f_s, dll_disc_bandwidth, Δt, sat_prn)
-    (signals, velocity_aiding = 0.0) -> _tracking(signals, PLL, DLL, init_carrier_replica, init_code_replicas, beamform, scale_factor, velocity_aiding)
+function init_tracking(init_carrier_phase, carrier_freq, interm_freq, init_carrier_doppler, init_code_phase, code_freq, sampling_freq, pll_disc_bandwidth, dll_disc_bandwidth, sat_svid, gen_sampled_code, get_code_phase)
+    gen_code_replica = init_code_replica(init_code_phase, sampling_freq, sat_svid, gen_sampled_code, get_code_phase)
+    gen_carrier_replica = init_carrier_replica(init_carrier_phase, sampling_freq)
+    carrier_loop = init_carrier_loop(pll_disc_bandwidth, sampling_freq)
+    code_loop = init_code_loop(dll_disc_bandwidth, sampling_freq)
+    aiding_scale_factor = code_freq / carrier_freq
+    code_doppler = init_carrier_doppler * aiding_scale_factor
+    (signals, beamform, velocity_aiding = 0.0) -> _tracking(signals, beamform, gen_carrier_replica, gen_code_replica, interm_freq + init_carrier_doppler, 0.0, code_freq + code_doppler, 0.0, carrier_loop, code_loop, aiding_scale_factor, velocity_aiding)
 end
 
 """
 $(SIGNATURES)
 
-Should be initialized by init_tracking, uses the provided 'PLL', 'DLL' and 'beamform' function together with the provided antenna 'signals', the provided 'scale_factor, the 'velocity_aiding', and the replicated samples/codes 'carrier_replica' and 'code_replicas' to calculate the functions and samples/codes for the next timestep.
+Should be initialized by init_tracking, uses the provided 'PLL', 'DLL' and 'beamform' function together with the provided antenna 'signals', the provided 'aiding_scale_factor, the 'velocity_aiding', and the replicated samples/codes 'carrier_replica' and 'code_replicas' to calculate the functions and samples/codes for the next timestep.
 Returns the _tracking function for the next time step together with the the code_phase, the carrier_frequency_update, and the prompt of the correlated signals.
 
 """
-function _tracking(signals, PLL, DLL, carrier_replica, code_replicas, beamform, scale_factor, velocity_aiding)
+function _tracking(signals, beamform, gen_carrier_replica, gen_code_replica, init_carrier_freq, carrier_doppler, init_code_freq, code_doppler, carrier_loop, code_loop, aiding_scale_factor, velocity_aiding)
+    num_samples = size(signals, 2)
+    next_gen_carrier_replica, carrier_replica, carrier_phase = gen_carrier_replica(num_samples, init_carrier_freq + carrier_doppler)
+    next_gen_code_replica, code_replicas, code_phase = gen_code_replica(num_samples, init_code_freq + code_doppler)
     downconverted_signals = downconvert(signals, carrier_replica')
     correlated_signals = map(replica -> correlate(downconverted_signals, replica), code_replicas)
     beamformed_signal = hcat(map(beamform, correlated_signals)...)
-    next_PLL, next_carrier_replica, carrier_phase, carrier_frequency_update = PLL(beamformed_signal, velocity_aiding)
-    next_DLL, next_code_replicas, code_phase = DLL(beamformed_signal, carrier_frequency_update * scale_factor)
-    (next_signal, next_velocity_aiding = 0.0) -> _tracking(next_signal, next_PLL, next_DLL, next_carrier_replica, next_code_replicas, beamform, scale_factor, next_velocity_aiding), code_phase, prompt(correlated_signals), carrier_frequency_update
+    next_carrier_loop, carrier_freq_update = carrier_loop(beamformed_signal, num_samples)
+    next_code_loop, code_freq_update = code_loop(beamformed_signal, num_samples)
+    next_carrier_doppler = carrier_freq_update + velocity_aiding
+    next_code_doppler = code_freq_update + next_carrier_doppler * aiding_scale_factor
+    (next_signal, beamform, next_velocity_aiding = 0.0) -> _tracking(next_signal, beamform, next_gen_carrier_replica, next_gen_code_replica, init_carrier_freq, next_carrier_doppler, init_code_freq, next_code_doppler, next_carrier_loop, next_code_loop, aiding_scale_factor, velocity_aiding), code_phase, prompt(correlated_signals), init_carrier_freq + carrier_doppler
+end
+
+function init_carrier_loop(bandwidth, sampling_freq)
+    (correlator_output, num_samples) -> _loop(correlator_output, num_samples, pll_disc, init_3rd_order_loop_filter(bandwidth), sampling_freq)
+end
+
+function init_code_loop(bandwidth, sampling_freq)
+    (correlator_output, num_samples) -> _loop(correlator_output, num_samples, dll_disc, init_2nd_order_loop_filter(bandwidth), sampling_freq)
+end
+
+function _loop(correlator_output, num_samples, disc, loop_filter, sampling_freq)
+    Δt = num_samples / sampling_freq
+    next_loop_filter, freq_update = loop_filter(disc(correlator_output), Δt)
+    (next_correlator_output, next_num_samples) -> _loop(next_correlator_output, next_num_samples, disc, next_loop_filter, sampling_freq), freq_update
 end
