@@ -19,38 +19,25 @@ end
     @test correlated_signals[1] == -4 + 0im
 end
 @testset "Tracking loop" begin
-    carrier = cis.(2 * π * 50 / 4e6 * (1:32000) + 1 / 3 * π)
-    sampled_code = GNSSSignals.gen_sat_code(1:32000, 1.023e6, 2.0, 4e6, SATELLITE_1_CODE) * 10^(-20/20)
+    init_carrier_freq = 50
+    carrier = cis.(2 * π * 60 / 4e6 * (1:32000000) + 1 / 3 * π)
+    sampled_code = GNSSSignals.gen_sat_code(1:32000000, 1.023e6, 2.1, 4e6, SATELLITE_1_CODE)
     incoming_signals = [1, 1, 1, 1] .* (carrier[1:4000] .* sampled_code[1:4000])'
     gen_sampled_code, get_code_phase = init_gpsl1_codes()
-    track = Tracking.init_tracking(1/3 * π, 1575.43e6, 50, 0.0, 2.0, 1.023e6, 4e6, 18.0, 1.0, 1, gen_sampled_code, get_code_phase)
-    next_track, code_phase, prompts_correlated_signals, carrier_freq = track(incoming_signals, beamform)
-    @test code_phase ≈ 2.0 atol = 1e-3
-    @test carrier_freq ≈ 50.0 atol = 1e-13
-    for i = 0:6
+    track = Tracking.init_tracking(1/3 * π, 1575.43e6, init_carrier_freq, 0.0, 2.0, 1.023e6, 4e6, 18.0, 1.0, 1, gen_sampled_code, get_code_phase)
+    next_track, results = track(incoming_signals, beamform)
+    prompts_correlated_signals = results.prompts_correlated_signals
+    println("prompts corr signals", prompts_correlated_signals)
+    for i = 0:300
         incoming_signals = [1, 1, 1, 1] .* (carrier[(4001 + 4000 * i):(8000 + 4000 * i)] .* sampled_code[(4001 + 4000 * i):(8000 + 4000 * i)])'
-        next_track, code_phase, prompts_correlated_signals, carrier_freq = next_track(incoming_signals, beamform)
-        @test code_phase ≈ 2.0 atol = 1e-3
-        @test carrier_freq ≈ 50.0 atol = 1e-13       
+        next_track, results = next_track(incoming_signals, beamform) 
     end
-
-end
-    @testset "Joined TrackingLoop" begin
-    l1_carrier = cis.(2 * π * 50 / 4e6 * (1:32000) + 1 / 3 * π)
-    l5_carrier = cis.(2 * π * 50 / 4e7 * (1:320000) + 1 /3 * π)
-    l1_sampled_code = GNSSSignals.gen_sat_code(1:32000, 1.023e6, 2.0, 4e6, SATELLITE_1_CODE) * 10^(-20/20)
-    l1_sampled_code = GNSSSignals.gen_sat_code(1:32000, 1.023e6, 2.0, 4e6, SATELLITE_1_CODE) * 10^(-20/20)
-
-    incoming_signals = [1, 1, 1, 1] .* (carrier[1:4000] .* sampled_code[1:4000])'
-    gen_sampled_code, get_code_phase = init_gpsl1_codes()
-    track = Tracking.init_tracking(1/3 * π, 1575.43e6, 50, 0.0, 2.0, 1.023e6, 4e6, 18.0, 1.0, 1, gen_sampled_code, get_code_phase)
-    next_track, code_phase, prompts_correlated_signals, carrier_freq = track(incoming_signals, beamform)
-    @test code_phase ≈ 2.0 atol = 1e-3
-    @test carrier_freq ≈ 50.0 atol = 1e-13
-    for i = 0:6
+    for i = 301:600
         incoming_signals = [1, 1, 1, 1] .* (carrier[(4001 + 4000 * i):(8000 + 4000 * i)] .* sampled_code[(4001 + 4000 * i):(8000 + 4000 * i)])'
-        next_track, code_phase, prompts_correlated_signals, carrier_freq = next_track(incoming_signals, beamform)
-        @test code_phase ≈ 2.0 atol = 1e-3
-        @test carrier_freq ≈ 50.0 atol = 1e-13       
-    end 
+        next_track, results = next_track(incoming_signals, beamform)
+
+        @test results.code_phase ≈ 2.1 atol = 0.02
+        @test results.carrier_doppler + init_carrier_freq ≈ 60.0 atol = 0.2  
+    end
+    println("prompts corr signals after 600", prompts_correlated_signals, " carrier freq", results.carrier_doppler + init_carrier_freq, "code_phase", results.code_phase)
 end
