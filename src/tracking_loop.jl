@@ -1,3 +1,11 @@
+struct TrackingResults
+    carrier_doppler::Float64
+    carrier_phase::Float64
+    code_doppler::Float64
+    code_phase::Float64
+    prompts_correlated_signals::Array{Complex{Float64}, 1}
+end
+
 """
 $(SIGNATURES)
 
@@ -69,16 +77,16 @@ Returns the _tracking function for the next time step together with the the code
 function _tracking(signals, beamform, sampling_freq, gen_carrier_replica, gen_code_replica, init_carrier_freq, carrier_doppler, init_code_freq, code_doppler, carrier_loop, code_loop, aiding_scale_factor, velocity_aiding)
     num_samples = size(signals, 2)
     Δt =  num_samples / sampling_freq
-    next_gen_carrier_replica, carrier_replica, carrier_phase = gen_carrier_replica(num_samples, init_carrier_freq - carrier_doppler)
-    next_gen_code_replica, code_replicas, code_phase = gen_code_replica(num_samples, init_code_freq - code_doppler)
+    next_gen_carrier_replica, carrier_replica, next_carrier_phase = gen_carrier_replica(num_samples, init_carrier_freq + carrier_doppler)
+    next_gen_code_replica, code_replicas, next_code_phase = gen_code_replica(num_samples, init_code_freq + code_doppler)
     downconverted_signals = downconvert(signals, carrier_replica')
     correlated_signals = map(replica -> correlate(downconverted_signals, replica), code_replicas)
     beamformed_signal = hcat(map(beamform, correlated_signals)...)
     next_carrier_loop, carrier_freq_update = carrier_loop(beamformed_signal, Δt)
     next_code_loop, code_freq_update = code_loop(beamformed_signal, Δt)
     next_carrier_doppler = carrier_freq_update + velocity_aiding
-    next_code_doppler = code_freq_update - next_carrier_doppler * aiding_scale_factor
-    (next_signal, beamform, next_velocity_aiding = 0.0) -> _tracking(next_signal, beamform, sampling_freq, next_gen_carrier_replica, next_gen_code_replica, init_carrier_freq, next_carrier_doppler, init_code_freq, next_code_doppler, next_carrier_loop, next_code_loop, aiding_scale_factor, velocity_aiding), code_phase, prompt(correlated_signals), init_carrier_freq - carrier_doppler
+    next_code_doppler = code_freq_update + next_carrier_doppler * aiding_scale_factor
+    (next_signal, beamform, next_velocity_aiding = 0.0) -> _tracking(next_signal, beamform, sampling_freq, next_gen_carrier_replica, next_gen_code_replica, init_carrier_freq, next_carrier_doppler, init_code_freq, next_code_doppler, next_carrier_loop, next_code_loop, aiding_scale_factor, velocity_aiding), TrackingResults(next_carrier_doppler, next_carrier_phase, next_code_doppler, next_code_phase, prompt(correlated_signals))
 end
 
 function init_carrier_loop(bandwidth)

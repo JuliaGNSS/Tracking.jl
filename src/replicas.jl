@@ -22,7 +22,7 @@ frequency `freq`.
 function _replica(num_samples, phase, freq, sampling_freq, calc_signal, calc_phase)
     replica = calc_signal(1:num_samples, freq, phase, sampling_freq)
     next_phase = calc_phase(num_samples, freq, phase, sampling_freq)
-    (num_samples, freq) -> _replica(num_samples, next_phase, freq, sampling_freq, calc_signal, calc_phase), replica, phase
+    (num_samples, freq) -> _replica(num_samples, next_phase, freq, sampling_freq, calc_signal, calc_phase), replica, next_phase
 end
 
 """
