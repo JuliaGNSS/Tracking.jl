@@ -21,7 +21,7 @@ end
 @testset "Tracking loop" begin
     doppler = 10
     init_carrier_freq = 50
-    carrier = cis.(2 * π * (50 + doppler) / 4e6 * (1:32000000) + 1 / 3 * π)
+    carrier = cis.(2 * π * (init_carrier_freq + doppler) / 4e6 * (1:32000000) + 1 / 3 * π)
     sampled_code = GNSSSignals.gen_sat_code(1:32000000, 1 / 1540 * doppler + 1.023e6, 2.1, 4e6, SATELLITE_1_CODE)
     incoming_signals = [1, 1, 1, 1] .* (carrier[1:4000] .* sampled_code[1:4000])'
     gen_sampled_code, get_code_phase = init_gpsl1_codes()
