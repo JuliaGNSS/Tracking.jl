@@ -1,65 +1,70 @@
-#For now
-function beamform(x)
-[0.5 0.5 0.5 0.5] * x
-end
-scale_factor = 1.023e6/1575.43e6
-
 @testset "Correlate" begin
-    x = [1im 2im 3im; 4im 5im 6im]
-    replica_signal = [1im 2im 3im]
-    downconverted_signals = @inferred Tracking.downconvert(x, replica_signal)
-    @test downconverted_signals == [1 + 0im 4 + 0im 9 + 0im; 4 + 0im 10 + 0im 18 + 0im]
+    signal = [1,1].' .* SATELLITE_1_CODE[floor.(Int, mod.((1:4000) * 1023e3 / 4e6 + 10,1023) + 1)]
+    replica = SATELLITE_1_CODE[floor.(Int, mod.((1:4000) * 1023e3 / 4e6 + 10,1023) + 1)]
+    @test @inferred(Tracking.correlate(signal, replica)) == [4e3 4e3]
 end
+
 @testset "Downconvert" begin
-    x = [1im 2im 3im; 4im 5im 6im]
-    replica_signal = [1im 2im 3im]
-    downconverted_signals = @inferred Tracking.downconvert(x, replica_signal)
-    replica_codes = [1, 1, -1]
-    correlated_signals = @inferred Tracking.correlate(downconverted_signals, replica_codes)
-    @test correlated_signals[1] == -4 + 0im
+    signal = cis.(2π * 1e6 / 4e6 * (1:10))
+    replica = cis.(2π * 1e6 / 4e6 * (1:10))
+    downconverted_signals = @inferred Tracking.downconvert(signal, replica)
+    @test downconverted_signals ≈ ones(10)
 end
-@testset "Tracking loop" begin
-    doppler = 10
-    init_carrier_freq = 50
-    carrier = cis.(2 * π * (50 + doppler) / 4e6 * (1:32000000) + 1 / 3 * π)
-    sampled_code = GNSSSignals.gen_sat_code(1:32000000, 1 / 1540 * doppler + 1.023e6, 2.1, 4e6, SATELLITE_1_CODE)
-    incoming_signals = [1, 1, 1, 1] .* (carrier[1:4000] .* sampled_code[1:4000])'
+
+@testset "Track L1" begin
+
+    function beamform(x)
+        [0.5 0.5 0.5 0.5] * x
+    end
+
+    center_freq = 1.57542e9
+    code_freq = 1023e3
+    doppler = 1
+    interm_freq = 50
+    carrier_phase = π / 3
+    sample_freq = 4e6
+    code_doppler = doppler * code_freq / center_freq
+    code_phase = 2.0
+
+    run_time = 500e-3
+    integration_time = 1e-3
+    num_integrations = Int(run_time / integration_time)
+    num_samples = Int(run_time * sample_freq)
+    integration_samples = Int(integration_time * sample_freq)
+
+    carrier = cis.(2 * π * (interm_freq + doppler) / sample_freq * (1:num_samples) + carrier_phase)
+    sampled_code = gen_sat_code(1:num_samples, code_doppler + code_freq, code_phase, sample_freq, SATELLITE_1_CODE)
+    signal = carrier .* sampled_code
+
     gen_sampled_code, get_code_phase = init_gpsl1_codes()
-    track = Tracking.init_tracking(1/3 * π, 1575.43e6, init_carrier_freq, 0.0, 2.1, 1.023e6, 4e6, 18.0, 1.0, 1, gen_sampled_code, get_code_phase)
-    next_track, results = track(incoming_signals, beamform)
-    prompts_correlated_signals = results.prompts_correlated_signals
-    println("prompts corr signals", prompts_correlated_signals)
-    code_dopplers = zeros(600)
-    code_phases = zeros(600)
-    calculated_code_phases  = zeros(600)
-    carrier_dopplers = zeros(600)
+    system = GNSSSystem(center_freq, code_freq, sample_freq, gen_sampled_code, get_code_phase)
+    inits = Initials(0.0, carrier_phase, 0.0, code_phase)
+    track = init_tracking(system, inits, interm_freq, sample_freq, 18.0, 1.0, 1)
 
-    for i = 1:300
-        incoming_signals = [1, 1, 1, 1] .* (carrier[(1 + 4000 * i):( 4000 * (i+1))] .* sampled_code[(1 + 4000 * i):(4000 * (i+1))])'
-        next_track, results = next_track(incoming_signals, beamform) 
+    code_dopplers = zeros(num_integrations)
+    code_phases = zeros(num_integrations)
+    calculated_code_phases  = mod.((1:num_integrations) * integration_samples * (code_doppler + code_freq) / sample_freq + code_phase, 1023)
+    carrier_dopplers = zeros(num_integrations)
+
+    results = nothing
+    for i = 1:num_integrations
+        current_signal = [1, 1, 1, 1]' .* signal[integration_samples * (i - 1) + 1:integration_samples * i]# .+ complex.(randn(integration_samples,4), randn(integration_samples,4 )) .* 10^(5/20)
+        track, results = track(current_signal, beamform) 
         code_phases[i] = results.code_phase
-        calculated_code_phases[i] = get_code_phase(4000 * (i + 2), 1 / 1540 * doppler + 1023e3, 2.1, 4e6)
         carrier_dopplers[i] = results.carrier_doppler
         code_dopplers[i] = results.code_doppler
     end
-    for i = 301:600
-        incoming_signals = [1, 1, 1, 1] .* (carrier[(1 + 4000 * i):( 4000 * (i+1))] .* sampled_code[(1 + 4000 * i):(4000 * (i+1))])'
-        next_track, results = next_track(incoming_signals, beamform)
 
-        @test results.code_phase ≈ 2.1 atol = 0.02
-        @test results.carrier_doppler + init_carrier_freq ≈ 60.0 atol = 0.2  
-        code_phases[i] = results.code_phase
-        calculated_code_phases[i] = get_code_phase(4000 * (i + 2), 1 / 1540 * doppler + 1023e3, 2.1, 4e6)
-        carrier_dopplers[i] = results.carrier_doppler
-        code_dopplers[i] = results.code_doppler
-    end
-    println("prompts corr signals after 600", prompts_correlated_signals, " carrier freq", results.carrier_doppler + init_carrier_freq, "code_phase", results.code_phase)
-    figure("Tracking code phases")
-    plot(code_phases, color = "blue")
-    plot(calculated_code_phases, color = "red")
-    figure("Tracking carrier_dopplers")
-    plot(carrier_dopplers)
-    figure("Tracking code dopplers")
-    plot(code_dopplers)
+    @test results.carrier_doppler ≈ doppler atol = 5e-2
+    @test results.code_phase ≈ calculated_code_phases[end] atol = 5e-6
+    @test results.code_doppler ≈ code_doppler atol = 5e-5
+
+    #figure("Tracking code phases")
+    #plot(code_phases, color = "blue")
+    #plot(calculated_code_phases, color = "red")
+    #figure("Tracking carrier_dopplers")
+    #plot(carrier_dopplers)
+    #figure("Tracking code dopplers")
+    #plot(code_dopplers)
 
 end

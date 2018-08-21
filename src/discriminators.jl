@@ -1,8 +1,8 @@
 
 
-early(x) = x[1]
+early(x) = x[3]
 prompt(x) = x[2]
-late(x) = x[3]
+late(x) = x[1]
 
 """
 $(SIGNATURES)
