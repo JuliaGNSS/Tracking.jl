@@ -31,19 +31,15 @@
     
     l1_carrier = cis.(2 * π * (l1_interm_freq + l1_doppler) / l1_sample_freq * (1:l1_num_samples) + l1_carrier_phase)
     l5_carrier = cis.(2 * π * (l5_interm_freq + l5_doppler) / l5_sample_freq * (1:l5_num_samples) + l5_carrier_phase)
-    l1_sampled_code = GNSSSignals.gen_sat_code(1:l1_num_samples, l1_code_doppler + l1_code_freq, l1_code_phase, l1_sample_freq, SATELLITE_1_CODE)
-    l5_sampled_code = GNSSSignals.gen_sat_code(1:l5_num_samples, l5_code_doppler + l5_code_freq, l5_code_phase, l5_sample_freq, L5_SAT1_CODE)
+    l1_sampled_code = gen_code(1:l1_num_samples, l1_code_doppler + l1_code_freq, l1_code_phase, l1_sample_freq, SATELLITE_1_CODE)
+    l5_sampled_code = gen_code(1:l5_num_samples, l5_code_doppler + l5_code_freq, l5_code_phase, l5_sample_freq, L5_SAT1_CODE)
     l1_signal = l1_carrier .* l1_sampled_code
     l5_signal = l5_carrier .* l5_sampled_code
 
-    l1_gen_sampled_code, l1_get_code_phase = GNSSSignals.init_gpsl1_codes()
-    l5_gen_sampled_code, l5_get_code_phase = GNSSSignals.init_gpsl5_codes()
-    l1_system = Tracking.GNSSSystem(l1_center_freq, l1_code_freq, l1_sample_freq, l1_gen_sampled_code, l1_get_code_phase)
-    l5_system = Tracking.GNSSSystem(l5_center_freq, l5_code_freq, l5_sample_freq, l5_gen_sampled_code, l5_get_code_phase)
     l1_results = Tracking.TrackingResults(0, l1_carrier_phase, 0.0, l1_code_phase, [0.0 + 0.0im])
     l5_results = Tracking.TrackingResults(0, l5_carrier_phase, 0.0, l5_code_phase, [0.0 + 0.0im])
 
-    track = Tracking.init_joined_tracking(l1_system, l5_system, l1_results, l5_results, l1_interm_freq, l5_interm_freq, 10.0, 1.0, 1)
+    track = Tracking.init_joined_tracking(GPSL1(), GPSL5(), l1_results, l5_results, l1_sample_freq, l5_sample_freq, l1_interm_freq, l5_interm_freq, 10.0, 1.0, 1)
     
     l1_code_phases = zeros(num_integrations)
     l5_code_phases = zeros(num_integrations)
@@ -70,11 +66,11 @@
     @test joined_results.l1_results.carrier_doppler ≈ l1_doppler atol = 5e-2
     @test joined_results.l5_results.carrier_doppler ≈ l5_doppler atol = 5e-2
     @test joined_results.l1_results.code_phase ≈ l1_calculated_code_phases[end] atol = 5e-6
-    @test joined_results.l5_results.code_phase ≈ l5_calculated_code_phases[end] atol = 5e-6
+    @test joined_results.l5_results.code_phase ≈ l5_calculated_code_phases[end] atol = 5e-5
     @test joined_results.l1_results.code_doppler ≈ l1_code_doppler atol = 5e-5
     @test joined_results.l5_results.code_doppler ≈ l5_code_doppler atol = 5e-4
 
-   #=  figure("L1 code_phases(b) and calculated (r)")
+    #= figure("L1 code_phases(b) and calculated (r)")
     plot(l1_calculated_code_phases, color = "red")
     plot(l1_code_phases, color = "blue")
     figure("L5 code_phases")

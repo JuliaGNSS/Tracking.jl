@@ -29,20 +29,19 @@ end
 $(SIGNATURES)
 
 Initializes the code replica generator based on the initial code phase `init_code_phase`, sampling frequency
-`sampling_freq`, satellite space vehicle ID `svid`, and the two functions `gen_sampled_code` and `get_code_phase`
-to generate the code signal and calculate the next code phase respectively. The code generators could refer to
-any system e.g. L1, L5, etc.
+`sampling_freq`, satellite pseudo random noise number `sat_prn`.
 A function is returned to calculate the replica with `num_samples` number of samples based on the current
 frequency `freq`.
 """
-function init_code_replica(init_freq, init_code_phase, sampling_freq, sat_svid, gen_sampled_code, get_code_phase)
+function init_code_replica(system, init_freq, init_code_phase, sampling_freq, sat_prn)
     early_prompt_late_phase = [-0.5, 0.0, 0.5]
-    calc_signal(samples, freq, phase, sampling_freq) = begin 
+    gen_replica_code(samples, freq, phase, sampling_freq) = begin 
       sample_shifts = round.(Int, early_prompt_late_phase .* sampling_freq / freq)
-      sampled_code = gen_sampled_code(minimum(samples) + sample_shifts[1]:maximum(samples) + sample_shifts[3], freq, phase, sampling_freq, sat_svid)
+      sampled_code = gen_code(system, minimum(samples) + sample_shifts[1]:maximum(samples) + sample_shifts[3], freq, phase, sampling_freq, sat_prn)
       map(sample_shift -> sampled_code[(minimum(samples) - sample_shifts[1] + sample_shift):(maximum(samples) - sample_shifts[1] + sample_shift)], sample_shifts)
     end
-    init_replica(init_freq, init_code_phase, sampling_freq, calc_signal, get_code_phase)
+    calc_replica_phase(sample, freq, phase, sampling_freq) = calc_code_phase(sample, freq, phase, sampling_freq, system.code_length)
+    init_replica(init_freq, init_code_phase, sampling_freq, gen_replica_code, calc_replica_phase)
 end
 
 

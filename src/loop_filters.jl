@@ -7,7 +7,7 @@ to calculate the initial state vector `x` and provide a first loop function
 which takes the discriminator output `δΘ` and returns a new loop function and the system output `y`
 """
 function init_loop_filter(F, L, C, D)
-    x = zeros(length(C))
+    x = zeros(length(C(0)))
     (δΘ, Δt) -> _loop_filter(x, δΘ, Δt, F, L, C, D)
 end
 
@@ -24,7 +24,7 @@ Returns a new loop_filter_function with updated parameters, and the system outpu
 """
 function _loop_filter(x, δΘ, Δt, F, L, C, D)
     next_x = F(Δt) * x + L(Δt) * δΘ
-    y = dot(C, x) + D * δΘ
+    y = dot(C(Δt), x) + D(Δt) * δΘ
     (next_δΘ, next_Δt) -> _loop_filter(next_x, next_δΘ, next_Δt, F, L, C, D), y
 end
 
@@ -39,8 +39,8 @@ function init_1st_order_loop_filter(bandwidth)
     ω0 = bandwidth * 4
     F(Δt) = 0
     L(Δt) = ω0
-    C = [1]
-    D = 0
+    C(Δt) = [1]
+    D(Δt) = 0
     init_loop_filter(F, L, C, D)
 end
 
@@ -52,12 +52,12 @@ Takes the noise `bandwidth` and the loop update time `Δt`.
 Calculates the appropriate matrices for an 2nd order loop_filter and hands them to init_loop_filter
 Returns a 2nd order loop_filter function.
 """
-function init_2nd_order_loop_filter(bandwidth)
+function init_2nd_order_boxcar_loop_filter(bandwidth)
     ω0 = bandwidth * 1.89
     F(Δt) = 1
     L(Δt) = Δt * ω0^2
-    C = [1]
-    D = sqrt(2) * ω0
+    C(Δt) = [1]
+    D(Δt) = sqrt(2) * ω0
     init_loop_filter(F, L, C, D)
 end
 
@@ -69,11 +69,45 @@ Takes the noise `bandwidth` and the loop update time `Δt`.
 Calculates the appropriate matrices for an 2nd order loop_filter and hands them to init_loop_filter
 Returns a 2nd order loop_filter function.
 """
-function init_3rd_order_loop_filter(bandwidth)
+function init_2nd_order_bilinear_loop_filter(bandwidth)
+    ω0 = bandwidth * 1.89
+    F(Δt) = 1
+    L(Δt) = Δt * ω0^2
+    C(Δt) = [1]
+    D(Δt) = sqrt(2) * ω0 + ω0^2 * Δt / 2
+    init_loop_filter(F, L, C, D)
+end
+
+"""
+$(SIGNATURES)
+
+Initialize a 2nd order loop_filter
+Takes the noise `bandwidth` and the loop update time `Δt`.
+Calculates the appropriate matrices for an 2nd order loop_filter and hands them to init_loop_filter
+Returns a 2nd order loop_filter function.
+"""
+function init_3rd_order_boxcar_loop_filter(bandwidth)
     ω0 = bandwidth * 1.2
     F(Δt) = [1 Δt; 0 1]
     L(Δt) = [Δt * 1.1 * ω0^2; Δt * ω0^3]
-    C = [1, 0]
-    D = 2.4 * ω0
+    C(Δt) = [1, 0]
+    D(Δt) = 2.4 * ω0
+    init_loop_filter(F, L, C, D)
+end
+
+"""
+$(SIGNATURES)
+
+Initialize a 2nd order loop_filter
+Takes the noise `bandwidth` and the loop update time `Δt`.
+Calculates the appropriate matrices for an 2nd order loop_filter and hands them to init_loop_filter
+Returns a 2nd order loop_filter function.
+"""
+function init_3rd_order_bilinear_loop_filter(bandwidth)
+    ω0 = bandwidth * 1.2
+    F(Δt) = [1 Δt; 0 1]
+    L(Δt) = [Δt * 1.1 * ω0^2 + ω0^3 * Δt^2 / 2; Δt * ω0^3]
+    C(Δt) = [1, Δt / 2]
+    D(Δt) = 2.4 * ω0 + 1.1 * ω0^2 * Δt / 2 + ω0^3 * Δt^2 / 4
     init_loop_filter(F, L, C, D)
 end

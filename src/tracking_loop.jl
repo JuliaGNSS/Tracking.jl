@@ -24,9 +24,9 @@ $(SIGNATURES)
 Initialize the tracking_loop by providing initial inputs to create the replicated carrier and satellite PRN code, the PLL, the DLL, and all the therfore needed componants; return a trackin_loop function.
 
 """
-function init_tracking(system::GNSSSystem, inits::Initials, interm_freq, sampling_freq, pll_bandwidth, dll_bandwidth, sat_svid)
-    aiding_scale_factor = system.code_f₀ / system.f₀
-    gen_code_replica = init_code_replica(system.code_f₀ + inits.code_doppler, inits.code_phase, sampling_freq, sat_svid, system.gen_sampled_code, system.calc_next_code_phase)
+function init_tracking(system::AbstractGNSSSystem, inits::Initials, interm_freq, sampling_freq, pll_bandwidth, dll_bandwidth, sat_prn)
+    aiding_scale_factor = system.code_freq / system.center_freq
+    gen_code_replica = init_code_replica(system, system.code_freq + inits.code_doppler, inits.code_phase, sampling_freq, sat_prn)
     gen_carrier_replica = init_carrier_replica(interm_freq + inits.carrier_doppler, inits.carrier_phase, sampling_freq)
     carrier_loop = init_carrier_loop(pll_bandwidth)
     code_loop = init_code_loop(dll_bandwidth)
@@ -56,11 +56,11 @@ function _tracking(signals, beamform, sampling_freq, gen_carrier_replica, gen_co
 end
 
 function init_carrier_loop(bandwidth)
-    (correlator_output, Δt) -> _loop(correlator_output, pll_disc, init_2nd_order_loop_filter(bandwidth), Δt)
+    (correlator_output, Δt) -> _loop(correlator_output, pll_disc, init_3rd_order_bilinear_loop_filter(bandwidth), Δt)
 end
 
 function init_code_loop(bandwidth)
-    (correlator_output, Δt) -> _loop(correlator_output, dll_disc, init_2nd_order_loop_filter(bandwidth), Δt)
+    (correlator_output, Δt) -> _loop(correlator_output, dll_disc, init_2nd_order_bilinear_loop_filter(bandwidth), Δt)
 end
 
 function _loop(correlator_output, disc, loop_filter, Δt)

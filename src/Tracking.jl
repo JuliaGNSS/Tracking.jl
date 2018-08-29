@@ -3,7 +3,6 @@ module Tracking
 
     export prompt,
         init_tracking,
-        GNSSSystem,
         Initials
 
     struct TrackingResults
@@ -19,14 +18,6 @@ module Tracking
         carrier_phase::Float64
         code_doppler::Float64
         code_phase::Float64
-    end
-
-    struct GNSSSystem
-        f₀::Float64 # Carrier center frequency
-        code_f₀::Float64 # Code center frequency
-        sampling_freq::Float64
-        gen_sampled_code::Function
-        calc_next_code_phase::Function
     end
     
     struct JoinedTrackingResults

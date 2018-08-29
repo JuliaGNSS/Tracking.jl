@@ -19,7 +19,7 @@ end
 
     center_freq = 1.57542e9
     code_freq = 1023e3
-    doppler = 1
+    doppler = 10
     interm_freq = 50
     carrier_phase = π / 3
     sample_freq = 4e6
@@ -33,13 +33,12 @@ end
     integration_samples = Int(integration_time * sample_freq)
 
     carrier = cis.(2 * π * (interm_freq + doppler) / sample_freq * (1:num_samples) + carrier_phase)
-    sampled_code = gen_sat_code(1:num_samples, code_doppler + code_freq, code_phase, sample_freq, SATELLITE_1_CODE)
+    sampled_code = gen_code(1:num_samples, code_doppler + code_freq, code_phase, sample_freq, SATELLITE_1_CODE)
     signal = carrier .* sampled_code
 
-    gen_sampled_code, get_code_phase = init_gpsl1_codes()
-    system = GNSSSystem(center_freq, code_freq, sample_freq, gen_sampled_code, get_code_phase)
+    gps_l1 = GPSL1()
     inits = Initials(0.0, carrier_phase, 0.0, code_phase)
-    track = init_tracking(system, inits, interm_freq, sample_freq, 18.0, 1.0, 1)
+    track = init_tracking(gps_l1, inits, interm_freq, sample_freq, 18.0, 1.0, 1)
 
     code_dopplers = zeros(num_integrations)
     code_phases = zeros(num_integrations)

@@ -1,16 +1,12 @@
 
-function init_joined_tracking(l1_system::GNSSSystem, l5_system::GNSSSystem, l1_results::TrackingResults, l5_results::TrackingResults, l1_interm_freq, l5_interm_freq, pll_bandwidth, dll_bandwidth, sat_svid)
-    #sampling_freq durch Δt ersetzen und Δt vorher ausrechnen
-    if (l1_system.code_f₀ / l1_system.sampling_freq !== l5_system.code_f₀ / l5_system.sampling_freq)
-        error("The amount of samples per second has to be the same for both systems, adjust sampling_freq according to code frequency")
-    end
-    l1_gen_code_replica = init_code_replica(l1_system.code_f₀ + l1_results.code_doppler, l1_results.code_phase, l1_system.sampling_freq, sat_svid, l1_system.gen_sampled_code, l1_system.calc_next_code_phase)
-    l5_gen_code_replica = init_code_replica(l5_system.code_f₀ + l5_results.code_doppler, l5_results.code_phase, l5_system.sampling_freq, sat_svid, l5_system.gen_sampled_code, l5_system.calc_next_code_phase)
-    l1_gen_carrier_replica = init_carrier_replica(l1_interm_freq + l1_results.carrier_doppler, l1_results.carrier_phase, l1_system.sampling_freq)
-    l5_gen_carrier_replica = init_carrier_replica(l5_interm_freq + l5_results.carrier_doppler, l5_results.carrier_phase, l5_system.sampling_freq)
+function init_joined_tracking(l1_system::GPSL1, l5_system::GPSL5, l1_results::TrackingResults, l5_results::TrackingResults, l1_sampling_freq, l5_sampling_freq, l1_interm_freq, l5_interm_freq, pll_bandwidth, dll_bandwidth, sat_prn)
+    l1_gen_code_replica = init_code_replica(l1_system, l1_system.code_freq + l1_results.code_doppler, l1_results.code_phase, l1_sampling_freq, sat_prn)
+    l5_gen_code_replica = init_code_replica(l5_system, l5_system.code_freq + l5_results.code_doppler, l5_results.code_phase, l5_sampling_freq, sat_prn)
+    l1_gen_carrier_replica = init_carrier_replica(l1_interm_freq + l1_results.carrier_doppler, l1_results.carrier_phase, l1_sampling_freq)
+    l5_gen_carrier_replica = init_carrier_replica(l5_interm_freq + l5_results.carrier_doppler, l5_results.carrier_phase, l5_sampling_freq)
     carrier_loop = init_carrier_loop(pll_bandwidth) # pll
     code_loop = init_code_loop(dll_bandwidth) # dll
-    (l1_signals, l5_signals, beamform, velocity_aiding = 0.0) -> _joined_tracking(l1_signals, l5_signals, beamform, l1_gen_carrier_replica, l5_gen_carrier_replica, l1_gen_code_replica, l5_gen_code_replica, #=carrier_freq_update=# 0.0, #=code_freq_update=# 0.0, carrier_loop, code_loop, #=l1_aiding_scale_factor=# l1_system.code_f₀ / l1_system.f₀, #=l5_aiding_scale_factor=# l5_system.code_f₀ / l5_system.f₀, velocity_aiding, l1_system.sampling_freq)
+    (l1_signals, l5_signals, beamform, velocity_aiding = 0.0) -> _joined_tracking(l1_signals, l5_signals, beamform, l1_gen_carrier_replica, l5_gen_carrier_replica, l1_gen_code_replica, l5_gen_code_replica, #=carrier_freq_update=# 0.0, #=code_freq_update=# 0.0, carrier_loop, code_loop, #=l1_aiding_scale_factor=# l1_system.code_freq / l1_system.center_freq, #=l5_aiding_scale_factor=# l5_system.code_freq / l5_system.center_freq, velocity_aiding, l1_sampling_freq)
 end
 
 #= function init_joined_tracking(systems::Vector{GNSSSystem}, tracking_results::Vector{TrackingResults}, interm_freqs, pll_bandwidth, dll_bandwidth, sat_svid)
@@ -18,7 +14,7 @@ end
     gen_carrier_replicas = map((system, track_results) -> init_carrier_replica(track_results.carrier_phase, system.sampling_freq), systems, tracking_results)
     carrier_loop = init_carrier_loop(pll_bandwidth)
     code_loop = init_code_loop(dll_bandwidth)
-    (l1_signals, l5_signals, beamform, velocity_aiding = 0.0) -> _joined_tracking(l1_signals, l5_signals, beamform, l1_gen_carrier_replica, l5_gen_carrier_replica, l1_gen_code_replica, l5_gen_code_replica, l1_init_carrier_freq + l1_results.carrier_doppler, l5_init_carrier_freq + l5_results.carrier_doppler, l1_system.code_f₀ + l1_results.code_doppler, l5_system.code_f₀ + l5_results.code_doppler, 0.0, 0.0, carrier_loop, code_loop, l1_system.code_f₀ / l1_system.f₀, l5_system.code_f₀ / l5_system.f₀, velocity_aiding, l1_system.sampling_freq)
+    (l1_signals, l5_signals, beamform, velocity_aiding = 0.0) -> _joined_tracking(l1_signals, l5_signals, beamform, l1_gen_carrier_replica, l5_gen_carrier_replica, l1_gen_code_replica, l5_gen_code_replica, l1_init_carrier_freq + l1_results.carrier_doppler, l5_init_carrier_freq + l5_results.carrier_doppler, l1_system.code_freq + l1_results.code_doppler, l5_system.code_freq + l5_results.code_doppler, 0.0, 0.0, carrier_loop, code_loop, l1_system.code_freq / l1_system.center_freq, l5_system.code_freq / l5_system.center_freq, velocity_aiding, l1_sampling_freq)
 end =#
 
 #= function _joined_tracking(signals, systems, beamform, gen_carrier_replicas, gen_code_replicas, init_carrier_freqs, init_code_freqs, carrier_freq_update, code_freq_update, carrier_loop, code_loop, velocity_aidings)
