@@ -1,5 +1,5 @@
 module Tracking
-    using DocStringExtensions, GNSSSignals
+    using DocStringExtensions, GNSSSignals, DataStructures
 
     export prompt,
         init_tracking,
@@ -10,7 +10,7 @@ module Tracking
         carrier_phase::Float64
         code_doppler::Float64
         code_phase::Float64
-        prompts_correlated_signals::Array{Complex{Float64}, 1}
+        prompt::Array{Complex{Float64}, 1}
     end
 
     struct Initials

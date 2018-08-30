@@ -32,11 +32,12 @@ end
     num_samples = Int(run_time * sample_freq)
     integration_samples = Int(integration_time * sample_freq)
 
+    gps_l1 = GPSL1()
+
     carrier = cis.(2 * π * (interm_freq + doppler) / sample_freq * (1:num_samples) + carrier_phase)
-    sampled_code = gen_code(1:num_samples, code_doppler + code_freq, code_phase, sample_freq, SATELLITE_1_CODE)
+    sampled_code = gen_code(gps_l1, 1:num_samples, code_doppler + code_freq, code_phase, sample_freq, 1)
     signal = carrier .* sampled_code
 
-    gps_l1 = GPSL1()
     inits = Initials(0.0, carrier_phase, 0.0, code_phase)
     track = init_tracking(gps_l1, inits, interm_freq, sample_freq, 18.0, 1.0, 1)
 
