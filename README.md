@@ -29,7 +29,7 @@ Pkg.clone("git@git.rwth-aachen.de:nav/Tracking.jl.git")
     end
     inits = Initial(50, pi / 3, 0.0, 200)
     prn = 1
-    track = init_tracking(GPSL1, inits, 1000, 4e6, 18, 1, prn)
+    track = init_tracking(GPSL1(), inits, 1000, 4e6, 18, 1, prn)
     track(signal)
 ```
 
