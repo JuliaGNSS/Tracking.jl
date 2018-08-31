@@ -36,8 +36,8 @@
     l1_signal = l1_carrier .* l1_sampled_code
     l5_signal = l5_carrier .* l5_sampled_code
 
-    l1_results = Tracking.TrackingResults(0, l1_carrier_phase, 0.0, l1_code_phase, [0.0 + 0.0im])
-    l5_results = Tracking.TrackingResults(0, l5_carrier_phase, 0.0, l5_code_phase, [0.0 + 0.0im])
+    l1_results = Tracking.Initials(0, l1_carrier_phase, 0.0, l1_code_phase)
+    l5_results = Tracking.Initials(0, l5_carrier_phase, 0.0, l5_code_phase)
 
     track = Tracking.init_joined_tracking([GPSL1(), GPSL5()], [l1_results, l5_results], [l1_sample_freq, l5_sample_freq], [l1_interm_freq, l5_interm_freq], 10.0, 1.0, 1)
     

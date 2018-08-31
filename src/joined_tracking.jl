@@ -1,31 +1,15 @@
-function init_joined_tracking(systems::Vector{T}, tracking_results::Vector{TrackingResults}, sample_freqs, interm_freqs, pll_bandwidth, dll_bandwidth, sat_prn) where T <: AbstractGNSSSystem
-    gen_code_replicas = map((system, track_result, sample_freq) -> init_code_replica(system, system.code_freq + track_result.code_doppler, track_result.code_phase, sample_freq, sat_prn), systems, tracking_results, sample_freqs)
-    gen_carrier_replicas = map((track_result, interm_freq, sample_freq) -> init_carrier_replica(interm_freq + track_result.carrier_doppler, track_result.carrier_phase, sample_freq), tracking_results, interm_freqs, sample_freqs)
+function init_joined_tracking(systems::Vector{T}, inits::Vector{Initials}, sample_freqs, interm_freqs, pll_bandwidth, dll_bandwidth, sat_prn) where T <: AbstractGNSSSystem
+    gen_code_replicas = map((system, init, sample_freq) -> init_code_replica(system, system.code_freq + init.code_doppler, init.code_phase, sample_freq, sat_prn), systems, inits, sample_freqs)
+    gen_carrier_replicas = map((init, interm_freq, sample_freq) -> init_carrier_replica(interm_freq + init.carrier_doppler, init.carrier_phase, sample_freq), inits, interm_freqs, sample_freqs)
     carrier_loop = init_carrier_loop(pll_bandwidth)
     code_loop = init_code_loop(dll_bandwidth)
     (signals, beamform, velocity_aidings = zeros(length(systems))) -> _joined_tracking(systems, signals, sample_freqs, beamform, gen_carrier_replicas, gen_code_replicas, 0.0, 0.0, carrier_loop, code_loop, velocity_aidings)
 end
 
-function gen_replica_downconvert_correlate(system, signal, sample_freq, gen_carrier_replica, gen_code_replica, carrier_freq_update, code_freq_update, center_freq_geometric_mean, code_freq_geometric_mean, velocity_aiding)
-    num_samples = size(signal, 1)
-    carrier_doppler = carrier_freq_update * system.center_freq / center_freq_geometric_mean + velocity_aiding
-    code_doppler = code_freq_update * system.code_freq / code_freq_geometric_mean + carrier_doppler * system.code_freq / system.center_freq
-
-    next_gen_carrier_replica, carrier_replica, next_carrier_phase = gen_carrier_replica(num_samples, carrier_doppler)
-    next_gen_code_replica, code_replicas, next_code_phase = gen_code_replica(num_samples, code_doppler)
-
-    downconverted_signal = downconvert(signal, carrier_replica)
-    correlated_signals = map(replica -> correlate(downconverted_signal, replica).', code_replicas)
-
-    tracking_result = TrackingResults(carrier_doppler, next_carrier_phase, code_doppler, next_code_phase, prompt(correlated_signals))
-
-    tracking_result, reduce(hcat, correlated_signals) ./ num_samples, next_gen_carrier_replica, next_gen_code_replica
-end
-
 function _joined_tracking(systems, signals, sample_freqs, beamform, gen_carrier_replicas, gen_code_replicas, carrier_freq_update, code_freq_update, carrier_loop, code_loop, velocity_aidings)
     num_systems = length(systems)
-    num_samples = map(signal -> size(signal, 1), signals)
-    num_ants = sum(map(signal -> size(signal, 2), signals))
+    num_samples = [size(signal, 1) for signal in signals]
+    num_ants = sum([size(signal, 2) for signal in signals])
     Δts = map((num_samples, sample_freq) -> num_samples / sample_freq, num_samples, sample_freqs)
     if !all(Δts .== Δts[1])
         error("Signal time interval must be identical for all given signals.")

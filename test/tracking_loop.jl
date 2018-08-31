@@ -1,7 +1,7 @@
 @testset "Correlate" begin
-    signal = [1,1].' .* SATELLITE_1_CODE[floor.(Int, mod.((1:4000) * 1023e3 / 4e6 + 10,1023) + 1)]
-    replica = SATELLITE_1_CODE[floor.(Int, mod.((1:4000) * 1023e3 / 4e6 + 10,1023) + 1)]
-    @test @inferred(Tracking.correlate(signal, replica)) == [4e3 4e3]
+    signal = [1,1].' .* gen_code(GPSL1(), 1:4000, 1023e3, 10, 4e6, 1)
+    replica = gen_code(GPSL1(), 1:4000, 1023e3, 10, 4e6, 1)
+    @test @inferred(Tracking.correlate(signal, replica)) == [1.0 1.0]
 end
 
 @testset "Downconvert" begin

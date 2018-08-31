@@ -19,11 +19,10 @@ module Tracking
         code_doppler::Float64
         code_phase::Float64
     end
-    
-    struct JoinedTrackingResults
-        l1_results::TrackingResults
-        l5_results::TrackingResults
-    end    
+
+    function Initials(res::TrackingResults)
+        Initials(res.carrier_doppler, res.carrier_phase, res.code_doppler, res.code_phase)
+    end
 
     include("discriminators.jl")
     include("loop_filters.jl")
