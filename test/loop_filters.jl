@@ -9,7 +9,7 @@
 end
 
 @testset "Second order loop filter" begin
-    loop_filter = @inferred Tracking.init_2nd_order_loop_filter(2 / 1.89) 
+    loop_filter = @inferred Tracking.init_2nd_order_boxcar_loop_filter(2 / 1.89) 
     loop_filter, current_y = @inferred loop_filter(1, 2)
     @test current_y == 2 * sqrt(2)
     loop_filter, current_y = @inferred loop_filter(2, 2)
@@ -19,7 +19,7 @@ end
 end
 
 @testset "Third order loop filter" begin
-    loop_filter = @inferred Tracking.init_3rd_order_loop_filter(2 / 1.2) 
+    loop_filter = @inferred Tracking.init_3rd_order_boxcar_loop_filter(2 / 1.2) 
     loop_filter, current_y = @inferred loop_filter(1.0, 2)
     @test current_y == 4.8
     loop_filter, current_y = @inferred loop_filter(2, 2)

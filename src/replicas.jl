@@ -6,8 +6,8 @@ and the two functions `calc_signal` and `calc_phase` to generate the signal and 
 A function is returned which depends on the number of signals of the replica `num_samples` and the current
 frequency `freq`.
 """
-function init_replica(phase, sampling_freq, calc_signal, calc_phase)
-    (num_samples, freq) -> _replica(num_samples, phase, freq, sampling_freq, calc_signal, calc_phase)
+function init_replica(init_freq, phase, sampling_freq, calc_signal, calc_phase)
+    (num_samples, freq_update) -> _replica(num_samples, phase, init_freq, freq_update, sampling_freq, calc_signal, calc_phase)
 end
 
 """
@@ -19,30 +19,29 @@ the signal and calculate the phase respectively.
 A function is returned to calculate the replica with `num_samples` number of samples based on the current
 frequency `freq`.
 """
-function _replica(num_samples, phase, freq, sampling_freq, calc_signal, calc_phase)
-    replica = calc_signal(1:num_samples, freq, phase, sampling_freq)
-    next_phase = calc_phase(num_samples, freq, phase, sampling_freq)
-    (num_samples, freq) -> _replica(num_samples, next_phase, freq, sampling_freq, calc_signal, calc_phase), replica, phase
+function _replica(num_samples, phase, init_freq, freq_update, sample_freq, calc_signal, calc_phase)
+    replica = calc_signal(1:num_samples, init_freq + freq_update, phase, sample_freq)
+    next_phase = calc_phase(num_samples, init_freq + freq_update, phase, sample_freq)
+    (next_num_samples, next_freq_update) -> _replica(next_num_samples, next_phase, init_freq, next_freq_update, sample_freq, calc_signal, calc_phase), replica, next_phase
 end
 
 """
 $(SIGNATURES)
 
 Initializes the code replica generator based on the initial code phase `init_code_phase`, sampling frequency
-`sampling_freq`, satellite space vehicle ID `svid`, and the two functions `gen_sampled_code` and `get_code_phase`
-to generate the code signal and calculate the next code phase respectively. The code generators could refer to
-any system e.g. L1, L5, etc.
+`sampling_freq`, satellite pseudo random noise number `sat_prn`.
 A function is returned to calculate the replica with `num_samples` number of samples based on the current
 frequency `freq`.
 """
-function init_code_replica(init_code_phase, sampling_freq, sat_svid, gen_sampled_code, get_code_phase)
+function init_code_replica(system, init_freq, init_code_phase, sample_freq, sat_prn)
     early_prompt_late_phase = [-0.5, 0.0, 0.5]
-    calc_signal(samples, f, phase, sampling_freq) = begin 
-      sample_shifts = round.(Int, early_prompt_late_phase .* sampling_freq / f)
-      sampled_code = gen_sampled_code(minimum(samples) + sample_shifts[1]:maximum(samples) + sample_shifts[3], f, phase, sampling_freq, sat_svid)
+    gen_replica_code(samples, freq, phase, used_sample_freq) = begin 
+      sample_shifts = round.(Int, early_prompt_late_phase .* used_sample_freq / freq)
+      sampled_code = gen_code(system, minimum(samples) + sample_shifts[1]:maximum(samples) + sample_shifts[3], freq, phase, used_sample_freq, sat_prn)
       map(sample_shift -> sampled_code[(minimum(samples) - sample_shifts[1] + sample_shift):(maximum(samples) - sample_shifts[1] + sample_shift)], sample_shifts)
     end
-    init_replica(init_code_phase, sampling_freq, calc_signal, get_code_phase)
+    calc_replica_phase(sample, freq, phase, used_sample_freq) = calc_code_phase(sample, freq, phase, used_sample_freq, system.code_length)
+    init_replica(init_freq, init_code_phase, sample_freq, gen_replica_code, calc_replica_phase)
 end
 
 
@@ -54,6 +53,6 @@ Initializes the carrier replica generator based on the initial carrier phase `in
 A function is returned to calculate the replica with `num_samples` number of samples based on the current
 frequency `freq`.
 """
-function init_carrier_replica(init_carrier_phase, sampling_freq)
-    init_replica(init_carrier_phase, sampling_freq, gen_carrier, get_carrier_phase)
+function init_carrier_replica(init_freq, init_carrier_phase, sample_freq)
+    init_replica(init_freq, init_carrier_phase, sample_freq, gen_carrier, get_carrier_phase)
 end
