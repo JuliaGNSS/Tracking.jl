@@ -8,7 +8,7 @@ testjob:
     - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add - > /dev/null
     - mkdir -p ~/.ssh
     - chmod 700 ~/.ssh
-    - julia -e 'using Pkg; Pkg.add("git@git.rwth-aachen.de:nav/GNSSSignals.jl.git")'
+    - julia -e 'using Pkg; Pkg.add(PackageSpec(url="git@git.rwth-aachen.de:nav/GNSSSignals.jl.git", rev="v0.7"))'
     - julia -e "using Pkg; Pkg.develope(PackageSpec(url=pwd()))"
   script:
     - julia -e 'using Pkg; Pkg.add("Coverage"); Pkg.test("Tracking", coverage=true);
