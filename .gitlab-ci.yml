@@ -9,7 +9,7 @@ testjob:
     - mkdir -p ~/.ssh
     - chmod 700 ~/.ssh
     - julia -e 'using Pkg; Pkg.add(PackageSpec(url="git@git.rwth-aachen.de:nav/GNSSSignals.jl.git", rev="v0.7"))'
-    - julia -e "using Pkg; Pkg.develope(PackageSpec(url=pwd()))"
+    - julia -e "using Pkg; Pkg.develop(PackageSpec(url=pwd()))"
   script:
     - julia -e 'using Pkg; Pkg.add("Coverage"); Pkg.test("Tracking", coverage=true);
       using Coverage; cl, tl = get_summary(process_folder());
