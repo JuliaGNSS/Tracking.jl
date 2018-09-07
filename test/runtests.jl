@@ -1,4 +1,4 @@
-using Base.Test, Tracking, GNSSSignals#, PyPlot
+using Base.Test, Tracking, GNSSSignals, LinearAlgebra#, PyPlot
 
 include("discriminators.jl")
 include("loop_filters.jl")

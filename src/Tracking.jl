@@ -1,5 +1,5 @@
 module Tracking
-    using DocStringExtensions, GNSSSignals, DataStructures
+    using DocStringExtensions, GNSSSignals, DataStructures, LinearAlgebra
 
     export prompt,
         init_tracking,

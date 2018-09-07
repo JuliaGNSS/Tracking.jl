@@ -23,7 +23,7 @@ Returns a new loop_filter_function with updated parameters, and the system outpu
 
 """
 function _loop_filter(x, δΘ, Δt, F, L, C, D)
-    next_x = F(Δt) * x + L(Δt) * δΘ
+    next_x = F(Δt) * x .+ L(Δt) * δΘ
     y = dot(C(Δt), x) + D(Δt) * δΘ
     (next_δΘ, next_Δt) -> _loop_filter(next_x, next_δΘ, next_Δt, F, L, C, D), y
 end

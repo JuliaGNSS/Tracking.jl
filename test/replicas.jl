@@ -15,5 +15,5 @@ end
     next_gen_carrier_replica, carrier_replica = @inferred gen_carrier_replica(400, 50)
     next1_gen_carrier_replica, next_carrier_replica = @inferred next_gen_carrier_replica(400, 50)
 
-    @test [carrier_replica; next_carrier_replica] ≈ cis.(2π * 150 / 4e6 * (1:800) + 1π)
+    @test [carrier_replica; next_carrier_replica] ≈ cis.(2π .* 150 ./ 4e6 .* (1:800) .+ 1π)
 end

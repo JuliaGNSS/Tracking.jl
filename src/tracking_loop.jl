@@ -15,7 +15,7 @@ Take one or multiple, allready downconverted antenna signals `x` and an replicat
 
 """
 function correlate(x, replica)
-    replica.' * x / size(x, 1)
+    transpose(replica) * x / size(x, 1)
 end
 
 """
@@ -43,7 +43,7 @@ function _tracking(system, signal, beamform, sample_freq, gen_carrier_replica, g
     num_samples = size(signal, 1)
     Δt =  num_samples / sample_freq
 
-    tracking_result, correlated_signals, next_gen_carrier_replica, next_gen_code_replica = 
+    tracking_result, correlated_signals, next_gen_carrier_replica, next_gen_code_replica =
         gen_replica_downconvert_correlate(system, signal, sample_freq, gen_carrier_replica, gen_code_replica, carrier_freq_update, code_freq_update, system.center_freq, system.code_freq, velocity_aiding)
     beamformed_signal = beamform(correlated_signals)
     next_carrier_loop, next_carrier_freq_update = carrier_loop(beamformed_signal, Δt)
@@ -60,7 +60,7 @@ function gen_replica_downconvert_correlate(system, signal, sample_freq, gen_carr
     next_gen_code_replica, code_replicas, next_code_phase = gen_code_replica(num_samples, code_doppler)
 
     downconverted_signal = downconvert(signal, carrier_replica)
-    correlated_signals = map(replica -> correlate(downconverted_signal, replica).', code_replicas)
+    correlated_signals = map(replica -> transpose(correlate(downconverted_signal, replica)), code_replicas)
 
     tracking_result = TrackingResults(carrier_doppler, next_carrier_phase, code_doppler, next_code_phase, prompt(correlated_signals))
 

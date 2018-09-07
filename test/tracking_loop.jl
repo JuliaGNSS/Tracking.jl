@@ -1,5 +1,5 @@
 @testset "Correlate" begin
-    signal = [1,1].' .* gen_code(GPSL1(), 1:4000, 1023e3, 10, 4e6, 1)
+    signal = [1,1]' .* gen_code(GPSL1(), 1:4000, 1023e3, 10, 4e6, 1)
     replica = gen_code(GPSL1(), 1:4000, 1023e3, 10, 4e6, 1)
     @test @inferred(Tracking.correlate(signal, replica)) == [1.0 1.0]
 end
@@ -34,7 +34,7 @@ end
 
     gps_l1 = GPSL1()
 
-    carrier = cis.(2 * π * (interm_freq + doppler) / sample_freq * (1:num_samples) + carrier_phase)
+    carrier = cis.(2 * π * (interm_freq + doppler) / sample_freq * (1:num_samples) .+ carrier_phase)
     sampled_code = gen_code(gps_l1, 1:num_samples, code_doppler + code_freq, code_phase, sample_freq, 1)
     signal = carrier .* sampled_code
 
@@ -43,13 +43,13 @@ end
 
     code_dopplers = zeros(num_integrations)
     code_phases = zeros(num_integrations)
-    calculated_code_phases  = mod.((1:num_integrations) * integration_samples * (code_doppler + code_freq) / sample_freq + code_phase, 1023)
+    calculated_code_phases  = mod.((1:num_integrations) * integration_samples * (code_doppler + code_freq) / sample_freq .+ code_phase, 1023)
     carrier_dopplers = zeros(num_integrations)
 
     results = nothing
     for i = 1:num_integrations
         current_signal = [1, 1, 1, 1]' .* signal[integration_samples * (i - 1) + 1:integration_samples * i]# .+ complex.(randn(integration_samples,4), randn(integration_samples,4 )) .* 10^(5/20)
-        track, results = track(current_signal, beamform) 
+        track, results = track(current_signal, beamform)
         code_phases[i] = results.code_phase
         carrier_dopplers[i] = results.carrier_doppler
         code_dopplers[i] = results.code_doppler
