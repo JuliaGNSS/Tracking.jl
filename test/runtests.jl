@@ -1,4 +1,5 @@
 using Base.Test, Tracking, GNSSSignals#, PyPlot
+import Unitful: Hz, s
 
 include("discriminators.jl")
 include("loop_filters.jl")

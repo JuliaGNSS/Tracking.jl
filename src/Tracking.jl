@@ -1,22 +1,23 @@
 module Tracking
     using DocStringExtensions, GNSSSignals, DataStructures
+    import Unitful: Hz, s
 
     export prompt,
         init_tracking,
         Initials
 
     struct TrackingResults
-        carrier_doppler::Float64
+        carrier_doppler::typeof(1.0Hz)
         carrier_phase::Float64
-        code_doppler::Float64
+        code_doppler::typeof(1.0Hz)
         code_phase::Float64
         prompt::Array{Complex{Float64}, 1}
     end
 
     struct Initials
-        carrier_doppler::Float64
+        carrier_doppler::typeof(1.0Hz)
         carrier_phase::Float64
-        code_doppler::Float64
+        code_doppler::typeof(1.0Hz)
         code_phase::Float64
     end
 

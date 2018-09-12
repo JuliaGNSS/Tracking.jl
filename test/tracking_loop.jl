@@ -17,17 +17,17 @@ end
         [0.5 0.5 0.5 0.5] * x
     end
 
-    center_freq = 1.57542e9
-    code_freq = 1023e3
-    doppler = 10
-    interm_freq = 50
+    center_freq = 1.57542e9Hz
+    code_freq = 1023e3Hz
+    doppler = 10Hz
+    interm_freq = 50Hz
     carrier_phase = π / 3
-    sample_freq = 4e6
+    sample_freq = 4e6Hz
     code_doppler = doppler * code_freq / center_freq
     code_phase = 2.0
 
-    run_time = 500e-3
-    integration_time = 1e-3
+    run_time = 500e-3s
+    integration_time = 1e-3s
     num_integrations = Int(run_time / integration_time)
     num_samples = Int(run_time * sample_freq)
     integration_samples = Int(integration_time * sample_freq)
@@ -38,8 +38,8 @@ end
     sampled_code = gen_code(gps_l1, 1:num_samples, code_doppler + code_freq, code_phase, sample_freq, 1)
     signal = carrier .* sampled_code
 
-    inits = Initials(0.0, carrier_phase, 0.0, code_phase)
-    track = init_tracking(gps_l1, inits, interm_freq, sample_freq, 18.0, 1.0, 1)
+    inits = Initials(0.0Hz, carrier_phase, 0.0Hz, code_phase)
+    track = init_tracking(gps_l1, inits, interm_freq, sample_freq, 18.0Hz, 1.0Hz, 1)
 
     code_dopplers = zeros(num_integrations)
     code_phases = zeros(num_integrations)
@@ -51,13 +51,13 @@ end
         current_signal = [1, 1, 1, 1]' .* signal[integration_samples * (i - 1) + 1:integration_samples * i]# .+ complex.(randn(integration_samples,4), randn(integration_samples,4 )) .* 10^(5/20)
         track, results = track(current_signal, beamform) 
         code_phases[i] = results.code_phase
-        carrier_dopplers[i] = results.carrier_doppler
-        code_dopplers[i] = results.code_doppler
+        carrier_dopplers[i] = results.carrier_doppler / 1.0Hz
+        code_dopplers[i] = results.code_doppler / 1.0Hz
     end
 
-    @test results.carrier_doppler ≈ doppler atol = 5e-2
+    @test results.carrier_doppler ≈ doppler atol = 5e-2Hz
     @test results.code_phase ≈ calculated_code_phases[end] atol = 5e-6
-    @test results.code_doppler ≈ code_doppler atol = 5e-5
+    @test results.code_doppler ≈ code_doppler atol = 5e-5Hz
 
     #figure("Tracking code phases")
     #plot(code_phases, color = "blue")

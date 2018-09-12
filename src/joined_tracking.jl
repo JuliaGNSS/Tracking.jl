@@ -3,7 +3,7 @@ function init_joined_tracking(systems::Vector{T}, inits::Vector{Initials}, sampl
     gen_carrier_replicas = map((init, interm_freq, sample_freq) -> init_carrier_replica(interm_freq + init.carrier_doppler, init.carrier_phase, sample_freq), inits, interm_freqs, sample_freqs)
     carrier_loop = init_carrier_loop(pll_bandwidth)
     code_loop = init_code_loop(dll_bandwidth)
-    (signals, beamform, velocity_aidings = zeros(length(systems))) -> _joined_tracking(systems, signals, sample_freqs, beamform, gen_carrier_replicas, gen_code_replicas, 0.0, 0.0, carrier_loop, code_loop, velocity_aidings)
+    (signals, beamform, velocity_aidings = zeros(length(systems)) .* 1Hz) -> _joined_tracking(systems, signals, sample_freqs, beamform, gen_carrier_replicas, gen_code_replicas, 0.0Hz, 0.0Hz, carrier_loop, code_loop, velocity_aidings)
 end
 
 function _joined_tracking(systems, signals, sample_freqs, beamform, gen_carrier_replicas, gen_code_replicas, carrier_freq_update, code_freq_update, carrier_loop, code_loop, velocity_aidings)
@@ -16,8 +16,8 @@ function _joined_tracking(systems, signals, sample_freqs, beamform, gen_carrier_
     end
     Δt = Δts[1]
 
-    center_freq_geometric_mean = prod([system.center_freq for system in systems])^(1 / num_systems)
-    code_freq_geometric_mean = prod([system.code_freq for system in systems])^(1 / num_systems)
+    center_freq_geometric_mean = prod([system.center_freq / 1.0Hz for system in systems])^(1 / num_systems) * 1.0Hz
+    code_freq_geometric_mean = prod([system.code_freq / 1.0Hz for system in systems])^(1 / num_systems) * 1.0Hz
     
     intermediate_results = map(systems, signals, sample_freqs, gen_carrier_replicas, gen_code_replicas, velocity_aidings) do system, signal, sample_freq, gen_carrier_replica, gen_code_replica, velocity_aiding
         gen_replica_downconvert_correlate(system, signal, sample_freq, gen_carrier_replica, gen_code_replica, carrier_freq_update, code_freq_update, center_freq_geometric_mean, code_freq_geometric_mean, velocity_aiding)
@@ -33,5 +33,5 @@ function _joined_tracking(systems, signals, sample_freqs, beamform, gen_carrier_
     next_carrier_loop, next_carrier_freq_update = carrier_loop(beamformed_signal, Δt)
     next_code_loop, next_code_freq_update = code_loop(beamformed_signal, Δt)
 
-    (next_signals, next_beamform, next_velocity_aidings = zeros(length(systems))) -> _joined_tracking(systems, next_signals, sample_freqs, next_beamform, next_gen_carrier_replicas, next_gen_code_replicas, next_carrier_freq_update, next_code_freq_update, next_carrier_loop, next_code_loop, next_velocity_aidings), tracking_results
+    (next_signals, next_beamform, next_velocity_aidings = zeros(length(systems)) .* 1Hz) -> _joined_tracking(systems, next_signals, sample_freqs, next_beamform, next_gen_carrier_replicas, next_gen_code_replicas, next_carrier_freq_update, next_code_freq_update, next_carrier_loop, next_code_loop, next_velocity_aidings), tracking_results
 end

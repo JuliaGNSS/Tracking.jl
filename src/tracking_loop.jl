@@ -29,7 +29,7 @@ function init_tracking(system::AbstractGNSSSystem, inits::Initials, interm_freq,
     gen_carrier_replica = init_carrier_replica(interm_freq + inits.carrier_doppler, inits.carrier_phase, sample_freq)
     carrier_loop = init_carrier_loop(pll_bandwidth)
     code_loop = init_code_loop(dll_bandwidth)
-    (signal, beamform, velocity_aiding = 0.0) -> _tracking(system, signal, beamform, sample_freq, gen_carrier_replica, gen_code_replica, 0.0, 0.0, carrier_loop, code_loop, velocity_aiding)
+    (signal, beamform, velocity_aiding = 0.0Hz) -> _tracking(system, signal, beamform, sample_freq, gen_carrier_replica, gen_code_replica, 0.0Hz, 0.0Hz, carrier_loop, code_loop, velocity_aiding)
 end
 
 """
@@ -48,7 +48,7 @@ function _tracking(system, signal, beamform, sample_freq, gen_carrier_replica, g
     beamformed_signal = beamform(correlated_signals)
     next_carrier_loop, next_carrier_freq_update = carrier_loop(beamformed_signal, Δt)
     next_code_loop, next_code_freq_update = code_loop(beamformed_signal, Δt)
-    (next_signal, next_beamform, next_velocity_aiding = 0.0) -> _tracking(system, next_signal, next_beamform, sample_freq, next_gen_carrier_replica, next_gen_code_replica, next_carrier_freq_update, next_code_freq_update, next_carrier_loop, next_code_loop, velocity_aiding), tracking_result
+    (next_signal, next_beamform, next_velocity_aiding = 0.0Hz) -> _tracking(system, next_signal, next_beamform, sample_freq, next_gen_carrier_replica, next_gen_code_replica, next_carrier_freq_update, next_code_freq_update, next_carrier_loop, next_code_loop, velocity_aiding), tracking_result
 end
 
 function gen_replica_downconvert_correlate(system, signal, sample_freq, gen_carrier_replica, gen_code_replica, carrier_freq_update, code_freq_update, center_freq_geometric_mean, code_freq_geometric_mean, velocity_aiding)
