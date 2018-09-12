@@ -28,9 +28,9 @@ end
 
     run_time = 500e-3s
     integration_time = 1e-3s
-    num_integrations = Int(run_time / integration_time)
-    num_samples = Int(run_time * sample_freq)
-    integration_samples = Int(integration_time * sample_freq)
+    num_integrations = convert(Int, run_time / integration_time)
+    num_samples = convert(Int, run_time * sample_freq)
+    integration_samples = convert(Int, integration_time * sample_freq)
 
     gps_l1 = GPSL1()
 
@@ -43,7 +43,8 @@ end
 
     code_dopplers = zeros(num_integrations)
     code_phases = zeros(num_integrations)
-    calculated_code_phases  = mod.((1:num_integrations) * integration_samples * (code_doppler + code_freq) / sample_freq .+ code_phase, 1023)
+    # Float64 because of error in Unitful: https://github.com/ajkeller34/Unitful.jl/issues/160
+    calculated_code_phases  = mod.((1:num_integrations) * integration_samples * Float64((code_doppler + code_freq) / sample_freq) .+ code_phase, 1023)
     carrier_dopplers = zeros(num_integrations)
 
     results = nothing

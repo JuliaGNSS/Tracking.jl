@@ -1,4 +1,4 @@
-using Base.Test, Tracking, GNSSSignals, LinearAlgebra#, PyPlot
+using Test, Tracking, GNSSSignals, LinearAlgebra#, PyPlot
 import Unitful: Hz, s
 
 include("discriminators.jl")

@@ -24,10 +24,10 @@
     run_time = 1s
     integration_time = 1e-3s
     num_integrations = Int(run_time / integration_time)
-    l1_num_samples = Int(run_time * l1_sample_freq)
-    l5_num_samples = Int(run_time * l5_sample_freq)
-    l1_integration_samples = Int(integration_time * l1_sample_freq)
-    l5_integration_samples = Int(integration_time * l5_sample_freq)
+    l1_num_samples = convert(Int, run_time * l1_sample_freq)
+    l5_num_samples = convert(Int, run_time * l5_sample_freq)
+    l1_integration_samples = convert(Int, integration_time * l1_sample_freq)
+    l5_integration_samples = convert(Int, integration_time * l5_sample_freq)
 
     l1_carrier = cis.(2 * π * (l1_interm_freq + l1_doppler) / l1_sample_freq * (1:l1_num_samples) .+ l1_carrier_phase)
     l5_carrier = cis.(2 * π * (l5_interm_freq + l5_doppler) / l5_sample_freq * (1:l5_num_samples) .+ l5_carrier_phase)
@@ -43,8 +43,9 @@
     
     l1_code_phases = zeros(num_integrations)
     l5_code_phases = zeros(num_integrations)
-    l1_calculated_code_phases =  mod.((1:num_integrations) * l1_integration_samples * (l1_code_doppler + l1_code_freq) / l1_sample_freq .+ l1_code_phase, 1023)
-    l5_calculated_code_phases = mod.((1:num_integrations) * l5_integration_samples * (l5_code_doppler + l5_code_freq) / l5_sample_freq .+ l5_code_phase, 10230)
+    # Float64 because of error in Unitful: https://github.com/ajkeller34/Unitful.jl/issues/160
+    l1_calculated_code_phases =  mod.((1:num_integrations) * l1_integration_samples * Float64((l1_code_doppler + l1_code_freq) / l1_sample_freq) .+ l1_code_phase, 1023)
+    l5_calculated_code_phases = mod.((1:num_integrations) * l5_integration_samples * Float64((l5_code_doppler + l5_code_freq) / l5_sample_freq) .+ l5_code_phase, 10230)
     l1_carrier_dopplers = zeros(num_integrations)
     l5_carrier_dopplers = zeros(num_integrations)
     l1_code_dopplers = zeros(num_integrations)
