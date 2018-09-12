@@ -7,7 +7,7 @@ to calculate the initial state vector `x` and provide a first loop function
 which takes the discriminator output `δΘ` and returns a new loop function and the system output `y`
 """
 function init_loop_filter(F, L, C, D)
-    x = zeros(length(C(0)))
+    x = copy(L(0.0s)) .* 0.0
     (δΘ, Δt) -> _loop_filter(x, δΘ, Δt, F, L, C, D)
 end
 
@@ -36,11 +36,11 @@ Takes the noise `bandwidth` and calculates the appropriate matrices for an 1st o
 Returns a 1st order loop_filter function.
 """
 function init_1st_order_loop_filter(bandwidth)
-    ω0 = bandwidth * 4
-    F(Δt) = 0
-    L(Δt) = ω0
-    C(Δt) = [1]
-    D(Δt) = 0
+    ω0 = bandwidth * 4.0
+    F(Δt) = 0.0
+    L(Δt) = [ω0]
+    C(Δt) = [1.0]
+    D(Δt) = 0.0Hz
     init_loop_filter(F, L, C, D)
 end
 
@@ -54,9 +54,9 @@ Returns a 2nd order loop_filter function.
 """
 function init_2nd_order_boxcar_loop_filter(bandwidth)
     ω0 = bandwidth * 1.89
-    F(Δt) = 1
-    L(Δt) = Δt * ω0^2
-    C(Δt) = [1]
+    F(Δt) = 1.0
+    L(Δt) = [Δt * ω0^2]
+    C(Δt) = [1.0]
     D(Δt) = sqrt(2) * ω0
     init_loop_filter(F, L, C, D)
 end
@@ -71,9 +71,9 @@ Returns a 2nd order loop_filter function.
 """
 function init_2nd_order_bilinear_loop_filter(bandwidth)
     ω0 = bandwidth * 1.89
-    F(Δt) = 1
-    L(Δt) = Δt * ω0^2
-    C(Δt) = [1]
+    F(Δt) = 1.0
+    L(Δt) = [Δt * ω0^2]
+    C(Δt) = [1.0]
     D(Δt) = sqrt(2) * ω0 + ω0^2 * Δt / 2
     init_loop_filter(F, L, C, D)
 end
@@ -88,9 +88,9 @@ Returns a 2nd order loop_filter function.
 """
 function init_3rd_order_boxcar_loop_filter(bandwidth)
     ω0 = bandwidth * 1.2
-    F(Δt) = [1 Δt; 0 1]
+    F(Δt) = [1.0 Δt; 0.0Hz 1.0]
     L(Δt) = [Δt * 1.1 * ω0^2; Δt * ω0^3]
-    C(Δt) = [1, 0]
+    C(Δt) = [1.0, 0.0s]
     D(Δt) = 2.4 * ω0
     init_loop_filter(F, L, C, D)
 end
@@ -105,9 +105,9 @@ Returns a 2nd order loop_filter function.
 """
 function init_3rd_order_bilinear_loop_filter(bandwidth)
     ω0 = bandwidth * 1.2
-    F(Δt) = [1 Δt; 0 1]
+    F(Δt) = [1.0 Δt; 0.0Hz 1.0]
     L(Δt) = [Δt * 1.1 * ω0^2 + ω0^3 * Δt^2 / 2; Δt * ω0^3]
-    C(Δt) = [1, Δt / 2]
+    C(Δt) = [1.0, Δt / 2]
     D(Δt) = 2.4 * ω0 + 1.1 * ω0^2 * Δt / 2 + ω0^3 * Δt^2 / 4
     init_loop_filter(F, L, C, D)
 end
