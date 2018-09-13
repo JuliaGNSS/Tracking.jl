@@ -1,7 +1,11 @@
 @testset "Correlate" begin
-    signal = [1,1].' .* gen_code(GPSL1(), 1:4000, 1023e3, 10, 4e6, 1)
-    replica = gen_code(GPSL1(), 1:4000, 1023e3, 10, 4e6, 1)
-    @test @inferred(Tracking.correlate(signal, replica)) == [1.0 1.0]
+    signal = [1,1].' .* gen_code(GPSL1(), 1:4000, 1023e3Hz, 10, 4e6Hz, 1)
+    replica = gen_code(GPSL1(), 1:4000, 1023e3Hz, 10, 4e6Hz, 1)
+    @test @inferred(Tracking.correlate(signal, replica)) == sqrt.([4000 4000])
+
+    signal = [1,1].' .* gen_code(GPSL5(), 1:40000, 1023e4Hz, 10, 4e7Hz, 1)
+    replica = gen_code(GPSL5(), 1:40000, 1023e4Hz, 10, 4e7Hz, 1)
+    @test @inferred(Tracking.correlate(signal, replica)) == sqrt.([40000 40000])
 end
 
 @testset "Downconvert" begin
