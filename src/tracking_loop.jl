@@ -15,7 +15,7 @@ Take one or multiple, allready downconverted antenna signals `x` and an replicat
 
 """
 function correlate(x, replica)
-    replica.' * x / size(x, 1)
+    replica.' * x / sqrt(size(x, 1))
 end
 
 """
