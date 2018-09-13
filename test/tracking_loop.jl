@@ -43,7 +43,7 @@ end
     signal = carrier .* sampled_code
 
     inits = Initials(0.0Hz, carrier_phase, 0.0Hz, code_phase)
-    track = init_tracking(gps_l1, inits, interm_freq, sample_freq, 18.0Hz, 1.0Hz, 1)
+    track = init_tracking(gps_l1, inits, sample_freq, interm_freq, 18.0Hz, 1.0Hz, 1)
 
     code_dopplers = zeros(num_integrations)
     code_phases = zeros(num_integrations)

@@ -24,7 +24,7 @@ $(SIGNATURES)
 Initialize the tracking_loop by providing initial inputs to create the replicated carrier and satellite PRN code, the PLL, the DLL, and all the therfore needed componants; return a trackin_loop function.
 
 """
-function init_tracking(system::AbstractGNSSSystem, inits::Initials, interm_freq, sample_freq, pll_bandwidth, dll_bandwidth, sat_prn)
+function init_tracking(system::AbstractGNSSSystem, inits::Initials, sample_freq, interm_freq, pll_bandwidth, dll_bandwidth, sat_prn)
     gen_code_replica = init_code_replica(system, system.code_freq + inits.code_doppler, inits.code_phase, sample_freq, sat_prn)
     gen_carrier_replica = init_carrier_replica(interm_freq + inits.carrier_doppler, inits.carrier_phase, sample_freq)
     carrier_loop = init_carrier_loop(pll_bandwidth)
