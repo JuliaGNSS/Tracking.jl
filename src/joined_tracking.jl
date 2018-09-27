@@ -16,11 +16,12 @@ function _joined_tracking(systems, signals, sample_freqs, beamform, gen_carrier_
     end
     Δt = Δts[1]
 
-    center_freq_geometric_mean = prod([system.center_freq / 1.0Hz for system in systems])^(1 / num_systems) * 1.0Hz
-    code_freq_geometric_mean = prod([system.code_freq / 1.0Hz for system in systems])^(1 / num_systems) * 1.0Hz
+
+    center_freq_mean = mean([system.center_freq for system in systems])
+    code_freq_mean = mean([system.code_freq for system in systems])
     
     intermediate_results = map(systems, signals, sample_freqs, gen_carrier_replicas, gen_code_replicas, velocity_aidings) do system, signal, sample_freq, gen_carrier_replica, gen_code_replica, velocity_aiding
-        gen_replica_downconvert_correlate(system, signal, sample_freq, gen_carrier_replica, gen_code_replica, carrier_freq_update, code_freq_update, center_freq_geometric_mean, code_freq_geometric_mean, velocity_aiding)
+        gen_replica_downconvert_correlate(system, signal, sample_freq, gen_carrier_replica, gen_code_replica, carrier_freq_update, code_freq_update, center_freq_mean, code_freq_mean, velocity_aiding)
     end
     tracking_results = [intermediate_result[1] for intermediate_result in intermediate_results]
     correlated_signals = [intermediate_result[2] for intermediate_result in intermediate_results]
