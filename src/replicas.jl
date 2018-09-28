@@ -35,7 +35,7 @@ frequency `freq`.
 """
 function init_code_replica(system, init_freq, init_code_phase, sample_freq, sat_prn)
     early_prompt_late_phase = [-0.5, 0.0, 0.5]
-    gen_replica_code(samples, freq, phase, used_sample_freq) = begin 
+    gen_replica_code(samples, freq, phase, used_sample_freq) = begin
       sample_shifts = round.(Int, early_prompt_late_phase .* used_sample_freq / freq)
       sampled_code = gen_code(system, minimum(samples) + sample_shifts[1]:maximum(samples) + sample_shifts[3], freq, phase, used_sample_freq, sat_prn)
       map(sample_shift -> sampled_code[(minimum(samples) - sample_shifts[1] + sample_shift):(maximum(samples) - sample_shifts[1] + sample_shift)], sample_shifts)
