@@ -1,7 +1,11 @@
 @testset "Correlate" begin
-    signal = [1,1]' .* gen_code(GPSL1(), 1:4000, 1023e3, 10, 4e6, 1)
-    replica = gen_code(GPSL1(), 1:4000, 1023e3, 10, 4e6, 1)
-    @test @inferred(Tracking.correlate(signal, replica)) == [1.0 1.0]
+    signal = [1,1]' .* gen_code(GPSL1(), 1:4000, 1023e3Hz, 10, 4e6Hz, 1)
+    replica = gen_code(GPSL1(), 1:4000, 1023e3Hz, 10, 4e6Hz, 1)
+    @test @inferred(Tracking.correlate(signal, replica)) == sqrt.([4000 4000])
+
+    signal = [1,1]' .* gen_code(GPSL5(), 1:40000, 1023e4Hz, 10, 4e7Hz, 1)
+    replica = gen_code(GPSL5(), 1:40000, 1023e4Hz, 10, 4e7Hz, 1)
+    @test @inferred(Tracking.correlate(signal, replica)) == sqrt.([40000 40000])
 end
 
 @testset "Downconvert" begin
@@ -39,7 +43,7 @@ end
     signal = carrier .* sampled_code
 
     inits = Initials(0.0Hz, carrier_phase, 0.0Hz, code_phase)
-    track = init_tracking(gps_l1, inits, interm_freq, sample_freq, 18.0Hz, 1.0Hz, 1)
+    track = init_tracking(gps_l1, inits, sample_freq, interm_freq, 18.0Hz, 1.0Hz, 1)
 
     code_dopplers = zeros(num_integrations)
     code_phases = zeros(num_integrations)

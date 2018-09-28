@@ -13,7 +13,7 @@ Returns the calculated code offset in chips.
 function dll_disc(x)
     E = abs(early(x))
     L = abs(late(x))
-    (E - L) / (E + L)
+    (E - L) / (E + L) / 2
 end
 
 

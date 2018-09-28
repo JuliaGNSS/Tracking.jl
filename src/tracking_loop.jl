@@ -15,7 +15,7 @@ Take one or multiple, allready downconverted antenna signals `x` and an replicat
 
 """
 function correlate(x, replica)
-    transpose(replica) * x / size(x, 1)
+    transpose(replica) * x / sqrt(size(x, 1))
 end
 
 """
@@ -24,7 +24,7 @@ $(SIGNATURES)
 Initialize the tracking_loop by providing initial inputs to create the replicated carrier and satellite PRN code, the PLL, the DLL, and all the therfore needed componants; return a trackin_loop function.
 
 """
-function init_tracking(system::AbstractGNSSSystem, inits::Initials, interm_freq, sample_freq, pll_bandwidth, dll_bandwidth, sat_prn)
+function init_tracking(system::AbstractGNSSSystem, inits::Initials, sample_freq, interm_freq, pll_bandwidth, dll_bandwidth, sat_prn)
     gen_code_replica = init_code_replica(system, system.code_freq + inits.code_doppler, inits.code_phase, sample_freq, sat_prn)
     gen_carrier_replica = init_carrier_replica(interm_freq + inits.carrier_doppler, inits.carrier_phase, sample_freq)
     carrier_loop = init_carrier_loop(pll_bandwidth)
@@ -51,10 +51,10 @@ function _tracking(system, signal, beamform, sample_freq, gen_carrier_replica, g
     (next_signal, next_beamform, next_velocity_aiding = 0.0Hz) -> _tracking(system, next_signal, next_beamform, sample_freq, next_gen_carrier_replica, next_gen_code_replica, next_carrier_freq_update, next_code_freq_update, next_carrier_loop, next_code_loop, velocity_aiding), tracking_result
 end
 
-function gen_replica_downconvert_correlate(system, signal, sample_freq, gen_carrier_replica, gen_code_replica, carrier_freq_update, code_freq_update, center_freq_geometric_mean, code_freq_geometric_mean, velocity_aiding)
+function gen_replica_downconvert_correlate(system, signal, sample_freq, gen_carrier_replica, gen_code_replica, carrier_freq_update, code_freq_update, center_freq_mean, code_freq_mean, velocity_aiding)
     num_samples = size(signal, 1)
-    carrier_doppler = carrier_freq_update * system.center_freq / center_freq_geometric_mean + velocity_aiding
-    code_doppler = code_freq_update * system.code_freq / code_freq_geometric_mean + carrier_doppler * system.code_freq / system.center_freq
+    carrier_doppler = carrier_freq_update * system.center_freq / center_freq_mean + velocity_aiding
+    code_doppler = code_freq_update * system.code_freq / code_freq_mean + carrier_doppler * system.code_freq / system.center_freq
 
     next_gen_carrier_replica, carrier_replica, next_carrier_phase = gen_carrier_replica(num_samples, carrier_doppler)
     next_gen_code_replica, code_replicas, next_code_phase = gen_code_replica(num_samples, code_doppler)
