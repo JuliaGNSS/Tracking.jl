@@ -29,7 +29,7 @@ function init_tracking(system::AbstractGNSSSystem, inits::Initials, sample_freq,
     gen_carrier_replica = init_carrier_replica(interm_freq + inits.carrier_doppler, inits.carrier_phase, sample_freq)
     carrier_loop = init_carrier_loop(pll_bandwidth)
     code_loop = init_code_loop(dll_bandwidth)
-    (signal, beamform, velocity_aiding = 0.0Hz) -> _tracking(system, signal, beamform, sample_freq, gen_carrier_replica, gen_code_replica, 0.0Hz, 0.0Hz, carrier_loop, code_loop, velocity_aiding)
+    (signal, beamform, velocity_aiding = 0.0Hz) -> _tracking(system, signal, beamform, sample_freq, gen_carrier_replica, gen_code_replica, 0.0Hz, 0.0Hz, inits.carrier_doppler, inits.code_doppler, carrier_loop, code_loop, velocity_aiding)
 end
 
 """
@@ -39,19 +39,19 @@ Should be initialized by init_tracking, uses the provided `PLL`, `DLL` and `beam
 Returns the _tracking function for the next time step together with the the code_phase, the carrier_frequency_update, and the prompt of the correlated signals.
 
 """
-function _tracking(system, signal, beamform, sample_freq, gen_carrier_replica, gen_code_replica, carrier_freq_update, code_freq_update, carrier_loop, code_loop, velocity_aiding)
+function _tracking(system, signal, beamform, sample_freq, gen_carrier_replica, gen_code_replica, carrier_freq_update, code_freq_update, init_carrier_doppler, init_code_doppler, carrier_loop, code_loop, velocity_aiding)
     num_samples = size(signal, 1)
     Δt =  num_samples / sample_freq
 
-    tracking_result, correlated_signals, next_gen_carrier_replica, next_gen_code_replica = 
-        gen_replica_downconvert_correlate(system, signal, sample_freq, gen_carrier_replica, gen_code_replica, carrier_freq_update, code_freq_update, system.center_freq, system.code_freq, velocity_aiding)
+    tracking_result, correlated_signals, next_gen_carrier_replica, next_gen_code_replica =
+        gen_replica_downconvert_correlate(system, signal, sample_freq, gen_carrier_replica, gen_code_replica, carrier_freq_update, code_freq_update, init_carrier_doppler, init_code_doppler, system.center_freq, system.code_freq, velocity_aiding)
     beamformed_signal = beamform(correlated_signals)
     next_carrier_loop, next_carrier_freq_update = carrier_loop(beamformed_signal, Δt)
     next_code_loop, next_code_freq_update = code_loop(beamformed_signal, Δt)
-    (next_signal, next_beamform, next_velocity_aiding = 0.0Hz) -> _tracking(system, next_signal, next_beamform, sample_freq, next_gen_carrier_replica, next_gen_code_replica, next_carrier_freq_update, next_code_freq_update, next_carrier_loop, next_code_loop, velocity_aiding), tracking_result
+    (next_signal, next_beamform, next_velocity_aiding = 0.0Hz) -> _tracking(system, next_signal, next_beamform, sample_freq, next_gen_carrier_replica, next_gen_code_replica, next_carrier_freq_update, next_code_freq_update, init_carrier_doppler, init_code_doppler, next_carrier_loop, next_code_loop, velocity_aiding), tracking_result
 end
 
-function gen_replica_downconvert_correlate(system, signal, sample_freq, gen_carrier_replica, gen_code_replica, carrier_freq_update, code_freq_update, center_freq_mean, code_freq_mean, velocity_aiding)
+function gen_replica_downconvert_correlate(system, signal, sample_freq, gen_carrier_replica, gen_code_replica, carrier_freq_update, code_freq_update, init_carrier_doppler, init_code_doppler, center_freq_mean, code_freq_mean, velocity_aiding)
     num_samples = size(signal, 1)
     carrier_doppler = carrier_freq_update * system.center_freq / center_freq_mean + velocity_aiding
     code_doppler = code_freq_update * system.code_freq / code_freq_mean + carrier_doppler * system.code_freq / system.center_freq
@@ -62,7 +62,7 @@ function gen_replica_downconvert_correlate(system, signal, sample_freq, gen_carr
     downconverted_signal = downconvert(signal, carrier_replica)
     correlated_signals = map(replica -> correlate(downconverted_signal, replica).', code_replicas)
 
-    tracking_result = TrackingResults(carrier_doppler, next_carrier_phase, code_doppler, next_code_phase, prompt(correlated_signals))
+    tracking_result = TrackingResults(init_carrier_doppler + carrier_doppler, next_carrier_phase, init_code_doppler + code_doppler, next_code_phase, prompt(correlated_signals))
 
     tracking_result, reduce(hcat, correlated_signals), next_gen_carrier_replica, next_gen_code_replica
 end
