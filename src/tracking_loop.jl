@@ -39,25 +39,37 @@ Should be initialized by init_tracking, uses the provided `PLL`, `DLL` and `beam
 Returns the _tracking function for the next time step together with the the code_phase, the carrier_frequency_update, and the prompt of the correlated signals.
 
 """
-function _tracking(system, signal, beamform, sample_freq, gen_carrier_replica, gen_code_replica, carrier_freq_update, code_freq_update, init_carrier_doppler, init_code_doppler, carrier_loop, code_loop, velocity_aiding)
+function _tracking(system, signal, beamform, sample_freq, gen_carrier_replica, gen_code_replica, carrier_freq_update, code_freq_update, init_carrier_doppler, init_code_doppler, carrier_loop, code_loop, velocity_aiding, code_phase_shift)
     num_samples = size(signal, 1)
-    Δt =  num_samples / sample_freq
+    Δt = num_samples / sample_freq
 
     tracking_result, correlated_signals, next_gen_carrier_replica, next_gen_code_replica =
-        gen_replica_downconvert_correlate(system, signal, sample_freq, gen_carrier_replica, gen_code_replica, carrier_freq_update, code_freq_update, init_carrier_doppler, init_code_doppler, system.center_freq, system.code_freq, velocity_aiding)
+        gen_replica_downconvert_correlate(system, signal, sample_freq, gen_carrier_replica, gen_code_replica, carrier_freq_update, code_freq_update, init_carrier_doppler, init_code_doppler, system.center_freq, system.code_freq, velocity_aiding, code_phase_shift)
     beamformed_signal = beamform(correlated_signals)
     next_carrier_loop, next_carrier_freq_update = carrier_loop(beamformed_signal, Δt)
     next_code_loop, next_code_freq_update = code_loop(beamformed_signal, Δt)
-    (next_signal, next_beamform, next_velocity_aiding = 0.0Hz) -> _tracking(system, next_signal, next_beamform, sample_freq, next_gen_carrier_replica, next_gen_code_replica, next_carrier_freq_update, next_code_freq_update, init_carrier_doppler, init_code_doppler, next_carrier_loop, next_code_loop, velocity_aiding), tracking_result
+    (next_signal, next_beamform, next_velocity_aiding = 0.0Hz, code_phase_shift = 0.0) -> _tracking(system, next_signal, next_beamform, sample_freq, next_gen_carrier_replica, next_gen_code_replica, next_carrier_freq_update, next_code_freq_update, init_carrier_doppler, init_code_doppler, next_carrier_loop, next_code_loop, velocity_aiding, code_phase_shift), tracking_result
 end
 
-function gen_replica_downconvert_correlate(system, signal, sample_freq, gen_carrier_replica, gen_code_replica, carrier_freq_update, code_freq_update, init_carrier_doppler, init_code_doppler, center_freq_mean, code_freq_mean, velocity_aiding)
+function _tracking(system, signal, Δt_remainding_integration, Δt_integration, beamform, sample_freq, carrier_phase, code_phase, carrier_freq_update, code_freq_update, init_carrier_doppler, init_code_doppler, carrier_loop, code_loop, sat_prn, velocity_aiding)
+    num_samples = size(signal, 1)
+    Δt_signal = num_samples / sample_freq
+    signal_part = view(signal, 1:min((Δt_integration - Δt_remainding_integration) * sample_freq), num_samples), :)
+
+    gen_carrier_replica(x) = gen_carrier(x, init_carrier_doppler + carrier_freq_update, carrier_phase, sample_freq)
+    gen_code_replica(x) = gen_code(system, x, init_code_doppler + code_freq_update, code_phase, sample_freq, sat_prn)
+    downconvert_and_correlate!(signal, output, gen_carrier_replica, gen_code_replica, sample_shift)
+    next_carrier_phase = get_carrier_phase(, init_carrier_doppler + carrier_freq_update, carrier_phase, sample_freq)
+    next_carrier_phase = get_code_phase(, init_code_doppler + code_freq_update, code_phase, sample_freq)
+end
+
+function gen_replica_downconvert_correlate(system, signal, sample_freq, gen_carrier_replica, gen_code_replica, carrier_freq_update, code_freq_update, init_carrier_doppler, init_code_doppler, center_freq_mean, code_freq_mean, velocity_aiding, code_phase_shift = 0.0)
     num_samples = size(signal, 1)
     carrier_doppler = carrier_freq_update * system.center_freq / center_freq_mean + velocity_aiding
     code_doppler = code_freq_update * system.code_freq / code_freq_mean + carrier_doppler * system.code_freq / system.center_freq
 
     next_gen_carrier_replica, carrier_replica, next_carrier_phase = gen_carrier_replica(num_samples, carrier_doppler)
-    next_gen_code_replica, code_replicas, next_code_phase = gen_code_replica(num_samples, code_doppler)
+    next_gen_code_replica, code_replicas, next_code_phase = gen_code_replica(num_samples, code_doppler, code_phase_shift)
 
     downconverted_signal = downconvert(signal, carrier_replica)
     correlated_signals = map(replica -> transpose(correlate(downconverted_signal, replica)), code_replicas)

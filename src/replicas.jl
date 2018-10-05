@@ -7,7 +7,7 @@ A function is returned which depends on the number of signals of the replica `nu
 frequency `freq`.
 """
 function init_replica(init_freq, phase, sampling_freq, calc_signal, calc_phase)
-    (num_samples, freq_update) -> _replica(num_samples, phase, init_freq, freq_update, sampling_freq, calc_signal, calc_phase)
+    (num_samples, freq_update, phase_shift = 0.0) -> _replica(num_samples, phase + phase_shift, init_freq, freq_update, sampling_freq, calc_signal, calc_phase)
 end
 
 """
@@ -22,7 +22,7 @@ frequency `freq`.
 function _replica(num_samples, phase, init_freq, freq_update, sample_freq, calc_signal, calc_phase)
     replica = calc_signal(1:num_samples, init_freq + freq_update, phase, sample_freq)
     next_phase = calc_phase(num_samples, init_freq + freq_update, phase, sample_freq)
-    (next_num_samples, next_freq_update) -> _replica(next_num_samples, next_phase, init_freq, next_freq_update, sample_freq, calc_signal, calc_phase), replica, next_phase
+    (next_num_samples, next_freq_update, phase_shift = 0.0) -> _replica(next_num_samples, next_phase + phase_shift, init_freq, next_freq_update, sample_freq, calc_signal, calc_phase), replica, next_phase
 end
 
 """
