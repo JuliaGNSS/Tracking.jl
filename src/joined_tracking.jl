@@ -17,6 +17,10 @@ function _joined_tracking(systems, signals, sample_freqs, beamform, gen_carrier_
         error("Signal time interval must be identical for all given signals.")
     end
     Δt = Δts[1]
+    code_sample_freq_ratio = map((system, sample_freq) -> system.code_freq / sample_freq, systems, sample_freqs)
+    if !all(code_sample_freq_ratio .== code_sample_freq_ratio[1])
+        error("The code sample freq ratio must be identical for all given systems.")
+    end
 
 
     center_freq_mean = mean([system.center_freq for system in systems])
@@ -35,4 +39,12 @@ function _joined_tracking(systems, signals, sample_freqs, beamform, gen_carrier_
     next_code_loop, next_code_freq_update = code_loop(beamformed_signal, Δt)
 
     (next_signals, next_beamform, next_velocity_aidings = zeros(length(systems)) .* 1Hz) -> _joined_tracking(systems, next_signals, sample_freqs, next_beamform, next_gen_carrier_replicas, next_gen_code_replicas, next_carrier_freq_update, next_code_freq_update, init_carrier_dopplers, init_code_dopplers, next_carrier_loop, next_code_loop, next_velocity_aidings), tracking_results
+end
+
+function calc_sample_shift(systems::Vector{<:AbstractGNSSSystem}, sample_freqs, preferred_phase)
+    calc_sample_shift(systems[1], sample_freqs[1], preferred_phase)
+end
+
+function gen_replica_downconvert_correlate!(correlated_signals, systems::Vector{<:AbstractGNSSSystem}, signals, total_integration_samples, integrated_samples, start_samples, sample_freqs, interm_freqs, code_sample_shift, init_carrier_dopplers, init_code_dopplers, carrier_freq_updates, code_freq_updates, carrier_phases, code_phases, sat_prn, velocity_aidings)
+    destruct(gen_replica_downconvert_correlate!.(correlated_signals, systems, signals, total_integration_samples, integrated_samples, start_samples, sample_freqs, interm_freqs, code_sample_shift, init_carrier_dopplers, init_code_dopplers, carrier_freq_updates, code_freq_updates, carrier_phases, code_phases, sat_prn, velocity_aidings))
 end

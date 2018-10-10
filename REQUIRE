@@ -3,3 +3,6 @@ DocStringExtensions
 GNSSSignals
 DataStructures
 Unitful
+StructArrays
+Destruct
+StaticArrays

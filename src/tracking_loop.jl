@@ -1,82 +1,67 @@
 """
 $(SIGNATURES)
 
-Take one or multiple antenna signals `x` and downgrade them by componantwise multiplying with a complex conjugated carrier replication signal `replica` and return the result.
-
-"""
-function downconvert(x, replica)
-    x .* conj(replica)
-end
-
-"""
-$(SIGNATURES)
-
-Take one or multiple, allready downconverted antenna signals `x` and an replicated satellite code , return the scalarproduct of each combination.
-
-"""
-function correlate(x, replica)
-    transpose(replica) * x / sqrt(size(x, 1))
-end
-
-"""
-$(SIGNATURES)
-
 Initialize the tracking_loop by providing initial inputs to create the replicated carrier and satellite PRN code, the PLL, the DLL, and all the therfore needed componants; return a trackin_loop function.
 
 """
-function init_tracking(system::AbstractGNSSSystem, inits::Initials, sample_freq, interm_freq, pll_bandwidth, dll_bandwidth, sat_prn)
-    gen_code_replica = init_code_replica(system, system.code_freq + inits.code_doppler, inits.code_phase, sample_freq, sat_prn)
-    gen_carrier_replica = init_carrier_replica(interm_freq + inits.carrier_doppler, inits.carrier_phase, sample_freq)
+function init_tracking(system::AbstractGNSSSystem, inits::Initials, max_total_integration_time, sample_freq, interm_freq, pll_bandwidth, dll_bandwidth, sat_prn)
     carrier_loop = init_carrier_loop(pll_bandwidth)
     code_loop = init_code_loop(dll_bandwidth)
-    (signal, beamform, velocity_aiding = 0.0Hz) -> _tracking(system, signal, beamform, sample_freq, gen_carrier_replica, gen_code_replica, 0.0Hz, 0.0Hz, inits.carrier_doppler, inits.code_doppler, carrier_loop, code_loop, velocity_aiding)
+    max_total_integration_samples = floor(Int, max_total_integration_time * sample_freq)
+    return (signal, beamform, velocity_aiding = 0.0Hz) -> begin
+        num_ants = size(signal, 2)
+        correlated_signals = [zeros(ComplexF64, num_ants) for i = 1:3] # Early, prompt, late
+        init_track_results = StructArray{TrackingResults}(undef, floor(Int, size(signal, 1) / max_total_integration_samples))
+        _tracking!(init_track_results, correlated_signals, system, signal, 1, max_total_integration_time, 0, beamform, sample_freq, interm_freq, inits.carrier_phase, inits.code_phase, 0.0Hz, 0.0Hz, inits.carrier_doppler, inits.code_doppler, carrier_loop, code_loop, sat_prn, velocity_aiding)
+    end
 end
 
-"""
-$(SIGNATURES)
+function _tracking!(track_results, correlated_signals, system, signal, start_sample, max_total_integration_time, integrated_samples, beamform, sample_freq, interm_freq, carrier_phase, code_phase, carrier_freq_update, code_freq_update, init_carrier_doppler, init_code_doppler, carrier_loop, code_loop, sat_prn, velocity_aiding)
+    code_sample_shift, actual_code_phase_shift = calc_sample_shift(system, sample_freq, 0.5)
 
-Should be initialized by init_tracking, uses the provided `PLL`, `DLL` and `beamform` function together with the provided antenna `system`, provided antenna `signals`, the `velocity_aiding`, and the replicated samples/codes `carrier_replica` and `code_replicas` to calculate the functions and samples/codes for the next timestep.
-Returns the _tracking function for the next time step together with the the code_phase, the carrier_frequency_update, and the prompt of the correlated signals.
+    correlated_signals, carrier_doppler, code_doppler, next_carrier_phase, next_code_phase, next_start_sample, next_integrated_samples, max_total_integration_samples =
+        gen_replica_downconvert_correlate!(correlated_signals, system, signal, max_total_integration_time, integrated_samples, start_sample, sample_freq, interm_freq, code_sample_shift, init_carrier_doppler, init_code_doppler, carrier_freq_update, code_freq_update, carrier_phase, code_phase, sat_prn, velocity_aiding)
 
-"""
-function _tracking(system, signal, beamform, sample_freq, gen_carrier_replica, gen_code_replica, carrier_freq_update, code_freq_update, init_carrier_doppler, init_code_doppler, carrier_loop, code_loop, velocity_aiding, code_phase_shift)
-    num_samples = size(signal, 1)
-    Δt = num_samples / sample_freq
-
-    tracking_result, correlated_signals, next_gen_carrier_replica, next_gen_code_replica =
-        gen_replica_downconvert_correlate(system, signal, sample_freq, gen_carrier_replica, gen_code_replica, carrier_freq_update, code_freq_update, init_carrier_doppler, init_code_doppler, system.center_freq, system.code_freq, velocity_aiding, code_phase_shift)
-    beamformed_signal = beamform(correlated_signals)
-    next_carrier_loop, next_carrier_freq_update = carrier_loop(beamformed_signal, Δt)
-    next_code_loop, next_code_freq_update = code_loop(beamformed_signal, Δt)
-    (next_signal, next_beamform, next_velocity_aiding = 0.0Hz, code_phase_shift = 0.0) -> _tracking(system, next_signal, next_beamform, sample_freq, next_gen_carrier_replica, next_gen_code_replica, next_carrier_freq_update, next_code_freq_update, init_carrier_doppler, init_code_doppler, next_carrier_loop, next_code_loop, velocity_aiding, code_phase_shift), tracking_result
+    if next_integrated_samples == max_total_integration_samples
+        next_carrier_loop, next_code_loop, next_carrier_freq_update, next_code_freq_update =
+            beamform_and_update_loops(correlated_signals, max_total_integration_time, beamform, carrier_loop, code_loop)
+        track_results = push_track_results!(track_results, start_sample, max_total_integration_samples, carrier_doppler, carrier_phase, code_doppler, code_phase, correlated_signals)
+        next_integrated_samples, correlated_signals = init_correlated_signals(signal)
+    else
+        next_carrier_loop, next_carrier_freq_update = carrier_loop, carrier_freq_update
+        next_code_loop, next_code_freq_update = code_loop, code_freq_update
+    end
+    if next_start_sample < size(signal, 1)
+        _tracking!(track_results, correlated_signals, system, signal, next_start_sample, max_total_integration_time, next_integrated_samples, beamform, sample_freq, interm_freq, next_carrier_phase, next_code_phase, next_carrier_freq_update, next_code_freq_update, init_carrier_doppler, init_code_doppler, next_carrier_loop, next_code_loop, sat_prn, velocity_aiding)
+    else
+        return (next_signal, next_beamform, next_velocity_aiding = 0.0Hz) -> begin
+            init_track_results = StructArray{TrackingResults}(undef, floor(Int, (size(next_signal, 1) + next_integrated_samples) / max_total_integration_samples))
+            _tracking!(init_track_results, correlated_signals, system, next_signal, 1, max_total_integration_time, next_integrated_samples, next_beamform, sample_freq, interm_freq, next_carrier_phase, next_code_phase, next_carrier_freq_update, next_code_freq_update, init_carrier_doppler, init_code_doppler, next_carrier_loop, next_code_loop, sat_prn, next_velocity_aiding)
+        end, track_results
+    end
 end
 
-function _tracking(system, signal, Δt_remainding_integration, Δt_integration, beamform, sample_freq, carrier_phase, code_phase, carrier_freq_update, code_freq_update, init_carrier_doppler, init_code_doppler, carrier_loop, code_loop, sat_prn, velocity_aiding)
-    num_samples = size(signal, 1)
-    Δt_signal = num_samples / sample_freq
-    signal_part = view(signal, 1:min((Δt_integration - Δt_remainding_integration) * sample_freq), num_samples), :)
-
-    gen_carrier_replica(x) = gen_carrier(x, init_carrier_doppler + carrier_freq_update, carrier_phase, sample_freq)
-    gen_code_replica(x) = gen_code(system, x, init_code_doppler + code_freq_update, code_phase, sample_freq, sat_prn)
-    downconvert_and_correlate!(signal, output, gen_carrier_replica, gen_code_replica, sample_shift)
-    next_carrier_phase = get_carrier_phase(, init_carrier_doppler + carrier_freq_update, carrier_phase, sample_freq)
-    next_carrier_phase = get_code_phase(, init_code_doppler + code_freq_update, code_phase, sample_freq)
+function check_need_new_signal(next_start_sample, signal)
+    next_start_sample == size(signal, 1)
 end
 
-function gen_replica_downconvert_correlate(system, signal, sample_freq, gen_carrier_replica, gen_code_replica, carrier_freq_update, code_freq_update, init_carrier_doppler, init_code_doppler, center_freq_mean, code_freq_mean, velocity_aiding, code_phase_shift = 0.0)
-    num_samples = size(signal, 1)
-    carrier_doppler = carrier_freq_update * system.center_freq / center_freq_mean + velocity_aiding
-    code_doppler = code_freq_update * system.code_freq / code_freq_mean + carrier_doppler * system.code_freq / system.center_freq
+function beamform_and_update_loops(correlated_signals, Δt, beamform, carrier_loop, code_loop)
+    beamformed_signals = map(correlated_signal -> beamform(correlated_signal), correlated_signals)
+    next_carrier_loop, carrier_freq_update = carrier_loop(beamformed_signals, Δt)
+    next_code_loop, code_freq_update = code_loop(beamformed_signals, Δt)
+    next_carrier_loop, next_code_loop, carrier_freq_update, code_freq_update
+end
 
-    next_gen_carrier_replica, carrier_replica, next_carrier_phase = gen_carrier_replica(num_samples, carrier_doppler)
-    next_gen_code_replica, code_replicas, next_code_phase = gen_code_replica(num_samples, code_doppler, code_phase_shift)
+function push_track_results!(track_results, start_sample, max_total_integration_samples, carrier_doppler, carrier_phase, code_doppler, code_phase, correlated_signals)
+    track_result_idx = floor(Int, start_sample / max_total_integration_samples) + 1
+    track_results[track_result_idx] = TrackingResults(carrier_doppler, carrier_phase, code_doppler, code_phase, prompt(correlated_signals))
+    track_results
+end
 
-    downconverted_signal = downconvert(signal, carrier_replica)
-    correlated_signals = map(replica -> transpose(correlate(downconverted_signal, replica)), code_replicas)
-
-    tracking_result = TrackingResults(init_carrier_doppler + carrier_doppler, next_carrier_phase, init_code_doppler + code_doppler, next_code_phase, prompt(correlated_signals))
-
-    tracking_result, reduce(hcat, correlated_signals), next_gen_carrier_replica, next_gen_code_replica
+function init_correlated_signals(signal)
+    next_integrated_samples = 0
+    correlated_signals = [zeros(ComplexF64, size(signal, 2)) for i = 1:3]
+    next_integrated_samples, correlated_signals
 end
 
 function init_carrier_loop(bandwidth)
