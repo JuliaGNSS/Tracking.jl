@@ -15,23 +15,16 @@ function downconvert_and_correlate!(signal, output, start_sample, num_samples_to
     output
 end
 
-function gen_replica_downconvert_correlate!(correlated_signals, system, signal, total_integration_time, integrated_samples, start_sample, sample_freq, interm_freq, code_sample_shift, init_carrier_doppler, init_code_doppler, carrier_freq_update, code_freq_update, carrier_phase, code_phase, sat_prn, velocity_aiding)
+function gen_replica_downconvert_correlate!(corr_res, system, signal, total_integration_time, integrated_samples, start_sample, sample_freq, interm_freq, code_sample_shift, carrier_doppler, code_doppler, sat_prn, velocity_aiding)
     num_samples = size(signal, 1)
     total_integration_samples = floor(Int, total_integration_time * sample_freq)
     num_samples_to_integrate = min(total_integration_samples - integrated_samples, num_samples - (start_sample - 1))
-    carrier_doppler, code_doppler = aid_dopplers(system, init_carrier_doppler, carrier_freq_update, velocity_aiding, init_code_doppler, code_freq_update)
-    gen_carrier_replica, gen_code_replica = create_gen_replicas(system, interm_freq, sample_freq, carrier_doppler, code_doppler, carrier_phase, code_phase, sat_prn)
-    correlated_signals = downconvert_and_correlate!(signal, correlated_signals, start_sample, num_samples_to_integrate, gen_carrier_replica, gen_code_replica, code_sample_shift)
-    next_carrier_phase, next_code_phase = calc_phases(system, interm_freq, sample_freq, carrier_doppler, code_doppler, carrier_phase, code_phase, num_samples_to_integrate)
+    gen_carrier_replica, gen_code_replica = create_gen_replicas(system, interm_freq, sample_freq, carrier_doppler, code_doppler, corr_res.carrier_phase, corr_res.code_phase, sat_prn)
+    correlated_signals = downconvert_and_correlate!(signal, corr_res.outputs, start_sample, num_samples_to_integrate, gen_carrier_replica, gen_code_replica, code_sample_shift)
+    next_carrier_phase, next_code_phase = calc_phases(system, interm_freq, sample_freq, carrier_doppler, code_doppler, corr_res.carrier_phase, corr_res.code_phase, num_samples_to_integrate)
     next_start_sample = start_sample + num_samples_to_integrate
     next_integrated_samples = integrated_samples + num_samples_to_integrate
-    correlated_signals, carrier_doppler, code_doppler, next_carrier_phase, next_code_phase, next_start_sample, next_integrated_samples, total_integration_samples
-end
-
-function aid_dopplers(system, init_carrier_doppler, carrier_freq_update, velocity_aiding, init_code_doppler, code_freq_update)
-    carrier_doppler = carrier_freq_update + velocity_aiding
-    code_doppler = code_freq_update + carrier_doppler * system.code_freq / system.center_freq
-    init_carrier_doppler + carrier_doppler, init_code_doppler + code_doppler
+    CorrelatorResults(next_carrier_phase, next_code_phase, correlated_signals), next_start_sample, next_integrated_samples, total_integration_samples
 end
 
 function create_gen_replicas(system, interm_freq, sample_freq, carrier_doppler, code_doppler, carrier_phase, code_phase, sat_prn)

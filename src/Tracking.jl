@@ -14,6 +14,12 @@ module Tracking
         prompt::Array{Complex{Float64}, 1}
     end
 
+    struct CorrelatorResults
+        carrier_phase::Float64
+        code_phase::Float64
+        outputs::Vector{Vector{ComplexF64}}
+    end
+
     struct Initials
         carrier_doppler::typeof(1.0Hz)
         carrier_phase::Float64

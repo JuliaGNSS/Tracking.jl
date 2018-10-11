@@ -10,10 +10,10 @@ $(SIGNATURES)
 DLL discriminator
 Returns the calculated code offset in chips.
 """
-function dll_disc(x)
+function dll_disc(x, d = 1)
     E = abs(early(x))
     L = abs(late(x))
-    (E - L) / (E + L) / 2
+    (E - L) / (E + L) / 2 / (2 - d)
 end
 
 
@@ -27,4 +27,3 @@ function pll_disc(x)
     p = prompt(x)
     atan(imag(p) / real(p))
 end
-

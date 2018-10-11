@@ -48,3 +48,31 @@ end
 function gen_replica_downconvert_correlate!(correlated_signals, systems::Vector{<:AbstractGNSSSystem}, signals, total_integration_samples, integrated_samples, start_samples, sample_freqs, interm_freqs, code_sample_shift, init_carrier_dopplers, init_code_dopplers, carrier_freq_updates, code_freq_updates, carrier_phases, code_phases, sat_prn, velocity_aidings)
     destruct(gen_replica_downconvert_correlate!.(correlated_signals, systems, signals, total_integration_samples, integrated_samples, start_samples, sample_freqs, interm_freqs, code_sample_shift, init_carrier_dopplers, init_code_dopplers, carrier_freq_updates, code_freq_updates, carrier_phases, code_phases, sat_prn, velocity_aidings))
 end
+
+function init_track_results(signals, integrated_samples::Vector, total_integration_samples)
+    init_track_results.(signals, integrated_samples, total_integration_samples)
+end
+
+function aid_dopplers(systems::Vector{<:AbstractGNSSSystem}, init_carrier_dopplers, carrier_freq_update, velocity_aidings, init_code_dopplers, code_freq_update)
+    destruct(aid_dopplers.(systems, init_carrier_dopplers, carrier_freq_update, velocity_aidings, init_code_dopplers, code_freq_update))
+end
+
+function beamform_and_update_loops(correlated_signals::Vector{Vector{Vector{ComplexF64}}}, Δt, beamform, carrier_loop, code_loop, actual_code_phase_shift)
+    joined_correlated_signals = foldl((corrs1, corrs2) -> vcat.(corrs1, corrs2), corrs1, corrs2)
+    beamform_and_update_loops(joined_correlated_signals, Δt, beamform, carrier_loop, code_loop, actual_code_phase_shift)
+end
+
+function push_track_results!(track_results, corr_res::Vector{CorrelatorResults}, start_samples, max_total_integration_samples, carrier_dopplers, code_dopplers)
+    push_track_results!.(track_results, corr_res, start_samples, max_total_integration_samples, carrier_dopplers, code_dopplers)
+end
+
+function init_correlated_signals(signal, carrier_phases::Vector, code_phases::Vector)
+    destruct(init_correlated_signals.(signal, carrier_phases, code_phases))
+end
+
+function check_init_track_consistency(systems::Vector{<:AbstractGNSSSystem}, sample_freqs)
+    code_sample_freq_ratio = map((system, sample_freq) -> system.code_freq / sample_freq, systems, sample_freqs)
+    if !all(code_sample_freq_ratio .== code_sample_freq_ratio[1])
+        error("The code sample freq ratio must be identical for all given systems.")
+    end
+end
