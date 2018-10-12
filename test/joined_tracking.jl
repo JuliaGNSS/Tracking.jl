@@ -1,7 +1,7 @@
 @testset "Joined tracking" begin
 
     function beamform(x)
-        [0.5 0.5 0.5 0.5] * x
+        dot([0.5, 0.5, 0.5, 0.5], x)
     end
 
     l1_center_freq = 1.57542e9Hz
@@ -31,16 +31,16 @@
 
     l1_carrier = cis.(2 * π * (l1_interm_freq + l1_doppler) / l1_sample_freq * (1:l1_num_samples) .+ l1_carrier_phase)
     l5_carrier = cis.(2 * π * (l5_interm_freq + l5_doppler) / l5_sample_freq * (1:l5_num_samples) .+ l5_carrier_phase)
-    l1_sampled_code = gen_code(GPSL1(), 1:l1_num_samples, l1_code_doppler + l1_code_freq, l1_code_phase, l1_sample_freq, 1)
-    l5_sampled_code = gen_code(GPSL5(), 1:l5_num_samples, l5_code_doppler + l5_code_freq, l5_code_phase, l5_sample_freq, 1)
+    l1_sampled_code = gen_code.(Ref(GPSL1()), 1:l1_num_samples, l1_code_doppler + l1_code_freq, l1_code_phase, l1_sample_freq, 1)
+    l5_sampled_code = gen_code.(Ref(GPSL5()), 1:l5_num_samples, l5_code_doppler + l5_code_freq, l5_code_phase, l5_sample_freq, 1)
     l1_signal = l1_carrier .* l1_sampled_code
     l5_signal = l5_carrier .* l5_sampled_code
 
-    l1_results = Tracking.Initials(0Hz, l1_carrier_phase, 0.0Hz, l1_code_phase)
-    l5_results = Tracking.Initials(0Hz, l5_carrier_phase, 0.0Hz, l5_code_phase)
+    l1_inits = Tracking.Initials(0Hz, l1_carrier_phase, 0.0Hz, l1_code_phase)
+    l5_inits = Tracking.Initials(0Hz, l5_carrier_phase, 0.0Hz, l5_code_phase)
 
-    track = Tracking.init_joined_tracking([GPSL1(), GPSL5()], [l1_results, l5_results], [l1_sample_freq, l5_sample_freq], [l1_interm_freq, l5_interm_freq], 10.0Hz, 1.0Hz, 1)
-    
+    track = Tracking.init_tracking([GPSL1(), GPSL5()], [l1_inits, l5_inits], integration_time, [l1_sample_freq, l5_sample_freq], [l1_interm_freq, l5_interm_freq], 10.0Hz, 1.0Hz, 1)
+
     l1_code_phases = zeros(num_integrations)
     l5_code_phases = zeros(num_integrations)
     # Float64 because of error in Unitful: https://github.com/ajkeller34/Unitful.jl/issues/160
@@ -56,22 +56,23 @@
         l1_current_signal = [1, 1]' .* l1_signal[l1_integration_samples * (i - 1) + 1:l1_integration_samples * i]# .+ complex.(randn(l1_integration_samples, 2), randn(l1_integration_samples, 2)) .* 10^(15 / 20)
         l5_current_signal = [1, 1]' .* l5_signal[l5_integration_samples * (i - 1) + 1:l5_integration_samples * i]# .+ complex.(randn(l5_integration_samples, 2), randn(l5_integration_samples, 2)) .* 10^(15 / 20)
         track, joined_results = track([l1_current_signal, l5_current_signal], beamform)
-        l1_code_phases[i] = joined_results[1].code_phase
-        l5_code_phases[i] = joined_results[2].code_phase
-        l1_carrier_dopplers[i] = joined_results[1].carrier_doppler / 1.0Hz
-        l5_carrier_dopplers[i] = joined_results[2].carrier_doppler / 1.0Hz
-        l1_code_dopplers[i] = joined_results[1].code_doppler / 1.0Hz
-        l5_code_dopplers[i] = joined_results[2].code_doppler / 1.0Hz
+        l1_code_phases[i] = joined_results[1].code_phase[1]
+        l5_code_phases[i] = joined_results[2].code_phase[1]
+        l1_carrier_dopplers[i] = joined_results[1].carrier_doppler[1] / 1.0Hz
+        l5_carrier_dopplers[i] = joined_results[2].carrier_doppler[1] / 1.0Hz
+        l1_code_dopplers[i] = joined_results[1].code_doppler[1] / 1.0Hz
+        l5_code_dopplers[i] = joined_results[2].code_doppler[1] / 1.0Hz
     end
 
-    @test joined_results[1].carrier_doppler ≈ l1_doppler atol = 5e-2Hz
-    @test joined_results[2].carrier_doppler ≈ l5_doppler atol = 5e-2Hz
-    @test joined_results[1].code_phase ≈ l1_calculated_code_phases[end] atol = 5e-6
-    @test joined_results[2].code_phase ≈ l5_calculated_code_phases[end] atol = 5e-5
-    @test joined_results[1].code_doppler ≈ l1_code_doppler atol = 5e-5Hz
-    @test joined_results[2].code_doppler ≈ l5_code_doppler atol = 5e-4Hz
+    @test joined_results[1].carrier_doppler[1] ≈ l1_doppler atol = 5e-2Hz
+    @test joined_results[2].carrier_doppler[1] ≈ l5_doppler atol = 5e-2Hz
+    @test joined_results[1].code_phase[1] ≈ l1_calculated_code_phases[end] atol = 5e-6
+    @test joined_results[2].code_phase[1] ≈ l5_calculated_code_phases[end] atol = 5e-5
+    @test joined_results[1].code_doppler[1] ≈ l1_code_doppler atol = 5e-5Hz
+    @test joined_results[2].code_doppler[1] ≈ l5_code_doppler atol = 5e-4Hz
 
-#=     figure("L1 code_phases(b) and calculated (r)")
+    #=
+     figure("L1 code_phases(b) and calculated (r)")
     plot(l1_calculated_code_phases, color = "red")
     plot(l1_code_phases, color = "blue")
     figure("L5 code_phases")
@@ -84,5 +85,6 @@
     figure("L1 code dopplers")
     plot(l1_code_dopplers)
     figure("L5 code dopplers")
-    plot(l5_code_dopplers) =#
+    plot(l5_code_dopplers)
+    =#
 end

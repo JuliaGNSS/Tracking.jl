@@ -34,7 +34,6 @@ module Tracking
     include("downconvert_and_correlate.jl")
     include("discriminators.jl")
     include("loop_filters.jl")
-    include("replicas.jl")
     include("tracking_loop.jl")
     include("joined_tracking.jl")
 end

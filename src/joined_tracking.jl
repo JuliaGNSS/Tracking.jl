@@ -1,64 +1,25 @@
-function init_joined_tracking(systems::Vector{T}, inits::Vector{Initials}, sample_freqs, interm_freqs, pll_bandwidth, dll_bandwidth, sat_prn) where T <: AbstractGNSSSystem
-    gen_code_replicas = map((system, init, sample_freq) -> init_code_replica(system, system.code_freq + init.code_doppler, init.code_phase, sample_freq, sat_prn), systems, inits, sample_freqs)
-    gen_carrier_replicas = map((init, interm_freq, sample_freq) -> init_carrier_replica(interm_freq + init.carrier_doppler, init.carrier_phase, sample_freq), inits, interm_freqs, sample_freqs)
-    carrier_loop = init_carrier_loop(pll_bandwidth)
-    code_loop = init_code_loop(dll_bandwidth)
-    init_carrier_dopplers = map(init-> init.carrier_doppler, inits)
-    init_code_dopplers = map(init-> init.code_doppler, inits)
-    (signals, beamform, velocity_aidings = zeros(length(systems)) .* 1Hz) -> _joined_tracking(systems, signals, sample_freqs, beamform, gen_carrier_replicas, gen_code_replicas, 0.0Hz, 0.0Hz, init_carrier_dopplers, init_code_dopplers, carrier_loop, code_loop, velocity_aidings)
-end
-
-function _joined_tracking(systems, signals, sample_freqs, beamform, gen_carrier_replicas, gen_code_replicas, carrier_freq_update, code_freq_update, init_carrier_dopplers, init_code_dopplers, carrier_loop, code_loop, velocity_aidings)
-    num_systems = length(systems)
-    num_samples = [size(signal, 1) for signal in signals]
-    num_ants = sum([size(signal, 2) for signal in signals])
-    Δts = map((num_samples, sample_freq) -> num_samples / sample_freq, num_samples, sample_freqs)
-    if !all(Δts .== Δts[1])
-        error("Signal time interval must be identical for all given signals.")
-    end
-    Δt = Δts[1]
-    code_sample_freq_ratio = map((system, sample_freq) -> system.code_freq / sample_freq, systems, sample_freqs)
-    if !all(code_sample_freq_ratio .== code_sample_freq_ratio[1])
-        error("The code sample freq ratio must be identical for all given systems.")
-    end
-
-
-    center_freq_mean = mean([system.center_freq for system in systems])
-    code_freq_mean = mean([system.code_freq for system in systems])
-
-    intermediate_results = gen_replica_downconvert_correlate.(systems, signals, sample_freqs, gen_carrier_replicas, gen_code_replicas, carrier_freq_update, code_freq_update, init_carrier_dopplers, init_code_dopplers, center_freq_mean, code_freq_mean, velocity_aidings)
-    tracking_results = [intermediate_result[1] for intermediate_result in intermediate_results]
-    correlated_signals = [intermediate_result[2] for intermediate_result in intermediate_results]
-    next_gen_carrier_replicas = [intermediate_result[3] for intermediate_result in intermediate_results]
-    next_gen_code_replicas = [intermediate_result[4] for intermediate_result in intermediate_results]
-
-    joined_correlated_signals = reduce(vcat, correlated_signals)
-    beamformed_signal = beamform(joined_correlated_signals)
-
-    next_carrier_loop, next_carrier_freq_update = carrier_loop(beamformed_signal, Δt)
-    next_code_loop, next_code_freq_update = code_loop(beamformed_signal, Δt)
-
-    (next_signals, next_beamform, next_velocity_aidings = zeros(length(systems)) .* 1Hz) -> _joined_tracking(systems, next_signals, sample_freqs, next_beamform, next_gen_carrier_replicas, next_gen_code_replicas, next_carrier_freq_update, next_code_freq_update, init_carrier_dopplers, init_code_dopplers, next_carrier_loop, next_code_loop, next_velocity_aidings), tracking_results
-end
-
 function calc_sample_shift(systems::Vector{<:AbstractGNSSSystem}, sample_freqs, preferred_phase)
     calc_sample_shift(systems[1], sample_freqs[1], preferred_phase)
 end
 
-function gen_replica_downconvert_correlate!(correlated_signals, systems::Vector{<:AbstractGNSSSystem}, signals, total_integration_samples, integrated_samples, start_samples, sample_freqs, interm_freqs, code_sample_shift, init_carrier_dopplers, init_code_dopplers, carrier_freq_updates, code_freq_updates, carrier_phases, code_phases, sat_prn, velocity_aidings)
-    destruct(gen_replica_downconvert_correlate!.(correlated_signals, systems, signals, total_integration_samples, integrated_samples, start_samples, sample_freqs, interm_freqs, code_sample_shift, init_carrier_dopplers, init_code_dopplers, carrier_freq_updates, code_freq_updates, carrier_phases, code_phases, sat_prn, velocity_aidings))
+function gen_replica_downconvert_correlate!(corr_res, systems::Vector{<:AbstractGNSSSystem}, signals, total_integration_samples, integrated_samples, start_samples, sample_freqs, interm_freqs, code_sample_shift, carrier_dopplers, code_dopplers, sat_prn, velocity_aidings)
+    destruct(gen_replica_downconvert_correlate!.(corr_res, systems, signals, total_integration_samples, integrated_samples, start_samples, sample_freqs, interm_freqs, code_sample_shift, carrier_dopplers, code_dopplers, sat_prn, velocity_aidings))
 end
 
-function init_track_results(signals, integrated_samples::Vector, total_integration_samples)
+function init_track_results(signals::Vector{<:AbstractArray}, integrated_samples, total_integration_samples)
     init_track_results.(signals, integrated_samples, total_integration_samples)
 end
 
-function aid_dopplers(systems::Vector{<:AbstractGNSSSystem}, init_carrier_dopplers, carrier_freq_update, velocity_aidings, init_code_dopplers, code_freq_update)
-    destruct(aid_dopplers.(systems, init_carrier_dopplers, carrier_freq_update, velocity_aidings, init_code_dopplers, code_freq_update))
+function aid_dopplers(systems::Vector{<:AbstractGNSSSystem}, inits, carrier_freq_update, code_freq_update, velocity_aidings)
+    center_freq_mean = mean([system.center_freq for system in systems])
+    code_freq_mean = mean([system.code_freq for system in systems])
+    matched_carrier_freq_update = carrier_freq_update .* getfield.(systems, :center_freq) ./ center_freq_mean
+    matched_code_freq_update = code_freq_update .* getfield.(systems, :code_freq) ./ code_freq_mean
+    destruct(aid_dopplers.(systems, inits, matched_carrier_freq_update, matched_code_freq_update, velocity_aidings))
 end
 
-function beamform_and_update_loops(correlated_signals::Vector{Vector{Vector{ComplexF64}}}, Δt, beamform, carrier_loop, code_loop, actual_code_phase_shift)
-    joined_correlated_signals = foldl((corrs1, corrs2) -> vcat.(corrs1, corrs2), corrs1, corrs2)
+function beamform_and_update_loops(corr_res::Vector{CorrelatorResults}, Δt, beamform, carrier_loop, code_loop, actual_code_phase_shift)
+    joined_correlated_signals = foldl((corr_res1, corr_res2) -> vcat.(corr_res1.outputs, corr_res2.outputs), corr_res)
     beamform_and_update_loops(joined_correlated_signals, Δt, beamform, carrier_loop, code_loop, actual_code_phase_shift)
 end
 
@@ -66,8 +27,16 @@ function push_track_results!(track_results, corr_res::Vector{CorrelatorResults},
     push_track_results!.(track_results, corr_res, start_samples, max_total_integration_samples, carrier_dopplers, code_dopplers)
 end
 
-function init_correlated_signals(signal, carrier_phases::Vector, code_phases::Vector)
-    destruct(init_correlated_signals.(signal, carrier_phases, code_phases))
+function init_correlated_signals(signals, carrier_phases::Vector, code_phases::Vector)
+    destruct(init_correlated_signals.(signals, carrier_phases, code_phases))
+end
+
+function init_correlated_signals(signals, initials::Vector{Initials})
+    destruct(init_correlated_signals.(signals, initials))
+end
+
+function init_correlated_signals(signals, corr_res::Vector{CorrelatorResults})
+    destruct(init_correlated_signals.(signals, corr_res))
 end
 
 function check_init_track_consistency(systems::Vector{<:AbstractGNSSSystem}, sample_freqs)
@@ -75,4 +44,16 @@ function check_init_track_consistency(systems::Vector{<:AbstractGNSSSystem}, sam
     if !all(code_sample_freq_ratio .== code_sample_freq_ratio[1])
         error("The code sample freq ratio must be identical for all given systems.")
     end
+end
+
+function default_velocity_aiding(systems::Vector{<:AbstractGNSSSystem})
+    zeros(typeof(1.0Hz), length(systems))
+end
+
+function init_dopplers(inits::Vector{Initials})
+    destruct(init_dopplers.(inits))
+end
+
+function check_need_new_signal(next_start_samples::Vector, signals)
+    all(next_start_samples .== size.(signals, 1) .+ 1)
 end
