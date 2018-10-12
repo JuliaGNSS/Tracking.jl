@@ -8,38 +8,40 @@ function init_tracking(system::Union{AbstractGNSSSystem, Vector{<:AbstractGNSSSy
     check_init_track_consistency(system, sample_freq)
     carrier_loop = init_carrier_loop(pll_bandwidth)
     code_loop = init_code_loop(dll_bandwidth)
-    init_carrier_doppler, init_code_doppler = init_dopplers(inits)
+    initial_dopplers = init_dopplers(inits)
+    initial_phases = init_phases(inits)
     max_total_integration_samples = floor.(Int, max_total_integration_time .* sample_freq)
     return (signal, beamform, velocity_aiding = default_velocity_aiding(system)) -> begin
         initial_track_results = init_track_results(signal, 0, max_total_integration_samples)
-        integrated_samples, corr_res = init_correlated_signals(signal, inits)
-        _tracking!(initial_track_results, corr_res, system, signal, 1, max_total_integration_time, integrated_samples, beamform, sample_freq, interm_freq, init_carrier_doppler, init_code_doppler, inits, carrier_loop, code_loop, sat_prn, velocity_aiding)
+        correlated_signals = init_correlated_signals(signal)
+        _tracking!(initial_track_results, correlated_signals, system, signal, 1, max_total_integration_time, 0, beamform, sample_freq, interm_freq, inits, initial_dopplers, initial_phases, carrier_loop, code_loop, sat_prn, velocity_aiding)
     end
 end
 
-function _tracking!(track_results, corr_res, system, signal, start_sample, max_total_integration_time, integrated_samples, beamform, sample_freq, interm_freq, carrier_doppler, code_doppler, inits, carrier_loop, code_loop, sat_prn, velocity_aiding)
+function _tracking!(track_results, correlated_signals, system, signal, start_sample, max_total_integration_time, integrated_samples, beamform, sample_freq, interm_freq, inits, dopplers, phases, carrier_loop, code_loop, sat_prn, velocity_aiding)
     code_sample_shift, actual_code_phase_shift = calc_sample_shift(system, sample_freq, 0.5)
 
-    next_corr_res, next_start_sample, next_integrated_samples, max_total_integration_samples =
-        gen_replica_downconvert_correlate!(corr_res, system, signal, max_total_integration_time, integrated_samples, start_sample, sample_freq, interm_freq, code_sample_shift, carrier_doppler, code_doppler, sat_prn, velocity_aiding)
+    next_correlated_signals, next_phases, next_start_sample, next_integrated_samples, max_total_integration_samples =
+        gen_replica_downconvert_correlate!(correlated_signals, system, signal, max_total_integration_time, integrated_samples, start_sample, sample_freq, interm_freq, code_sample_shift, dopplers, phases, sat_prn, velocity_aiding)
 
     if all(next_integrated_samples .== max_total_integration_samples)
         next_carrier_loop, next_code_loop, next_carrier_freq_update, next_code_freq_update =
-            beamform_and_update_loops(next_corr_res, max_total_integration_time, beamform, carrier_loop, code_loop, actual_code_phase_shift)
-        next_carrier_doppler, next_code_doppler = aid_dopplers(system, inits, next_carrier_freq_update, velocity_aiding, next_code_freq_update)
-        track_results = push_track_results!(track_results, next_corr_res, start_sample, max_total_integration_samples, next_carrier_doppler, next_code_doppler)
-        next_integrated_samples, next_corr_res = init_correlated_signals(signal, next_corr_res)
+            beamform_and_update_loops(next_correlated_signals, max_total_integration_time, beamform, carrier_loop, code_loop, actual_code_phase_shift)
+        next_dopplers = aid_dopplers(system, inits, next_carrier_freq_update, velocity_aiding, next_code_freq_update)
+        track_results = push_track_results!(track_results, next_correlated_signals, start_sample, max_total_integration_samples, next_dopplers, next_phases)
+        next_integrated_samples = 0
+        next_correlated_signals = init_correlated_signals(signal)
     else
-        next_carrier_loop, next_carrier_doppler = carrier_loop, carrier_doppler
-        next_code_loop, next_code_doppler = code_loop, code_doppler
+        next_dopplers = dopplers
+        next_carrier_loop, next_code_loop = carrier_loop, code_loop
     end
     if check_need_new_signal(next_start_sample, signal)
         return (next_signal, next_beamform, next_velocity_aiding = default_velocity_aiding(system)) -> begin
             initial_track_results = init_track_results(next_signal, next_integrated_samples, max_total_integration_samples)
-            _tracking!(initial_track_results, next_corr_res, system, next_signal, 1, max_total_integration_time, next_integrated_samples, next_beamform, sample_freq, interm_freq, next_carrier_doppler, next_code_doppler, inits, next_carrier_loop, next_code_loop, sat_prn, next_velocity_aiding)
+            _tracking!(initial_track_results, next_correlated_signals, system, next_signal, 1, max_total_integration_time, next_integrated_samples, next_beamform, sample_freq, interm_freq, inits, next_dopplers, next_phases, next_carrier_loop, next_code_loop, sat_prn, next_velocity_aiding)
         end, track_results
     else
-        _tracking!(track_results, next_corr_res, system, signal, next_start_sample, max_total_integration_time, next_integrated_samples, beamform, sample_freq, interm_freq, next_carrier_doppler, next_code_doppler, inits, next_carrier_loop, next_code_loop, sat_prn, velocity_aiding)
+        _tracking!(track_results, next_correlated_signals, system, signal, next_start_sample, max_total_integration_time, next_integrated_samples, beamform, sample_freq, interm_freq, inits, next_dopplers, next_phases, next_carrier_loop, next_code_loop, sat_prn, velocity_aiding)
     end
 end
 
@@ -54,7 +56,7 @@ end
 function aid_dopplers(system, inits, carrier_freq_update, code_freq_update, velocity_aiding)
     carrier_doppler = carrier_freq_update + velocity_aiding
     code_doppler = code_freq_update + carrier_doppler * system.code_freq / system.center_freq
-    inits.carrier_doppler + carrier_doppler, inits.code_doppler + code_doppler
+    TrackingDopplers(inits.carrier_doppler + carrier_doppler, inits.code_doppler + code_doppler)
 end
 
 function beamform_and_update_loops(correlated_signals, Δt, beamform, carrier_loop, code_loop, actual_code_phase_shift)
@@ -64,29 +66,18 @@ function beamform_and_update_loops(correlated_signals, Δt, beamform, carrier_lo
     next_carrier_loop, next_code_loop, carrier_freq_update, code_freq_update
 end
 
-function beamform_and_update_loops(corr_res::CorrelatorResults, Δt, beamform, carrier_loop, code_loop, actual_code_phase_shift)
-    beamform_and_update_loops(corr_res.outputs, Δt, beamform, carrier_loop, code_loop, actual_code_phase_shift)
-end
-
-function push_track_results!(track_results, corr_res, start_sample, max_total_integration_samples, carrier_doppler, code_doppler)
+function push_track_results!(track_results, correlated_signals, start_sample, max_total_integration_samples, dopplers, phases)
     track_result_idx = floor(Int, start_sample / max_total_integration_samples) + 1
-    track_results[track_result_idx] = TrackingResults(carrier_doppler, corr_res.carrier_phase, code_doppler, corr_res.code_phase, prompt(corr_res.outputs))
+    track_results[track_result_idx] = TrackingResults(dopplers.carrier, phases.carrier, dopplers.code, phases.code, prompt(correlated_signals))
     track_results
 end
 
-function init_correlated_signals(signal, carrier_phase, code_phase)
-    integrated_samples = 0
-    correlated_signals = [zeros(ComplexF64, size(signal, 2)) for i = 1:3]
-    corr_res = CorrelatorResults(carrier_phase, code_phase, correlated_signals)
-    integrated_samples, corr_res
+function init_correlated_signals(signal)
+    [zeros(ComplexF64, size(signal, 2)) for i = 1:3]
 end
 
-function init_correlated_signals(signal, initials::Initials)
-    init_correlated_signals(signal, initials.carrier_phase, initials.code_phase)
-end
-
-function init_correlated_signals(signal, corr_res::CorrelatorResults)
-    init_correlated_signals(signal, corr_res.carrier_phase, corr_res.code_phase)
+function init_phases(initials::Initials)
+    TrackingPhases(initials.carrier_phase, initials.code_phase)
 end
 
 function init_carrier_loop(bandwidth)
@@ -102,7 +93,7 @@ function default_velocity_aiding(system)
 end
 
 function init_dopplers(inits)
-    inits.carrier_doppler, inits.code_doppler
+    TrackingDopplers(inits.carrier_doppler, inits.code_doppler)
 end
 
 function check_init_track_consistency(system, sample_rate)
