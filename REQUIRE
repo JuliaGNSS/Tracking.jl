@@ -6,3 +6,4 @@ Unitful
 StructArrays
 Destruct
 StaticArrays
+FFTW

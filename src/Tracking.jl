@@ -1,6 +1,6 @@
 module Tracking
-    using DocStringExtensions, GNSSSignals, DataStructures, LinearAlgebra, Statistics, StructArrays, StaticArrays, Destruct
-    import Unitful: Hz, s
+    using DocStringExtensions, GNSSSignals, DataStructures, LinearAlgebra, Statistics, StructArrays, StaticArrays, Destruct, FFTW
+    import Unitful: Hz, s, ms
 
     export prompt,
         init_tracking,
