@@ -30,7 +30,7 @@ function _tracking!(track_results, correlated_signals, system, signal, start_sam
     if all(next_integrated_samples .== max_total_integration_samples)
         beamformed_signals, next_carrier_loop, next_code_loop, next_carrier_freq_update, next_code_freq_update =
             beamform_and_update_loops(next_correlated_signals, max_total_integration_time, beamform, carrier_loop, code_loop, actual_code_phase_shift)
-        next_dopplers = aid_dopplers(system, inits, next_carrier_freq_update, velocity_aiding, next_code_freq_update)
+        next_dopplers = aid_dopplers(system, inits, next_carrier_freq_update, next_code_freq_update, velocity_aiding)
         next_phases = find_neuman_hofman_code(system, next_phases, beamformed_prompt_correlator_buffer, prompt(beamformed_signals))
         track_results = push_track_results!(track_results, next_correlated_signals, start_sample, max_total_integration_samples, next_dopplers, next_phases)
         next_integrated_samples = 0

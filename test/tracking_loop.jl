@@ -83,6 +83,22 @@
     @test code_phases ≈ code_phases2
     @test carrier_dopplers ≈ carrier_dopplers2
     @test code_dopplers ≈ code_dopplers2
+
+    inits = Initials(0.0Hz, carrier_phase + 1.0, 0.0Hz, code_phase + 0.1)
+    track = init_tracking(gps_l1, inits, integration_time, sample_freq, interm_freq, 18.0Hz, 1.0Hz, 1)
+    track, results = track([1, 1]' .* signal, beamform)
+
+    @test results.code_phase[end] ≈ calculated_code_phases[end] atol = 4e-3
+
+    #=
+    figure("Tracking code phases")
+    plot(results.code_phase, color = "blue")
+    plot(calculated_code_phases, color = "red")
+    figure("Tracking carrier_dopplers")
+    plot(results.carrier_doppler ./ Hz)
+    figure("Tracking code dopplers")
+    plot(results.code_doppler ./ Hz)
+    =#
 end
 
 @testset "Track L5" begin
