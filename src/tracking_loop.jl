@@ -4,7 +4,7 @@ $(SIGNATURES)
 Initialize the tracking_loop by providing initial inputs to create the replicated carrier and satellite PRN code, the PLL, the DLL, and all the therfore needed componants; return a trackin_loop function.
 
 """
-function init_tracking(system::Union{AbstractGNSSSystem, Vector{<:AbstractGNSSSystem}}, inits::Union{Initials, Vector{Initials}}, max_total_integration_time, sample_freq, interm_freq, pll_bandwidth, dll_bandwidth, sat_prn)
+function init_tracking(system::Union{AbstractGNSSSystem, NTuple{N, AbstractGNSSSystem}}, inits::Union{Initials, NTuple{N, Initials}}, max_total_integration_time, sample_freq, interm_freq, pll_bandwidth, dll_bandwidth, sat_prn) where N
     check_init_track_consistency(system, sample_freq)
     carrier_loop = init_carrier_loop(pll_bandwidth)
     code_loop = init_code_loop(dll_bandwidth)
@@ -28,11 +28,12 @@ function _tracking!(track_results, correlated_signals, system, signal, start_sam
         gen_replica_downconvert_correlate!(correlated_signals, system, signal, max_total_integration_time, integrated_samples, start_sample, sample_freq, interm_freq, code_sample_shift, dopplers, phases, sat_prn, velocity_aiding)
 
     if all(next_integrated_samples .== max_total_integration_samples)
+        next_correlated_signals_scaled = next_correlated_signals ./ max_total_integration_samples
         beamformed_signals, next_carrier_loop, next_code_loop, next_carrier_freq_update, next_code_freq_update =
-            beamform_and_update_loops(next_correlated_signals, max_total_integration_time, beamform, carrier_loop, code_loop, actual_code_phase_shift)
+            beamform_and_update_loops(next_correlated_signals_scaled, max_total_integration_time, beamform, carrier_loop, code_loop, actual_code_phase_shift)
         next_dopplers = aid_dopplers(system, inits, next_carrier_freq_update, next_code_freq_update, velocity_aiding)
         next_phases = find_neuman_hofman_code(system, next_phases, beamformed_prompt_correlator_buffer, prompt(beamformed_signals))
-        track_results = push_track_results!(track_results, next_correlated_signals, start_sample, max_total_integration_samples, next_dopplers, next_phases)
+        track_results = push_track_results!(track_results, next_correlated_signals_scaled, prompt(beamformed_signals), start_sample, max_total_integration_samples, next_dopplers, next_phases)
         next_integrated_samples = 0
         next_correlated_signals = init_correlated_signals(signal)
     else
@@ -108,15 +109,17 @@ function aid_dopplers(system, inits, carrier_freq_update, code_freq_update, velo
 end
 
 function beamform_and_update_loops(correlated_signals, Δt, beamform, carrier_loop, code_loop, actual_code_phase_shift)
+    #beamformed_signals = map(correlated_signal -> beamform(correlated_signal .* sign(real(mean(prompt(correlated_signal))))), correlated_signals)
     beamformed_signals = map(correlated_signal -> beamform(correlated_signal), correlated_signals)
     next_carrier_loop, carrier_freq_update = carrier_loop(pll_disc(beamformed_signals), Δt)
     next_code_loop, code_freq_update = code_loop(dll_disc(beamformed_signals, 2 * actual_code_phase_shift), Δt)
     beamformed_signals, next_carrier_loop, next_code_loop, carrier_freq_update, code_freq_update
 end
 
-function push_track_results!(track_results, correlated_signals, start_sample, max_total_integration_samples, dopplers, phases)
+function push_track_results!(track_results, correlated_signals, beamformed_prompt_signal, start_sample, max_total_integration_samples, dopplers, phases)
     track_result_idx = floor(Int, start_sample / max_total_integration_samples) + 1
-    track_results[track_result_idx] = TrackingResults(dopplers.carrier, phases.carrier, dopplers.code, phases.code, prompt(correlated_signals))
+    #track_results[track_result_idx] = TrackingResults(dopplers.carrier, phases.carrier, dopplers.code, phases.code, prompt(correlated_signals) .* sign(real(mean(prompt(correlated_signals)))), prompt(beamformed_signals))
+    track_results[track_result_idx] = TrackingResults(dopplers.carrier, phases.carrier, dopplers.code, phases.code, prompt(correlated_signals), beamformed_prompt_signal)
     track_results
 end
 

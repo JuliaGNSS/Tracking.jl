@@ -21,6 +21,9 @@
     l1_code_phase = 2.0
     l5_code_phase = 4.0
 
+    gpsl1 = GPSL1()
+    gpsl5 = GPSL5()
+
     run_time = 1s
     integration_time = 1e-3s
     num_integrations = Int(run_time / integration_time)
@@ -31,15 +34,15 @@
 
     l1_carrier = cis.(2 * π * (l1_interm_freq + l1_doppler) / l1_sample_freq * (1:l1_num_samples) .+ l1_carrier_phase)
     l5_carrier = cis.(2 * π * (l5_interm_freq + l5_doppler) / l5_sample_freq * (1:l5_num_samples) .+ l5_carrier_phase)
-    l1_sampled_code = gen_code.(Ref(GPSL1()), 1:l1_num_samples, l1_code_doppler + l1_code_freq, l1_code_phase, l1_sample_freq, 1)
-    l5_sampled_code = gen_code.(Ref(GPSL5()), 1:l5_num_samples, l5_code_doppler + l5_code_freq, l5_code_phase, l5_sample_freq, 1)
+    l1_sampled_code = gen_code.(Ref(gpsl1), 1:l1_num_samples, l1_code_doppler + l1_code_freq, l1_code_phase, l1_sample_freq, 1)
+    l5_sampled_code = gen_code.(Ref(gpsl5), 1:l5_num_samples, l5_code_doppler + l5_code_freq, l5_code_phase, l5_sample_freq, 1)
     l1_signal = l1_carrier .* l1_sampled_code
     l5_signal = l5_carrier .* l5_sampled_code
 
     l1_inits = Tracking.Initials(0Hz, l1_carrier_phase, 0.0Hz, l1_code_phase)
     l5_inits = Tracking.Initials(0Hz, l5_carrier_phase, 0.0Hz, l5_code_phase)
 
-    track = Tracking.init_tracking([GPSL1(), GPSL5()], [l1_inits, l5_inits], integration_time, [l1_sample_freq, l5_sample_freq], [l1_interm_freq, l5_interm_freq], 10.0Hz, 1.0Hz, 1)
+    track = Tracking.init_tracking((gpsl1, gpsl5), (l1_inits, l5_inits), integration_time, (l1_sample_freq, l5_sample_freq), (l1_interm_freq, l5_interm_freq), 10.0Hz, 1.0Hz, 1)
 
     l1_code_phases = zeros(num_integrations)
     l5_code_phases = zeros(num_integrations)
@@ -55,7 +58,7 @@
     for i = 1:num_integrations
         l1_current_signal = [1, 1]' .* l1_signal[l1_integration_samples * (i - 1) + 1:l1_integration_samples * i]# .+ complex.(randn(l1_integration_samples, 2), randn(l1_integration_samples, 2)) .* 10^(15 / 20)
         l5_current_signal = [1, 1]' .* l5_signal[l5_integration_samples * (i - 1) + 1:l5_integration_samples * i]# .+ complex.(randn(l5_integration_samples, 2), randn(l5_integration_samples, 2)) .* 10^(15 / 20)
-        track, joined_results = track([l1_current_signal, l5_current_signal], beamform)
+        track, joined_results = track((l1_current_signal, l5_current_signal), beamform)
         l1_code_phases[i] = joined_results[1].code_phase[1]
         l5_code_phases[i] = joined_results[2].code_phase[1]
         l1_carrier_dopplers[i] = joined_results[1].carrier_doppler[1] / 1.0Hz

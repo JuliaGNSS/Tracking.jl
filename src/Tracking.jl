@@ -11,7 +11,8 @@ module Tracking
         carrier_phase::Float64
         code_doppler::typeof(1.0Hz)
         code_phase::Float64
-        prompt::Array{Complex{Float64}, 1}
+        prompt::Array{ComplexF64, 1}
+        beamformed_prompt::ComplexF64
     end
 
     struct TrackingPhases
