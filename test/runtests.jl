@@ -1,8 +1,6 @@
-using Test, Tracking, GNSSSignals, LinearAlgebra, DataStructures
-import Unitful: Hz, s
+using Test, Tracking, GNSSSignals, LinearAlgebra, DataStructures, StaticArrays
+import Unitful: Hz, s, ms
 
-include("discriminators.jl")
+#include("discriminators.jl")
 include("loop_filters.jl")
-include("downconvert_and_correlate.jl")
 include("tracking_loop.jl")
-include("joined_tracking.jl")

@@ -1,8 +1,22 @@
+function veryearly(x::SVector{N,T}) where {N,T}
+    x[(N - 1) >> 1 + 3]
+end
 
+function early(x::SVector{N,T}) where {N,T}
+    x[(N - 1) >> 1 + 2]
+end
 
-early(x) = x[3]
-prompt(x) = x[2]
-late(x) = x[1]
+function prompt(x::SVector{N,T}) where {N,T}
+    x[(N - 1) >> 1 + 1]
+end
+
+function late(x::SVector{N,T}) where {N,T}
+    x[(N - 1) >> 1]
+end
+
+function verylate(x::SVector{N,T}) where {N,T}
+    x[(N - 1) >> 1 - 1]
+end
 
 """
 $(SIGNATURES)
