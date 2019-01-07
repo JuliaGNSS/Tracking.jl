@@ -1,17 +1,15 @@
-image: julia:0.6
+image: julia:1.0
 
 testjob:
   before_script:
-    - apt-get update && apt-get install bzip2
     - 'which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )'
     - eval $(ssh-agent -s)
     - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add - > /dev/null
     - mkdir -p ~/.ssh
     - chmod 700 ~/.ssh
-    - julia -e 'Pkg.clone(pwd())'
-    - julia -e 'Pkg.clone("git@git.rwth-aachen.de:nav/GNSSSignals.jl.git")'
+    - julia -e 'using Pkg; Pkg.add(PackageSpec(url="git@git.rwth-aachen.de:nav/GNSSSignals.jl.git"))'
+    - julia -e "using Pkg; Pkg.develop(PackageSpec(url=pwd()))"
   script:
-    - julia -e 'Pkg.test("Tracking", coverage=true)'
-    - julia -e 'Pkg.add("Coverage"); cd(Pkg.dir("Tracking"));
+    - julia -e 'using Pkg; Pkg.add("Coverage"); Pkg.test("Tracking", coverage=true);
       using Coverage; cl, tl = get_summary(process_folder());
       println("(", cl/tl*100, "%) covered")'

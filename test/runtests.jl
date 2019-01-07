@@ -1,8 +1,6 @@
-using Base.Test, Tracking, GNSSSignals#, PyPlot
-import Unitful: Hz, s
+using Test, Tracking, GNSSSignals, LinearAlgebra, DataStructures, StaticArrays
+import Unitful: Hz, s, ms
 
 include("discriminators.jl")
 include("loop_filters.jl")
-include("replicas.jl")
 include("tracking_loop.jl")
-include("joined_tracking.jl")
