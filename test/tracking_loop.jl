@@ -208,8 +208,7 @@ end
     filtered_prompt_correlator_buffer = Tracking.init_prompt_correlator_buffer(gpsl1)
     last_valid_correlator_outputs = zeros(typeof(correlator_outputs))
     data_bits = Tracking.DataBits(gpsl1)
-    #results = @inferred Tracking._tracking(correlator_outputs, last_valid_correlator_outputs, signal, gpsl1, 4e6Hz, 30Hz, inits, dopplers, phases, code_shift, carrier_loop, code_loop, 1, x -> x, 0.5ms, 1ms, 1, 0, 0, data_bits, 0.0Hz)
-    results = Tracking._tracking(correlator_outputs, last_valid_correlator_outputs, signal, gpsl1, 4e6Hz, 30Hz, inits, dopplers, phases, code_shift, carrier_loop, code_loop, 1, x -> x, 0.5ms, 1ms, 1, 0, 0, data_bits, 0.0Hz)
+    results = @inferred Tracking._tracking(correlator_outputs, last_valid_correlator_outputs, signal, gpsl1, 4e6Hz, 30Hz, inits, dopplers, phases, code_shift, carrier_loop, code_loop, 1, x -> x, 0.5ms, 1ms, 1, 0, UInt(0), data_bits, 0.0Hz)
     @test results[2].carrier_doppler ≈ 20Hz
     @test results[2].code_doppler ≈ 0Hz atol = 3e-3Hz #??
     @test results[2].code_phase ≈ 2 atol = 2e-5

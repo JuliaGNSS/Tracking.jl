@@ -13,7 +13,7 @@ function init_tracking(system, inits, sample_freq, interm_freq, pll_bandwidth, d
     correlator_outputs = init_correlator_outputs(code_shift)
     data_bits = DataBits(system)
     last_valid_correlator_outputs = zeros(typeof(correlator_outputs))
-    req_signal_and_track(correlator_outputs, last_valid_correlator_outputs, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, min_integration_time, max_integration_time, 0, 0, data_bits)
+    req_signal_and_track(correlator_outputs, last_valid_correlator_outputs, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, min_integration_time, max_integration_time, 0, UInt(0), data_bits)
 end
 
 function _tracking(correlator_outputs, last_valid_correlator_outputs, signal, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, post_corr_filter, min_integration_time, max_integration_time, signal_idx, integrated_samples, num_integrated_prns, data_bits, velocity_aiding)
@@ -61,7 +61,7 @@ function buffer(data_bits, system::T, prompt_real, num_integrated_prns) where T<
     else
         synchronisation_buffer = data_bits.synchronisation_buffer << 1 + UInt(prompt_real > 0)
         num_bits_in_synchronisation_buffer = data_bits.num_bits_in_synchronisation_buffer + UInt(1)
-        first_found_after_num_prns = is_upcoming_integration_new_bit(T, synchronisation_buffer, num_bits_in_synchronisation_buffer) ? num_integrated_prns + 1 : -1
+        first_found_after_num_prns = is_upcoming_integration_new_bit(T, synchronisation_buffer, num_bits_in_synchronisation_buffer) ? Int(num_integrated_prns) + 1 : -1
         return DataBits{T}(synchronisation_buffer, num_bits_in_synchronisation_buffer, first_found_after_num_prns, data_bits.prompt_accumulator, data_bits.buffer, data_bits.num_bits_in_buffer)
     end
 end
