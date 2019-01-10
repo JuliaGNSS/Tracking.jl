@@ -12,9 +12,9 @@ module Tracking
         code_doppler::typeof(1.0Hz)
         code_phase::Float64
         prompt::P
-        databitbuffer::UInt
-        num_databits::UInt
-        num_integrationbits::UInt
+        data_bits::UInt
+        num_bits::Int
+        num_processed_prns::Int
     end
 
     struct CodeShift{N}
@@ -34,11 +34,11 @@ module Tracking
 
     struct DataBits{T<:AbstractGNSSSystem}
         synchronisation_buffer::UInt
-        num_bits_in_synchronisation_buffer::UInt
+        num_bits_in_synchronisation_buffer::Int
         first_found_after_num_prns::Int
         prompt_accumulator::Float64
         buffer::UInt
-        num_bits_in_buffer::UInt
+        num_bits_in_buffer::Int
     end
 
     struct Initials
@@ -76,7 +76,7 @@ module Tracking
 
     include("discriminators.jl")
     include("loop_filters.jl")
+    include("tracking_loop.jl")
     include("gpsl1.jl")
     include("gpsl5.jl")
-    include("tracking_loop.jl")
 end

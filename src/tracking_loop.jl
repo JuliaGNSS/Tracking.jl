@@ -13,12 +13,12 @@ function init_tracking(system, inits, sample_freq, interm_freq, pll_bandwidth, d
     correlator_outputs = init_correlator_outputs(code_shift)
     data_bits = DataBits(system)
     last_valid_correlator_outputs = zeros(typeof(correlator_outputs))
-    req_signal_and_track(correlator_outputs, last_valid_correlator_outputs, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, min_integration_time, max_integration_time, 0, UInt(0), data_bits)
+    req_signal_and_track(correlator_outputs, last_valid_correlator_outputs, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, min_integration_time, max_integration_time, 0, data_bits)
 end
 
 function _tracking(correlator_outputs, last_valid_correlator_outputs, signal, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, post_corr_filter, min_integration_time, max_integration_time, signal_idx, integrated_samples, num_integrated_prns, data_bits, velocity_aiding)
     preferred_integration_time = calc_integration_time(data_bits, max_integration_time)
-    num_samples_left_to_integrate = calc_num_samples_left_to_integrate(system, sample_freq, integrated_samples, phases, preferred_integration_time)
+    num_samples_left_to_integrate = calc_num_samples_left_to_integrate(system, sample_freq, phases, preferred_integration_time)
     num_samples_signal_bound = calc_num_samples_signal_bound(signal, signal_idx)
     num_samples_to_integrate = min(num_samples_left_to_integrate, num_samples_signal_bound)
     correlator_outputs = correlate_and_dump(correlator_outputs, signal, system, sample_freq, interm_freq, dopplers, phases, code_shift, signal_idx, num_samples_to_integrate, sat_prn)
@@ -26,7 +26,7 @@ function _tracking(correlator_outputs, last_valid_correlator_outputs, signal, sy
     phases = calc_next_phases(system, interm_freq, sample_freq, dopplers, phases, num_samples_to_integrate, data_bits)
     actual_integration_time = calc_actual_integration_time(integrated_samples, sample_freq)
     if num_samples_to_integrate == num_samples_left_to_integrate
-        num_integrated_prns += UInt(mod(preferred_integration_time / ms, system.num_prns_per_bit))
+        num_integrated_prns += calc_integrated_prns(system, integrated_samples, sample_freq)
         if actual_integration_time >= min_integration_time
             last_valid_correlator_outputs = correlator_outputs
             filtered_correlator_outputs = post_corr_filter(correlator_outputs)
@@ -40,28 +40,28 @@ function _tracking(correlator_outputs, last_valid_correlator_outputs, signal, sy
     end
     if num_samples_to_integrate == num_samples_signal_bound
         track_results = TrackingResults(dopplers, phases, last_valid_correlator_outputs, data_bits, num_integrated_prns)
-        return req_signal_and_track(correlator_outputs, last_valid_correlator_outputs, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, min_integration_time, max_integration_time, integrated_samples, num_integrated_prns, data_bits), track_results
+        return req_signal_and_track(correlator_outputs, last_valid_correlator_outputs, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, min_integration_time, max_integration_time, integrated_samples, data_bits), track_results
     else
         _tracking(correlator_outputs, last_valid_correlator_outputs, signal, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, post_corr_filter, min_integration_time, max_integration_time, signal_idx, integrated_samples, num_integrated_prns, data_bits, velocity_aiding)
     end
 end
 
-function req_signal_and_track(correlator_outputs, last_valid_correlator_outputs, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, min_integration_time, max_integration_time, integrated_samples, num_integrated_prns, data_bits)
+function req_signal_and_track(correlator_outputs, last_valid_correlator_outputs, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, min_integration_time, max_integration_time, integrated_samples, data_bits)
     (signal, post_corr_filter = x -> x, velocity_aiding = 0.0Hz) ->
-        _tracking(correlator_outputs, last_valid_correlator_outputs, signal, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, post_corr_filter, min_integration_time, max_integration_time, 1, integrated_samples, num_integrated_prns, data_bits, velocity_aiding)
+        _tracking(correlator_outputs, last_valid_correlator_outputs, signal, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, post_corr_filter, min_integration_time, max_integration_time, 1, integrated_samples, 0, data_bits, velocity_aiding)
 end
 
 function buffer(data_bits, system::T, prompt_real, num_integrated_prns) where T<:AbstractGNSSSystem
     if found(data_bits)
         prompt_accumulator = data_bits.prompt_accumulator + prompt_real
         bitbuffer = ifelse(data_bits.first_found_after_num_prns == num_integrated_prns, data_bits.buffer << 1 + UInt(prompt_accumulator > 0), data_bits.buffer)
-        num_bits_in_buffer = ifelse(data_bits.first_found_after_num_prns == num_integrated_prns, data_bits.num_bits_in_buffer + UInt(1), data_bits.num_bits_in_buffer)
+        num_bits_in_buffer = ifelse(data_bits.first_found_after_num_prns == num_integrated_prns, data_bits.num_bits_in_buffer + 1, data_bits.num_bits_in_buffer)
         new_prompt_accumulator = ifelse(data_bits.first_found_after_num_prns == num_integrated_prns, zero(prompt_accumulator), prompt_accumulator)
         return DataBits{T}(data_bits.synchronisation_buffer, data_bits.num_bits_in_synchronisation_buffer, data_bits.first_found_after_num_prns, new_prompt_accumulator, bitbuffer, num_bits_in_buffer)
     else
         synchronisation_buffer = data_bits.synchronisation_buffer << 1 + UInt(prompt_real > 0)
-        num_bits_in_synchronisation_buffer = data_bits.num_bits_in_synchronisation_buffer + UInt(1)
-        first_found_after_num_prns = is_upcoming_integration_new_bit(T, synchronisation_buffer, num_bits_in_synchronisation_buffer) ? Int(num_integrated_prns) + 1 : -1
+        num_bits_in_synchronisation_buffer = data_bits.num_bits_in_synchronisation_buffer + 1
+        first_found_after_num_prns = is_upcoming_integration_new_bit(T, synchronisation_buffer, num_bits_in_synchronisation_buffer) ? num_integrated_prns + 1 : -1
         return DataBits{T}(synchronisation_buffer, num_bits_in_synchronisation_buffer, first_found_after_num_prns, data_bits.prompt_accumulator, data_bits.buffer, data_bits.num_bits_in_buffer)
     end
 end
@@ -78,13 +78,17 @@ function calc_next_phases(system, interm_freq, sample_freq, dopplers, phases, nu
     Phases(next_carrier_phase, adjust_code_phase(system, data_bits, next_code_phase))
 end
 
-function calc_num_samples_left_to_integrate(system, sample_freq, integrated_samples, phases, integration_time)
-    chips_left = system.code_length * integration_time ÷ system.code_period - mod(phases.code, system.code_length)
-    ceil(Int, chips_left * sample_freq / system.code_freq) - integrated_samples
+function calc_num_samples_left_to_integrate(system, sample_freq, phases, integration_time)
+    chips_left = integration_time * system.code_freq - mod(phases.code, convert(Int, integration_time * system.code_freq))
+    ceil(Int, chips_left * sample_freq / system.code_freq)
 end
 
 function calc_num_samples_signal_bound(signal, signal_idx)
     size(signal, 1) - signal_idx + 1
+end
+
+function calc_integrated_prns(system, integrated_samples, sample_freq)
+    ceil(Int, integrated_samples / (sample_freq / system.code_freq * system.code_length))
 end
 
 function calc_integration_time(data_bits, max_integration_time)
