@@ -47,6 +47,7 @@ function _tracking(correlator_outputs, last_valid_correlator_outputs, signal, sy
 end
 
 function req_signal_and_track(correlator_outputs, last_valid_correlator_outputs, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, min_integration_time, max_integration_time, integrated_samples, data_bits)
+    data_bits = DataBits{typeof(system)}(data_bits.synchronisation_buffer, data_bits.num_bits_in_synchronisation_buffer, data_bits.first_found_after_num_prns, data_bits.prompt_accumulator, 0, 0)
     (signal, post_corr_filter = x -> x, velocity_aiding = 0.0Hz) ->
         _tracking(correlator_outputs, last_valid_correlator_outputs, signal, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, post_corr_filter, min_integration_time, max_integration_time, 1, integrated_samples, 0, data_bits, velocity_aiding)
 end
