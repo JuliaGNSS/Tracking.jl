@@ -239,7 +239,7 @@ end
      signal = carrier .* sampled_code
 
      inits = Initials(0.0Hz, carrier_phase, 0.0Hz, code_phase)
-     track = @inferred init_tracking(gps_l1, inits, sample_freq, interm_freq, 18.0Hz, 1.0Hz, min_integration_time, integration_time, 1)
+     track = @inferred init_tracking(gps_l1, inits, sample_freq, interm_freq, 1, pll_bandwidth = 18.0Hz, dll_bandwidth = 1.0Hz, min_integration_time = min_integration_time, max_integration_time = integration_time)
 
      code_dopplers = zeros(num_integrations)
      code_phases = zeros(num_integrations)
@@ -278,7 +278,7 @@ end
      switching_prn_code = vcat(repeat(-one_prn_code, 20), repeat(one_prn_code, 20))
      sampled_switching_code = switching_prn_code[mod.(floor.(Int, (1:num_samples) .* (code_doppler + code_freq) ./ sample_freq .+ code_phase), 40920) .+ 1]
      signal = carrier .* sampled_switching_code
-     track = @inferred init_tracking(gps_l1, inits, sample_freq, interm_freq, 18.0Hz, 1.0Hz, min_integration_time, integration_time, 1)
+     track = @inferred init_tracking(gps_l1, inits, sample_freq, interm_freq, 1, pll_bandwidth = 18.0Hz, dll_bandwidth = 1.0Hz, min_integration_time = min_integration_time, max_integration_time = integration_time)
      for i = 1:num_integrations
          current_signal = signal[integration_samples * (i - 1) + 1:integration_samples * i]# .+ complex.(randn(integration_samples,2), randn(integration_samples,2)) .* 10^(5/20)
          track, results = @inferred track(current_signal)
@@ -324,7 +324,7 @@ end
      signal = carrier .* sampled_code
 
      inits = Initials(0.0Hz, carrier_phase, 0.0Hz, mod(code_phase, 10230))
-     track = @inferred init_tracking(gps_l5, inits, sample_freq, interm_freq, 18.0Hz, 1.0Hz, min_integration_time, integration_time, 1)
+     track = @inferred init_tracking(gps_l5, inits, sample_freq, interm_freq, 1, pll_bandwidth = 18.0Hz, dll_bandwidth = 1.0Hz, min_integration_time = min_integration_time, max_integration_time = integration_time)
 
      code_dopplers = zeros(num_integrations)
      code_phases = zeros(num_integrations)

@@ -4,7 +4,7 @@ $(SIGNATURES)
 Initialize tracking function
 
 """
-function init_tracking(system, inits, sample_freq, interm_freq, pll_bandwidth, dll_bandwidth, min_integration_time, max_integration_time, sat_prn; carrier_loop_func = init_3rd_order_bilinear_loop_filter, code_loop_func = init_2nd_order_bilinear_loop_filter)
+function init_tracking(system, inits, sample_freq, interm_freq, sat_prn; pll_bandwidth = 18Hz, dll_bandwidth = 1Hz, min_integration_time = 0.5ms, max_integration_time = 1ms, carrier_loop_func = init_3rd_order_bilinear_loop_filter, code_loop_func = init_2nd_order_bilinear_loop_filter)
     code_shift = CodeShift{3}(system, sample_freq, 0.5) # 3: Early, Prompt, Late
     dopplers = Dopplers(inits)
     phases = Phases(inits)
