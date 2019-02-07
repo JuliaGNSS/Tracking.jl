@@ -100,10 +100,6 @@ function init_correlator_outputs(code_shift::CodeShift{N}) where N
     zeros(SVector{N, ComplexF64})
 end
 
-function init_prompt_correlator_buffer(system)
-    CircularBuffer{Float64}(0)
-end
-
 function buffer!(prompt_correlator_buffer, prompt_filtered_correlator_outputs)
     if !isfull(prompt_correlator_buffer)
         push!(filtered_prompt_correlator_buffer, prompt(filtered_correlator_outputs))

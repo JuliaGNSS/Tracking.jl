@@ -29,7 +29,7 @@ Returns a new loop_filter_function with updated parameters, and the system outpu
 function _loop_filter(x, δΘ, Δt, F, L, C, D)
     Δt_in_sec = Float64(upreferred(Δt/s))
     next_x = F(Δt_in_sec) * x .+ L(Δt_in_sec) * δΘ
-    y = dot(C(Δt_in_sec), x) + D(Δt_in_sec) * δΘ
+    y = dot(C(Δt_in_sec), x) + D(Δt_in_sec) * δΘ # next_x or x?
     req_error_and_filter(next_x, F, L, C, D), y * Hz
 end
 

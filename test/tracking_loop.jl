@@ -203,7 +203,6 @@ end
     phases = Tracking.Phases(inits)
     carrier_loop = Tracking.init_3rd_order_bilinear_loop_filter(18Hz)
     code_loop = Tracking.init_2nd_order_bilinear_loop_filter(1Hz)
-    filtered_prompt_correlator_buffer = Tracking.init_prompt_correlator_buffer(gpsl1)
     last_valid_correlator_outputs = zeros(typeof(correlator_outputs))
     data_bits = Tracking.DataBits(gpsl1)
     results = @inferred Tracking._tracking(correlator_outputs, last_valid_correlator_outputs, signal, gpsl1, 4e6Hz, 30Hz, inits, dopplers, phases, code_shift, carrier_loop, code_loop, 1, x -> x, 0.5ms, 1ms, 1, 0, 0, data_bits, 0.0Hz)
@@ -265,9 +264,8 @@ end
 #=
      using PyPlot
      pygui(true)
-     figure("Tracking code phases")
-     plot(code_phases, color = "blue")
-     plot(calculated_code_phases, color = "red")
+     figure("Tracking code phase error")
+     plot(code_phases - calculated_code_phases)
      figure("Tracking carrier_dopplers")
      plot(carrier_dopplers)
      figure("Tracking code dopplers")

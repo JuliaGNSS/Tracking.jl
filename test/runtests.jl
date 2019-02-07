@@ -1,4 +1,4 @@
-using Test, Tracking, GNSSSignals, LinearAlgebra, DataStructures, StaticArrays
+using Test, Tracking, GNSSSignals, LinearAlgebra, StaticArrays
 import Unitful: Hz, s, ms
 
 include("discriminators.jl")
