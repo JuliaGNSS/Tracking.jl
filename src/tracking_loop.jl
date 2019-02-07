@@ -12,7 +12,7 @@ function init_tracking(system, inits, sample_freq, interm_freq, sat_prn; pll_ban
     code_loop = code_loop_func(dll_bandwidth)
     correlator_outputs = init_correlator_outputs(code_shift)
     data_bits = DataBits(system)
-    last_valid_correlator_outputs = zeros(typeof(correlator_outputs))
+    last_valid_correlator_outputs = copy(correlator_outputs)
     req_signal_and_track(correlator_outputs, last_valid_correlator_outputs, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, min_integration_time, max_integration_time, 0, data_bits)
 end
 
