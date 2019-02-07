@@ -1,5 +1,5 @@
 module Tracking
-    using DocStringExtensions, GNSSSignals, LinearAlgebra, Statistics, StaticArrays, FFTW, Unitful
+    using DocStringExtensions, GNSSSignals, LinearAlgebra, Statistics, StaticArrays, Unitful
     import Unitful: Hz, s, ms
 
     export prompt,
