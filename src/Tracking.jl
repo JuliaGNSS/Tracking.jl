@@ -32,6 +32,13 @@ module Tracking
         code::typeof(1.0Hz)
     end
 
+    struct Initials
+        carrier_doppler::typeof(1.0Hz)
+        carrier_phase::Float64
+        code_doppler::typeof(1.0Hz)
+        code_phase::Float64
+    end
+
     struct DataBits{T<:AbstractGNSSSystem}
         synchronisation_buffer::UInt
         num_bits_in_synchronisation_buffer::Int
@@ -39,13 +46,6 @@ module Tracking
         prompt_accumulator::Float64
         buffer::UInt
         num_bits_in_buffer::Int
-    end
-
-    struct Initials
-        carrier_doppler::typeof(1.0Hz)
-        carrier_phase::Float64
-        code_doppler::typeof(1.0Hz)
-        code_phase::Float64
     end
 
     function Initials(res::TrackingResults)
@@ -70,12 +70,9 @@ module Tracking
         TrackingResults(dopplers.carrier, phases.carrier, dopplers.code, phases.code, correlator_outputs, data_bits.buffer, data_bits.num_bits_in_buffer, num_integrated_prns)
     end
 
-    function DataBits(system::T) where T <: AbstractGNSSSystem
-        DataBits{T}(0, 0, -1, 0, 0, 0)
-    end
-
     include("discriminators.jl")
     include("loop_filters.jl")
+    include("data_bits.jl")
     include("tracking_loop.jl")
     include("gpsl1.jl")
     include("gpsl5.jl")

@@ -5,7 +5,7 @@ Initialize tracking function
 
 """
 function init_tracking(system, inits, sample_freq, interm_freq, sat_prn; pll_bandwidth = 18Hz, dll_bandwidth = 1Hz, min_integration_time = 0.5ms, max_integration_time = 1ms, carrier_loop_func = init_3rd_order_bilinear_loop_filter, code_loop_func = init_2nd_order_bilinear_loop_filter)
-    code_shift = CodeShift{3}(system, sample_freq, 0.5) # 3: Early, Prompt, Late
+    code_shift = CodeShift{3}(system, sample_freq, 0.5) # 3: Early, Prompt, Late; should later depend on system
     dopplers = Dopplers(inits)
     phases = Phases(inits)
     carrier_loop = carrier_loop_func(pll_bandwidth)
@@ -47,24 +47,9 @@ function _tracking(correlator_outputs, last_valid_correlator_outputs, signal, sy
 end
 
 function req_signal_and_track(correlator_outputs, last_valid_correlator_outputs, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, min_integration_time, max_integration_time, integrated_samples, data_bits)
-    data_bits = DataBits{typeof(system)}(data_bits.synchronisation_buffer, data_bits.num_bits_in_synchronisation_buffer, data_bits.first_found_after_num_prns, data_bits.prompt_accumulator, 0, 0)
+    data_bits = DataBits(data_bits, 0, 0)
     (signal, post_corr_filter = x -> x, velocity_aiding = 0.0Hz) ->
         _tracking(correlator_outputs, last_valid_correlator_outputs, signal, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, post_corr_filter, min_integration_time, max_integration_time, 1, integrated_samples, 0, data_bits, velocity_aiding)
-end
-
-function buffer(data_bits, system::T, prompt_real, num_integrated_prns) where T<:AbstractGNSSSystem
-    if found(data_bits)
-        prompt_accumulator = data_bits.prompt_accumulator + prompt_real
-        bitbuffer = ifelse(data_bits.first_found_after_num_prns == num_integrated_prns, data_bits.buffer << 1 + UInt(prompt_accumulator > 0), data_bits.buffer)
-        num_bits_in_buffer = ifelse(data_bits.first_found_after_num_prns == num_integrated_prns, data_bits.num_bits_in_buffer + 1, data_bits.num_bits_in_buffer)
-        new_prompt_accumulator = ifelse(data_bits.first_found_after_num_prns == num_integrated_prns, zero(prompt_accumulator), prompt_accumulator)
-        return DataBits{T}(data_bits.synchronisation_buffer, data_bits.num_bits_in_synchronisation_buffer, data_bits.first_found_after_num_prns, new_prompt_accumulator, bitbuffer, num_bits_in_buffer)
-    else
-        synchronisation_buffer = data_bits.synchronisation_buffer << 1 + UInt(prompt_real > 0)
-        num_bits_in_synchronisation_buffer = data_bits.num_bits_in_synchronisation_buffer + 1
-        first_found_after_num_prns = is_upcoming_integration_new_bit(T, synchronisation_buffer, num_bits_in_synchronisation_buffer) ? num_integrated_prns + 1 : -1
-        return DataBits{T}(synchronisation_buffer, num_bits_in_synchronisation_buffer, first_found_after_num_prns, data_bits.prompt_accumulator, data_bits.buffer, data_bits.num_bits_in_buffer)
-    end
 end
 
 function correlate_and_dump(correlator_outputs, signal, system, sample_freq, interm_freq, dopplers, phases, code_shift, start_sample, num_samples_to_integrate, sat_prn)
@@ -98,12 +83,6 @@ end
 
 function init_correlator_outputs(code_shift::CodeShift{N}) where N
     zeros(SVector{N, ComplexF64})
-end
-
-function buffer!(prompt_correlator_buffer, prompt_filtered_correlator_outputs)
-    if !isfull(prompt_correlator_buffer)
-        push!(filtered_prompt_correlator_buffer, prompt(filtered_correlator_outputs))
-    end
 end
 
 function aid_dopplers(system, inits, carrier_freq_update, code_freq_update, velocity_aiding)
@@ -151,16 +130,6 @@ Base.@propagate_inbounds function dump!(output, signal::Vector, output_idx, samp
     @fastmath output[output_idx] += signal[sample] * code_carrier
 end
 
-Base.@propagate_inbounds function dump!(output, signal::Matrix, output_idx, sample, code_carrier)
-    for ant_idx = 1:size(output, 1)
-        @fastmath output[output_idx,ant_idx] += signal[sample,ant_idx] * code_carrier
-    end
-end
-
 function adjust_code_phase(system, data_bits, phase)
     phase
-end
-
-function found(data_bits::DataBits)
-    data_bits.first_found_after_num_prns != -1
 end
