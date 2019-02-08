@@ -1,3 +1,16 @@
+@testset "Prompt early late" begin
+    a = @SVector [i for i = 1:3]
+    @test Tracking.early(a) == a[3]
+    @test prompt(a) == a[2]
+    @test Tracking.late(a) == a[1]
+
+    a = @SVector [i for i = 1:5]
+    @test Tracking.veryearly(a) == a[5]
+    @test Tracking.early(a) == a[4]
+    @test prompt(a) == a[3]
+    @test Tracking.late(a) == a[2]
+    @test Tracking.verylate(a) == a[1]
+end
 
 @testset "PLL discriminator" begin
     test_signal_prephase = @SVector [-0.5 + sqrt(3) / 2im, -1 + sqrt(3) * 1im, -0.5 + sqrt(3) / 2im]
