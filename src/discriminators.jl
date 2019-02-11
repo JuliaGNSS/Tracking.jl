@@ -21,8 +21,7 @@ end
 """
 $(SIGNATURES)
 
-DLL discriminator
-Returns the calculated code offset in chips.
+Calculates the code offset in chips.
 """
 function dll_disc(x, d = 1)
     E = abs(early(x))
@@ -34,8 +33,7 @@ end
 """
 $(SIGNATURES)
 
-PLL discriminator
-Returns the calculated Phase error in rad.
+Calculates the phase error in radians.
 """
 function pll_disc(x)
     p = prompt(x)

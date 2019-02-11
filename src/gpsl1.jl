@@ -1,3 +1,8 @@
+"""
+$(SIGNATURES)
+
+Checks if upcoming integration is a new bit for GPSL1.
+"""
 function is_upcoming_integration_new_bit(::Type{GPSL1}, synchronisation_buffer, num_bits_in_buffer)
     if num_bits_in_buffer < 40
         return false

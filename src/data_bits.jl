@@ -6,6 +6,11 @@ function DataBits(data_bits::DataBits{T}, buffer, num_bits_in_buffer) where T <:
     DataBits{T}(data_bits.synchronisation_buffer, data_bits.num_bits_in_synchronisation_buffer, data_bits.first_found_after_num_prns, data_bits.prompt_accumulator, buffer, num_bits_in_buffer)
 end
 
+"""
+$(SIGNATURES)
+
+Buffers the data bits.
+"""
 function buffer(data_bits, system::T, prompt_real, num_integrated_prns) where T<:AbstractGNSSSystem
     if found(data_bits)
         prompt_accumulator = data_bits.prompt_accumulator + prompt_real
@@ -21,6 +26,11 @@ function buffer(data_bits, system::T, prompt_real, num_integrated_prns) where T<
     end
 end
 
+"""
+$(SIGNATURES)
+
+Checks if a possible data bit transition has been found yet.
+"""
 function found(data_bits::DataBits)
     data_bits.first_found_after_num_prns != -1
 end
