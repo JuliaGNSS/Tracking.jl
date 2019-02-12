@@ -43,8 +43,8 @@ function init_tracking(
     correlator_outputs = init_correlator_outputs(code_shift)
     data_bits = DataBits(system)
     last_valid_correlator_outputs = copy(correlator_outputs)
-    cn0_buffer = CN0Buffer(cn0_update_time)
-    req_signal_and_track(correlator_outputs, last_valid_correlator_outputs, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, min_integration_time, max_integration_time, 0, data_bits, cn0_buffer)
+    cn0_state = CN0State(cn0_update_time)
+    req_signal_and_track(correlator_outputs, last_valid_correlator_outputs, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, min_integration_time, max_integration_time, 0, data_bits, cn0_state)
 end
 
 """
@@ -53,7 +53,7 @@ $(SIGNATURES)
 Running tracking function. Will return a new tracking function for the next
 iteration and the tracking results.
 """
-function _tracking(correlator_outputs, last_valid_correlator_outputs, signal, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, post_corr_filter, min_integration_time, max_integration_time, signal_idx, integrated_samples, num_integrated_prns, data_bits, cn0_buffer, velocity_aiding)
+function _tracking(correlator_outputs, last_valid_correlator_outputs, signal, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, post_corr_filter, min_integration_time, max_integration_time, signal_idx, integrated_samples, num_integrated_prns, data_bits, cn0_state, velocity_aiding)
     preferred_integration_time = calc_integration_time(data_bits, max_integration_time)
     num_samples_left_to_integrate = calc_num_samples_left_to_integrate(system, sample_freq, phases, preferred_integration_time)
     num_samples_signal_bound = calc_num_samples_signal_bound(signal, signal_idx)
@@ -71,16 +71,16 @@ function _tracking(correlator_outputs, last_valid_correlator_outputs, signal, sy
             code_loop, code_freq_update = code_loop(dll_disc(filtered_correlator_outputs, 2 * code_shift.actual_shift), actual_integration_time)
             dopplers = aid_dopplers(system, inits, carrier_freq_update, code_freq_update, velocity_aiding)
             data_bits = buffer(data_bits, system, real(prompt(filtered_correlator_outputs)), num_integrated_prns)
-            cn0_buffer = estimate_CN0(cn0_buffer, actual_integration_time, prompt(filtered_correlator_outputs))
+            cn0_state = estimate_CN0(cn0_state, actual_integration_time, prompt(filtered_correlator_outputs))
         end
         correlator_outputs = zeros(typeof(correlator_outputs))
         integrated_samples = zero(integrated_samples)
     end
     if num_samples_to_integrate == num_samples_signal_bound
-        track_results = TrackingResults(dopplers, phases, last_valid_correlator_outputs, data_bits, num_integrated_prns, cn0_buffer.last_valid_cn0)
-        return req_signal_and_track(correlator_outputs, last_valid_correlator_outputs, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, min_integration_time, max_integration_time, integrated_samples, data_bits, cn0_buffer), track_results
+        track_results = TrackingResults(dopplers, phases, last_valid_correlator_outputs, data_bits, num_integrated_prns, cn0_state.last_valid_cn0)
+        return req_signal_and_track(correlator_outputs, last_valid_correlator_outputs, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, min_integration_time, max_integration_time, integrated_samples, data_bits, cn0_state), track_results
     else
-        _tracking(correlator_outputs, last_valid_correlator_outputs, signal, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, post_corr_filter, min_integration_time, max_integration_time, signal_idx, integrated_samples, num_integrated_prns, data_bits, cn0_buffer, velocity_aiding)
+        _tracking(correlator_outputs, last_valid_correlator_outputs, signal, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, post_corr_filter, min_integration_time, max_integration_time, signal_idx, integrated_samples, num_integrated_prns, data_bits, cn0_state, velocity_aiding)
     end
 end
 
@@ -89,10 +89,10 @@ $(SIGNATURES)
 
 Requires a new signal and returns a new tracking function for next iteration.
 """
-function req_signal_and_track(correlator_outputs, last_valid_correlator_outputs, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, min_integration_time, max_integration_time, integrated_samples, data_bits, cn0_buffer)
+function req_signal_and_track(correlator_outputs, last_valid_correlator_outputs, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, min_integration_time, max_integration_time, integrated_samples, data_bits, cn0_state)
     data_bits = DataBits(data_bits, 0, 0)
     (signal, post_corr_filter = x -> x, velocity_aiding = 0.0Hz) ->
-        _tracking(correlator_outputs, last_valid_correlator_outputs, signal, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, post_corr_filter, min_integration_time, max_integration_time, 1, integrated_samples, 0, data_bits, cn0_buffer, velocity_aiding)
+        _tracking(correlator_outputs, last_valid_correlator_outputs, signal, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, post_corr_filter, min_integration_time, max_integration_time, 1, integrated_samples, 0, data_bits, cn0_state, velocity_aiding)
 end
 
 """
