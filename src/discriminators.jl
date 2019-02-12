@@ -1,19 +1,44 @@
+"""
+$(SIGNATURES)
+
+Returns the very early
+"""
 function veryearly(x::SVector{N,T}) where {N,T}
     x[(N - 1) >> 1 + 3]
 end
 
+"""
+$(SIGNATURES)
+
+Returns the early
+"""
 function early(x::SVector{N,T}) where {N,T}
     x[(N - 1) >> 1 + 2]
 end
 
+"""
+$(SIGNATURES)
+
+Returns the prompt
+"""
 function prompt(x::SVector{N,T}) where {N,T}
     x[(N - 1) >> 1 + 1]
 end
 
+"""
+$(SIGNATURES)
+
+Returns the late
+"""
 function late(x::SVector{N,T}) where {N,T}
     x[(N - 1) >> 1]
 end
 
+"""
+$(SIGNATURES)
+
+Returns the very late
+"""
 function verylate(x::SVector{N,T}) where {N,T}
     x[(N - 1) >> 1 - 1]
 end

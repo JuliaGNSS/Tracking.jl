@@ -1,7 +1,7 @@
 [![pipeline status](https://git.rwth-aachen.de/nav/Tracking.jl/badges/master/pipeline.svg)](https://git.rwth-aachen.de/nav/Tracking.jl/commits/master)
 [![coverage report](https://git.rwth-aachen.de/nav/Tracking.jl/badges/master/coverage.svg)](https://git.rwth-aachen.de/nav/Tracking.jl/commits/master)
 # Tracking
-This implements a basic tracking function of GNSS signals. The correlation is done in the interval of PRNs. Each call of the tracking function returns the current code phase, doppler, data bits, number of data bits and the last valid correlator output.
+This implements a basic tracking functionality for GNSS signals. The correlation is done in the interval of PRNs. Each call of the tracking function returns the current code phase, doppler, the Carrier-to-Noise-Density-Ratio (CN0), data bits, number of data bits and the last valid correlator output.
 
 ## Features
 
@@ -25,12 +25,12 @@ If you have not added `GNSSSignals` before, you will also need to download `GNSS
 
 ```julia
 using Tracking, GNSSSignals
-import Unitful: Hz
+import Unitful: MHz, Hz
 gpsl1 = GPSL1()
 carrier_doppler = 100Hz
 code_phase = 120
 inits = Initials(gpsl1, carrier_doppler, code_phase)
-sample_freq = 2.5e6Hz
+sample_freq = 2.5MHz
 interm_freq = 0Hz
 prn = 1
 track = init_tracking(gpsl1, inits, sample_freq, interm_freq, prn)

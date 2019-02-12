@@ -2,7 +2,13 @@ module Tracking
     using DocStringExtensions, GNSSSignals, LinearAlgebra, Statistics, StaticArrays, Unitful
     import Unitful: Hz, s, ms
 
-    export prompt,
+    export
+        init_1st_order_loop_filter,
+        init_2nd_order_bilinear_loop_filter,
+        init_2nd_order_boxcar_loop_filter,
+        init_3rd_order_bilinear_loop_filter,
+        init_3rd_order_boxcar_loop_filter,
+        prompt,
         init_tracking,
         Initials
 
@@ -33,6 +39,11 @@ module Tracking
         code::typeof(1.0Hz)
     end
 
+    """
+    $(SIGNATURES)
+
+    Initials for the doppler and phase with respect to the carrier and the code.
+    """
     struct Initials
         carrier_doppler::typeof(1.0Hz)
         carrier_phase::Float64
@@ -49,14 +60,30 @@ module Tracking
         num_bits_in_buffer::Int
     end
 
+    """
+    $(SIGNATURES)
+
+    Creates initials from the tracking results `TrackingResults`
+    """
     function Initials(res::TrackingResults)
         Initials(res.carrier_doppler, res.carrier_phase, res.code_doppler, res.code_phase)
     end
 
+    """
+    $(SIGNATURES)
+
+    Simplified initials in the case that only the carrier doppler and the code
+    phase is available.
+    """
     function Initials(carrier_doppler, code_phase)
         Initials(carrier_doppler, 0.0, 0.0Hz, code_phase)
     end
 
+    """
+    $(SIGNATURES)
+
+    Initials with estimated code doppler from the carrier doppler.
+    """
     function Initials(system::AbstractGNSSSystem, carrier_doppler, code_phase)
         Initials(carrier_doppler, 0.0, carrier_doppler * (system.code_freq / system.center_freq), code_phase)
     end

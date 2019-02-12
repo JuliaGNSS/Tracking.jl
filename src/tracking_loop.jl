@@ -1,7 +1,7 @@
 """
 $(SIGNATURES)
 
-Initialize tracking function. Returns a tracking function to track a given signal.
+Initializes the tracking function. Returns a tracking function to track a given signal.
 The initialization needs the GNSS system `system`, the doppler and phase of the
 carrier and code `inits` of type `Initials`, the sample frequency `sample_freq`
 of type `Unitful.Hz`, the intermediate frequency of type `Unitful.Hz` and the
@@ -9,17 +9,23 @@ satellite PRN number `prn`.
 Optianally you can set the PLL bandwidth (default: 18Hz), the DLL bandwidth
 (default: 1Hz), the minimal integration time which will lead to a valid
 correlation results (default: 0.5ms), the maximal integration time (default: 1ms),
-the carrier loop function (default: init_3rd_order_bilinear_loop_filter) and the
-the code loop function (default: init_2nd_order_bilinear_loop_filter).
-The tracking function will never integrate beyond a data bit shift. Therefore,
-the correlator output will not be sampled at the exact same time instance, if
-you track multiple satellites. The tracking function will track the complete given
-signal. Adjust the number of samples in the signal to your preferred output update
-rate. The data bits are bufferd in an UInt variable. It can hold up to
-64 or 32 bits depending on your system. The number of detected bits will be
-returned, too.
+the carrier loop function (default: `init_3rd_order_bilinear_loop_filter`), the
+the code loop function (default: `init_2nd_order_bilinear_loop_filter`) the
+Carrier-to-Noise-Density-Ratio (CN0) update time `cn0_update_time`.
+The tracking function will only integrate in the boundaries of a bit shifts.
+Moreover, it will track the complete given signal. Adjust the number of samples
+in the signal to your preferred output update rate. The data bits are bufferd in
+an UInt variable. It can hold up to 64 or 32 bits depending on your system.
+The number of detected bits will be returned, too.
 The returned tracking function will return a new tracking function for the next
 iteration and the tracking results `TrackingResults`.
+# Examples
+```julia-repl
+julia> gpsl1 = GPSL1()
+julia> inits = Initials(gpsl1, 1200Hz, 231) # 1200 Hz doppler, 231 code phase
+julia> track = init_tracking(gpsl1, inits, 5Mhz, 0Hz, 1)
+julia> next_track, track_results = track(signal)
+```
 """
 function init_tracking(
         system,
