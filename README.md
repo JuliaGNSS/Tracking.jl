@@ -5,9 +5,10 @@ This implements a basic tracking function of GNSS signals. The correlation is do
 
 ## Features
 
-* Loop Filters of 1st, 2nd, and 3rd order, bilinear or boxcar
-* GPSL1
-* GPSL5
+* Supports Loop Filters of 1st, 2nd, and 3rd order, bilinear or boxcar
+* Supports GPS L1
+* Supports GPS L5
+* CN0 estimation
 
 ## Getting started
 
@@ -38,7 +39,7 @@ track, track_results = track(signal)
 
 ## Todo
 
-* Galileo Signals
+* Support Galileo Signals
 
 ## License
 

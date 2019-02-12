@@ -15,6 +15,7 @@ module Tracking
         data_bits::UInt
         num_bits::Int
         num_processed_prns::Int
+        cn0::Float64
     end
 
     struct CodeShift{N}
@@ -74,13 +75,14 @@ module Tracking
         Dopplers(inits.carrier_doppler, inits.code_doppler)
     end
 
-    function TrackingResults(dopplers::Dopplers, phases::Phases, correlator_outputs, data_bits::DataBits, num_integrated_prns)
-        TrackingResults(dopplers.carrier, phases.carrier, dopplers.code, phases.code, correlator_outputs, data_bits.buffer, data_bits.num_bits_in_buffer, num_integrated_prns)
+    function TrackingResults(dopplers::Dopplers, phases::Phases, correlator_outputs, data_bits::DataBits, num_integrated_prns, cn0)
+        TrackingResults(dopplers.carrier, phases.carrier, dopplers.code, phases.code, correlator_outputs, data_bits.buffer, data_bits.num_bits_in_buffer, num_integrated_prns, cn0)
     end
 
     include("discriminators.jl")
     include("loop_filters.jl")
     include("data_bits.jl")
+    include("cn0_estimation.jl")
     include("tracking_loop.jl")
     include("gpsl1.jl")
     include("gpsl5.jl")
