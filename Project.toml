@@ -1,0 +1,8 @@
+name = "Tracking"
+uuid = "ddecc2a6-2edf-11e9-34b8-2387f3c0e00d"
+
+[deps]
+DocStringExtensions = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
+GNSSSignals = "d30829eb-4b0d-58f8-884a-6991358505ae"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
