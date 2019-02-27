@@ -35,7 +35,7 @@ end
 
 @testset "Aiding" begin
     gpsl1 = GPSL1()
-    inits = Initials(20.0Hz, 0.0, 1.0Hz, 0)
+    inits = TrackingInitials(20.0Hz, 0.0, 1.0Hz, 0)
 
     dopplers = @inferred Tracking.aid_dopplers(gpsl1, inits, 2.5Hz, 0.1Hz, 0.0Hz)
     @test dopplers.carrier == 22.5Hz
@@ -114,7 +114,7 @@ end
     signal = carrier .* code
     correlator_outputs = zeros(SVector{3,ComplexF64})
     code_shift = Tracking.CodeShift{3}(gpsl1, 4e6Hz, 0.5)
-    inits = Initials(20Hz, 1.2, 0.0Hz, 2.0)
+    inits = TrackingInitials(20Hz, 1.2, 0.0Hz, 2.0)
     dopplers = Tracking.Dopplers(inits)
     phases = Tracking.Phases(inits)
     carrier_loop = Tracking.init_3rd_order_bilinear_loop_filter(18Hz)
@@ -154,7 +154,7 @@ end
      sampled_code = gen_code.(Ref(gps_l1), 1:num_samples, code_doppler + code_freq, code_phase, sample_freq, 1)
      signal = carrier .* sampled_code
 
-     inits = Initials(0.0Hz, carrier_phase, 0.0Hz, code_phase)
+     inits = TrackingInitials(0.0Hz, carrier_phase, 0.0Hz, code_phase)
      track = @inferred init_tracking(gps_l1, inits, sample_freq, interm_freq, 1, min_integration_time = min_integration_time, max_integration_time = integration_time)
 
      code_dopplers = zeros(num_integrations)
@@ -238,7 +238,7 @@ end
      sampled_code = gen_code.(Ref(gps_l5), 1:num_samples, code_doppler + code_freq, code_phase, sample_freq, 1)
      signal = carrier .* sampled_code
 
-     inits = Initials(0.0Hz, carrier_phase, 0.0Hz, mod(code_phase, 10230))
+     inits = TrackingInitials(0.0Hz, carrier_phase, 0.0Hz, mod(code_phase, 10230))
      track = @inferred init_tracking(gps_l5, inits, sample_freq, interm_freq, 1, pll_bandwidth = 18.0Hz, dll_bandwidth = 1.0Hz, min_integration_time = min_integration_time, max_integration_time = integration_time)
 
      code_dopplers = zeros(num_integrations)

@@ -32,7 +32,7 @@ end
     signal = carrier .* code .+ complex.(randn(num_samples), randn(num_samples)) ./ sqrt(2) .* 10 .^ (20 ./ 20)
     correlator_outputs = zeros(SVector{3,ComplexF64})
     code_shift = Tracking.CodeShift{3}(gpsl1, sample_freq, 0.5)
-    inits = Initials(20Hz, 1.2, 0.0Hz, 2.0)
+    inits = TrackingInitials(20Hz, 1.2, 0.0Hz, 2.0)
     dopplers = Tracking.Dopplers(inits)
     phases = Tracking.Phases(inits)
     carrier_loop = Tracking.init_3rd_order_bilinear_loop_filter(18Hz)

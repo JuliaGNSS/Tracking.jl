@@ -1,5 +1,6 @@
 name = "Tracking"
 uuid = "ddecc2a6-2edf-11e9-34b8-2387f3c0e00d"
+authors = ["Soeren Zorn <soeren.zorn@nav.rwth-aachen.de>"]
 
 [deps]
 DocStringExtensions = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
