@@ -37,7 +37,3 @@ track, track_results = track(signal)
 ## Todo
 
 * Support Galileo Signals
-
-## License
-
-MIT License
