@@ -16,9 +16,6 @@ matrix:
 notifications:
   email: false
 
-before_script:
-  - julia -e 'using Pkg; Pkg.add(PackageSpec(url="https://github.com/JuliaGNSS/GNSSSignals.jl.git"))'
-
 after_success:
   - julia -e 'using Pkg; import Tracking; cd(joinpath(dirname(pathof(Tracking)), "..")); Pkg.add("Coverage"); using Coverage; Coveralls.submit(Coveralls.process_folder())';
 
@@ -28,6 +25,6 @@ jobs:
       julia: 1.1
       os: linux
       script:
-        - julia --project=docs/ -e 'using Pkg; Pkg.add(PackageSpec(url="https://github.com/JuliaGNSS/GNSSSignals.jl.git")); Pkg.add("Documenter"); Pkg.instantiate(); Pkg.develop(PackageSpec(path=pwd()))'
+        - julia --project=docs/ -e 'using Pkg; Pkg.add("Documenter"); Pkg.instantiate(); Pkg.develop(PackageSpec(path=pwd()))'
         - julia --project=docs/ docs/make.jl
       after_success: skip
