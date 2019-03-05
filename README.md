@@ -14,8 +14,8 @@ This implements a basic tracking functionality for GNSS signals. The correlation
 
 Install:
 ```julia
-] add https://github.com/JuliaGNSS/GNSSSignals.jl.git
-] add https://github.com/JuliaGNSS/Tracking.jl.git
+julia> ]
+pkg> add Tracking
 ```
 
 ## Usage
