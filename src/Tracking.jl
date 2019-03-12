@@ -66,7 +66,7 @@ module Tracking
     Creates initials from the tracking results `TrackingResults`
     """
     function TrackingInitials(res::TrackingResults)
-        Initials(res.carrier_doppler, res.carrier_phase, res.code_doppler, res.code_phase)
+        TrackingInitials(res.carrier_doppler, res.carrier_phase, res.code_doppler, res.code_phase)
     end
 
     """
@@ -76,7 +76,7 @@ module Tracking
     phase is available.
     """
     function TrackingInitials(carrier_doppler, code_phase)
-        Initials(carrier_doppler, 0.0, 0.0Hz, code_phase)
+        TrackingInitials(carrier_doppler, 0.0, 0.0Hz, code_phase)
     end
 
     """
@@ -85,7 +85,7 @@ module Tracking
     Initials with estimated code doppler from the carrier doppler.
     """
     function TrackingInitials(system::AbstractGNSSSystem, carrier_doppler, code_phase)
-        Initials(carrier_doppler, 0.0, carrier_doppler * (system.code_freq / system.center_freq), code_phase)
+        TrackingInitials(carrier_doppler, 0.0, carrier_doppler * (system.code_freq / system.center_freq), code_phase)
     end
 
     function CodeShift{N}(system::AbstractGNSSSystem, sample_freq, preferred_code_shift) where N

@@ -1,3 +1,25 @@
+@testset "Tracking initials" begin
+    inits = TrackingInitials(20Hz, 140)
+    @test inits.carrier_doppler == 20Hz
+    @test inits.carrier_phase == 0
+    @test inits.code_doppler == 0Hz
+    @test inits.code_phase == 140
+
+    inits = TrackingInitials(Tracking.GPSL1(), 20Hz, 140)
+    @test inits.carrier_doppler == 20Hz
+    @test inits.carrier_phase == 0
+    @test inits.code_doppler == 20Hz / 1540
+    @test inits.code_phase == 140
+
+    track_res = Tracking.TrackingResults(20.0Hz, 1.5, 1.0Hz, 140.0, 2, UInt(0), 0, 0, 1000.0)
+
+    inits = TrackingInitials(track_res)
+    @test inits.carrier_doppler == 20Hz
+    @test inits.carrier_phase == 1.5
+    @test inits.code_doppler == 1Hz
+    @test inits.code_phase == 140
+end
+
 @testset "Code shift" begin
     gpsl1 = GPSL1()
     code_shift = Tracking.CodeShift{3}(gpsl1, 4e6Hz, 0.5)
