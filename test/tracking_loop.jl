@@ -284,7 +284,7 @@ end
          code_phases[i] = results.code_phase
          carrier_dopplers[i] = results.carrier_doppler / Hz
          code_dopplers[i] = results.code_doppler / Hz
-         real_prompts[i] = real(prompt(results.prompt))
+         real_prompts[i] = real(prompt(results.correlator_outputs))
      end
 
      @test results.carrier_doppler[1] ≈ doppler atol = 5e-2Hz

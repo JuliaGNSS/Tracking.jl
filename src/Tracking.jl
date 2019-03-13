@@ -17,7 +17,7 @@ module Tracking
         carrier_phase::Float64
         code_doppler::typeof(1.0Hz)
         code_phase::Float64
-        prompt::P
+        correlator_outputs::P
         data_bits::UInt
         num_bits::Int
         num_processed_prns::Int
@@ -113,4 +113,5 @@ module Tracking
     include("tracking_loop.jl")
     include("gpsl1.jl")
     include("gpsl5.jl")
+    include("phased_array.jl")
 end
