@@ -33,6 +33,7 @@ function init_tracking(
         sample_freq,
         interm_freq,
         sat_prn;
+        num_ants = NumAnts(1),
         pll_bandwidth = 18Hz,
         dll_bandwidth = 1Hz,
         min_integration_time = 0.5ms,
@@ -46,7 +47,7 @@ function init_tracking(
     phases = Phases(inits)
     carrier_loop = carrier_loop_func(pll_bandwidth)
     code_loop = code_loop_func(dll_bandwidth)
-    correlator_outputs = init_correlator_outputs(code_shift)
+    correlator_outputs = init_correlator_outputs(num_ants, code_shift)
     data_bits = DataBits(system)
     last_valid_correlator_outputs = copy(correlator_outputs)
     cn0_state = CN0State(cn0_update_time)
@@ -169,7 +170,7 @@ $(SIGNATURES)
 
 Initializes the correlator outputs.
 """
-function init_correlator_outputs(code_shift::CodeShift{N}) where N
+function init_correlator_outputs(::NumAnts{1}, code_shift::CodeShift{N}) where N
     zeros(SVector{N, ComplexF64})
 end
 

@@ -10,7 +10,13 @@ module Tracking
         init_3rd_order_boxcar_loop_filter,
         prompt,
         init_tracking,
-        TrackingInitials
+        TrackingInitials,
+        NumAnts
+
+    struct NumAnts{x}
+    end
+
+    NumAnts(x) = NumAnts{x}()
 
     struct TrackingResults{P}
         carrier_doppler::typeof(1.0Hz)

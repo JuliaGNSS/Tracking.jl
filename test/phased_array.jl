@@ -45,7 +45,7 @@ end
      signal = carrier .* sampled_code * [1 1 1 1]
 
      inits = TrackingInitials(0.0Hz, carrier_phase, 0.0Hz, code_phase)
-     track = @inferred Tracking.init_tracking(Val(4), gps_l1, inits, sample_freq, interm_freq, 1, pll_bandwidth = 18.0Hz, dll_bandwidth = 1.0Hz, min_integration_time = min_integration_time, max_integration_time = integration_time)
+     track = @inferred Tracking.init_tracking(gps_l1, inits, sample_freq, interm_freq, 1, num_ants = NumAnts(4), pll_bandwidth = 18.0Hz, dll_bandwidth = 1.0Hz, min_integration_time = min_integration_time, max_integration_time = integration_time)
 
      code_dopplers = zeros(num_integrations)
      code_phases = zeros(num_integrations)

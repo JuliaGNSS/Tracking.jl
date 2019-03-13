@@ -67,7 +67,7 @@ end
 @testset "Correlator output" begin
     gpsl1 = GPSL1()
     code_shift = Tracking.CodeShift{3}(gpsl1, 4e6Hz, 0.5)
-    output = @inferred Tracking.init_correlator_outputs(code_shift)
+    output = @inferred Tracking.init_correlator_outputs(NumAnts(1), code_shift)
     @test output === zeros(SVector{3, ComplexF64})
 end
 
