@@ -11,7 +11,8 @@ module Tracking
         prompt,
         init_tracking,
         TrackingInitials,
-        NumAnts
+        NumAnts,
+        cn0
 
     struct NumAnts{x}
     end
@@ -29,6 +30,9 @@ module Tracking
         num_processed_prns::Int
         cn0::Float64
     end
+
+    prompt(track_res::TrackingResults) = prompt(track_res.correlator_outputs)
+    CN0(track_res::TrackingResults) = track_res.cn0
 
     struct CodeShift{N}
         samples::Int
