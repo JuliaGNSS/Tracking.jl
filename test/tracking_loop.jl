@@ -11,7 +11,7 @@
     @test inits.code_doppler == 20Hz / 1540
     @test inits.code_phase == 140
 
-    track_res = Tracking.TrackingResults(20.0Hz, 1.5, 1.0Hz, 140.0, 2, UInt(0), 0, 0, 1000.0)
+    track_res = Tracking.TrackingResults(20.0Hz, 1.5, 1.0Hz, 140.0, 2, 2, UInt(0), 0, 0, 1000.0)
 
     inits = TrackingInitials(track_res)
     @test inits.carrier_doppler == 20Hz
@@ -142,9 +142,10 @@ end
     carrier_loop = Tracking.init_3rd_order_bilinear_loop_filter(18Hz)
     code_loop = Tracking.init_2nd_order_bilinear_loop_filter(1Hz)
     last_valid_correlator_outputs = zeros(typeof(correlator_outputs))
+    last_valid_filtered_correlator_outputs = zeros(typeof(correlator_outputs))
     data_bits = Tracking.DataBits(gpsl1)
     cn0_state = Tracking.CN0State(20ms)
-    results = @inferred Tracking._tracking(correlator_outputs, last_valid_correlator_outputs, signal, gpsl1, 4e6Hz, 30Hz, inits, dopplers, phases, code_shift, carrier_loop, code_loop, 1, x -> x, 0.5ms, 1ms, 1, 0, 0, data_bits, cn0_state, 0.0Hz)
+    results = @inferred Tracking._tracking(correlator_outputs, last_valid_correlator_outputs, last_valid_filtered_correlator_outputs, signal, gpsl1, 4e6Hz, 30Hz, inits, dopplers, phases, code_shift, carrier_loop, code_loop, 1, x -> x, 0.5ms, 1ms, 1, 0, 0, data_bits, cn0_state, 0.0Hz)
     @test results[2].carrier_doppler ≈ 20Hz
     @test results[2].code_doppler ≈ 0Hz atol = 3e-3Hz #??
     @test results[2].code_phase ≈ 2 atol = 2e-5

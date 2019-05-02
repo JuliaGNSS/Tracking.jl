@@ -19,12 +19,13 @@ module Tracking
 
     NumAnts(x) = NumAnts{x}()
 
-    struct TrackingResults{P}
+    struct TrackingResults{P,FP}
         carrier_doppler::typeof(1.0Hz)
         carrier_phase::Float64
         code_doppler::typeof(1.0Hz)
         code_phase::Float64
         correlator_outputs::P
+        filtered_correlator_outputs::FP
         data_bits::UInt
         num_bits::Int
         num_processed_prns::Int
@@ -112,8 +113,8 @@ module Tracking
         Dopplers(inits.carrier_doppler, inits.code_doppler)
     end
 
-    function TrackingResults(dopplers::Dopplers, phases::Phases, correlator_outputs, data_bits::DataBits, num_integrated_prns, cn0)
-        TrackingResults(dopplers.carrier, phases.carrier, dopplers.code, phases.code, correlator_outputs, data_bits.buffer, data_bits.num_bits_in_buffer, num_integrated_prns, cn0)
+    function TrackingResults(dopplers::Dopplers, phases::Phases, correlator_outputs, filtered_correlator_outputs, data_bits::DataBits, num_integrated_prns, cn0)
+        TrackingResults(dopplers.carrier, phases.carrier, dopplers.code, phases.code, correlator_outputs, filtered_correlator_outputs, data_bits.buffer, data_bits.num_bits_in_buffer, num_integrated_prns, cn0)
     end
 
     include("discriminators.jl")

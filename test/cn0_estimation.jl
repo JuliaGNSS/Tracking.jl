@@ -38,8 +38,9 @@ end
     carrier_loop = Tracking.init_3rd_order_bilinear_loop_filter(18Hz)
     code_loop = Tracking.init_2nd_order_bilinear_loop_filter(1Hz)
     last_valid_correlator_outputs = zeros(typeof(correlator_outputs))
+    last_valid_filtered_correlator_outputs = zeros(typeof(correlator_outputs))
     data_bits = Tracking.DataBits(gpsl1)
     cn0_state = Tracking.CN0State(20ms)
-    results = @inferred Tracking._tracking(correlator_outputs, last_valid_correlator_outputs, signal, gpsl1, sample_freq, 30Hz, inits, dopplers, phases, code_shift, carrier_loop, code_loop, 1, x -> x, 0.5ms, 1ms, 1, 0, 0, data_bits, cn0_state, 0.0Hz)
+    results = @inferred Tracking._tracking(correlator_outputs, last_valid_correlator_outputs, last_valid_filtered_correlator_outputs, signal, gpsl1, sample_freq, 30Hz, inits, dopplers, phases, code_shift, carrier_loop, code_loop, 1, x -> x, 0.5ms, 1ms, 1, 0, 0, data_bits, cn0_state, 0.0Hz)
     @test 10*log10(results[2].cn0) ≈ 45 atol = 1 #1?
 end

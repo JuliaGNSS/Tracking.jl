@@ -11,9 +11,10 @@
     carrier_loop = init_3rd_order_bilinear_loop_filter(18Hz)
     code_loop = init_2nd_order_bilinear_loop_filter(1Hz)
     last_valid_correlator_outputs = copy(correlator_outputs)
+    last_valid_filtered_correlator_outputs = zeros(SVector{3,ComplexF64})
     data_bits = Tracking.DataBits(gpsl1)
     cn0_state = Tracking.CN0State(20ms)
-    results = @inferred Tracking._tracking(correlator_outputs, last_valid_correlator_outputs, signal, gpsl1, 4e6Hz, 30Hz, inits, dopplers, phases, code_shift, carrier_loop, code_loop, 1, x -> x[:,1], 0.5ms, 1ms, 1, 0, 0, data_bits, cn0_state, 0.0Hz)
+    results = @inferred Tracking._tracking(correlator_outputs, last_valid_correlator_outputs, last_valid_filtered_correlator_outputs, signal, gpsl1, 4e6Hz, 30Hz, inits, dopplers, phases, code_shift, carrier_loop, code_loop, 1, x -> x[:,1], 0.5ms, 1ms, 1, 0, 0, data_bits, cn0_state, 0.0Hz)
     @test results[2].carrier_doppler ≈ 20Hz
     @test results[2].code_doppler ≈ 0Hz atol = 3e-3Hz #??
     @test results[2].code_phase ≈ 2 atol = 2e-5
