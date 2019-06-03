@@ -22,7 +22,7 @@ end
 
 @testset "Code shift" begin
     gpsl1 = GPSL1()
-    code_shift = Tracking.CodeShift{3}(gpsl1, 4e6Hz, 0.5)
+    code_shift = Tracking.CodeShift(gpsl1, 4e6Hz, 0.5)
     @test code_shift.samples == 2
     @test code_shift.actual_shift == 0.5115
 
@@ -45,7 +45,7 @@ end
     gen_carrier_replica(x) = gen_carrier(x, -50Hz, -1.2, 4e6Hz)
     calc_code_replica_phase_unsafe(x) = calc_code_phase_unsafe(x, 1023e3Hz, 2.0, 4e6Hz)
     prev_correlator_outputs = zeros(SVector{3,ComplexF64})
-    code_shift = Tracking.CodeShift{3}(gpsl1, 4e6Hz, 0.5)
+    code_shift = Tracking.CodeShift(gpsl1, 4e6Hz, 0.5)
     outputs = @inferred Tracking.downconvert_and_correlate(prev_correlator_outputs, signal, gpsl1, 1, 4000, gen_carrier_replica, calc_code_replica_phase_unsafe, code_shift, 1)
     @test outputs ≈ [1952, 4000, 1952]
 
@@ -66,7 +66,7 @@ end
 
 @testset "Correlator output" begin
     gpsl1 = GPSL1()
-    code_shift = Tracking.CodeShift{3}(gpsl1, 4e6Hz, 0.5)
+    code_shift = Tracking.CodeShift(gpsl1, 4e6Hz, 0.5)
     output = @inferred Tracking.init_correlator_outputs(NumAnts(1), code_shift)
     @test output === zeros(SVector{3, ComplexF64})
 end
@@ -135,7 +135,7 @@ end
     code = gen_code.(Ref(gpsl1), 1:24000, 1023e3Hz, 2.0, 4e6Hz, 1)
     signal = carrier .* code
     correlator_outputs = zeros(SVector{3,ComplexF64})
-    code_shift = Tracking.CodeShift{3}(gpsl1, 4e6Hz, 0.5)
+    code_shift = Tracking.CodeShift(gpsl1, 4e6Hz, 0.5)
     inits = TrackingInitials(20Hz, 1.2, 0.0Hz, 2.0)
     dopplers = Tracking.Dopplers(inits)
     phases = Tracking.Phases(inits)
@@ -216,7 +216,7 @@ end
      switching_prn_code = vcat(repeat(-one_prn_code, 20), repeat(one_prn_code, 20))
      sampled_switching_code = switching_prn_code[mod.(floor.(Int, (1:num_samples) .* (code_doppler + code_freq) ./ sample_freq .+ code_phase), 40920) .+ 1]
      signal = carrier .* sampled_switching_code
-     track = @inferred init_tracking(gps_l1, inits, sample_freq, interm_freq, 1, pll_bandwidth = 18.0Hz, dll_bandwidth = 1.0Hz, min_integration_time = min_integration_time, max_integration_time = integration_time)
+     track = @inferred init_tracking(gps_l1, inits, sample_freq, interm_freq, 1, min_integration_time = min_integration_time, max_integration_time = integration_time)
      for i = 1:num_integrations
          current_signal = signal[integration_samples * (i - 1) + 1:integration_samples * i]# .+ complex.(randn(integration_samples,2), randn(integration_samples,2)) .* 10^(5/20)
          track, results = @inferred track(current_signal)
@@ -262,7 +262,7 @@ end
      signal = carrier .* sampled_code
 
      inits = TrackingInitials(0.0Hz, carrier_phase, 0.0Hz, mod(code_phase, 10230))
-     track = @inferred init_tracking(gps_l5, inits, sample_freq, interm_freq, 1, pll_bandwidth = 18.0Hz, dll_bandwidth = 1.0Hz, min_integration_time = min_integration_time, max_integration_time = integration_time)
+     track = @inferred init_tracking(gps_l5, inits, sample_freq, interm_freq, 1, min_integration_time = min_integration_time, max_integration_time = integration_time)
 
      code_dopplers = zeros(num_integrations)
      code_phases = zeros(num_integrations)

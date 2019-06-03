@@ -31,7 +31,7 @@ end
     code = gen_code.(Ref(gpsl1), 1:num_samples, 1023e3Hz, 2.0, sample_freq, 1)
     signal = carrier .* code .+ complex.(randn(num_samples), randn(num_samples)) ./ sqrt(2) .* 10 .^ (20 ./ 20)
     correlator_outputs = zeros(SVector{3,ComplexF64})
-    code_shift = Tracking.CodeShift{3}(gpsl1, sample_freq, 0.5)
+    code_shift = Tracking.CodeShift(gpsl1, sample_freq, 0.5)
     inits = TrackingInitials(20Hz, 1.2, 0.0Hz, 2.0)
     dopplers = Tracking.Dopplers(inits)
     phases = Tracking.Phases(inits)

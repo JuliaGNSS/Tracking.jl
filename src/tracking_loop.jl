@@ -34,19 +34,15 @@ function init_tracking(
         interm_freq,
         sat_prn;
         num_ants = NumAnts(1),
-        pll_bandwidth = 18Hz,
-        dll_bandwidth = 1Hz,
         min_integration_time = 0.5ms,
         max_integration_time = 1ms,
-        carrier_loop_func = init_3rd_order_bilinear_loop_filter,
-        code_loop_func = init_2nd_order_bilinear_loop_filter,
+        carrier_loop = init_3rd_order_bilinear_loop_filter(18Hz),
+        code_loop = init_2nd_order_bilinear_loop_filter(1Hz),
         cn0_update_time = 20ms
     )
-    code_shift = CodeShift{3}(system, sample_freq, 0.5) # 3: Early, Prompt, Late; should later depend on system
+    code_shift = CodeShift(system, sample_freq, 0.5)
     dopplers = Dopplers(inits)
     phases = Phases(inits)
-    carrier_loop = carrier_loop_func(pll_bandwidth)
-    code_loop = code_loop_func(dll_bandwidth)
     correlator_outputs = init_correlator_outputs(num_ants, code_shift)
     data_bits = DataBits(system)
     last_valid_correlator_outputs = copy(correlator_outputs)

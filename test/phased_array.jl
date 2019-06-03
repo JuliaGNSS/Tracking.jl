@@ -4,7 +4,7 @@
     code = Tracking.gen_code.(Ref(gpsl1), 1:24000, 1023e3Hz, 2.0, 4e6Hz, 1)
     signal = carrier .* code * [1 1 1 1]
     correlator_outputs = zeros(SMatrix{3,4,ComplexF64})
-    code_shift = Tracking.CodeShift{3}(gpsl1, 4e6Hz, 0.5)
+    code_shift = Tracking.CodeShift(gpsl1, 4e6Hz, 0.5)
     inits = TrackingInitials(20Hz, 1.2, 0.0Hz, 2.0)
     dopplers = Tracking.Dopplers(inits)
     phases = Tracking.Phases(inits)
@@ -46,7 +46,7 @@ end
      signal = carrier .* sampled_code * [1 1 1 1]
 
      inits = TrackingInitials(0.0Hz, carrier_phase, 0.0Hz, code_phase)
-     track = @inferred Tracking.init_tracking(gps_l1, inits, sample_freq, interm_freq, 1, num_ants = NumAnts(4), pll_bandwidth = 18.0Hz, dll_bandwidth = 1.0Hz, min_integration_time = min_integration_time, max_integration_time = integration_time)
+     track = @inferred Tracking.init_tracking(gps_l1, inits, sample_freq, interm_freq, 1, num_ants = NumAnts(4), min_integration_time = min_integration_time, max_integration_time = integration_time)
 
      code_dopplers = zeros(num_integrations)
      code_phases = zeros(num_integrations)
