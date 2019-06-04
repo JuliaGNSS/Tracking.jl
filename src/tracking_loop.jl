@@ -38,13 +38,14 @@ function init_tracking(
         max_integration_time = 1ms,
         carrier_loop = init_3rd_order_bilinear_loop_filter(18Hz),
         code_loop = init_2nd_order_bilinear_loop_filter(1Hz),
-        cn0_update_time = 20ms
+        cn0_update_time = 20ms,
+        data_bit_found_after_num_prn = -1
     )
     code_shift = CodeShift(system, sample_freq, 0.5)
     dopplers = Dopplers(inits)
     phases = Phases(inits)
     correlator_outputs = init_correlator_outputs(num_ants, code_shift)
-    data_bits = DataBits(system)
+    data_bits = DataBits(system, data_bit_found_after_num_prn)
     last_valid_correlator_outputs = copy(correlator_outputs)
     last_valid_filtered_correlator_outputs = init_correlator_outputs(NumAnts(1), code_shift)
     cn0_state = CN0State(cn0_update_time)
@@ -63,7 +64,8 @@ function _tracking(correlator_outputs, last_valid_correlator_outputs, last_valid
     num_samples_signal_bound = calc_num_samples_signal_bound(signal, signal_idx)
     num_samples_to_integrate = min(num_samples_left_to_integrate, num_samples_signal_bound)
     correlator_outputs = correlate_and_dump(correlator_outputs, signal, system, sample_freq, interm_freq, dopplers, phases, code_shift, signal_idx, num_samples_to_integrate, sat_prn)
-    integrated_samples, signal_idx = (integrated_samples, signal_idx) .+ num_samples_to_integrate
+    integrated_samples = increase_samples_by(integrated_samples, num_samples_to_integrate)
+    signal_idx = increase_samples_by(signal_idx, num_samples_to_integrate)
     phases = calc_next_phases(system, interm_freq, sample_freq, dopplers, phases, num_samples_to_integrate, data_bits)
     actual_integration_time = calc_actual_integration_time(integrated_samples, sample_freq)
     if num_samples_to_integrate == num_samples_left_to_integrate
@@ -257,4 +259,8 @@ necessary.
 """
 function adjust_code_phase(system, data_bits, phase)
     phase
+end
+
+function increase_samples_by(a, b)
+    a + b
 end

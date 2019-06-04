@@ -1,5 +1,5 @@
-function DataBits(system::T) where T <: AbstractGNSSSystem
-    DataBits{T}(0, 0, -1, 0, 0, 0)
+function DataBits(system::T, data_bit_found_after_num_prn = -1) where T <: AbstractGNSSSystem
+    DataBits{T}(0, 0, data_bit_found_after_num_prn, 0, 0, 0)
 end
 
 function DataBits(data_bits::DataBits{T}, buffer, num_bits_in_buffer) where T <: AbstractGNSSSystem
