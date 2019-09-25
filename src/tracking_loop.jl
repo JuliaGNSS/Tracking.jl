@@ -46,7 +46,7 @@ function init_tracking(
     phases = Phases(inits)
     correlator_outputs = init_correlator_outputs(num_ants, code_shift)
     data_bits = DataBits(system, data_bit_found_after_num_prn)
-    last_valid_correlator_outputs = copy(correlator_outputs)
+    last_valid_correlator_outputs = init_correlator_outputs(num_ants, code_shift)
     last_valid_filtered_correlator_outputs = init_correlator_outputs(NumAnts(1), code_shift)
     cn0_state = CN0State(cn0_update_time)
     req_signal_and_track(correlator_outputs, last_valid_correlator_outputs, last_valid_filtered_correlator_outputs, system, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, min_integration_time, max_integration_time, 0, data_bits, cn0_state)
@@ -62,26 +62,27 @@ function _tracking(correlator_outputs, last_valid_correlator_outputs, last_valid
     preferred_integration_time = calc_integration_time(data_bits, max_integration_time)
     num_samples_left_to_integrate = calc_num_samples_left_to_integrate(system, sample_freq, phases, preferred_integration_time)
     num_samples_signal_bound = calc_num_samples_signal_bound(signal, signal_idx)
-    num_samples_to_integrate = min(num_samples_left_to_integrate, num_samples_signal_bound)
+    num_samples_to_integrate = calc_num_samples_to_integrate(num_samples_left_to_integrate, num_samples_signal_bound)
     correlator_outputs = correlate_and_dump(correlator_outputs, signal, system, sample_freq, interm_freq, dopplers, phases, code_shift, signal_idx, num_samples_to_integrate, sat_prn)
     integrated_samples = increase_samples_by(integrated_samples, num_samples_to_integrate)
     signal_idx = increase_samples_by(signal_idx, num_samples_to_integrate)
     phases = calc_next_phases(system, interm_freq, sample_freq, dopplers, phases, num_samples_to_integrate, data_bits)
     actual_integration_time = calc_actual_integration_time(integrated_samples, sample_freq)
     if num_samples_to_integrate == num_samples_left_to_integrate
+        correlator_outputs = normalize(correlator_outputs, integrated_samples)
         num_integrated_prns += calc_integrated_prns(system, integrated_samples, sample_freq)
         if actual_integration_time >= min_integration_time
             last_valid_correlator_outputs = correlator_outputs
             filtered_correlator_outputs = post_corr_filter(correlator_outputs)
             last_valid_filtered_correlator_outputs = filtered_correlator_outputs
             carrier_loop, carrier_freq_update = carrier_loop(pll_disc(filtered_correlator_outputs), actual_integration_time)
-            code_loop, code_freq_update = code_loop(dll_disc(filtered_correlator_outputs, 2 * code_shift.actual_shift), actual_integration_time)
+            code_loop, code_freq_update = code_loop(dll_disc(filtered_correlator_outputs, early_late_shift(code_shift)), actual_integration_time)
             dopplers = aid_dopplers(system, inits, carrier_freq_update, code_freq_update, velocity_aiding)
             data_bits = buffer(data_bits, system, real(prompt(filtered_correlator_outputs)), num_integrated_prns)
             cn0_state = estimate_CN0(cn0_state, actual_integration_time, prompt(filtered_correlator_outputs))
         end
-        correlator_outputs = zeros(typeof(correlator_outputs))
-        integrated_samples = zero(integrated_samples)
+        correlator_outputs = reset(correlator_outputs)
+        integrated_samples = reset(integrated_samples)
     end
     if num_samples_to_integrate == num_samples_signal_bound
         track_results = TrackingResults(dopplers, phases, last_valid_correlator_outputs, last_valid_filtered_correlator_outputs, data_bits, num_integrated_prns, cn0_state.last_valid_cn0)
@@ -263,4 +264,24 @@ end
 
 function increase_samples_by(a, b)
     a + b
+end
+
+function calc_num_samples_to_integrate(num_samples_left_to_integrate, num_samples_signal_bound)
+    min(num_samples_left_to_integrate, num_samples_signal_bound)
+end
+
+function reset(correlator_outputs)
+    zeros(typeof(correlator_outputs))
+end
+
+function reset(integrated_samples::Int)
+    zero(integrated_samples)
+end
+
+function early_late_shift(code_shift)
+    2 * code_shift.actual_shift
+end
+
+function normalize(correlator_outputs, integrated_samples)
+    correlator_outputs ./ integrated_samples
 end
