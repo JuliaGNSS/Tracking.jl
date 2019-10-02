@@ -1,4 +1,4 @@
-function DataBits(system::T, data_bit_found_after_num_prn = -1) where T <: AbstractGNSSSystem
+function DataBits(::Type{T}, data_bit_found_after_num_prn = -1) where T <: AbstractGNSSSystem
     DataBits{T}(0, 0, data_bit_found_after_num_prn, 0, 0, 0)
 end
 
@@ -11,7 +11,7 @@ $(SIGNATURES)
 
 Buffers the data bits.
 """
-function buffer(data_bits, system::T, prompt_real, num_integrated_prns) where T<:AbstractGNSSSystem
+function buffer(data_bits::DataBits{T}, prompt_real, num_integrated_prns) where T <: AbstractGNSSSystem
     if found(data_bits)
         prompt_accumulator = data_bits.prompt_accumulator + prompt_real
         bitbuffer = ifelse(data_bits.first_found_after_num_prns == num_integrated_prns, data_bits.buffer << 1 + UInt(prompt_accumulator > 0), data_bits.buffer)

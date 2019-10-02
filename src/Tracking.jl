@@ -95,18 +95,18 @@ module Tracking
 
     Initials with estimated code doppler from the carrier doppler.
     """
-    function TrackingInitials(system::AbstractGNSSSystem, carrier_doppler, code_phase)
-        TrackingInitials(carrier_doppler, 0.0, carrier_doppler * (system.code_freq / system.center_freq), code_phase)
+    function TrackingInitials(::Type{T}, carrier_doppler, code_phase) where T <: AbstractGNSSSystem
+        TrackingInitials(carrier_doppler, 0.0, carrier_doppler * get_code_center_frequency_ratio(T), code_phase)
     end
 
-    function CodeShift(system::S, sample_freq, preferred_code_shift) where S <: Union{GPSL1, GPSL5}
-        sample_shift, actual_code_shift = calc_shifts(system, sample_freq, preferred_code_shift)
+    function CodeShift(::Type{T}, sample_freq, preferred_code_shift) where T <: AbstractGNSSSystem
+        sample_shift, actual_code_shift = calc_shifts(T, sample_freq, preferred_code_shift)
         CodeShift{3}(sample_shift, actual_code_shift)
     end
 
-    function calc_shifts(system::AbstractGNSSSystem, sample_freq, preferred_code_shift)
-        sample_shift = round(preferred_code_shift * sample_freq / system.code_freq)
-        actual_code_shift = sample_shift * system.code_freq / sample_freq
+    function calc_shifts(::Type{T}, sample_freq, preferred_code_shift) where T <: AbstractGNSSSystem
+        sample_shift = round(preferred_code_shift * sample_freq / get_code_frequency(T))
+        actual_code_shift = sample_shift * get_code_frequency(T) / sample_freq
         sample_shift, actual_code_shift
     end
 

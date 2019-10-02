@@ -1,10 +1,11 @@
 @testset "Phased array tracking" begin
-    gpsl1 = Tracking.GPSL1()
-    carrier = Tracking.gen_carrier.(1:24000, 50Hz, 1.2, 4e6Hz)
-    code = Tracking.gen_code.(Ref(gpsl1), 1:24000, 1023e3Hz, 2.0, 4e6Hz, 1)
+    num_samples = 24000
+    sample_freq = 4e6Hz
+    carrier = cis.(2π * (1:num_samples) .* 50Hz ./ sample_freq .+ 1.2)
+    code = get_code.(GPSL1, (1:num_samples) .* 1023e3Hz ./ sample_freq .+ 2.0, 1)
     signal = carrier .* code * [1 1 1 1]
     correlator_outputs = zeros(SMatrix{3,4,ComplexF64})
-    code_shift = Tracking.CodeShift(gpsl1, 4e6Hz, 0.5)
+    code_shift = Tracking.CodeShift(GPSL1, 4e6Hz, 0.5)
     inits = TrackingInitials(20Hz, 1.2, 0.0Hz, 2.0)
     dopplers = Tracking.Dopplers(inits)
     phases = Tracking.Phases(inits)
@@ -12,9 +13,9 @@
     code_loop = init_2nd_order_bilinear_loop_filter(1Hz)
     last_valid_correlator_outputs = copy(correlator_outputs)
     last_valid_filtered_correlator_outputs = zeros(SVector{3,ComplexF64})
-    data_bits = Tracking.DataBits(gpsl1)
+    data_bits = Tracking.DataBits(GPSL1)
     cn0_state = Tracking.CN0State(20ms)
-    results = @inferred Tracking._tracking(correlator_outputs, last_valid_correlator_outputs, last_valid_filtered_correlator_outputs, signal, gpsl1, 4e6Hz, 30Hz, inits, dopplers, phases, code_shift, carrier_loop, code_loop, 1, x -> x[:,1], 0.5ms, 1ms, 1, 0, 0, data_bits, cn0_state, 0.0Hz)
+    results = @inferred Tracking._tracking(GPSL1, correlator_outputs, last_valid_correlator_outputs, last_valid_filtered_correlator_outputs, signal, 4e6Hz, 30Hz, inits, dopplers, phases, code_shift, carrier_loop, code_loop, 1, x -> x[:,1], 0.5ms, 1ms, 1, 0, 0, data_bits, cn0_state, 0.0Hz)
     @test results[2].carrier_doppler ≈ 20Hz
     @test results[2].code_doppler ≈ 0Hz atol = 3e-3Hz #??
     @test results[2].code_phase ≈ 2 atol = 2e-5
@@ -39,14 +40,12 @@ end
      num_samples = convert(Int, run_time * sample_freq)
      integration_samples = convert(Int, integration_time * sample_freq)
 
-     gps_l1 = GNSSSignals.GPSL1()
-
      carrier = cis.(2π * (interm_freq + doppler) / sample_freq * (1:num_samples) .+ carrier_phase)
-     sampled_code = GNSSSignals.gen_code.(Ref(gps_l1), 1:num_samples, code_doppler + code_freq, code_phase, sample_freq, 1)
+     sampled_code = get_code.(GPSL1, (1:num_samples) .* (code_doppler + code_freq) ./ sample_freq .+ code_phase, 1)
      signal = carrier .* sampled_code * [1 1 1 1]
 
      inits = TrackingInitials(0.0Hz, carrier_phase, 0.0Hz, code_phase)
-     track = @inferred Tracking.init_tracking(gps_l1, inits, sample_freq, interm_freq, 1, num_ants = NumAnts(4), min_integration_time = min_integration_time, max_integration_time = integration_time)
+     track = @inferred Tracking.init_tracking(GPSL1, inits, sample_freq, interm_freq, 1, num_ants = NumAnts(4), min_integration_time = min_integration_time, max_integration_time = integration_time)
 
      code_dopplers = zeros(num_integrations)
      code_phases = zeros(num_integrations)

@@ -24,21 +24,20 @@ pkg> add Tracking
 ```julia
 using Tracking
 import Tracking: MHz, Hz
-gpsl1 = Tracking.GPSL1()
 carrier_doppler = 100Hz
 code_phase = 120
-inits = TrackingInitials(gpsl1, carrier_doppler, code_phase)
+inits = TrackingInitials(Tracking.GPSL1, carrier_doppler, code_phase)
 sample_freq = 2.5MHz
 interm_freq = 0Hz
 prn = 1
-track = init_tracking(gpsl1, inits, sample_freq, interm_freq, prn)
+track = init_tracking(Tracking.GPSL1, inits, sample_freq, interm_freq, prn)
 track, track_results = track(signal)
 ```
 
 If you'd like to track several signals at once (e.g. in the case of phased antenna arrays), you have'll to specify the optional parameter `num_ants` and pass a beamforming function to the `track` function:
 
 ```julia
-track = init_tracking(gpsl1, inits, sample_freq, interm_freq, prn, num_ants = NumAnts(4)) # 4 antenna channels
+track = init_tracking(Tracking.GPSL1, inits, sample_freq, interm_freq, prn, num_ants = NumAnts(4)) # 4 antenna channels
 beamform(x) = x[:,1]
 track, track_results = track(signal, beamform)
 ```

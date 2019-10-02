@@ -18,8 +18,8 @@ $(SIGNATURES)
 
 Adjusts the code phase if the data bit has not been found yet.
 """
-function adjust_code_phase(system::GPSL5, data_bits, phase)
-    ifelse(found(data_bits), phase, mod(phase, system.code_length_wo_neuman_hofman_code))
+function adjust_code_phase(data_bits::DataBits{GPSL5}, phase)
+    ifelse(found(data_bits), phase, mod(phase, get_shortest_code_length(GPSL5)))
 end
 
 """
@@ -27,6 +27,6 @@ $(SIGNATURES)
 
 Calculates the integrated PRNs specifically for GPSL5.
 """
-function calc_integrated_prns(system::GPSL5, integrated_samples, sample_freq)
-    ceil(Int, integrated_samples / (sample_freq / system.code_freq * system.code_length_wo_neuman_hofman_code))
+function calc_integrated_prns(::Type{GPSL5}, integrated_samples, sample_freq)
+    ceil(Int, integrated_samples / (sample_freq / get_code_frequency(GPSL5) * get_shortest_code_length(GPSL5)))
 end

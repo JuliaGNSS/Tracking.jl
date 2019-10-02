@@ -24,14 +24,13 @@ end
 
 @testset "Tracking: CN0 estimation" begin
     Random.seed!(1234)
-    gpsl1 = GPSL1()
     num_samples = 55000
     sample_freq = 2.5e6Hz
-    carrier = gen_carrier.(1:num_samples, 50Hz, 1.2, sample_freq)
-    code = gen_code.(Ref(gpsl1), 1:num_samples, 1023e3Hz, 2.0, sample_freq, 1)
-    signal = carrier .* code .+ complex.(randn(num_samples), randn(num_samples)) ./ sqrt(2) .* 10 .^ (20 ./ 20)
+    carrier = cis.(2π * (1:num_samples) .* 50Hz ./ sample_freq .+ 1.2)
+    code = get_code.(GPSL1, (1:num_samples) .* 1023e3Hz ./ sample_freq .+ 2.0, 1)
+    signal = carrier .* code .+ randn(ComplexF64, num_samples) .* 10 .^ (20 ./ 20)
     correlator_outputs = zeros(SVector{3,ComplexF64})
-    code_shift = Tracking.CodeShift(gpsl1, sample_freq, 0.5)
+    code_shift = Tracking.CodeShift(GPSL1, sample_freq, 0.5)
     inits = TrackingInitials(20Hz, 1.2, 0.0Hz, 2.0)
     dopplers = Tracking.Dopplers(inits)
     phases = Tracking.Phases(inits)
@@ -39,8 +38,8 @@ end
     code_loop = Tracking.init_2nd_order_bilinear_loop_filter(1Hz)
     last_valid_correlator_outputs = zeros(typeof(correlator_outputs))
     last_valid_filtered_correlator_outputs = zeros(typeof(correlator_outputs))
-    data_bits = Tracking.DataBits(gpsl1)
+    data_bits = Tracking.DataBits(GPSL1)
     cn0_state = Tracking.CN0State(20ms)
-    results = @inferred Tracking._tracking(correlator_outputs, last_valid_correlator_outputs, last_valid_filtered_correlator_outputs, signal, gpsl1, sample_freq, 30Hz, inits, dopplers, phases, code_shift, carrier_loop, code_loop, 1, x -> x, 0.5ms, 1ms, 1, 0, 0, data_bits, cn0_state, 0.0Hz)
-    @test 10*log10(results[2].cn0) ≈ 45 atol = 1 #1?
+    results = @inferred Tracking._tracking(GPSL1, correlator_outputs, last_valid_correlator_outputs, last_valid_filtered_correlator_outputs, signal, sample_freq, 30Hz, inits, dopplers, phases, code_shift, carrier_loop, code_loop, 1, x -> x, 0.5ms, 1ms, 1, 0, 0, data_bits, cn0_state, 0.0Hz)
+    @test 10 * log10(results[2].cn0) ≈ 45 atol = 2.6 #1?
 end
