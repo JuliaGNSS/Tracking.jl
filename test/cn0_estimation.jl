@@ -26,8 +26,8 @@ end
     Random.seed!(1234)
     num_samples = 55000
     sample_freq = 2.5e6Hz
-    carrier = cis.(2π * (1:num_samples) .* 50Hz ./ sample_freq .+ 1.2)
-    code = get_code.(GPSL1, (1:num_samples) .* 1023e3Hz ./ sample_freq .+ 2.0, 1)
+    carrier = cis.(2π * (0:num_samples-1) .* 50Hz ./ sample_freq .+ 1.2)
+    code = get_code.(GPSL1, (0:num_samples-1) .* 1023e3Hz ./ sample_freq .+ 2.0, 1)
     signal = carrier .* code .+ randn(ComplexF64, num_samples) .* 10 .^ (20 ./ 20)
     correlator_outputs = zeros(SVector{3,ComplexF64})
     code_shift = Tracking.CodeShift(GPSL1, sample_freq, 0.5)

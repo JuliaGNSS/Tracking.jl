@@ -83,16 +83,6 @@ module Tracking
     """
     $(SIGNATURES)
 
-    Simplified initials in the case that only the carrier doppler and the code
-    phase is available.
-    """
-    function TrackingInitials(carrier_doppler, code_phase)
-        TrackingInitials(carrier_doppler, 0.0, 0.0Hz, code_phase)
-    end
-
-    """
-    $(SIGNATURES)
-
     Initials with estimated code doppler from the carrier doppler.
     """
     function TrackingInitials(::Type{T}, carrier_doppler, code_phase) where T <: AbstractGNSSSystem
@@ -129,5 +119,6 @@ module Tracking
     include("tracking_loop.jl")
     include("gpsl1.jl")
     include("gpsl5.jl")
+    include("galileo_e1b.jl")
     include("phased_array.jl")
 end

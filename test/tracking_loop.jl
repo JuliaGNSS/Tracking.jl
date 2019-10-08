@@ -1,10 +1,4 @@
 @testset "Tracking initials" begin
-    inits = TrackingInitials(20Hz, 140)
-    @test inits.carrier_doppler == 20Hz
-    @test inits.carrier_phase == 0
-    @test inits.code_doppler == 0Hz
-    @test inits.code_phase == 140
-
     inits = TrackingInitials(GPSL1, 20Hz, 140)
     @test inits.carrier_doppler == 20Hz
     @test inits.carrier_phase == 0
@@ -38,14 +32,16 @@ end
 
     num_samples = 4000
     sample_freq = 4e6Hz
-    carrier = cis.(2π * (1:num_samples) .* 50Hz ./ sample_freq .+ 1.2)
-    code = get_code.(GPSL1, (1:num_samples) .* 1023e3Hz ./ sample_freq .+ 2.0, 1)
+    carrier = cis.(2π * (0:num_samples - 1) .* 50Hz ./ sample_freq .+ 1.2)
+    code = get_code.(GPSL1, (0:num_samples - 1) .* 1023e3Hz ./ sample_freq .+ 2.0, 1)
     signal = carrier .* code
     gen_carrier_replica(x) = cis(x * 2π * -50Hz / sample_freq - 1.2)
-    calc_code_replica_phase_unsafe(x) = x * 1023e3Hz / sample_freq + 2.0
+    #calc_code_replica_phase_unsafe(x) = x * 1023e3Hz / sample_freq + 2.0
+    code_phase = 2.0
+    code_phase_delta = 1023e3Hz / sample_freq
     prev_correlator_outputs = zeros(SVector{3,ComplexF64})
     code_shift = Tracking.CodeShift(GPSL1, 4e6Hz, 0.5)
-    outputs = @inferred Tracking.downconvert_and_correlate(GPSL1, prev_correlator_outputs, signal, 1, 4000, gen_carrier_replica, calc_code_replica_phase_unsafe, code_shift, 1)
+    outputs = @inferred Tracking.downconvert_and_correlate(GPSL1, prev_correlator_outputs, signal, 1, 4000, gen_carrier_replica, code_phase, code_phase_delta, code_shift, 1)
     @test outputs ≈ [1952, 4000, 1952]
 
     dopplers = Tracking.Dopplers(10Hz, 0Hz)
@@ -126,8 +122,8 @@ end
 @testset "Tracking" begin
     num_samples = 24000
     sample_freq = 4e6Hz
-    carrier = cis.(2π * (1:num_samples) .* 50Hz ./ sample_freq .+ 1.2)
-    code = get_code.(GPSL1, (1:num_samples) .* 1023e3Hz ./ sample_freq .+ 2.0, 1)
+    carrier = cis.(2π * (0:num_samples - 1) .* 50Hz ./ sample_freq .+ 1.2)
+    code = get_code.(GPSL1, (0:num_samples - 1) .* 1023e3Hz ./ sample_freq .+ 2.0, 1)
     signal = carrier .* code
     correlator_outputs = zeros(SVector{3,ComplexF64})
     code_shift = Tracking.CodeShift(GPSL1, 4e6Hz, 0.5)
@@ -166,8 +162,8 @@ end
     num_samples = convert(Int, run_time * sample_freq)
     integration_samples = convert(Int, integration_time * sample_freq)
 
-    carrier = cis.(2π * (interm_freq + doppler) / sample_freq * (1:num_samples) .+ carrier_phase)
-    sampled_code = get_code.(GPSL1, (1:num_samples) .* (code_doppler + code_freq) ./ sample_freq .+ code_phase, 1)
+    carrier = cis.(2π * (interm_freq + doppler) / sample_freq * (0:num_samples-1) .+ carrier_phase)
+    sampled_code = get_code.(GPSL1, (0:num_samples-1) .* (code_doppler + code_freq) ./ sample_freq .+ code_phase, 1)
     signal = carrier .* sampled_code
 
     inits = TrackingInitials(0.0Hz, carrier_phase, 0.0Hz, code_phase)
@@ -208,7 +204,7 @@ end
 
     one_prn_code = get_code.(GPSL1, (0:num_samples-1), 1)
     switching_prn_code = vcat(repeat(-one_prn_code, 20), repeat(one_prn_code, 20))
-    sampled_switching_code = switching_prn_code[mod.(floor.(Int, (1:num_samples) .* (code_doppler + code_freq) ./ sample_freq .+ code_phase), 40920) .+ 1]
+    sampled_switching_code = switching_prn_code[mod.(floor.(Int, (0:num_samples-1) .* (code_doppler + code_freq) ./ sample_freq .+ code_phase), 40920) .+ 1]
     signal = carrier .* sampled_switching_code
     track = @inferred init_tracking(GPSL1, inits, sample_freq, interm_freq, 1, min_integration_time = min_integration_time, max_integration_time = integration_time)
     for i = 1:num_integrations
@@ -249,8 +245,8 @@ end
     num_samples = convert(Int, run_time * sample_freq)
     integration_samples = convert(Int, integration_time * sample_freq)
 
-    carrier = cis.(2 * π * (interm_freq + doppler) / sample_freq * (1:num_samples) .+ carrier_phase)
-    sampled_code = get_code.(GPSL5, (1:num_samples) .* (code_doppler + code_freq) ./ sample_freq .+ code_phase, 1)
+    carrier = cis.(2 * π * (interm_freq + doppler) / sample_freq * (0:num_samples-1) .+ carrier_phase)
+    sampled_code = get_code.(GPSL5, (0:num_samples-1) .* (code_doppler + code_freq) ./ sample_freq .+ code_phase, 1)
     signal = carrier .* sampled_code
 
     inits = TrackingInitials(0.0Hz, carrier_phase, 0.0Hz, mod(code_phase, 10230))

@@ -1,8 +1,8 @@
 @testset "Phased array tracking" begin
     num_samples = 24000
     sample_freq = 4e6Hz
-    carrier = cis.(2π * (1:num_samples) .* 50Hz ./ sample_freq .+ 1.2)
-    code = get_code.(GPSL1, (1:num_samples) .* 1023e3Hz ./ sample_freq .+ 2.0, 1)
+    carrier = cis.(2π * (0:num_samples-1) .* 50Hz ./ sample_freq .+ 1.2)
+    code = get_code.(GPSL1, (0:num_samples-1) .* 1023e3Hz ./ sample_freq .+ 2.0, 1)
     signal = carrier .* code * [1 1 1 1]
     correlator_outputs = zeros(SMatrix{3,4,ComplexF64})
     code_shift = Tracking.CodeShift(GPSL1, 4e6Hz, 0.5)
@@ -40,8 +40,8 @@ end
      num_samples = convert(Int, run_time * sample_freq)
      integration_samples = convert(Int, integration_time * sample_freq)
 
-     carrier = cis.(2π * (interm_freq + doppler) / sample_freq * (1:num_samples) .+ carrier_phase)
-     sampled_code = get_code.(GPSL1, (1:num_samples) .* (code_doppler + code_freq) ./ sample_freq .+ code_phase, 1)
+     carrier = cis.(2π * (interm_freq + doppler) / sample_freq * (0:num_samples-1) .+ carrier_phase)
+     sampled_code = get_code.(GPSL1, (0:num_samples-1) .* (code_doppler + code_freq) ./ sample_freq .+ code_phase, 1)
      signal = carrier .* sampled_code * [1 1 1 1]
 
      inits = TrackingInitials(0.0Hz, carrier_phase, 0.0Hz, code_phase)

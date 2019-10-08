@@ -39,9 +39,10 @@ function init_tracking(
         carrier_loop = init_3rd_order_bilinear_loop_filter(18Hz),
         code_loop = init_2nd_order_bilinear_loop_filter(1Hz),
         cn0_update_time = 20ms,
-        data_bit_found_after_num_prn = -1
+        data_bit_found_after_num_prn = -1,
+        early_late_shift = get_early_late_shift(T)
     ) where T <: AbstractGNSSSystem
-    code_shift = CodeShift(T, sample_freq, 0.5)
+    code_shift = CodeShift(T, sample_freq, early_late_shift)
     dopplers = Dopplers(inits)
     phases = Phases(inits)
     correlator_outputs = init_correlator_outputs(num_ants, code_shift)
@@ -51,6 +52,9 @@ function init_tracking(
     cn0_state = CN0State(cn0_update_time)
     req_signal_and_track(T, correlator_outputs, last_valid_correlator_outputs, last_valid_filtered_correlator_outputs, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, min_integration_time, max_integration_time, 0, data_bits, cn0_state)
 end
+
+get_early_late_shift(::Type{T}) where T <: AbstractGNSSSystem = 0.5
+get_early_late_shift(::Type{GalileoE1B}) = 0.2
 
 """
 $(SIGNATURES)
@@ -110,8 +114,9 @@ Downconverts the signal and correlates with the code replica.
 """
 function correlate_and_dump(::Type{T}, correlator_outputs, signal, sample_freq, interm_freq, dopplers, phases, code_shift, start_sample, num_samples_to_integrate, sat_prn) where T <: AbstractGNSSSystem
     gen_carrier_replica(x) = cis(x * 2π * (-interm_freq - dopplers.carrier) / sample_freq - phases.carrier)
-    calc_code_replica_phase_unsafe(x) = x * (get_code_frequency(T) + dopplers.code) / sample_freq + phases.code
-    downconvert_and_correlate(T, correlator_outputs, signal, start_sample, num_samples_to_integrate, gen_carrier_replica, calc_code_replica_phase_unsafe, code_shift, sat_prn)
+    code_phase_delta = (get_code_frequency(T) + dopplers.code) / sample_freq
+    #calc_code_replica_phase_unsafe(x) = x * (get_code_frequency(T) + dopplers.code) / sample_freq + phases.code
+    downconvert_and_correlate(T, correlator_outputs, signal, start_sample, num_samples_to_integrate, gen_carrier_replica, phases.code, code_phase_delta, code_shift, sat_prn)
 end
 
 """
@@ -201,18 +206,19 @@ $(SIGNATURES)
 
 Downconverts and correlates the signal.
 """
-function downconvert_and_correlate(::Type{T}, output, signal, start_sample, num_samples_to_integrate, gen_carrier_replica, calc_code_replica_phase_unsafe, code_shift, prn) where T <: AbstractGNSSSystem
+function downconvert_and_correlate(::Type{T}, output, signal, start_sample, num_samples_to_integrate, gen_carrier_replica, code_phase, code_phase_delta, code_shift::CodeShift{N}, prn) where {N, T <: AbstractGNSSSystem}
     mutual_output = MArray(output)
-    shifts = init_shifts(code_shift)
-    code_idx_wrap = 0
-    @inbounds for sample_idx = 1:num_samples_to_integrate
+    code_length = get_code_length(T)
+    @inbounds for sample_idx = 0:num_samples_to_integrate-1
         carrier = gen_carrier_replica(sample_idx)
-        for (output_idx, code_sample_shift) in enumerate(shifts)
-            code_idx = floor(Int, calc_code_replica_phase_unsafe(code_sample_shift + sample_idx)) + code_idx_wrap
-            wrapped_code_idx, code_idx_wrap = wrap_code_idx(T, code_idx, code_idx_wrap)
-            code_carrier = get_code_unsafe(T, wrapped_code_idx, prn) * carrier
-            dump!(mutual_output, signal, output_idx, sample_idx + start_sample - 1, code_carrier)
+        for code_phase_shift_idx = 1:N
+            curr_code_phase = code_phase + code_shift.actual_shift * (code_phase_shift_idx - ((N - 1) >> 1 + 1))
+            curr_code_phase += (curr_code_phase < 0) * code_length - (curr_code_phase >= code_length) * code_length
+            code_carrier = get_code_unsafe(T, curr_code_phase, prn) * carrier
+            dump!(mutual_output, signal, code_phase_shift_idx, sample_idx + start_sample, code_carrier)
         end
+        code_phase += code_phase_delta
+        code_phase -= (code_phase >= code_length) * code_length
     end
     SArray(mutual_output)
 end
