@@ -11,7 +11,7 @@ StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
 [compat]
-GNSSSignals = ">= 0.10.1"
+GNSSSignals = ">= 0.10.2"
 Unitful = ">= 0.12.0"
 julia = ">= 0.7"
 
