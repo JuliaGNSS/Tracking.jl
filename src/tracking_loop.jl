@@ -1,3 +1,57 @@
+
+struct SecondaryCodeOrBitDetector
+    prn_buffer::Int64
+    num_prns::Int
+    found::Bool
+end
+
+struct TrackingState{
+        S <: AbstractGNSSSystem,
+        C,
+        LF <: AbstractLoopFilter
+    }
+    dopplers::Dopplers
+    phases::Phases
+    correlator::C
+    loop_filter::LF
+    secondary_code_or_bit_detector::SecondaryCodeOrBitDetector
+end
+
+function track(
+        ::Type{T},
+        signal,
+        track_state,
+        sample_frequency;
+        intermediate_frequency = 0.0Hz,
+        num_ants = NumAnts(1),
+        max_integration_time::typeof(1ms) = 1ms
+        early_late_shift = get_early_late_shift(T),
+        carrier_loop_filter_bandwidth = 18Hz,
+        code_loop_filter_bandwidth = 1Hz
+    ) where T <: AbstractGNSSSystem
+
+
+end
+
+@inline get_code_phase(phases::Phases) = phases.code
+@inline get_carrier_phase(phases::Phases) = phases.carrier
+@inline get_code_phase(state::TrackingState) = get_code_phase(state.phases)
+@inline get_carrier_phase(state::TrackingState) = get_carrier_phase(state.phases)
+@inline get_code_doppler(dopplers::Dopplers) = dopplers.code
+@inline get_carrier_doppler(dopplers::Dopplers) = dopplers.carrier
+@inline get_code_doppler(state::TrackingState) = get_code_doppler(state.dopplers)
+@inline get_carrier_doppler(state::TrackingState) = get_carrier_doppler(state.dopplers)
+
+function get_num_phase_to_integrate(::Type{T}, max_integration_time, tracking_state::TrackingState) where T <: AbstractGNSSSystem
+    max_phase = get_code_frequency(T) * max_integration_time
+
+end
+
+function calc_samples_to_track(track_state::TrackingState, sample_frequency)
+
+end
+
+
 """
 $(SIGNATURES)
 
