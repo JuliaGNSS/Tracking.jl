@@ -32,8 +32,8 @@ results = track(signal, state, prn, sample_frequency)
 next_results = track(next_signal, get_state(results), prn, sample_frequency)
 ```
 
-If you'd like to track several signals at once (e.g. in the case of phased antenna arrays), you have'll to specify the optional parameter `num_ants::NumAnts{N}` and pass a beamforming function to the `track` function:
- 
+If you'd like to track several signals at once (e.g. in the case of phased antenna arrays), you will have to specify the optional parameter `num_ants::NumAnts{N}` and pass a beamforming function to the `track` function:
+
 ```julia
 track = TrackingState(GPSL1, carrier_doppler, code_phase, num_ants = NumAnts(4)) # 4 antenna channels
 results = track(signal, state, prn, sample_frequency, post_corr_filter = x -> x[1]) # Post corr filter is optional

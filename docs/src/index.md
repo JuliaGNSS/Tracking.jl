@@ -18,8 +18,11 @@ pkg> add Tracking
 
 ## Usage
 
-Tracking.jl processes each satellite individually. That means for each satellite a tracking state `TrackingState` must be initialized. From there, the `track` function needs to be called for every state and for every incoming signal to update the tracking parameters.
-The required parameters to initialize the tracking state are the GNSS system, carrier doppler and the code phase, e.g.
+Tracking.jl processes each satellite individually. That means for each satellite a tracking
+state `TrackingState` must be initialized. From there, the `track` function needs to be
+called for every state and for every incoming signal to update the tracking parameters.
+The required parameters to initialize the tracking state are the GNSS system, carrier
+Doppler and the code phase, e.g.
 ```julia
 state = TrackingState(GPSL1, carrier_doppler, code_phase)
 ```
@@ -29,7 +32,12 @@ The signal is tracked by
 ```julia
 results = track(signal, state, prn, sample_frequency)
 ```
-where `prn` is the PRN and `sample_frequency` the sample frequency. Refer to [`track`](@ref) to find about other optional parameters. The result contains the current state as well as some additional information such as the last valid correlator output, found data bits, etc. For each of those parameters a helper function exists to get the parameter (e.g. `get_prompt(results)`) - see [Tracking Results](@ref). The next track function needs the updated state:
+where `prn` is the PRN and `sample_frequency` the sample frequency. Refer to [`track`](@ref)
+to find about other optional parameters. The result contains the current state as well as
+some additional information such as the last valid correlator output, found data bits, etc.
+For each of those parameters a helper function exists to get the parameter
+(e.g. `get_prompt(results)`) - see [Tracking Results](@ref). The next track function needs
+the updated state:
 ```julia
 next_results = track(next_signal, get_state(results), prn, sample_frequency)
 ```
@@ -45,6 +53,24 @@ prn = 1
 state = TrackingState(GPSL1, carrier_doppler, code_phase)
 results = track(signal, state, prn, sample_frequency)
 next_results = track(next_signal, get_state(results), prn, sample_frequency)
+```
+
+## Track multiple signals coherently
+
+Tracking.jl provides a way to track multiple signals coherently, e.g. to track signals from
+a phased array. In that case the input `signal` should be a Matrix instead of a Vector,
+where the number of rows is equal to the number of antenna elements and the number of
+columns is equal to the number of samples. Furthermore, you need to specify the number
+of antenna elements to the tracking state:
+```julia
+state = TrackingState(GPSL1, carrier_doppler, code_phase, num_ants = NumAnts(4))
+```
+By default the track function will use the first antenna channel as the reference signal to
+drive the discriminators etc. However, an appropiate beamforming algorithm will probably
+suit better. For that, you'll have to pass a function `post_corr_filter` to the track
+function like the following:
+```julia
+results = track(signal, state, prn, sample_frequency, post_corr_filter = x -> x[end])
 ```
 
 ## Q/A
