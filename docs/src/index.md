@@ -5,7 +5,14 @@
 Tracking.jl provides a modular and performant tracking algorithm.
 
 ```@contents
-Pages = ["track.md", "tracking_state.md", "tracking_results.md", "correlator.md", "cn0_estimator.md"]
+Pages = [
+  "track.md",
+  "tracking_state.md",
+  "tracking_results.md",
+  "loop_filter.md",
+  "correlator.md",
+  "cn0_estimator.md"
+]
 Depth = 1
 ```
 
