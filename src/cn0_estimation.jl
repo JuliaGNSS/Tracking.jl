@@ -1,35 +1,47 @@
-struct CN0State
-    summed_total_power::Float64
-    summed_abs_inphase_ampl::Float64
-    last_valid_cn0::Float64
-    update_time::typeof(1.0s)
-    current_updated_time::typeof(1.0s)
+abstract type AbstractCN0Estimator end
+
+"""
+$(SIGNATURES)
+
+MomentsCN0Estimator to estimate the CN0
+"""
+struct MomentsCN0Estimator{N} <: AbstractCN0Estimator
+    prompt_buffer::SVector{N, ComplexF64}
+    current_index::Int
+    length::Int
 end
 
-function CN0State(update_time)
-    CN0State(0.0, 0.0, NaN, update_time, 0.0s)
+function MomentsCN0Estimator(N)
+    MomentsCN0Estimator{N}(zero(SVector{N, ComplexF64}), 0, 0)
+end
+
+length(cn0_state::MomentsCN0Estimator) = cn0_state.length
+get_prompt_buffer(cn0_state::MomentsCN0Estimator) = cn0_state.prompt_buffer
+get_current_index(cn0_state::MomentsCN0Estimator) = cn0_state.current_index
+
+"""
+$(SIGNATURES)
+
+Updates the `cn0_estimator` to include the information of the current prompt value.
+"""
+function update(cn0_estimator::MomentsCN0Estimator{N}, prompt) where N
+    next_index = mod(get_current_index(cn0_estimator), N) + 1
+    next_prompt_buffer = setindex(get_prompt_buffer(cn0_estimator), prompt, next_index)
+    next_length = min(length(cn0_estimator) + 1, N)
+    MomentsCN0Estimator{N}(next_prompt_buffer, next_index, next_length)
 end
 
 """
 $(SIGNATURES)
 
-Estimates the CN0. The update rate is defined by `update_time` in the `CN0State`.
-The coherent integration time `integration_time` should be constant throughout
-estimation. The prompt correlator output `prompt_correlator_output` must be a
-scalar.
+Estimates the CN0 based on the struct `cn0_estimator`.
 """
-function estimate_CN0(cn0_state::CN0State, integration_time, prompt_correlator_output)
-    summed_total_power = cn0_state.summed_total_power + abs2(prompt_correlator_output)
-    summed_abs_inphase_ampl = cn0_state.summed_abs_inphase_ampl + abs(real(prompt_correlator_output))
-    current_updated_time = cn0_state.current_updated_time + integration_time
-    last_valid_cn0 = cn0_state.last_valid_cn0
-    if current_updated_time >= cn0_state.update_time
-        inphase_power = (summed_abs_inphase_ampl / round(upreferred(current_updated_time / integration_time)))^2
-        total_power = summed_total_power / round(upreferred(current_updated_time / integration_time))
-        last_valid_cn0 = inphase_power / (total_power - inphase_power) / upreferred(integration_time / s)
-        summed_total_power = 0.0
-        summed_abs_inphase_ampl = 0.0
-        current_updated_time = 0.0s
-    end
-    CN0State(summed_total_power, summed_abs_inphase_ampl, last_valid_cn0, cn0_state.update_time, current_updated_time)
+function estimate_cn0(cn0_estimator::MomentsCN0Estimator, integration_time)
+    length(cn0_estimator) == 0 && return 0.0dBHz
+    abs2_prompt_buffer = abs2.(get_prompt_buffer(cn0_estimator))
+    M₂ = 1 / length(cn0_estimator) * sum(abs2_prompt_buffer)
+    M₄ = 1 / length(cn0_estimator) * sum(abs2_prompt_buffer .^ 2)
+    P_real = (1 / length(cn0_estimator) * sum(abs.(real.(get_prompt_buffer(cn0_estimator)))))^2
+    SNR = sqrt(2 * M₂^2 - M₄) / (M₂ - P_real)
+    dBHz(SNR / integration_time)
 end

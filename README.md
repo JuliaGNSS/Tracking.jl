@@ -2,12 +2,11 @@
 [![Coverage Status](https://coveralls.io/repos/github/JuliaGNSS/Tracking.jl/badge.svg?branch=master)](https://coveralls.io/github/JuliaGNSS/Tracking.jl?branch=master)
 
 # Tracking
-This implements a basic tracking functionality for GNSS signals. The correlation is done in the interval of PRNs. Each call of the tracking function returns the current code phase, doppler, the Carrier-to-Noise-Density-Ratio (CN0), data bits, number of data bits and the last valid correlator output.
+This implements a basic tracking functionality for GNSS signals. The correlation is done in the interval of PRNs. Each call of the tracking function returns the current code phase, doppler, the Carrier-to-Noise-Density-Ratio (CN0), data bits, number of data bits and the last correlator output.
 
 ## Features
 
-* Supports Loop Filters of 1st, 2nd, and 3rd order, bilinear or boxcar
-* Supports GPS L1 / L5
+* Supports GPS L1 / L5 and Galileo E1B
 * CN0 estimation
 * Phased array tracking
 
@@ -23,25 +22,19 @@ pkg> add Tracking
 
 ```julia
 using Tracking
-import Tracking: MHz, Hz
-carrier_doppler = 100Hz
-code_phase = 120
-inits = TrackingInitials(Tracking.GPSL1, carrier_doppler, code_phase)
-sample_freq = 2.5MHz
-interm_freq = 0Hz
+using Tracking: MHz, Hz, GPSL1
+carrier_doppler = 1000Hz
+code_phase = 50
+sample_frequency = 2.5MHz
 prn = 1
-track = init_tracking(Tracking.GPSL1, inits, sample_freq, interm_freq, prn)
-track, track_results = track(signal)
+state = TrackingState(GPSL1, carrier_doppler, code_phase)
+results = track(signal, state, prn, sample_frequency)
+next_results = track(next_signal, get_state(results), prn, sample_frequency)
 ```
 
-If you'd like to track several signals at once (e.g. in the case of phased antenna arrays), you have'll to specify the optional parameter `num_ants` and pass a beamforming function to the `track` function:
-
+If you'd like to track several signals at once (e.g. in the case of phased antenna arrays), you have'll to specify the optional parameter `num_ants::NumAnts{N}` and pass a beamforming function to the `track` function:
+ 
 ```julia
-track = init_tracking(Tracking.GPSL1, inits, sample_freq, interm_freq, prn, num_ants = NumAnts(4)) # 4 antenna channels
-beamform(x) = x[:,1]
-track, track_results = track(signal, beamform)
+track = TrackingState(GPSL1, carrier_doppler, code_phase, num_ants = NumAnts(4)) # 4 antenna channels
+results = track(signal, state, prn, sample_frequency, post_corr_filter = x -> x[1]) # Post corr filter is optional
 ```
-
-## Todo
-
-* Support Galileo Signals

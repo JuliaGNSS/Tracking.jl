@@ -1,66 +1,26 @@
 """
 $(SIGNATURES)
 
-Returns the very early
+Calculates the code phase error in chips.
 """
-function veryearly(x::SVector{N,T}) where {N,T}
-    x[(N - 1) >> 1 + 3]
+function dll_disc(
+    ::Type{S},
+    correlator,
+    early_late_sample_shift,
+    code_phase_delta
+) where S <: AbstractGNSSSystem
+    E = abs(get_early(correlator))
+    L = abs(get_late(correlator))
+    distance_between_early_and_late = 2 * early_late_sample_shift * code_phase_delta
+    (E - L) / (E + L) / (2 * (2 - distance_between_early_and_late))
 end
 
 """
 $(SIGNATURES)
 
-Returns the early
+Calculates the carrier phase error in radians.
 """
-function early(x::SVector{N,T}) where {N,T}
-    x[(N - 1) >> 1 + 2]
-end
-
-"""
-$(SIGNATURES)
-
-Returns the prompt
-"""
-function prompt(x::SVector{N,T}) where {N,T}
-    x[(N - 1) >> 1 + 1]
-end
-
-"""
-$(SIGNATURES)
-
-Returns the late
-"""
-function late(x::SVector{N,T}) where {N,T}
-    x[(N - 1) >> 1]
-end
-
-"""
-$(SIGNATURES)
-
-Returns the very late
-"""
-function verylate(x::SVector{N,T}) where {N,T}
-    x[(N - 1) >> 1 - 1]
-end
-
-"""
-$(SIGNATURES)
-
-Calculates the code offset in chips.
-"""
-function dll_disc(x, d = 1)
-    E = abs(early(x))
-    L = abs(late(x))
-    (E - L) / (E + L) / 2 / (2 - d)
-end
-
-
-"""
-$(SIGNATURES)
-
-Calculates the phase error in radians.
-"""
-function pll_disc(x)
-    p = prompt(x)
+function pll_disc(::Type{S}, correlator) where S <: AbstractGNSSSystem
+    p = get_prompt(correlator)
     atan(imag(p) / real(p))
 end

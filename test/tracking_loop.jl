@@ -1,296 +1,311 @@
-@testset "Tracking initials" begin
-    inits = TrackingInitials(GPSL1, 20Hz, 140)
-    @test inits.carrier_doppler == 20Hz
-    @test inits.carrier_phase == 0
-    @test inits.code_doppler == 20Hz / 1540
-    @test inits.code_phase == 140
+@testset "Default post correlation Filter" begin
+    post_corr_filter = Tracking.get_default_post_corr_filter(EarlyPromptLateCorrelator())
+    @test @inferred(post_corr_filter(1.0 + 0.0im)) == 1.0 + 0.0im
 
-    track_res = Tracking.TrackingResults(20.0Hz, 1.5, 1.0Hz, 140.0, 2, 2, UInt(0), 0, 0, 1000.0)
-
-    inits = TrackingInitials(track_res)
-    @test inits.carrier_doppler == 20Hz
-    @test inits.carrier_phase == 1.5
-    @test inits.code_doppler == 1Hz
-    @test inits.code_phase == 140
-end
-
-@testset "Code shift" begin
-    code_shift = Tracking.CodeShift(GPSL1, 4e6Hz, 0.5)
-    @test code_shift.samples == 2
-    @test code_shift.actual_shift == 0.5115
-
-    @test Tracking.init_shifts(code_shift) == [-2,0,2]
-end
-
-@testset "Downconvert and correlate" begin
-
-    @test @inferred(Tracking.wrap_code_idx(GPSL1, 0, 0)) == (0, 0)
-    @test @inferred(Tracking.wrap_code_idx(GPSL1, 1023, 0)) == (0, -1023)
-    @test @inferred(Tracking.wrap_code_idx(GPSL1, -1, 0)) == (1022, 0)
-    @test @inferred(Tracking.wrap_code_idx(GPSL1, -4, 0)) == (1019, 0)
-    @test @inferred(Tracking.wrap_code_idx(GPSL1, 1026, -1023)) == (3, -1023 * 2)
-
-    num_samples = 4000
-    sample_freq = 4e6Hz
-    carrier = cis.(2π * (0:num_samples - 1) .* 50Hz ./ sample_freq .+ 1.2)
-    code = get_code.(GPSL1, (0:num_samples - 1) .* 1023e3Hz ./ sample_freq .+ 2.0, 1)
-    signal = carrier .* code
-    gen_carrier_replica(x) = cis(x * 2π * -50Hz / sample_freq - 1.2)
-    #calc_code_replica_phase_unsafe(x) = x * 1023e3Hz / sample_freq + 2.0
-    code_phase = 2.0
-    code_phase_delta = 1023e3Hz / sample_freq
-    prev_correlator_outputs = zeros(SVector{3,ComplexF64})
-    code_shift = Tracking.CodeShift(GPSL1, 4e6Hz, 0.5)
-    outputs = @inferred Tracking.downconvert_and_correlate(GPSL1, prev_correlator_outputs, signal, 1, 4000, gen_carrier_replica, code_phase, code_phase_delta, code_shift, 1)
-    @test outputs ≈ [1952, 4000, 1952]
-
-    dopplers = Tracking.Dopplers(10Hz, 0Hz)
-    phases = Tracking.Phases(1.2, 2.0)
-    outputs = @inferred Tracking.correlate_and_dump(GPSL1, prev_correlator_outputs, signal, 4e6Hz, 40Hz, dopplers, phases, code_shift, 1, 4000, 1)
-    @test outputs ≈ [1952, 4000, 1952]
-end
-
-@testset "Aiding" begin
-    inits = TrackingInitials(20.0Hz, 0.0, 1.0Hz, 0)
-
-    dopplers = @inferred Tracking.aid_dopplers(GPSL1, inits, 2.5Hz, 0.1Hz, 0.0Hz)
-    @test dopplers.carrier == 22.5Hz
-    @test dopplers.code == 1.1Hz + 2.5Hz / 1540
-end
-
-@testset "Correlator output" begin
-    code_shift = Tracking.CodeShift(GPSL1, 4e6Hz, 0.5)
-    output = @inferred Tracking.init_correlator_outputs(NumAnts(1), code_shift)
-    @test output === zeros(SVector{3, ComplexF64})
+    post_corr_filter = Tracking.get_default_post_corr_filter(
+        EarlyPromptLateCorrelator(NumAnts(2))
+    )
+    @test @inferred(post_corr_filter(SVector(1.0 + 0.0im, 2.0 + 0.0im))) == 1.0 + 0.0im
 end
 
 @testset "Integration time" begin
-    @test @inferred(Tracking.calc_actual_integration_time(4000, 4e6)) == 1e-3
+    max_integration_time = 2ms
+    bit_found = false
+    time = @inferred Tracking.get_integration_time(GPSL1, max_integration_time, bit_found)
+    @test time == 1ms
 
-    num_samples = @inferred Tracking.calc_num_samples_left_to_integrate(GPSL1, 4e6Hz, Tracking.Phases(0.0, 100.0), 1ms)
-    @test num_samples == ceil(Int, (1023 - 100) * 4e6Hz / 1023e3Hz)
-    num_samples = @inferred Tracking.calc_num_samples_left_to_integrate(GPSL1, 4e6Hz, Tracking.Phases(0.0, 0.0), 1ms)
-    @test num_samples == 4000
-    num_samples = @inferred Tracking.calc_num_samples_left_to_integrate(GPSL1, 4e6Hz, Tracking.Phases(0.0, 1023), 1ms)
-    @test num_samples == 4000
-    num_samples = @inferred Tracking.calc_num_samples_left_to_integrate(GPSL1, 4e6Hz, Tracking.Phases(0.0, 1022.8), 1ms)
-    @test num_samples == 1
-    num_samples = @inferred Tracking.calc_num_samples_left_to_integrate(GPSL1, 4e6Hz, Tracking.Phases(0.0, 1023.1), 1ms)
-    @test num_samples == 4000
-    num_samples = @inferred Tracking.calc_num_samples_left_to_integrate(GPSL1, 4e6Hz, Tracking.Phases(0.0, 1024.0), 1ms)
-    @test num_samples == ceil(Int, (1023 - 1) * 4e6Hz / 1023e3Hz)
+    max_integration_time = 2ms
+    bit_found = true
+    time = @inferred Tracking.get_integration_time(GPSL1, max_integration_time, bit_found)
+    @test time == 2ms
 
-    signal = zeros(1000)
-    @test @inferred(Tracking.calc_num_samples_signal_bound(signal, 100)) == 901
-    @test @inferred(Tracking.calc_num_samples_signal_bound(signal, 1)) == 1000
-    @test @inferred(Tracking.calc_num_samples_signal_bound(signal, 1000)) == 1
+    max_integration_time = 2ms
+    bit_found = false
+    time = @inferred Tracking.get_integration_time(
+        GalileoE1B,
+        max_integration_time,
+        bit_found
+    )
+    @test time == 2ms
 
-    data_bits = Tracking.DataBits(GPSL1)
-    @test @inferred(Tracking.calc_integration_time(data_bits, 2ms)) == 1ms
-    data_bits = Tracking.DataBits{GPSL1}(0, 20, 4, 8.0, 0, 0)
-    @test @inferred(Tracking.calc_integration_time(data_bits, 2ms)) == 2ms
+    max_integration_time = 10ms
+    bit_found = false
+    time = @inferred Tracking.get_integration_time(
+        GalileoE1B,
+        max_integration_time,
+        bit_found
+    )
+    @test time == 4ms
 end
 
-@testset "Phases" begin
-    dopplers = Tracking.Dopplers(20Hz, 1Hz)
-    phases = Tracking.Phases(0.0, 100.0)
+@testset "Number of chips to integrate" begin
+    max_integration_time = 1ms
+    code_phase = 200
+    bit_found = true
+    chips = @inferred Tracking.get_num_chips_to_integrate(
+        GPSL1,
+        max_integration_time,
+        code_phase,
+        bit_found
+    )
+    @test chips == 1023 - 200
 
-    data_bits = Tracking.DataBits(GPSL1)
-    adjusted_code_phase = @inferred Tracking.adjust_code_phase(data_bits, 100)
-    @test adjusted_code_phase == 100
-
-    next_phases = @inferred Tracking.calc_next_phases(50Hz, 4e6Hz, dopplers, phases, 200, data_bits)
-    @test next_phases.carrier ≈ 2π * 200 * (50Hz + 20Hz) / 4e6Hz + 0.0
-    @test next_phases.code ≈ 200 * (1023e3Hz + 1Hz) / 4e6Hz + 100.0
-
-    data_bits = Tracking.DataBits(GPSL5)
-    adjusted_code_phase = @inferred Tracking.adjust_code_phase(data_bits, 10430)
-    @test adjusted_code_phase == 200
-
-    next_phases = @inferred Tracking.calc_next_phases(50Hz, 4e7Hz, dopplers, phases, 50000, data_bits)
-    @test next_phases.carrier ≈ 2π * 50000 * (50Hz + 20Hz) / 4e7Hz + 0.0
-    @test next_phases.code ≈ 50000 * (1023e4Hz + 1Hz) / 4e7Hz + 100.0 - 10230
-
-    data_bits = Tracking.DataBits{GPSL5}(0, 0, 10, 0.0, 0, 0)
-    adjusted_code_phase = @inferred Tracking.adjust_code_phase(data_bits, 10430)
-    @test adjusted_code_phase == 10430
-    next_phases = @inferred Tracking.calc_next_phases(50Hz, 4e7Hz, dopplers, phases, 50000, data_bits)
-    @test next_phases.code ≈ 50000 * (1023e4Hz + 1Hz) / 4e7Hz + 100.0
+    code_phase = 1200
+    chips = @inferred Tracking.get_num_chips_to_integrate(
+        GPSL1,
+        max_integration_time,
+        code_phase,
+        bit_found
+    )
+    @test chips == 2046 - 1200
 end
 
+@testset "Number of samples to integrate" begin
+    max_integration_time = 1ms
+    sample_frequency = 4e6Hz
+    current_code_doppler = 0Hz
+    current_code_phase = 0
+    bit_found = true
+    samples = @inferred Tracking.get_num_samples_left_to_integrate(
+        GPSL1,
+        max_integration_time,
+        sample_frequency,
+        current_code_doppler,
+        current_code_phase,
+        bit_found
+    )
+    @test samples == 4000
+end
+
+@testset "Carrier phase delta" begin
+    intermediate_frequency = 100Hz
+    carrier_doppler = 50Hz
+    frequency = @inferred Tracking.get_current_carrier_frequency(
+        intermediate_frequency,
+        carrier_doppler
+    )
+    @test frequency == intermediate_frequency + carrier_doppler
+end
+
+@testset "Code phase delta" begin
+    code_doppler = 1Hz
+    frequency = @inferred Tracking.get_current_code_frequency(GPSL1, code_doppler)
+    @test frequency == 1023e3Hz + 1Hz
+end
+
+@testset "Update phases" begin
+    carrier_phase = π / 2
+    carrier_frequency = 10Hz
+    sample_frequency = 100Hz
+    num_samples = 2000
+    phase = @inferred Tracking.update_carrier_phase(
+        num_samples,
+        carrier_frequency,
+        sample_frequency,
+        carrier_phase
+    )
+    @test phase == mod(π / 2 + 0.1 * 2000 + 1, 2) - 1
+
+    code_phase = 10
+    code_frequency = 10Hz
+    sample_frequency = 100Hz
+    num_samples = 2000
+    bit_found = true
+    phase = @inferred Tracking.update_code_phase(
+        GPSL1,
+        num_samples,
+        code_frequency,
+        sample_frequency,
+        code_phase,
+        bit_found
+    )
+    @test phase == mod(10 + 0.1 * 2000, 1023)
+end
+
+@testset "Correlate" begin
+    correlator = EarlyPromptLateCorrelator()
+    early_late_sample_shift = 2
+    start_sample = 1
+    num_samples = 4000
+    carrier_frequency = 800e3Hz
+    code_frequency = 1023e3Hz
+    sample_frequency = 4000e3Hz
+    start_carrier_phase = 0.25
+    @testset "Correlate for satellite $prn" for prn in 1:32
+        range = 0:3999
+        signal = cis.(2π .* carrier_frequency .* range ./ sample_frequency .+ π ./ 2) .*
+            get_code.(GPSL1, code_frequency .* range ./ sample_frequency .+ 0, prn)
+        start_code_phase = 0
+
+        correlator_result = @inferred Tracking.correlate(
+            GPSL1,
+            correlator,
+            signal,
+            prn,
+            early_late_sample_shift,
+            start_sample,
+            num_samples,
+            carrier_frequency,
+            code_frequency,
+            sample_frequency,
+            start_carrier_phase,
+            start_code_phase
+        )
+        difference_early_late = abs(
+            get_early(correlator_result) - get_late(correlator_result)
+        )
+        # WHY??
+        @test get_early(correlator_result) ≈ 1952 || get_early(correlator_result) ≈ 2080.0 ||
+            get_early(correlator_result) ≈ 1824.0
+        @test get_prompt(correlator_result) ≈ 4000
+        @test get_late(correlator_result) ≈ 1952 || get_late(correlator_result) ≈ 2080.0 ||
+            get_late(correlator_result) ≈ 1824.0
+        @test difference_early_late ≈ 0 atol = 4.5e-11
+    end
+
+
+    range = 0:7999
+    num_samples = 8000
+    prn = 1
+    signal = cis.(2π .* carrier_frequency .* range ./ sample_frequency .+ π ./ 2) .*
+        get_code.(GPSL1, code_frequency .* range ./ sample_frequency .+ 0, prn)
+    start_code_phase = 0
+    correlator_result = @inferred Tracking.correlate(
+        GPSL1,
+        correlator,
+        signal,
+        prn,
+        early_late_sample_shift,
+        start_sample,
+        num_samples,
+        carrier_frequency,
+        code_frequency,
+        sample_frequency,
+        start_carrier_phase,
+        start_code_phase
+    )
+    @test get_early(correlator_result) ≈ 3904
+    @test get_prompt(correlator_result) ≈ 8000
+    @test get_late(correlator_result) ≈ 3904
+
+end
+
+@testset "Doppler aiding" begin
+
+    init_carrier_doppler = 10Hz
+    init_code_doppler = 1Hz
+    carrier_freq_update = 2Hz
+    code_freq_update = -0.5Hz
+    velocity_aiding = 3Hz
+
+    carrier_freq, code_freq = @inferred Tracking.aid_dopplers(
+        GPSL1,
+        init_carrier_doppler,
+        init_code_doppler,
+        carrier_freq_update,
+        code_freq_update,
+        velocity_aiding
+    )
+
+    @test carrier_freq == 10Hz + 2Hz + 3Hz
+    @test code_freq == 1Hz + (2Hz + 3Hz) / 1540 - 0.5Hz
+end
+
+@testset "Signal" begin
+    correlator = EarlyPromptLateCorrelator()
+    signal = collect(1:10)
+    sample = 5
+    signal_sample = @inferred Tracking.get_signal(correlator, signal, sample)
+    @test signal_sample == 5
+    @test @inferred(Tracking.get_num_samples(signal)) == 10
+
+    correlator = EarlyPromptLateCorrelator(NumAnts(2))
+    signal = [1, 2] * collect(1:10)'
+    sample = 5
+    signal_sample = @inferred Tracking.get_signal(correlator, signal, sample)
+    @test signal_sample == [5, 10]
+    @test typeof(signal_sample) <: SVector
+
+    @test @inferred(Tracking.get_num_samples(signal)) == 10
+end
 
 @testset "Tracking" begin
-    num_samples = 24000
-    sample_freq = 4e6Hz
-    carrier = cis.(2π * (0:num_samples - 1) .* 50Hz ./ sample_freq .+ 1.2)
-    code = get_code.(GPSL1, (0:num_samples - 1) .* 1023e3Hz ./ sample_freq .+ 2.0, 1)
-    signal = carrier .* code
-    correlator_outputs = zeros(SVector{3,ComplexF64})
-    code_shift = Tracking.CodeShift(GPSL1, 4e6Hz, 0.5)
-    inits = TrackingInitials(20Hz, 1.2, 0.0Hz, 2.0)
-    dopplers = Tracking.Dopplers(inits)
-    phases = Tracking.Phases(inits)
-    carrier_loop = Tracking.init_3rd_order_bilinear_loop_filter(18Hz)
-    code_loop = Tracking.init_2nd_order_bilinear_loop_filter(1Hz)
-    last_valid_correlator_outputs = zeros(typeof(correlator_outputs))
-    last_valid_filtered_correlator_outputs = zeros(typeof(correlator_outputs))
-    data_bits = Tracking.DataBits(GPSL1)
-    cn0_state = Tracking.CN0State(20ms)
-    results = @inferred Tracking._tracking(GPSL1, correlator_outputs, last_valid_correlator_outputs, last_valid_filtered_correlator_outputs, signal, 4e6Hz, 30Hz, inits, dopplers, phases, code_shift, carrier_loop, code_loop, 1, x -> x, 0.5ms, 1ms, 1, 0, 0, data_bits, cn0_state, 0.0Hz)
-    @test results[2].carrier_doppler ≈ 20Hz
-    @test results[2].code_doppler ≈ 0Hz atol = 3e-3Hz #??
-    @test results[2].code_phase ≈ 2 atol = 2e-5
-end
+
+    carrier_doppler = 200Hz
+    start_code_phase = 100
+    code_frequency = carrier_doppler / 1540 + 1023kHz
+    sample_frequency = 4MHz
+    prn = 1
+    range = 0:3999
+    start_carrier_phase = π / 2
+    state = TrackingState(GPSL1, carrier_doppler, start_code_phase)
 
 
-@testset "Track L1" begin
+    signal = cis.(
+            2π .* carrier_doppler .* range ./ sample_frequency .+ start_carrier_phase
+        ) .*
+        get_code.(
+            GPSL1,
+            code_frequency .* range ./ sample_frequency .+ start_code_phase,
+            prn
+        )
 
-    center_freq = 1.57542e9Hz
-    code_freq = 1023e3Hz
-    doppler = 10Hz
-    interm_freq = 50Hz
-    carrier_phase = π / 3
-    sample_freq = 4e6Hz
-    code_doppler = doppler * code_freq / center_freq
-    data_doppler = doppler * 50Hz / center_freq
-    code_phase = 2.0
-    min_integration_time = 0.5ms
+    track_result = @inferred track(signal, state, prn, sample_frequency)
 
-    run_time = 1500e-3s
-    integration_time = 1e-3s
-    num_integrations = convert(Int, run_time / integration_time)
-    num_samples = convert(Int, run_time * sample_freq)
-    integration_samples = convert(Int, integration_time * sample_freq)
-
-    carrier = cis.(2π * (interm_freq + doppler) / sample_freq * (0:num_samples-1) .+ carrier_phase)
-    sampled_code = get_code.(GPSL1, (0:num_samples-1) .* (code_doppler + code_freq) ./ sample_freq .+ code_phase, 1)
-    signal = carrier .* sampled_code
-
-    inits = TrackingInitials(0.0Hz, carrier_phase, 0.0Hz, code_phase)
-    track = @inferred init_tracking(GPSL1, inits, sample_freq, interm_freq, 1, min_integration_time = min_integration_time, max_integration_time = integration_time)
-
-    code_dopplers = zeros(num_integrations)
-    code_phases = zeros(num_integrations)
-    calculated_code_phases  = mod.((1:num_integrations) * integration_samples * (code_doppler + code_freq) / sample_freq .+ code_phase, 1023)
-    carrier_dopplers = zeros(num_integrations)
-
-    results = nothing
-    for i = 1:num_integrations
-        current_signal = signal[integration_samples * (i - 1) + 1:integration_samples * i]# .+ complex.(randn(integration_samples,2), randn(integration_samples,2)) .* 10^(5/20)
-        track, results = @inferred track(current_signal)
-        @test results.num_processed_prns == 1
-        @test results.num_bits == 0
-        @test results.data_bits == 0
-        code_phases[i] = results.code_phase
-        carrier_dopplers[i] = results.carrier_doppler / Hz
-        code_dopplers[i] = results.code_doppler / Hz
+    iterations = 1000
+    code_phases = zeros(iterations)
+    carrier_phases = zeros(iterations)
+    tracked_code_phases = zeros(iterations)
+    tracked_carrier_phases = zeros(iterations)
+    tracked_code_dopplers = zeros(iterations)
+    tracked_carrier_dopplers = zeros(iterations)
+    for i = 1:iterations
+        carrier_phase = mod2pi(2π * carrier_doppler * 4000 * i / sample_frequency +
+            start_carrier_phase + π) - π
+        code_phase = mod(
+            code_frequency * 4000 * i / sample_frequency + start_code_phase,
+            1023
+        )
+        signal = cis.(
+                2π .* carrier_doppler .* range ./ sample_frequency .+ carrier_phase
+            ) .*
+            get_code.(
+                GPSL1,
+                code_frequency .* range ./ sample_frequency .+ code_phase,
+                prn
+            )
+        track_result = @inferred track(
+            signal,
+            get_state(track_result),
+            prn,
+            sample_frequency
+        )
+        comp_carrier_phase = mod2pi(2π * carrier_doppler * 4000 * (i + 1) /
+            sample_frequency + start_carrier_phase + π) - π
+        comp_code_phase = mod(
+            code_frequency * 4000 * (i + 1) / sample_frequency + start_code_phase,
+            1023
+        )
+        tracked_code_phases[i] = get_code_phase(track_result)
+        tracked_carrier_phases[i] = get_carrier_phase(track_result)
+        tracked_carrier_dopplers[i] = get_carrier_doppler(track_result)/Hz
+        tracked_code_dopplers[i] = get_code_doppler(track_result)/Hz
+        code_phases[i] = comp_code_phase
+        carrier_phases[i] = comp_carrier_phase
     end
+    @test tracked_code_phases[end] ≈ code_phases[end] atol = 2e-4
+    @test tracked_carrier_phases[end] ≈ carrier_phases[end] atol = 5e-2
 
-    @test results.carrier_doppler ≈ doppler atol = 4e-4Hz
-    @test mod(results.code_phase, 1023) ≈ calculated_code_phases[end] atol = 3e-6
-    @test results.code_doppler ≈ code_doppler atol = 4e-6Hz
-
-#=
-    using PyPlot
-    pygui(true)
-    figure("Tracking code phase error")
-    plot(code_phases - calculated_code_phases)
-    figure("Tracking carrier_dopplers")
-    plot(carrier_dopplers)
-    figure("Tracking code dopplers")
-    plot(code_dopplers)
-=#
-
-
-    one_prn_code = get_code.(GPSL1, (0:num_samples-1), 1)
-    switching_prn_code = vcat(repeat(-one_prn_code, 20), repeat(one_prn_code, 20))
-    sampled_switching_code = switching_prn_code[mod.(floor.(Int, (0:num_samples-1) .* (code_doppler + code_freq) ./ sample_freq .+ code_phase), 40920) .+ 1]
-    signal = carrier .* sampled_switching_code
-    track = @inferred init_tracking(GPSL1, inits, sample_freq, interm_freq, 1, min_integration_time = min_integration_time, max_integration_time = integration_time)
-    for i = 1:num_integrations
-        current_signal = signal[integration_samples * (i - 1) + 1:integration_samples * i]# .+ complex.(randn(integration_samples,2), randn(integration_samples,2)) .* 10^(5/20)
-        track, results = @inferred track(current_signal)
-        @test results.num_processed_prns == 1
-        if i-1 % 20 == 0 && i > 1
-            @test results.num_bits == 1
-            @test results.data_bits == (i % 40 == 0)
-        else
-            @test results.num_bits == 0
-            @test results.data_bits == 0
-        end
-        code_phases[i] = results.code_phase
-        carrier_dopplers[i] = results.carrier_doppler / Hz
-        code_dopplers[i] = results.code_doppler / Hz
-    end
-    @test results.carrier_doppler ≈ doppler atol = 4e-4Hz
-    @test mod(results.code_phase, 1023) ≈ calculated_code_phases[end] atol = 5e-5
-    @test results.code_doppler ≈ code_doppler atol = 2e-3Hz
-end
-
-@testset "Track L5" begin
-
-    center_freq = 1.17645e9Hz
-    code_freq = 10230e3Hz
-    doppler = 10Hz
-    interm_freq = 50Hz
-    carrier_phase = π / 3
-    sample_freq = 40e6Hz
-    code_doppler = doppler * code_freq / center_freq
-    code_phase = 65950.0
-    min_integration_time = 0.5ms
-
-    run_time = 500e-3s
-    integration_time = 1e-3s
-    num_integrations = convert(Int, run_time / integration_time)
-    num_samples = convert(Int, run_time * sample_freq)
-    integration_samples = convert(Int, integration_time * sample_freq)
-
-    carrier = cis.(2 * π * (interm_freq + doppler) / sample_freq * (0:num_samples-1) .+ carrier_phase)
-    sampled_code = get_code.(GPSL5, (0:num_samples-1) .* (code_doppler + code_freq) ./ sample_freq .+ code_phase, 1)
-    signal = carrier .* sampled_code
-
-    inits = TrackingInitials(0.0Hz, carrier_phase, 0.0Hz, mod(code_phase, 10230))
-    track = @inferred init_tracking(GPSL5, inits, sample_freq, interm_freq, 1, min_integration_time = min_integration_time, max_integration_time = integration_time)
-
-    code_dopplers = zeros(num_integrations)
-    code_phases = zeros(num_integrations)
-    calculated_code_phases  = mod.((1:num_integrations) * integration_samples * (code_doppler + code_freq) / sample_freq .+ code_phase, 102300)
-    carrier_dopplers = zeros(num_integrations)
-    real_prompts = zeros(num_integrations)
-
-    results = nothing
-    for i = 1:num_integrations
-        current_signal = signal[integration_samples * (i - 1) + 1:integration_samples * i]# .+ complex.(randn(integration_samples,2), randn(integration_samples,2)) .* 10^(5/20)
-        track, results = @inferred track(current_signal)
-        @test results.num_processed_prns == 1
-        if i-1 % 10 == 0 && i > 1
-            @test results.num_bits == 1
-            @test results.data_bits == 1
-        else
-            @test results.num_bits == 0
-            @test results.data_bits == 0
-        end
-        code_phases[i] = results.code_phase
-        carrier_dopplers[i] = results.carrier_doppler / Hz
-        code_dopplers[i] = results.code_doppler / Hz
-        real_prompts[i] = real(prompt(results.correlator_outputs))
-    end
-
-    @test results.carrier_doppler[1] ≈ doppler atol = 5e-2Hz
-    @test mod(results.code_phase[1], 102300) ≈ calculated_code_phases[end] atol = 5e-5
-    @test results.code_doppler[1] ≈ code_doppler atol = 5e-4Hz
-
-    #=
-    using PyPlot
-    pygui(true)
-    figure("Tracking code phases error")
-    plot(code_phases - calculated_code_phases)
-    figure("Tracking carrier_dopplers")
-    plot(carrier_dopplers)
-    figure("Tracking code dopplers")
-    plot(code_dopplers)
-    figure("Prompts")
-    plot(real_prompts)
-    =#
+#    using PyPlot
+#    pygui(true)
+#    figure("carrier_phases")
+#    plot(tracked_carrier_phases - carrier_phases)
+#    plot(carrier_phases)
+#    figure("Code Phases")
+#    plot(300 * (tracked_code_phases .- code_phases))
+#    figure("Carrier Doppler")
+#    plot(tracked_carrier_dopplers)
+#    figure("Code Doppler")
+#    plot(tracked_code_dopplers)
 
 end

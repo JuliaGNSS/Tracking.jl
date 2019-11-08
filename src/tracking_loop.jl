@@ -1,237 +1,362 @@
 
-struct SecondaryCodeOrBitDetector
-    prn_buffer::Int64
-    num_prns::Int
-    found::Bool
-end
+"""
+$(SIGNATURES)
 
-struct TrackingState{
-        S <: AbstractGNSSSystem,
-        C,
-        LF <: AbstractLoopFilter
-    }
-    dopplers::Dopplers
-    phases::Phases
-    correlator::C
-    loop_filter::LF
-    secondary_code_or_bit_detector::SecondaryCodeOrBitDetector
-end
-
+Track the signal `signal` based on the current tracking `state`, the sample frequency
+`sample_frequency` and PRN `prn`. Optional configurations are:
+- Post correlation filter `post_corr_filter` defaults to `get_default_post_corr_filter(...)`
+- Intermediate frequency `intermediate_frequency` defaults to 0Hz
+- Maximal integration time `max_integration_time` defaults to 1ms. The actual integration
+  time can be less in order to find the secondary code or the bit shift. Once this is found
+  the integration time is identical to the maximal integration time.
+- Minimal integration time `min_integration_time` defaults to 0.75ms. It's the minimal
+  integration time, that leads to a valid correlation result. It is only used for the first
+  integration period.
+- Sample shift between early and late `early_late_sample_shift` defaults to
+  `get_early_late_sample_shift(...)`
+- Bandwidth of the carrier loop `carrier_loop_filter_bandwidth` defaults to 18Hz
+- Bandwidth of the code loop `code_loop_filter_bandwidth` defaults to 1Hz
+- Velocity aiding `velocity_aiding` defaults to 0Hz
+"""
 function track(
-        ::Type{T},
         signal,
-        track_state,
+        state::TrackingState{S, C, CALF, COLF, CN},
+        prn::Integer,
         sample_frequency;
+        post_corr_filter = get_default_post_corr_filter(get_correlator(state)),
         intermediate_frequency = 0.0Hz,
-        num_ants = NumAnts(1),
-        max_integration_time::typeof(1ms) = 1ms
-        early_late_shift = get_early_late_shift(T),
+        max_integration_time::typeof(1ms) = 1ms,
+        min_integration_time::typeof(1.0ms) = 0.75ms,
+        early_late_sample_shift = get_early_late_sample_shift(S,
+            get_correlator(state), sample_frequency, 0.5),
         carrier_loop_filter_bandwidth = 18Hz,
-        code_loop_filter_bandwidth = 1Hz
-    ) where T <: AbstractGNSSSystem
+        code_loop_filter_bandwidth = 1Hz,
+        velocity_aiding = 0Hz
+) where {
+    S <: AbstractGNSSSystem,
+    C <: AbstractCorrelator,
+    CALF <: AbstractLoopFilter,
+    COLF <: AbstractLoopFilter,
+    CN <: AbstractCN0Estimator
+}
+    if get_data_frequency(S) != 0Hz
+        @assert rem(1 / get_data_frequency(S), max_integration_time) == 0ms
+    end
+    init_carrier_doppler = get_init_carrier_doppler(state)
+    init_code_doppler = get_init_code_doppler(state)
+    carrier_doppler = get_carrier_doppler(state)
+    code_doppler = get_code_doppler(state)
+    carrier_phase = get_carrier_phase(state)
+    code_phase = get_code_phase(state)
+    sc_bit_detector = get_sc_bit_detector(state)
+    correlator = get_correlator(state)
+    carrier_loop_filter = get_carrier_loop_filter(state)
+    code_loop_filter = get_code_loop_filter(state)
+    prompt_accumulator = get_prompt_accumulator(state)
+    integrated_samples = get_integrated_samples(state)
+    cn0_estimator = get_cn0_estimator(state)
+    signal_start_sample = 1
+    bit_buffer = BitBuffer()
+    valid_correlator = zero(correlator)
+    got_correlator = false
+    while true
+        num_samples_left_to_integrate = get_num_samples_left_to_integrate(
+            S,
+            max_integration_time,
+            sample_frequency,
+            code_doppler,
+            code_phase,
+            found(sc_bit_detector)
+        )
+        signal_samples_left = get_num_samples(signal) - signal_start_sample + 1
+        num_samples_left = min(num_samples_left_to_integrate, signal_samples_left)
+        carrier_frequency = get_current_carrier_frequency(
+            intermediate_frequency,
+            carrier_doppler
+        )
+        code_frequency = get_current_code_frequency(S, code_doppler)
+        correlator = correlate(
+            S,
+            correlator,
+            signal,
+            prn,
+            early_late_sample_shift,
+            signal_start_sample,
+            num_samples_left,
+            carrier_frequency,
+            code_frequency,
+            sample_frequency,
+            carrier_phase,
+            code_phase
+        )
+        integrated_samples += num_samples_left
+        carrier_phase = update_carrier_phase(
+            num_samples_left,
+            carrier_frequency,
+            sample_frequency,
+            carrier_phase
+        )
+        prev_code_phase = code_phase
+        code_phase = update_code_phase(
+            S,
+            num_samples_left,
+            code_frequency,
+            sample_frequency,
+            code_phase,
+            found(sc_bit_detector)
+        )
+        integration_time = integrated_samples / sample_frequency
+        if num_samples_left == num_samples_left_to_integrate &&
+                integration_time >= min_integration_time
+            got_correlator = true
 
-
-end
-
-@inline get_code_phase(phases::Phases) = phases.code
-@inline get_carrier_phase(phases::Phases) = phases.carrier
-@inline get_code_phase(state::TrackingState) = get_code_phase(state.phases)
-@inline get_carrier_phase(state::TrackingState) = get_carrier_phase(state.phases)
-@inline get_code_doppler(dopplers::Dopplers) = dopplers.code
-@inline get_carrier_doppler(dopplers::Dopplers) = dopplers.carrier
-@inline get_code_doppler(state::TrackingState) = get_code_doppler(state.dopplers)
-@inline get_carrier_doppler(state::TrackingState) = get_carrier_doppler(state.dopplers)
-
-function get_num_phase_to_integrate(::Type{T}, max_integration_time, tracking_state::TrackingState) where T <: AbstractGNSSSystem
-    max_phase = get_code_frequency(T) * max_integration_time
-
-end
-
-function calc_samples_to_track(track_state::TrackingState, sample_frequency)
-
-end
-
-
-"""
-$(SIGNATURES)
-
-Initializes the tracking function. Returns a tracking function to track a given signal.
-The initialization needs the GNSS system `system`, the doppler and phase of the
-carrier and code `inits` of type `Initials`, the sample frequency `sample_freq`
-of type `Unitful.Hz`, the intermediate frequency of type `Unitful.Hz` and the
-satellite PRN number `prn`.
-Optianally you can set the PLL bandwidth (default: 18Hz), the DLL bandwidth
-(default: 1Hz), the minimal integration time which will lead to a valid
-correlation results (default: 0.5ms), the maximal integration time (default: 1ms),
-the carrier loop function (default: `init_3rd_order_bilinear_loop_filter`), the
-the code loop function (default: `init_2nd_order_bilinear_loop_filter`) the
-Carrier-to-Noise-Density-Ratio (CN0) update time `cn0_update_time`.
-The tracking function will only integrate in the boundaries of a bit shifts.
-Moreover, it will track the complete given signal. Adjust the number of samples
-in the signal to your preferred output update rate. The data bits are bufferd in
-an UInt variable. It can hold up to 64 or 32 bits depending on your system.
-The number of detected bits will be returned, too.
-The returned tracking function will return a new tracking function for the next
-iteration and the tracking results `TrackingResults`.
-# Examples
-```julia-repl
-julia> gpsl1 = GPSL1()
-julia> inits = Initials(gpsl1, 1200Hz, 231) # 1200 Hz doppler, 231 code phase
-julia> track = init_tracking(gpsl1, inits, 5Mhz, 0Hz, 1)
-julia> next_track, track_results = track(signal)
-```
-"""
-function init_tracking(
-        ::Type{T},
-        inits,
-        sample_freq,
-        interm_freq,
-        sat_prn;
-        num_ants = NumAnts(1),
-        min_integration_time = 0.5ms,
-        max_integration_time = 1ms,
-        carrier_loop = init_3rd_order_bilinear_loop_filter(18Hz),
-        code_loop = init_2nd_order_bilinear_loop_filter(1Hz),
-        cn0_update_time = 20ms,
-        data_bit_found_after_num_prn = -1,
-        early_late_shift = get_early_late_shift(T)
-    ) where T <: AbstractGNSSSystem
-    code_shift = CodeShift(T, sample_freq, early_late_shift)
-    dopplers = Dopplers(inits)
-    phases = Phases(inits)
-    correlator_outputs = init_correlator_outputs(num_ants, code_shift)
-    data_bits = DataBits(T, data_bit_found_after_num_prn)
-    last_valid_correlator_outputs = init_correlator_outputs(num_ants, code_shift)
-    last_valid_filtered_correlator_outputs = init_correlator_outputs(NumAnts(1), code_shift)
-    cn0_state = CN0State(cn0_update_time)
-    req_signal_and_track(T, correlator_outputs, last_valid_correlator_outputs, last_valid_filtered_correlator_outputs, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, min_integration_time, max_integration_time, 0, data_bits, cn0_state)
-end
-
-get_early_late_shift(::Type{T}) where T <: AbstractGNSSSystem = 0.5
-get_early_late_shift(::Type{GalileoE1B}) = 0.2
-
-"""
-$(SIGNATURES)
-
-Running tracking function. Will return a new tracking function for the next
-iteration and the tracking results.
-"""
-function _tracking(::Type{T}, correlator_outputs, last_valid_correlator_outputs, last_valid_filtered_correlator_outputs, signal, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, post_corr_filter, min_integration_time, max_integration_time, signal_idx, integrated_samples, num_integrated_prns, data_bits, cn0_state, velocity_aiding) where T <: AbstractGNSSSystem
-    preferred_integration_time = calc_integration_time(data_bits, max_integration_time)
-    num_samples_left_to_integrate = calc_num_samples_left_to_integrate(T, sample_freq, phases, preferred_integration_time)
-    num_samples_signal_bound = calc_num_samples_signal_bound(signal, signal_idx)
-    num_samples_to_integrate = calc_num_samples_to_integrate(num_samples_left_to_integrate, num_samples_signal_bound)
-    correlator_outputs = correlate_and_dump(T, correlator_outputs, signal, sample_freq, interm_freq, dopplers, phases, code_shift, signal_idx, num_samples_to_integrate, sat_prn)
-    integrated_samples = increase_samples_by(integrated_samples, num_samples_to_integrate)
-    signal_idx = increase_samples_by(signal_idx, num_samples_to_integrate)
-    phases = calc_next_phases(interm_freq, sample_freq, dopplers, phases, num_samples_to_integrate, data_bits)
-    actual_integration_time = calc_actual_integration_time(integrated_samples, sample_freq)
-    if num_samples_to_integrate == num_samples_left_to_integrate
-        correlator_outputs = normalize(correlator_outputs, integrated_samples)
-        num_integrated_prns += calc_integrated_prns(T, integrated_samples, sample_freq)
-        if actual_integration_time >= min_integration_time
-            last_valid_correlator_outputs = correlator_outputs
-            filtered_correlator_outputs = post_corr_filter(correlator_outputs)
-            last_valid_filtered_correlator_outputs = filtered_correlator_outputs
-            carrier_loop, carrier_freq_update = carrier_loop(pll_disc(filtered_correlator_outputs), actual_integration_time)
-            code_loop, code_freq_update = code_loop(dll_disc(filtered_correlator_outputs, early_late_shift(code_shift)), actual_integration_time)
-            dopplers = aid_dopplers(T, inits, carrier_freq_update, code_freq_update, velocity_aiding)
-            data_bits = buffer(data_bits, real(prompt(filtered_correlator_outputs)), num_integrated_prns)
-            cn0_state = estimate_CN0(cn0_state, actual_integration_time, prompt(filtered_correlator_outputs))
+            correlator = normalize(correlator, integrated_samples)
+            valid_correlator = correlator
+            filtered_correlator = filter(post_corr_filter, correlator)
+            pll_discriminator = pll_disc(S, filtered_correlator)
+            dll_discriminator = dll_disc(
+                S,
+                filtered_correlator,
+                early_late_sample_shift,
+                code_frequency / sample_frequency
+            )
+            carrier_freq_update, carrier_loop_filter = filter_loop(
+                carrier_loop_filter,
+                pll_discriminator,
+                integration_time,
+                carrier_loop_filter_bandwidth
+            )
+            code_freq_update, code_loop_filter = filter_loop(
+                code_loop_filter,
+                dll_discriminator,
+                integration_time,
+                code_loop_filter_bandwidth
+            )
+            carrier_doppler, code_doppler = aid_dopplers(
+                S,
+                init_carrier_doppler,
+                init_code_doppler,
+                carrier_freq_update,
+                code_freq_update,
+                velocity_aiding
+            )
+            cn0_estimator = update(cn0_estimator, get_prompt(filtered_correlator))
+            bit_buffer, prompt_accumulator = buffer(
+                S,
+                bit_buffer,
+                prompt_accumulator,
+                found(sc_bit_detector),
+                prev_code_phase,
+                code_phase,
+                max_integration_time,
+                get_prompt(filtered_correlator)
+            )
+            sc_bit_detector = find(S, sc_bit_detector, get_prompt(filtered_correlator))
+            correlator = zero(correlator)
+            integrated_samples = 0
         end
-        correlator_outputs = reset(correlator_outputs)
-        integrated_samples = reset(integrated_samples)
+
+        num_samples_left == signal_samples_left && break
+        signal_start_sample += num_samples_left
     end
-    if num_samples_to_integrate == num_samples_signal_bound
-        track_results = TrackingResults(dopplers, phases, last_valid_correlator_outputs, last_valid_filtered_correlator_outputs, data_bits, num_integrated_prns, cn0_state.last_valid_cn0)
-        return req_signal_and_track(T, correlator_outputs, last_valid_correlator_outputs, last_valid_filtered_correlator_outputs, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, min_integration_time, max_integration_time, integrated_samples, data_bits, cn0_state), track_results
-    else
-        _tracking(T, correlator_outputs, last_valid_correlator_outputs, last_valid_filtered_correlator_outputs, signal, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, post_corr_filter, min_integration_time, max_integration_time, signal_idx, integrated_samples, num_integrated_prns, data_bits, cn0_state, velocity_aiding)
+    next_state = TrackingState{S, C, CALF, COLF, CN}(
+        init_carrier_doppler,
+        init_code_doppler,
+        carrier_doppler,
+        code_doppler,
+        carrier_phase,
+        code_phase,
+        correlator,
+        carrier_loop_filter,
+        code_loop_filter,
+        sc_bit_detector,
+        integrated_samples,
+        prompt_accumulator,
+        cn0_estimator
+    )
+    estimated_cn0 = estimate_cn0(cn0_estimator, max_integration_time)
+    TrackingResults(next_state, valid_correlator, got_correlator, bit_buffer, estimated_cn0)
+end
+
+"""
+$(SIGNATURES)
+
+Default post corr filter
+"""
+function get_default_post_corr_filter(correlator::AbstractCorrelator{T}) where T <: SVector
+    x -> x[1]
+end
+
+function get_default_post_corr_filter(correlator)
+    x -> x
+end
+
+"""
+$(SIGNATURES)
+
+Returns the appropiate integration time. It will be the maximum integration time once the
+secondary code or the bit shift has been found.
+"""
+function get_integration_time(
+    ::Type{S},
+    max_integration_time,
+    secondary_code_or_bit_found::Bool
+) where S <: AbstractGNSSSystem
+    ifelse(
+        secondary_code_or_bit_found,
+        max_integration_time,
+        min(
+            convert(typeof(1ms), get_code_length(S) / get_code_frequency(S)),
+            max_integration_time
+        )
+    )
+end
+
+"""
+$(SIGNATURES)
+
+Calculates the number of chips to integrate.
+"""
+function get_num_chips_to_integrate(
+    ::Type{S},
+    max_integration_time,
+    current_code_phase,
+    secondary_code_or_bit_found
+) where S <: AbstractGNSSSystem
+    max_phase = Int(upreferred(get_code_frequency(S) *
+        get_integration_time(S, max_integration_time, secondary_code_or_bit_found)))
+    current_phase_mod_max_phase = mod(current_code_phase, max_phase)
+    max_phase - current_phase_mod_max_phase
+end
+
+"""
+$(SIGNATURES)
+
+Calculates the number of samples to integrate.
+"""
+function get_num_samples_left_to_integrate(
+    ::Type{S},
+    max_integration_time,
+    sample_frequency,
+    current_code_doppler,
+    current_code_phase,
+    secondary_code_or_bit_found
+) where S <: AbstractGNSSSystem
+    phase_to_integrate = get_num_chips_to_integrate(
+        S,
+        max_integration_time,
+        current_code_phase,
+        secondary_code_or_bit_found
+    )
+    code_frequency = get_code_frequency(S) + current_code_doppler
+    ceil(Int, phase_to_integrate * sample_frequency / code_frequency)
+end
+
+"""
+$(SIGNATURES)
+
+Calculates the current carrier frequency.
+"""
+function get_current_carrier_frequency(intermediate_frequency, carrier_doppler)
+    carrier_doppler + intermediate_frequency
+end
+
+"""
+$(SIGNATURES)
+
+Calculates the current code frequency.
+"""
+function get_current_code_frequency(::Type{S}, code_doppler) where S <: AbstractGNSSSystem
+    code_doppler + get_code_frequency(S)
+end
+
+"""
+$(SIGNATURES)
+
+Updates the carrier phase.
+"""
+function update_carrier_phase(
+    num_samples,
+    carrier_frequency,
+    sample_frequency,
+    start_carrier_phase
+)
+    mod(carrier_frequency * num_samples / sample_frequency + start_carrier_phase + 0.5, 1) - 0.5
+end
+
+"""
+$(SIGNATURES)
+
+Updates the code phase.
+"""
+function update_code_phase(
+    ::Type{S},
+    num_samples,
+    code_frequency,
+    sample_frequency,
+    start_code_phase,
+    secondary_code_or_bit_found
+) where S <: AbstractGNSSSystem
+    secondary_code_or_bit_length =
+        get_data_frequency(S) == 0Hz ?
+        get_secondary_code_length(S) :
+        Int(get_code_frequency(S) / (get_data_frequency(S) * get_code_length(S)))
+    code_length = get_code_length(S) *
+        (secondary_code_or_bit_found ? secondary_code_or_bit_length : 1)
+    mod(code_frequency * num_samples / sample_frequency + start_code_phase, code_length)
+end
+
+"""
+$(SIGNATURES)
+
+Correlate the signal the the replicas.
+"""
+function correlate(
+    ::Type{S},
+    correlator,
+    signal,
+    prn::Integer,
+    early_late_sample_shift::Integer,
+    start_sample::Integer,
+    num_samples::Integer,
+    carrier_frequency,
+    code_frequency,
+    sample_frequency,
+    start_carrier_phase,
+    start_code_phase
+) where S <: AbstractGNSSSystem
+    total_code_length = get_code_length(S) * get_secondary_code_length(S)
+    start_code_phase = mod(start_code_phase, total_code_length)
+    carrier_phase_wrap = 0
+    code_phase_wrap = 0
+    code_register = 0
+    max_early_late_sample_shift = maximum(early_late_sample_shift)
+    for i = -max_early_late_sample_shift:max_early_late_sample_shift-1
+        code = get_code(S, code_frequency * i / sample_frequency + start_code_phase, prn)
+        code_register = code_register << 1 + (code + 1) >> 1
     end
-end
-
-"""
-$(SIGNATURES)
-
-Requires a new signal and returns a new tracking function for next iteration.
-"""
-function req_signal_and_track(::Type{T}, correlator_outputs, last_valid_correlator_outputs, last_valid_filtered_correlator_outputs, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, min_integration_time, max_integration_time, integrated_samples, data_bits, cn0_state) where T <: AbstractGNSSSystem
-    data_bits = DataBits(data_bits, 0, 0)
-    (signal, post_corr_filter = x -> x, velocity_aiding = 0.0Hz) ->
-        _tracking(T, correlator_outputs, last_valid_correlator_outputs, last_valid_filtered_correlator_outputs, signal, sample_freq, interm_freq, inits, dopplers, phases, code_shift, carrier_loop, code_loop, sat_prn, post_corr_filter, min_integration_time, max_integration_time, 1, integrated_samples, 0, data_bits, cn0_state, velocity_aiding)
-end
-
-"""
-$(SIGNATURES)
-
-Downconverts the signal and correlates with the code replica.
-"""
-function correlate_and_dump(::Type{T}, correlator_outputs, signal, sample_freq, interm_freq, dopplers, phases, code_shift, start_sample, num_samples_to_integrate, sat_prn) where T <: AbstractGNSSSystem
-    gen_carrier_replica(x) = cis(x * 2π * (-interm_freq - dopplers.carrier) / sample_freq - phases.carrier)
-    code_phase_delta = (get_code_frequency(T) + dopplers.code) / sample_freq
-    #calc_code_replica_phase_unsafe(x) = x * (get_code_frequency(T) + dopplers.code) / sample_freq + phases.code
-    downconvert_and_correlate(T, correlator_outputs, signal, start_sample, num_samples_to_integrate, gen_carrier_replica, phases.code, code_phase_delta, code_shift, sat_prn)
-end
-
-"""
-$(SIGNATURES)
-
-Calculates the phases for the next iterations. The phase gets adjusted if no
-data bit has been found yet.
-"""
-function calc_next_phases(interm_freq, sample_freq, dopplers, phases, num_samples_to_integrate, data_bits::DataBits{T}) where T <: AbstractGNSSSystem
-    next_carrier_phase = mod2pi(num_samples_to_integrate * 2π * (interm_freq + dopplers.carrier) / sample_freq + phases.carrier)
-    next_code_phase = mod(num_samples_to_integrate * (get_code_frequency(T) + dopplers.code) / sample_freq + phases.code, get_code_length(T))
-    Phases(next_carrier_phase, adjust_code_phase(data_bits, next_code_phase))
-end
-
-"""
-$(SIGNATURES)
-
-Calculates the number of samples left to integrate until a bit shift might occur.
-"""
-function calc_num_samples_left_to_integrate(::Type{T}, sample_freq, phases, integration_time) where T <: AbstractGNSSSystem
-    chips_left = integration_time * get_code_frequency(T) - mod(phases.code, convert(Int, integration_time * get_code_frequency(T)))
-    ceil(Int, chips_left * sample_freq / get_code_frequency(T))
-end
-
-"""
-$(SIGNATURES)
-
-Calculates the number of samples left to integrate until signal is running out
-of samples.
-"""
-function calc_num_samples_signal_bound(signal, signal_idx)
-    size(signal, 1) - signal_idx + 1
-end
-
-"""
-$(SIGNATURES)
-
-Calculates the number of PRNs that were integrated
-"""
-function calc_integrated_prns(T, integrated_samples, sample_freq)
-    ceil(Int, integrated_samples / (sample_freq / get_code_frequency(T) * get_code_length(T)))
-end
-
-"""
-$(SIGNATURES)
-
-Calculates the necessary integration time. If the data bit has not been found yet,
-it will default to the hard coded 1ms. Otherwise it will return the specified
-maximum integration time.
-"""
-function calc_integration_time(data_bits, max_integration_time)
-    ifelse(found(data_bits), max_integration_time, 1ms)
-end
-
-"""
-$(SIGNATURES)
-
-Initializes the correlator outputs.
-"""
-function init_correlator_outputs(::NumAnts{1}, code_shift::CodeShift{N}) where N
-    zeros(SVector{N, ComplexF64})
+    @inbounds @fastmath for i = 0:num_samples - 1
+        carrier_phase = carrier_frequency * i / sample_frequency + start_carrier_phase
+        carrier_phase_wrap += (carrier_phase - carrier_phase_wrap >= 0.5) * 1
+        carrier = cis(-2π * (carrier_phase - carrier_phase_wrap))
+        current_signal = get_signal(correlator, signal, start_sample + i)
+        earliest_code_phase = code_frequency * (i + max_early_late_sample_shift) /
+            sample_frequency + start_code_phase
+        code_phase_wrap += (earliest_code_phase - code_phase_wrap >= total_code_length) *
+            total_code_length
+        earliest_code = get_code_unsafe(S, earliest_code_phase - code_phase_wrap, prn)
+        code_register = code_register << 1 + (earliest_code + 1) >> 1
+        correlator = correlate_iteration(
+            S,
+            correlator,
+            current_signal,
+            carrier,
+            code_register,
+            early_late_sample_shift,
+            earliest_code
+        )
+    end
+    correlator
 end
 
 """
@@ -240,109 +365,45 @@ $(SIGNATURES)
 Aid dopplers. That is velocity aiding for the carrier doppler and carrier aiding
 for the code doppler.
 """
-function aid_dopplers(::Type{T}, inits, carrier_freq_update, code_freq_update, velocity_aiding) where T <: AbstractGNSSSystem
+function aid_dopplers(
+    ::Type{S},
+    init_carrier_doppler,
+    init_code_doppler,
+    carrier_freq_update,
+    code_freq_update,
+    velocity_aiding
+) where S <: AbstractGNSSSystem
     carrier_doppler = carrier_freq_update + velocity_aiding
-    code_doppler = code_freq_update + carrier_doppler * get_code_center_frequency_ratio(T)
-    Dopplers(inits.carrier_doppler + carrier_doppler, inits.code_doppler + code_doppler)
+    code_doppler = code_freq_update + carrier_doppler * get_code_center_frequency_ratio(S)
+    init_carrier_doppler + carrier_doppler, init_code_doppler + code_doppler
 end
 
 """
 $(SIGNATURES)
 
-Calculates that actual integration time.
+Get the signal at sample `sample`.
 """
-function calc_actual_integration_time(integrated_samples, sample_freq)
-    integrated_samples / sample_freq
+Base.@propagate_inbounds @inline function get_signal(
+    correlator::AbstractCorrelator{T},
+    signal,
+    sample::Integer
+) where T <: SVector
+    T(view(signal, :, sample))
+end
+
+Base.@propagate_inbounds @inline function get_signal(correlator, signal, sample::Integer)
+    signal[sample]
 end
 
 """
 $(SIGNATURES)
 
-Downconverts and correlates the signal.
+Get the number of samples in the signal.
 """
-function downconvert_and_correlate(::Type{T}, output, signal, start_sample, num_samples_to_integrate, gen_carrier_replica, code_phase, code_phase_delta, code_shift::CodeShift{N}, prn) where {N, T <: AbstractGNSSSystem}
-    mutual_output = MArray(output)
-    code_length = get_code_length(T)
-    @inbounds for sample_idx = 0:num_samples_to_integrate-1
-        carrier = gen_carrier_replica(sample_idx)
-        for code_phase_shift_idx = 1:N
-            curr_code_phase = code_phase + code_shift.actual_shift * (code_phase_shift_idx - ((N - 1) >> 1 + 1))
-            curr_code_phase += (curr_code_phase < 0) * code_length - (curr_code_phase >= code_length) * code_length
-            code_carrier = get_code_unsafe(T, curr_code_phase, prn) * carrier
-            dump!(mutual_output, signal, code_phase_shift_idx, sample_idx + start_sample, code_carrier)
-        end
-        code_phase += code_phase_delta
-        code_phase -= (code_phase >= code_length) * code_length
-    end
-    SArray(mutual_output)
+@inline function get_num_samples(signal)
+    length(signal)
 end
 
-"""
-$(SIGNATURES)
-
-Wraps the code index with the maximal code index.
-"""
-function wrap_code_idx(::Type{T}, code_idx, code_idx_wrap) where T <: AbstractGNSSSystem
-    code_length = get_code_length(T)
-    if code_idx >= code_length
-        code_idx_wrap -= code_length
-        code_idx -= code_length
-    elseif code_idx <= -1
-        code_idx += code_length
-    end
-    code_idx, code_idx_wrap
-end
-
-"""
-$(SIGNATURES)
-
-Initializes the code shift register
-"""
-function init_shifts(code_shift::CodeShift{N}) where N
-    min_max_code_shift_samples = (N - 1) / 2 * code_shift.samples
-    SVector{N,Int}(-min_max_code_shift_samples:code_shift.samples:min_max_code_shift_samples)
-end
-
-"""
-$(SIGNATURES)
-
-Dumps the downconverted and correlated signal for the case that signal is a
-vector.
-"""
-Base.@propagate_inbounds function dump!(output, signal::Vector, output_idx, sample, code_carrier)
-    @fastmath output[output_idx] += signal[sample] * code_carrier
-end
-
-"""
-$(SIGNATURES)
-
-General code phase adjustment. Should be overriden by specified system, if
-necessary.
-"""
-function adjust_code_phase(data_bits::DataBits{T}, phase) where T <: AbstractGNSSSystem
-    phase
-end
-
-function increase_samples_by(a, b)
-    a + b
-end
-
-function calc_num_samples_to_integrate(num_samples_left_to_integrate, num_samples_signal_bound)
-    min(num_samples_left_to_integrate, num_samples_signal_bound)
-end
-
-function reset(correlator_outputs)
-    zeros(typeof(correlator_outputs))
-end
-
-function reset(integrated_samples::Int)
-    zero(integrated_samples)
-end
-
-function early_late_shift(code_shift)
-    2 * code_shift.actual_shift
-end
-
-function normalize(correlator_outputs, integrated_samples)
-    correlator_outputs ./ integrated_samples
+@inline function get_num_samples(signal::AbstractMatrix)
+    size(signal, 2)
 end
