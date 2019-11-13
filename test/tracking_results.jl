@@ -11,7 +11,7 @@
     @test @inferred(get_carrier_phase(results)) == 0.0
     @test @inferred(get_code_doppler(results)) == 100Hz / 1540
     @test @inferred(get_code_phase(results)) == 100
-    correlator = @inferred Nothing get_correlator(results)
+    correlator = @inferred get_correlator(results)
     @test correlator == EarlyPromptLateCorrelator(NumAnts(2))
     @test @inferred(get_early(results)) == [0.0, 0.0]
     @test @inferred(get_prompt(results)) == [0.0, 0.0]
@@ -28,6 +28,8 @@
         Tracking.BitBuffer(),
         45dBHz
     )
-    correlator = @inferred Nothing get_correlator(results)
-    @test correlator == nothing
+    correlator = @inferred get_correlator(results)
+    @test get_early(correlator) == [0, 0]
+    @test get_prompt(correlator) == [0, 0]
+    @test get_late(correlator) == [0, 0]
 end
