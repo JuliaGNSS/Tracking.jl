@@ -12,7 +12,7 @@ TrackingLoopFilters = "0814aff9-93cb-554c-9fff-9bf1cfdb5efa"
 Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
 [compat]
-GNSSSignals = "0.10.2"
+GNSSSignals = "0.10.3"
 Unitful = "0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18"
 StaticArrays = "0.9, 0.10, 0.11, 0.12"
 TrackingLoopFilters = "0.1"
