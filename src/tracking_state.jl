@@ -55,7 +55,13 @@ function TrackingState(
     integrated_samples = 0,
     prompt_accumulator = zero(ComplexF64),
     cn0_estimator::CN = MomentsCN0Estimator(20)
-) where {S <: AbstractGNSSSystem, C <: AbstractCorrelator, CALF <: AbstractLoopFilter, COLF <: AbstractLoopFilter, CN <: AbstractCN0Estimator}
+) where {
+    S <: AbstractGNSSSystem,
+    C <: AbstractCorrelator,
+    CALF <: AbstractLoopFilter,
+    COLF <: AbstractLoopFilter,
+    CN <: AbstractCN0Estimator
+}
     if found(sc_bit_detector)
         code_phase = mod(code_phase, get_code_length(S) *
             get_secondary_code_length(S))

@@ -281,7 +281,10 @@ function update_carrier_phase(
     sample_frequency,
     start_carrier_phase
 )
-    mod(carrier_frequency * num_samples / sample_frequency + start_carrier_phase + 0.5, 1) - 0.5
+    mod(
+        carrier_frequency * num_samples / sample_frequency + start_carrier_phase + 0.5,
+        1
+    ) - 0.5
 end
 
 """
