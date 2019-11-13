@@ -3,6 +3,7 @@ language: julia
 os:
   - osx
   - linux
+  - windows
 
 julia:
   - 1.0
@@ -28,6 +29,6 @@ jobs:
       julia: 1.1
       os: linux
       script:
-        - julia --project=docs/ -e 'using Pkg; Pkg.add("Documenter"); Pkg.instantiate(); Pkg.develop(PackageSpec(path=pwd()))'
+        - julia --project=docs/ -e 'using Pkg; Pkg.add("Documenter"); Pkg.add("GNSSSignals"); Pkg.instantiate(); Pkg.develop(PackageSpec(path=pwd()))'
         - julia --project=docs/ docs/make.jl
       after_success: skip
