@@ -4,12 +4,14 @@
 [![Coverage Status](https://coveralls.io/repos/github/JuliaGNSS/Tracking.jl/badge.svg?branch=master)](https://coveralls.io/github/JuliaGNSS/Tracking.jl?branch=master)
 
 # Tracking
-This implements a basic tracking functionality for GNSS signals. The correlation is done in the interval of PRNs. Each call of the tracking function returns the current code phase, doppler, the Carrier-to-Noise-Density-Ratio (CN0), data bits, number of data bits and the last correlator output.
+This implements a basic tracking functionality for GNSS signals. The correlation is done in the interval of PRNs. Each call of the tracking function returns the current code phase, Doppler, the Carrier-to-Noise-Density-Ratio (CN0), data bits, number of data bits and the last correlator output.
 
 ## Features
 
 * Supports GPS L1 / L5 and Galileo E1B
 * CN0 estimation
+* Secondary code detection
+* Bit detection
 * Phased array tracking
 
 ## Getting started
