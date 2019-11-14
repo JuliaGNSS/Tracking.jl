@@ -1,45 +1,75 @@
-@testset "CN0 estimation" begin
+@testset "Update CN0 Estimator" begin
 
-    prompt_correlator_output = complex(2,2)
-    cn0_state = Tracking.CN0State(0.0, 0.0, NaN, 20ms, 10ms)
-    new_cn0_state = Tracking.estimate_CN0(cn0_state, 1ms, prompt_correlator_output)
-    @test new_cn0_state.summed_total_power == 8.0
-    @test new_cn0_state.summed_abs_inphase_ampl == 2.0
-    @test isnan(new_cn0_state.last_valid_cn0)
-    @test new_cn0_state.update_time == 20ms
-    @test new_cn0_state.current_updated_time == 11ms
+    cn0_estimator = MomentsCN0Estimator(20)
+    @test @inferred(Tracking.get_prompt_buffer(cn0_estimator)) == zero(SVector{20, ComplexF64})
+    @test @inferred(Tracking.get_current_index(cn0_estimator)) == 0
+    @test @inferred(Tracking.length(cn0_estimator)) == 0
 
-    signal = complex.(ones(19), ones(19))
-    summed_total_power = sum(abs2.(signal))
-    summed_abs_inphase_ampl = sum(abs.(real.(signal)))
-    prompt_correlator_output = complex(1,1)
-    cn0_state = Tracking.CN0State(summed_total_power, summed_abs_inphase_ampl, NaN, 20ms, 19ms)
-    new_cn0_state = Tracking.estimate_CN0(cn0_state, 1ms, prompt_correlator_output)
-    @test new_cn0_state.summed_total_power == 0.0
-    @test new_cn0_state.summed_abs_inphase_ampl == 0.0
-    @test new_cn0_state.last_valid_cn0 == 1000.0
-    @test new_cn0_state.update_time == 20ms
-    @test new_cn0_state.current_updated_time == 0ms
+    next_cn0_estimator = @inferred Tracking.update(cn0_estimator, 1 + 2im)
+    @test @inferred(Tracking.get_prompt_buffer(next_cn0_estimator))[1] == 1 + 2im
+    @test @inferred(Tracking.get_current_index(next_cn0_estimator)) == 1
+    @test @inferred(Tracking.length(next_cn0_estimator)) == 1
+
+    cn0_estimator = MomentsCN0Estimator(ones(SVector{20, ComplexF64}), 20, 20)
+    next_cn0_estimator = @inferred Tracking.update(cn0_estimator, 1 + 2im)
+    @test @inferred(Tracking.get_prompt_buffer(next_cn0_estimator))[1] == 1 + 2im
+    @test @inferred(Tracking.get_current_index(next_cn0_estimator)) == 1
+    @test @inferred(Tracking.length(next_cn0_estimator)) == 20
+
+    cn0_estimator = MomentsCN0Estimator(ones(SVector{20, ComplexF64}), 19, 20)
+    @test @inferred(Tracking.get_current_index(cn0_estimator)) == 19
+    @test @inferred(Tracking.length(cn0_estimator)) == 20
+
+    @test @allocated(Tracking.update(MomentsCN0Estimator(20), 1 + 2im)) == 0
 end
 
-@testset "Tracking: CN0 estimation" begin
+@testset "CN0 estimation" begin
+
     Random.seed!(1234)
-    num_samples = 55000
-    sample_freq = 2.5e6Hz
-    carrier = cis.(2π * (0:num_samples-1) .* 50Hz ./ sample_freq .+ 1.2)
-    code = get_code.(GPSL1, (0:num_samples-1) .* 1023e3Hz ./ sample_freq .+ 2.0, 1)
-    signal = carrier .* code .+ randn(ComplexF64, num_samples) .* 10 .^ (20 ./ 20)
-    correlator_outputs = zeros(SVector{3,ComplexF64})
-    code_shift = Tracking.CodeShift(GPSL1, sample_freq, 0.5)
-    inits = TrackingInitials(20Hz, 1.2, 0.0Hz, 2.0)
-    dopplers = Tracking.Dopplers(inits)
-    phases = Tracking.Phases(inits)
-    carrier_loop = Tracking.init_3rd_order_bilinear_loop_filter(18Hz)
-    code_loop = Tracking.init_2nd_order_bilinear_loop_filter(1Hz)
-    last_valid_correlator_outputs = zeros(typeof(correlator_outputs))
-    last_valid_filtered_correlator_outputs = zeros(typeof(correlator_outputs))
-    data_bits = Tracking.DataBits(GPSL1)
-    cn0_state = Tracking.CN0State(20ms)
-    results = @inferred Tracking._tracking(GPSL1, correlator_outputs, last_valid_correlator_outputs, last_valid_filtered_correlator_outputs, signal, sample_freq, 30Hz, inits, dopplers, phases, code_shift, carrier_loop, code_loop, 1, x -> x, 0.5ms, 1ms, 1, 0, 0, data_bits, cn0_state, 0.0Hz)
-    @test 10 * log10(results[2].cn0) ≈ 45 atol = 2.6 #1?
+    carrier_doppler = 0Hz
+    start_code_phase = 0
+    code_frequency = 1023kHz
+    sample_frequency = 4MHz
+    prn = 1
+    range = 0:3999
+    start_carrier_phase = π / 2
+    cn0_estimator = MomentsCN0Estimator(20)
+    early_late_sample_shift = 2
+    start_sample = 1
+    num_samples = 4000
+
+    for i = 1:20
+        signal = cis.(
+                2π .* carrier_doppler .* range ./ sample_frequency .+ start_carrier_phase
+            ) .*
+            get_code.(
+                GPSL1,
+                code_frequency .* range ./ sample_frequency .+ start_code_phase,
+                prn
+            ) .* 10^(45 / 20) .+
+            randn(ComplexF64, length(range)) .* sqrt(4e6)
+
+        correlator = EarlyPromptLateCorrelator()
+        correlator = Tracking.correlate(
+            GPSL1,
+            correlator,
+            signal,
+            prn,
+            early_late_sample_shift,
+            start_sample,
+            num_samples,
+            carrier_doppler,
+            code_frequency,
+            sample_frequency,
+            start_carrier_phase / 2π,
+            start_code_phase
+        )
+        cn0_estimator = Tracking.update(cn0_estimator, get_prompt(correlator))
+    end
+    @test @inferred(Tracking.get_current_index(cn0_estimator)) == 20
+    @test @inferred(Tracking.length(cn0_estimator)) == 20
+    cn0_estimate = @inferred Tracking.estimate_cn0(cn0_estimator, 1ms)
+
+    @test cn0_estimate ≈ 45dBHz atol = 0.3dBHz
+
 end
