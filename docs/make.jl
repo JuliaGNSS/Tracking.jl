@@ -14,3 +14,7 @@ makedocs(
         "cn0_estimator.md"
         ]
 )
+
+deploydocs(
+    repo = "github.com/JuliaGNSS/Tracking.jl.git",
+)
