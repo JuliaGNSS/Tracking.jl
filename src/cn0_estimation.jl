@@ -41,7 +41,7 @@ function estimate_cn0(cn0_estimator::MomentsCN0Estimator, integration_time)
     abs2_prompt_buffer = abs2.(get_prompt_buffer(cn0_estimator))
     M₂ = 1 / length(cn0_estimator) * sum(abs2_prompt_buffer)
     M₄ = 1 / length(cn0_estimator) * sum(abs2_prompt_buffer .^ 2)
-    P_real = (1 / length(cn0_estimator) * sum(abs.(real.(get_prompt_buffer(cn0_estimator)))))^2
-    SNR = sqrt(2 * M₂^2 - M₄) / (M₂ - P_real)
+    Pd = sqrt(abs(2 * M₂^2 - M₄))
+    SNR = Pd / (M₂ - Pd)
     dBHz(SNR / integration_time)
 end
