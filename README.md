@@ -26,7 +26,7 @@ pkg> add Tracking
 
 ```julia
 using Tracking
-using Tracking: MHz, Hz, GPSL1
+using Tracking: Hz, GPSL1
 carrier_doppler = 1000Hz
 code_phase = 50
 sample_frequency = 2.5MHz
