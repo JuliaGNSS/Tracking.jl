@@ -29,7 +29,7 @@ using Tracking
 using Tracking: Hz, GPSL1
 carrier_doppler = 1000Hz
 code_phase = 50
-sample_frequency = 2.5MHz
+sample_frequency = 2.5e6Hz
 prn = 1
 state = TrackingState(GPSL1, carrier_doppler, code_phase)
 results = track(signal, state, prn, sample_frequency)
