@@ -1,4 +1,3 @@
-
 """
 $(SIGNATURES)
 
@@ -19,8 +18,8 @@ Track the signal `signal` based on the current tracking `state`, the sample freq
 - Velocity aiding `velocity_aiding` defaults to 0Hz
 """
 function track(
-        signal,
-        state::TrackingState{S, C, CALF, COLF, CN},
+        gain_controlled_signal::GainControlledSignal,
+        state::TrackingState{S, C, CALF, COLF, CN, DS},
         prn::Integer,
         sample_frequency;
         post_corr_filter = get_default_post_corr_filter(get_correlator(state)),
@@ -37,11 +36,22 @@ function track(
     C <: AbstractCorrelator,
     CALF <: AbstractLoopFilter,
     COLF <: AbstractLoopFilter,
-    CN <: AbstractCN0Estimator
+    CN <: AbstractCN0Estimator,
+    DS <: StructArray
 }
     if get_data_frequency(S) != 0Hz
         @assert rem(1 / get_data_frequency(S), max_integration_time) == 0ms
     end
+    signal = get_signal(gain_controlled_signal)
+    correlator = get_correlator(state)
+    num_ants = get_num_ants(correlator)
+    size(signal, 2) == num_ants || throw(ArgumentError("The second dimension of the signal should be equal to the number of antennas specified by num_ants = NumAnts(N) in the TrackingState."))
+    agc_amplitude_power = get_amplitude_power(gain_controlled_signal)
+    agc_attenuation = get_attenuation(gain_controlled_signal)
+    carrier_amplitude_power = get_carrier_amplitude_power(zero(Int16))
+    downconverted_signal = resize!(get_downconverted_signal(state), size(signal, 1))
+    carrier_replica = resize!(get_carrier(state), size(signal, 1))
+    code_replica = resize!(get_code(state), size(signal, 1) + 2 * maximum(early_late_sample_shift))
     init_carrier_doppler = get_init_carrier_doppler(state)
     init_code_doppler = get_init_code_doppler(state)
     carrier_doppler = get_carrier_doppler(state)
@@ -49,7 +59,6 @@ function track(
     carrier_phase = get_carrier_phase(state)
     code_phase = get_code_phase(state)
     sc_bit_detector = get_sc_bit_detector(state)
-    correlator = get_correlator(state)
     carrier_loop_filter = get_carrier_loop_filter(state)
     code_loop_filter = get_code_loop_filter(state)
     prompt_accumulator = get_prompt_accumulator(state)
@@ -75,19 +84,42 @@ function track(
             carrier_doppler
         )
         code_frequency = get_current_code_frequency(S, code_doppler)
-        correlator = correlate(
+        code_replica = gen_code_replica!(
+            code_replica,
             S,
-            correlator,
+            code_frequency,
+            sample_frequency,
+            code_phase,
+            signal_start_sample,
+            num_samples_left,
+            early_late_sample_shift,
+            prn
+        )
+        carrier_replica = gen_carrier_replica!(
+            carrier_replica,
+            carrier_frequency,
+            sample_frequency,
+            carrier_phase,
+            signal_start_sample,
+            num_samples_left
+        )
+        downconverted_signal = downconvert!(
+            downconverted_signal,
             signal,
-            prn,
+            carrier_replica,
+            signal_start_sample,
+            num_samples_left
+        )
+        correlator = correlate(
+            correlator,
+            downconverted_signal,
+            code_replica,
             early_late_sample_shift,
             signal_start_sample,
             num_samples_left,
-            carrier_frequency,
-            code_frequency,
-            sample_frequency,
-            carrier_phase,
-            code_phase
+            agc_attenuation,
+            agc_amplitude_power,
+            carrier_amplitude_power
         )
         integrated_samples += num_samples_left
         carrier_phase = update_carrier_phase(
@@ -159,7 +191,7 @@ function track(
         num_samples_left == signal_samples_left && break
         signal_start_sample += num_samples_left
     end
-    next_state = TrackingState{S, C, CALF, COLF, CN}(
+    next_state = TrackingState{S, C, CALF, COLF, CN, DS}(
         init_carrier_doppler,
         init_code_doppler,
         carrier_doppler,
@@ -172,10 +204,54 @@ function track(
         sc_bit_detector,
         integrated_samples,
         prompt_accumulator,
-        cn0_estimator
+        cn0_estimator,
+        downconverted_signal,
+        carrier_replica,
+        code_replica
     )
     estimated_cn0 = estimate_cn0(cn0_estimator, max_integration_time)
     TrackingResults(next_state, valid_correlator, got_correlator, bit_buffer, estimated_cn0)
+end
+
+@inline function track(
+        signal::AbstractArray,
+        state::TrackingState{S, C, CALF, COLF, CN, DS},
+        prn::Integer,
+        sample_frequency;
+        post_corr_filter = get_default_post_corr_filter(get_correlator(state)),
+        intermediate_frequency = 0.0Hz,
+        max_integration_time::typeof(1ms) = 1ms,
+        min_integration_time::typeof(1.0ms) = 0.75ms,
+        early_late_sample_shift = get_early_late_sample_shift(S,
+            get_correlator(state), sample_frequency, 0.5),
+        carrier_loop_filter_bandwidth = 18Hz,
+        code_loop_filter_bandwidth = 1Hz,
+        velocity_aiding = 0Hz
+) where {
+    S <: AbstractGNSSSystem,
+    C <: AbstractCorrelator,
+    CALF <: AbstractLoopFilter,
+    COLF <: AbstractLoopFilter,
+    CN <: AbstractCN0Estimator,
+    DS <: StructArray
+}
+    correlator = get_correlator(state)
+    num_ants = get_num_ants(correlator)
+    size(signal, 2) == num_ants || throw(ArgumentError("The second dimension of the signal should be equal to the number of antennas specified by num_ants = NumAnts(N) in the TrackingState."))
+    track(
+        GainControlledSignal(signal),
+        state,
+        prn,
+        sample_frequency,
+        post_corr_filter = post_corr_filter,
+        intermediate_frequency = intermediate_frequency,
+        max_integration_time = max_integration_time,
+        min_integration_time = min_integration_time,
+        early_late_sample_shift = early_late_sample_shift,
+        carrier_loop_filter_bandwidth = carrier_loop_filter_bandwidth,
+        code_loop_filter_bandwidth = code_loop_filter_bandwidth,
+        velocity_aiding = velocity_aiding,
+    )
 end
 
 """
@@ -255,116 +331,6 @@ end
 """
 $(SIGNATURES)
 
-Calculates the current carrier frequency.
-"""
-function get_current_carrier_frequency(intermediate_frequency, carrier_doppler)
-    carrier_doppler + intermediate_frequency
-end
-
-"""
-$(SIGNATURES)
-
-Calculates the current code frequency.
-"""
-function get_current_code_frequency(::Type{S}, code_doppler) where S <: AbstractGNSSSystem
-    code_doppler + get_code_frequency(S)
-end
-
-"""
-$(SIGNATURES)
-
-Updates the carrier phase.
-"""
-function update_carrier_phase(
-    num_samples,
-    carrier_frequency,
-    sample_frequency,
-    start_carrier_phase
-)
-    mod(
-        carrier_frequency * num_samples / sample_frequency + start_carrier_phase + 0.5,
-        1
-    ) - 0.5
-end
-
-"""
-$(SIGNATURES)
-
-Updates the code phase.
-"""
-function update_code_phase(
-    ::Type{S},
-    num_samples,
-    code_frequency,
-    sample_frequency,
-    start_code_phase,
-    secondary_code_or_bit_found
-) where S <: AbstractGNSSSystem
-    secondary_code_or_bit_length =
-        get_data_frequency(S) == 0Hz ?
-        get_secondary_code_length(S) :
-        Int(get_code_frequency(S) / (get_data_frequency(S) * get_code_length(S)))
-    code_length = get_code_length(S) *
-        (secondary_code_or_bit_found ? secondary_code_or_bit_length : 1)
-    mod(code_frequency * num_samples / sample_frequency + start_code_phase, code_length)
-end
-
-"""
-$(SIGNATURES)
-
-Correlate the signal the the replicas.
-"""
-function correlate(
-    ::Type{S},
-    correlator,
-    signal,
-    prn::Integer,
-    early_late_sample_shift::Integer,
-    start_sample::Integer,
-    num_samples::Integer,
-    carrier_frequency,
-    code_frequency,
-    sample_frequency,
-    start_carrier_phase,
-    start_code_phase
-) where S <: AbstractGNSSSystem
-    total_code_length = get_code_length(S) * get_secondary_code_length(S)
-    start_code_phase = mod(start_code_phase, total_code_length)
-    carrier_phase_wrap = 0
-    code_phase_wrap = 0
-    code_register = 0
-    max_early_late_sample_shift = maximum(early_late_sample_shift)
-    for i = -max_early_late_sample_shift:max_early_late_sample_shift-1
-        code = get_code(S, code_frequency * i / sample_frequency + start_code_phase, prn)
-        code_register = code_register << 1 + (code + 1) >> 1
-    end
-    @inbounds @fastmath for i = 0:num_samples - 1
-        carrier_phase = carrier_frequency * i / sample_frequency + start_carrier_phase
-        carrier_phase_wrap += (carrier_phase - carrier_phase_wrap >= 0.5) * 1
-        carrier = cis(-2π * (carrier_phase - carrier_phase_wrap))
-        current_signal = get_signal(correlator, signal, start_sample + i)
-        earliest_code_phase = code_frequency * (i + max_early_late_sample_shift) /
-            sample_frequency + start_code_phase
-        code_phase_wrap += (earliest_code_phase - code_phase_wrap >= total_code_length) *
-            total_code_length
-        earliest_code = get_code_unsafe(S, earliest_code_phase - code_phase_wrap, prn)
-        code_register = code_register << 1 + (earliest_code + 1) >> 1
-        correlator = correlate_iteration(
-            S,
-            correlator,
-            current_signal,
-            carrier,
-            code_register,
-            early_late_sample_shift,
-            earliest_code
-        )
-    end
-    correlator
-end
-
-"""
-$(SIGNATURES)
-
 Aid dopplers. That is velocity aiding for the carrier doppler and carrier aiding
 for the code doppler.
 """
@@ -384,23 +350,6 @@ end
 """
 $(SIGNATURES)
 
-Get the signal at sample `sample`.
-"""
-Base.@propagate_inbounds @inline function get_signal(
-    correlator::AbstractCorrelator{T},
-    signal,
-    sample::Integer
-) where T <: SVector
-    T(view(signal, :, sample))
-end
-
-Base.@propagate_inbounds @inline function get_signal(correlator, signal, sample::Integer)
-    signal[sample]
-end
-
-"""
-$(SIGNATURES)
-
 Get the number of samples in the signal.
 """
 @inline function get_num_samples(signal)
@@ -408,5 +357,13 @@ Get the number of samples in the signal.
 end
 
 @inline function get_num_samples(signal::AbstractMatrix)
-    size(signal, 2)
+    size(signal, 1)
+end
+
+function resize!(A::StructArray{Complex{T}, 2}, b::Integer) where T
+    if size(A, 1) == b
+        return A
+    end
+    num_ants = size(A, 2)
+    StructArray{Complex{T}}((Matrix{T}(undef, b, num_ants), Matrix{T}(undef, b, num_ants)))
 end

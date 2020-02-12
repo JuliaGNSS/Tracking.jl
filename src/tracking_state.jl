@@ -8,7 +8,8 @@ struct TrackingState{
         C <: AbstractCorrelator,
         CALF <: AbstractLoopFilter,
         COLF <: AbstractLoopFilter,
-        CN <: AbstractCN0Estimator
+        CN <: AbstractCN0Estimator,
+        DS <: StructArray,
     }
     init_carrier_doppler::typeof(1.0Hz)
     init_code_doppler::typeof(1.0Hz)
@@ -23,6 +24,9 @@ struct TrackingState{
     integrated_samples::Int
     prompt_accumulator::ComplexF64
     cn0_estimator::CN
+    downconverted_signal::DS
+    carrier::StructArray{Complex{Int16},1,NamedTuple{(:re, :im),Tuple{Array{Int16,1},Array{Int16,1}}},Int64}
+    code::Vector{Int16}
 end
 
 """
@@ -68,7 +72,11 @@ function TrackingState(
     else
         code_phase = mod(code_phase, get_code_length(S))
     end
-    TrackingState{S, C, CALF, COLF, CN}(
+    downconverted_signal = init_downconverted_signal(num_ants)
+    carrier = StructArray{Complex{Int16}}(undef, 0)
+    code = Vector{Int16}(undef, 0)
+
+    TrackingState{S, C, CALF, COLF, CN, typeof(downconverted_signal)}(
         carrier_doppler,
         code_doppler,
         carrier_doppler,
@@ -81,8 +89,19 @@ function TrackingState(
         sc_bit_detector,
         integrated_samples,
         prompt_accumulator,
-        cn0_estimator
+        cn0_estimator,
+        downconverted_signal,
+        carrier,
+        code
     )
+end
+
+function init_downconverted_signal(num_ants::NumAnts{1})
+    StructArray{Complex{Int16}}(undef, 0)
+end
+
+function init_downconverted_signal(num_ants::NumAnts{N}) where N
+    StructArray{Complex{Int16}}(undef, 0, N)
 end
 
 @inline get_code_phase(state::TrackingState) = state.code_phase
@@ -98,3 +117,6 @@ end
 @inline get_prompt_accumulator(state::TrackingState) = state.prompt_accumulator
 @inline get_integrated_samples(state::TrackingState) = state.integrated_samples
 @inline get_cn0_estimator(state::TrackingState) = state.cn0_estimator
+@inline get_downconverted_signal(state::TrackingState) = state.downconverted_signal
+@inline get_carrier(state::TrackingState) = state.carrier
+@inline get_code(state::TrackingState) = state.code

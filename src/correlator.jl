@@ -22,9 +22,9 @@ end
 
 function EarlyPromptLateCorrelator(num_ants::NumAnts{1})
     EarlyPromptLateCorrelator(
-        complex(0.0, 0.0),
-        complex(0.0, 0.0),
-        complex(0.0, 0.0)
+        zero(Complex{Float64}),
+        zero(Complex{Float64}),
+        zero(Complex{Float64})
     )
 end
 
@@ -37,11 +37,19 @@ elements.
 """
 function EarlyPromptLateCorrelator(num_ants::NumAnts{N}) where N
     EarlyPromptLateCorrelator(
-        zero(SVector{N, ComplexF64}),
-        zero(SVector{N, ComplexF64}),
-        zero(SVector{N, ComplexF64})
+        zero(SVector{N, Complex{Float64}}),
+        zero(SVector{N, Complex{Float64}}),
+        zero(SVector{N, Complex{Float64}})
     )
 end
+
+"""
+$(SIGNATURES)
+
+Get number of antennas from correlator
+"""
+get_num_ants(correlator::EarlyPromptLateCorrelator{Complex{T}}) where T = 1
+get_num_ants(correlator::EarlyPromptLateCorrelator{SVector{N, Complex{T}}}) where {N, T} = N
 
 """
 $(SIGNATURES)
@@ -116,23 +124,66 @@ end
 """
 $(SIGNATURES)
 
-Perform a correlation iteration.
+Perform a correlation.
 """
-@inline function correlate_iteration(
-    ::Type{S},
+function correlate(
     correlator::EarlyPromptLateCorrelator,
-    current_signal,
-    carrier,
-    code_register::Integer,
-    early_late_sample_shift::Integer,
-    early_code
-) where S <: AbstractGNSSSystem
-    prompt_code = ((code_register & 1 << early_late_sample_shift) > 0) * 2 - 1
-    late_code = ((code_register & 1 << (2 * early_late_sample_shift)) > 0) * 2 - 1
-    early = get_early(correlator) + current_signal * carrier * early_code
-    prompt = get_prompt(correlator) + current_signal * carrier * prompt_code
-    late = get_late(correlator) + current_signal * carrier * late_code
-    EarlyPromptLateCorrelator(early, prompt, late)
+    downconverted_signal,
+    code,
+    early_late_sample_shift,
+    start_sample,
+    num_samples_left,
+    agc_attenuation,
+    agc_bits,
+    carrier_bits
+)
+    late = zero(Complex{Int32})
+    prompt = zero(Complex{Int32})
+    early = zero(Complex{Int32})
+    @inbounds for i = start_sample:num_samples_left + start_sample - 1
+        late = late + downconverted_signal[i] * code[i]
+    end
+    @inbounds for i = start_sample:num_samples_left + start_sample - 1
+        prompt = prompt + downconverted_signal[i] * code[i + early_late_sample_shift]
+    end
+    @inbounds for i = start_sample:num_samples_left + start_sample - 1
+        early = early + downconverted_signal[i] * code[i + 2 * early_late_sample_shift]
+    end
+    EarlyPromptLateCorrelator(
+        get_early(correlator) + early * agc_attenuation / 1 << (agc_bits + carrier_bits),
+        get_prompt(correlator) + prompt * agc_attenuation / 1 << (agc_bits + carrier_bits),
+        get_late(correlator) + late * agc_attenuation / 1 << (agc_bits + carrier_bits)
+    )
+end
+
+function correlate(
+    correlator::EarlyPromptLateCorrelator{SVector{N}},
+    downconverted_signal::AbstractMatrix,
+    code,
+    early_late_sample_shift,
+    start_sample,
+    num_samples_left,
+    agc_attenuation,
+    agc_bits,
+    carrier_bits
+) where N
+    late = zero(MVector{N, Complex{Int32}})
+    prompt = zero(MVector{N, Complex{Int32}})
+    early = zero(MVector{N, Complex{Int32}})
+    @inbounds for j = 1:length(late), i = start_sample:num_samples_left + start_sample - 1
+        late[j] = late[j] + downconverted_signal[i,j] * code[i]
+    end
+    @inbounds for j = 1:length(late), i = start_sample:num_samples_left + start_sample - 1
+        prompt[j] = prompt[j] + downconverted_signal[i,j] * code[i + early_late_sample_shift]
+    end
+    @inbounds for j = 1:length(late), i = start_sample:num_samples_left + start_sample - 1
+        early[j] = early[j] + downconverted_signal[i,j] * code[i + 2 * early_late_sample_shift]
+    end
+    EarlyPromptLateCorrelator(
+        get_early(correlator) .+ early .* agc_attenuation ./ 1 << (agc_bits + carrier_bits),
+        get_prompt(correlator) .+ prompt .* agc_attenuation ./ 1 << (agc_bits + carrier_bits),
+        get_late(correlator) .+ late .* agc_attenuation ./ 1 << (agc_bits + carrier_bits)
+    )
 end
 
 struct VeryEarlyPromptLateCorrelator{T} <: AbstractCorrelator{T}
@@ -145,22 +196,34 @@ end
 
 function VeryEarlyPromptLateCorrelator(num_ants::NumAnts{1})
     VeryEarlyPromptLateCorrelator(
-        complex(0.0, 0.0),
-        complex(0.0, 0.0),
-        complex(0.0, 0.0),
-        complex(0.0, 0.0),
-        complex(0.0, 0.0)
+        zero(Complex{Float64}),
+        zero(Complex{Float64}),
+        zero(Complex{Float64}),
+        zero(Complex{Float64}),
+        zero(Complex{Float64})
     )
 end
 
 function VeryEarlyPromptLateCorrelator(num_ants::NumAnts{N}) where N
     VeryEarlyPromptLateCorrelator(
-        zero(SVector{N, ComplexF64}),
-        zero(SVector{N, ComplexF64}),
-        zero(SVector{N, ComplexF64}),
-        zero(SVector{N, ComplexF64}),
-        zero(SVector{N, ComplexF64})
+        zero(SVector{N, Complex{Float64}}),
+        zero(SVector{N, Complex{Float64}}),
+        zero(SVector{N, Complex{Float64}}),
+        zero(SVector{N, Complex{Float64}}),
+        zero(SVector{N, Complex{Float64}})
     )
+end
+
+"""
+$(SIGNATURES)
+
+Get number of antennas from correlator
+"""
+get_num_ants(correlator::VeryEarlyPromptLateCorrelator{Complex{T}}) where T = 1
+function get_num_ants(
+    correlator::VeryEarlyPromptLateCorrelator{SVector{N, Complex{T}}}
+) where {N, T}
+    N
 end
 
 @inline get_very_early(correlator::VeryEarlyPromptLateCorrelator) = correlator.early

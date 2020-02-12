@@ -37,32 +37,36 @@ end
     early_late_sample_shift = 2
     start_sample = 1
     num_samples = 4000
+    agc_bits = 5
 
     for i = 1:20
-        signal = cis.(
-                2π .* carrier_doppler .* range ./ sample_frequency .+ start_carrier_phase
-            ) .*
-            get_code.(
+        signal = get_code.(
                 GPSL1,
                 code_frequency .* range ./ sample_frequency .+ start_code_phase,
                 prn
             ) .* 10^(45 / 20) .+
             randn(ComplexF64, length(range)) .* sqrt(4e6)
-
+        attenuation = Tracking.find_max(signal)
+        agc_signal = StructArray{Complex{Int16}}((
+            floor.(Int16, real.(signal * 1 << agc_bits / attenuation)),
+            floor.(Int16, imag.(signal * 1 << agc_bits / attenuation))
+        ))
+        code = get_code.(
+            GPSL1,
+            code_frequency .* (-2:4001) ./ sample_frequency .+ start_code_phase,
+            prn
+        )
         correlator = EarlyPromptLateCorrelator()
         correlator = Tracking.correlate(
-            GPSL1,
             correlator,
-            signal,
-            prn,
+            agc_signal,
+            code,
             early_late_sample_shift,
             start_sample,
             num_samples,
-            carrier_doppler,
-            code_frequency,
-            sample_frequency,
-            start_carrier_phase / 2π,
-            start_code_phase
+            1.0,
+            agc_bits,
+            1
         )
         cn0_estimator = Tracking.update(cn0_estimator, get_prompt(correlator))
     end
@@ -70,6 +74,6 @@ end
     @test @inferred(Tracking.length(cn0_estimator)) == 20
     cn0_estimate = @inferred Tracking.estimate_cn0(cn0_estimator, 1ms)
 
-    @test cn0_estimate ≈ 45dBHz atol = 0.55dBHz
+    @test cn0_estimate ≈ 45dBHz atol = 0.30dBHz
 
 end

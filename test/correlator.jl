@@ -96,43 +96,51 @@
             SVector(0.1 + 0.0im, 0.1 + 0.0im)
         )
 
-        signal = 1.0 + 0.0im
-        carrier = cis(0.0)
-        early_late_sample_shift = 2
-        # Late Prompt Early
-        early_code = 1
-        code_register = 1 << 4 + 0 << 2 + 1
-        correlator = EarlyPromptLateCorrelator(1.0 + 0.0im, 1.0 + 0.0im, 1.0 + 0.0im)
-
-        next_correlator = @inferred Tracking.correlate_iteration(
+        signal = StructArray{Complex{Int16}}(
+            (get_code.(GPSL1, (1:2500) * 1023e3 / 2.5e6, 1) * Int16(1) << (7 + 2),
+            zeros(Int16, 2500))
+        )
+        early_late_sample_shift = 1
+        code = get_code.(
             GPSL1,
+            (1 - early_late_sample_shift:2500 + early_late_sample_shift) * 1023e3 / 2.5e6,
+            1
+        )
+        correlator = EarlyPromptLateCorrelator(0.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im)
+
+        correlator_result = Tracking.correlate(
             correlator,
             signal,
-            carrier,
-            code_register,
+            code,
             early_late_sample_shift,
-            early_code
+            1,
+            2500,
+            1.0,
+            2,
+            7
         )
-        @test get_early(next_correlator) ≈ 1.0 + signal * conj(carrier) * 1
-        @test get_prompt(next_correlator) ≈ 1.0 + signal * conj(carrier) * -1
-        @test get_late(next_correlator) ≈ 1.0 + signal * conj(carrier) * 1
+        @test get_early(correlator_result) == get_late(correlator_result)
+        @test get_prompt(correlator_result) == 2500
 
-        early_code = -1
-        code_register = 0 << 4 + 1 << 2 + 0
 
-        next_correlator = @inferred Tracking.correlate_iteration(
-            GPSL1,
+        signal_mat = repeat(signal, outer = (1,3))
+        early_late_sample_shift = 1
+        correlator = EarlyPromptLateCorrelator(NumAnts(3))
+
+        correlator_result = Tracking.correlate(
             correlator,
             signal,
-            carrier,
-            code_register,
+            code,
             early_late_sample_shift,
-            early_code
+            1,
+            2500,
+            [1.0, 1.0, 1.0],
+            2,
+            7
         )
-        @test get_early(next_correlator) ≈ 1.0 + signal * conj(carrier) * -1
-        @test get_prompt(next_correlator) ≈ 1.0 + signal * conj(carrier) * 1
-        @test get_late(next_correlator) ≈ 1.0 + signal * conj(carrier) * -1
-
+        @test get_early(correlator_result) == get_late(correlator_result)
+        @test all(get_early(correlator_result) .== 1476)
+        @test all(get_prompt(correlator_result) .== 2500)
     end
 
 end

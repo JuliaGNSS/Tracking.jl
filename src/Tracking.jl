@@ -1,7 +1,13 @@
 module Tracking
-    using DocStringExtensions, GNSSSignals, StaticArrays, TrackingLoopFilters
+    using
+        DocStringExtensions,
+        GNSSSignals,
+        StaticArrays,
+        TrackingLoopFilters,
+        StructArrays,
+        LoopVectorization
     using Unitful: upreferred, Hz, dBHz, ms
-    import Base.zero, Base.length
+    import Base.zero, Base.length, Base.resize!
 
     export
         get_early,
@@ -25,13 +31,18 @@ module Tracking
         get_num_bits,
         EarlyPromptLateCorrelator,
         VeryEarlyPromptLateCorrelator,
-        SecondaryCodeOrBitDetector
+        SecondaryCodeOrBitDetector,
+        GainControlledSignal
 
     struct NumAnts{x}
     end
 
     NumAnts(x) = NumAnts{x}()
 
+    include("agc.jl")
+    include("code_replica.jl")
+    include("carrier_replica.jl")
+    include("downconvert.jl")
     include("cn0_estimation.jl")
     include("discriminators.jl")
     include("bit_buffer.jl")

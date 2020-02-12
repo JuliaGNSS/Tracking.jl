@@ -1,27 +1,32 @@
 name = "Tracking"
 uuid = "10b2438b-ffd4-5096-aa58-44041d5c8f3b"
 authors = ["Soeren Zorn <soeren.zorn@nav.rwth-aachen.de>"]
-version = "0.11.1"
+version = "0.12.0"
 
 [deps]
 DocStringExtensions = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
 GNSSSignals = "52c80523-2a4e-5c38-8979-05588f836870"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+LoopVectorization = "bdcacae8-1622-11e9-2a5c-532679323890"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+StructArrays = "09ab397b-f2b6-538f-b94a-2f83cf4a842a"
 TrackingLoopFilters = "0814aff9-93cb-554c-9fff-9bf1cfdb5efa"
 Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
 [compat]
 DocStringExtensions = "0.6, 0.7, 0.8"
-GNSSSignals = "0.10.3"
-Unitful = "0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18"
+GNSSSignals = "0.11"
+LoopVectorization = "0.6"
 StaticArrays = "0.9, 0.10, 0.11, 0.12"
+StructArrays = "0.4"
 TrackingLoopFilters = "0.1"
+Unitful = "0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18"
 julia = "1.0"
 
 [extras]
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test", "Random"]
+test = ["Test", "Random", "Statistics"]

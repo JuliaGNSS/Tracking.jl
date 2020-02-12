@@ -1,6 +1,19 @@
-using Test, Tracking, GNSSSignals, Random, StaticArrays, TrackingLoopFilters
+using
+    Test,
+    Tracking,
+    GNSSSignals,
+    Random,
+    StaticArrays,
+    TrackingLoopFilters,
+    StructArrays,
+    Statistics
+
 import Unitful: MHz, kHz, Hz, s, ms, dBHz
 
+include("agc.jl")
+include("code_replica.jl")
+include("carrier_replica.jl")
+include("downconvert.jl")
 include("discriminators.jl")
 include("gps_l1.jl")
 include("gps_l5.jl")
