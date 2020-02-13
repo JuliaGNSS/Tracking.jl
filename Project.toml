@@ -1,7 +1,7 @@
 name = "Tracking"
 uuid = "10b2438b-ffd4-5096-aa58-44041d5c8f3b"
 authors = ["Soeren Zorn <soeren.zorn@nav.rwth-aachen.de>"]
-version = "0.12.0"
+version = "0.12.1"
 
 [deps]
 DocStringExtensions = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
@@ -21,7 +21,7 @@ StaticArrays = "0.9, 0.10, 0.11, 0.12"
 StructArrays = "0.4"
 TrackingLoopFilters = "0.1"
 Unitful = "0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 1.0"
-julia = "1.0"
+julia = "1"
 
 [extras]
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
