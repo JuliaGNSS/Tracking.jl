@@ -1,6 +1,6 @@
 struct GainControlledSignal{
     S <: StructArray{Complex{Int16}},
-    A <: Union{AbstractFloat, Vector{AbstractFloat}}
+    A <: Union{AbstractFloat, Vector{<:AbstractFloat}}
 }
     signal::S
     attenuation::A
