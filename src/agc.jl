@@ -1,6 +1,6 @@
 struct GainControlledSignal{
     S <: StructArray{Complex{Int16}},
-    A <: Union{Float64, Vector{Float64}}
+    A <: Union{AbstractFloat, Vector{AbstractFloat}}
 }
     signal::S
     attenuation::A
@@ -11,7 +11,7 @@ get_signal(agc::GainControlledSignal) = agc.signal
 get_attenuation(agc::GainControlledSignal) = agc.attenuation
 get_amplitude_power(agc::GainControlledSignal) = agc.amplitude_power
 
-function GainControlledSignal!(
+@inline function GainControlledSignal!(
     agc_signal::StructArray{Complex{Int16}},
     signal::AbstractVector,
     bits::Integer = 5
@@ -27,7 +27,7 @@ function GainControlledSignal!(
     GainControlledSignal(agc_signal, max_ampl, bits)
 end
 
-function GainControlledSignal!(
+@inline function GainControlledSignal!(
     agc_signal::StructArray{Complex{Int16}},
     signal::AbstractMatrix,
     bits::Integer = 5
@@ -43,7 +43,7 @@ function GainControlledSignal!(
     GainControlledSignal(agc_signal, max_ampl, bits)
 end
 
-function GainControlledSignal(signal, bits::Integer = 5)
+@inline function GainControlledSignal(signal, bits::Integer = 5)
     GainControlledSignal!(
         StructArray{Complex{Int16}}(undef, size(signal)),
         signal,
@@ -51,7 +51,7 @@ function GainControlledSignal(signal, bits::Integer = 5)
     )
 end
 
-function find_max(signal)
+@inline function find_max(signal)
     max_real_value = 0.0
     max_imag_value = 0.0
     for i = 1:length(signal)
