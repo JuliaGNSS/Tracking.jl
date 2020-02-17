@@ -62,5 +62,5 @@ end
             max_imag_value = imag(signal[i])
         end
     end
-    sqrt(max_real_value^2 + max_imag_value^2)
+    sqrt(float(max_real_value)^2 + float(max_imag_value)^2)
 end
