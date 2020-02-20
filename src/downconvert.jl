@@ -8,7 +8,7 @@ function downconvert!(
     start_sample::Integer,
     num_samples_left::Integer
 )
-    @avx for i = start_sample:num_samples_left + start_sample - 1
+    @avx unroll = 3 for i = start_sample:num_samples_left + start_sample - 1
         downconverted_signal_re[i] = signal_re[i] * carrier_re[i] +
             signal_im[i] * carrier_im[i]
         downconverted_signal_im[i] = signal_im[i] * carrier_re[i] -
@@ -26,7 +26,7 @@ function downconvert!(
     start_sample::Integer,
     num_samples_left::Integer
 )
-    @avx for i = start_sample:num_samples_left + start_sample - 1, j = 1:size(signal_re, 2)
+    @avx unroll = 3 for i = start_sample:num_samples_left + start_sample - 1, j = 1:size(signal_re, 2)
         # Calculate signal * carrier'
         downconverted_signal_re[i, j] = signal_re[i, j] * carrier_re[i] +
             signal_im[i, j] * carrier_im[i]

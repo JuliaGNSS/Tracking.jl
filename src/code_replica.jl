@@ -5,18 +5,17 @@ function gen_code_replica!(
     sample_frequency,
     start_code_phase::AbstractFloat,
     start_sample::Integer,
-    num_samples_left::Integer,
+    num_samples::Integer,
     early_late_sample_shift,
     prn::Integer
 ) where S <: AbstractGNSSSystem
-    # TODO: Consider Int32 or Int64 for the phase delta
     fixed_point = sizeof(Int) * 8 - 1 - min_bits_for_code_length(S)
     delta = floor(Int, code_frequency * 1 << fixed_point / sample_frequency)
     fixed_point_start_code_phase = floor(Int, start_code_phase * 1 << fixed_point)
     max_sample_shift = maximum(early_late_sample_shift)
     # Assumes, that the number of early shifts is identical to the number of late shifts
     early_late_samples = 2 * max_sample_shift
-    @inbounds for i = start_sample:num_samples_left + early_late_samples + start_sample - 1
+    @inbounds for i = start_sample:num_samples + early_late_samples + start_sample - 1
         fixed_point_code_phase = (i - max_sample_shift - start_sample) * delta +
             fixed_point_start_code_phase
         code_index = fixed_point_code_phase >> fixed_point
