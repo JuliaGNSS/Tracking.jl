@@ -30,14 +30,16 @@ function track(
             get_correlator(state), sample_frequency, 0.5),
         carrier_loop_filter_bandwidth = 18Hz,
         code_loop_filter_bandwidth = 1Hz,
-        velocity_aiding = 0Hz
+        velocity_aiding = 0Hz,
+        carrier_amplitude_power::Val{N} = Val(5)
 ) where {
     S <: AbstractGNSSSystem,
     C <: AbstractCorrelator,
     CALF <: AbstractLoopFilter,
     COLF <: AbstractLoopFilter,
     CN <: AbstractCN0Estimator,
-    DS <: StructArray
+    DS <: StructArray,
+    N
 }
     if get_data_frequency(S) != 0Hz
         @assert rem(1 / get_data_frequency(S), max_integration_time) == 0ms
@@ -48,7 +50,6 @@ function track(
     size(signal, 2) == num_ants || throw(ArgumentError("The second dimension of the signal should be equal to the number of antennas specified by num_ants = NumAnts(N) in the TrackingState."))
     agc_amplitude_power = get_amplitude_power(gain_controlled_signal)
     agc_attenuation = get_attenuation(gain_controlled_signal)
-    carrier_amplitude_power = get_carrier_amplitude_power(zero(Int16))
     downconverted_signal = resize!(get_downconverted_signal(state), size(signal, 1))
     carrier_replica = resize!(get_carrier(state), size(signal, 1))
     code_replica = resize!(get_code(state), size(signal, 1) + 2 * maximum(early_late_sample_shift))
@@ -100,6 +101,7 @@ function track(
             carrier_frequency,
             sample_frequency,
             carrier_phase,
+            carrier_amplitude_power,
             signal_start_sample,
             num_samples_left
         )
@@ -126,7 +128,8 @@ function track(
             num_samples_left,
             carrier_frequency,
             sample_frequency,
-            carrier_phase
+            carrier_phase,
+            carrier_amplitude_power
         )
         prev_code_phase = code_phase
         code_phase = update_code_phase(

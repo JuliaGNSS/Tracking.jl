@@ -1,6 +1,6 @@
 struct GainControlledSignal{
     S <: StructArray{Complex{Int16}},
-    A <: Union{AbstractFloat, Vector{<:AbstractFloat}}
+    A <: Union{Real, Vector{<:Real}}
 }
     signal::S
     attenuation::A
@@ -62,5 +62,6 @@ end
             max_imag_value = imag(signal[i])
         end
     end
-    sqrt(float(max_real_value)^2 + float(max_imag_value)^2)
+    #sqrt(float(max_real_value)^2 + float(max_imag_value)^2)
+    max(max_real_value, max_imag_value)
 end

@@ -135,8 +135,8 @@ function correlate(
     num_samples_left,
     agc_attenuation,
     agc_bits,
-    carrier_bits
-)
+    carrier_bits::Val{NC}
+) where NC
     late = zero(Complex{Int32})
     prompt = zero(Complex{Int32})
     early = zero(Complex{Int32})
@@ -150,14 +150,14 @@ function correlate(
         early = early + downconverted_signal[i] * code[i + 2 * early_late_sample_shift]
     end
     EarlyPromptLateCorrelator(
-        get_early(correlator) + early * agc_attenuation / 1 << (agc_bits + carrier_bits),
-        get_prompt(correlator) + prompt * agc_attenuation / 1 << (agc_bits + carrier_bits),
-        get_late(correlator) + late * agc_attenuation / 1 << (agc_bits + carrier_bits)
+        get_early(correlator) + early * agc_attenuation / 1 << (agc_bits + NC),
+        get_prompt(correlator) + prompt * agc_attenuation / 1 << (agc_bits + NC),
+        get_late(correlator) + late * agc_attenuation / 1 << (agc_bits + NC)
     )
 end
 
 function correlate(
-    correlator::EarlyPromptLateCorrelator{SVector{N}},
+    correlator::EarlyPromptLateCorrelator{<: SVector{N}},
     downconverted_signal::AbstractMatrix,
     code,
     early_late_sample_shift,
@@ -165,8 +165,8 @@ function correlate(
     num_samples_left,
     agc_attenuation,
     agc_bits,
-    carrier_bits
-) where N
+    carrier_bits::Val{NC}
+) where {N, NC}
     late = zero(MVector{N, Complex{Int32}})
     prompt = zero(MVector{N, Complex{Int32}})
     early = zero(MVector{N, Complex{Int32}})
@@ -180,9 +180,9 @@ function correlate(
         early[j] = early[j] + downconverted_signal[i,j] * code[i + 2 * early_late_sample_shift]
     end
     EarlyPromptLateCorrelator(
-        get_early(correlator) .+ early .* agc_attenuation ./ 1 << (agc_bits + carrier_bits),
-        get_prompt(correlator) .+ prompt .* agc_attenuation ./ 1 << (agc_bits + carrier_bits),
-        get_late(correlator) .+ late .* agc_attenuation ./ 1 << (agc_bits + carrier_bits)
+        get_early(correlator) + early .* agc_attenuation / 1 << (agc_bits + NC),
+        get_prompt(correlator) + prompt .* agc_attenuation / 1 << (agc_bits + NC),
+        get_late(correlator) + late .* agc_attenuation / 1 << (agc_bits + NC)
     )
 end
 

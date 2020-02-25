@@ -117,7 +117,7 @@
             2500,
             1.0,
             2,
-            7
+            Val(7)
         )
         @test get_early(correlator_result) == get_late(correlator_result)
         @test get_prompt(correlator_result) == 2500
@@ -136,7 +136,7 @@
             2500,
             [1.0, 1.0, 1.0],
             2,
-            7
+            Val(7)
         )
         @test get_early(correlator_result) == get_late(correlator_result)
         @test all(get_early(correlator_result) .== 1476)

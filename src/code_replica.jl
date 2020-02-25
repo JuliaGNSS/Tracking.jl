@@ -11,7 +11,11 @@ function gen_code_replica!(
 ) where S <: AbstractGNSSSystem
     fixed_point = sizeof(Int) * 8 - 1 - min_bits_for_code_length(S)
     delta = floor(Int, code_frequency * 1 << fixed_point / sample_frequency)
-    fixed_point_start_code_phase = floor(Int, start_code_phase * 1 << fixed_point)
+    modded_start_code_phase = mod(
+        start_code_phase,
+        get_code_length(S) * get_secondary_code_length(S)
+    )
+    fixed_point_start_code_phase = floor(Int, modded_start_code_phase * 1 << fixed_point)
     max_sample_shift = maximum(early_late_sample_shift)
     # Assumes, that the number of early shifts is identical to the number of late shifts
     early_late_samples = 2 * max_sample_shift
@@ -45,11 +49,12 @@ function update_code_phase(
     end
     code_length = get_code_length(S) *
         (secondary_code_or_bit_found ? secondary_code_or_bit_length : 1)
-    fixed_point = sizeof(Int) * 8 - 1 - min_bits_for_code_length(S)
-    delta = floor(Int, code_frequency * 1 << fixed_point / sample_frequency)
-    fixed_point_start_phase = floor(Int, start_code_phase * 1 << fixed_point)
-    phase_fixed_point = delta * num_samples + fixed_point_start_phase
-    mod(phase_fixed_point / 1 << fixed_point, code_length)
+    mod(code_frequency * num_samples / sample_frequency + start_code_phase, code_length)
+#    fixed_point = sizeof(Int) * 8 - 1 - min_bits_for_code_length(S)
+#    delta = floor(Int, code_frequency * 1 << fixed_point / sample_frequency)
+#    fixed_point_start_phase = floor(Int, start_code_phase * 1 << fixed_point)
+#    phase_fixed_point = delta * num_samples + fixed_point_start_phase
+#    mod(phase_fixed_point / 1 << fixed_point, code_length)
 end
 
 function min_bits_for_code_length(::Type{S}) where S <: AbstractGNSSSystem

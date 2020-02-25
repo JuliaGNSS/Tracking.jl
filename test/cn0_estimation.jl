@@ -66,7 +66,7 @@ end
             num_samples,
             1.0,
             agc_bits,
-            1
+            Val(1)
         )
         cn0_estimator = Tracking.update(cn0_estimator, get_prompt(correlator))
     end
