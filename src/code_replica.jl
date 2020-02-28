@@ -57,15 +57,6 @@ function update_code_phase(
 #    mod(phase_fixed_point / 1 << fixed_point, code_length)
 end
 
-function min_bits_for_code_length(::Type{S}) where S <: AbstractGNSSSystem
-    for i = 1:32
-        if get_code_length(S) * get_secondary_code_length(S) <= 1 << i
-            return i
-        end
-    end
-    return 0
-end
-
 """
 $(SIGNATURES)
 
