@@ -19,6 +19,8 @@ function gen_carrier_replica!(
     carrier_replica
 end
 
+# TODO: function gen_carrier_replica!( GPU Array, ...)
+
 """
 $(SIGNATURES)
 
