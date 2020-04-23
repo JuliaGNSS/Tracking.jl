@@ -44,6 +44,8 @@ function track(
     if get_data_frequency(S) != 0Hz
         @assert rem(1 / get_data_frequency(S), max_integration_time) == 0ms
     end
+    N > 7 && throw(ArgumentError("The carrier amplitude power should be less than 8 to stay within 16 bits."))
+    (get_amplitude_power(gain_controlled_signal) + N) > 16 && throw(ArgumentError("The AGC amplitude + carrier replica amplitude should not exceed 16 bits"))
     signal = get_signal(gain_controlled_signal)
     correlator = get_correlator(state)
     num_ants = get_num_ants(correlator)
@@ -229,14 +231,16 @@ end
             get_correlator(state), sample_frequency, 0.5),
         carrier_loop_filter_bandwidth = 18Hz,
         code_loop_filter_bandwidth = 1Hz,
-        velocity_aiding = 0Hz
+        velocity_aiding = 0Hz,
+        carrier_amplitude_power::Val{N} = Val(5)
 ) where {
     S <: AbstractGNSSSystem,
     C <: AbstractCorrelator,
     CALF <: AbstractLoopFilter,
     COLF <: AbstractLoopFilter,
     CN <: AbstractCN0Estimator,
-    DS <: StructArray
+    DS <: StructArray,
+    N
 }
     correlator = get_correlator(state)
     num_ants = get_num_ants(correlator)
@@ -254,6 +258,7 @@ end
         carrier_loop_filter_bandwidth = carrier_loop_filter_bandwidth,
         code_loop_filter_bandwidth = code_loop_filter_bandwidth,
         velocity_aiding = velocity_aiding,
+        carrier_amplitude_power = carrier_amplitude_power
     )
 end
 
