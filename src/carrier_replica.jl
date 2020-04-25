@@ -19,7 +19,29 @@ function gen_carrier_replica!(
     carrier_replica
 end
 
-# TODO: function gen_carrier_replica!( GPU Array, ...)
+# GPU carrier generation
+# - carrier_replica is implemented as a CuArray
+function gen_carrier_replica!(
+    carrier_replica::CuArray{Complex{Float16}}
+    carrier_frequency,
+    sample_frequency,
+    start_phase,
+    carrier_amplitude_power::Val{N},
+    start_sample,
+    num_samples
+) where N 
+    fpcarrier!(
+        carrier_replica,
+        carrier_frequency,
+        sample_frequency,
+        start_phase,
+        start_sample = start_sample,
+        num_samples = num_samples,
+        bits = carrier_amplitude_power
+    )
+
+    return carrier_replica
+end
 
 """
 $(SIGNATURES)

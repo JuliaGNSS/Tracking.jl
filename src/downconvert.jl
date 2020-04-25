@@ -16,6 +16,7 @@ function downconvert!(
     end
 end
 
+# CPU downconvert function
 function downconvert!(
     downconverted_signal_re::AbstractMatrix,
     downconverted_signal_im::AbstractMatrix,
@@ -33,6 +34,26 @@ function downconvert!(
         downconverted_signal_im[i, j] = signal_im[i, j] * carrier_re[i] -
             signal_re[i, j] * carrier_im[i]
     end
+end
+
+# GPU downconvert function
+function downconvert!(
+    downconverted_signal_re::AbstractMatrix,
+    downconverted_signal_im::AbstractMatrix,
+    carrier_re,
+    carrier_im,
+    signal_re::AbstractMatrix,
+    signal_im::AbstractMatrix,
+    start_sample::Integer,
+    num_samples_left::Integer
+)
+#    @avx unroll = 3 for i = start_sample:num_samples_left + start_sample - 1, j = 1:size(signal_re, 2)
+#        # Calculate signal * carrier'
+#        downconverted_signal_re[i, j] = signal_re[i, j] * carrier_re[i] +
+#            signal_im[i, j] * carrier_im[i]
+#        downconverted_signal_im[i, j] = signal_im[i, j] * carrier_re[i] -
+#            signal_re[i, j] * carrier_im[i]
+#    end
 end
 
 function downconvert!(
