@@ -46,11 +46,10 @@ function downconvert!(
     start_sample::Integer,
     num_samples_left::Integer
 )
-#    @avx unroll = 3 for i = start_sample:num_samples_left + start_sample - 1
-#    downconverted_signal_re[i] = signal_re[i] * carrier_re[i] + signal_im[i] * carrier_im[i]
-#    downconverted_signal_im[i] = signal_im[i] * carrier_re[i] - signal_re[i] * carrier_im[i]
-#    end
-
+    for i = start_sample:num_samples_left + start_sample - 1
+        downconverted_signal_re[i] = signal_re[i] * carrier_re[i] + signal_im[i] * carrier_im[i]
+        downconverted_signal_im[i] = signal_im[i] * carrier_re[i] - signal_re[i] * carrier_im[i]
+    end
 end
 
 function downconvert!(
