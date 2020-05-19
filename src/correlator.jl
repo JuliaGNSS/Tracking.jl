@@ -124,7 +124,7 @@ end
 """
 $(SIGNATURES)
 
-Perform a correlation.
+Perform a correlation on the CPU with a single antenna
 """
 function correlate(
     correlator::EarlyPromptLateCorrelator,
@@ -156,6 +156,11 @@ function correlate(
     )
 end
 
+"""
+$(SIGNATURES)
+
+Perform a correlation on the CPU of a multi-antenna system
+"""
 function correlate(
     correlator::EarlyPromptLateCorrelator{<: SVector{N}},
     downconverted_signal::AbstractMatrix,
@@ -183,6 +188,41 @@ function correlate(
         get_early(correlator) + early .* agc_attenuation / 1 << (agc_bits + NC),
         get_prompt(correlator) + prompt .* agc_attenuation / 1 << (agc_bits + NC),
         get_late(correlator) + late .* agc_attenuation / 1 << (agc_bits + NC)
+    )
+end
+
+"""
+$(SIGNATURES)
+
+Perform a correlation on the GPU with a single antenna
+"""
+function correlate(
+    correlator::EarlyPromptLateCorrelator,
+    downconverted_signal::StructArray{CuArray},
+    code,
+    early_late_sample_shift,
+    start_sample,
+    num_samples_left,
+    agc_attenuation,
+    agc_bits,
+    carrier_bits::Val{NC}
+) where NC
+    late = zero(Complex{Int32})
+    prompt = zero(Complex{Int32})
+    early = zero(Complex{Int32})
+    for i = start_sample:num_samples_left + start_sample - 1
+        late = late + downconverted_signal[i] * code[i]
+    end
+    for i = start_sample:num_samples_left + start_sample - 1
+        prompt = prompt + downconverted_signal[i] * code[i + early_late_sample_shift]
+    end
+    for i = start_sample:num_samples_left + start_sample - 1
+        early = early + downconverted_signal[i] * code[i + 2 * early_late_sample_shift]
+    end
+    EarlyPromptLateCorrelator(
+        get_early(correlator) + early * agc_attenuation / 1 << (agc_bits + NC),
+        get_prompt(correlator) + prompt * agc_attenuation / 1 << (agc_bits + NC),
+        get_late(correlator) + late * agc_attenuation / 1 << (agc_bits + NC)
     )
 end
 

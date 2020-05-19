@@ -29,10 +29,8 @@ function gen_carrier_replica!(
     carrier_frequency,
     sample_frequency,
     start_phase,
-    carrier_amplitude_power::Val{N},
-    start_sample,
     num_samples
-) where N 
+)
     # Here fpcarrier!() from GNSSSignals is called
     # TODO multimpe dispatch fpcarrier!() in GNSSSignals.jl
     # TODO call the fpcarrier!() described above
