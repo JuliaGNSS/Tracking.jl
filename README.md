@@ -14,6 +14,10 @@ This implements a basic tracking functionality for GNSS signals. The correlation
 * Bit detection
 * Phased array tracking
 
+## Under Development
+
+* GPU-based tracking loop
+
 ## Getting started
 
 Install:
