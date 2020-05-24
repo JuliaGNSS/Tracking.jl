@@ -41,10 +41,8 @@ Constructor for a signal to be computed on a GPU
         throw(DimensionMismatch("size of AGC signal not equal to size of signal"))
     max_ampl = find_max(signal) #TODO check if optimal for GPU
     amplification = bits / max_ampl
-    @inbounds @fastmath for i = eachindex(signal, agc_signal)
-        agc_signal.re[i] = floor(Int16, real(signal[i]) * amplification)
-        agc_signal.im[i] = floor(Int16, imag(signal[i]) * amplification)
-    end
+    agc_signal.re = real(signal) .* amplification
+    agc_signal.im = imag(signal) .* amplification
     GainControlledSignal(agc_signal, max_ampl, bits)
 end
 
