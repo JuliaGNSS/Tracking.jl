@@ -1,8 +1,8 @@
 """
 $(SIGNATURES)
 
-Track the signal `signal` based on the current tracking `state`, the sample frequency
-`sample_frequency` and PRN `prn`. Optional configurations are:
+Track the signal `signal` based on the current tracking `state`, the sampling frequency
+`sampling_frequency` and PRN `prn`. Optional configurations are:
 - Post correlation filter `post_corr_filter` defaults to `get_default_post_corr_filter(...)`
 - Intermediate frequency `intermediate_frequency` defaults to 0Hz
 - Maximal integration time `max_integration_time` defaults to 1ms. The actual integration
@@ -21,13 +21,13 @@ function track(
         gain_controlled_signal::GainControlledSignal,
         state::TrackingState{S, C, CALF, COLF, CN, DS},
         prn::Integer,
-        sample_frequency;
+        sampling_frequency;
         post_corr_filter = get_default_post_corr_filter(get_correlator(state)),
         intermediate_frequency = 0.0Hz,
         max_integration_time::typeof(1ms) = 1ms,
         min_integration_time::typeof(1.0ms) = 0.75ms,
         early_late_sample_shift = get_early_late_sample_shift(S,
-            get_correlator(state), sample_frequency, 0.5),
+            get_correlator(state), sampling_frequency, 0.5),
         carrier_loop_filter_bandwidth = 18Hz,
         code_loop_filter_bandwidth = 1Hz,
         velocity_aiding = 0Hz,
@@ -73,7 +73,7 @@ function track(
         num_samples_left_to_integrate = get_num_samples_left_to_integrate(
             S,
             max_integration_time,
-            sample_frequency,
+            sampling_frequency,
             code_doppler,
             code_phase,
             found(sc_bit_detector)
@@ -89,7 +89,7 @@ function track(
             code_replica,
             S,
             code_frequency,
-            sample_frequency,
+            sampling_frequency,
             code_phase,
             signal_start_sample,
             num_samples_left,
@@ -99,7 +99,7 @@ function track(
         carrier_replica = gen_carrier_replica!(
             carrier_replica,
             carrier_frequency,
-            sample_frequency,
+            sampling_frequency,
             carrier_phase,
             carrier_amplitude_power,
             signal_start_sample,
@@ -127,7 +127,7 @@ function track(
         carrier_phase = update_carrier_phase(
             num_samples_left,
             carrier_frequency,
-            sample_frequency,
+            sampling_frequency,
             carrier_phase,
             carrier_amplitude_power
         )
@@ -136,11 +136,11 @@ function track(
             S,
             num_samples_left,
             code_frequency,
-            sample_frequency,
+            sampling_frequency,
             code_phase,
             found(sc_bit_detector)
         )
-        integration_time = integrated_samples / sample_frequency
+        integration_time = integrated_samples / sampling_frequency
         if num_samples_left == num_samples_left_to_integrate &&
                 integration_time >= min_integration_time
             got_correlator = true
@@ -153,7 +153,7 @@ function track(
                 S,
                 filtered_correlator,
                 early_late_sample_shift,
-                code_frequency / sample_frequency
+                code_frequency / sampling_frequency
             )
             carrier_freq_update, carrier_loop_filter = filter_loop(
                 carrier_loop_filter,
@@ -220,13 +220,13 @@ end
         signal::AbstractArray,
         state::TrackingState{S, C, CALF, COLF, CN, DS},
         prn::Integer,
-        sample_frequency;
+        sampling_frequency;
         post_corr_filter = get_default_post_corr_filter(get_correlator(state)),
         intermediate_frequency = 0.0Hz,
         max_integration_time::typeof(1ms) = 1ms,
         min_integration_time::typeof(1.0ms) = 0.75ms,
         early_late_sample_shift = get_early_late_sample_shift(S,
-            get_correlator(state), sample_frequency, 0.5),
+            get_correlator(state), sampling_frequency, 0.5),
         carrier_loop_filter_bandwidth = 18Hz,
         code_loop_filter_bandwidth = 1Hz,
         velocity_aiding = 0Hz
@@ -245,7 +245,7 @@ end
         GainControlledSignal(signal),
         state,
         prn,
-        sample_frequency,
+        sampling_frequency,
         post_corr_filter = post_corr_filter,
         intermediate_frequency = intermediate_frequency,
         max_integration_time = max_integration_time,
@@ -316,7 +316,7 @@ Calculates the number of samples to integrate.
 function get_num_samples_left_to_integrate(
     ::Type{S},
     max_integration_time,
-    sample_frequency,
+    sampling_frequency,
     current_code_doppler,
     current_code_phase,
     secondary_code_or_bit_found
@@ -328,7 +328,7 @@ function get_num_samples_left_to_integrate(
         secondary_code_or_bit_found
     )
     code_frequency = get_code_frequency(S) + current_code_doppler
-    ceil(Int, phase_to_integrate * sample_frequency / code_frequency)
+    ceil(Int, phase_to_integrate * sampling_frequency / code_frequency)
 end
 
 """

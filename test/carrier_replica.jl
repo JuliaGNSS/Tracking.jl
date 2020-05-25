@@ -19,12 +19,12 @@ end
 @testset "Update carrier phase" begin
     carrier_phase = 0.25
     carrier_frequency = 10Hz
-    sample_frequency = 100Hz
+    sampling_frequency = 100Hz
     num_samples = 2000
     phase = @inferred Tracking.update_carrier_phase(
         num_samples,
         carrier_frequency,
-        sample_frequency,
+        sampling_frequency,
         carrier_phase,
         Val(7)
     )
@@ -32,12 +32,12 @@ end
 
     carrier_phase = 0.25
     carrier_frequency = 10Hz
-    sample_frequency = 2.5e6Hz
+    sampling_frequency = 2.5e6Hz
     num_samples = 2500
     phase = @inferred Tracking.update_carrier_phase(
         num_samples,
         carrier_frequency,
-        sample_frequency,
+        sampling_frequency,
         carrier_phase,
         Val(7)
     )

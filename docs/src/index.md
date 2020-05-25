@@ -37,16 +37,16 @@ These parameters are usually provided by the acquisition process of the satellit
 
 The signal is tracked by
 ```julia
-results = track(signal, state, prn, sample_frequency)
+results = track(signal, state, prn, sampling_frequency)
 ```
-where `prn` is the PRN and `sample_frequency` the sample frequency. Refer to [`track`](@ref)
+where `prn` is the PRN and `sampling_frequency` the sampling frequency. Refer to [`track`](@ref)
 to find about other optional parameters. The result contains the current state as well as
 some additional information such as the last valid correlator output, found data bits, etc.
 For each of those parameters a helper function exists to get the parameter
 (e.g. `get_prompt(results)`) - see [Tracking Results](@ref). The next track function needs
 the updated state:
 ```julia
-next_results = track(next_signal, get_state(results), prn, sample_frequency)
+next_results = track(next_signal, get_state(results), prn, sampling_frequency)
 ```
 
 Here is an example for a single PRN:
@@ -55,11 +55,11 @@ using Tracking
 using Tracking: Hz, GPSL1
 carrier_doppler = 1000Hz
 code_phase = 50
-sample_frequency = 2.5e6Hz
+sampling_frequency = 2.5e6Hz
 prn = 1
 state = TrackingState(GPSL1, carrier_doppler, code_phase)
-results = track(signal, state, prn, sample_frequency)
-next_results = track(next_signal, get_state(results), prn, sample_frequency)
+results = track(signal, state, prn, sampling_frequency)
+next_results = track(next_signal, get_state(results), prn, sampling_frequency)
 ```
 
 ## Track multiple signals coherently
@@ -77,7 +77,7 @@ drive the discriminators etc. However, an appropiate beamforming algorithm will 
 suit better. For that, you'll have to pass a function `post_corr_filter` to the track
 function like the following:
 ```julia
-results = track(signal, state, prn, sample_frequency, post_corr_filter = x -> x[end])
+results = track(signal, state, prn, sampling_frequency, post_corr_filter = x -> x[end])
 ```
 
 ## Q/A
