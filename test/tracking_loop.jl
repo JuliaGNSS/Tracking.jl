@@ -122,7 +122,7 @@ end
     sampling_frequency = 4MHz
     prn = 1
     range = 0:3999
-    start_carrier_phase = π / 2# 0.0 #π / 2
+    start_carrier_phase = π / 2
     state = TrackingState(GPSL1, carrier_doppler - 20Hz, start_code_phase)
 
     signal = cis.(
@@ -134,6 +134,21 @@ end
             prn
         )
 
+    agc_signal = GainControlledSignal(signal, 11)
+    @test_throws ArgumentError track(
+        agc_signal,
+        state,
+        prn,
+        sampling_frequency,
+        carrier_amplitude_power = Val(6)
+    )
+    @test_throws ArgumentError track(
+        signal,
+        state,
+        prn,
+        sampling_frequency,
+        carrier_amplitude_power = Val(8)
+    )
     track_result = @inferred track(signal, state, prn, sampling_frequency)
 
     iterations = 2000
