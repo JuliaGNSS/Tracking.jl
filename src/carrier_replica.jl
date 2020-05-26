@@ -1,7 +1,7 @@
 function gen_carrier_replica!(
     carrier_replica::StructArray{Complex{Int16}},
     carrier_frequency,
-    sample_frequency,
+    sampling_frequency,
     start_phase,
     carrier_amplitude_power::Val{N},
     start_sample,
@@ -10,7 +10,7 @@ function gen_carrier_replica!(
     fpcarrier!(
         carrier_replica,
         carrier_frequency,
-        sample_frequency,
+        sampling_frequency,
         start_phase,
         start_sample = start_sample,
         num_samples = num_samples,
@@ -27,13 +27,13 @@ Updates the carrier phase.
 function update_carrier_phase(
     num_samples,
     carrier_frequency,
-    sample_frequency,
+    sampling_frequency,
     start_phase,
     carrier_amplitude_power::Val{N}
 ) where N
     n = N + 2
     fixed_point = 32 - n - 2
-    delta = floor(Int32, carrier_frequency * 1 << (fixed_point + n) / sample_frequency)
+    delta = floor(Int32, carrier_frequency * 1 << (fixed_point + n) / sampling_frequency)
     fixed_point_start_phase = floor(Int32, start_phase * 1 << (fixed_point + n))
     phase_fixed_point = delta * num_samples + fixed_point_start_phase
     mod(

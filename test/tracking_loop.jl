@@ -62,14 +62,14 @@ end
 
 @testset "Number of samples to integrate" begin
     max_integration_time = 1ms
-    sample_frequency = 4e6Hz
+    sampling_frequency = 4e6Hz
     current_code_doppler = 0Hz
     current_code_phase = 0
     bit_found = true
     samples = @inferred Tracking.get_num_samples_left_to_integrate(
         GPSL1,
         max_integration_time,
-        sample_frequency,
+        sampling_frequency,
         current_code_doppler,
         current_code_phase,
         bit_found
@@ -119,22 +119,37 @@ end
     carrier_doppler = 200Hz
     start_code_phase = 100
     code_frequency = carrier_doppler / 1540 + 1023kHz
-    sample_frequency = 4MHz
+    sampling_frequency = 4MHz
     prn = 1
     range = 0:3999
-    start_carrier_phase = π / 2# 0.0 #π / 2
+    start_carrier_phase = π / 2
     state = TrackingState(GPSL1, carrier_doppler - 20Hz, start_code_phase)
 
     signal = cis.(
-            2π .* carrier_doppler .* range ./ sample_frequency .+ start_carrier_phase
+            2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase
         ) .*
         get_code.(
             GPSL1,
-            code_frequency .* range ./ sample_frequency .+ start_code_phase,
+            code_frequency .* range ./ sampling_frequency .+ start_code_phase,
             prn
         )
 
-    track_result = @inferred track(signal, state, prn, sample_frequency)
+    agc_signal = GainControlledSignal(signal, 11)
+    @test_throws ArgumentError track(
+        agc_signal,
+        state,
+        prn,
+        sampling_frequency,
+        carrier_amplitude_power = Val(6)
+    )
+    @test_throws ArgumentError track(
+        signal,
+        state,
+        prn,
+        sampling_frequency,
+        carrier_amplitude_power = Val(8)
+    )
+    track_result = @inferred track(signal, state, prn, sampling_frequency)
 
     iterations = 2000
     code_phases = zeros(iterations)
@@ -145,30 +160,30 @@ end
     tracked_carrier_dopplers = zeros(iterations)
     tracked_prompts = zeros(ComplexF64, iterations)
     for i = 1:iterations
-        carrier_phase = mod2pi(2π * carrier_doppler * 4000 * i / sample_frequency +
+        carrier_phase = mod2pi(2π * carrier_doppler * 4000 * i / sampling_frequency +
             start_carrier_phase + π) - π
         code_phase = mod(
-            code_frequency * 4000 * i / sample_frequency + start_code_phase,
+            code_frequency * 4000 * i / sampling_frequency + start_code_phase,
             1023
         )
         signal = cis.(
-                2π .* carrier_doppler .* range ./ sample_frequency .+ carrier_phase
+                2π .* carrier_doppler .* range ./ sampling_frequency .+ carrier_phase
             ) .*
             get_code.(
                 GPSL1,
-                code_frequency .* range ./ sample_frequency .+ code_phase,
+                code_frequency .* range ./ sampling_frequency .+ code_phase,
                 prn
             )
         track_result = @inferred track(
             signal,
             get_state(track_result),
             prn,
-            sample_frequency
+            sampling_frequency
         )
         comp_carrier_phase = mod2pi(2π * carrier_doppler * 4000 * (i + 1) /
-            sample_frequency + start_carrier_phase + π) - π
+            sampling_frequency + start_carrier_phase + π) - π
         comp_code_phase = mod(
-            code_frequency * 4000 * (i + 1) / sample_frequency + start_code_phase,
+            code_frequency * 4000 * (i + 1) / sampling_frequency + start_code_phase,
             1023
         )
         tracked_code_phases[i] = get_code_phase(track_result)
@@ -204,25 +219,25 @@ end
     carrier_doppler = 200Hz
     start_code_phase = 100
     code_frequency = carrier_doppler / 1540 + 1023kHz
-    sample_frequency = 4MHz
+    sampling_frequency = 4MHz
     prn = 1
     range = 0:3999
     start_carrier_phase = π / 2
     state = TrackingState(GPSL1, carrier_doppler - 20Hz, start_code_phase, num_ants = NumAnts(3))
 
     signal = cis.(
-            2π .* carrier_doppler .* range ./ sample_frequency .+ start_carrier_phase
+            2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase
         ) .*
         get_code.(
             GPSL1,
-            code_frequency .* range ./ sample_frequency .+ start_code_phase,
+            code_frequency .* range ./ sampling_frequency .+ start_code_phase,
             prn
         )
     signal_mat = repeat(signal, outer = (1,3))
 
-    @test_throws ArgumentError track(signal_mat', state, prn, sample_frequency)
+    @test_throws ArgumentError track(signal_mat', state, prn, sampling_frequency)
 
-    track_result = @inferred track(signal_mat, state, prn, sample_frequency)
+    track_result = @inferred track(signal_mat, state, prn, sampling_frequency)
 
     iterations = 2000
     code_phases = zeros(iterations)
@@ -232,18 +247,18 @@ end
     tracked_code_dopplers = zeros(iterations)
     tracked_carrier_dopplers = zeros(iterations)
     for i = 1:iterations
-        carrier_phase = mod2pi(2π * carrier_doppler * 4000 * i / sample_frequency +
+        carrier_phase = mod2pi(2π * carrier_doppler * 4000 * i / sampling_frequency +
             start_carrier_phase + π) - π
         code_phase = mod(
-            code_frequency * 4000 * i / sample_frequency + start_code_phase,
+            code_frequency * 4000 * i / sampling_frequency + start_code_phase,
             1023
         )
         signal = cis.(
-                2π .* carrier_doppler .* range ./ sample_frequency .+ carrier_phase
+                2π .* carrier_doppler .* range ./ sampling_frequency .+ carrier_phase
             ) .*
             get_code.(
                 GPSL1,
-                code_frequency .* range ./ sample_frequency .+ code_phase,
+                code_frequency .* range ./ sampling_frequency .+ code_phase,
                 prn
             )
         signal_mat = repeat(signal, outer = (1,3))
@@ -251,12 +266,12 @@ end
             signal_mat,
             get_state(track_result),
             prn,
-            sample_frequency
+            sampling_frequency
         )
         comp_carrier_phase = mod2pi(2π * carrier_doppler * 4000 * (i + 1) /
-            sample_frequency + start_carrier_phase + π) - π
+            sampling_frequency + start_carrier_phase + π) - π
         comp_code_phase = mod(
-            code_frequency * 4000 * (i + 1) / sample_frequency + start_code_phase,
+            code_frequency * 4000 * (i + 1) / sampling_frequency + start_code_phase,
             1023
         )
         tracked_code_phases[i] = get_code_phase(track_result)
