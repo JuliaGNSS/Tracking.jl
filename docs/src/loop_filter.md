@@ -27,7 +27,7 @@ next_results = track(
   next_signal,
   get_state(results),
   prn,
-  sample_frequency,
+  sampling_frequency,
   carrier_loop_filter_bandwidth = 18Hz,
   code_loop_filter_bandwidth = 1Hz
 )

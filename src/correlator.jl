@@ -102,10 +102,10 @@ Calculate the shift between the early and late in samples.
 function get_early_late_sample_shift(
     ::Type{S},
     correlator::EarlyPromptLateCorrelator,
-    sample_frequency,
+    sampling_frequency,
     preferred_code_shift
 ) where S <: AbstractGNSSSystem
-    round(Int, preferred_code_shift * sample_frequency / get_code_frequency(S))
+    round(Int, preferred_code_shift * sampling_frequency / get_code_frequency(S))
 end
 
 """
