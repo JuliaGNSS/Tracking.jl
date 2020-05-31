@@ -25,7 +25,7 @@ $(SIGNATURES)
 GPU carrier generation
 """
 function gen_carrier_replica!(
-    carrier_replica::CuArray{Complex{Float16}},
+    carrier_replica::CuArray{Complex{Float32}},
     carrier_frequency,
     sample_frequency,
     start_phase,

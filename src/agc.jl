@@ -33,7 +33,7 @@ $(SIGNATURES)
 Constructor for a signal to be computed on a GPU
 """
 @inline function GainControlledSignal!(
-    agc_signal::StructArray{Complex{Float16}},
+    agc_signal::StructArray{Complex{Float32}},
     signal::AbstractVector,
     bits::Integer = 5
 )
