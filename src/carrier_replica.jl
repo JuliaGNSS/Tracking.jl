@@ -25,13 +25,18 @@ $(SIGNATURES)
 GPU carrier generation
 """
 function gen_carrier_replica!(
-    carrier_replica::CuArray{Complex{Float32}},
+    carrier_replica::StructArray{Complex{Float32}},
     carrier_frequency,
-    sample_frequency,
+    sampling_frequency,
     start_phase,
+    carrier_amplitude_power,
+    start_sample,
     num_samples
 )
-    carrier_replica = exp.(1im * (2pi * (1:num_samples) * carrier_frequency / sample_frequency + start_phase))
+    z = CuArray{Complex{Float32}}(undef, num_samples)
+    @. z = cis(2pi * (1:num_samples) * carrier_frequency / sampling_frequency + start_phase )
+    carrier_replica.re .= real(z)
+    carrier_replica.im .= imag(z)
     return carrier_replica
 end
 
