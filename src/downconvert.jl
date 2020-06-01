@@ -37,19 +37,17 @@ end
 
 # GPU downconvert function
 function downconvert!(
-    downconverted_signal_re::CuArray,
-    downconverted_signal_im::CuArray,
-    carrier_re,
-    carrier_im,
-    signal_re::CuArray,
-    signal_im::CuArray,
+    downconverted_signal_re::CuArray{Float32},
+    downconverted_signal_im::CuArray{Float32},
+    carrier_re::CuArray{Float32},
+    carrier_im::CuArray{Float32},
+    signal_re::CuArray{Float32},
+    signal_im::CuArray{Float32},
     start_sample::Integer,
     num_samples_left::Integer
 )
-    for i = start_sample:num_samples_left + start_sample - 1
-        downconverted_signal_re[i] = signal_re[i] * carrier_re[i] + signal_im[i] * carrier_im[i]
-        downconverted_signal_im[i] = signal_im[i] * carrier_re[i] - signal_re[i] * carrier_im[i]
-    end
+    @. downconverted_signal_re = signal_re * carrier_re + signal_im * carrier_im
+    @. downconverted_signal_im = signal_im * carrier_re - signal_re * carrier_im
 end
 
 function downconvert!(
