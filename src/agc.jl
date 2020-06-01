@@ -14,7 +14,7 @@ get_amplitude_power(agc::GainControlledSignal) = agc.amplitude_power
 @inline function GainControlledSignal!(
     agc_signal::StructArray{Complex{Int16}},
     signal::AbstractVector,
-    bits::Integer = 5
+    bits::Integer = 7
 )
     size(agc_signal) == size(signal) ||
         throw(DimensionMismatch("size of AGC signal not equal to size of signal"))
@@ -49,7 +49,7 @@ end
 @inline function GainControlledSignal!(
     agc_signal::StructArray{Complex{Int16}},
     signal::AbstractMatrix,
-    bits::Integer = 5
+    bits::Integer = 7
 )
     size(agc_signal) == size(signal) ||
         throw(DimensionMismatch("size of AGC signal not equal to size of signal"))
@@ -62,7 +62,7 @@ end
     GainControlledSignal(agc_signal, max_ampl, bits)
 end
 
-@inline function GainControlledSignal(signal, bits::Integer = 5)
+@inline function GainControlledSignal(signal, bits::Integer = 7)
     GainControlledSignal!(
         StructArray{Complex{Int16}}(undef, size(signal)),
         signal,

@@ -29,7 +29,7 @@ end
     carrier_doppler = 0Hz
     start_code_phase = 0
     code_frequency = 1023kHz
-    sample_frequency = 4MHz
+    sampling_frequency = 4MHz
     prn = 1
     range = 0:3999
     start_carrier_phase = π / 2
@@ -42,7 +42,7 @@ end
     for i = 1:20
         signal = get_code.(
                 GPSL1,
-                code_frequency .* range ./ sample_frequency .+ start_code_phase,
+                code_frequency .* range ./ sampling_frequency .+ start_code_phase,
                 prn
             ) .* 10^(45 / 20) .+
             randn(ComplexF64, length(range)) .* sqrt(4e6)
@@ -53,7 +53,7 @@ end
         ))
         code = get_code.(
             GPSL1,
-            code_frequency .* (-2:4001) ./ sample_frequency .+ start_code_phase,
+            code_frequency .* (-2:4001) ./ sampling_frequency .+ start_code_phase,
             prn
         )
         correlator = EarlyPromptLateCorrelator()

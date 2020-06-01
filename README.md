@@ -33,16 +33,16 @@ using Tracking
 using Tracking: Hz, GPSL1
 carrier_doppler = 1000Hz
 code_phase = 50
-sample_frequency = 2.5e6Hz
+sampling_frequency = 2.5e6Hz
 prn = 1
 state = TrackingState(GPSL1, carrier_doppler, code_phase)
-results = track(signal, state, prn, sample_frequency)
-next_results = track(next_signal, get_state(results), prn, sample_frequency)
+results = track(signal, state, prn, sampling_frequency)
+next_results = track(next_signal, get_state(results), prn, sampling_frequency)
 ```
 
 If you'd like to track several signals at once (e.g. in the case of phased antenna arrays), you will have to specify the optional parameter `num_ants::NumAnts{N}` and pass a beamforming function to the `track` function:
 
 ```julia
 state = TrackingState(GPSL1, carrier_doppler, code_phase, num_ants = NumAnts(4)) # 4 antenna channels
-results = track(signal, state, prn, sample_frequency, post_corr_filter = x -> x[1]) # Post corr filter is optional
+results = track(signal, state, prn, sampling_frequency, post_corr_filter = x -> x[1]) # Post corr filter is optional
 ```

@@ -7,7 +7,7 @@ function gen_code_replica!(
     code_replica,
     ::Type{S},
     code_frequency,
-    sample_frequency,
+    sampling_frequency,
     start_code_phase::AbstractFloat,
     start_sample::Integer,
     num_samples::Integer,
@@ -15,7 +15,7 @@ function gen_code_replica!(
     prn::Integer
 ) where S <: AbstractGNSSSystem
     fixed_point = sizeof(Int) * 8 - 1 - min_bits_for_code_length(S)
-    delta = floor(Int, code_frequency * 1 << fixed_point / sample_frequency)
+    delta = floor(Int, code_frequency * 1 << fixed_point / sampling_frequency)
     modded_start_code_phase = mod(
         start_code_phase,
         get_code_length(S) * get_secondary_code_length(S)
@@ -77,7 +77,7 @@ function update_code_phase(
     ::Type{S},
     num_samples,
     code_frequency,
-    sample_frequency,
+    sampling_frequency,
     start_code_phase,
     secondary_code_or_bit_found
 ) where S <: AbstractGNSSSystem
@@ -89,9 +89,9 @@ function update_code_phase(
     end
     code_length = get_code_length(S) *
         (secondary_code_or_bit_found ? secondary_code_or_bit_length : 1)
-    mod(code_frequency * num_samples / sample_frequency + start_code_phase, code_length)
+    mod(code_frequency * num_samples / sampling_frequency + start_code_phase, code_length)
 #    fixed_point = sizeof(Int) * 8 - 1 - min_bits_for_code_length(S)
-#    delta = floor(Int, code_frequency * 1 << fixed_point / sample_frequency)
+#    delta = floor(Int, code_frequency * 1 << fixed_point / sampling_frequency)
 #    fixed_point_start_phase = floor(Int, start_code_phase * 1 << fixed_point)
 #    phase_fixed_point = delta * num_samples + fixed_point_start_phase
 #    mod(phase_fixed_point / 1 << fixed_point, code_length)
