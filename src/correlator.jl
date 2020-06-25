@@ -198,7 +198,7 @@ Perform a correlation on the GPU with a single antenna
 """
 function correlate(
     correlator::EarlyPromptLateCorrelator,
-    downconverted_signal::StructArray{CuArray},
+    downconverted_signal::StructArray{},
     code,
     early_late_sample_shift,
     start_sample,
@@ -211,7 +211,7 @@ function correlate(
     prompt = zero(Complex{Int32})
     early = zero(Complex{Int32})
     for i = start_sample:num_samples_left + start_sample - 1
-        late = late + downconverted_signal[i] * code[i]
+        late = late + downconverted_signal[i] * code[i] 
     end
     for i = start_sample:num_samples_left + start_sample - 1
         prompt = prompt + downconverted_signal[i] * code[i + early_late_sample_shift]
@@ -220,9 +220,9 @@ function correlate(
         early = early + downconverted_signal[i] * code[i + 2 * early_late_sample_shift]
     end
     EarlyPromptLateCorrelator(
-        get_early(correlator) + early * agc_attenuation / 1 << (agc_bits + NC),
-        get_prompt(correlator) + prompt * agc_attenuation / 1 << (agc_bits + NC),
-        get_late(correlator) + late * agc_attenuation / 1 << (agc_bits + NC)
+        get_early(correlator) + early 
+        get_prompt(correlator) + prompt
+        get_late(correlator) + late
     )
 end
 
