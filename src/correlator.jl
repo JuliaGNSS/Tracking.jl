@@ -220,8 +220,8 @@ function correlate(
         early = early + downconverted_signal[i] * code[i + 2 * early_late_sample_shift]
     end
     EarlyPromptLateCorrelator(
-        get_early(correlator) + early 
-        get_prompt(correlator) + prompt
+        get_early(correlator) + early, 
+        get_prompt(correlator) + prompt,
         get_late(correlator) + late
     )
 end
