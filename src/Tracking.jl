@@ -5,7 +5,8 @@ module Tracking
         StaticArrays,
         TrackingLoopFilters,
         StructArrays,
-        LoopVectorization
+        LoopVectorization,
+        CUDA
     using Unitful: upreferred, Hz, dBHz, ms
     import Base.zero, Base.length, Base.resize!
 
