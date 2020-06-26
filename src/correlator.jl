@@ -198,7 +198,7 @@ Perform a correlation on the GPU with a single antenna
 """
 function correlate(
     correlator::EarlyPromptLateCorrelator,
-    downconverted_signal::StructArray{},
+    downconverted_signal::CuArray{ComplexF32},
     code,
     early_late_sample_shift,
     start_sample,
