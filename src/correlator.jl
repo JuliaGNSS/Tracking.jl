@@ -210,11 +210,14 @@ function correlate(
     late = zero(Complex{Int32})
     prompt = zero(Complex{Int32})
     early = zero(Complex{Int32})
-    late += dot(downconverted_signal[start_sample:num_samples_left + start_sample - 1], 
+    @views late = dot(
+                downconverted_signal[start_sample:num_samples_left + start_sample - 1], 
                 code[start_sample:num_samples_left + start_sample - 1]) 
-    prompt += dot(downconverted_signal[start_sample:num_samples_left + start_sample - 1], 
+    @views prompt = dot(
+                downconverted_signal[start_sample:num_samples_left + start_sample - 1], 
                 code[(start_sample:num_samples_left + start_sample - 1) .+ early_late_sample_shift])
-    early += dot(downconverted_signal[start_sample:num_samples_left + start_sample - 1], 
+    @views early = dot(
+                downconverted_signal[start_sample:num_samples_left + start_sample - 1], 
                 code[(start_sample:num_samples_left + start_sample - 1) .+ 2 * early_late_sample_shift])
     EarlyPromptLateCorrelator(
         get_early(correlator) + early, 
