@@ -8,7 +8,7 @@ module Tracking
         LoopVectorization,
         CUDA
     using Unitful: upreferred, Hz, dBHz, ms
-    import Base.zero, Base.length, Base.resize!
+    import Base.zero, Base.length, Base.resize!, LinearAlgebra.dot
 
     export
         get_early,
