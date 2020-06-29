@@ -33,10 +33,9 @@ function gen_carrier_replica!(
     start_sample,
     num_samples
 )
-    z = CuArray{Complex{Float32}}(undef, num_samples)
-    @. z = cis(2pi * (1:num_samples) * carrier_frequency / sampling_frequency + start_phase )
-    carrier_replica.re .= real(z)
-    carrier_replica.im .= imag(z)
+    carrier_replica.re .= 2pi * (1:num_samples) * carrier_frequency / sampling_frequency + start_phase
+    carrier_replica.im .= sin(carrier_replica.re)
+    carrier_replica.re .= cos(carrier_replica.re)
     return carrier_replica
 end
 
@@ -56,6 +55,7 @@ function update_carrier_phase(
     fixed_point = 32 - n - 2
     delta = floor(Int32, carrier_frequency * 1 << (fixed_point + n) / sampling_frequency)
     fixed_point_start_phase = floor(Int32, start_phase * 1 << (fixed_point + n))
+    phase_fixed_point = delta * num_samples + fixed_point_start_phase
     phase_fixed_point = delta * num_samples + fixed_point_start_phase
     mod(
         phase_fixed_point / 1 << (fixed_point + n) + 0.5,
