@@ -10,6 +10,8 @@ struct TrackingState{
         COLF <: AbstractLoopFilter,
         CN <: AbstractCN0Estimator,
         DS <: StructArray,
+        CAV <: Union{StructArray, CuArray},
+        CDV <: Union{Vector{Int16}, CuArray}
     }
     init_carrier_doppler::typeof(1.0Hz)
     init_code_doppler::typeof(1.0Hz)
@@ -25,11 +27,11 @@ struct TrackingState{
     prompt_accumulator::ComplexF64
     cn0_estimator::CN
     downconverted_signal::DS
-    carrier::StructArray{Complex{Int16},1,NamedTuple{(:re, :im),Tuple{Array{Int16,1},Array{Int16,1}}},Int64}
-    code::Vector{Int16}
+    carrier::CAV
+    code::CDV
 end
 
-"""
+""" 
 $(SIGNATURES)
 
 Convenient TrackingState constructor. Mandatory parameters are the GNSS system, the
