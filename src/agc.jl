@@ -1,5 +1,5 @@
 struct GainControlledSignal{
-    S <: StructArray,
+    S <: Union{StructArray, CuArray},
     A <: Union{Real, Vector{<:Real}}
 }
     signal::S
@@ -33,17 +33,14 @@ $(SIGNATURES)
 Constructor for a signal to be computed on a GPU
 """
 @inline function GainControlledSignal!(
-    agc_signal::StructArray{Complex{Float32}},
+    agc_signal::CuArray{ComplexF32},
     signal::AbstractVector,
-    bits::Integer = 5
+    bits::Integer = 7
 )
     size(agc_signal) == size(signal) ||
         throw(DimensionMismatch("size of AGC signal not equal to size of signal"))
-    max_ampl = find_max(signal) #TODO check if optimal for GPU
-    amplification = bits / max_ampl
-    agc_signal.re = real(signal) .* amplification
-    agc_signal.im = imag(signal) .* amplification
-    GainControlledSignal(agc_signal, max_ampl, bits)
+    agc_signal = signal
+    GainControlledSignal(agc_signal, 1, bits)
 end
 
 @inline function GainControlledSignal!(
