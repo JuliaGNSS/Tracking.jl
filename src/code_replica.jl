@@ -42,15 +42,14 @@ function gen_code_replica!(
     code_replica::CuArray,
     ::Type{S},
     code_frequency,
-    sample_frequency,
+    sampling_frequency,
     start_code_phase::AbstractFloat,
     start_sample::Integer,
     num_samples::Integer,
     early_late_sample_shift,
     prn::Integer
 ) where S <: AbstractGNSSSystem
-    get_code(....)
-    code_replica
+    code replica = get_codes(S)
 end
 
 """
