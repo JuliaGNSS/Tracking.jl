@@ -20,14 +20,14 @@ end
 @testset "Update code phase" begin
     code_phase = 10
     code_frequency = 10Hz
-    sample_frequency = 100Hz
+    sampling_frequency = 100Hz
     num_samples = 2000
     bit_found = true
     phase = @inferred Tracking.update_code_phase(
         GPSL1,
         num_samples,
         code_frequency,
-        sample_frequency,
+        sampling_frequency,
         code_phase,
         bit_found
     )
