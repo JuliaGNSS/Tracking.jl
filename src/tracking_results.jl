@@ -9,6 +9,8 @@ struct TrackingResults{
     }
     state::TS
     correlator::C
+    correlator_carrier_frequency::typeof(1.0Hz)
+    correlator_carrier_phase::Float64
     got_correlator::Bool
     bit_buffer::BitBuffer
     cn0::typeof(1.0dBHz)
@@ -55,6 +57,26 @@ $(SIGNATURES)
 Get the correlator of the tracking result.
 """
 @inline get_correlator(results::TrackingResults) = results.correlator
+
+"""
+$(SIGNATURES)
+
+Get carrier phase at the same timestamp when the correlator is created of the tracking
+result.
+"""
+@inline function get_correlator_carrier_phase(results::TrackingResults)
+    results.correlator_carrier_phase * 2π
+end
+
+"""
+$(SIGNATURES)
+
+Get carrier frequency at the same timestamp when the correlator is created of the tracking
+result.
+"""
+@inline function get_correlator_carrier_frequency(results::TrackingResults)
+    results.correlator_carrier_frequency
+end
 
 """
 $(SIGNATURES)

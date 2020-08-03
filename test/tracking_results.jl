@@ -2,6 +2,8 @@
     results = Tracking.TrackingResults(
         TrackingState(GPSL1, 100Hz, 100),
         EarlyPromptLateCorrelator(NumAnts(2)),
+        1.0Hz,
+        1.0,
         true,
         Tracking.BitBuffer(),
         45dBHz
@@ -11,6 +13,8 @@
     @test @inferred(get_carrier_phase(results)) == 0.0
     @test @inferred(get_code_doppler(results)) == 100Hz / 1540
     @test @inferred(get_code_phase(results)) == 100
+    @test @inferred(get_correlator_carrier_phase(results)) ≈ 1.0 * 2π
+    @test @inferred(get_correlator_carrier_frequency(results)) == 1.0Hz
     correlator = @inferred get_correlator(results)
     @test correlator == EarlyPromptLateCorrelator(NumAnts(2))
     @test @inferred(get_early(results)) == [0.0, 0.0]
@@ -24,6 +28,8 @@
     results = Tracking.TrackingResults(
         TrackingState(GPSL1, 100Hz, 100),
         EarlyPromptLateCorrelator(NumAnts(2)),
+        1.0Hz,
+        1.0,
         false,
         Tracking.BitBuffer(),
         45dBHz

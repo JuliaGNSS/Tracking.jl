@@ -20,6 +20,8 @@ module Tracking
         get_code_phase,
         get_early_late_sample_shift,
         get_secondary_code_or_bit_found,
+        get_correlator_carrier_phase,
+        get_correlator_carrier_frequency,
         get_state,
         get_cn0,
         track,

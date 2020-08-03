@@ -70,6 +70,8 @@ function track(
     signal_start_sample = 1
     bit_buffer = BitBuffer()
     valid_correlator = zero(correlator)
+    valid_correlator_carrier_phase = 0.0
+    valid_correlator_carrier_frequency = 0.0Hz
     got_correlator = false
     while true
         num_samples_left_to_integrate = get_num_samples_left_to_integrate(
@@ -149,6 +151,8 @@ function track(
 
             correlator = normalize(correlator, integrated_samples)
             valid_correlator = correlator
+            valid_correlator_carrier_phase = carrier_phase
+            valid_correlator_carrier_frequency = carrier_frequency
             filtered_correlator = filter(post_corr_filter, correlator)
             pll_discriminator = pll_disc(S, filtered_correlator)
             dll_discriminator = dll_disc(
@@ -215,7 +219,15 @@ function track(
         code_replica
     )
     estimated_cn0 = estimate_cn0(cn0_estimator, max_integration_time)
-    TrackingResults(next_state, valid_correlator, got_correlator, bit_buffer, estimated_cn0)
+    TrackingResults(
+        next_state,
+        valid_correlator,
+        valid_correlator_carrier_frequency,
+        valid_correlator_carrier_phase,
+        got_correlator,
+        bit_buffer,
+        estimated_cn0
+    )
 end
 
 @inline function track(
