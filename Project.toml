@@ -1,7 +1,7 @@
 name = "Tracking"
 uuid = "10b2438b-ffd4-5096-aa58-44041d5c8f3b"
 authors = ["Soeren Zorn <soeren.zorn@nav.rwth-aachen.de>"]
-version = "0.12.5"
+version = "0.13.0"
 
 [deps]
 DocStringExtensions = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
@@ -15,13 +15,13 @@ Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
 [compat]
 DocStringExtensions = "0.6, 0.7, 0.8"
-GNSSSignals = "0.12.1"
-LoopVectorization = "0.6.11, 0.7, 0.8"
+GNSSSignals = "0.13"
+LoopVectorization = "0.8"
 StaticArrays = "0.9, 0.10, 0.11, 0.12"
 StructArrays = "0.4"
 TrackingLoopFilters = "0.1"
 Unitful = "0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 1.0"
-julia = "1"
+julia = "1.4"
 
 [extras]
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
