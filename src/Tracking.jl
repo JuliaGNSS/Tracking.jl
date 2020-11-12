@@ -13,6 +13,12 @@ module Tracking
         get_early,
         get_prompt,
         get_late,
+        get_tap,
+        get_taps,
+        get_num_taps,
+        get_early_index,
+        get_prompt_index,
+        get_late_index,
         get_correlator,
         get_carrier_doppler,
         get_carrier_phase,
@@ -27,12 +33,14 @@ module Tracking
         track,
         TrackingState,
         NumAnts,
+        NumTaps,
         MomentsCN0Estimator,
         AbstractCN0Estimator,
         get_bits,
         get_num_bits,
         EarlyPromptLateCorrelator,
         VeryEarlyPromptLateCorrelator,
+        GenericCorrelator,
         SecondaryCodeOrBitDetector,
         GainControlledSignal
 
@@ -40,6 +48,11 @@ module Tracking
     end
 
     NumAnts(x) = NumAnts{x}()
+
+    struct NumTaps{x}
+    end
+
+    NumTaps(x) = NumTaps{x}()
 
     include("agc.jl")
     include("code_replica.jl")

@@ -143,4 +143,5 @@
         @test all(get_prompt(correlator_result) .== 2500)
     end
 
+    include("generic_correlator.jl")
 end
