@@ -38,6 +38,9 @@ module Tracking
     struct NumAnts{x}
     end
 
+    SOA = NamedTuple{(:re, :im),Tuple{Array{Float32,1},Array{Float32,1}}}
+    SOC = NamedTuple{(:re, :im),Tuple{CuArray{Float32,1},CuArray{Float32,1}}}
+
     NumAnts(x) = NumAnts{x}()
 
     include("agc.jl")

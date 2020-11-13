@@ -194,7 +194,81 @@ end
 """
 $(SIGNATURES)
 
-Perform a correlation on the GPU with a single antenna
+CuArray Perform a correlation on the GPU with a single antenna
+"""
+function correlate(
+    correlator::EarlyPromptLateCorrelator,
+    downconverted_signal::CuArray{Complex{T}},
+    code,
+    early_late_sample_shift,
+    start_sample,
+    num_samples_left,
+    agc_attenuation,
+    agc_bits,
+    carrier_bits::Val{NC}
+) where {NC, T <: AbstractFloat}
+    late = zero(ComplexF32)
+    prompt = zero(ComplexF32)
+    early = zero(ComplexF32)
+    @views late = 
+        downconverted_signal[start_sample:num_samples_left + start_sample - 1] ⋅ 
+        code[start_sample:num_samples_left + start_sample - 1]
+    @views prompt = 
+        downconverted_signal[start_sample:num_samples_left + start_sample - 1] ⋅ 
+        code[early_late_sample_shift .+ (start_sample:num_samples_left + start_sample - 1)]
+    @views early = 
+        downconverted_signal[start_sample:num_samples_left + start_sample - 1] ⋅ 
+        code[2*early_late_sample_shift .+ (start_sample:num_samples_left + start_sample - 1)]
+    EarlyPromptLateCorrelator(
+        Tracking.get_early(correlator) + early, 
+        Tracking.get_prompt(correlator) + prompt,
+        Tracking.get_late(correlator) + late
+    )
+end
+
+"""
+$(SIGNATURES)
+
+CuArray Perform a correlation on the GPU with multi-antenna
+"""
+function correlate(
+    correlator::EarlyPromptLateCorrelator{<: SVector{N}},
+    downconverted_signal::CuArray{Complex{T},2},
+    code,
+    early_late_sample_shift,
+    start_sample,
+    num_samples_left,
+    agc_attenuation,
+    agc_bits,
+    carrier_bits::Val{NC}
+)  where {N, T <: AbstractFloat}
+    late = zero(MVector{N, ComplexF32})
+    prompt = zero(MVector{N, ComplexF32})
+    early = zero(MVector{N, ComplexF32})
+    for i in 1:N
+        late[i] = @views dot(code[start_sample:num_samples_left + start_sample - 1],
+        downconverted_signal[(start_sample:num_samples_left + start_sample - 1),i]) 
+    end
+    for i in 1:N
+        prompt[i] = @views dot(code[start_sample+early_late_sample_shift:num_samples_left + start_sample + early_late_sample_shift - 1],
+        downconverted_signal[(start_sample:num_samples_left + start_sample - 1),i])
+    end
+    for i in 1:N
+        early[i] = @views dot(code[start_sample+2*early_late_sample_shift:num_samples_left + start_sample + 2*early_late_sample_shift - 1],
+        downconverted_signal[(start_sample:num_samples_left + start_sample - 1),i])
+    end
+    EarlyPromptLateCorrelator(
+        Tracking.get_early(correlator) .+ early, 
+        Tracking.get_prompt(correlator) .+ prompt,
+        Tracking.get_late(correlator) .+ late
+    )
+end
+
+
+"""
+$(SIGNATURES)
+
+StrcutArray Perform a correlation on the GPU with a single antenna
 """
 function correlate(
     correlator::EarlyPromptLateCorrelator,

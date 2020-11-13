@@ -35,19 +35,62 @@ function downconvert!(
     end
 end
 
-# GPU downconvert function
+# StructArray GPU downconvert function Ants = 1
 function downconvert!(
-    downconverted_signal_re::CuArray{Float32},
-    downconverted_signal_im::CuArray{Float32},
-    carrier_re::CuArray{Float32},
-    carrier_im::CuArray{Float32},
-    signal_re::CuArray{Float32},
-    signal_im::CuArray{Float32},
+    downconverted_signal_re::CuMatrix{Complex{T}},
+    downconverted_signal_im::CuMatrix{Complex{T}},
+    carrier_re::CuVector{Complex{T}},
+    carrier_im::CuVector{Complex{T}},
+    signal_re::CuMatrix{Complex{T}},
+    signal_im::CuMatrix{Complex{T}},
     start_sample::Integer,
     num_samples_left::Integer
-)
-    @. downconverted_signal_re = signal_re * carrier_re + signal_im * carrier_im
-    @. downconverted_signal_im = signal_im * carrier_re - signal_re * carrier_im
+) where T <: AbstractFloat
+    idxs = start_sample:start_sample + num_samples_left - 1
+    @. @views downconverted_signal_re[idxs] = signal_re[idxs] * carrier_re[idxs] + signal_im[idxs] * carrier_im[idxs]
+    @. @views downconverted_signal_im[idxs] = signal_im[idxs] * carrier_re[idxs] - signal_re[idxs] * carrier_im[idxs]
+end
+
+# StructArray GPU downconvert function Ants > 1
+function downconvert!(
+    downconverted_signal_re::CuVector{T},
+    downconverted_signal_im::CuVector{T},
+    carrier_re::CuVector{T},
+    carrier_im::CuVector{T},
+    signal_re::CuVector{T},
+    signal_im::CuVector{T},
+    start_sample::Integer,
+    num_samples_left::Integer
+) where T <: AbstractFloat
+    idxs = start_sample:start_sample + num_samples_left - 1
+    @. @views downconverted_signal_re[idxs] = signal_re[idxs] * carrier_re[idxs] + signal_im[idxs] * carrier_im[idxs]
+    @. @views downconverted_signal_im[idxs] = signal_im[idxs] * carrier_re[idxs] - signal_re[idxs] * carrier_im[idxs]
+end
+
+# CuArray GPU downconvert function Ants = 1
+function downconvert!(
+    downconverted_signal::CuVector{Complex{T}},
+    carrier::CuVector{Complex{T}},
+    signal::CuVector{Complex{T}},
+    start_sample::Integer,
+    num_samples_left::Integer
+) where T <: AbstractFloat    
+    @. @views downconverted_signal[start_sample:num_samples_left + start_sample - 1] =
+        signal[start_sample:num_samples_left + start_sample - 1] * 
+        conj(carrier[start_sample:num_samples_left + start_sample - 1])
+end
+
+# CuArray GPU downconvert function Ants > 1
+function downconvert!(
+    downconverted_signal::CuMatrix{Complex{T}},
+    carrier::CuVector{Complex{T}},
+    signal::CuMatrix{Complex{T}},
+    start_sample::Integer,
+    num_samples_left::Integer
+) where T <: AbstractFloat
+    @. @views downconverted_signal[start_sample:num_samples_left + start_sample - 1] =
+        signal[start_sample:num_samples_left + start_sample - 1] * 
+        conj(carrier[start_sample:num_samples_left + start_sample - 1])
 end
 
 function downconvert!(

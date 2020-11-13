@@ -39,8 +39,8 @@ $(SIGNATURES)
 GPU Code replica function
 """
 function gen_code_replica!(
-    code_replica::CuArray,
-    ::Type{S},
+    code_replica::CuArray{T},
+    system::AbstractGNSSSystem,
     code_frequency,
     sampling_frequency,
     start_code_phase::AbstractFloat,
@@ -48,8 +48,11 @@ function gen_code_replica!(
     num_samples::Integer,
     early_late_sample_shift,
     prn::Integer
-) where S <: AbstractGNSSSystem
-    code replica = get_codes(S)
+) where T
+    idxs = start_sample:start_sample - 1 + num_samples + 2*early_late_sample_shift
+    phases = code_frequency .* (0:num_samples - 1 + 2 * early_late_sample_shift) ./ sampling_frequency .+ start_code_phase
+    code_length = get_code_length(system) * get_secondary_code_length(system)
+    @inbounds @views code_replica[idxs] .= system.codes[2 .+ mod.(floor.(Int, phases), code_length), prn]
 end
 
 """

@@ -9,7 +9,7 @@ struct TrackingState{
         CALF <: AbstractLoopFilter,
         COLF <: AbstractLoopFilter,
         CN <: AbstractCN0Estimator,
-        DS <: StructArray,
+        DS <: Union{StructArray, CuArray},
         CAV <: Union{StructArray, CuArray},
         CDV <: Union{Vector{Int16}, CuArray}
     }
