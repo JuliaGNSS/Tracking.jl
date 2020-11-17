@@ -154,7 +154,7 @@ end
         early_late_sample_shift,
         1,
         2500,
-        ones(Float64, 5),
+        ones(Float64, 3),
         2,
         Val(7)
     )

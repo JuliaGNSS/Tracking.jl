@@ -416,8 +416,8 @@ $(SIGNATURES)
 
 Get number of antennas from correlator
 """
-get_num_ants(correlator::GenericCorrelator{Vector{Complex{T}}}) where T = 1
-get_num_ants(correlator::GenericCorrelator{Vector{SVector{N,T}}}) where {N,T} = N
+get_num_ants(correlator::GenericCorrelator{Complex{T}}) where T = 1
+get_num_ants(correlator::GenericCorrelator{SVector{N,T}}) where {N,T} = N
 
 """
 $(SIGNATURES)
@@ -496,7 +496,7 @@ $(SIGNATURES)
 
 Reset the Correlator
 """
-function zero(correlator::GenericCorrelator{Vector{T}}) where T
+function zero(correlator::GenericCorrelator{T}) where T
     GenericCorrelator(
         [zero(T) for i = 1:get_num_taps(correlator)],
         correlator.early_index,
@@ -607,8 +607,13 @@ function correlate(
         taps[i] = c
     end
 
+    println(size(get_taps(correlator)))
+    println(size(taps))
+    println(size(agc_attenuation))
+    taps += get_taps(correlator)
+    attenuation = agc_attenuation / 1 << (agc_bits+NC)
     return GenericCorrelator(
-        get_taps(correlator) + taps .* agc_attenuation / 1 << (agc_bits + NC),
+        [tap .* attenuation for tap in taps],
         get_early_index(correlator),
         get_prompt_index(correlator),
         get_late_index(correlator)
