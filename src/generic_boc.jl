@@ -4,7 +4,7 @@ $(SIGNATURES)
 Checks if upcoming integration is a new bit for generic BOC signal
 """
 function is_upcoming_integration_new_bit(
-    ::Type{GenericBOC{T}}, 
+    ::Type{<:GenericBOC{T}}, 
     prns,
     num_prns
 ) where T<:AbstractGNSSSystem
@@ -12,7 +12,7 @@ function is_upcoming_integration_new_bit(
 end
 
 function get_default_correlator(
-    ::Type{GenericBOC{T}}, 
+    ::Type{<:GenericBOC{T}}, 
     numAnts::NumAnts{N}
 ) where {N, T<:AbstractGNSSSystem}
     EarlyPromptLateCorrelator(numAnts)

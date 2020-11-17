@@ -69,4 +69,5 @@ module Tracking
     include("gpsl1.jl")
     include("gpsl5.jl")
     include("galileo_e1b.jl")
+    include("generic_boc.jl")
 end
