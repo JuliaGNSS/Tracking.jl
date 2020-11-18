@@ -607,10 +607,10 @@ function correlate(
         taps[i] = c
     end
 
-    taps += get_taps(correlator)
+    old = get_taps(correlator)
     attenuation = agc_attenuation / 1 << (agc_bits+NC)
-    return GenericCorrelator(
-        [tap .* attenuation for tap in taps],
+    GenericCorrelator(
+        [old[i] + taps[i] .* attenuation for i in 1:nt],
         get_early_index(correlator),
         get_prompt_index(correlator),
         get_late_index(correlator)
