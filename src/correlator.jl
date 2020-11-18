@@ -288,7 +288,7 @@ $(SIGNATURES)
 
 Generic correlator holding a user defined number of correlation values.
 """
-struct GenericCorrelator{T} <: AbstractCorrelator{Vector{T}}
+struct GenericCorrelator{T} <: AbstractCorrelator{T}
     taps::Vector{T}
     early_index::Int64
     prompt_index::Int64
@@ -607,9 +607,6 @@ function correlate(
         taps[i] = c
     end
 
-    println(size(get_taps(correlator)))
-    println(size(taps))
-    println(size(agc_attenuation))
     taps += get_taps(correlator)
     attenuation = agc_attenuation / 1 << (agc_bits+NC)
     return GenericCorrelator(
