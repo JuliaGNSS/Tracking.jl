@@ -34,7 +34,7 @@ end
     range = 0:3999
     start_carrier_phase = π / 2
     cn0_estimator = MomentsCN0Estimator(20)
-    early_late_sample_shift = 2
+    correlator_sample_shifts = SVector(-2, 0, 2)
     start_sample = 1
     num_samples = 4000
     agc_bits = 5
@@ -61,7 +61,7 @@ end
             correlator,
             agc_signal,
             code,
-            early_late_sample_shift,
+            correlator_sample_shifts,
             start_sample,
             num_samples,
             1.0,
