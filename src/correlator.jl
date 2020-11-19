@@ -399,8 +399,8 @@ early and late correlator using `el_spacing`.
 """
 function GenericCorrelator(num_ants::NumAnts{N}, num_taps::NumTaps{M}, el_spacing) where {M, N}
     prompt_index = ceil(Int64, M/2)
-    early_index  = prompt_index - ceil(Int64, el_spacing/2)
-    late_index   = prompt_index + ceil(Int64, el_spacing/2)
+    early_index  = prompt_index + ceil(Int64, el_spacing/2)
+    late_index   = prompt_index - ceil(Int64, el_spacing/2)
     @assert late_index <= M
     GenericCorrelator(
         [zero(SVector{N, ComplexF64}) for i = 1:M],
