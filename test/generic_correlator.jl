@@ -9,9 +9,9 @@
     @test @inferred(get_late(correlator)) == 0.0
     @test length(get_taps(correlator)) == 3
     @test @inferred(get_num_taps(correlator)) == 3
-    @test @inferred(get_early_index(correlator)) == 1
+    @test @inferred(get_early_index(correlator)) == 3
     @test @inferred(get_prompt_index(correlator)) == 2
-    @test @inferred(get_late_index(correlator)) == 3
+    @test @inferred(get_late_index(correlator)) == 1
 end
 
 @testset "Single antenna" begin
@@ -21,9 +21,9 @@ end
     @test @inferred(get_late(correlator)) == 0.0
     @test length(get_taps(correlator)) == 3
     @test @inferred(get_num_taps(correlator)) == 3
-    @test @inferred(get_early_index(correlator)) == 1
+    @test @inferred(get_early_index(correlator)) == 3
     @test @inferred(get_prompt_index(correlator)) == 2
-    @test @inferred(get_late_index(correlator)) == 3
+    @test @inferred(get_late_index(correlator)) == 1
 end
 
 @testset "Multiple Antennas" begin
@@ -33,9 +33,9 @@ end
     @test @inferred(get_late(correlator)) == SVector(0.0 + 0.0im, 0.0 + 0.0im)
     @test length(get_taps(correlator)) == 3
     @test @inferred(get_num_taps(correlator)) == 3
-    @test @inferred(get_early_index(correlator)) == 1
+    @test @inferred(get_early_index(correlator)) == 3
     @test @inferred(get_prompt_index(correlator)) == 2
-    @test @inferred(get_late_index(correlator)) == 3
+    @test @inferred(get_late_index(correlator)) == 1
 end
 
 @testset "Multiple antennas, multiple taps" begin
@@ -45,9 +45,9 @@ end
     end
     @test length(get_taps(correlator)) == 5
     @test @inferred(get_num_taps(correlator)) == 5
-    @test @inferred(get_early_index(correlator)) == 2
+    @test @inferred(get_early_index(correlator)) == 4
     @test @inferred(get_prompt_index(correlator)) == 3
-    @test @inferred(get_late_index(correlator)) == 4
+    @test @inferred(get_late_index(correlator)) == 2
 end
 
 @testset "Multiple antennas, multiple taps, custom spacing" begin
@@ -57,14 +57,15 @@ end
     end
     @test length(get_taps(correlator)) == 7
     @test @inferred(get_num_taps(correlator)) == 7
-    @test @inferred(get_early_index(correlator)) == 2
+    @test @inferred(get_early_index(correlator)) == 6
     @test @inferred(get_prompt_index(correlator)) == 4
-    @test @inferred(get_late_index(correlator)) == 6
+    @test @inferred(get_late_index(correlator)) == 2
 end
 
 @testset "Default constructor" begin
     correlator = @inferred GenericCorrelator(
         [SVector(i + 1.0i*im, i + 2.0im) for i = 1:7],
+        NumTaps(7),
         1, 4, 7
     )
     @test @inferred(get_early(correlator)) == SVector(1+1.0im, 1+2.0im)
@@ -72,9 +73,20 @@ end
     @test @inferred(get_late(correlator)) == SVector(7+7.0im, 7+2.0im)
 end
 
+@testset "Correlator zeroing" begin
+    correlator = @inferred GenericCorrelator(
+        [SVector(i+1im, 2i+3im) for i=1:3],
+        NumTaps(3),
+        3,2,1
+    )
+    zero_correlator = @inferred Tracking.zero(correlator)
+    @test all([all(t.==0) for t in get_taps(zero_correlator)])
+end
+
 @testset "Correlator filtering" begin
     correlator = @inferred GenericCorrelator(
         [SVector(1.0+0im, 1.0+0im) for i = 1:3],
+        NumTaps(3),
         1, 2, 3
     )
     filtered_correlator = @inferred Tracking.filter(x->x[1], correlator)
@@ -84,20 +96,21 @@ end
 end
 
 @testset "Sampleshift calculation" begin
-    correlator = @inferred GenericCorrelator(NumAnts(2))
-    early_late_sample_shift = @inferred get_early_late_sample_shift(
+    correlator = @inferred GenericCorrelator(NumAnts(2), NumTaps(7))
+    correlator_sample_shifts = @inferred get_correlator_sample_shifts(
         GPSL1,
         correlator,
         4e6Hz,
         0.5
     )
-    @test early_late_sample_shift ≈ round(0.5*4e6/1.023e6)
-    @test typeof(early_late_sample_shift) <: Integer
+    @test correlator_sample_shifts ≈ SVector(-3,-2,-1,0,1,2,3).*round(0.5*4e6/1.023e6)
+    @test typeof(correlator_sample_shifts) <: SVector
 end
 
 @testset "Correlator normalization" begin
     correlator = @inferred GenericCorrelator(
         [SVector(10i+0im, 20i+0im) for i = 1:3],
+        NumTaps(3),
         1, 2, 3
     )
     normalized_correlator = @inferred Tracking.normalize(correlator, 10)
