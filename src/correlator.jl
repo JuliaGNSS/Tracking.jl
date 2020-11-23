@@ -97,15 +97,21 @@ end
 """
 $(SIGNATURES)
 
-Calculate the shift between the early and late in samples.
+Calculate the replica phase offset required for the correlator taps with
+respect to the prompt correlator, expressed in samples. The shifts are 
+ordered from latest to earliest replica.
 """
-function get_early_late_sample_shift(
+function get_correlator_sample_shifts(
     ::Type{S},
     correlator::EarlyPromptLateCorrelator,
     sampling_frequency,
     preferred_code_shift
 ) where S <: AbstractGNSSSystem
-    round(Int, preferred_code_shift * sampling_frequency / get_code_frequency(S))
+    @SVector [i*round(Int, preferred_code_shift * sampling_frequency / get_code_frequency(S)) for i in -1:1]
+end
+
+function get_early_late_sample_spacing(correlator::EarlyPromptLateCorrelator, correlator_sample_shift::SVector)
+    correlator_sample_shift[3] - correlator_sample_shift[1]
 end
 
 """
@@ -130,7 +136,7 @@ function correlate(
     correlator::EarlyPromptLateCorrelator,
     downconverted_signal,
     code,
-    early_late_sample_shift,
+    correlator_sample_shifts::SVector{3},
     start_sample,
     num_samples_left,
     agc_attenuation,
@@ -144,10 +150,10 @@ function correlate(
         late = late + downconverted_signal[i] * code[i]
     end
     @inbounds for i = start_sample:num_samples_left + start_sample - 1
-        prompt = prompt + downconverted_signal[i] * code[i + early_late_sample_shift]
+        prompt = prompt + downconverted_signal[i] * code[i + correlator_sample_shifts[2]-correlator_sample_shifts[1]]
     end
     @inbounds for i = start_sample:num_samples_left + start_sample - 1
-        early = early + downconverted_signal[i] * code[i + 2 * early_late_sample_shift]
+        early = early + downconverted_signal[i] * code[i + correlator_sample_shifts[3]-correlator_sample_shifts[1]]
     end
     EarlyPromptLateCorrelator(
         get_early(correlator) + early * agc_attenuation / 1 << (agc_bits + NC),
@@ -160,7 +166,7 @@ function correlate(
     correlator::EarlyPromptLateCorrelator{<: SVector{N}},
     downconverted_signal::AbstractMatrix,
     code,
-    early_late_sample_shift,
+    correlator_sample_shifts::SVector{3},
     start_sample,
     num_samples_left,
     agc_attenuation,
@@ -174,10 +180,10 @@ function correlate(
         late[j] = late[j] + downconverted_signal[i,j] * code[i]
     end
     @inbounds for j = 1:length(late), i = start_sample:num_samples_left + start_sample - 1
-        prompt[j] = prompt[j] + downconverted_signal[i,j] * code[i + early_late_sample_shift]
+        prompt[j] = prompt[j] + downconverted_signal[i,j] * code[i + correlator_sample_shifts[2] - correlator_sample_shifts[1]]
     end
     @inbounds for j = 1:length(late), i = start_sample:num_samples_left + start_sample - 1
-        early[j] = early[j] + downconverted_signal[i,j] * code[i + 2 * early_late_sample_shift]
+        early[j] = early[j] + downconverted_signal[i,j] * code[i + correlator_sample_shifts[3] - correlator_sample_shifts[1]]
     end
     EarlyPromptLateCorrelator(
         get_early(correlator) + early .* agc_attenuation / 1 << (agc_bits + NC),

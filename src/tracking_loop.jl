@@ -11,8 +11,8 @@ Track the signal `signal` based on the current tracking `state`, the sampling fr
 - Minimal integration time `min_integration_time` defaults to 0.75ms. It's the minimal
   integration time, that leads to a valid correlation result. It is only used for the first
   integration period.
-- Sample shift between early and late `early_late_sample_shift` defaults to
-  `get_early_late_sample_shift(...)`
+- Sample shift of the correlator replica `correlator_sample_shifts` defaults to
+  `get_correlator_sample_shifts(...)`
 - Bandwidth of the carrier loop `carrier_loop_filter_bandwidth` defaults to 18Hz
 - Bandwidth of the code loop `code_loop_filter_bandwidth` defaults to 1Hz
 - Velocity aiding `velocity_aiding` defaults to 0Hz
@@ -26,7 +26,7 @@ function track(
         intermediate_frequency = 0.0Hz,
         max_integration_time::typeof(1ms) = 1ms,
         min_integration_time::typeof(1.0ms) = 0.75ms,
-        early_late_sample_shift = get_early_late_sample_shift(S,
+        correlator_sample_shifts = get_correlator_sample_shifts(S,
             get_correlator(state), sampling_frequency, 0.5),
         carrier_loop_filter_bandwidth = 18Hz,
         code_loop_filter_bandwidth = 1Hz,
@@ -54,7 +54,7 @@ function track(
     agc_attenuation = get_attenuation(gain_controlled_signal)
     downconverted_signal = resize!(get_downconverted_signal(state), size(signal, 1))
     carrier_replica = resize!(get_carrier(state), size(signal, 1))
-    code_replica = resize!(get_code(state), size(signal, 1) + 2 * maximum(early_late_sample_shift))
+    code_replica = resize!(get_code(state), size(signal, 1) + correlator_sample_shifts[end]-correlator_sample_shifts[1])
     init_carrier_doppler = get_init_carrier_doppler(state)
     init_code_doppler = get_init_code_doppler(state)
     carrier_doppler = get_carrier_doppler(state)
@@ -97,7 +97,7 @@ function track(
             code_phase,
             signal_start_sample,
             num_samples_left,
-            early_late_sample_shift,
+            correlator_sample_shifts,
             prn
         )
         carrier_replica = gen_carrier_replica!(
@@ -120,7 +120,7 @@ function track(
             correlator,
             downconverted_signal,
             code_replica,
-            early_late_sample_shift,
+            correlator_sample_shifts,
             signal_start_sample,
             num_samples_left,
             agc_attenuation,
@@ -158,7 +158,7 @@ function track(
             dll_discriminator = dll_disc(
                 S,
                 filtered_correlator,
-                early_late_sample_shift,
+                correlator_sample_shifts,
                 code_frequency / sampling_frequency
             )
             carrier_freq_update, carrier_loop_filter = filter_loop(
@@ -239,7 +239,7 @@ end
         intermediate_frequency = 0.0Hz,
         max_integration_time::typeof(1ms) = 1ms,
         min_integration_time::typeof(1.0ms) = 0.75ms,
-        early_late_sample_shift = get_early_late_sample_shift(S,
+        correlator_sample_shifts = get_correlator_sample_shifts(S,
             get_correlator(state), sampling_frequency, 0.5),
         carrier_loop_filter_bandwidth = 18Hz,
         code_loop_filter_bandwidth = 1Hz,
@@ -266,7 +266,7 @@ end
         intermediate_frequency = intermediate_frequency,
         max_integration_time = max_integration_time,
         min_integration_time = min_integration_time,
-        early_late_sample_shift = early_late_sample_shift,
+        correlator_sample_shifts = correlator_sample_shifts,
         carrier_loop_filter_bandwidth = carrier_loop_filter_bandwidth,
         code_loop_filter_bandwidth = code_loop_filter_bandwidth,
         velocity_aiding = velocity_aiding,

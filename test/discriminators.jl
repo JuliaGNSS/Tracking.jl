@@ -30,7 +30,7 @@ end
     late_correlator = EarlyPromptLateCorrelator(0.75 + 0.0im, 0.75 + 0.0im, 0.25 + 0.0im)
     very_late_correlator = EarlyPromptLateCorrelator(1.0 + 0.0im, 0.5 + 0.0im, 0.0 + 0.0im)
 
-    sample_shift = 2
+    sample_shift = SVector(-2, 0, 2)
     delta = 0.25
 
     @test @inferred(
