@@ -1,5 +1,3 @@
-using Plots
-using DSP
 """
 $(SIGNATURES)
 
@@ -288,7 +286,7 @@ function correlate(
     taps = Vector{Complex{Int32}}(undef,M)
     for i = 1:M
         c = zero(Complex{Int32})
-        offset = (i-1)*early_late_sample_shift[1]
+        offset = correlator_sample_shifts[i] - correlator_sample_shifts[1]
         @inbounds for j = start_sample:num_samples_left + start_sample - 1
             c += downconverted_signal[j] .* code[j + offset]
         end
@@ -320,13 +318,13 @@ function correlate(
     carrier_bits::Val{NC}
 ) where {M,N,NC}
     taps = Vector{SVector{N,Complex{Int32}}}(undef,M)
-    for i = 1:M
+    for m = 1:M
         c = zero(MVector{N, Complex{Int32}})
-        offset = correlator_sample_shifts[i] - correlator_sample_shifts[1]
-        @inbounds for j = start_sample:num_samples_left + start_sample - 1
-            c += downconverted_signal[j,:] .* code[j + offset]
+        offset = correlator_sample_shifts[m] - correlator_sample_shifts[1]
+        @inbounds for j = 1:N, i = start_sample:num_samples_left + start_sample - 1
+            c[j] = c[j] + downconverted_signal[i,j] * code[i + offset]
         end
-        taps[i] = c
+        taps[m] = c
     end
 
     old = get_taps(correlator)
