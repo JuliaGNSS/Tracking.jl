@@ -111,7 +111,7 @@ function get_correlator_sample_shifts(
 end
 
 function get_early_late_sample_spacing(correlator::EarlyPromptLateCorrelator, correlator_sample_shifts::SVector{3})
-    correlator_sample_shift[3] - correlator_sample_shifts[1]
+    correlator_sample_shifts[3] - correlator_sample_shifts[1]
 end
 
 """
