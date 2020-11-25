@@ -64,8 +64,7 @@ end
 
 @testset "Default constructor" begin
     correlator = @inferred GenericCorrelator(
-        [SVector(i + 1.0i*im, i + 2.0im) for i = 1:7],
-        NumTaps(7),
+        SVector{7}([SVector(i + 1.0i*im, i + 2.0im) for i = 1:7]),
         1, 4, 7
     )
     @test @inferred(get_early(correlator)) == SVector(1+1.0im, 1+2.0im)
@@ -75,8 +74,7 @@ end
 
 @testset "Correlator zeroing" begin
     correlator = @inferred GenericCorrelator(
-        [SVector(i+1im, 2i+3im) for i=1:3],
-        NumTaps(3),
+        SVector{3}([SVector(i+1im, 2i+3im) for i=1:3]),
         3,2,1
     )
     zero_correlator = @inferred Tracking.zero(correlator)
@@ -85,8 +83,7 @@ end
 
 @testset "Correlator filtering" begin
     correlator = @inferred GenericCorrelator(
-        [SVector(1.0+0im, 1.0+0im) for i = 1:3],
-        NumTaps(3),
+        SVector{3}([SVector(1.0+0im, 1.0+0im) for i = 1:3]),
         1, 2, 3
     )
     filtered_correlator = @inferred Tracking.filter(x->x[1], correlator)
@@ -109,8 +106,7 @@ end
 
 @testset "Correlator normalization" begin
     correlator = @inferred GenericCorrelator(
-        [SVector(10i+0im, 20i+0im) for i = 1:3],
-        NumTaps(3),
+        SVector{3}([SVector(10i+0im, 20i+0im) for i = 1:3]),
         1, 2, 3
     )
     normalized_correlator = @inferred Tracking.normalize(correlator, 10)
@@ -122,18 +118,23 @@ end
         (get_code.(GPSL1, (1:2500) * 1023e3 / 2.5e6, 1) * Int16(1) << (7 + 2),
         zeros(Int16, 2500))
     )
-    early_late_sample_shift = 1
+    correlator = GenericCorrelator(NumAnts(1), NumTaps(5))
+    correlator_sample_shifts = get_correlator_sample_shifts(
+        GPSL1,
+        correlator,
+        2.5e6Hz,
+        0.5
+    )
     code = get_code.(
         GPSL1,
-        (1 - 2early_late_sample_shift:2500+2early_late_sample_shift) * 1023e3 / 2.5e6,
+        (1 +correlator_sample_shifts[1]:2500+correlator_sample_shifts[end]) * 1023e3 / 2.5e6,
         1
     )
-    correlator = GenericCorrelator(NumAnts(1), NumTaps(5))
     correlator_result = Tracking.correlate(
         correlator,
         signal,
         code,
-        early_late_sample_shift,
+        correlator_sample_shifts,
         1,
         2500,
         1.0,
@@ -150,21 +151,25 @@ end
         (get_code.(GPSL1, (1:2500) * 1023e3 / 2.5e6, 1) * Int16(1) << (7 + 2),
         zeros(Int16, 2500))
     )
-    early_late_sample_shift = 1
+    correlator = GenericCorrelator(NumAnts(3), NumTaps(5))
+    correlator_sample_shifts = get_correlator_sample_shifts(
+        GPSL1,
+        correlator,
+        2.5e6Hz,
+        0.5
+    )
     code = get_code.(
         GPSL1,
-        (1 - 2early_late_sample_shift:2500+2early_late_sample_shift) * 1023e3 / 2.5e6,
+        (1 +correlator_sample_shifts[1]:2500+correlator_sample_shifts[end]) * 1023e3 / 2.5e6,
         1
     )
     signal_mat = repeat(signal, outer = (1,3))
-    early_late_sample_shift = 1
-    correlator = GenericCorrelator(NumAnts(3), NumTaps(5))
     
     correlator_result = Tracking.correlate(
         correlator,
         signal_mat,
         code,
-        early_late_sample_shift,
+        correlator_sample_shifts,
         1,
         2500,
         ones(Float64, 3),

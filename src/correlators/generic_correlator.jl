@@ -4,8 +4,7 @@ $(SIGNATURES)
 Generic correlator holding a user defined number of correlation values.
 """
 struct GenericCorrelator{M,T} <: AbstractCorrelator{T}
-    taps::Vector{T}
-    num_taps::NumTaps{M}
+    taps::SVector{M,T}
     early_index::Int64
     prompt_index::Int64
     late_index::Int64
@@ -82,8 +81,7 @@ function GenericCorrelator(num_ants::NumAnts{1}, num_taps::NumTaps{M}, el_spacin
     late_index   = prompt_index - ceil(Int64, el_spacing/2)
     @assert late_index <= M
     GenericCorrelator(
-        [zero(ComplexF64) for i = 1:M],
-        num_taps,
+        SVector{M}([zero(ComplexF64) for i = 1:M]),
         early_index,
         prompt_index,
         late_index
@@ -104,8 +102,7 @@ function GenericCorrelator(num_ants::NumAnts{N}, num_taps::NumTaps{M}, el_spacin
     late_index   = prompt_index - ceil(Int64, el_spacing/2)
     @assert late_index <= M
     GenericCorrelator(
-        [zero(SVector{N, ComplexF64}) for i = 1:M],
-        num_taps,
+        SVector{M}([zero(SVector{N, ComplexF64}) for i = 1:M]),
         early_index,
         prompt_index,
         late_index
@@ -201,7 +198,6 @@ Reset the Correlator
 function zero(correlator::GenericCorrelator{M}) where M
     GenericCorrelator(
         zero(correlator.taps),
-        NumTaps(M),
         correlator.early_index,
         correlator.prompt_index,
         correlator.late_index
@@ -216,7 +212,6 @@ Filter the correlator by the function `post_corr_filter`
 function filter(post_corr_filter, correlator::GenericCorrelator{M}) where M
     GenericCorrelator(
         map(x->post_corr_filter(x), get_taps(correlator)),
-        NumTaps(M),
         get_early_index(correlator),
         get_prompt_index(correlator),
         get_late_index(correlator)
@@ -261,7 +256,6 @@ Normalize the correlator
 function normalize(correlator::GenericCorrelator{M}, integrated_samples) where M
     GenericCorrelator(
         map(x->x/integrated_samples, get_taps(correlator)),
-        NumTaps(M),
         get_early_index(correlator),
         get_prompt_index(correlator),
         get_late_index(correlator)
@@ -288,13 +282,12 @@ function correlate(
         c = zero(Complex{Int32})
         offset = correlator_sample_shifts[i] - correlator_sample_shifts[1]
         @inbounds for j = start_sample:num_samples_left + start_sample - 1
-            c += downconverted_signal[j] .* code[j + offset]
+            c += downconverted_signal[j] * code[j + offset]
         end
         taps[i] = c
     end
     return GenericCorrelator(
         get_taps(correlator) + taps .* agc_attenuation / 1 << (agc_bits + NC),
-        NumTaps(M),
         get_early_index(correlator),
         get_prompt_index(correlator),
         get_late_index(correlator)
@@ -317,21 +310,19 @@ function correlate(
     agc_bits,
     carrier_bits::Val{NC}
 ) where {M,N,NC}
-    taps = Vector{SVector{N,Complex{Int32}}}(undef,M)
+    taps = MVector(MVector.(get_taps(correlator)))
+    attenuation = agc_attenuation / 1 << (agc_bits+NC)
     for m = 1:M
         c = zero(MVector{N, Complex{Int32}})
         offset = correlator_sample_shifts[m] - correlator_sample_shifts[1]
         @inbounds for j = 1:N, i = start_sample:num_samples_left + start_sample - 1
             c[j] = c[j] + downconverted_signal[i,j] * code[i + offset]
         end
-        taps[m] = c
+        taps[m] .= taps[m] .+ c .* attenuation
     end
 
-    old = get_taps(correlator)
-    attenuation = agc_attenuation / 1 << (agc_bits+NC)
     GenericCorrelator(
-        [old[i] + taps[i] .* attenuation for i in 1:M],
-        NumTaps(M),
+        SVector(SVector.(taps)),
         get_early_index(correlator),
         get_prompt_index(correlator),
         get_late_index(correlator)
