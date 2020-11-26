@@ -13,7 +13,7 @@ end
 """
 $(SIGNATURES)
 
-GenericCorrelator constructor without parameters assumes a single antenna 
+GenericCorrelator constructor without parameters assumes a single antenna
 and tree correlator elements.
 """
 function GenericCorrelator()
@@ -24,7 +24,7 @@ end
 $(SIGNATURES)
 
 GenericCorrelator constructor that allows for the configuration of the
-number of antenna elements using `num_ants::NumAnts{N}` The number of 
+number of antenna elements using `num_ants::NumAnts{N}` The number of
 correlator taps is fixed to three.
 """
 function GenericCorrelator(num_ants::NumAnts{N}) where N
@@ -39,7 +39,7 @@ end
 $(SIGNATURES)
 
 GenericCorrelator constructor that allows for the configuration of the
-number of correlator taps using `num_taps::NumTaps{N}` The number of 
+number of correlator taps using `num_taps::NumTaps{N}` The number of
 antenne elements is fixed to one.
 """
 function GenericCorrelator(num_taps::NumTaps{M}) where M
@@ -54,8 +54,8 @@ end
 $(SIGNATURES)
 
 GenericCorrelator constructor that allows for the configuration of the
-number of antenna elements using `num_ants::NumAnts{N}`, the number of 
-correlator taps using `num_taps::NumTaps{M}`. The early-late spacing 
+number of antenna elements using `num_ants::NumAnts{N}`, the number of
+correlator taps using `num_taps::NumTaps{M}`. The early-late spacing
 is fixed to 2.
 """
 function GenericCorrelator(num_ants::NumAnts{N}, num_taps::NumTaps{M}) where {M, N}
@@ -70,9 +70,9 @@ end
 """
 $(SIGNATURES)
 
-GenericCorrelator constructor for single antenna correlation, that 
-allows for the configuration of the number of correlator taps using 
-`num_taps::NumTaps{M}` and the spacing of the early and late correlator 
+GenericCorrelator constructor for single antenna correlation, that
+allows for the configuration of the number of correlator taps using
+`num_taps::NumTaps{M}` and the spacing of the early and late correlator
 using `el_spacing`.
 """
 function GenericCorrelator(num_ants::NumAnts{1}, num_taps::NumTaps{M}, el_spacing) where M
@@ -92,8 +92,8 @@ end
 $(SIGNATURES)
 
 GenericCorrelator constructor that allows for the configuration of the
-number of antenna elements using `num_ants::NumAnts{N}`, the number of 
-correlator taps using `num_taps::NumTaps{M}` and the spacing of the 
+number of antenna elements using `num_ants::NumAnts{N}`, the number of
+correlator taps using `num_taps::NumTaps{M}` and the spacing of the
 early and late correlator using `el_spacing`.
 """
 function GenericCorrelator(num_ants::NumAnts{N}, num_taps::NumTaps{M}, el_spacing) where {M, N}
@@ -156,10 +156,10 @@ get_taps(correlator::GenericCorrelator) = correlator.taps
 """
 $(SIGNATURES)
 
-Get a specific correlator tap with `index` counted negative for late and 
+Get a specific correlator tap with `index` counted negative for late and
 positive for early correlators.
 """
-function get_tap(correlator::GenericCorrelator, index::Integer) 
+function get_tap(correlator::GenericCorrelator, index::Integer)
     correlator.taps[index+get_prompt_index(correlator)]
 end
 
@@ -222,7 +222,7 @@ end
 $(SIGNATURES)
 
 Calculate the replica phase offset required for the correlator taps with
-respect to the prompt correlator, expressed in samples. The shifts are 
+respect to the prompt correlator, expressed in samples. The shifts are
 ordered from latest to earliest replica.
 """
 function get_correlator_sample_shifts(
@@ -241,7 +241,7 @@ $(SIGNATURES)
 Calculate the total spacing between early and late correlator in samples.
 """
 function get_early_late_sample_spacing(
-    correlator::GenericCorrelator{M}, 
+    correlator::GenericCorrelator{M},
     correlator_sample_shifts::SVector{M}
 ) where M
     correlator_sample_shifts[get_early_index(correlator)] -
@@ -271,27 +271,45 @@ function correlate(
     downconverted_signal,
     code,
     correlator_sample_shifts,
-    start_sample, 
-    num_samples_left,
+    start_sample,
+    num_samples,
     agc_attenuation,
     agc_bits,
     carrier_bits::Val{NC}
 ) where {M, NC}
-    taps = Vector{Complex{Int32}}(undef,M)
-    for i = 1:M
-        c = zero(Complex{Int32})
-        offset = correlator_sample_shifts[i] - correlator_sample_shifts[1]
-        @inbounds for j = start_sample:num_samples_left + start_sample - 1
-            c += downconverted_signal[j] * code[j + offset]
-        end
-        taps[i] = c
+    taps = map(correlator_sample_shifts) do correlator_sample_shift
+        correlate_single_tap(
+            correlator_sample_shift - correlator_sample_shifts[1],
+            start_sample,
+            num_samples,
+            downconverted_signal,
+            code
+        )
     end
+
+    attenuation = agc_attenuation / 1 << (agc_bits + NC)
+    scaled_taps = map(x -> x * attenuation, taps)
+
     return GenericCorrelator(
-        get_taps(correlator) + taps .* agc_attenuation / 1 << (agc_bits + NC),
+        map(+, get_taps(correlator), scaled_taps),
         get_early_index(correlator),
         get_prompt_index(correlator),
         get_late_index(correlator)
     )
+end
+
+function correlate_single_tap(
+    offset,
+    start_sample,
+    num_samples,
+    downconverted_signal,
+    code
+)
+    tap = zero(Complex{Int32})
+    @inbounds for i = start_sample:num_samples + start_sample - 1
+        tap += downconverted_signal[i] * code[i + offset]
+    end
+    tap
 end
 
 """
@@ -304,29 +322,43 @@ function correlate(
     downconverted_signal::AbstractMatrix,
     code,
     correlator_sample_shifts,
-    start_sample, 
-    num_samples_left,
+    start_sample,
+    num_samples,
     agc_attenuation,
     agc_bits,
     carrier_bits::Val{NC}
 ) where {M,N,NC}
-    taps = MVector(MVector.(get_taps(correlator)))
-    attenuation = agc_attenuation / 1 << (agc_bits+NC)
-    for m = 1:M
-        c = zero(MVector{N, Complex{Int32}})
-        offset = correlator_sample_shifts[m] - correlator_sample_shifts[1]
-        @inbounds for j = 1:N, i = start_sample:num_samples_left + start_sample - 1
-            c[j] = c[j] + downconverted_signal[i,j] * code[i + offset]
-        end
-        taps[m] .= taps[m] .+ c .* attenuation
+    taps = map(correlator_sample_shifts) do correlator_sample_shift
+        correlate_single_tap(
+            NumAnts(N),
+            correlator_sample_shift - correlator_sample_shifts[1],
+            start_sample,
+            num_samples,
+            downconverted_signal,
+            code
+        )
     end
-
+    attenuation = agc_attenuation / 1 << (agc_bits + NC)
+    scaled_taps = map(x -> x .* attenuation, taps)
     GenericCorrelator(
-        SVector(SVector.(taps)),
+        map(+, get_taps(correlator), scaled_taps),
         get_early_index(correlator),
         get_prompt_index(correlator),
         get_late_index(correlator)
     )
 end
 
-
+function correlate_single_tap(
+    ::NumAnts{N},
+    offset,
+    start_sample,
+    num_samples,
+    downconverted_signal,
+    code
+) where N
+    tap = zero(MVector{N, Complex{Int32}})
+    @inbounds for j = 1:length(tap), i = start_sample:num_samples + start_sample - 1
+        tap[j] += downconverted_signal[i,j] * code[i + offset]
+    end
+    SVector(tap)
+end

@@ -110,10 +110,10 @@ end
         1, 2, 3
     )
     normalized_correlator = @inferred Tracking.normalize(correlator, 10)
-    @test get_taps(normalized_correlator) == [SVector(1i+0im, 2i+0im) for i = 1:3]    
+    @test get_taps(normalized_correlator) == [SVector(1i+0im, 2i+0im) for i = 1:3]
 end
 
-@testset "Singe antenna correlation" begin
+@testset "Single antenna correlation" begin
     signal = StructArray{Complex{Int16}}(
         (get_code.(GPSL1, (1:2500) * 1023e3 / 2.5e6, 1) * Int16(1) << (7 + 2),
         zeros(Int16, 2500))
@@ -164,7 +164,7 @@ end
         1
     )
     signal_mat = repeat(signal, outer = (1,3))
-    
+
     correlator_result = Tracking.correlate(
         correlator,
         signal_mat,
