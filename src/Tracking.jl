@@ -5,10 +5,12 @@ module Tracking
         StaticArrays,
         TrackingLoopFilters,
         StructArrays,
-        LoopVectorization,
-        CUDA
+        LoopVectorization
     using Unitful: upreferred, Hz, dBHz, ms
     import Base.zero, Base.length, Base.resize!, LinearAlgebra.dot
+
+    using CUDA
+    const use_gpu = Ref(false) # assume no GPU if not initialized
 
     export
         get_early,
@@ -37,9 +39,20 @@ module Tracking
 
     struct NumAnts{x}
     end
-
+    
+    # Aliases for StructArrays of Arrays/CuArrays
     SOA = NamedTuple{(:re, :im),Tuple{Array{Float32,1},Array{Float32,1}}}
     SOC = NamedTuple{(:re, :im),Tuple{CuArray{Float32,1},CuArray{Float32,1}}}
+
+    # Initialization function for GPU signal processing
+    function __init__()
+        use_gpu[] = CUDA.functional()
+        if use_gpu[]
+            @info "Found CUDA. Activating GPU signal processing. Call Tracking.use_gpu[] = Ref(false) to override this."
+        else
+            @warn "CUDA not functional. Using solely CPU signal processing."
+        end
+    end
 
     NumAnts(x) = NumAnts{x}()
 

@@ -22,7 +22,7 @@ $(SIGNATURES)
 
 Finds the secondary code or the bit shift.
 """
-function find(::Type{S}, detector, prompt_correlator) where S <: AbstractGNSSSystem
+function find(system, detector, prompt_correlator)
     found(detector) && return detector
     prns = get_buffer(detector) << 1 + UInt64(real(prompt_correlator) > 0)
     num_prns = length(detector) + 1

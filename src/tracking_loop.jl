@@ -343,15 +343,15 @@ Aid dopplers. That is velocity aiding for the carrier doppler and carrier aiding
 for the code doppler.
 """
 function aid_dopplers(
-    ::Type{S},
+    system,
     init_carrier_doppler,
     init_code_doppler,
     carrier_freq_update,
     code_freq_update,
     velocity_aiding
-) where S <: AbstractGNSSSystem
+)
     carrier_doppler = carrier_freq_update + velocity_aiding
-    code_doppler = code_freq_update + carrier_doppler * get_code_center_frequency_ratio(S)
+    code_doppler = code_freq_update + carrier_doppler * get_code_center_frequency_ratio(system)
     init_carrier_doppler + carrier_doppler, init_code_doppler + code_doppler
 end
 
