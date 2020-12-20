@@ -74,7 +74,7 @@ end
 """
 $(SIGNATURES)
 
-StructArray GPU carrier generation
+sincos testing
 """
 function gen_carrier_replica2!(
     carrier_replica_re::CuVector{T},
@@ -105,7 +105,7 @@ function gen_carrier_replica!(
     start_sample,
     num_samples
 ) where T <: AbstractFloat
-    @. @views carrier_replica[start_sample:num_samples] = cis(2pi * (1:num_samples) * carrier_frequency / sampling_frequency + start_phase)
+    @. @views carrier_replica[start_sample:num_samples] = cis(2pi * (start_sample:num_samples) * carrier_frequency / sampling_frequency + start_phase)
 end
 
 """
