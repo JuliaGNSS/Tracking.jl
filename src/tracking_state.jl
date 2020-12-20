@@ -46,7 +46,7 @@ carrier doppler `carrier_doppler` and the code phase `code_phase`. Optional para
 - CN0 estimator `cn0_estimator`, that defaults to `MomentsCN0Estimator(20)`
 """
 function TrackingState(
-    GNSS::AbstractGNSSSystem{T},
+    GNSS::S,
     carrier_doppler,
     code_phase;
     code_doppler = carrier_doppler * get_code_center_frequency_ratio(GNSS),
@@ -62,6 +62,7 @@ function TrackingState(
     num_samples = 0
 ) where {
     T <: Array,
+    S <: AbstractGNSSSystem{T},
     C <: AbstractCorrelator,
     CALF <: AbstractLoopFilter,
     COLF <: AbstractLoopFilter,
@@ -77,7 +78,7 @@ function TrackingState(
     carrier = StructArray{Complex{Int16}}(undef, 0)
     code = Vector{Int16}(undef, 0)
 
-    TrackingState{C, CALF, COLF, CN, typeof(downconverted_signal)}(
+    TrackingState{S, C, CALF, COLF, CN, typeof(downconverted_signal)}(
         carrier_doppler,
         code_doppler,
         carrier_doppler,
@@ -93,8 +94,7 @@ function TrackingState(
         cn0_estimator,
         downconverted_signal,
         carrier,
-        code,
-        num_samples,
+        code
     )
 end
 
