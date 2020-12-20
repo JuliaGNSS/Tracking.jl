@@ -61,20 +61,20 @@ $(SIGNATURES)
 Updates the code phase.
 """
 function update_code_phase(
-    system,
+    GNSS::S,
     num_samples,
     code_frequency,
     sampling_frequency,
     start_code_phase,
     secondary_code_or_bit_found
 ) where S <: AbstractGNSSSystem
-    if get_data_frequency(system) == 0Hz
-        secondary_code_or_bit_length = get_secondary_code_length(system)
+    if get_data_frequency(GNSS) == 0Hz
+        secondary_code_or_bit_length = get_secondary_code_length(GNSS)
     else
         secondary_code_or_bit_length =
-            Int(get_code_frequency(system) / (get_data_frequency(system) * get_code_length(system)))
+            Int(get_code_frequency(GNSS) / (get_data_frequency(GNSS) * get_code_length(GNSS)))
     end
-    code_length = get_code_length(system) *
+    code_length = get_code_length(GNSS) *
         (secondary_code_or_bit_found ? secondary_code_or_bit_length : 1)
     mod(code_frequency * num_samples / sampling_frequency + start_code_phase, code_length)
 #    fixed_point = sizeof(Int) * 8 - 1 - min_bits_for_code_length(S)
@@ -89,6 +89,6 @@ $(SIGNATURES)
 
 Calculates the current code frequency.
 """
-function get_current_code_frequency(system, code_doppler)
-    code_doppler + get_code_frequency(system)
+function get_current_code_frequency(GNSS, code_doppler)
+    code_doppler + get_code_frequency(GNSS)
 end

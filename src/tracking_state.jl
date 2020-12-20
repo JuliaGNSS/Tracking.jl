@@ -27,6 +27,7 @@ struct TrackingState{
     downconverted_signal::T
     carrier::T
     code::T
+    GNSS::S
 end
 
 """ 
@@ -94,7 +95,8 @@ function TrackingState(
         cn0_estimator,
         downconverted_signal,
         carrier,
-        code
+        code,
+        GNSS
     )
 end
 
@@ -148,7 +150,8 @@ function TrackingState(
         cn0_estimator,
         downconverted_signal,
         carrier,
-        code
+        code,
+        GNSS
     )
 end
 
@@ -178,3 +181,5 @@ end
 @inline get_downconverted_signal(state::TrackingState) = state.downconverted_signal
 @inline get_carrier(state::TrackingState) = state.carrier
 @inline get_code(state::TrackingState) = state.code
+@inline get_GNSS(state::TrackingState) = state.GNSS
+
