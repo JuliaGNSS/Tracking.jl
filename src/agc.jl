@@ -27,21 +27,6 @@ get_amplitude_power(agc::GainControlledSignal) = agc.amplitude_power
     GainControlledSignal(agc_signal, max_ampl, bits)
 end
 
-"""
-$(SIGNATURES)
-
-Constructor for a signal to be computed on a GPU
-"""
-@inline function GainControlledSignal!(
-    agc_signal::CuArray{ComplexF32},
-    signal::AbstractVector,
-    bits::Integer = 7
-)
-    size(agc_signal) == size(signal) ||
-        throw(DimensionMismatch("size of AGC signal not equal to size of signal"))
-    agc_signal = signal
-    GainControlledSignal(agc_signal, 1, bits)
-end
 
 @inline function GainControlledSignal!(
     agc_signal::StructArray{Complex{Int16}},
@@ -65,6 +50,15 @@ end
         signal,
         bits
     )
+end
+
+"""
+$(SIGNATURES)
+
+Constructor for a signal to be computed on a GPU
+"""
+@inline function GainControlledSignal(signal::CuArray, bits::Integer = 7)
+    GainControlledSignal(signal, 1, bits)
 end
 
 @inline function find_max(signal)
