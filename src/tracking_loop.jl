@@ -33,7 +33,7 @@ function track(
         velocity_aiding = 0Hz,
         carrier_amplitude_power::Val{N} = Val(5)
 ) where {
-    S <: AbstractGNSSSystem,
+    S <: AbstractGNSSSystem{},
     C <: AbstractCorrelator,
     CALF <: AbstractLoopFilter,
     COLF <: AbstractLoopFilter,
@@ -234,7 +234,7 @@ end
         velocity_aiding = 0Hz,
         carrier_amplitude_power::Val{N} = Val(5)
 ) where {
-    S <: AbstractGNSSSystem,
+    S <: AbstractGNSSSystem{},
     C <: AbstractCorrelator,
     CALF <: AbstractLoopFilter,
     COLF <: AbstractLoopFilter,
