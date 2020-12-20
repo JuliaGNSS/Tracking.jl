@@ -9,7 +9,7 @@ struct TrackingState{
         CALF <: AbstractLoopFilter,
         COLF <: AbstractLoopFilter,
         CN <: AbstractCN0Estimator,
-        V <: Union{StructArray, CuArray},
+        T <: AbstractArray,
     }
     init_carrier_doppler::typeof(1.0Hz)
     init_code_doppler::typeof(1.0Hz)
@@ -24,9 +24,9 @@ struct TrackingState{
     integrated_samples::Int
     prompt_accumulator::ComplexF64
     cn0_estimator::CN
-    downconverted_signal::V
-    carrier::V
-    code::V
+    downconverted_signal::T
+    carrier::T
+    code::T
 end
 
 """ 

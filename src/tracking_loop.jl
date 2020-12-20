@@ -19,7 +19,7 @@ Track the signal `signal` based on the current tracking `state`, the sampling fr
 """
 function track(
         gain_controlled_signal::GainControlledSignal,
-        state::TrackingState{S, C, CALF, COLF, CN, DS},
+        state::TrackingState{S, C, CALF, COLF, CN, T},
         prn::Integer,
         sampling_frequency;
         post_corr_filter = get_default_post_corr_filter(get_correlator(state)),
@@ -33,12 +33,12 @@ function track(
         velocity_aiding = 0Hz,
         carrier_amplitude_power::Val{N} = Val(5)
 ) where {
-    S <: AbstractGNSSSystem{},
+    S <: AbstractGNSSSystem,
     C <: AbstractCorrelator,
     CALF <: AbstractLoopFilter,
     COLF <: AbstractLoopFilter,
     CN <: AbstractCN0Estimator,
-    DS <: StructArray,
+    T <: AbstractArray,
     N
 }
     if get_data_frequency(S) != 0Hz
@@ -219,8 +219,8 @@ function track(
 end
 
 @inline function track(
-        signal::AbstractArray,
-        state::TrackingState{S, C, CALF, COLF, CN, DS},
+        signal::T,
+        state::TrackingState{S, C, CALF, COLF, CN, T},
         prn::Integer,
         sampling_frequency;
         post_corr_filter = get_default_post_corr_filter(get_correlator(state)),
@@ -234,12 +234,12 @@ end
         velocity_aiding = 0Hz,
         carrier_amplitude_power::Val{N} = Val(5)
 ) where {
-    S <: AbstractGNSSSystem{},
+    T <: AbstractArray,
+    S <: AbstractGNSSSystem,
     C <: AbstractCorrelator,
     CALF <: AbstractLoopFilter,
     COLF <: AbstractLoopFilter,
     CN <: AbstractCN0Estimator,
-    DS <: StructArray,
     N
 }
     correlator = get_correlator(state)
