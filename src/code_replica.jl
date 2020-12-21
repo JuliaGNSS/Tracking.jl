@@ -53,6 +53,7 @@ function gen_code_replica!(
     phases = code_frequency .* (0:num_samples - 1 + 2 * early_late_sample_shift) ./ sampling_frequency .+ start_code_phase
     code_length = get_code_length(system) * get_secondary_code_length(system)
     @inbounds @views code_replica[idxs] .= system.codes[2 .+ mod.(floor.(Int, phases), code_length), prn]
+    return code_replica
 end
 
 """

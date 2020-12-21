@@ -52,9 +52,19 @@ function track(
     size(signal, 2) == num_ants || throw(ArgumentError("The second dimension of the signal should be equal to the number of antennas specified by num_ants = NumAnts(N) in the TrackingState."))
     agc_amplitude_power = get_amplitude_power(gain_controlled_signal)
     agc_attenuation = get_attenuation(gain_controlled_signal)
-    downconverted_signal = resize!(get_downconverted_signal(state), size(signal, 1))
-    carrier_replica = resize!(get_carrier(state), size(signal, 1))
-    code_replica = resize!(get_code(state), size(signal, 1) + 2 * maximum(early_late_sample_shift))
+    #TODO function
+    downconverted_signal = get_downconverted_signal(state)
+    if length(downconverted_signal) != size(signal, 1)
+        resize!(downconverted_signal, size(signal, 1))
+    end
+    carrier_replica = get_carrier(state)
+    if length(carrier_replica) != size(signal, 1)
+        resize!(carrier_replica, size(signal, 1))
+    end
+    code_replica = get_code(state)
+    if length(code_replica) != size(signal, 1) + 2 * maximum(early_late_sample_shift)
+        resize!(code_replica, size(signal, 1) + 2 * maximum(early_late_sample_shift))
+    end
     init_carrier_doppler = get_init_carrier_doppler(state)
     init_code_doppler = get_init_code_doppler(state)
     carrier_doppler = get_carrier_doppler(state)
