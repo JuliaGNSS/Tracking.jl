@@ -41,8 +41,9 @@ function track(
     T <: AbstractArray,
     N
 }
-    if get_data_frequency(get_gnss(state)) != 0Hz
-        @assert rem(1 / get_data_frequency(get_gnss(state)), max_integration_time) == 0ms
+    gnss = get_gnss(state)
+    if get_data_frequency(gnss) != 0Hz
+        @assert rem(1 / get_data_frequency(gnss), max_integration_time) == 0ms
     end
     N > 7 && throw(ArgumentError("The carrier amplitude power should be less than 8 to stay within 16 bits."))
     (get_amplitude_power(gain_controlled_signal) + N) > 16 && throw(ArgumentError("The AGC amplitude + carrier replica amplitude should not exceed 16 bits"))
@@ -77,14 +78,13 @@ function track(
     prompt_accumulator = get_prompt_accumulator(state)
     integrated_samples = get_integrated_samples(state)
     cn0_estimator = get_cn0_estimator(state)
-    gnss = get_gnss(state)
     signal_start_sample = 1
     bit_buffer = BitBuffer()
     valid_correlator = zero(correlator)
     got_correlator = false
     while true
         num_samples_left_to_integrate = get_num_samples_left_to_integrate(
-            get_gnss(state),
+            gnss,
             max_integration_time,
             sampling_frequency,
             code_doppler,
@@ -97,10 +97,10 @@ function track(
             intermediate_frequency,
             carrier_doppler
         )
-        code_frequency = get_current_code_frequency(get_gnss(state), code_doppler)
+        code_frequency = get_current_code_frequency(gnss, code_doppler)
         code_replica = gen_code_replica!(
             code_replica,
-            get_gnss(state),
+            gnss,
             code_frequency,
             sampling_frequency,
             code_phase,
@@ -146,7 +146,7 @@ function track(
         )
         prev_code_phase = code_phase
         code_phase = update_code_phase(
-            get_gnss(state),
+            gnss,
             num_samples_left,
             code_frequency,
             sampling_frequency,
@@ -181,7 +181,7 @@ function track(
                 code_loop_filter_bandwidth
             )
             carrier_doppler, code_doppler = aid_dopplers(
-                get_gnss(state),
+                gnss,
                 init_carrier_doppler,
                 init_code_doppler,
                 carrier_freq_update,
@@ -190,7 +190,7 @@ function track(
             )
             cn0_estimator = update(cn0_estimator, get_prompt(filtered_correlator))
             bit_buffer, prompt_accumulator = buffer(
-                get_gnss(state),
+                gnss,
                 bit_buffer,
                 prompt_accumulator,
                 found(sc_bit_detector),
@@ -199,7 +199,7 @@ function track(
                 max_integration_time,
                 get_prompt(filtered_correlator)
             )
-            sc_bit_detector = find(get_gnss(state), sc_bit_detector, get_prompt(filtered_correlator))
+            sc_bit_detector = find(gnss, sc_bit_detector, get_prompt(filtered_correlator))
             correlator = zero(correlator)
             integrated_samples = 0
         end
@@ -224,7 +224,7 @@ function track(
         downconverted_signal,
         carrier_replica,
         code_replica,
-        get_gnss(state)
+        gnss
     )
     estimated_cn0 = estimate_cn0(cn0_estimator, max_integration_time)
     TrackingResults(next_state, valid_correlator, got_correlator, bit_buffer, estimated_cn0)
@@ -239,7 +239,7 @@ end
         intermediate_frequency = 0.0Hz,
         max_integration_time::typeof(1ms) = 1ms,
         min_integration_time::typeof(1.0ms) = 0.75ms,
-        early_late_sample_shift = get_early_late_sample_shift(get_gnss(state),
+        early_late_sample_shift = get_early_late_sample_shift(gnss,
             get_correlator(state), sampling_frequency, 0.5),
         carrier_loop_filter_bandwidth = 18Hz,
         code_loop_filter_bandwidth = 1Hz,
@@ -337,7 +337,7 @@ function get_num_samples_left_to_integrate(
     current_code_doppler,
     current_code_phase,
     secondary_code_or_bit_found
-) where S <: AbstractgnssSystem
+) where S <: AbstractGNSSSystem
     phase_to_integrate = get_num_chips_to_integrate(
         gnss,
         max_integration_time,
