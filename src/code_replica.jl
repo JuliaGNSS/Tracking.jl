@@ -73,7 +73,7 @@ function update_code_phase(
         secondary_code_or_bit_length = get_secondary_code_length(gnss)
     else
         secondary_code_or_bit_length =
-            Int(get_code_frequency(gnss) / (get_data_frequency(GNSS) * get_code_length(gnss)))
+            Int(get_code_frequency(gnss) / (get_data_frequency(gnss) * get_code_length(gnss)))
     end
     code_length = get_code_length(gnss) *
         (secondary_code_or_bit_found ? secondary_code_or_bit_length : 1)

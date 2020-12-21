@@ -239,7 +239,7 @@ end
         intermediate_frequency = 0.0Hz,
         max_integration_time::typeof(1ms) = 1ms,
         min_integration_time::typeof(1.0ms) = 0.75ms,
-        early_late_sample_shift = get_early_late_sample_shift(gnss,
+        early_late_sample_shift = get_early_late_sample_shift(get_gnss(state),
             get_correlator(state), sampling_frequency, 0.5),
         carrier_loop_filter_bandwidth = 18Hz,
         code_loop_filter_bandwidth = 1Hz,
