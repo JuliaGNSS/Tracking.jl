@@ -27,7 +27,7 @@ struct TrackingState{
     downconverted_signal::T
     carrier::T
     code::T
-    GNSS::S
+    gnss::S
 end
 
 """ 
@@ -47,16 +47,16 @@ carrier doppler `carrier_doppler` and the code phase `code_phase`. Optional para
 - CN0 estimator `cn0_estimator`, that defaults to `MomentsCN0Estimator(20)`
 """
 function TrackingState(
-    GNSS::S,
+    gnss::S,
     carrier_doppler,
     code_phase;
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(GNSS),
+    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gnss),
     carrier_phase = 0.0,
     carrier_loop_filter::CALF = ThirdOrderBilinearLF(),
     code_loop_filter::COLF = SecondOrderBilinearLF(),
     sc_bit_detector = SecondaryCodeOrBitDetector(),
     num_ants = NumAnts(1),
-    correlator::C = get_default_correlator(GNSS, num_ants),
+    correlator::C = get_default_correlator(gnss, num_ants),
     integrated_samples = 0,
     prompt_accumulator = zero(ComplexF64),
     cn0_estimator::CN = MomentsCN0Estimator(20),
@@ -70,10 +70,10 @@ function TrackingState(
     CN <: AbstractCN0Estimator
 }
     if found(sc_bit_detector)
-        code_phase = mod(code_phase, get_code_length(GNSS) *
-            get_secondary_code_length(GNSS))
+        code_phase = mod(code_phase, get_code_length(gnss) *
+            get_secondary_code_length(gnss))
     else
-        code_phase = mod(code_phase, get_code_length(GNSS))
+        code_phase = mod(code_phase, get_code_length(gnss))
     end
     downconverted_signal = init_downconverted_signal(num_ants, num_samples)
     carrier = StructArray{Complex{Int16}}(undef, 0)
@@ -96,22 +96,22 @@ function TrackingState(
         downconverted_signal,
         carrier,
         code,
-        GNSS
+        gnss
     )
 end
 
 # GPU tracking state constructor
 function TrackingState(
-    GNSS::S,
+    gnss::S,
     carrier_doppler,
     code_phase;
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(GNSS),
+    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gnss),
     carrier_phase = 0.0,
     carrier_loop_filter::CALF = ThirdOrderBilinearLF(),
     code_loop_filter::COLF = SecondOrderBilinearLF(),
     sc_bit_detector = SecondaryCodeOrBitDetector(),
     num_ants = NumAnts(1),
-    correlator::C = get_default_correlator(GNSS, num_ants),
+    correlator::C = get_default_correlator(gnss, num_ants),
     integrated_samples = 0,
     prompt_accumulator = zero(ComplexF64),
     cn0_estimator::CN = MomentsCN0Estimator(20),
@@ -125,10 +125,10 @@ function TrackingState(
     CN <: AbstractCN0Estimator
 }
     if found(sc_bit_detector)
-        code_phase = mod(code_phase, get_code_length(GNSS) *
-            get_secondary_code_length(GNSS))
+        code_phase = mod(code_phase, get_code_length(gnss) *
+            get_secondary_code_length(gnss))
     else
-        code_phase = mod(code_phase, get_code_length(GNSS))
+        code_phase = mod(code_phase, get_code_length(gnss))
     end
     downconverted_signal = CuArray{Complex{Float32}}(undef, num_samples)
     carrier = CuArray{Complex{Float32}}(undef, num_samples)
@@ -151,7 +151,7 @@ function TrackingState(
         downconverted_signal,
         carrier,
         code,
-        GNSS
+        gnss
     )
 end
 
@@ -181,5 +181,5 @@ end
 @inline get_downconverted_signal(state::TrackingState) = state.downconverted_signal
 @inline get_carrier(state::TrackingState) = state.carrier
 @inline get_code(state::TrackingState) = state.code
-@inline get_GNSS(state::TrackingState) = state.GNSS
+@inline get_gnss(state::TrackingState) = state.gnss
 
