@@ -5,11 +5,9 @@ module Tracking
         StaticArrays,
         TrackingLoopFilters,
         StructArrays,
-        LoopVectorization,
-        CUDA
-
+        LoopVectorization
     using Unitful: upreferred, Hz, dBHz, ms
-    import Base.zero, Base.length, Base.resize!, LinearAlgebra.dot
+    import Base.zero, Base.length, Base.resize!
 
     export
         get_early,
@@ -40,11 +38,7 @@ module Tracking
 
     struct NumAnts{x}
     end
-    
-    # Aliases for StructArrays of Arrays/CuArrays
-    SOA = NamedTuple{(:re, :im),Tuple{Array{Float32,1},Array{Float32,1}}}
-    SOC = NamedTuple{(:re, :im),Tuple{CuArray{Float32,1},CuArray{Float32,1}}}
-    
+
     NumAnts(x) = NumAnts{x}()
 
     include("agc.jl")

@@ -1,5 +1,5 @@
 struct GainControlledSignal{
-    S <: Union{StructArray, CuArray},
+    S <: StructArray{Complex{Int16}},
     A <: Union{Real, Vector{<:Real}}
 }
     signal::S
@@ -27,7 +27,6 @@ get_amplitude_power(agc::GainControlledSignal) = agc.amplitude_power
     GainControlledSignal(agc_signal, max_ampl, bits)
 end
 
-
 @inline function GainControlledSignal!(
     agc_signal::StructArray{Complex{Int16}},
     signal::AbstractMatrix,
@@ -50,15 +49,6 @@ end
         signal,
         bits
     )
-end
-
-"""
-$(SIGNATURES)
-
-Constructor for a signal to be computed on a GPU
-"""
-@inline function GainControlledSignal(signal::CuArray, bits::Integer = 7)
-    GainControlledSignal(signal, 1, bits)
 end
 
 @inline function find_max(signal)
