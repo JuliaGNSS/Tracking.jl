@@ -14,6 +14,10 @@ This implements a basic tracking functionality for GNSS signals. The correlation
 * Bit detection
 * Phased array tracking
 
+## Under Development
+
+* GPU-based tracking loop
+
 ## Getting started
 
 Install:
@@ -25,13 +29,15 @@ pkg> add Tracking
 ## Usage
 
 ```julia
+using GNSSSignals
 using Tracking
-using Tracking: Hz, GPSL1
+using Tracking: Hz
 carrier_doppler = 1000Hz
 code_phase = 50
 sampling_frequency = 2.5e6Hz
 prn = 1
-state = TrackingState(GPSL1, carrier_doppler, code_phase)
+gpsl1 = GPSL1()
+state = TrackingState(gpsl1, carrier_doppler, code_phase)
 results = track(signal, state, prn, sampling_frequency)
 next_results = track(next_signal, get_state(results), prn, sampling_frequency)
 ```
