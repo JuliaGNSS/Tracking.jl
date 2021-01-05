@@ -243,7 +243,7 @@ end
 
 @inline function track(
         signal::T,
-        state::TrackingState{S, C, CALF, COLF, CN, T},
+        state::TrackingState,
         prn::Integer,
         sampling_frequency;
         post_corr_filter = get_default_post_corr_filter(get_correlator(state)),

@@ -26,7 +26,7 @@ struct TrackingState{
     cn0_estimator::CN
     downconverted_signal::T
     carrier::T
-    code::T
+    code
     gnss::S
 end
 

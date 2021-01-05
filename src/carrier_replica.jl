@@ -1,5 +1,5 @@
 function gen_carrier_replica!(
-    carrier_replica::StructArray{Complex{Int16}},
+    carrier_replica::StructArray,
     carrier_frequency,
     sampling_frequency,
     start_phase,
@@ -19,77 +19,77 @@ function gen_carrier_replica!(
     carrier_replica
 end
 
-"""
-$(SIGNATURES)
+# """
+# $(SIGNATURES)
 
-StructArray GPU carrier generation
-"""
-function gen_carrier_replica!(
-    carrier_replica::StructArray{T,1,SOC,Int64},
-    carrier_frequency,
-    sampling_frequency,
-    start_phase,
-    carrier_amplitude_power,
-    start_sample,
-    num_samples
-) where {
-    T <: Complex,
-    SOC
-}
-    @. carrier_replica.re = 2pi * (start_sample:num_samples) * carrier_frequency / sampling_frequency + start_phase
-    carrier_replica.im .= sin.(carrier_replica.re)
-    carrier_replica.re .= cos.(carrier_replica.re)
-    return carrier_replica
-end
+# StructArray GPU carrier generation
+# """
+# function gen_carrier_replica!(
+#     carrier_replica::StructArray{T,1,SOC,Int64},
+#     carrier_frequency,
+#     sampling_frequency,
+#     start_phase,
+#     carrier_amplitude_power,
+#     start_sample,
+#     num_samples
+# ) where {
+#     T <: Complex,
+#     SOC
+# }
+#     @. carrier_replica.re = 2pi * (start_sample:num_samples) * carrier_frequency / sampling_frequency + start_phase
+#     carrier_replica.im .= sin.(carrier_replica.re)
+#     carrier_replica.re .= cos.(carrier_replica.re)
+#     return carrier_replica
+# end
 
-"""
-$(SIGNATURES)
+# """
+# $(SIGNATURES)
 
-StructArray GPU carrier generation
-"""
-function gen_carrier_replica2!(
-    carrier_replica::StructArray{T,1,SOC,Int64},
-    carrier_frequency,
-    sampling_frequency,
-    start_phase,
-    carrier_amplitude_power,
-    start_sample,
-    num_samples
-) where {
-    T <: Complex,
-    SOC
-}
-    gen_carrier_replica2!(
-        carrier_replica.re,
-        carrier_replica.im,
-        carrier_frequency,
-        sampling_frequency,
-        start_phase,
-        carrier_amplitude_power,
-        start_sample,
-        num_samples
-    )
-end
+# StructArray GPU carrier generation
+# """
+# function gen_carrier_replica2!(
+#     carrier_replica::StructArray{T,1,SOC,Int64},
+#     carrier_frequency,
+#     sampling_frequency,
+#     start_phase,
+#     carrier_amplitude_power,
+#     start_sample,
+#     num_samples
+# ) where {
+#     T <: Complex,
+#     SOC
+# }
+#     gen_carrier_replica2!(
+#         carrier_replica.re,
+#         carrier_replica.im,
+#         carrier_frequency,
+#         sampling_frequency,
+#         start_phase,
+#         carrier_amplitude_power,
+#         start_sample,
+#         num_samples
+#     )
+# end
 
-"""
-$(SIGNATURES)
+# """
+# $(SIGNATURES)
 
-sincos testing
-"""
-function gen_carrier_replica2!(
-    carrier_replica_re::CuVector{T},
-    carrier_replica_im::CuVector{T},
-    carrier_frequency,
-    sampling_frequency,
-    start_phase,
-    carrier_amplitude_power,
-    start_sample,
-    num_samples
-) where {
-    T <: AbstractFloat,
-}
-    carrier_replica_re, carrier_replica_im = sincos.(2pi .* (start_sample:num_samples) .* carrier_frequency ./ sampling_frequency .+ start_phase)
-end
+# sincos testing
+# """
+# function gen_carrier_replica2!(
+#     carrier_replica_re::CuVector{T},
+#     carrier_replica_im::CuVector{T},
+#     carrier_frequency,
+#     sampling_frequency,
+#     start_phase,
+#     carrier_amplitude_power,
+#     start_sample,
+#     num_samples
+# ) where {
+#     T <: AbstractFloat,
+# }
+#     carrier_replica_re, carrier_replica_im = sincos.(2pi .* (start_sample:num_samples) .* carrier_frequency ./ sampling_frequency .+ start_phase)
+# end
 
 """
 $(SIGNATURES)
