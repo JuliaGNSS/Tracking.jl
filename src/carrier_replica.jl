@@ -105,7 +105,8 @@ function gen_carrier_replica!(
     start_sample,
     num_samples
 ) where T <: AbstractFloat
-    @. @views carrier_replica[start_sample:num_samples] = cis(2pi * (start_sample:num_samples) * carrier_frequency / sampling_frequency + start_phase)
+    sample_range = start_sample:num_samples + start_sample - 1
+    @. @views carrier_replica[sample_range] = cis(2pi * (0:num_samples-1) * carrier_frequency / sampling_frequency + start_phase)
     return carrier_replica
 end
 

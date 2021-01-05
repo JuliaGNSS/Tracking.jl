@@ -4,7 +4,7 @@ $(SIGNATURES)
 Calculates the code phase error in chips.
 """
 function dll_disc(
-    system,
+    gnss,
     correlator,
     early_late_sample_shift,
     code_phase_delta
@@ -20,7 +20,7 @@ $(SIGNATURES)
 
 Calculates the carrier phase error in radians.
 """
-function pll_disc(system, correlator)
+function pll_disc(gnss, correlator)
     p = get_prompt(correlator)
-    atan(imag(p) / real(p))
+    return atan(imag(p) / real(p))
 end

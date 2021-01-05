@@ -202,7 +202,7 @@ function correlate(
     code,
     early_late_sample_shift,
     start_sample,
-    num_samples_left,
+    num_samples,
     agc_attenuation,
     agc_bits,
     carrier_bits::Val{NC}
@@ -210,15 +210,16 @@ function correlate(
     late = zero(ComplexF32)
     prompt = zero(ComplexF32)
     early = zero(ComplexF32)
+    # TODO try different correlation schemes (v^T ⋅ w)
     @views late = 
-        downconverted_signal[start_sample:num_samples_left + start_sample - 1] ⋅ 
-        code[start_sample:num_samples_left + start_sample - 1]
+        downconverted_signal[start_sample:num_samples + start_sample - 1] ⋅ 
+        code[start_sample:num_samples + start_sample - 1]
     @views prompt = 
-        downconverted_signal[start_sample:num_samples_left + start_sample - 1] ⋅ 
-        code[early_late_sample_shift .+ (start_sample:num_samples_left + start_sample - 1)]
+        downconverted_signal[start_sample:num_samples + start_sample - 1] ⋅ 
+        code[early_late_sample_shift .+ (start_sample:num_samples + start_sample - 1)]
     @views early = 
-        downconverted_signal[start_sample:num_samples_left + start_sample - 1] ⋅ 
-        code[2*early_late_sample_shift .+ (start_sample:num_samples_left + start_sample - 1)]
+        downconverted_signal[start_sample:num_samples + start_sample - 1] ⋅ 
+        code[2*early_late_sample_shift .+ (start_sample:num_samples + start_sample - 1)]
     EarlyPromptLateCorrelator(
         Tracking.get_early(correlator) + early, 
         Tracking.get_prompt(correlator) + prompt,
@@ -261,42 +262,6 @@ function correlate(
         Tracking.get_early(correlator) .+ early, 
         Tracking.get_prompt(correlator) .+ prompt,
         Tracking.get_late(correlator) .+ late
-    )
-end
-
-
-"""
-$(SIGNATURES)
-
-StrcutArray Perform a correlation on the GPU with a single antenna
-"""
-function correlate(
-    correlator::EarlyPromptLateCorrelator,
-    downconverted_signal::CuArray{ComplexF32},
-    code,
-    early_late_sample_shift,
-    start_sample,
-    num_samples_left,
-    agc_attenuation,
-    agc_bits,
-    carrier_bits::Val{NC}
-) where NC
-    late = zero(Complex{Int32})
-    prompt = zero(Complex{Int32})
-    early = zero(Complex{Int32})
-    @views late = dot(
-                downconverted_signal[start_sample:num_samples_left + start_sample - 1], 
-                code[start_sample:num_samples_left + start_sample - 1]) 
-    @views prompt = dot(
-                downconverted_signal[start_sample:num_samples_left + start_sample - 1], 
-                code[(start_sample:num_samples_left + start_sample - 1) .+ early_late_sample_shift])
-    @views early = dot(
-                downconverted_signal[start_sample:num_samples_left + start_sample - 1], 
-                code[(start_sample:num_samples_left + start_sample - 1) .+ 2 * early_late_sample_shift])
-    EarlyPromptLateCorrelator(
-        get_early(correlator) + early, 
-        get_prompt(correlator) + prompt,
-        get_late(correlator) + late
     )
 end
 

@@ -75,9 +75,8 @@ function downconvert!(
     start_sample::Integer,
     num_samples_left::Integer
 ) where T <: AbstractFloat
-    @. @views downconverted_signal[start_sample:num_samples_left + start_sample - 1] =
-        signal[start_sample:num_samples_left + start_sample - 1] * 
-        conj(carrier[start_sample:num_samples_left + start_sample - 1])
+    sample_range = start_sample:num_samples_left + start_sample - 1
+    downconverted_signal[sample_range] .= @views signal[sample_range] .* conj.(carrier[sample_range])
     return downconverted_signal
 end
 

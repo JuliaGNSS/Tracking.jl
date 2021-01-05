@@ -159,15 +159,14 @@ function track(
         if num_samples_left == num_samples_left_to_integrate &&
                 integration_time >= min_integration_time
             got_correlator = true
-
             correlator = normalize(correlator, integrated_samples)
             valid_correlator = correlator
             valid_correlator_carrier_phase = carrier_phase
             valid_correlator_carrier_frequency = carrier_frequency
             filtered_correlator = filter(post_corr_filter, correlator)
-            pll_discriminator = pll_disc(S, filtered_correlator)
+            pll_discriminator = pll_disc(gnss, filtered_correlator)
             dll_discriminator = dll_disc(
-                S,
+                gnss,
                 filtered_correlator,
                 early_late_sample_shift,
                 code_frequency / sampling_frequency
@@ -334,7 +333,7 @@ function get_num_chips_to_integrate(
     max_phase = Int(upreferred(get_code_frequency(gnss) *
         get_integration_time(gnss, max_integration_time, secondary_code_or_bit_found)))
     current_phase_mod_max_phase = mod(current_code_phase, max_phase)
-    max_phase - current_phase_mod_max_phase
+    return max_phase - current_phase_mod_max_phase
 end
 
 """
@@ -357,7 +356,7 @@ function get_num_samples_left_to_integrate(
         secondary_code_or_bit_found
     )
     code_frequency = get_code_frequency(gnss) + current_code_doppler
-    ceil(Int, phase_to_integrate * sampling_frequency / code_frequency)
+    return ceil(Int, phase_to_integrate * sampling_frequency / code_frequency)
 end
 
 """
@@ -367,7 +366,7 @@ Aid dopplers. That is velocity aiding for the carrier doppler and carrier aiding
 for the code doppler.
 """
 function aid_dopplers(
-    system,
+    gnss,
     init_carrier_doppler,
     init_code_doppler,
     carrier_freq_update,
@@ -375,7 +374,7 @@ function aid_dopplers(
     velocity_aiding
 )
     carrier_doppler = carrier_freq_update + velocity_aiding
-    code_doppler = code_freq_update + carrier_doppler * get_code_center_frequency_ratio(system)
+    code_doppler = code_freq_update + carrier_doppler * get_code_center_frequency_ratio(gnss)
     init_carrier_doppler + carrier_doppler, init_code_doppler + code_doppler
 end
 
