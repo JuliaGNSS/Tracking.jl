@@ -1,12 +1,20 @@
+"""
+$(SIGNATURES)
+
+Fixed point CPU StructArray carrier replica generation
+"""
 function gen_carrier_replica!(
-    carrier_replica::StructArray,
+    carrier_replica::StructArray{Complex{T},1,NamedTuple{(:re, :im),Tuple{Array{T,1},Array{T,1}}},Int64},
     carrier_frequency,
     sampling_frequency,
     start_phase,
     carrier_amplitude_power::Val{N},
     start_sample,
     num_samples
-) where N
+) where {
+    T <: Integer,
+    N
+}
     fpcarrier!(
         carrier_replica,
         carrier_frequency,
@@ -19,28 +27,50 @@ function gen_carrier_replica!(
     carrier_replica
 end
 
-# """
-# $(SIGNATURES)
+"""
+$(SIGNATURES)
 
-# StructArray GPU carrier generation
-# """
-# function gen_carrier_replica!(
-#     carrier_replica::StructArray{T,1,SOC,Int64},
-#     carrier_frequency,
-#     sampling_frequency,
-#     start_phase,
-#     carrier_amplitude_power,
-#     start_sample,
-#     num_samples
-# ) where {
-#     T <: Complex,
-#     SOC
-# }
-#     @. carrier_replica.re = 2pi * (start_sample:num_samples) * carrier_frequency / sampling_frequency + start_phase
-#     carrier_replica.im .= sin.(carrier_replica.re)
-#     carrier_replica.re .= cos.(carrier_replica.re)
-#     return carrier_replica
-# end
+Floating point CPU StructArray carrier generation
+"""
+function gen_carrier_replica!(
+    carrier_replica::StructArray{Complex{T},1,NamedTuple{(:re, :im),Tuple{Array{T,1},Array{T,1}}},Int64},
+    carrier_frequency,
+    sampling_frequency,
+    start_phase,
+    carrier_amplitude_power::Val{N},
+    start_sample,
+    num_samples
+) where {
+    T <: AbstractFloat,
+    N
+}
+    @. carrier_replica.re = 2pi * (start_sample:num_samples) * carrier_frequency / sampling_frequency + start_phase
+    carrier_replica.im .= sin.(carrier_replica.re)
+    carrier_replica.re .= cos.(carrier_replica.re)
+    return carrier_replica
+end
+
+"""
+$(SIGNATURES)
+
+GPU StructArray carrier replica generation
+"""
+function gen_carrier_replica!(
+    carrier_replica::StructArray{Complex{T},1,NamedTuple{(:re, :im),Tuple{CuArray{T,1},CuArray{T,1}}},Int64},
+    carrier_frequency,
+    sampling_frequency,
+    start_phase,
+    carrier_amplitude_power,
+    start_sample,
+    num_samples
+) where {
+    T <: AbstractFloat
+}
+    @. carrier_replica.re = 2pi * (start_sample:num_samples) * carrier_frequency / sampling_frequency + start_phase
+    carrier_replica.im .= sin.(carrier_replica.re)
+    carrier_replica.re .= cos.(carrier_replica.re)
+    return carrier_replica
+end
 
 # """
 # $(SIGNATURES)
@@ -94,7 +124,7 @@ end
 """
 $(SIGNATURES)
 
-CuArray GPU carrier generation
+GPU complex CuArray carrier generation
 """
 function gen_carrier_replica!(
     carrier_replica::CuArray{Complex{T}},
