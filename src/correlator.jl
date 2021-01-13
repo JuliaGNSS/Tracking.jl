@@ -128,7 +128,7 @@ Perform a correlation on the CPU with a single antenna
 """
 function correlate(
     correlator::EarlyPromptLateCorrelator,
-    downconverted_signal,
+    downconverted_signal::StructArray{Complex{T},1,NamedTuple{(:re, :im),Tuple{Array{T,1},Array{T,1}}},Int64},
     code,
     early_late_sample_shift,
     start_sample,
@@ -136,7 +136,7 @@ function correlate(
     agc_attenuation,
     agc_bits,
     carrier_bits::Val{NC}
-) where NC
+) where {NC, T<: Integer}
     late = zero(Complex{Int32})
     prompt = zero(Complex{Int32})
     early = zero(Complex{Int32})
@@ -153,6 +153,45 @@ function correlate(
         get_early(correlator) + early * agc_attenuation / 1 << (agc_bits + NC),
         get_prompt(correlator) + prompt * agc_attenuation / 1 << (agc_bits + NC),
         get_late(correlator) + late * agc_attenuation / 1 << (agc_bits + NC)
+    )
+end
+
+"""
+$(SIGNATURES)
+
+GPU StructArray correlation with a single antenna
+"""
+function correlate(
+    correlator::EarlyPromptLateCorrelator,
+    downconverted_signal::StructArray{Complex{T},1,NamedTuple{(:re, :im),Tuple{CuArray{T,1},CuArray{T,1}}},Int64},
+    code::CuArray{T},
+    early_late_sample_shift,
+    start_sample,
+    num_samples,
+    agc_attenuation,
+    agc_bits,
+    carrier_bits::Val{NC}
+) where {NC, T <: AbstractFloat}
+    late = zero(ComplexF32)
+    prompt = zero(ComplexF32)
+    early = zero(ComplexF32)
+    sample_range = start_sample:num_samples + start_sample - 1
+    @views late = Complex(
+            downconverted_signal.re[sample_range] ⋅ code[sample_range], 
+            downconverted_signal.im[sample_range] ⋅ code[sample_range]
+        )
+    @views prompt = Complex(
+            downconverted_signal.re[sample_range] ⋅ code[early_late_sample_shift .+ sample_range], 
+            downconverted_signal.im[sample_range] ⋅ code[early_late_sample_shift .+ sample_range]
+        )
+    @views early = Complex(
+            downconverted_signal.re[sample_range] ⋅ code[2*early_late_sample_shift .+ sample_range],
+            downconverted_signal.im[sample_range] ⋅ code[2*early_late_sample_shift .+ sample_range]
+        )
+    EarlyPromptLateCorrelator(
+        Tracking.get_early(correlator) + early, 
+        Tracking.get_prompt(correlator) + prompt,
+        Tracking.get_late(correlator) + late
     )
 end
 
