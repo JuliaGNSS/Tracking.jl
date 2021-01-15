@@ -159,45 +159,6 @@ end
 """
 $(SIGNATURES)
 
-GPU StructArray correlation with a single antenna
-"""
-function correlate(
-    correlator::EarlyPromptLateCorrelator,
-    downconverted_signal::StructArray{Complex{T},1,NamedTuple{(:re, :im),Tuple{CuArray{T,1},CuArray{T,1}}},Int64},
-    code::CuArray{T},
-    early_late_sample_shift,
-    start_sample,
-    num_samples,
-    agc_attenuation,
-    agc_bits,
-    carrier_bits::Val{NC}
-) where {NC, T <: AbstractFloat}
-    late = zero(ComplexF32)
-    prompt = zero(ComplexF32)
-    early = zero(ComplexF32)
-    sample_range = start_sample:num_samples + start_sample - 1
-    @views late = Complex(
-            downconverted_signal.re[sample_range] ⋅ code[sample_range], 
-            downconverted_signal.im[sample_range] ⋅ code[sample_range]
-        )
-    @views prompt = Complex(
-            downconverted_signal.re[sample_range] ⋅ code[early_late_sample_shift .+ sample_range], 
-            downconverted_signal.im[sample_range] ⋅ code[early_late_sample_shift .+ sample_range]
-        )
-    @views early = Complex(
-            downconverted_signal.re[sample_range] ⋅ code[2*early_late_sample_shift .+ sample_range],
-            downconverted_signal.im[sample_range] ⋅ code[2*early_late_sample_shift .+ sample_range]
-        )
-    EarlyPromptLateCorrelator(
-        Tracking.get_early(correlator) + early, 
-        Tracking.get_prompt(correlator) + prompt,
-        Tracking.get_late(correlator) + late
-    )
-end
-
-"""
-$(SIGNATURES)
-
 Perform a correlation on the CPU of a multi-antenna system
 """
 function correlate(
@@ -250,15 +211,10 @@ function correlate(
     prompt = zero(ComplexF32)
     early = zero(ComplexF32)
     # TODO try different correlation schemes (v^T ⋅ w)
-    @views late = 
-        downconverted_signal[start_sample:num_samples + start_sample - 1] ⋅ 
-        code[start_sample:num_samples + start_sample - 1]
-    @views prompt = 
-        downconverted_signal[start_sample:num_samples + start_sample - 1] ⋅ 
-        code[early_late_sample_shift .+ (start_sample:num_samples + start_sample - 1)]
-    @views early = 
-        downconverted_signal[start_sample:num_samples + start_sample - 1] ⋅ 
-        code[2*early_late_sample_shift .+ (start_sample:num_samples + start_sample - 1)]
+    sample_range = start_sample:num_samples + start_sample - 1
+    @views late = CUBLAS.dotc(2, downconverted_signal[sample_range], code[sample_range] + 1im*CUDA.zeros(length(sample_range)))
+    @views prompt = CUBLAS.dotc(2, downconverted_signal[sample_range], code[early_late_sample_shift .+ (sample_range)] + 1im*CUDA.zeros(length(early_late_sample_shift .+ sample_range)))
+    @views early = CUBLAS.dotc(2, downconverted_signal[sample_range], code[2*early_late_sample_shift .+ (sample_range)] + 1im*CUDA.zeros(length(2*early_late_sample_shift .+ sample_range)))
     EarlyPromptLateCorrelator(
         Tracking.get_early(correlator) + early, 
         Tracking.get_prompt(correlator) + prompt,
@@ -303,6 +259,37 @@ function correlate(
         Tracking.get_late(correlator) .+ late
     )
 end
+
+"""
+$(SIGNATURES)
+
+GPU StructArray correlation with a single antenna
+"""
+function correlate(
+    correlator::EarlyPromptLateCorrelator,
+    downconverted_signal::StructArray{Complex{T},1,NamedTuple{(:re, :im),Tuple{CuArray{T,1},CuArray{T,1}}},Int64},
+    code::CuArray,
+    early_late_sample_shift,
+    start_sample,
+    num_samples,
+    agc_attenuation,
+    agc_bits,
+    carrier_bits::Val{NC}
+) where {NC, T <: AbstractFloat}
+    late = zero(ComplexF32)
+    prompt = zero(ComplexF32)
+    early = zero(ComplexF32)
+    sample_range = start_sample:num_samples + start_sample - 1
+    @views late = CUBLAS.dot(2, downconverted_signal.re[sample_range], code[sample_range]) + 1im * CUBLAS.dot(2, downconverted_signal.im[sample_range], code[sample_range])
+    @views prompt = CUBLAS.dot(2, downconverted_signal.re[sample_range], code[early_late_sample_shift .+ sample_range]) + 1im * CUBLAS.dot(2, downconverted_signal.im[sample_range], code[early_late_sample_shift .+ sample_range])
+    @views early =  CUBLAS.dot(2, downconverted_signal.re[sample_range], code[2*early_late_sample_shift .+ sample_range]) + 1im * CUBLAS.dot(2, downconverted_signal.im[sample_range], code[2*early_late_sample_shift .+ sample_range])
+    EarlyPromptLateCorrelator(
+        Tracking.get_early(correlator) + early, 
+        Tracking.get_prompt(correlator) + prompt,
+        Tracking.get_late(correlator) + late
+    )
+end
+
 
 struct VeryEarlyPromptLateCorrelator{T} <: AbstractCorrelator{T}
     very_early::T

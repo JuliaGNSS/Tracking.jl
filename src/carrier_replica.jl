@@ -44,9 +44,10 @@ function gen_carrier_replica!(
     T <: AbstractFloat,
     N
 }
-    @. carrier_replica.re = 2pi * (start_sample:num_samples) * carrier_frequency / sampling_frequency + start_phase
-    carrier_replica.im .= sin.(carrier_replica.re)
-    carrier_replica.re .= cos.(carrier_replica.re)
+    sample_range = start_sample:num_samples + start_sample - 1
+    @views @. carrier_replica.re[sample_range] = 2pi * (sample_range) * carrier_frequency / sampling_frequency + start_phase
+    @. carrier_replica.im[sample_range] = sin(carrier_replica.re[sample_range])
+    @. carrier_replica.re[sample_range] = cos(carrier_replica.re[sample_range])
     return carrier_replica
 end
 
@@ -66,9 +67,15 @@ function gen_carrier_replica!(
 ) where {
     T <: AbstractFloat
 }
-    @. carrier_replica.re = 2pi * (start_sample:num_samples) * carrier_frequency / sampling_frequency + start_phase
-    carrier_replica.im .= sin.(carrier_replica.re)
-    carrier_replica.re .= cos.(carrier_replica.re)
+    # println("++++ INSIDE gen_carrier_replica! ++++")
+    # println("start_sample: ", start_sample)
+    # println("num_samples: ", num_samples)
+    # println("size of carrier_replica: ", length(carrier_replica))
+    sample_range = start_sample:num_samples + start_sample - 1
+    @views @. carrier_replica.re[sample_range] = 2pi * (sample_range) * carrier_frequency / sampling_frequency + start_phase
+    @. carrier_replica.im[sample_range] = sin(carrier_replica.re[sample_range])
+    @. carrier_replica.re[sample_range] = cos(carrier_replica.re[sample_range])
+    # println("++++ EXITING gen_carrier_replica! ++++")
     return carrier_replica
 end
 

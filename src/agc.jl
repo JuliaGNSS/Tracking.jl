@@ -55,11 +55,24 @@ end
 """
 $(SIGNATURES)
 
-Constructor for a signal to be computed on a GPU
+Constructor for a signal to be computed on a GPU with a StructArray
+"""
+@inline function GainControlledSignal(
+    signal::StructArray{Complex{T},1,NamedTuple{(:re, :im),Tuple{CuArray{T,1},CuArray{T,1}}},Int64}, 
+    bits::Integer = 7
+) where T <: AbstractFloat
+    GainControlledSignal(signal, 1, bits)
+end
+
+"""
+$(SIGNATURES)
+
+Constructor for a signal to be computed on a GPU with a CuArray
 """
 @inline function GainControlledSignal(signal::CuArray, bits::Integer = 7)
     GainControlledSignal(signal, 1, bits)
 end
+
 
 @inline function find_max(signal)
     max_real_value = 0.0

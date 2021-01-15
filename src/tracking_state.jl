@@ -100,7 +100,7 @@ function TrackingState(
     )
 end
 
-# GPU tracking state constructor
+# GPU CuArrays tracking state constructor
 function TrackingState(
     gnss::S,
     carrier_doppler,
@@ -132,7 +132,64 @@ function TrackingState(
     end
     downconverted_signal = CuArray{Complex{Float32}}(undef, num_samples)
     carrier = CuArray{Complex{Float32}}(undef, num_samples)
-    code = CuArray{Complex{Float32}}(undef, num_samples)
+    code = CuArray{Float32}(undef, num_samples)
+
+    TrackingState{S, C, CALF, COLF, CN, typeof(downconverted_signal)}(
+        carrier_doppler,
+        code_doppler,
+        carrier_doppler,
+        code_doppler,
+        carrier_phase / 2π,
+        code_phase,
+        correlator,
+        carrier_loop_filter,
+        code_loop_filter,
+        sc_bit_detector,
+        integrated_samples,
+        prompt_accumulator,
+        cn0_estimator,
+        downconverted_signal,
+        carrier,
+        code,
+        gnss
+    )
+end
+
+# GPU StructArray tracking state constructor
+function TrackingState_struct(
+    gnss::S,
+    carrier_doppler,
+    code_phase;
+    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gnss),
+    carrier_phase = 0.0,
+    carrier_loop_filter::CALF = ThirdOrderBilinearLF(),
+    code_loop_filter::COLF = SecondOrderBilinearLF(),
+    sc_bit_detector = SecondaryCodeOrBitDetector(),
+    num_ants = NumAnts(1),
+    correlator::C = get_default_correlator(gnss, num_ants),
+    integrated_samples = 0,
+    prompt_accumulator = zero(ComplexF64),
+    cn0_estimator::CN = MomentsCN0Estimator(20),
+    num_samples = 0
+) where {
+    T <: CuArray,
+    S <: AbstractGNSSSystem{T},
+    C <: AbstractCorrelator,
+    CALF <: AbstractLoopFilter,
+    COLF <: AbstractLoopFilter,
+    CN <: AbstractCN0Estimator
+}
+    if found(sc_bit_detector)
+        code_phase = mod(code_phase, get_code_length(gnss) *
+            get_secondary_code_length(gnss))
+    else
+        code_phase = mod(code_phase, get_code_length(gnss))
+    end
+    downconverted_signal = StructArray{Complex{Float32}}(undef, num_samples)
+    code = CuArray{Float32}(undef, num_samples)
+    # Move StructArrays to GPU
+    downconverted_signal = replace_storage(CuArray, downconverted_signal)
+    carrier = similar(downconverted_signal)
 
     TrackingState{S, C, CALF, COLF, CN, typeof(downconverted_signal)}(
         carrier_doppler,
