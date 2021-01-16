@@ -276,17 +276,43 @@ function correlate(
     agc_bits,
     carrier_bits::Val{NC}
 ) where {NC, T <: AbstractFloat}
-    late = zero(ComplexF32)
-    prompt = zero(ComplexF32)
-    early = zero(ComplexF32)
+    # late = zero(ComplexF32)
+    # prompt = zero(ComplexF32)
+    # early = zero(ComplexF32)
     sample_range = start_sample:num_samples + start_sample - 1
-    @views late = CUBLAS.dot(2, downconverted_signal.re[sample_range], code[sample_range]) + 1im * CUBLAS.dot(2, downconverted_signal.im[sample_range], code[sample_range])
-    @views prompt = CUBLAS.dot(2, downconverted_signal.re[sample_range], code[early_late_sample_shift .+ sample_range]) + 1im * CUBLAS.dot(2, downconverted_signal.im[sample_range], code[early_late_sample_shift .+ sample_range])
-    @views early =  CUBLAS.dot(2, downconverted_signal.re[sample_range], code[2*early_late_sample_shift .+ sample_range]) + 1im * CUBLAS.dot(2, downconverted_signal.im[sample_range], code[2*early_late_sample_shift .+ sample_range])
+    @views late = Complex.(CUBLAS.dot(2, downconverted_signal.re[sample_range], code[sample_range]), CUBLAS.dot(2, downconverted_signal.im[sample_range], code[sample_range]))
+    @views prompt = Complex.(CUBLAS.dot(2, downconverted_signal.re[sample_range], code[early_late_sample_shift .+ sample_range]) + 1im * CUBLAS.dot(2, downconverted_signal.im[sample_range], code[early_late_sample_shift .+ sample_range]))
+    @views early =  Complex.(CUBLAS.dot(2, downconverted_signal.re[sample_range], code[2*early_late_sample_shift .+ sample_range]) + 1im * CUBLAS.dot(2, downconverted_signal.im[sample_range], code[2*early_late_sample_shift .+ sample_range]))
     EarlyPromptLateCorrelator(
         Tracking.get_early(correlator) + early, 
         Tracking.get_prompt(correlator) + prompt,
         Tracking.get_late(correlator) + late
+    )
+end
+
+"""
+$(SIGNATURES)
+
+GPU StructArray correlation with a single antenna (Hadamard variant)
+"""
+function correlate_hadamard(
+    correlator::EarlyPromptLateCorrelator,
+    downconverted_signal::StructArray{Complex{T},1,NamedTuple{(:re, :im),Tuple{CuArray{T,1},CuArray{T,1}}},Int64},
+    code::CuArray,
+    early_late_sample_shift,
+    start_sample,
+    num_samples,
+    agc_attenuation,
+    agc_bits,
+    carrier_bits::Val{NC}
+) where {NC, T <: AbstractFloat}
+    sample_range = start_sample:num_samples + start_sample - 1
+    @views code_mtr = [code[sample_range] code[early_late_sample_shift .+ sample_range] code[2*early_late_sample_shift .+ sample_range]]
+    @views correlator_results = Complex.(downconverted_signal.re[sample_range] .* CUDA.ones(length(sample_range), 3) .* code_mtr, downconverted_signal.im[sample_range] .* CUDA.ones(length(sample_range), 3) .* code_mtr)
+    EarlyPromptLateCorrelator(
+        Tracking.get_early(correlator) .+ first(sum(correlator_results[:,1], dims=1)), 
+        Tracking.get_prompt(correlator) .+ first(sum(correlator_results[:,2], dims=1)),
+        Tracking.get_late(correlator) .+ first(sum(correlator_results[:,3], dims=1))
     )
 end
 
