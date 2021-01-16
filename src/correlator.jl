@@ -120,7 +120,7 @@ function normalize(correlator::EarlyPromptLateCorrelator, integrated_samples)
         get_late(correlator) / integrated_samples
     )
 end
-
+CUDA.dot
 """
 $(SIGNATURES)
 
@@ -207,14 +207,14 @@ function correlate(
     agc_bits,
     carrier_bits::Val{NC}
 ) where {NC, T <: AbstractFloat}
-    late = zero(ComplexF32)
-    prompt = zero(ComplexF32)
-    early = zero(ComplexF32)
+    # late = zero(ComplexF32)
+    # prompt = zero(ComplexF32)
+    # early = zero(ComplexF32)
     # TODO try different correlation schemes (v^T ⋅ w)
     sample_range = start_sample:num_samples + start_sample - 1
-    @views late = CUBLAS.dotc(2, downconverted_signal[sample_range], code[sample_range] + 1im*CUDA.zeros(length(sample_range)))
-    @views prompt = CUBLAS.dotc(2, downconverted_signal[sample_range], code[early_late_sample_shift .+ (sample_range)] + 1im*CUDA.zeros(length(early_late_sample_shift .+ sample_range)))
-    @views early = CUBLAS.dotc(2, downconverted_signal[sample_range], code[2*early_late_sample_shift .+ (sample_range)] + 1im*CUDA.zeros(length(2*early_late_sample_shift .+ sample_range)))
+    @views late = CUBLAS.dotc(2, downconverted_signal[sample_range], Complex.(code[sample_range], CUDA.zeros(length(sample_range))))
+    @views prompt = CUBLAS.dotc(2, downconverted_signal[sample_range], Complex.(code[early_late_sample_shift .+ (sample_range)], CUDA.zeros(length(early_late_sample_shift .+ sample_range))))
+    @views early = CUBLAS.dotc(2, downconverted_signal[sample_range], Complex.(code[2*early_late_sample_shift .+ (sample_range)], CUDA.zeros(length(2*early_late_sample_shift .+ sample_range))))
     EarlyPromptLateCorrelator(
         Tracking.get_early(correlator) + early, 
         Tracking.get_prompt(correlator) + prompt,
