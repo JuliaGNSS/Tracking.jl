@@ -212,13 +212,41 @@ function correlate(
     # early = zero(ComplexF32)
     # TODO try different correlation schemes (v^T ⋅ w)
     sample_range = start_sample:num_samples + start_sample - 1
-    @views late = CUBLAS.dotc(2, downconverted_signal[sample_range], Complex.(code[sample_range], CUDA.zeros(length(sample_range))))
-    @views prompt = CUBLAS.dotc(2, downconverted_signal[sample_range], Complex.(code[early_late_sample_shift .+ (sample_range)], CUDA.zeros(length(early_late_sample_shift .+ sample_range))))
-    @views early = CUBLAS.dotc(2, downconverted_signal[sample_range], Complex.(code[2*early_late_sample_shift .+ (sample_range)], CUDA.zeros(length(2*early_late_sample_shift .+ sample_range))))
+    code_cplx = complex.(code, CUDA.zeros(length(code)))
+    @views late = dot(downconverted_signal[sample_range], code_cplx[sample_range])
+    @views prompt = dot(downconverted_signal[sample_range], code_cplx[early_late_sample_shift .+ (sample_range)])
+    @views early = dot(downconverted_signal[sample_range], code_cplx[2*early_late_sample_shift .+ (sample_range)])
     EarlyPromptLateCorrelator(
         Tracking.get_early(correlator) + early, 
         Tracking.get_prompt(correlator) + prompt,
         Tracking.get_late(correlator) + late
+    )
+end
+
+"""
+$(SIGNATURES)
+
+CuArray Perform a correlation on the GPU with a single antenna (Matrix Variant)
+"""
+function correlate_matrix(
+    correlator::EarlyPromptLateCorrelator,
+    downconverted_signal::CuArray{Complex{T}},
+    code,
+    early_late_sample_shift,
+    start_sample,
+    num_samples,
+    agc_attenuation,
+    agc_bits,
+    carrier_bits::Val{NC}
+) where {NC, T <: AbstractFloat}
+    sample_range = start_sample:num_samples + start_sample - 1
+    code_cplx = complex.(code, CUDA.zeros(length(code)))
+    @views code_mtr = [code_cplx[sample_range] code_cplx[early_late_sample_shift .+ sample_range] code_cplx[2*early_late_sample_shift .+ sample_range]]
+    epl = @views transpose(code_mtr) * downconverted_signal[sample_range]
+    EarlyPromptLateCorrelator(
+        Tracking.get_early(correlator) + epl[1], 
+        Tracking.get_prompt(correlator) + epl[2],
+        Tracking.get_late(correlator) + epl[3]
     )
 end
 
@@ -280,9 +308,9 @@ function correlate(
     # prompt = zero(ComplexF32)
     # early = zero(ComplexF32)
     sample_range = start_sample:num_samples + start_sample - 1
-    @views late = Complex.(CUBLAS.dot(2, downconverted_signal.re[sample_range], code[sample_range]), CUBLAS.dot(2, downconverted_signal.im[sample_range], code[sample_range]))
-    @views prompt = Complex.(CUBLAS.dot(2, downconverted_signal.re[sample_range], code[early_late_sample_shift .+ sample_range]) + 1im * CUBLAS.dot(2, downconverted_signal.im[sample_range], code[early_late_sample_shift .+ sample_range]))
-    @views early =  Complex.(CUBLAS.dot(2, downconverted_signal.re[sample_range], code[2*early_late_sample_shift .+ sample_range]) + 1im * CUBLAS.dot(2, downconverted_signal.im[sample_range], code[2*early_late_sample_shift .+ sample_range]))
+    @views late = complex.(dot(downconverted_signal.re[sample_range], code[sample_range]), dot(downconverted_signal.im[sample_range], code[sample_range]))
+    @views prompt = complex.(dot(downconverted_signal.re[sample_range], code[early_late_sample_shift .+ sample_range]), dot(downconverted_signal.im[sample_range], code[early_late_sample_shift .+ sample_range]))
+    @views early =  complex.(dot(downconverted_signal.re[sample_range], code[2*early_late_sample_shift .+ sample_range]), dot(downconverted_signal.im[sample_range], code[2*early_late_sample_shift .+ sample_range]))
     EarlyPromptLateCorrelator(
         Tracking.get_early(correlator) + early, 
         Tracking.get_prompt(correlator) + prompt,

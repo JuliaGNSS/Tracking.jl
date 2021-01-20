@@ -59,7 +59,7 @@ function track(
     carrier_replica = get_carrier(state)
     carrier_replica = match_size_to_signal!(carrier_replica, signal)
     code_replica = get_code(state)
-    code_replica = match_size_to_signal!(code_replica, signal, early_late_sample_shift)
+    code_replica = match_size_to_signal!(code_replica, signal, tail = 2 * early_late_sample_shift)
     init_carrier_doppler = get_init_carrier_doppler(state)
     init_code_doppler = get_init_code_doppler(state)
     carrier_doppler = get_carrier_doppler(state)
@@ -384,39 +384,6 @@ end
 @inline function get_num_samples(signal::AbstractMatrix)
     size(signal, 1)
 end
-
-
-"""
-$(SIGNATURES)
-
-Mathches the size of a GNSS code to the input signal by checking if such resize is needed in the first place
-"""
-@inline function match_size_to_signal!(
-    code::Vector{INT},
-    signal,
-    early_late_sample_shift
-) where {
-    INT <: Integer
-}
-    match_size_to_signal!(code, signal, tail = 2 * early_late_sample_shift)
-end
-
-"""
-$(SIGNATURES)
-
-Mathches the size of a GNSS code to the input signal by checking if such resize is needed in the first place
-"""
-@inline function match_size_to_signal!(
-    code::CuArray{FLT},
-    signal,
-    early_late_sample_shift
-) where {
-    FLT <: AbstractFloat
-}
-    match_size_to_signal!(code, signal, tail = 2 * early_late_sample_shift)
-    return code
-end
-
 
 """
 $(SIGNATURES)

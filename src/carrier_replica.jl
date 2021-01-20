@@ -79,54 +79,56 @@ function gen_carrier_replica!(
     return carrier_replica
 end
 
-# """
-# $(SIGNATURES)
+"""
+$(SIGNATURES)
 
-# StructArray GPU carrier generation
-# """
-# function gen_carrier_replica2!(
-#     carrier_replica::StructArray{T,1,SOC,Int64},
-#     carrier_frequency,
-#     sampling_frequency,
-#     start_phase,
-#     carrier_amplitude_power,
-#     start_sample,
-#     num_samples
-# ) where {
-#     T <: Complex,
-#     SOC
-# }
-#     gen_carrier_replica2!(
-#         carrier_replica.re,
-#         carrier_replica.im,
-#         carrier_frequency,
-#         sampling_frequency,
-#         start_phase,
-#         carrier_amplitude_power,
-#         start_sample,
-#         num_samples
-#     )
-# end
+StructArray GPU carrier generation
+"""
+function gen_carrier_replica_sincos!(
+    carrier_replica::StructArray{Complex{T},1,NamedTuple{(:re, :im),Tuple{CuArray{T,1},CuArray{T,1}}},Int64},
+    carrier_frequency,
+    sampling_frequency,
+    start_phase,
+    carrier_amplitude_power,
+    start_sample,
+    num_samples
+) where {
+    T <: AbstractFloat
+}
+    @cuda gen_carrier_replica_sincos!(
+        carrier_replica.re,
+        carrier_replica.im,
+        carrier_frequency,
+        sampling_frequency,
+        start_phase,
+        carrier_amplitude_power,
+        start_sample,
+        num_samples
+    )
+end
 
-# """
-# $(SIGNATURES)
+"""
+$(SIGNATURES)
 
-# sincos testing
-# """
-# function gen_carrier_replica2!(
-#     carrier_replica_re::CuVector{T},
-#     carrier_replica_im::CuVector{T},
-#     carrier_frequency,
-#     sampling_frequency,
-#     start_phase,
-#     carrier_amplitude_power,
-#     start_sample,
-#     num_samples
-# ) where {
-#     T <: AbstractFloat,
-# }
-#     carrier_replica_re, carrier_replica_im = sincos.(2pi .* (start_sample:num_samples) .* carrier_frequency ./ sampling_frequency .+ start_phase)
-# end
+sincos testing
+"""
+function gen_carrier_replica_sincos!(
+    carrier_replica_re::CuVector{T},
+    carrier_replica_im::CuVector{T},
+    carrier_frequency,
+    sampling_frequency,
+    start_phase,
+    carrier_amplitude_power,
+    start_sample,
+    num_samples
+) where {
+    T <: AbstractFloat,
+}   
+    index = threadIdx().x
+    stride = blockDim().x
+    
+    carrier_replica_re, carrier_replica_im = sincos.(2pi .* (start_sample:num_samples) .* carrier_frequency ./ sampling_frequency .+ start_phase)
+end
 
 """
 $(SIGNATURES)

@@ -9,7 +9,7 @@ module Tracking
         CUDA
 
     using Unitful: upreferred, Hz, dBHz, ms
-    import Base.zero, Base.length, Base.resize!, LinearAlgebra.⋅  
+    import Base.zero, Base.length, Base.resize!, LinearAlgebra.dot  
 
     export
         get_early,
