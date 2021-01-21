@@ -3,8 +3,9 @@ $(SIGNATURES)
 
 Generic correlator holding a user defined number of correlation values.
 """
-struct GenericCorrelator{M,T} <: AbstractCorrelator{T}
-    taps::SVector{M,T}
+struct GenericCorrelator{M, T} <: AbstractCorrelator{T}
+    taps::Vector{T}
+    num_taps::NumTaps{M}
     early_index::Int64
     prompt_index::Int64
     late_index::Int64
@@ -81,7 +82,8 @@ function GenericCorrelator(num_ants::NumAnts{1}, num_taps::NumTaps{M}, el_spacin
     late_index   = prompt_index - ceil(Int64, el_spacing/2)
     @assert late_index <= M
     GenericCorrelator(
-        SVector{M}([zero(ComplexF64) for i = 1:M]),
+        [zero(ComplexF64) for i = 1:M],
+        num_taps,
         early_index,
         prompt_index,
         late_index
@@ -102,7 +104,8 @@ function GenericCorrelator(num_ants::NumAnts{N}, num_taps::NumTaps{M}, el_spacin
     late_index   = prompt_index - ceil(Int64, el_spacing/2)
     @assert late_index <= M
     GenericCorrelator(
-        SVector{M}([zero(SVector{N, ComplexF64}) for i = 1:M]),
+        [zero(SVector{N, ComplexF64}) for i = 1:M],
+        num_taps,
         early_index,
         prompt_index,
         late_index
@@ -115,8 +118,8 @@ $(SIGNATURES)
 
 Get number of antennas from correlator
 """
-get_num_ants(correlator::GenericCorrelator{M, Complex{T}}) where {M,T} = 1
-get_num_ants(correlator::GenericCorrelator{M, SVector{N,T}}) where {M,N,T} = N
+get_num_ants(correlator::GenericCorrelator{M,Complex{T}}) where {M,T} = 1
+get_num_ants(correlator::GenericCorrelator{M,SVector{N,T}}) where {M,N,T} = N
 
 """
 $(SIGNATURES)
@@ -195,12 +198,13 @@ $(SIGNATURES)
 
 Reset the Correlator
 """
-function zero(correlator::GenericCorrelator{M}) where M
+function zero(correlator::GenericCorrelator)
     GenericCorrelator(
         zero(correlator.taps),
-        correlator.early_index,
-        correlator.prompt_index,
-        correlator.late_index
+        NumTaps(get_num_taps(correlator)),
+        get_early_index(correlator),
+        get_prompt_index(correlator),
+        get_late_index(correlator)
     )
 end
 
@@ -209,9 +213,10 @@ $(SIGNATURES)
 
 Filter the correlator by the function `post_corr_filter`
 """
-function filter(post_corr_filter, correlator::GenericCorrelator{M}) where M
+function filter(post_corr_filter, correlator::GenericCorrelator)
     GenericCorrelator(
         map(x->post_corr_filter(x), get_taps(correlator)),
+        NumTaps(get_num_taps(correlator)),
         get_early_index(correlator),
         get_prompt_index(correlator),
         get_late_index(correlator)
@@ -230,7 +235,7 @@ function get_correlator_sample_shifts(
     correlator::GenericCorrelator{M},
     sampling_frequency,
     preferred_code_shift
-) where {M, S <: AbstractGNSSSystem}
+) where {M,S <: AbstractGNSSSystem}
     numEl = floor(Int, M/2)
     SVector{M}(-numEl:numEl) .* round(Int, preferred_code_shift * sampling_frequency / get_code_frequency(S))
 end
@@ -253,9 +258,10 @@ $(SIGNATURES)
 
 Normalize the correlator
 """
-function normalize(correlator::GenericCorrelator{M}, integrated_samples) where M
+function normalize(correlator::GenericCorrelator, integrated_samples)
     GenericCorrelator(
         map(x->x/integrated_samples, get_taps(correlator)),
+        NumTaps(get_num_taps(correlator)),
         get_early_index(correlator),
         get_prompt_index(correlator),
         get_late_index(correlator)
@@ -267,7 +273,7 @@ $(SIGNATURES)
 Perform a correlation for multi antenna systems
 """
 function correlate(
-    correlator::GenericCorrelator{M},
+    correlator::GenericCorrelator,
     downconverted_signal,
     code,
     correlator_sample_shifts,
@@ -276,8 +282,8 @@ function correlate(
     agc_attenuation,
     agc_bits,
     carrier_bits::Val{NC}
-) where {M, NC}
-    taps = map(correlator_sample_shifts) do correlator_sample_shift
+) where NC
+    taps = map(Vector(correlator_sample_shifts)) do correlator_sample_shift
         correlate_single_tap(
             correlator_sample_shift - correlator_sample_shifts[1],
             start_sample,
@@ -292,6 +298,7 @@ function correlate(
 
     return GenericCorrelator(
         map(+, get_taps(correlator), scaled_taps),
+        NumTaps(get_num_taps(correlator)),
         get_early_index(correlator),
         get_prompt_index(correlator),
         get_late_index(correlator)
@@ -318,7 +325,7 @@ $(SIGNATURES)
 Perform a correlation for multi antenna systems
 """
 function correlate(
-    correlator::GenericCorrelator{M,<: SVector{N}},
+    correlator::GenericCorrelator{<: SVector{N}},
     downconverted_signal::AbstractMatrix,
     code,
     correlator_sample_shifts,
@@ -327,8 +334,8 @@ function correlate(
     agc_attenuation,
     agc_bits,
     carrier_bits::Val{NC}
-) where {M,N,NC}
-    taps = map(correlator_sample_shifts) do correlator_sample_shift
+) where {N,NC}
+    taps = map(Vector(correlator_sample_shifts)) do correlator_sample_shift
         correlate_single_tap(
             NumAnts(N),
             correlator_sample_shift - correlator_sample_shifts[1],
@@ -342,6 +349,7 @@ function correlate(
     scaled_taps = map(x -> x .* attenuation, taps)
     GenericCorrelator(
         map(+, get_taps(correlator), scaled_taps),
+        NumTaps(get_num_taps(correlator)),
         get_early_index(correlator),
         get_prompt_index(correlator),
         get_late_index(correlator)

@@ -64,7 +64,8 @@ end
 
 @testset "Default constructor" begin
     correlator = @inferred GenericCorrelator(
-        SVector{7}([SVector(i + 1.0i*im, i + 2.0im) for i = 1:7]),
+        [SVector(i + 1.0i*im, i + 2.0im) for i = 1:7],
+        NumTaps(7),
         1, 4, 7
     )
     @test @inferred(get_early(correlator)) == SVector(1+1.0im, 1+2.0im)
@@ -74,7 +75,8 @@ end
 
 @testset "Correlator zeroing" begin
     correlator = @inferred GenericCorrelator(
-        SVector{3}([SVector(i+1im, 2i+3im) for i=1:3]),
+        [SVector(i+1im, 2i+3im) for i=1:3],
+        NumTaps(3),
         3,2,1
     )
     zero_correlator = @inferred Tracking.zero(correlator)
@@ -83,7 +85,8 @@ end
 
 @testset "Correlator filtering" begin
     correlator = @inferred GenericCorrelator(
-        SVector{3}([SVector(1.0+0im, 1.0+0im) for i = 1:3]),
+        [SVector(1.0+0im, 1.0+0im) for i = 1:3],
+        NumTaps(3),
         1, 2, 3
     )
     filtered_correlator = @inferred Tracking.filter(x->x[1], correlator)
@@ -106,7 +109,8 @@ end
 
 @testset "Correlator normalization" begin
     correlator = @inferred GenericCorrelator(
-        SVector{3}([SVector(10i+0im, 20i+0im) for i = 1:3]),
+        [SVector(10i+0im, 20i+0im) for i = 1:3],
+        NumTaps(3),
         1, 2, 3
     )
     normalized_correlator = @inferred Tracking.normalize(correlator, 10)
