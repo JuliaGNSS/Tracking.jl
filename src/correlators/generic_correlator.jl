@@ -3,7 +3,7 @@ $(SIGNATURES)
 
 Generic correlator holding a user defined number of correlation values.
 """
-struct GenericCorrelator{M, T} <: AbstractCorrelator{T}
+struct GenericCorrelator{T, M} <: AbstractCorrelator{T}
     taps::Vector{T}
     num_taps::NumTaps{M}
     early_index::Int64
@@ -118,15 +118,15 @@ $(SIGNATURES)
 
 Get number of antennas from correlator
 """
-get_num_ants(correlator::GenericCorrelator{M,Complex{T}}) where {M,T} = 1
-get_num_ants(correlator::GenericCorrelator{M,SVector{N,T}}) where {M,N,T} = N
+get_num_ants(correlator::GenericCorrelator{Complex{T},M}) where {T,M} = 1
+get_num_ants(correlator::GenericCorrelator{SVector{N,T},M}) where {T,M,N} = N
 
 """
 $(SIGNATURES)
 
 Get number of correlator taps
 """
-get_num_taps(correlator::GenericCorrelator{M}) where M = M
+get_num_taps(correlator::GenericCorrelator{T,M}) where {T,M} = M
 
 """
 $(SIGNATURES)
@@ -232,10 +232,10 @@ ordered from latest to earliest replica.
 """
 function get_correlator_sample_shifts(
     system::AbstractGNSS,
-    correlator::GenericCorrelator{M},
+    correlator::GenericCorrelator{T,M},
     sampling_frequency,
     preferred_code_shift
-) where {M}
+) where {T,M}
     numEl = floor(Int, M/2)
     SVector{M}(-numEl:numEl) .* round(Int, preferred_code_shift * sampling_frequency / get_code_frequency(system))
 end
@@ -246,9 +246,9 @@ $(SIGNATURES)
 Calculate the total spacing between early and late correlator in samples.
 """
 function get_early_late_sample_spacing(
-    correlator::GenericCorrelator{M},
+    correlator::GenericCorrelator{T,M},
     correlator_sample_shifts::SVector{M}
-) where M
+) where {T,M}
     correlator_sample_shifts[get_early_index(correlator)] -
     correlator_sample_shifts[get_late_index(correlator)]
 end
@@ -274,15 +274,12 @@ Perform a correlation for multi antenna systems
 """
 function correlate(
     correlator::GenericCorrelator,
-    downconverted_signal,
+    downconverted_signal::AbstractVector,
     code,
     correlator_sample_shifts,
     start_sample,
-    num_samples,
-    agc_attenuation,
-    agc_bits,
-    carrier_bits::Val{NC}
-) where NC
+    num_samples
+)
     taps = map(Vector(correlator_sample_shifts)) do correlator_sample_shift
         correlate_single_tap(
             correlator_sample_shift - correlator_sample_shifts[1],
@@ -293,11 +290,8 @@ function correlate(
         )
     end
 
-    attenuation = agc_attenuation / 1 << (agc_bits + NC)
-    scaled_taps = map(x -> x * attenuation, taps)
-
     return GenericCorrelator(
-        map(+, get_taps(correlator), scaled_taps),
+        map(+, get_taps(correlator), taps),
         NumTaps(get_num_taps(correlator)),
         get_early_index(correlator),
         get_prompt_index(correlator),
@@ -312,7 +306,7 @@ function correlate_single_tap(
     downconverted_signal,
     code
 )
-    tap = zero(Complex{Int32})
+    tap = zero(eltype(downconverted_signal))
     @inbounds for i = start_sample:num_samples + start_sample - 1
         tap += downconverted_signal[i] * code[i + offset]
     end
@@ -331,10 +325,7 @@ function correlate(
     correlator_sample_shifts,
     start_sample,
     num_samples,
-    agc_attenuation,
-    agc_bits,
-    carrier_bits::Val{NC}
-) where {N,NC}
+) where N
     taps = map(Vector(correlator_sample_shifts)) do correlator_sample_shift
         correlate_single_tap(
             NumAnts(N),
@@ -345,10 +336,8 @@ function correlate(
             code
         )
     end
-    attenuation = agc_attenuation / 1 << (agc_bits + NC)
-    scaled_taps = map(x -> x .* attenuation, taps)
     GenericCorrelator(
-        map(+, get_taps(correlator), scaled_taps),
+        map(+, get_taps(correlator), taps),
         NumTaps(get_num_taps(correlator)),
         get_early_index(correlator),
         get_prompt_index(correlator),
@@ -364,7 +353,7 @@ function correlate_single_tap(
     downconverted_signal,
     code
 ) where N
-    tap = zero(MVector{N, Complex{Int32}})
+    tap = zero(MVector{N, eltype(downconverted_signal)})
     @inbounds for j = 1:length(tap), i = start_sample:num_samples + start_sample - 1
         tap[j] += downconverted_signal[i,j] * code[i + offset]
     end

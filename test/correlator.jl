@@ -98,9 +98,9 @@
             SVector(0.1 + 0.0im, 0.1 + 0.0im)
         )
 
-        signal = StructArray{Complex{Int16}}(
-            (get_code.(gpsl1, (1:2500) * 1023e3 / 2.5e6, 1) * Int16(1) << (7 + 2),
-            zeros(Int16, 2500))
+        signal = StructArray{Complex{Float32}}(
+            (Float32.(get_code.(gpsl1, (1:2500) * 1023e3 / 2.5e6, 1)),
+            zeros(Float32, 2500))
         )
         correlator_sample_shifts = SVector(-1, 0, 1)
         code = get_code.(
@@ -116,10 +116,7 @@
             code,
             correlator_sample_shifts,
             1,
-            2500,
-            1.0,
-            2,
-            Val(7)
+            2500
         )
         @test get_early(correlator_result) == get_late(correlator_result)
         @test get_prompt(correlator_result) == 2500
@@ -131,14 +128,11 @@
 
         correlator_result = Tracking.correlate(
             correlator,
-            signal,
+            signal_mat,
             code,
             correlator_sample_shifts,
             1,
             2500,
-            [1.0, 1.0, 1.0],
-            2,
-            Val(7)
         )
         @test get_early(correlator_result) == get_late(correlator_result)
         @test all(get_early(correlator_result) .== 1476)

@@ -134,31 +134,28 @@ Perform a correlation.
 """
 function correlate(
     correlator::EarlyPromptLateCorrelator,
-    downconverted_signal,
+    downconverted_signal::AbstractVector,
     code,
     correlator_sample_shifts::SVector{3},
     start_sample,
-    num_samples_left,
-    agc_attenuation,
-    agc_bits,
-    carrier_bits::Val{NC}
-) where NC
-    late = zero(Complex{Int32})
-    prompt = zero(Complex{Int32})
-    early = zero(Complex{Int32})
-    @inbounds for i = start_sample:num_samples_left + start_sample - 1
+    num_samples
+)
+    late = zero(eltype(downconverted_signal))
+    prompt = zero(eltype(downconverted_signal))
+    early = zero(eltype(downconverted_signal))
+    @inbounds for i = start_sample:num_samples + start_sample - 1
         late = late + downconverted_signal[i] * code[i]
     end
-    @inbounds for i = start_sample:num_samples_left + start_sample - 1
+    @inbounds for i = start_sample:num_samples + start_sample - 1
         prompt = prompt + downconverted_signal[i] * code[i + correlator_sample_shifts[2]-correlator_sample_shifts[1]]
     end
-    @inbounds for i = start_sample:num_samples_left + start_sample - 1
+    @inbounds for i = start_sample:num_samples + start_sample - 1
         early = early + downconverted_signal[i] * code[i + correlator_sample_shifts[3]-correlator_sample_shifts[1]]
     end
     EarlyPromptLateCorrelator(
-        get_early(correlator) + early * agc_attenuation / 1 << (agc_bits + NC),
-        get_prompt(correlator) + prompt * agc_attenuation / 1 << (agc_bits + NC),
-        get_late(correlator) + late * agc_attenuation / 1 << (agc_bits + NC)
+        get_early(correlator) + early,
+        get_prompt(correlator) + prompt,
+        get_late(correlator) + late
     )
 end
 
@@ -169,13 +166,10 @@ function correlate(
     correlator_sample_shifts::SVector{3},
     start_sample,
     num_samples_left,
-    agc_attenuation,
-    agc_bits,
-    carrier_bits::Val{NC}
-) where {N, NC}
-    late = zero(MVector{N, Complex{Int32}})
-    prompt = zero(MVector{N, Complex{Int32}})
-    early = zero(MVector{N, Complex{Int32}})
+) where N
+    late = zero(MVector{N, eltype(downconverted_signal)})
+    prompt = zero(MVector{N, eltype(downconverted_signal)})
+    early = zero(MVector{N, eltype(downconverted_signal)})
     @inbounds for j = 1:length(late), i = start_sample:num_samples_left + start_sample - 1
         late[j] = late[j] + downconverted_signal[i,j] * code[i]
     end
@@ -186,12 +180,13 @@ function correlate(
         early[j] = early[j] + downconverted_signal[i,j] * code[i + correlator_sample_shifts[3] - correlator_sample_shifts[1]]
     end
     EarlyPromptLateCorrelator(
-        get_early(correlator) + early .* agc_attenuation / 1 << (agc_bits + NC),
-        get_prompt(correlator) + prompt .* agc_attenuation / 1 << (agc_bits + NC),
-        get_late(correlator) + late .* agc_attenuation / 1 << (agc_bits + NC)
+        get_early(correlator) + early,
+        get_prompt(correlator) + prompt,
+        get_late(correlator) + late
     )
 end
 
+#=
 struct VeryEarlyPromptLateCorrelator{T} <: AbstractCorrelator{T}
     very_early::T
     early::T
@@ -261,6 +256,7 @@ function normalize(correlator::VeryEarlyPromptLateCorrelator, integrated_samples
         get_very_late(correlator) / integrated_samples
     )
 end
+=#
 
 # TODO: correlate and dump for very early, very late
 #=

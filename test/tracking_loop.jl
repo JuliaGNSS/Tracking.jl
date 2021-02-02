@@ -139,21 +139,6 @@ end
             prn
         )
 
-    agc_signal = GainControlledSignal(signal, 11)
-    @test_throws ArgumentError track(
-        agc_signal,
-        state,
-        prn,
-        sampling_frequency,
-        carrier_amplitude_power = Val(6)
-    )
-    @test_throws ArgumentError track(
-        signal,
-        state,
-        prn,
-        sampling_frequency,
-        carrier_amplitude_power = Val(8)
-    )
     track_result = @inferred track(signal, state, prn, sampling_frequency)
 
     iterations = 2000

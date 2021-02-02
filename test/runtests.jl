@@ -10,7 +10,6 @@ using
 
 import Unitful: MHz, kHz, Hz, s, ms, dBHz
 
-include("agc.jl")
 include("code_replica.jl")
 include("carrier_replica.jl")
 include("downconvert.jl")
