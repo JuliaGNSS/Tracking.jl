@@ -96,9 +96,10 @@ end
 end
 
 @testset "Sampleshift calculation" begin
+    gpsl1 = GPSL1()
     correlator = @inferred GenericCorrelator(NumAnts(2), NumTaps(7))
     correlator_sample_shifts = @inferred get_correlator_sample_shifts(
-        GPSL1,
+        gpsl1,
         correlator,
         4e6Hz,
         0.5
@@ -118,19 +119,20 @@ end
 end
 
 @testset "Single antenna correlation" begin
+    gpsl1 = GPSL1()
     signal = StructArray{Complex{Int16}}(
-        (get_code.(GPSL1, (1:2500) * 1023e3 / 2.5e6, 1) * Int16(1) << (7 + 2),
+        (get_code.(gpsl1, (1:2500) * 1023e3 / 2.5e6, 1) * Int16(1) << (7 + 2),
         zeros(Int16, 2500))
     )
     correlator = GenericCorrelator(NumAnts(1), NumTaps(5))
     correlator_sample_shifts = get_correlator_sample_shifts(
-        GPSL1,
+        gpsl1,
         correlator,
         2.5e6Hz,
         0.5
     )
     code = get_code.(
-        GPSL1,
+        gpsl1,
         (1 +correlator_sample_shifts[1]:2500+correlator_sample_shifts[end]) * 1023e3 / 2.5e6,
         1
     )
@@ -151,19 +153,20 @@ end
 end
 
 @testset "Multi antenna correlation" begin
+    gpsl1 = GPSL1()
     signal = StructArray{Complex{Int16}}(
-        (get_code.(GPSL1, (1:2500) * 1023e3 / 2.5e6, 1) * Int16(1) << (7 + 2),
+        (get_code.(gpsl1, (1:2500) * 1023e3 / 2.5e6, 1) * Int16(1) << (7 + 2),
         zeros(Int16, 2500))
     )
     correlator = GenericCorrelator(NumAnts(3), NumTaps(5))
     correlator_sample_shifts = get_correlator_sample_shifts(
-        GPSL1,
+        gpsl1,
         correlator,
         2.5e6Hz,
         0.5
     )
     code = get_code.(
-        GPSL1,
+        gpsl1,
         (1 +correlator_sample_shifts[1]:2500+correlator_sample_shifts[end]) * 1023e3 / 2.5e6,
         1
     )

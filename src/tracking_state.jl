@@ -4,13 +4,14 @@ $(SIGNATURES)
 TrackingState that holds the tracking state.
 """
 struct TrackingState{
-        S <: AbstractGNSSSystem,
+        S <: AbstractGNSS,
         C <: AbstractCorrelator,
         CALF <: AbstractLoopFilter,
         COLF <: AbstractLoopFilter,
         CN <: AbstractCN0Estimator,
         DS <: StructArray,
     }
+    system::S
     init_carrier_doppler::typeof(1.0Hz)
     init_code_doppler::typeof(1.0Hz)
     carrier_doppler::typeof(1.0Hz)
@@ -46,37 +47,38 @@ carrier doppler `carrier_doppler` and the code phase `code_phase`. Optional para
 - CN0 estimator `cn0_estimator`, that defaults to `MomentsCN0Estimator(20)`
 """
 function TrackingState(
-    ::Type{S},
+    system::S,
     carrier_doppler,
     code_phase;
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(S),
+    code_doppler = carrier_doppler * get_code_center_frequency_ratio(system),
     carrier_phase = 0.0,
     carrier_loop_filter::CALF = ThirdOrderBilinearLF(),
     code_loop_filter::COLF = SecondOrderBilinearLF(),
     sc_bit_detector = SecondaryCodeOrBitDetector(),
     num_ants = NumAnts(1),
-    correlator::C = get_default_correlator(S, num_ants),
+    correlator::C = get_default_correlator(system, num_ants),
     integrated_samples = 0,
     prompt_accumulator = zero(ComplexF64),
     cn0_estimator::CN = MomentsCN0Estimator(20)
 ) where {
-    S <: AbstractGNSSSystem,
+    S <: AbstractGNSS,
     C <: AbstractCorrelator,
     CALF <: AbstractLoopFilter,
     COLF <: AbstractLoopFilter,
     CN <: AbstractCN0Estimator
 }
     if found(sc_bit_detector)
-        code_phase = mod(code_phase, get_code_length(S) *
-            get_secondary_code_length(S))
+        code_phase = mod(code_phase, get_code_length(system) *
+            get_secondary_code_length(system))
     else
-        code_phase = mod(code_phase, get_code_length(S))
+        code_phase = mod(code_phase, get_code_length(system))
     end
     downconverted_signal = init_downconverted_signal(num_ants)
     carrier = StructArray{Complex{Int16}}(undef, 0)
     code = Vector{Int16}(undef, 0)
 
     TrackingState{S, C, CALF, COLF, CN, typeof(downconverted_signal)}(
+        system,
         carrier_doppler,
         code_doppler,
         carrier_doppler,
@@ -104,6 +106,7 @@ function init_downconverted_signal(num_ants::NumAnts{N}) where N
     StructArray{Complex{Int16}}(undef, 0, N)
 end
 
+@inline get_system(state::TrackingState) = state.system
 @inline get_code_phase(state::TrackingState) = state.code_phase
 @inline get_carrier_phase(state::TrackingState) = state.carrier_phase
 @inline get_init_code_doppler(state::TrackingState) = state.init_code_doppler

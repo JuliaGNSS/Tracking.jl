@@ -26,14 +26,14 @@ function track(
         intermediate_frequency = 0.0Hz,
         max_integration_time::typeof(1ms) = 1ms,
         min_integration_time::typeof(1.0ms) = 0.75ms,
-        correlator_sample_shifts = get_correlator_sample_shifts(S,
+        correlator_sample_shifts = get_correlator_sample_shifts(get_system(state),
             get_correlator(state), sampling_frequency, 0.5),
         carrier_loop_filter_bandwidth = 18Hz,
         code_loop_filter_bandwidth = 1Hz,
         velocity_aiding = 0Hz,
         carrier_amplitude_power::Val{N} = Val(5)
 ) where {
-    S <: AbstractGNSSSystem,
+    S <: AbstractGNSS,
     C <: AbstractCorrelator,
     CALF <: AbstractLoopFilter,
     COLF <: AbstractLoopFilter,
@@ -41,8 +41,9 @@ function track(
     DS <: StructArray,
     N
 }
-    if get_data_frequency(S) != 0Hz
-        @assert rem(1 / get_data_frequency(S), max_integration_time) == 0ms
+    system = get_system(state)
+    if get_data_frequency(system) != 0Hz
+        @assert rem(1 / get_data_frequency(system), max_integration_time) == 0ms
     end
     N > 7 && throw(ArgumentError("The carrier amplitude power should be less than 8 to stay within 16 bits."))
     (get_amplitude_power(gain_controlled_signal) + N) > 16 && throw(ArgumentError("The AGC amplitude + carrier replica amplitude should not exceed 16 bits"))
@@ -75,7 +76,7 @@ function track(
     got_correlator = false
     while true
         num_samples_left_to_integrate = get_num_samples_left_to_integrate(
-            S,
+            system,
             max_integration_time,
             sampling_frequency,
             code_doppler,
@@ -88,10 +89,10 @@ function track(
             intermediate_frequency,
             carrier_doppler
         )
-        code_frequency = get_current_code_frequency(S, code_doppler)
+        code_frequency = get_current_code_frequency(system, code_doppler)
         code_replica = gen_code_replica!(
             code_replica,
-            S,
+            system,
             code_frequency,
             sampling_frequency,
             code_phase,
@@ -137,7 +138,7 @@ function track(
         )
         prev_code_phase = code_phase
         code_phase = update_code_phase(
-            S,
+            system,
             num_samples_left,
             code_frequency,
             sampling_frequency,
@@ -154,9 +155,9 @@ function track(
             valid_correlator_carrier_phase = carrier_phase
             valid_correlator_carrier_frequency = carrier_frequency
             filtered_correlator = filter(post_corr_filter, correlator)
-            pll_discriminator = pll_disc(S, filtered_correlator)
+            pll_discriminator = pll_disc(system, filtered_correlator)
             dll_discriminator = dll_disc(
-                S,
+                system,
                 filtered_correlator,
                 correlator_sample_shifts,
                 code_frequency / sampling_frequency
@@ -174,7 +175,7 @@ function track(
                 code_loop_filter_bandwidth
             )
             carrier_doppler, code_doppler = aid_dopplers(
-                S,
+                system,
                 init_carrier_doppler,
                 init_code_doppler,
                 carrier_freq_update,
@@ -183,7 +184,7 @@ function track(
             )
             cn0_estimator = update(cn0_estimator, get_prompt(filtered_correlator))
             bit_buffer, prompt_accumulator = buffer(
-                S,
+                system,
                 bit_buffer,
                 prompt_accumulator,
                 found(sc_bit_detector),
@@ -192,7 +193,7 @@ function track(
                 max_integration_time,
                 get_prompt(filtered_correlator)
             )
-            sc_bit_detector = find(S, sc_bit_detector, get_prompt(filtered_correlator))
+            sc_bit_detector = find(system, sc_bit_detector, get_prompt(filtered_correlator))
             correlator = zero(correlator)
             integrated_samples = 0
         end
@@ -201,6 +202,7 @@ function track(
         signal_start_sample += num_samples_left
     end
     next_state = TrackingState{S, C, CALF, COLF, CN, DS}(
+        system,
         init_carrier_doppler,
         init_code_doppler,
         carrier_doppler,
@@ -239,14 +241,14 @@ end
         intermediate_frequency = 0.0Hz,
         max_integration_time::typeof(1ms) = 1ms,
         min_integration_time::typeof(1.0ms) = 0.75ms,
-        correlator_sample_shifts = get_correlator_sample_shifts(S,
+        correlator_sample_shifts = get_correlator_sample_shifts(get_system(state),
             get_correlator(state), sampling_frequency, 0.5),
         carrier_loop_filter_bandwidth = 18Hz,
         code_loop_filter_bandwidth = 1Hz,
         velocity_aiding = 0Hz,
         carrier_amplitude_power::Val{N} = Val(5)
 ) where {
-    S <: AbstractGNSSSystem,
+    S <: AbstractGNSS,
     C <: AbstractCorrelator,
     CALF <: AbstractLoopFilter,
     COLF <: AbstractLoopFilter,
@@ -294,15 +296,15 @@ Returns the appropiate integration time. It will be the maximum integration time
 secondary code or the bit shift has been found.
 """
 function get_integration_time(
-    ::Type{S},
+    system::AbstractGNSS,
     max_integration_time,
     secondary_code_or_bit_found::Bool
-) where S <: AbstractGNSSSystem
+)
     ifelse(
         secondary_code_or_bit_found,
         max_integration_time,
         min(
-            ceil(typeof(1ms), get_code_length(S) / get_code_frequency(S)),
+            ceil(typeof(1ms), get_code_length(system) / get_code_frequency(system)),
             max_integration_time
         )
     )
@@ -314,13 +316,13 @@ $(SIGNATURES)
 Calculates the number of chips to integrate.
 """
 function get_num_chips_to_integrate(
-    ::Type{S},
+    system::AbstractGNSS,
     max_integration_time,
     current_code_phase,
     secondary_code_or_bit_found
-) where S <: AbstractGNSSSystem
-    max_phase = Int(upreferred(get_code_frequency(S) *
-        get_integration_time(S, max_integration_time, secondary_code_or_bit_found)))
+)
+    max_phase = Int(upreferred(get_code_frequency(system) *
+        get_integration_time(system, max_integration_time, secondary_code_or_bit_found)))
     current_phase_mod_max_phase = mod(current_code_phase, max_phase)
     max_phase - current_phase_mod_max_phase
 end
@@ -331,20 +333,20 @@ $(SIGNATURES)
 Calculates the number of samples to integrate.
 """
 function get_num_samples_left_to_integrate(
-    ::Type{S},
+    system::AbstractGNSS,
     max_integration_time,
     sampling_frequency,
     current_code_doppler,
     current_code_phase,
     secondary_code_or_bit_found
-) where S <: AbstractGNSSSystem
+)
     phase_to_integrate = get_num_chips_to_integrate(
-        S,
+        system,
         max_integration_time,
         current_code_phase,
         secondary_code_or_bit_found
     )
-    code_frequency = get_code_frequency(S) + current_code_doppler
+    code_frequency = get_code_frequency(system) + current_code_doppler
     ceil(Int, phase_to_integrate * sampling_frequency / code_frequency)
 end
 
@@ -355,15 +357,15 @@ Aid dopplers. That is velocity aiding for the carrier doppler and carrier aiding
 for the code doppler.
 """
 function aid_dopplers(
-    ::Type{S},
+    system::AbstractGNSS,
     init_carrier_doppler,
     init_code_doppler,
     carrier_freq_update,
     code_freq_update,
     velocity_aiding
-) where S <: AbstractGNSSSystem
+)
     carrier_doppler = carrier_freq_update + velocity_aiding
-    code_doppler = code_freq_update + carrier_doppler * get_code_center_frequency_ratio(S)
+    code_doppler = code_freq_update + carrier_doppler * get_code_center_frequency_ratio(system)
     init_carrier_doppler + carrier_doppler, init_code_doppler + code_doppler
 end
 

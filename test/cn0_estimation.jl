@@ -38,10 +38,11 @@ end
     start_sample = 1
     num_samples = 4000
     agc_bits = 5
+    gpsl1 = GPSL1()
 
     for i = 1:20
         signal = get_code.(
-                GPSL1,
+                gpsl1,
                 code_frequency .* range ./ sampling_frequency .+ start_code_phase,
                 prn
             ) .* 10^(45 / 20) .+
@@ -52,7 +53,7 @@ end
             floor.(Int16, imag.(signal * 1 << agc_bits / attenuation))
         ))
         code = get_code.(
-            GPSL1,
+            gpsl1,
             code_frequency .* (-2:4001) ./ sampling_frequency .+ start_code_phase,
             prn
         )

@@ -1,7 +1,7 @@
 @testset "Correlator" begin
 
     @testset "Early prompt late correlator" begin
-
+        gpsl1 = GPSL1()
         correlator = @inferred EarlyPromptLateCorrelator()
 
         @test @inferred(get_early(correlator)) == 0.0
@@ -69,7 +69,7 @@
         )
 
         correlator_sample_shifts = @inferred get_correlator_sample_shifts(
-            GPSL1,
+            gpsl1,
             correlator,
             4e6Hz,
             0.5
@@ -99,12 +99,12 @@
         )
 
         signal = StructArray{Complex{Int16}}(
-            (get_code.(GPSL1, (1:2500) * 1023e3 / 2.5e6, 1) * Int16(1) << (7 + 2),
+            (get_code.(gpsl1, (1:2500) * 1023e3 / 2.5e6, 1) * Int16(1) << (7 + 2),
             zeros(Int16, 2500))
         )
         correlator_sample_shifts = SVector(-1, 0, 1)
         code = get_code.(
-            GPSL1,
+            gpsl1,
             (1 + correlator_sample_shifts[1]:2500 + correlator_sample_shifts[end]) * 1023e3 / 2.5e6,
             1
         )

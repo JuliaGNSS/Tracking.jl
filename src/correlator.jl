@@ -102,12 +102,12 @@ respect to the prompt correlator, expressed in samples. The shifts are
 ordered from latest to earliest replica.
 """
 function get_correlator_sample_shifts(
-    ::Type{S},
+    system::AbstractGNSS,
     correlator::EarlyPromptLateCorrelator,
     sampling_frequency,
     preferred_code_shift
-) where S <: AbstractGNSSSystem
-    @SVector [i*round(Int, preferred_code_shift * sampling_frequency / get_code_frequency(S)) for i in -1:1]
+)
+    @SVector [i*round(Int, preferred_code_shift * sampling_frequency / get_code_frequency(system)) for i in -1:1]
 end
 
 function get_early_late_sample_spacing(correlator::EarlyPromptLateCorrelator, correlator_sample_shifts::SVector{3})
@@ -273,7 +273,7 @@ Base.@propagate_inbounds @inline function correlate_iteration(
     prn,
     total_code_length,
     prompt_code_phase
-) where S <: AbstractGNSSSystem
+) where S <: AbstractGNSS
     early_code_phase = prompt_code_phase + code_phase_delta * early_late_sample_shift
     early_code_phase += (early_code_phase < 0) * total_code_length
     late_code_phase = prompt_code_phase - code_phase_delta * early_late_sample_shift

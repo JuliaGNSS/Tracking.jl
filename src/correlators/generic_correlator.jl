@@ -231,13 +231,13 @@ respect to the prompt correlator, expressed in samples. The shifts are
 ordered from latest to earliest replica.
 """
 function get_correlator_sample_shifts(
-    ::Type{S},
+    system::AbstractGNSS,
     correlator::GenericCorrelator{M},
     sampling_frequency,
     preferred_code_shift
-) where {M,S <: AbstractGNSSSystem}
+) where {M}
     numEl = floor(Int, M/2)
-    SVector{M}(-numEl:numEl) .* round(Int, preferred_code_shift * sampling_frequency / get_code_frequency(S))
+    SVector{M}(-numEl:numEl) .* round(Int, preferred_code_shift * sampling_frequency / get_code_frequency(system))
 end
 
 """
