@@ -13,12 +13,19 @@ module Tracking
         get_early,
         get_prompt,
         get_late,
+        get_tap,
+        get_taps,
+        get_num_taps,
+        get_early_index,
+        get_prompt_index,
+        get_late_index,
         get_correlator,
         get_carrier_doppler,
         get_carrier_phase,
         get_code_doppler,
         get_code_phase,
-        get_early_late_sample_shift,
+        get_correlator_sample_shifts,
+        get_early_late_sample_spacing,
         get_secondary_code_or_bit_found,
         get_correlator_carrier_phase,
         get_correlator_carrier_frequency,
@@ -27,12 +34,14 @@ module Tracking
         track,
         TrackingState,
         NumAnts,
+        NumTaps,
         MomentsCN0Estimator,
         AbstractCN0Estimator,
         get_bits,
         get_num_bits,
         EarlyPromptLateCorrelator,
         VeryEarlyPromptLateCorrelator,
+        GenericCorrelator,
         SecondaryCodeOrBitDetector,
         GainControlledSignal
 
@@ -41,7 +50,11 @@ module Tracking
 
     NumAnts(x) = NumAnts{x}()
 
-    include("agc.jl")
+    struct NumTaps{x}
+    end
+
+    NumTaps(x) = NumTaps{x}()
+
     include("code_replica.jl")
     include("carrier_replica.jl")
     include("downconvert.jl")
@@ -56,4 +69,5 @@ module Tracking
     include("gpsl1.jl")
     include("gpsl5.jl")
     include("galileo_e1b.jl")
+    include("boc.jl")
 end

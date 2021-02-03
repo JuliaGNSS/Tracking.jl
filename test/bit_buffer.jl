@@ -10,9 +10,9 @@
     code_phase = 1023
     prompt_correlator = 1.0 + 0.0im
     integration_time = 5ms
-
+    gpsl1 = GPSL1()
     next_bit_buffer, next_prompt_accumulator = @inferred Tracking.buffer(
-        GPSL1,
+        gpsl1,
         bit_buffer,
         prompt_accumulator,
         secondary_code_or_bit_found,
@@ -23,7 +23,7 @@
     )
 
     @test @allocated(Tracking.buffer(
-        GPSL1,
+        gpsl1,
         Tracking.BitBuffer(),
         0.0 + 0.0im,
         false,
@@ -45,7 +45,7 @@
     integration_time = 5ms
 
     next_bit_buffer, next_prompt_accumulator = @inferred Tracking.buffer(
-        GPSL1,
+        gpsl1,
         bit_buffer,
         prompt_accumulator,
         secondary_code_or_bit_found,
@@ -66,7 +66,7 @@
     integration_time = 20ms
 
     next_bit_buffer, next_prompt_accumulator = @inferred Tracking.buffer(
-        GPSL1,
+        gpsl1,
         bit_buffer,
         prompt_accumulator,
         secondary_code_or_bit_found,
@@ -87,7 +87,7 @@
     integration_time = 20ms
 
     next_bit_buffer, next_prompt_accumulator = @inferred Tracking.buffer(
-        GPSL1,
+        gpsl1,
         bit_buffer,
         prompt_accumulator,
         secondary_code_or_bit_found,
