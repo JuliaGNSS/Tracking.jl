@@ -1,6 +1,6 @@
 @testset "Code replica" begin
 
-    code = zeros(Int16, 2502)
+    code = zeros(Int8, 2502)
     gpsl1 = GPSL1()
     Tracking.gen_code_replica!(
         code,
@@ -15,6 +15,42 @@
     )
 
     @test code[11:2492] == get_code.(gpsl1, (-1:2480) * 1023e3 / 2.5e6 .+ 2.0, 1)
+
+    @testset "More than 1ms" begin
+        code = zeros(Int8, 6502)
+        gpsl1 = GPSL1()
+        Tracking.gen_code_replica!(
+            code,
+            gpsl1,
+            1023e3,
+            2.5e6,
+            2.0,
+            11,
+            6480,
+            SVector(-1, 0, 1),
+            1
+        )
+
+        @test code[11:6492] == get_code.(gpsl1, (-1:6480) * 1023e3 / 2.5e6 .+ 2.0, 1)
+    end
+
+    @testset "code_length is less than 1ms" begin
+        code = zeros(Int8, 2502)
+        gpsl1 = GPSL1()
+        Tracking.gen_code_replica!(
+            code,
+            gpsl1,
+            1023e3 * 3,
+            7.5e6,
+            2.0,
+            11,
+            2480,
+            SVector(-1, 0, 1),
+            1
+        )
+
+        @test code[11:2492] == get_code.(gpsl1, (-1:2480) * 1023e3 * 3 / 7.5e6 .+ 2.0, 1)
+    end
 end
 
 @testset "Update code phase" begin
