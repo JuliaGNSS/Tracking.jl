@@ -13,9 +13,9 @@ module Tracking
         get_early,
         get_prompt,
         get_late,
-        get_tap,
-        get_taps,
-        get_num_taps,
+        get_correlator,
+        get_correlators,
+        get_num_correlators,
         get_early_index,
         get_prompt_index,
         get_late_index,
@@ -34,7 +34,7 @@ module Tracking
         track,
         TrackingState,
         NumAnts,
-        NumTaps,
+        NumCorrelators,
         MomentsCN0Estimator,
         AbstractCN0Estimator,
         get_bits,
@@ -50,10 +50,10 @@ module Tracking
 
     NumAnts(x) = NumAnts{x}()
 
-    struct NumTaps{x}
+    struct NumCorrelators{x}
     end
 
-    NumTaps(x) = NumTaps{x}()
+    NumCorrelators(x) = NumCorrelators{x}()
 
     include("code_replica.jl")
     include("carrier_replica.jl")

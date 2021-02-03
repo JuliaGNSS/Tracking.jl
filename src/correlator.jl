@@ -143,13 +143,9 @@ function correlate(
     late = zero(eltype(downconverted_signal))
     prompt = zero(eltype(downconverted_signal))
     early = zero(eltype(downconverted_signal))
-    @inbounds for i = start_sample:num_samples + start_sample - 1
+    @inbounds @fastmath for i = start_sample:num_samples + start_sample - 1
         late = late + downconverted_signal[i] * code[i]
-    end
-    @inbounds for i = start_sample:num_samples + start_sample - 1
         prompt = prompt + downconverted_signal[i] * code[i + correlator_sample_shifts[2]-correlator_sample_shifts[1]]
-    end
-    @inbounds for i = start_sample:num_samples + start_sample - 1
         early = early + downconverted_signal[i] * code[i + correlator_sample_shifts[3]-correlator_sample_shifts[1]]
     end
     EarlyPromptLateCorrelator(
@@ -170,13 +166,9 @@ function correlate(
     late = zero(MVector{N, eltype(downconverted_signal)})
     prompt = zero(MVector{N, eltype(downconverted_signal)})
     early = zero(MVector{N, eltype(downconverted_signal)})
-    @inbounds for j = 1:length(late), i = start_sample:num_samples_left + start_sample - 1
+    @inbounds @fastmath for i = start_sample:num_samples_left + start_sample - 1, j = 1:length(late)
         late[j] = late[j] + downconverted_signal[i,j] * code[i]
-    end
-    @inbounds for j = 1:length(late), i = start_sample:num_samples_left + start_sample - 1
         prompt[j] = prompt[j] + downconverted_signal[i,j] * code[i + correlator_sample_shifts[2] - correlator_sample_shifts[1]]
-    end
-    @inbounds for j = 1:length(late), i = start_sample:num_samples_left + start_sample - 1
         early[j] = early[j] + downconverted_signal[i,j] * code[i + correlator_sample_shifts[3] - correlator_sample_shifts[1]]
     end
     EarlyPromptLateCorrelator(

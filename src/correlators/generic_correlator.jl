@@ -3,109 +3,52 @@ $(SIGNATURES)
 
 Generic correlator holding a user defined number of correlation values.
 """
-struct GenericCorrelator{T, M} <: AbstractCorrelator{T}
-    taps::Vector{T}
-    num_taps::NumTaps{M}
-    early_index::Int64
-    prompt_index::Int64
-    late_index::Int64
+struct GenericCorrelator{T, TA <: AbstractVector{T}} <: AbstractCorrelator{T}
+    correlators::TA
+    early_index::Int
+    prompt_index::Int
+    late_index::Int
 end
 
 """
 $(SIGNATURES)
 
-GenericCorrelator constructor without parameters assumes a single antenna
-and tree correlator elements.
+GenericCorrelator constructor without parameters and some default parameters.
 """
-function GenericCorrelator()
-    GenericCorrelator(NumAnts(1))
-end
-
-"""
-$(SIGNATURES)
-
-GenericCorrelator constructor that allows for the configuration of the
-number of antenna elements using `num_ants::NumAnts{N}` The number of
-correlator taps is fixed to three.
-"""
-function GenericCorrelator(num_ants::NumAnts{N}) where N
+function GenericCorrelator(;
+    num_correlators::NumCorrelators{M} = NumCorrelators(3),
+    num_ants = NumAnts(1),
+    early_late_index_offset::Integer = 2
+) where M
+    prompt_index = ceil(Int, M / 2)
+    early_index = prompt_index + early_late_index_offset >> 1
+    late_index = prompt_index - early_late_index_offset >> 1
     GenericCorrelator(
-        num_ants,
-        NumTaps(3),
-        2
-    )
-end
-
-"""
-$(SIGNATURES)
-
-GenericCorrelator constructor that allows for the configuration of the
-number of correlator taps using `num_taps::NumTaps{N}` The number of
-antenne elements is fixed to one.
-"""
-function GenericCorrelator(num_taps::NumTaps{M}) where M
-    GenericCorrelator(
-        NumAnts(1),
-        num_taps,
-        2
-    )
-end
-
-"""
-$(SIGNATURES)
-
-GenericCorrelator constructor that allows for the configuration of the
-number of antenna elements using `num_ants::NumAnts{N}`, the number of
-correlator taps using `num_taps::NumTaps{M}`. The early-late spacing
-is fixed to 2.
-"""
-function GenericCorrelator(num_ants::NumAnts{N}, num_taps::NumTaps{M}) where {M, N}
-    prompt_idx = ceil(M/2)
-    GenericCorrelator(
-        num_ants,
-        num_taps,
-        2
-    )
-end
-
-"""
-$(SIGNATURES)
-
-GenericCorrelator constructor for single antenna correlation, that
-allows for the configuration of the number of correlator taps using
-`num_taps::NumTaps{M}` and the spacing of the early and late correlator
-using `el_spacing`.
-"""
-function GenericCorrelator(num_ants::NumAnts{1}, num_taps::NumTaps{M}, el_spacing) where M
-    prompt_index = ceil(Int64, M/2)
-    early_index  = prompt_index + ceil(Int64, el_spacing/2)
-    late_index   = prompt_index - ceil(Int64, el_spacing/2)
-    @assert late_index <= M
-    GenericCorrelator(
-        [zero(ComplexF64) for i = 1:M],
-        num_taps,
+        zero(SVector{M, type_for_num_ants(num_ants)}),
         early_index,
         prompt_index,
         late_index
     )
 end
 
+type_for_num_ants(num_ants::NumAnts{1}) = ComplexF64
+type_for_num_ants(num_ants::NumAnts{N}) where N = SVector{N, ComplexF64}
+
 """
 $(SIGNATURES)
 
-GenericCorrelator constructor that allows for the configuration of the
-number of antenna elements using `num_ants::NumAnts{N}`, the number of
-correlator taps using `num_taps::NumTaps{M}` and the spacing of the
-early and late correlator using `el_spacing`.
+GenericCorrelator constructor for large number of correlators.
 """
-function GenericCorrelator(num_ants::NumAnts{N}, num_taps::NumTaps{M}, el_spacing) where {M, N}
-    prompt_index = ceil(Int64, M/2)
-    early_index  = prompt_index + ceil(Int64, el_spacing/2)
-    late_index   = prompt_index - ceil(Int64, el_spacing/2)
-    @assert late_index <= M
+function GenericCorrelator(
+    num_correlators::Integer;
+    num_ants = NumAnts(1),
+    early_late_index_offset::Integer = 2
+) where M
+    prompt_index = ceil(Int, num_correlators / 2)
+    early_index = prompt_index + early_late_index_offset >> 1
+    late_index = prompt_index - early_late_index_offset >> 1
     GenericCorrelator(
-        [zero(SVector{N, ComplexF64}) for i = 1:M],
-        num_taps,
+        [zero(type_for_num_ants(num_ants)) for i = 1:num_correlators],
         early_index,
         prompt_index,
         late_index
@@ -118,15 +61,15 @@ $(SIGNATURES)
 
 Get number of antennas from correlator
 """
-get_num_ants(correlator::GenericCorrelator{Complex{T},M}) where {T,M} = 1
-get_num_ants(correlator::GenericCorrelator{SVector{N,T},M}) where {T,M,N} = N
+get_num_ants(correlator::GenericCorrelator{Complex{T}}) where {T} = 1
+get_num_ants(correlator::GenericCorrelator{SVector{N,T}}) where {N,T} = N
 
 """
 $(SIGNATURES)
 
-Get number of correlator taps
+Get number of correlators
 """
-get_num_taps(correlator::GenericCorrelator{T,M}) where {T,M} = M
+get_num_correlators(correlator::GenericCorrelator) = size(correlator.correlators, 1)
 
 """
 $(SIGNATURES)
@@ -152,18 +95,18 @@ get_late_index(correlator::GenericCorrelator) = correlator.late_index
 """
 $(SIGNATURES)
 
-Get all correlator taps
+Get all correlator correlators
 """
-get_taps(correlator::GenericCorrelator) = correlator.taps
+get_correlators(correlator::GenericCorrelator) = correlator.correlators
 
 """
 $(SIGNATURES)
 
-Get a specific correlator tap with `index` counted negative for late and
+Get a specific correlator with `index` counted negative for late and
 positive for early correlators.
 """
-function get_tap(correlator::GenericCorrelator, index::Integer)
-    correlator.taps[index+get_prompt_index(correlator)]
+function get_correlator(correlator::GenericCorrelator, index::Integer)
+    correlator.correlators[index + get_prompt_index(correlator)]
 end
 
 """
@@ -172,7 +115,7 @@ $(SIGNATURES)
 Get the early correlator
 """
 function get_early(correlator::GenericCorrelator)
-    correlator.taps[get_early_index(correlator)]
+    correlator.correlators[get_early_index(correlator)]
 end
 
 """
@@ -181,7 +124,7 @@ $(SIGNATURES)
 Get the prompt correlator
 """
 function get_prompt(correlator::GenericCorrelator)
-    correlator.taps[get_prompt_index(correlator)]
+    correlator.correlators[get_prompt_index(correlator)]
 end
 
 """
@@ -190,7 +133,7 @@ $(SIGNATURES)
 Get the late correlator
 """
 function get_late(correlator::GenericCorrelator)
-    correlator.taps[get_late_index(correlator)]
+    correlator.correlators[get_late_index(correlator)]
 end
 
 """
@@ -200,8 +143,7 @@ Reset the Correlator
 """
 function zero(correlator::GenericCorrelator)
     GenericCorrelator(
-        zero(correlator.taps),
-        NumTaps(get_num_taps(correlator)),
+        zero(correlator.correlators),
         get_early_index(correlator),
         get_prompt_index(correlator),
         get_late_index(correlator)
@@ -215,8 +157,7 @@ Filter the correlator by the function `post_corr_filter`
 """
 function filter(post_corr_filter, correlator::GenericCorrelator)
     GenericCorrelator(
-        map(x->post_corr_filter(x), get_taps(correlator)),
-        NumTaps(get_num_taps(correlator)),
+        map(x -> post_corr_filter(x), get_correlators(correlator)),
         get_early_index(correlator),
         get_prompt_index(correlator),
         get_late_index(correlator)
@@ -232,12 +173,41 @@ ordered from latest to earliest replica.
 """
 function get_correlator_sample_shifts(
     system::AbstractGNSS,
-    correlator::GenericCorrelator{T,M},
+    correlator::GenericCorrelator{T, <:SVector{M}},
     sampling_frequency,
     preferred_code_shift
 ) where {T,M}
-    numEl = floor(Int, M/2)
-    SVector{M}(-numEl:numEl) .* round(Int, preferred_code_shift * sampling_frequency / get_code_frequency(system))
+    num_corrs = floor(Int, M / 2)
+    sample_shift = preferred_code_shift_to_sample_shift(
+        preferred_code_shift,
+        sampling_frequency,
+        system
+    )
+    SVector{M}(-num_corrs:num_corrs) .* sample_shift
+end
+function get_correlator_sample_shifts(
+    system::AbstractGNSS,
+    correlator::GenericCorrelator,
+    sampling_frequency,
+    preferred_code_shift
+)
+    num_corrs = floor(Int, get_num_correlators(correlator) / 2)
+    sample_shift = preferred_code_shift_to_sample_shift(
+        preferred_code_shift,
+        sampling_frequency,
+        system
+    )
+    (-num_corrs:num_corrs) .* sample_shift
+end
+function preferred_code_shift_to_sample_shift(
+    preferred_code_shift,
+    sampling_frequency,
+    system
+)
+    sample_shift = round(Int, preferred_code_shift * sampling_frequency / get_code_frequency(system))
+    sample_shift < 1 &&
+        throw(ArgumentError("Sample shift between early and prompt / late and prompt is less than 1."))
+    sample_shift
 end
 
 """
@@ -246,9 +216,9 @@ $(SIGNATURES)
 Calculate the total spacing between early and late correlator in samples.
 """
 function get_early_late_sample_spacing(
-    correlator::GenericCorrelator{T,M},
-    correlator_sample_shifts::SVector{M}
-) where {T,M}
+    correlator,
+    correlator_sample_shifts
+)
     correlator_sample_shifts[get_early_index(correlator)] -
     correlator_sample_shifts[get_late_index(correlator)]
 end
@@ -259,13 +229,7 @@ $(SIGNATURES)
 Normalize the correlator
 """
 function normalize(correlator::GenericCorrelator, integrated_samples)
-    GenericCorrelator(
-        map(x->x/integrated_samples, get_taps(correlator)),
-        NumTaps(get_num_taps(correlator)),
-        get_early_index(correlator),
-        get_prompt_index(correlator),
-        get_late_index(correlator)
-    )
+    filter(x -> x / integrated_samples, correlator)
 end
 """
 $(SIGNATURES)
@@ -280,7 +244,7 @@ function correlate(
     start_sample,
     num_samples
 )
-    taps = map(Vector(correlator_sample_shifts)) do correlator_sample_shift
+    correlators = map(correlator_sample_shifts) do correlator_sample_shift
         correlate_single_tap(
             correlator_sample_shift - correlator_sample_shifts[1],
             start_sample,
@@ -291,8 +255,7 @@ function correlate(
     end
 
     return GenericCorrelator(
-        map(+, get_taps(correlator), taps),
-        NumTaps(get_num_taps(correlator)),
+        map(+, get_correlators(correlator), correlators),
         get_early_index(correlator),
         get_prompt_index(correlator),
         get_late_index(correlator)
@@ -306,11 +269,11 @@ function correlate_single_tap(
     downconverted_signal,
     code
 )
-    tap = zero(eltype(downconverted_signal))
-    @inbounds for i = start_sample:num_samples + start_sample - 1
-        tap += downconverted_signal[i] * code[i + offset]
+    correlator = zero(eltype(downconverted_signal))
+    @inbounds @fastmath for i = start_sample:num_samples + start_sample - 1
+        correlator += downconverted_signal[i] * code[i + offset]
     end
-    tap
+    correlator
 end
 
 """
@@ -326,7 +289,7 @@ function correlate(
     start_sample,
     num_samples,
 ) where N
-    taps = map(Vector(correlator_sample_shifts)) do correlator_sample_shift
+    correlators = map(Vector(correlator_sample_shifts)) do correlator_sample_shift
         correlate_single_tap(
             NumAnts(N),
             correlator_sample_shift - correlator_sample_shifts[1],
@@ -337,8 +300,7 @@ function correlate(
         )
     end
     GenericCorrelator(
-        map(+, get_taps(correlator), taps),
-        NumTaps(get_num_taps(correlator)),
+        map(+, get_correlators(correlator), correlators),
         get_early_index(correlator),
         get_prompt_index(correlator),
         get_late_index(correlator)
@@ -353,9 +315,9 @@ function correlate_single_tap(
     downconverted_signal,
     code
 ) where N
-    tap = zero(MVector{N, eltype(downconverted_signal)})
-    @inbounds for j = 1:length(tap), i = start_sample:num_samples + start_sample - 1
-        tap[j] += downconverted_signal[i,j] * code[i + offset]
+    correlator = zero(MVector{N, eltype(downconverted_signal)})
+    @inbounds @fastmath for j = 1:length(correlator), i = start_sample:num_samples + start_sample - 1
+        correlator[j] += downconverted_signal[i,j] * code[i + offset]
     end
-    SVector(tap)
+    SVector(correlator)
 end
