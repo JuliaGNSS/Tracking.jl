@@ -34,7 +34,6 @@ function gen_code_replica!(
         get_code_length(system) * get_secondary_code_length(system)
     )
     fixed_point_start_code_phase = floor(Int, modded_start_code_phase * 1 << fixed_point)
-    # Assumes, that the number of early shifts is identical to the number of late shifts
     @inbounds for i = start_sample:num_samples + num_early_late_samples + start_sample - 1
         fixed_point_code_phase = (i + most_late_sample_shift - start_sample) * delta +
             fixed_point_start_code_phase
