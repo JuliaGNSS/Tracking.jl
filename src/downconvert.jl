@@ -42,6 +42,6 @@ function downconvert!(
     num_samples::Integer
 )    
     sample_range = start_sample:start_sample + num_samples - 1
-    downconverted_signal[sample_range] .= @view(signal[sample_range]) .* conj.(@view(carrier_replica[sample_range]))
+    downconverted_signal[sample_range,:] .= @view(signal[sample_range,:]) .* conj.(@view(carrier_replica[sample_range]))
     downconverted_signal
 end
