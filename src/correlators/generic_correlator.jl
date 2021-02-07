@@ -244,14 +244,12 @@ function correlate(
     start_sample,
     num_samples
 )
-    correlators = map(correlator_sample_shifts) do correlator_sample_shift
-        correlate_single_tap(
-            correlator_sample_shift - correlator_sample_shifts[1],
-            start_sample,
-            num_samples,
-            downconverted_signal,
-            code
-        )
+    correlators = zeros_correlator(get_correlators(correlator), downconverted_signal)
+    @inbounds @fastmath for i = start_sample:num_samples + start_sample - 1
+        for j = 1:length(correlators)
+            sample_shift = correlator_sample_shifts[j] - correlator_sample_shifts[1]
+            correlators[j] += downconverted_signal[i] * code[i + sample_shift]
+        end
     end
 
     return GenericCorrelator(
@@ -262,18 +260,11 @@ function correlate(
     )
 end
 
-function correlate_single_tap(
-    offset,
-    start_sample,
-    num_samples,
-    downconverted_signal,
-    code
-)
-    correlator = zero(eltype(downconverted_signal))
-    @inbounds @fastmath for i = start_sample:num_samples + start_sample - 1
-        correlator += downconverted_signal[i] * code[i + offset]
-    end
-    correlator
+function zeros_correlator(correlators::SVector, signal)
+    zeros(MVector{length(correlators), eltype(signal)})
+end
+function zeros_correlator(correlators::Vector, signal)
+    zeros(eltype(signal), length(correlators))
 end
 
 """
@@ -289,7 +280,8 @@ function correlate(
     start_sample,
     num_samples,
 ) where N
-    correlators = map(Vector(correlator_sample_shifts)) do correlator_sample_shift
+
+    correlators = map(correlator_sample_shifts) do correlator_sample_shift
         correlate_single_tap(
             NumAnts(N),
             correlator_sample_shift - correlator_sample_shifts[1],
@@ -299,6 +291,7 @@ function correlate(
             code
         )
     end
+    
     GenericCorrelator(
         map(+, get_correlators(correlator), correlators),
         get_early_index(correlator),
@@ -316,7 +309,7 @@ function correlate_single_tap(
     code
 ) where N
     correlator = zero(MVector{N, eltype(downconverted_signal)})
-    @inbounds @fastmath for j = 1:length(correlator), i = start_sample:num_samples + start_sample - 1
+    @inbounds @fastmath for i = start_sample:num_samples + start_sample - 1, j = 1:length(correlator)
         correlator[j] += downconverted_signal[i,j] * code[i + offset]
     end
     SVector(correlator)
