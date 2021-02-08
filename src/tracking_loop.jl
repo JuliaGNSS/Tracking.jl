@@ -28,6 +28,8 @@ function track(
         min_integration_time::typeof(1.0ms) = 0.75ms,
         correlator_sample_shifts = get_correlator_sample_shifts(get_system(state),
             get_correlator(state), sampling_frequency, 0.5),
+        early_late_index_shift = get_early_late_index_shift(get_system(state),
+            correlator_sample_shifts, get_correlator(state), sampling_frequency, 0.5),
         carrier_loop_filter_bandwidth = 18Hz,
         code_loop_filter_bandwidth = 1Hz,
         velocity_aiding = 0Hz,
@@ -131,11 +133,16 @@ function track(
             valid_correlator_carrier_phase = carrier_phase
             valid_correlator_carrier_frequency = carrier_frequency
             filtered_correlator = filter(post_corr_filter, correlator)
-            pll_discriminator = pll_disc(system, filtered_correlator)
+            pll_discriminator = pll_disc(
+                system,
+                filtered_correlator,
+                correlator_sample_shifts
+            )
             dll_discriminator = dll_disc(
                 system,
                 filtered_correlator,
                 correlator_sample_shifts,
+                early_late_index_shift,
                 code_frequency / sampling_frequency
             )
             carrier_freq_update, carrier_loop_filter = filter_loop(
@@ -158,7 +165,10 @@ function track(
                 code_freq_update,
                 velocity_aiding
             )
-            cn0_estimator = update(cn0_estimator, get_prompt(filtered_correlator))
+            cn0_estimator = update(
+                cn0_estimator,
+                get_prompt(filtered_correlator, correlator_sample_shifts)
+            )
             bit_buffer, prompt_accumulator = buffer(
                 system,
                 bit_buffer,
@@ -167,9 +177,13 @@ function track(
                 prev_code_phase,
                 code_phase,
                 max_integration_time,
-                get_prompt(filtered_correlator)
+                get_prompt(filtered_correlator, correlator_sample_shifts)
             )
-            sc_bit_detector = find(system, sc_bit_detector, get_prompt(filtered_correlator))
+            sc_bit_detector = find(
+                system,
+                sc_bit_detector,
+                get_prompt(filtered_correlator, correlator_sample_shifts)
+            )
             correlator = zero(correlator)
             integrated_samples = 0
         end
@@ -200,6 +214,8 @@ function track(
     TrackingResults(
         next_state,
         valid_correlator,
+        correlator_sample_shifts,
+        early_late_index_shift,
         valid_correlator_carrier_frequency,
         valid_correlator_carrier_phase,
         got_correlator,

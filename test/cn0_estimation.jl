@@ -60,7 +60,10 @@ end
             start_sample,
             num_samples,
         )
-        cn0_estimator = Tracking.update(cn0_estimator, get_prompt(correlator))
+        cn0_estimator = Tracking.update(
+            cn0_estimator,
+            get_prompt(correlator, correlator_sample_shifts)
+        )
     end
     @test @inferred(Tracking.get_current_index(cn0_estimator)) == 20
     @test @inferred(Tracking.length(cn0_estimator)) == 20
