@@ -8,6 +8,32 @@
     @test @inferred(post_corr_filter(SVector(1.0 + 0.0im, 2.0 + 0.0im))) == 1.0 + 0.0im
 end
 
+@testset "Resize downconverted signal for multiple ants" for type in (Float32, Float64)
+    downconverted_signal_temp = Tracking.DownconvertedSignalCPU(NumAnts(4))
+    signal = StructArray(ones(Complex{type}, 2500, 4))
+    downconverted_signal = Tracking.resize!(downconverted_signal_temp, 2500, signal)
+    if type == Float32
+        @test size(downconverted_signal.downconverted_signal_f32) == (2500, 4)
+        @test size(downconverted_signal.downconverted_signal_f64) == (0, 4)
+    else
+        @test size(downconverted_signal.downconverted_signal_f32) == (0, 4)
+        @test size(downconverted_signal.downconverted_signal_f64) == (2500, 4)
+    end
+end
+
+@testset "Resize downconverted signal for single ant" for type in (Float32, Float64)
+    downconverted_signal_temp = Tracking.DownconvertedSignalCPU(NumAnts(1))
+    signal = StructArray(ones(Complex{type}, 2500))
+    downconverted_signal = Tracking.resize!(downconverted_signal_temp, 2500, signal)
+    if type == Float32
+        @test size(downconverted_signal.downconverted_signal_f32) == (2500,)
+        @test size(downconverted_signal.downconverted_signal_f64) == (0,)
+    else
+        @test size(downconverted_signal.downconverted_signal_f32) == (0,)
+        @test size(downconverted_signal.downconverted_signal_f64) == (2500,)
+    end
+end
+
 @testset "Integration time" begin
     gpsl1 = GPSL1()
     galileo_e1b = GalileoE1B()

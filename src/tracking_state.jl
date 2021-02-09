@@ -46,7 +46,7 @@ end
 
 function DownconvertedSignalCPU(num_ants::NumAnts{N}) where N
     DownconvertedSignalCPU(
-        StructArray{Complex{Float32}}(undef, 0),
+        StructArray{Complex{Float32}}(undef, 0, N),
         StructArray{Complex{Float64}}(undef, 0, N)
     )
 end
