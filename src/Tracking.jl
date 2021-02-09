@@ -15,7 +15,7 @@ module Tracking
         get_late,
         get_correlator,
         get_accumulators,
-        get_num_correlators,
+        get_num_accumulators,
         get_early_index,
         get_prompt_index,
         get_late_index,
