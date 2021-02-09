@@ -37,8 +37,8 @@ $(SIGNATURES)
 EarlyPromptLateCorrelator constructor for large number of accumulators.
 """
 function EarlyPromptLateCorrelator(
-    num_accumulators::Integer,
-    num_ants = NumAnts(1)
+    num_ants::NumAnts,
+    num_accumulators::Integer
 )
     EarlyPromptLateCorrelator(
         [zero(type_for_num_ants(num_ants)) for i = 1:num_accumulators]
@@ -303,7 +303,7 @@ function correlate(
             code
         )
     end
-    
+
     typeof(correlator)(map(+, get_accumulators(correlator), accumulators))
 end
 
