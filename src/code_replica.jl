@@ -23,35 +23,19 @@ function gen_code_replica!(
 )
     most_early_sample_shift = correlator_sample_shifts[end]
     most_late_sample_shift  = correlator_sample_shifts[1]
-    early_late_samples = most_early_sample_shift - most_late_sample_shift
-    code_length = get_code_length(system)
+    num_early_late_samples = most_early_sample_shift - most_late_sample_shift
     fixed_point = sizeof(Int) * 8 - 1 - min_bits_for_code_length(system)
-    delta = floor(Int, code_frequency * 1 << fixed_point / sampling_frequency)
-    modded_start_code_phase = mod(
-        start_code_phase + (most_late_sample_shift - start_sample) * code_frequency/sampling_frequency,
-        code_length * get_secondary_code_length(system)
-        )
+    total_code_length = get_code_length(system) * get_secondary_code_length(system)
+    fixed_point_total_code_length = total_code_length * 1 << fixed_point
+    modded_start_code_phase = mod(start_code_phase, total_code_length)
     fixed_point_start_code_phase = floor(Int, modded_start_code_phase * 1 << fixed_point)
-    code_length_fixed_point = code_length << fixed_point
-
-    end_code_phase = modded_start_code_phase + (start_sample + num_samples + early_late_samples) * code_frequency / sampling_frequency
-    number_of_iterations = floor(Int, end_code_phase / code_length)
-    first_iteration = floor(Int, (modded_start_code_phase + start_sample * code_frequency / sampling_frequency) / code_length)
-    fixed_point_code_phase = (start_sample - 1) * delta + fixed_point_start_code_phase - (first_iteration - 1) * code_length_fixed_point
-
-    samples_left = num_samples + early_late_samples
-    for m = first_iteration:number_of_iterations
-        phase_correction = m * code_length_fixed_point
-        number_of_samples = min(samples_left,
-            floor(Int, (2 * code_length_fixed_point - fixed_point_code_phase - delta) / delta)
-        )
-        samples_left -= number_of_samples
-        @inbounds for i = start_sample:start_sample+number_of_samples-1
-            fixed_point_code_phase = i * delta + fixed_point_start_code_phase - phase_correction
-            code_index = fixed_point_code_phase >> fixed_point
-            code_replica[i] = get_code_unsafe(system, code_index, prn)
-        end
-        start_sample += number_of_samples
+    delta = floor(Int, code_frequency * 1 << fixed_point / sampling_frequency)
+    fixed_point_code_phase = fixed_point_start_code_phase + (most_late_sample_shift - 1) * delta
+    @inbounds for i = start_sample:num_samples + num_early_late_samples + start_sample - 1
+        fixed_point_code_phase += delta
+        fixed_point_code_phase -= (fixed_point_code_phase >= fixed_point_total_code_length) * fixed_point_total_code_length
+        code_index = fixed_point_code_phase >> fixed_point
+        code_replica[i] = get_code_unsafe(system, code_index, prn)
     end
     code_replica
 end
