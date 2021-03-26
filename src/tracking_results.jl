@@ -153,3 +153,10 @@ Check if the secondary code or bit has been found.
 """
 @inline get_secondary_code_or_bit_found(results::TrackingResults) =
     found(get_sc_bit_detector(results.state))
+
+"""
+$(SIGNATURES)
+    
+Check if the secondary code or bit has been found.
+"""
+@inline get_system(results::TrackingResults) = get_system(get_state(results))

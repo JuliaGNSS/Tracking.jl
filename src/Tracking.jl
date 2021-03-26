@@ -31,6 +31,7 @@ module Tracking
         get_correlator_carrier_phase,
         get_correlator_carrier_frequency,
         get_state,
+        get_system,
         get_cn0,
         track,
         TrackingState,
