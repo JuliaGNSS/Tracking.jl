@@ -7,9 +7,13 @@ function gen_carrier_replica!(
     num_samples
 ) where T
     c_re = carrier_replica.re; c_im = carrier_replica.im
+    carr_freq = T(upreferred(carrier_frequency / Hz))
+    sample_freq = T(upreferred(sampling_frequency / Hz))
+    twopi = T(2π)
+    phase = T(start_phase)
     @avx for i in 0:num_samples - 1
         c_im[i + start_sample], c_re[i + start_sample] =
-            sincos(T(2π) * (i * T(upreferred(carrier_frequency / Hz)) / T(upreferred(sampling_frequency / Hz)) + T(start_phase)))
+            sincos(twopi * (i * carr_freq / sample_freq + phase))
     end
     carrier_replica
 end
