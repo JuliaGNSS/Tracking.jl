@@ -3,7 +3,7 @@ $(SIGNATURES)
 
 Checks if upcoming integration is a new bit for GPSL5.
 """
-function is_upcoming_integration_new_bit(::Type{GPSL5}, prns, num_prns)
+function is_upcoming_integration_new_bit(gpsl5::GPSL5, prns, num_prns)
     num_prns < 10 && return false
     masked_bit_synchronizer = prns & 0x3ff # First 10
     xored_bit_synchronizer = masked_bit_synchronizer ⊻ 0x35 # 0x35 == 0000110101
@@ -11,6 +11,6 @@ function is_upcoming_integration_new_bit(::Type{GPSL5}, prns, num_prns)
     xored_bit_synchronizer == 0 || xored_bit_synchronizer == 0x3ff
 end
 
-function get_default_correlator(::Type{GPSL5}, num_ants::NumAnts{N}) where N
+function get_default_correlator(gpsl5::GPSL5, num_ants::NumAnts{N}) where N
     EarlyPromptLateCorrelator(num_ants)
 end

@@ -8,21 +8,49 @@
     @test @inferred(post_corr_filter(SVector(1.0 + 0.0im, 2.0 + 0.0im))) == 1.0 + 0.0im
 end
 
+@testset "Resize downconverted signal for multiple ants" for type in (Float32, Float64)
+    downconverted_signal_temp = Tracking.DownconvertedSignalCPU(NumAnts(4))
+    signal = StructArray(ones(Complex{type}, 2500, 4))
+    downconverted_signal = Tracking.resize!(downconverted_signal_temp, 2500, signal)
+    if type == Float32
+        @test size(downconverted_signal.downconverted_signal_f32) == (2500, 4)
+        @test size(downconverted_signal.downconverted_signal_f64) == (0, 4)
+    else
+        @test size(downconverted_signal.downconverted_signal_f32) == (0, 4)
+        @test size(downconverted_signal.downconverted_signal_f64) == (2500, 4)
+    end
+end
+
+@testset "Resize downconverted signal for single ant" for type in (Float32, Float64)
+    downconverted_signal_temp = Tracking.DownconvertedSignalCPU(NumAnts(1))
+    signal = StructArray(ones(Complex{type}, 2500))
+    downconverted_signal = Tracking.resize!(downconverted_signal_temp, 2500, signal)
+    if type == Float32
+        @test size(downconverted_signal.downconverted_signal_f32) == (2500,)
+        @test size(downconverted_signal.downconverted_signal_f64) == (0,)
+    else
+        @test size(downconverted_signal.downconverted_signal_f32) == (0,)
+        @test size(downconverted_signal.downconverted_signal_f64) == (2500,)
+    end
+end
+
 @testset "Integration time" begin
+    gpsl1 = GPSL1()
+    galileo_e1b = GalileoE1B()
     max_integration_time = 2ms
     bit_found = false
-    time = @inferred Tracking.get_integration_time(GPSL1, max_integration_time, bit_found)
+    time = @inferred Tracking.get_integration_time(gpsl1, max_integration_time, bit_found)
     @test time == 1ms
 
     max_integration_time = 2ms
     bit_found = true
-    time = @inferred Tracking.get_integration_time(GPSL1, max_integration_time, bit_found)
+    time = @inferred Tracking.get_integration_time(gpsl1, max_integration_time, bit_found)
     @test time == 2ms
 
     max_integration_time = 2ms
     bit_found = false
     time = @inferred Tracking.get_integration_time(
-        GalileoE1B,
+        galileo_e1b,
         max_integration_time,
         bit_found
     )
@@ -31,7 +59,7 @@ end
     max_integration_time = 10ms
     bit_found = false
     time = @inferred Tracking.get_integration_time(
-        GalileoE1B,
+        galileo_e1b,
         max_integration_time,
         bit_found
     )
@@ -39,11 +67,12 @@ end
 end
 
 @testset "Number of chips to integrate" begin
+    gpsl1 = GPSL1()
     max_integration_time = 1ms
     code_phase = 200
     bit_found = true
     chips = @inferred Tracking.get_num_chips_to_integrate(
-        GPSL1,
+        gpsl1,
         max_integration_time,
         code_phase,
         bit_found
@@ -52,7 +81,7 @@ end
 
     code_phase = 1200
     chips = @inferred Tracking.get_num_chips_to_integrate(
-        GPSL1,
+        gpsl1,
         max_integration_time,
         code_phase,
         bit_found
@@ -61,13 +90,14 @@ end
 end
 
 @testset "Number of samples to integrate" begin
+    gpsl1 = GPSL1()
     max_integration_time = 1ms
     sampling_frequency = 4e6Hz
     current_code_doppler = 0Hz
     current_code_phase = 0
     bit_found = true
     samples = @inferred Tracking.get_num_samples_left_to_integrate(
-        GPSL1,
+        gpsl1,
         max_integration_time,
         sampling_frequency,
         current_code_doppler,
@@ -88,13 +118,14 @@ end
 end
 
 @testset "Code phase delta" begin
+    gpsl1 = GPSL1()
     code_doppler = 1Hz
-    frequency = @inferred Tracking.get_current_code_frequency(GPSL1, code_doppler)
+    frequency = @inferred Tracking.get_current_code_frequency(gpsl1, code_doppler)
     @test frequency == 1023e3Hz + 1Hz
 end
 
 @testset "Doppler aiding" begin
-
+    gpsl1 = GPSL1()
     init_carrier_doppler = 10Hz
     init_code_doppler = 1Hz
     carrier_freq_update = 2Hz
@@ -102,7 +133,7 @@ end
     velocity_aiding = 3Hz
 
     carrier_freq, code_freq = @inferred Tracking.aid_dopplers(
-        GPSL1,
+        gpsl1,
         init_carrier_doppler,
         init_code_doppler,
         carrier_freq_update,
@@ -115,7 +146,7 @@ end
 end
 
 @testset "Tracking" begin
-
+    gpsl1 = GPSL1()
     carrier_doppler = 200Hz
     start_code_phase = 100
     code_frequency = carrier_doppler / 1540 + 1023kHz
@@ -123,32 +154,17 @@ end
     prn = 1
     range = 0:3999
     start_carrier_phase = π / 2
-    state = TrackingState(GPSL1, carrier_doppler - 20Hz, start_code_phase)
+    state = TrackingState(gpsl1, carrier_doppler - 20Hz, start_code_phase)
 
     signal = cis.(
             2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase
         ) .*
         get_code.(
-            GPSL1,
+            gpsl1,
             code_frequency .* range ./ sampling_frequency .+ start_code_phase,
             prn
         )
 
-    agc_signal = GainControlledSignal(signal, 11)
-    @test_throws ArgumentError track(
-        agc_signal,
-        state,
-        prn,
-        sampling_frequency,
-        carrier_amplitude_power = Val(6)
-    )
-    @test_throws ArgumentError track(
-        signal,
-        state,
-        prn,
-        sampling_frequency,
-        carrier_amplitude_power = Val(8)
-    )
     track_result = @inferred track(signal, state, prn, sampling_frequency)
 
     iterations = 2000
@@ -170,7 +186,7 @@ end
                 2π .* carrier_doppler .* range ./ sampling_frequency .+ carrier_phase
             ) .*
             get_code.(
-                GPSL1,
+                gpsl1,
                 code_frequency .* range ./ sampling_frequency .+ code_phase,
                 prn
             )
@@ -215,7 +231,7 @@ end
 end
 
 @testset "Track multiple signals" begin
-
+    gpsl1 = GPSL1()
     carrier_doppler = 200Hz
     start_code_phase = 100
     code_frequency = carrier_doppler / 1540 + 1023kHz
@@ -223,13 +239,13 @@ end
     prn = 1
     range = 0:3999
     start_carrier_phase = π / 2
-    state = TrackingState(GPSL1, carrier_doppler - 20Hz, start_code_phase, num_ants = NumAnts(3))
+    state = TrackingState(gpsl1, carrier_doppler - 20Hz, start_code_phase, num_ants = NumAnts(3))
 
     signal = cis.(
             2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase
         ) .*
         get_code.(
-            GPSL1,
+            gpsl1,
             code_frequency .* range ./ sampling_frequency .+ start_code_phase,
             prn
         )
@@ -257,7 +273,7 @@ end
                 2π .* carrier_doppler .* range ./ sampling_frequency .+ carrier_phase
             ) .*
             get_code.(
-                GPSL1,
+                gpsl1,
                 code_frequency .* range ./ sampling_frequency .+ code_phase,
                 prn
             )
