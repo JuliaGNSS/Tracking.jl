@@ -2,11 +2,11 @@
 # the two dimensional case
 function downconvert!(
     downconverted_signal::StructArray{Complex{T}, 1},
-    signal::StructArray{Complex{T}, 1},
+    signal::StructArray{Complex{ST}, 1},
     carrier_replica::StructArray{Complex{T}, 1},
     start_sample::Integer,
     num_samples::Integer
-) where T
+) where {T, ST}
     ds_re = downconverted_signal.re; ds_im = downconverted_signal.im
     s_re = signal.re; s_im = signal.im
     c_re = carrier_replica.re; c_im = carrier_replica.im
@@ -19,11 +19,11 @@ end
 
 function downconvert!(
     downconverted_signal::StructArray{Complex{T}, 2},
-    signal::StructArray{Complex{T}, 2},
+    signal::StructArray{Complex{ST}, 2},
     carrier_replica::StructArray{Complex{T}, 1},
     start_sample::Integer,
     num_samples::Integer
-) where T
+) where {T, ST}
     ds_re = downconverted_signal.re; ds_im = downconverted_signal.im
     s_re = signal.re; s_im = signal.im
     c_re = carrier_replica.re; c_im = carrier_replica.im
