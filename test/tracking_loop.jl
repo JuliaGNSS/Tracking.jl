@@ -8,29 +8,30 @@
     @test @inferred(post_corr_filter(SVector(1.0 + 0.0im, 2.0 + 0.0im))) == 1.0 + 0.0im
 end
 
-@testset "Resize downconverted signal for multiple ants" for type in (Float32, Float64)
+@testset "Resize downconverted signal ($type) for multiple ants" for type in (Int16, Int32, Int64, Float32, Float64)
     downconverted_signal_temp = Tracking.DownconvertedSignalCPU(NumAnts(4))
     signal = StructArray(ones(Complex{type}, 2500, 4))
     downconverted_signal = Tracking.resize!(downconverted_signal_temp, 2500, signal)
-    if type == Float32
-        @test size(downconverted_signal.downconverted_signal_f32) == (2500, 4)
-        @test size(downconverted_signal.downconverted_signal_f64) == (0, 4)
-    else
+    if type == Float64
         @test size(downconverted_signal.downconverted_signal_f32) == (0, 4)
         @test size(downconverted_signal.downconverted_signal_f64) == (2500, 4)
+    else
+        @test size(downconverted_signal.downconverted_signal_f32) == (2500, 4)
+        @test size(downconverted_signal.downconverted_signal_f64) == (0, 4)
     end
 end
 
-@testset "Resize downconverted signal for single ant" for type in (Float32, Float64)
+@testset "Resize downconverted signal ($type) for single ant" for type in (Int16, Int32, Int64, Float32, Float64)
     downconverted_signal_temp = Tracking.DownconvertedSignalCPU(NumAnts(1))
     signal = StructArray(ones(Complex{type}, 2500))
     downconverted_signal = Tracking.resize!(downconverted_signal_temp, 2500, signal)
-    if type == Float32
-        @test size(downconverted_signal.downconverted_signal_f32) == (2500,)
-        @test size(downconverted_signal.downconverted_signal_f64) == (0,)
-    else
+    if type == Float64
         @test size(downconverted_signal.downconverted_signal_f32) == (0,)
         @test size(downconverted_signal.downconverted_signal_f64) == (2500,)
+    else
+        @test size(downconverted_signal.downconverted_signal_f32) == (2500,)
+        @test size(downconverted_signal.downconverted_signal_f64) == (0,)
+
     end
 end
 
@@ -145,7 +146,7 @@ end
     @test code_freq == 1Hz + (2Hz + 3Hz) / 1540 - 0.5Hz
 end
 
-@testset "Tracking" begin
+@testset "Tracking with signal of type $type" for type in (Int16, Int32, Int64, Float32, Float64)
     gpsl1 = GPSL1()
     carrier_doppler = 200Hz
     start_code_phase = 100
@@ -156,7 +157,7 @@ end
     start_carrier_phase = π / 2
     state = TrackingState(gpsl1, carrier_doppler - 20Hz, start_code_phase)
 
-    signal = cis.(
+    signal_temp = cis.(
             2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase
         ) .*
         get_code.(
@@ -164,6 +165,8 @@ end
             code_frequency .* range ./ sampling_frequency .+ start_code_phase,
             prn
         )
+    scaling = 512
+    signal = type <: Integer ? complex.(floor.(type, real.(signal_temp) * scaling), floor.(type, imag.(signal_temp) * scaling)) : Complex{type}.(signal_temp)
 
     track_result = @inferred track(signal, state, prn, sampling_frequency)
 
@@ -230,7 +233,7 @@ end
 #    plot(imag.(tracked_prompts))
 end
 
-@testset "Track multiple signals" begin
+@testset "Track multiple signals with signal of type $type" for type in (Int16, Int32, Int64, Float32, Float64)
     gpsl1 = GPSL1()
     carrier_doppler = 200Hz
     start_code_phase = 100
@@ -249,7 +252,9 @@ end
             code_frequency .* range ./ sampling_frequency .+ start_code_phase,
             prn
         )
-    signal_mat = repeat(signal, outer = (1,3))
+    signal_mat_temp = repeat(signal, outer = (1,3))
+    scaling = 512
+    signal_mat = type <: Integer ? complex.(floor.(type, real.(signal_mat_temp) * scaling), floor.(type, imag.(signal_mat_temp) * scaling)) : Complex{type}.(signal_mat_temp)
 
     @test_throws ArgumentError track(signal_mat', state, prn, sampling_frequency)
 

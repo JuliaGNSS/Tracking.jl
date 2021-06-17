@@ -127,7 +127,6 @@ function track(
         if num_samples_left == num_samples_left_to_integrate &&
                 integration_time >= min_integration_time
             got_correlator = true
-
             correlator = normalize(correlator, integrated_samples)
             valid_correlator = correlator
             valid_correlator_carrier_phase = carrier_phase
@@ -280,13 +279,13 @@ end
 function choose(replica::CarrierReplicaCPU, signal::AbstractArray{Complex{Float64}})
     replica.carrier_f64
 end
-function choose(replica::CarrierReplicaCPU, signal::AbstractArray{Complex{Float32}})
+function choose(replica::CarrierReplicaCPU, signal::AbstractArray{Complex{T}}) where T <: Number
     replica.carrier_f32
 end
 function choose(replica::DownconvertedSignalCPU, signal::AbstractArray{Complex{Float64}})
     replica.downconverted_signal_f64
 end
-function choose(replica::DownconvertedSignalCPU, signal::AbstractArray{Complex{Float32}})
+function choose(replica::DownconvertedSignalCPU, signal::AbstractArray{Complex{T}}) where T <: Number
     replica.downconverted_signal_f32
 end
 
@@ -411,7 +410,7 @@ function resize!(ds::DownconvertedSignalCPU, b::Integer, signal::AbstractMatrix{
     )
 end
 
-function resize!(ds::DownconvertedSignalCPU, b::Integer, signal::AbstractMatrix{Complex{Float32}})
+function resize!(ds::DownconvertedSignalCPU, b::Integer, signal::AbstractMatrix{Complex{T}}) where T <: Number
     num_ants = size(signal, 2)
     DownconvertedSignalCPU(
         size(ds.downconverted_signal_f32, 1) == b ?

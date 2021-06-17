@@ -52,9 +52,10 @@ end
             prn
         )
         correlator = EarlyPromptLateCorrelator()
+        signal_struct = StructArray(signal)
         correlator = Tracking.correlate(
             correlator,
-            signal,
+            signal_struct,
             code,
             correlator_sample_shifts,
             start_sample,
