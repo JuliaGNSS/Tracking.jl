@@ -262,14 +262,19 @@ function correlate(
     num_samples
 ) where {T <: AbstractCorrelator}
     accumulators = zero_accumulators(get_accumulators(correlator), downconverted_signal)
-    @inbounds @fastmath for i = start_sample:num_samples + start_sample - 1
+    d_re = downconverted_signal.re
+    d_im = downconverted_signal.im
+    a_re = real.(accumulators)
+    a_im = imag.(accumulators)
+    @avx for i = start_sample:num_samples + start_sample - 1
         for j = 1:length(accumulators)
             sample_shift = correlator_sample_shifts[j] - correlator_sample_shifts[1]
-            accumulators[j] += downconverted_signal[i] * code[i + sample_shift]
+            a_re[j] += d_re[i] * code[i + sample_shift]
+            a_im[j] += d_im[i] * code[i + sample_shift]
         end
     end
-
-    T(map(+, get_accumulators(correlator), accumulators))
+    accumulators_result = complex.(a_re, a_im)
+    T(map(+, get_accumulators(correlator), accumulators_result))
 end
 
 function zero_accumulators(accumulators::SVector, signal)
@@ -292,32 +297,21 @@ function correlate(
     start_sample,
     num_samples,
 ) where {N}
-
-    accumulators = map(correlator_sample_shifts) do correlator_sample_shift
-        correlate_single_tap(
-            NumAnts(N),
-            correlator_sample_shift - correlator_sample_shifts[1],
-            start_sample,
-            num_samples,
-            downconverted_signal,
-            code
-        )
+    accumulators = zero(MMatrix{N, length(correlator_sample_shifts), eltype(downconverted_signal)})
+    a_re = real.(accumulators)
+    a_im = imag.(accumulators)
+    d_re = downconverted_signal.re
+    d_im = downconverted_signal.im
+    @avx for i = start_sample:num_samples + start_sample - 1
+        for k = 1:size(accumulators, 2)
+            for j = 1:size(accumulators, 1)
+                shift = correlator_sample_shifts[k] - correlator_sample_shifts[1]
+                a_re[j,k] += d_re[i,j] * code[shift + i]
+                a_im[j,k] += d_im[i,j] * code[shift + i]
+            end
+        end
     end
 
-    typeof(correlator)(map(+, get_accumulators(correlator), accumulators))
-end
-
-function correlate_single_tap(
-    ::NumAnts{N},
-    offset,
-    start_sample,
-    num_samples,
-    downconverted_signal,
-    code
-) where N
-    accumulator = zero(MVector{N, eltype(downconverted_signal)})
-    @inbounds @fastmath for i = start_sample:num_samples + start_sample - 1, j = 1:length(accumulator)
-        accumulator[j] += downconverted_signal[i,j] * code[i + offset]
-    end
-    SVector(accumulator)
+    accumulators_new = SVector(eachcol(complex.(SMatrix(a_re), SMatrix(a_im)))...)
+    typeof(correlator)(map(+, get_accumulators(correlator), accumulators_new))
 end
