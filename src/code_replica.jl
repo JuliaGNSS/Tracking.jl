@@ -53,12 +53,10 @@ function update_code_phase(
     start_code_phase,
     secondary_code_or_bit_found
 )
-    if get_data_frequency(system) == 0Hz
-        secondary_code_or_bit_length = get_secondary_code_length(system)
-    else
-        secondary_code_or_bit_length =
-            Int(get_code_frequency(system) / (get_data_frequency(system) * get_code_length(system)))
-    end
+    secondary_code_or_bit_length = get_data_frequency(system) == 0Hz ?
+        get_secondary_code_length(system) :
+        Int(get_code_frequency(system) / (get_data_frequency(system) * get_code_length(system)))
+        
     code_length = get_code_length(system) *
         (secondary_code_or_bit_found ? secondary_code_or_bit_length : 1)
     mod(code_frequency * num_samples / sampling_frequency + start_code_phase, code_length)

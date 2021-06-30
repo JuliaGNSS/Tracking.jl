@@ -66,7 +66,7 @@ $(SIGNATURES)
 
 Get early correlator index
 """
-get_early_index(correlator_sample_shifts, early_late_index_shift) =
+@inline get_early_index(correlator_sample_shifts, early_late_index_shift) =
     get_prompt_index(correlator_sample_shifts) + early_late_index_shift
 
 """
@@ -74,14 +74,14 @@ $(SIGNATURES)
 
 Get prompt correlator index
 """
-get_prompt_index(correlator_sample_shifts) = findfirst(iszero, correlator_sample_shifts)
+@inline get_prompt_index(correlator_sample_shifts) = findfirst(iszero, correlator_sample_shifts)
 
 """
 $(SIGNATURES)
 
 Get late correlator index
 """
-get_late_index(correlator_sample_shifts, early_late_index_shift) =
+@inline get_late_index(correlator_sample_shifts, early_late_index_shift) =
     get_prompt_index(correlator_sample_shifts) - early_late_index_shift
 
 """
