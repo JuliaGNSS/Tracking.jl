@@ -21,7 +21,7 @@ $(SIGNATURES)
 Buffer data bits based on the prompt accumulation and the current prompt value.
 """
 function buffer(
-    system,
+    system::AbstractGNSS,
     bit_buffer,
     prompt_accumulator,
     secondary_code_or_bit_found,
@@ -32,7 +32,7 @@ function buffer(
 )
     prompt_accumulator = prompt_accumulator + secondary_code_or_bit_found *
         prompt_correlator
-
+        
     if secondary_code_or_bit_found &&
         (code_phase - prev_code_phase < 0 || integration_time == 1 / get_data_frequency(system))
         bit = real(prompt_accumulator) > 0

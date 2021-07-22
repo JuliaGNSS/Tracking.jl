@@ -1,16 +1,73 @@
 """
 $(SIGNATURES)
 
+CarrierReplicaCPU that holds possible carrier representations.
+The type is unknown, when TrackingState is initialized.
+It is determined based on the signal, which is given in the track
+function.
+"""
+struct CarrierReplicaCPU{
+        CF32 <: StructArray{ComplexF32},
+        CF64 <: StructArray{ComplexF64}
+    }
+    carrier_f32::CF32
+    carrier_f64::CF64
+end
+
+function CarrierReplicaCPU()
+    CarrierReplicaCPU(
+        StructArray{Complex{Float32}}(undef, 0),
+        StructArray{Complex{Float64}}(undef, 0)
+    )
+end
+
+"""
+$(SIGNATURES)
+
+DownconvertedSignalCPU that holds possible downconverted signal representations.
+The type is unknown, when TrackingState is initialized.
+It is determined based on the signal, which is given in the track
+function.
+"""
+struct DownconvertedSignalCPU{
+        DSF32 <: StructArray{ComplexF32},
+        DSF64 <: StructArray{ComplexF64}
+    }
+    downconverted_signal_f32::DSF32
+    downconverted_signal_f64::DSF64
+end
+
+function DownconvertedSignalCPU(num_ants::NumAnts{1})
+    DownconvertedSignalCPU(
+        StructArray{Complex{Float32}}(undef, 0),
+        StructArray{Complex{Float64}}(undef, 0)
+    )
+end
+
+function DownconvertedSignalCPU(num_ants::NumAnts{N}) where N
+    DownconvertedSignalCPU(
+        StructArray{Complex{Float32}}(undef, 0, N),
+        StructArray{Complex{Float64}}(undef, 0, N)
+    )
+end
+
+
+"""
+$(SIGNATURES)
+
 TrackingState that holds the tracking state.
 """
 struct TrackingState{
-        S <: AbstractGNSSSystem{},
+        S <: AbstractGNSS,
         C <: AbstractCorrelator,
         CALF <: AbstractLoopFilter,
         COLF <: AbstractLoopFilter,
         CN <: AbstractCN0Estimator,
-        T <: AbstractArray,
+        DS <: DownconvertedSignalCPU, # Union{DownconvertedSignalCPU, CuArray{ComplexF32}}
+        CAR <: CarrierReplicaCPU, # Union{CarrierReplicaCPU, CuArray{ComplexF32}}
+        COR <: Vector{Int8}, # Union{Vector{Int8}, CuArray{Float32}}
     }
+    system::S
     init_carrier_doppler::typeof(1.0Hz)
     init_code_doppler::typeof(1.0Hz)
     carrier_doppler::typeof(1.0Hz)
@@ -24,10 +81,9 @@ struct TrackingState{
     integrated_samples::Int
     prompt_accumulator::ComplexF64
     cn0_estimator::CN
-    downconverted_signal::T
-    carrier::T
-    code
-    gnss::S
+    downconverted_signal::DS
+    carrier::CAR
+    code::COR
 end
 
 """ 
@@ -47,39 +103,39 @@ carrier doppler `carrier_doppler` and the code phase `code_phase`. Optional para
 - CN0 estimator `cn0_estimator`, that defaults to `MomentsCN0Estimator(20)`
 """
 function TrackingState(
-    gnss::S,
+    system::S,
     carrier_doppler,
     code_phase;
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gnss),
+    code_doppler = carrier_doppler * get_code_center_frequency_ratio(system),
     carrier_phase = 0.0,
     carrier_loop_filter::CALF = ThirdOrderBilinearLF(),
     code_loop_filter::COLF = SecondOrderBilinearLF(),
     sc_bit_detector = SecondaryCodeOrBitDetector(),
     num_ants = NumAnts(1),
-    correlator::C = get_default_correlator(gnss, num_ants),
+    correlator::C = get_default_correlator(system, num_ants),
     integrated_samples = 0,
     prompt_accumulator = zero(ComplexF64),
     cn0_estimator::CN = MomentsCN0Estimator(20),
     num_samples = 0
 ) where {
-    T <: Array,
-    S <: AbstractGNSSSystem{T},
+    S <: AbstractGNSS,
     C <: AbstractCorrelator,
     CALF <: AbstractLoopFilter,
     COLF <: AbstractLoopFilter,
     CN <: AbstractCN0Estimator
 }
     if found(sc_bit_detector)
-        code_phase = mod(code_phase, get_code_length(gnss) *
-            get_secondary_code_length(gnss))
+        code_phase = mod(code_phase, get_code_length(system) *
+            get_secondary_code_length(system))
     else
-        code_phase = mod(code_phase, get_code_length(gnss))
+        code_phase = mod(code_phase, get_code_length(system))
     end
-    downconverted_signal = init_downconverted_signal(num_ants, num_samples)
-    carrier = StructArray{Complex{Int16}}(undef, 0)
-    code = Vector{Int16}(undef, 0)
+    downconverted_signal = DownconvertedSignalCPU(num_ants)
+    carrier = CarrierReplicaCPU()
+    code = Vector{Int8}(undef, 0)
 
-    TrackingState{S, C, CALF, COLF, CN, typeof(downconverted_signal)}(
+    TrackingState{S, C, CALF, COLF, CN, typeof(downconverted_signal), typeof(carrier), typeof(code)}(
+        system,
         carrier_doppler,
         code_doppler,
         carrier_doppler,
@@ -100,128 +156,7 @@ function TrackingState(
     )
 end
 
-# GPU CuArrays tracking state constructor
-function TrackingState(
-    gnss::S,
-    carrier_doppler,
-    code_phase;
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gnss),
-    carrier_phase = 0.0,
-    carrier_loop_filter::CALF = ThirdOrderBilinearLF(),
-    code_loop_filter::COLF = SecondOrderBilinearLF(),
-    sc_bit_detector = SecondaryCodeOrBitDetector(),
-    num_ants = NumAnts(1),
-    correlator::C = get_default_correlator(gnss, num_ants),
-    integrated_samples = 0,
-    prompt_accumulator = zero(ComplexF64),
-    cn0_estimator::CN = MomentsCN0Estimator(20),
-    num_samples = 0
-) where {
-    T <: CuArray,
-    S <: AbstractGNSSSystem{T},
-    C <: AbstractCorrelator,
-    CALF <: AbstractLoopFilter,
-    COLF <: AbstractLoopFilter,
-    CN <: AbstractCN0Estimator
-}
-    if found(sc_bit_detector)
-        code_phase = mod(code_phase, get_code_length(gnss) *
-            get_secondary_code_length(gnss))
-    else
-        code_phase = mod(code_phase, get_code_length(gnss))
-    end
-    downconverted_signal = CuArray{Complex{Float32}}(undef, num_samples)
-    carrier = CuArray{Complex{Float32}}(undef, num_samples)
-    code = CuArray{Float32}(undef, num_samples)
-
-    TrackingState{S, C, CALF, COLF, CN, typeof(downconverted_signal)}(
-        carrier_doppler,
-        code_doppler,
-        carrier_doppler,
-        code_doppler,
-        carrier_phase / 2π,
-        code_phase,
-        correlator,
-        carrier_loop_filter,
-        code_loop_filter,
-        sc_bit_detector,
-        integrated_samples,
-        prompt_accumulator,
-        cn0_estimator,
-        downconverted_signal,
-        carrier,
-        code,
-        gnss
-    )
-end
-
-# GPU StructArray tracking state constructor
-function TrackingState_struct(
-    gnss::S,
-    carrier_doppler,
-    code_phase;
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gnss),
-    carrier_phase = 0.0,
-    carrier_loop_filter::CALF = ThirdOrderBilinearLF(),
-    code_loop_filter::COLF = SecondOrderBilinearLF(),
-    sc_bit_detector = SecondaryCodeOrBitDetector(),
-    num_ants = NumAnts(1),
-    correlator::C = get_default_correlator(gnss, num_ants),
-    integrated_samples = 0,
-    prompt_accumulator = zero(ComplexF64),
-    cn0_estimator::CN = MomentsCN0Estimator(20),
-    num_samples = 0
-) where {
-    T <: CuArray,
-    S <: AbstractGNSSSystem{T},
-    C <: AbstractCorrelator,
-    CALF <: AbstractLoopFilter,
-    COLF <: AbstractLoopFilter,
-    CN <: AbstractCN0Estimator
-}
-    if found(sc_bit_detector)
-        code_phase = mod(code_phase, get_code_length(gnss) *
-            get_secondary_code_length(gnss))
-    else
-        code_phase = mod(code_phase, get_code_length(gnss))
-    end
-    downconverted_signal = StructArray{Complex{Float32}}(undef, num_samples)
-    code = CuArray{Float32}(undef, num_samples)
-    # Move StructArrays to GPU
-    downconverted_signal = replace_storage(CuArray, downconverted_signal)
-    carrier = similar(downconverted_signal)
-
-    TrackingState{S, C, CALF, COLF, CN, typeof(downconverted_signal)}(
-        carrier_doppler,
-        code_doppler,
-        carrier_doppler,
-        code_doppler,
-        carrier_phase / 2π,
-        code_phase,
-        correlator,
-        carrier_loop_filter,
-        code_loop_filter,
-        sc_bit_detector,
-        integrated_samples,
-        prompt_accumulator,
-        cn0_estimator,
-        downconverted_signal,
-        carrier,
-        code,
-        gnss
-    )
-end
-
-# One dimensional signal initialization
-function init_downconverted_signal(num_ants::NumAnts{1}, num_samples::Int)
-    StructArray{Complex{Int16}}(undef, num_samples)
-end
-
-# N-dimensional signal initialization
-function init_downconverted_signal(num_ants::NumAnts{N}, num_samples::Int) where N
-    StructArray{Complex{Int16}}(undef, num_samples, N)
-end
-
+@inline get_system(state::TrackingState) = state.system
 @inline get_code_phase(state::TrackingState) = state.code_phase
 @inline get_carrier_phase(state::TrackingState) = state.carrier_phase
 @inline get_init_code_doppler(state::TrackingState) = state.init_code_doppler

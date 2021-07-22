@@ -4,26 +4,20 @@ $(SIGNATURES)
 Fixed point CPU StructArray carrier replica generation
 """
 function gen_carrier_replica!(
-    carrier_replica::StructArray{Complex{T},1,NamedTuple{(:re, :im),Tuple{Array{T,1},Array{T,1}}},Int64},
+    carrier_replica::StructArray{Complex{T}},
     carrier_frequency,
     sampling_frequency,
     start_phase,
-    carrier_amplitude_power::Val{N},
     start_sample,
     num_samples
-) where {
-    T <: Integer,
-    N
-}
-    fpcarrier!(
-        carrier_replica,
-        carrier_frequency,
-        sampling_frequency,
-        start_phase,
-        start_sample = start_sample,
-        num_samples = num_samples,
-        bits = carrier_amplitude_power
-    )
+) where T
+    c_re = carrier_replica.re; c_im = carrier_replica.im
+    carrier_freq = upreferred(carrier_frequency / Hz)
+    sampling_freq = upreferred(sampling_frequency / Hz)
+    @avx for i in 0:num_samples - 1
+        c_im[i + start_sample], c_re[i + start_sample] =
+            sincos(T(2π) * (i * T(carrier_freq) / T(sampling_freq) + T(start_phase)))
+    end
     carrier_replica
 end
 
@@ -159,18 +153,9 @@ function update_carrier_phase(
     carrier_frequency,
     sampling_frequency,
     start_phase,
-    carrier_amplitude_power::Val{N}
-) where N
-    n = N + 2
-    fixed_point = 32 - n - 2
-    delta = floor(Int32, carrier_frequency * 1 << (fixed_point + n) / sampling_frequency)
-    fixed_point_start_phase = floor(Int32, start_phase * 1 << (fixed_point + n))
-    phase_fixed_point = delta * num_samples + fixed_point_start_phase
-    phase_fixed_point = delta * num_samples + fixed_point_start_phase
-    mod(
-        phase_fixed_point / 1 << (fixed_point + n) + 0.5,
-        1
-    ) - 0.5
+)
+    phase = num_samples * carrier_frequency / sampling_frequency + start_phase
+    mod(phase + 0.5, 1) - 0.5
 end
 
 """

@@ -5,10 +5,14 @@ TrackingResults that hold the correlation results.
 """
 struct TrackingResults{
         TS <: TrackingState,
-        C <: AbstractCorrelator
+        C <: AbstractCorrelator,
+        CS,
+        ELI
     }
     state::TS
     correlator::C
+    correlator_sample_shifts::CS
+    early_late_index_shift::ELI
     correlator_carrier_frequency::typeof(1.0Hz)
     correlator_carrier_phase::Float64
     got_correlator::Bool
@@ -61,6 +65,20 @@ Get the correlator of the tracking result.
 """
 $(SIGNATURES)
 
+Get the correlator sample shifts of the tracking result.
+"""
+@inline get_correlator_sample_shifts(results::TrackingResults) = results.correlator_sample_shifts
+
+"""
+$(SIGNATURES)
+
+Get the correlator sample shifts of the tracking result.
+"""
+@inline get_early_late_index_shift(results::TrackingResults) = results.early_late_index_shift
+
+"""
+$(SIGNATURES)
+
 Get carrier phase at the same timestamp when the correlator is created of the tracking
 result.
 """
@@ -83,21 +101,29 @@ $(SIGNATURES)
 
 Get the early of the tracking result.
 """
-@inline get_early(results::TrackingResults) = get_early(get_correlator(results))
+@inline get_early(results::TrackingResults) = get_early(
+    get_correlator(results),
+    get_correlator_sample_shifts(results),
+    get_early_late_index_shift(results)
+)
 
 """
 $(SIGNATURES)
 
 Get the prompt of the tracking result.
 """
-@inline get_prompt(results::TrackingResults) = get_prompt(get_correlator(results))
+@inline get_prompt(results::TrackingResults) = get_prompt(get_correlator(results), get_correlator_sample_shifts(results))
 
 """
 $(SIGNATURES)
 
 Get the late of the tracking result.
 """
-@inline get_late(results::TrackingResults) = get_late(get_correlator(results))
+@inline get_late(results::TrackingResults) = get_late(
+    get_correlator(results),
+    get_correlator_sample_shifts(results),
+    get_early_late_index_shift(results)
+)
 
 """
 $(SIGNATURES)
@@ -127,3 +153,10 @@ Check if the secondary code or bit has been found.
 """
 @inline get_secondary_code_or_bit_found(results::TrackingResults) =
     found(get_sc_bit_detector(results.state))
+
+"""
+$(SIGNATURES)
+    
+Check if the secondary code or bit has been found.
+"""
+@inline get_system(results::TrackingResults) = get_system(get_state(results))
