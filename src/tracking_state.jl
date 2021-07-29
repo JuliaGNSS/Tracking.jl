@@ -24,6 +24,24 @@ end
 """
 $(SIGNATURES)
 
+CarrierReplicaCPU that holds possible carrier representations.
+The type is unknown, when TrackingState is initialized.
+It is determined based on the signal, which is given in the track
+function.
+"""
+struct CarrierReplicaGPU{
+        CF32 <: StructArray{ComplexF32}
+    }
+    carrier::CF32
+end
+
+function CarrierReplicaGPU(num_samples)
+    CarrierReplicaGPU(StructArray{ComplexF32}((CuArray{Float32}(undef, num_samples),CuArray{Float32}(undef, num_samples))))
+end
+
+"""
+$(SIGNATURES)
+
 DownconvertedSignalCPU that holds possible downconverted signal representations.
 The type is unknown, when TrackingState is initialized.
 It is determined based on the signal, which is given in the track
@@ -51,6 +69,31 @@ function DownconvertedSignalCPU(num_ants::NumAnts{N}) where N
     )
 end
 
+"""
+$(SIGNATURES)
+
+DownconvertedSignalGPU that holds possible downconverted signal representations.
+The type is unknown, when TrackingState is initialized.
+It is determined based on the signal, which is given in the track
+function.
+"""
+struct DownconvertedSignalGPU{
+    DSF32 <: StructArray{ComplexF32}
+}
+    downconverted_signal::DSF32
+end
+
+function DownconvertedSignalGPU(num_samples, num_ants::NumAnts{1})
+    DownconvertedSignalGPU(
+        StructArray{ComplexF32}((CuArray{Float32}(undef, num_samples), CuArray{Float32}(undef, num_samples)))
+    )
+end
+
+function DownconvertedSignalGPU(num_samples, num_ants::NumAnts{N}) where N
+    DownconvertedSignalGPU(
+        StructArray{ComplexF32}((CuArray{Float32}(undef, (num_samples, num_ants)),CuArray{Float32}(undef, (num_samples, num_ants))))
+    )
+end
 
 """
 $(SIGNATURES)
@@ -63,9 +106,9 @@ struct TrackingState{
         CALF <: AbstractLoopFilter,
         COLF <: AbstractLoopFilter,
         CN <: AbstractCN0Estimator,
-        DS <: DownconvertedSignalCPU, # Union{DownconvertedSignalCPU, CuArray{ComplexF32}}
-        CAR <: CarrierReplicaCPU, # Union{CarrierReplicaCPU, CuArray{ComplexF32}}
-        COR <: Vector{Int8}, # Union{Vector{Int8}, CuArray{Float32}}
+        DS <: Union{DownconvertedSignalCPU, DownconvertedSignalGPU},
+        CAR <: Union{CarrierReplicaCPU, CarrierReplicaGPU},
+        COR <: Union{Vector{Int8}, CuArray{Float32}}
     }
     system::S
     init_carrier_doppler::typeof(1.0Hz)
@@ -118,7 +161,8 @@ function TrackingState(
     cn0_estimator::CN = MomentsCN0Estimator(20),
     num_samples = 0
 ) where {
-    S <: AbstractGNSS,
+    T <: AbstractMatrix,
+    S <: AbstractGNSS{T},
     C <: AbstractCorrelator,
     CALF <: AbstractLoopFilter,
     COLF <: AbstractLoopFilter,
@@ -151,8 +195,61 @@ function TrackingState(
         cn0_estimator,
         downconverted_signal,
         carrier,
-        code,
-        gnss
+        code
+    )
+end
+
+# CUDA dispatch
+function TrackingState(
+    system::S,
+    carrier_doppler,
+    code_phase;
+    code_doppler = carrier_doppler * get_code_center_frequency_ratio(system),
+    carrier_phase = 0.0,
+    carrier_loop_filter::CALF = ThirdOrderBilinearLF(),
+    code_loop_filter::COLF = SecondOrderBilinearLF(),
+    sc_bit_detector = SecondaryCodeOrBitDetector(),
+    num_ants = NumAnts(1),
+    correlator::C = get_default_correlator(system, num_ants),
+    integrated_samples = 0,
+    prompt_accumulator = zero(ComplexF64),
+    cn0_estimator::CN = MomentsCN0Estimator(20),    
+    num_samples = 0
+) where {
+    T <: CuMatrix,
+    S <: AbstractGNSS{T},
+    C <: AbstractCorrelator,
+    CALF <: AbstractLoopFilter,
+    COLF <: AbstractLoopFilter,
+    CN <: AbstractCN0Estimator
+}
+    if found(sc_bit_detector)
+        code_phase = mod(code_phase, get_code_length(system) *
+            get_secondary_code_length(system))
+    else
+        code_phase = mod(code_phase, get_code_length(system))
+    end
+    downconverted_signal =  DownconvertedSignalGPU(num_samples, num_ants)
+    carrier =  CarrierReplicaGPU(num_samples)
+    code = CuArray{Float32}(undef, num_samples)
+    TrackingState{S, C, CALF, COLF, CN, typeof(downconverted_signal), typeof(carrier), typeof(code)}(
+        system,
+        carrier_doppler,
+        code_doppler,
+        carrier_doppler,
+        code_doppler,
+        carrier_phase / 2π,
+        code_phase,
+        correlator,
+        carrier_loop_filter,
+        code_loop_filter,
+        sc_bit_detector,
+        integrated_samples,
+        prompt_accumulator,
+        cn0_estimator,
+        downconverted_signal,
+        carrier,
+        code
     )
 end
 

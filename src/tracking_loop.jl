@@ -310,11 +310,7 @@ Returns the appropiate integration time. It will be the maximum integration time
 secondary code or the bit shift has been found.
 """
 function get_integration_time(
-<<<<<<< HEAD
-    gnss::S,
-=======
     system::AbstractGNSS,
->>>>>>> 2159e4514e1465bba0babf30688a0dc7808049a4
     max_integration_time,
     secondary_code_or_bit_found::Bool
 )
@@ -322,11 +318,7 @@ function get_integration_time(
         secondary_code_or_bit_found,
         max_integration_time,
         min(
-<<<<<<< HEAD
-            convert(typeof(1ms), get_code_length(gnss) / get_code_frequency(gnss)),
-=======
             ceil(typeof(1ms), get_code_length(system) / get_code_frequency(system)),
->>>>>>> 2159e4514e1465bba0babf30688a0dc7808049a4
             max_integration_time
         )
     )
@@ -338,15 +330,6 @@ $(SIGNATURES)
 Calculates the number of chips to integrate.
 """
 function get_num_chips_to_integrate(
-<<<<<<< HEAD
-    gnss::S,
-    max_integration_time,
-    current_code_phase,
-    secondary_code_or_bit_found
-) where S <: AbstractGNSSSystem
-    max_phase = Int(upreferred(get_code_frequency(gnss) *
-        get_integration_time(gnss, max_integration_time, secondary_code_or_bit_found)))
-=======
     system::AbstractGNSS,
     max_integration_time,
     current_code_phase,
@@ -354,7 +337,6 @@ function get_num_chips_to_integrate(
 )
     max_phase = Int(upreferred(get_code_frequency(system) *
         get_integration_time(system, max_integration_time, secondary_code_or_bit_found)))
->>>>>>> 2159e4514e1465bba0babf30688a0dc7808049a4
     current_phase_mod_max_phase = mod(current_code_phase, max_phase)
     return max_phase - current_phase_mod_max_phase
 end
@@ -365,11 +347,7 @@ $(SIGNATURES)
 Calculates the number of samples to integrate.
 """
 function get_num_samples_left_to_integrate(
-<<<<<<< HEAD
-    gnss::S,
-=======
     system::AbstractGNSS,
->>>>>>> 2159e4514e1465bba0babf30688a0dc7808049a4
     max_integration_time,
     sampling_frequency,
     current_code_doppler,
@@ -377,22 +355,13 @@ function get_num_samples_left_to_integrate(
     secondary_code_or_bit_found
 )
     phase_to_integrate = get_num_chips_to_integrate(
-<<<<<<< HEAD
-        gnss,
-=======
         system,
->>>>>>> 2159e4514e1465bba0babf30688a0dc7808049a4
         max_integration_time,
         current_code_phase,
         secondary_code_or_bit_found
     )
-<<<<<<< HEAD
-    code_frequency = get_code_frequency(gnss) + current_code_doppler
-    return ceil(Int, phase_to_integrate * sampling_frequency / code_frequency)
-=======
     code_frequency = get_code_frequency(system) + current_code_doppler
     ceil(Int, phase_to_integrate * sampling_frequency / code_frequency)
->>>>>>> 2159e4514e1465bba0babf30688a0dc7808049a4
 end
 
 """
@@ -402,11 +371,7 @@ Aid dopplers. That is velocity aiding for the carrier doppler and carrier aiding
 for the code doppler.
 """
 function aid_dopplers(
-<<<<<<< HEAD
-    gnss,
-=======
     system::AbstractGNSS,
->>>>>>> 2159e4514e1465bba0babf30688a0dc7808049a4
     init_carrier_doppler,
     init_code_doppler,
     carrier_freq_update,
@@ -414,11 +379,7 @@ function aid_dopplers(
     velocity_aiding
 )
     carrier_doppler = carrier_freq_update + velocity_aiding
-<<<<<<< HEAD
-    code_doppler = code_freq_update + carrier_doppler * get_code_center_frequency_ratio(gnss)
-=======
     code_doppler = code_freq_update + carrier_doppler * get_code_center_frequency_ratio(system)
->>>>>>> 2159e4514e1465bba0babf30688a0dc7808049a4
     init_carrier_doppler + carrier_doppler, init_code_doppler + code_doppler
 end
 
@@ -435,26 +396,6 @@ end
     size(signal, 1)
 end
 
-<<<<<<< HEAD
-"""
-$(SIGNATURES)
-
-Abstract match_size_to_signal function for matching signals that resizes only if the dimensions are different
-"""
-@inline function match_size_to_signal!(signal_to_match::AbstractArray, signal::AbstractArray; tail = 0)
-    if length(signal_to_match) != size(signal, 1) + tail
-        resize!(signal_to_match, size(signal, 1) + tail)
-    end
-    return signal_to_match
-end
-
-function resize!(A::StructArray{Complex{T}, 2}, b::Integer) where T
-    if size(A, 1) == b
-        return A
-    end
-    num_ants = size(A, 2)
-    StructArray{Complex{T}}((Matrix{T}(undef, b, num_ants), Matrix{T}(undef, b, num_ants)))
-=======
 function resize!(ds::DownconvertedSignalCPU, b::Integer, signal::AbstractVector)
     resize!(choose(ds, signal), b)
     ds
@@ -468,7 +409,6 @@ function resize!(ds::DownconvertedSignalCPU, b::Integer, signal::AbstractMatrix{
             ds.downconverted_signal_f64 :
             StructArray{Complex{Float64}}((Matrix{Float64}(undef, b, num_ants), Matrix{Float64}(undef, b, num_ants)))
     )
->>>>>>> 2159e4514e1465bba0babf30688a0dc7808049a4
 end
 
 function resize!(ds::DownconvertedSignalCPU, b::Integer, signal::AbstractMatrix{Complex{T}}) where T <: Number

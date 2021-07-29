@@ -125,15 +125,9 @@ function downconvert!(
 end
 
 function downconvert!(
-<<<<<<< HEAD
-    downconverted_signal::StructArray,
-    signal::StructArray,
-    carrier_replica::StructArray,
-=======
     downconverted_signal::StructArray{Complex{T}, 2},
     signal::StructArray{Complex{ST}, 2},
     carrier_replica::StructArray{Complex{T}, 1},
->>>>>>> 2159e4514e1465bba0babf30688a0dc7808049a4
     start_sample::Integer,
     num_samples::Integer
 ) where {T, ST}
