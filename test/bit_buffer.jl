@@ -22,17 +22,6 @@
         prompt_correlator
     )
 
-    @test @allocated(Tracking.buffer(
-        gpsl1,
-        Tracking.BitBuffer(),
-        0.0 + 0.0im,
-        false,
-        0.0,
-        1023,
-        5ms,
-        1.0 + 0.0im
-    )) == 0
-
     @test next_prompt_accumulator == 0.0 + 0.0im
     @test @inferred(get_bits(next_bit_buffer)) == 0
     @test @inferred(Tracking.length(next_bit_buffer)) == 0
