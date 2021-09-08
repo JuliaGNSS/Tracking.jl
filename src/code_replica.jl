@@ -20,7 +20,7 @@ function gen_code_replica!(
     num_samples::Integer,
     correlator_sample_shifts::SVector,
     prn::Integer
-) where
+)
     most_early_sample_shift = correlator_sample_shifts[end]
     most_late_sample_shift  = correlator_sample_shifts[1]
     total_samples = num_samples + most_early_sample_shift - most_late_sample_shift
