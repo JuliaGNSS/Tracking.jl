@@ -1,6 +1,7 @@
 module Tracking
     using
         DocStringExtensions,
+        FixedPointNumbers,
         GNSSSignals,
         StaticArrays,
         TrackingLoopFilters,
