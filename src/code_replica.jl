@@ -12,32 +12,6 @@ index start_sample.
 """
 function gen_code_replica!(
     code_replica,
-    system::T,
-    code_frequency,
-    sampling_frequency,
-    start_code_phase::AbstractFloat,
-    start_sample::Integer,
-    num_samples::Integer,
-    correlator_sample_shifts::SVector,
-    prn::Integer
-) where T <:AbstractGNSS
-    fixed_point = sizeof(Int) * 8 - 1 - min_bits_for_code_length(system)
-    FP = Fixed{Int, fixed_point}
-    code_loop!(
-        code_replica,
-        system,
-        code_frequency,
-        sampling_frequency,
-        start_code_phase,
-        start_sample,
-        num_samples,
-        correlator_sample_shifts,
-        prn,
-        FP
-    )
-end
-function code_loop!(
-    code_replica,
     system::AbstractGNSS,
     code_frequency,
     sampling_frequency,
@@ -45,21 +19,19 @@ function code_loop!(
     start_sample::Integer,
     num_samples::Integer,
     correlator_sample_shifts::SVector,
-    prn::Integer,
-    ::Type{FP}
-) where FP
+    prn::Integer
+) where
     most_early_sample_shift = correlator_sample_shifts[end]
     most_late_sample_shift  = correlator_sample_shifts[1]
-    num_early_late_samples = most_early_sample_shift - most_late_sample_shift
-    total_code_length = FP(get_code_length(system) * get_secondary_code_length(system))
-    start_code_phase = FP(mod(start_code_phase, total_code_length))
-    delta = FP(code_frequency / sampling_frequency)
-    code_phase = start_code_phase + delta * (most_late_sample_shift - 1)
-    @inbounds for i ∈ start_sample:(num_samples + num_early_late_samples + start_sample - 1)
-        code_phase += delta
-        code_phase -= (code_phase >= total_code_length) * total_code_length
-        code_replica[i] = get_code_unsafe(system, code_phase, prn)
-    end
+    total_samples = num_samples + most_early_sample_shift - most_late_sample_shift
+    gen_code!(
+        view(code_replica, start_sample:start_sample+total_samples-1),
+        system,
+        prn,
+        sampling_frequency,
+        code_frequency,
+        start_code_phase + most_late_sample_shift * code_frequency/sampling_frequency
+    )
     code_replica
 end
 
