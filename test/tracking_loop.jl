@@ -150,8 +150,8 @@ end
     gpsl1 = GPSL1()
     carrier_doppler = 200Hz
     start_code_phase = 100
-    code_frequency = carrier_doppler / 1540 + 1023kHz
-    sampling_frequency = 4MHz
+    code_frequency = carrier_doppler / 1540 + 1023e3Hz
+    sampling_frequency = 4e6Hz
     prn = 1
     range = 0:3999
     start_carrier_phase = π / 2
@@ -237,8 +237,8 @@ end
     gpsl1 = GPSL1()
     carrier_doppler = 200Hz
     start_code_phase = 100
-    code_frequency = carrier_doppler / 1540 + 1023kHz
-    sampling_frequency = 4MHz
+    code_frequency = carrier_doppler / 1540 + 1023e3Hz
+    sampling_frequency = 4e6Hz
     prn = 1
     range = 0:3999
     start_carrier_phase = π / 2

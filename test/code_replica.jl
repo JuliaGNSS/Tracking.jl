@@ -5,8 +5,8 @@
     Tracking.gen_code_replica!(
         code,
         gpsl1,
-        1023e3,
-        2.5e6,
+        1023e3Hz,
+        2.5e6Hz,
         2.0,
         11,
         2480,
@@ -22,8 +22,8 @@
         Tracking.gen_code_replica!(
             code,
             gpsl1,
-            1023e3,
-            2.5e6,
+            1023e3Hz,
+            2.5e6Hz,
             2.0,
             11,
             6480,
@@ -40,8 +40,8 @@
         Tracking.gen_code_replica!(
             code,
             gpsl1,
-            1023e3 * 3,
-            7.5e6,
+            1023e3Hz * 3,
+            7.5e6Hz,
             2.0,
             11,
             2480,
