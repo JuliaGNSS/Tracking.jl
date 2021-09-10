@@ -9,7 +9,16 @@
         @test @inferred(get_prompt(correlator, correlator_sample_shifts)) == 0.0
         @test @inferred(get_late(correlator, correlator_sample_shifts, early_late_index_shift)) == 0.0
 
+        correlator = @inferred EarlyPromptLateCorrelator(NumAnts(1), 3)
+        @test isa(get_accumulators(correlator), Vector)
+
         correlator = @inferred EarlyPromptLateCorrelator(NumAnts(1))
+
+        @test @inferred(get_early(correlator, correlator_sample_shifts, early_late_index_shift)) == 0.0
+        @test @inferred(get_prompt(correlator, correlator_sample_shifts)) == 0.0
+        @test @inferred(get_late(correlator, correlator_sample_shifts, early_late_index_shift)) == 0.0
+
+        correlator = @inferred EarlyPromptLateCorrelator(NumAnts(1), 3)
 
         @test @inferred(get_early(correlator, correlator_sample_shifts, early_late_index_shift)) == 0.0
         @test @inferred(get_prompt(correlator, correlator_sample_shifts)) == 0.0
@@ -20,6 +29,13 @@
         @test @inferred(get_early(correlator, correlator_sample_shifts, early_late_index_shift)) == SVector(0.0 + 0.0im, 0.0 + 0.0im)
         @test @inferred(get_prompt(correlator, correlator_sample_shifts)) == SVector(0.0 + 0.0im, 0.0 + 0.0im)
         @test @inferred(get_late(correlator, correlator_sample_shifts, early_late_index_shift)) == SVector(0.0 + 0.0im, 0.0 + 0.0im)
+
+        correlator = @inferred EarlyPromptLateCorrelator(NumAnts(2), 3)
+
+        @test @inferred(get_early(correlator, correlator_sample_shifts, early_late_index_shift)) == SVector(0.0 + 0.0im, 0.0 + 0.0im)
+        @test @inferred(get_prompt(correlator, correlator_sample_shifts)) == SVector(0.0 + 0.0im, 0.0 + 0.0im)
+        @test @inferred(get_late(correlator, correlator_sample_shifts, early_late_index_shift)) == SVector(0.0 + 0.0im, 0.0 + 0.0im)
+
     end
     @testset "Zeroing correlator" begin
         correlator = @inferred EarlyPromptLateCorrelator(
@@ -154,6 +170,8 @@
             )
         )
     end
+
+
     @testset "Correlate" begin
         gpsl1 = GPSL1()
         signal = StructArray{Complex{Float32}}(
@@ -166,36 +184,33 @@
             (1 + correlator_sample_shifts[1]:2500 + correlator_sample_shifts[end]) * 1023e3 / 2.5e6,
             1
         )
-        correlator = EarlyPromptLateCorrelator(SVector(0.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im))
 
-        correlator_result = Tracking.correlate(
-            correlator,
-            signal,
-            code,
-            correlator_sample_shifts,
-            1,
-            2500
-        )
-        @test get_early(correlator_result, correlator_sample_shifts, 1) ==
-            get_late(correlator_result, correlator_sample_shifts, 1)
-        @test get_prompt(correlator_result, correlator_sample_shifts) == 2500
+        @testset "↳ $na antennas" for na ∈ [1, 4, 15]
+            signal_mat = na == 1 ? signal : repeat(signal, outer=(1,na))
 
+            @testset "↳ $(string(type)) accumulator" for type ∈ [:SVector, :Vector]
+                if type == :SVector
+                    correlator = EarlyPromptLateCorrelator(NumAnts(na))
+                else
+                    correlator = EarlyPromptLateCorrelator(NumAnts(na), 3)
+                end
 
-        signal_mat = repeat(signal, outer = (1,3))
-        correlator_sample_shifts = SVector(-1,0,1)
-        correlator = EarlyPromptLateCorrelator(NumAnts(3))
-
-        correlator_result = Tracking.correlate(
-            correlator,
-            signal_mat,
-            code,
-            correlator_sample_shifts,
-            1,
-            2500,
-        )
-        @test get_early(correlator_result, correlator_sample_shifts, 1) == get_late(correlator_result, correlator_sample_shifts, 1)
-        @test all(get_early(correlator_result, correlator_sample_shifts, 1) .== 1476)
-        @test all(get_prompt(correlator_result, correlator_sample_shifts) .== 2500)
+                correlator_result = Tracking.correlate(
+                    correlator,
+                    signal_mat,
+                    code,
+                    correlator_sample_shifts,
+                    1,
+                    2500,
+                )
+                early = get_early(correlator_result, correlator_sample_shifts, 1)
+                prompt = get_prompt(correlator_result, correlator_sample_shifts)
+                late = get_late(correlator_result, correlator_sample_shifts, 1)
+                @test early == late
+                @test all(early .== 1476)
+                @test all(prompt .== 2500)
+            end
+        end
     end
 
 end
