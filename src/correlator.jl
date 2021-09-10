@@ -297,14 +297,13 @@ function correlate(
     start_sample,
     num_samples,
 ) where {N}
-    accumulators = zero_accumulators(get_accumulators(correlator), downconverted_signal)
-    a_re = real.(accumulators)
-    a_im = imag.(accumulators)
+    a_re = zero_accumulators(get_accumulators(correlator), downconverted_signal)
+    a_im = zero_accumulators(get_accumulators(correlator), downconverted_signal)
     d_re = downconverted_signal.re
     d_im = downconverted_signal.im
     @avx for i = start_sample:num_samples + start_sample - 1
-        for k = 1:size(accumulators, 2)
-            for j = 1:size(accumulators, 1)
+        for k = 1:size(a_re, 2)
+            for j = 1:size(a_re, 1)
                 shift = correlator_sample_shifts[k] - correlator_sample_shifts[1]
                 a_re[j,k] += d_re[i,j] * code[shift + i]
                 a_im[j,k] += d_im[i,j] * code[shift + i]
@@ -317,8 +316,8 @@ function correlate(
 end
 
 function zero_accumulators(accumulators::SVector{NC, <:SVector{NA}}, signal) where {NC, NA}
-    zeros(MMatrix{NA, NC, eltype(signal)})
+    zeros(MMatrix{NA, NC, real(eltype(signal))})
 end
 function zero_accumulators(accumulators::Vector{<:SVector{NA}}, signal) where NA
-    zeros(eltype(signal), NA, length(accumulators))
+    zeros(real(eltype(signal)), NA, length(accumulators))
 end
