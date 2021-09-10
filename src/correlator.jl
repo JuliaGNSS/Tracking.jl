@@ -297,7 +297,7 @@ function correlate(
     start_sample,
     num_samples,
 ) where {N}
-    accumulators = zero(MMatrix{N, length(correlator_sample_shifts), eltype(downconverted_signal)})
+    accumulators = zero_accumulators(get_accumulators(correlator), downconverted_signal)
     a_re = real.(accumulators)
     a_im = imag.(accumulators)
     d_re = downconverted_signal.re
@@ -312,6 +312,13 @@ function correlate(
         end
     end
 
-    accumulators_new = SVector(eachcol(complex.(SMatrix(a_re), SMatrix(a_im)))...)
+    accumulators_new = SVector{N}.(eachcol(complex.(a_re, a_im)))
     typeof(correlator)(map(+, get_accumulators(correlator), accumulators_new))
+end
+
+function zero_accumulators(accumulators::SVector{NC, <:SVector{NA}}, signal) where {NC, NA}
+    zeros(MMatrix{NA, NC, eltype(signal)})
+end
+function zero_accumulators(accumulators::Vector{<:SVector{NA}}, signal) where NA
+    zeros(eltype(signal), NA, length(accumulators))
 end

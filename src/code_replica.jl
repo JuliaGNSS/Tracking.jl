@@ -18,7 +18,7 @@ function gen_code_replica!(
     start_code_phase::AbstractFloat,
     start_sample::Integer,
     num_samples::Integer,
-    correlator_sample_shifts::SVector,
+    correlator_sample_shifts::AbstractVector,
     prn::Integer
 )
     most_early_sample_shift = correlator_sample_shifts[end]
