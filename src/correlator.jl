@@ -261,13 +261,12 @@ function correlate(
     start_sample,
     num_samples
 ) where {T <: AbstractCorrelator}
-    accumulators = zero_accumulators(get_accumulators(correlator), downconverted_signal)
+    a_re = zero_accumulators(get_accumulators(correlator), downconverted_signal)
+    a_im = zero_accumulators(get_accumulators(correlator), downconverted_signal)
     d_re = downconverted_signal.re
     d_im = downconverted_signal.im
-    a_re = real.(accumulators)
-    a_im = imag.(accumulators)
     @avx for i = start_sample:num_samples + start_sample - 1
-        for j = 1:length(accumulators)
+        for j = 1:length(a_re)
             sample_shift = correlator_sample_shifts[j] - correlator_sample_shifts[1]
             a_re[j] += d_re[i] * code[i + sample_shift]
             a_im[j] += d_im[i] * code[i + sample_shift]
@@ -278,10 +277,10 @@ function correlate(
 end
 
 function zero_accumulators(accumulators::SVector, signal)
-    zeros(MVector{length(accumulators), eltype(signal)})
+    zeros(MVector{length(accumulators), real(eltype(signal))})
 end
 function zero_accumulators(accumulators::Vector, signal)
-    zeros(eltype(signal), length(accumulators))
+    zeros(real(eltype(signal)), length(accumulators))
 end
 
 """
@@ -311,8 +310,7 @@ function correlate(
         end
     end
 
-    accumulators_new = SVector{N}.(eachcol(complex.(a_re, a_im)))
-    typeof(correlator)(map(+, get_accumulators(correlator), accumulators_new))
+    typeof(correlator)(map(+, get_accumulators(correlator), eachcol(complex.(a_re, a_im))))
 end
 
 function zero_accumulators(accumulators::SVector{NC, <:SVector{NA}}, signal) where {NC, NA}
