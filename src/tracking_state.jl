@@ -203,18 +203,19 @@ end
 function TrackingState(
     system::S,
     carrier_doppler,
-    code_phase;
+    code_phase,
+    signal;
     code_doppler = carrier_doppler * get_code_center_frequency_ratio(system),
     carrier_phase = 0.0,
     carrier_loop_filter::CALF = ThirdOrderBilinearLF(),
     code_loop_filter::COLF = SecondOrderBilinearLF(),
     sc_bit_detector = SecondaryCodeOrBitDetector(),
-    num_ants = NumAnts(1),
+    num_ants = NumAnts(size(signal, 2)),
     correlator::C = get_default_correlator(system, num_ants),
     integrated_samples = 0,
     prompt_accumulator = zero(ComplexF64),
     cn0_estimator::CN = MomentsCN0Estimator(20),    
-    num_samples = 0
+    num_samples = length(signal)
 ) where {
     T <: CuMatrix,
     S <: AbstractGNSS{T},

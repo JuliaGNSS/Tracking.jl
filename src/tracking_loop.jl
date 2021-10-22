@@ -283,11 +283,17 @@ end
 function choose(replica::CarrierReplicaCPU, signal::AbstractArray{Complex{T}}) where T <: Number
     replica.carrier_f32
 end
+function choose(replica::CarrierReplicaGPU, signal::AbstractArray)
+    replica.carrier
+end
 function choose(replica::DownconvertedSignalCPU, signal::AbstractArray{Complex{Float64}})
     replica.downconverted_signal_f64
 end
 function choose(replica::DownconvertedSignalCPU, signal::AbstractArray{Complex{T}}) where T <: Number
     replica.downconverted_signal_f32
+end
+function choose(replica::DownconvertedSignalGPU, signal::AbstractArray)
+    replica.downconverted_signal
 end
 
 """
@@ -419,4 +425,9 @@ function resize!(ds::DownconvertedSignalCPU, b::Integer, signal::AbstractMatrix{
             StructArray{Complex{Float32}}((Matrix{Float32}(undef, b, num_ants), Matrix{Float32}(undef, b, num_ants))),
         ds.downconverted_signal_f64
     )
+end
+
+# No need for resizing when dealing with GPU signals
+function resize!(ds::DownconvertedSignalGPU, b::Integer, signal::AbstractMatrix)
+    return ds
 end
