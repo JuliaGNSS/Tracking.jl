@@ -108,7 +108,7 @@ struct TrackingState{
         CN <: AbstractCN0Estimator,
         DS <: Union{DownconvertedSignalCPU, DownconvertedSignalGPU},
         CAR <: Union{CarrierReplicaCPU, CarrierReplicaGPU},
-        COR <: Union{Vector{Int8}, CuArray{Float32}}
+        COR <: Union{Vector{Int8}, typeof(NaN)}
     }
     system::S
     init_carrier_doppler::typeof(1.0Hz)
@@ -232,7 +232,7 @@ function TrackingState(
     end
     downconverted_signal =  DownconvertedSignalGPU(num_samples, num_ants)
     carrier =  CarrierReplicaGPU(num_samples)
-    code = CuArray{Float32}(undef, num_samples)
+    code = NaN
     TrackingState{S, C, CALF, COLF, CN, typeof(downconverted_signal), typeof(carrier), typeof(code)}(
         system,
         carrier_doppler,

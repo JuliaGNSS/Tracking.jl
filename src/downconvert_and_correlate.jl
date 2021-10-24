@@ -32,7 +32,7 @@ end
 =#
 
 
-function shmem_code_nant_ncorr_kernel(
+function downconvert_and_correlate_kernel(
     res_re,
     res_im,
     signal_re,
@@ -40,7 +40,6 @@ function shmem_code_nant_ncorr_kernel(
     carrier_re,
     carrier_im,
     codes,
-    upsampled_code,
     code_frequency,
     correlator_sample_shifts,
     carrier_frequency,
@@ -51,8 +50,7 @@ function shmem_code_nant_ncorr_kernel(
     prn,
     num_samples,
     num_ants,
-    num_corrs,
-    cache_content
+    num_corrs
 )   
     cache = @cuDynamicSharedMem(Float32, (2 * blockDim().x, num_ants, num_corrs))   
     sample_idx   = 1 + ((blockIdx().x - 1) * blockDim().x + (threadIdx().x - 1))
@@ -86,7 +84,7 @@ function shmem_code_nant_ncorr_kernel(
         # @cuprintln("(sample_idx, antenna_idx, corr_idx): ($(sample_idx), $(antenna_idx), $(corr_idx)) Calculated mod floor phase to be: $modfloorphase")
 
         # save the upsampled code
-        upsampled_code[sample_idx, corr_idx] = codes[mod_floor_code_phase, prn]
+        # upsampled_code[sample_idx, corr_idx] = codes[mod_floor_code_phase, prn]
 
         # multiply elementwise with the code
         accum_re += codes[mod_floor_code_phase, prn] * dw_re
@@ -101,13 +99,6 @@ function shmem_code_nant_ncorr_kernel(
     # wait until all the accumulators have done writing the results to the cache
     sync_threads()
 
-    # save cache_content for inspection
-    if blockIdx().x == gridDim().x
-        for idx = 1:length(cache_content)
-            cache_content[idx] = cache[idx]
-        end
-    end
-    
     i::Int = blockDim().x ÷ 2
     @inbounds while i != 0
         if cache_index < i
@@ -123,51 +114,4 @@ function shmem_code_nant_ncorr_kernel(
         res_im[blockIdx().x, antenna_idx, corr_idx] += cache[1 + 1 * iq_offset, antenna_idx, corr_idx]
     end
     return nothing
-end
-
-# kernel wrapper function prevpow(2)
-function shmem_code_nant_ncorr_kernel_wrapper(signal, carrier, codes, correlator_sample_shifts, carrier_frequency, sampling_frequency, start_code_phase, carrier_phase, code_length, prn; threads_per_block = 1024)
-    num_corrs = length(correlator_sample_shifts)
-    num_ants = size(signal, 2)
-    num_samples = size(signal, 1)
-    block_dim_z = num_corrs
-    block_dim_y = num_ants
-    # keep num_corrs and num_ants in seperate dimensions, truncate num_samples accordingly to fit
-    block_dim_x = prevpow(2, threads_per_block ÷ block_dim_y ÷ block_dim_z)
-    threads = (block_dim_x, block_dim_y, block_dim_z)
-    blocks = cld(size(signal, 1), block_dim_x)
-    upsampled_code = CUDA.zeros(Float32, num_samples, num_corrs)
-    # correlator_re = CUDA.zeros(Float32, num_samples, num_ants, num_corrs)
-    # correlator_im = CUDA.zeros(Float32, num_samples, num_ants, num_corrs)
-    res_re = CUDA.zeros(Float32, blocks, block_dim_y, block_dim_z)
-    res_im = CUDA.zeros(Float32, blocks, block_dim_y, block_dim_z)
-    cache_content = CUDA.zeros(Float32, 2*block_dim_x, block_dim_y, block_dim_z)
-    shmem_size = sizeof(ComplexF32)*block_dim_x*block_dim_y*block_dim_z
-    # println("Launching Kernel with Signal: ($(size(signal, 1)), $(size(signal, 2)), $(length(correlator_sample_shifts)), Threads: ($block_dim_x, $block_dim_y, $block_dim_z) = $(block_dim_x*block_dim_y*block_dim_z), Blocks: $blocks, Total Threads: $(block_dim_x*block_dim_y*block_dim_z*blocks), ThreadsPerBlockMax: $threads_per_block")
-    @cuda threads=threads blocks=blocks shmem=shmem_size shmem_code_nant_ncorr_kernel(
-        res_re, 
-        res_im, 
-        signal.re, 
-        signal.im, 
-        carrier.re, 
-        carrier.im, 
-        codes,
-        upsampled_code,
-        Float32(code_frequency), # code freq
-        correlator_sample_shifts,
-        Float32(carrier_frequency),
-        Float32(sampling_frequency), # sampling freq
-        Float32(start_code_phase),# start code phase
-        Float32(carrier_phase), # start carrier phase
-        code_length, # code length
-        prn, #prn
-        num_samples, 
-        num_ants,
-        num_corrs,
-        cache_content
-    )
-    return sum(res_re, dims=1), sum(res_im, dims=1)
-    # return res_re, res_im
-    # return upsampled_code
-    # return cache_content
 end
