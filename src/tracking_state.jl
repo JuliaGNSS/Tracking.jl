@@ -108,7 +108,7 @@ struct TrackingState{
         CN <: AbstractCN0Estimator,
         DS <: Union{DownconvertedSignalCPU, DownconvertedSignalGPU},
         CAR <: Union{CarrierReplicaCPU, CarrierReplicaGPU},
-        COR <: Union{Vector{Int8}, typeof(NaN)}
+        COR <: Union{Vector{Int8}, Nothing}
     }
     system::S
     init_carrier_doppler::typeof(1.0Hz)
@@ -203,19 +203,18 @@ end
 function TrackingState(
     system::S,
     carrier_doppler,
-    code_phase,
-    signal;
+    code_phase;
+    num_samples,
     code_doppler = carrier_doppler * get_code_center_frequency_ratio(system),
     carrier_phase = 0.0,
     carrier_loop_filter::CALF = ThirdOrderBilinearLF(),
     code_loop_filter::COLF = SecondOrderBilinearLF(),
     sc_bit_detector = SecondaryCodeOrBitDetector(),
-    num_ants = NumAnts(size(signal, 2)),
+    num_ants = NumAnts(1),
     correlator::C = get_default_correlator(system, num_ants),
     integrated_samples = 0,
     prompt_accumulator = zero(ComplexF64),
-    cn0_estimator::CN = MomentsCN0Estimator(20),    
-    num_samples = length(signal)
+    cn0_estimator::CN = MomentsCN0Estimator(20)   
 ) where {
     T <: CuMatrix,
     S <: AbstractGNSS{T},
@@ -231,9 +230,9 @@ function TrackingState(
         code_phase = mod(code_phase, get_code_length(system))
     end
     downconverted_signal =  DownconvertedSignalGPU(num_samples, num_ants)
-    carrier =  CarrierReplicaGPU(num_samples)
-    code = NaN
-    TrackingState{S, C, CALF, COLF, CN, typeof(downconverted_signal), typeof(carrier), typeof(code)}(
+    carrier =  CarrierReplicaGPU(num_samples) #nothing
+    code = nothing
+    TrackingState{S, C, CALF, COLF, CN, typeof(downconverted_signal), typeof(carrier), Nothing}(
         system,
         carrier_doppler,
         code_doppler,

@@ -67,7 +67,7 @@ function downconvert_and_correlate_kernel(
         # @cuprintln("+++++ Current (sample_idx, antenna_idx, corr_idx): ($(sample_idx), $(antenna_idx), $(corr_idx)) +++++")
 
         # generate carrier
-        carrier_im[sample_idx], carrier_re[sample_idx] = CUDA.sincos(2π * sample_idx * carrier_frequency / sampling_frequency + carrier_phase)
+        carrier_im[sample_idx], carrier_re[sample_idx] = CUDA.sincos(2π * (sample_idx - 1) * carrier_frequency / sampling_frequency + carrier_phase)
         # @cuprintln("(sample_idx, antenna_idx, corr_idx): ($(sample_idx), $(antenna_idx), $(corr_idx)) Calculated (carrier_re, carrier_im) to be: ($(carrier_re[sample_idx]), $(carrier_im[sample_idx]))")
         
         # downconvert with the conjugate of the carrier
@@ -114,4 +114,56 @@ function downconvert_and_correlate_kernel(
         res_im[blockIdx().x, antenna_idx, corr_idx] += cache[1 + 1 * iq_offset, antenna_idx, corr_idx]
     end
     return nothing
+end
+
+function downconvert_and_correlate_kernel_wrapper(
+    system,
+    signal,
+    correlator,
+    code_replica,
+    code_phase,
+    carrier_replica,
+    carrier_phase,
+    downconverted_signal,
+    code_frequency,
+    correlator_sample_shifts,
+    carrier_frequency,
+    sampling_frequency,
+    signal_start_sample,
+    num_samples_left,
+    prn
+)
+    num_corrs = length(correlator_sample_shifts)
+    num_ants = size(signal, 2)
+    num_samples = size(signal, 1)
+    block_dim_z = num_corrs
+    block_dim_y = num_ants
+    # keep num_corrs and num_ants in seperate dimensions, truncate num_samples accordingly to fit
+    block_dim_x = prevpow(2, 1024 ÷ block_dim_y ÷ block_dim_z)
+    threads = (block_dim_x, block_dim_y, block_dim_z)
+    blocks = cld(size(signal, 1), block_dim_x)
+    res_re = CUDA.zeros(Float32, blocks, block_dim_y, block_dim_z)
+    res_im = CUDA.zeros(Float32, blocks, block_dim_y, block_dim_z)
+    shmem_size = sizeof(ComplexF32)*block_dim_x*block_dim_y*block_dim_z
+    @cuda threads=threads blocks=blocks shmem=shmem_size downconvert_and_correlate_kernel(
+        res_re, 
+        res_im, 
+        signal.re, 
+        signal.im, 
+        carrier_replica.carrier.re, 
+        carrier_replica.carrier.im, 
+        system.codes,
+        Float32(code_frequency),
+        correlator_sample_shifts,
+        Float32(carrier_frequency),
+        Float32(sampling_frequency),
+        Float32(code_phase),
+        Float32(carrier_phase),
+        size(system.codes, 1),
+        prn,
+        num_samples, 
+        num_ants,
+        num_corrs
+    )
+    return sum(res_re .+ 1im*res_im, dims=1)
 end

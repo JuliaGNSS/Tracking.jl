@@ -207,8 +207,7 @@ function track(
         cn0_estimator,
         downconverted_signal,
         carrier_replica,
-        code_replica,
-        gnss
+        code_replica
     )
     estimated_cn0 = estimate_cn0(cn0_estimator, max_integration_time)
     TrackingResults(
@@ -295,39 +294,24 @@ function downconvert_and_correlate!(
     num_samples_left,
     prn
 ) where {C <: CuMatrix, T <: AbstractCorrelator}
-    num_corrs = length(correlator_sample_shifts)
-    num_ants = size(signal, 2)
-    num_samples = size(signal, 1)
-    block_dim_z = num_corrs
-    block_dim_y = num_ants
-    # keep num_corrs and num_ants in seperate dimensions, truncate num_samples accordingly to fit
-    block_dim_x = prevpow(2, 1024 ÷ block_dim_y ÷ block_dim_z)
-    threads = (block_dim_x, block_dim_y, block_dim_z)
-    blocks = cld(size(signal, 1), block_dim_x)
-    res_re = CUDA.zeros(Float32, blocks, block_dim_y, block_dim_z)
-    res_im = CUDA.zeros(Float32, blocks, block_dim_y, block_dim_z)
-    shmem_size = sizeof(ComplexF32)*block_dim_x*block_dim_y*block_dim_z
-    @cuda threads=threads blocks=blocks shmem=shmem_size downconvert_and_correlate_kernel(
-        res_re, 
-        res_im, 
-        signal.re, 
-        signal.im, 
-        carrier_replica.carrier.re, 
-        carrier_replica.carrier.im, 
-        system.codes,
-        Float32(code_frequency),
+    accumulator_result = downconvert_and_correlate_kernel_wrapper(
+        system,
+        view(signal, signal_start_sample:signal_start_sample - 1 + num_samples_left),
+        correlator,
+        code_replica,
+        code_phase,
+        carrier_replica,
+        carrier_phase,
+        downconverted_signal,
+        code_frequency,
         correlator_sample_shifts,
-        Float32(carrier_frequency),
-        Float32(sampling_frequency),
-        Float32(code_phase),
-        Float32(carrier_phase),
-        size(system.codes, 1),
-        prn,
-        num_samples, 
-        num_ants,
-        num_corrs
+        carrier_frequency,
+        sampling_frequency,
+        signal_start_sample,
+        num_samples_left,
+        prn
     )
-    return T(sum(res_re .+ 1im*res_im, dims=1))
+    return T(map(+, get_accumulators(correlator), vec(accumulator_result)))
 end
 
 function choose(replica::CarrierReplicaCPU, signal::AbstractArray{Complex{Float64}})
@@ -485,6 +469,6 @@ function resize!(ds::DownconvertedSignalGPU, b::Integer, signal::AbstractMatrix)
     return ds
 end
 # No need for resizing the GPU GNSS codes
-function resize!(codes::typeof(NaN), b::Integer)
+function resize!(codes::typeof(nothing), b::Integer)
     return codes
 end
