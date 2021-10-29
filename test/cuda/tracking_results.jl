@@ -1,4 +1,4 @@
-@testset "Tracking results" begin
+@testset "Tracking results GPU" begin
     gpsl1 = GPSL1(use_gpu = Val(true))
     results = Tracking.TrackingResults(
         TrackingState(gpsl1, 100Hz, 100, num_samples = 2500),

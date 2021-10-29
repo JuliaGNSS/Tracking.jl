@@ -1,4 +1,4 @@
-@testset "Tracking state" begin
+@testset "Tracking state GPU" begin
 
     carrier_doppler = 100Hz
     code_phase = 100
@@ -7,7 +7,7 @@
     state = TrackingState(gpsl1, carrier_doppler, code_phase, num_samples = num_samples)
 
     @test_throws UndefKeywordError TrackingState(gpsl1, carrier_doppler, code_phase)
-    
+
     @test @inferred(Tracking.get_code_phase(state)) == 100
     @test @inferred(Tracking.get_carrier_phase(state)) == 0.0
     @test @inferred(Tracking.get_init_code_doppler(state)) == 100Hz / 1540

@@ -6,7 +6,8 @@ using
     StaticArrays,
     TrackingLoopFilters,
     StructArrays,
-    Statistics
+    Statistics,
+    CUDA
 
 import Unitful: MHz, kHz, Hz, s, ms, dBHz
 
