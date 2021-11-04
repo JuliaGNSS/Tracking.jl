@@ -65,7 +65,6 @@ module Tracking
     include("carrier_replica.jl")
     include("downconvert.jl")
     include("cn0_estimation.jl")
-    include("discriminators.jl")
     include("bit_buffer.jl")
     include("correlator.jl")
     include("secondary_code_or_bit_detector.jl")

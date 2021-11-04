@@ -26,7 +26,9 @@ function est_carrier_doppler(
     correlator,
     filtered_correlator,
     correlator_sample_shifts,
+    sampling_frequency,
     integration_time,
+    integrated_samples_wrt_signal,
     init_carrier_doppler,
 )
     pll_discriminator = pll_disc(

@@ -67,6 +67,7 @@ function track(
     code_doppler_estimator_state = get_code_doppler_estimator_state(state)
     prompt_accumulator = get_prompt_accumulator(state)
     integrated_samples = get_integrated_samples(state)
+    integrated_samples_wrt_signal = 0
     cn0_estimator = get_cn0_estimator(state)
     signal_start_sample = 1
     bit_buffer = BitBuffer()
@@ -110,6 +111,7 @@ function track(
             prn
         )
         integrated_samples += num_samples_left
+        integrated_samples_wrt_signal += num_samples_left
         carrier_phase = update_carrier_phase(
             num_samples_left,
             carrier_frequency,
@@ -140,7 +142,9 @@ function track(
                 correlator,
                 filtered_correlator,
                 correlator_sample_shifts,
+                sampling_frequency,
                 integration_time,
+                integrated_samples_wrt_signal,
                 init_carrier_doppler,
             )
             code_doppler, code_doppler_estimator_state = est_code_doppler(
@@ -153,6 +157,7 @@ function track(
                 code_frequency,
                 sampling_frequency,
                 integration_time,
+                integrated_samples_wrt_signal,
                 init_code_doppler,
             )
             cn0_estimator = update(

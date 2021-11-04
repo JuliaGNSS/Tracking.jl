@@ -39,6 +39,7 @@ function est_code_doppler(
     code_frequency,
     sampling_frequency,
     integration_time,
+    integrated_samples_wrt_signal,
     init_code_doppler,
 )
     dll_discriminator = dll_disc(
