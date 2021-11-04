@@ -3,8 +3,9 @@
     carrier_doppler = 100Hz
     code_phase = 100
     gpsl1 = GPSL1()
-    state = TrackingState(gpsl1, carrier_doppler, code_phase)
+    state = TrackingState(1, gpsl1, carrier_doppler, code_phase)
 
+    @test @inferred(Tracking.get_prn(state)) == 1
     @test @inferred(Tracking.get_code_phase(state)) == 100
     @test @inferred(Tracking.get_carrier_phase(state)) == 0.0
     @test @inferred(Tracking.get_init_code_doppler(state)) == 100Hz / 1540
@@ -19,6 +20,7 @@
     @test @inferred(Tracking.get_integrated_samples(state)) == 0
 
     state = TrackingState(
+        1,
         gpsl1,
         carrier_doppler,
         code_phase;
@@ -32,6 +34,7 @@
         prompt_accumulator = zero(ComplexF64)
     )
 
+    @test @inferred(Tracking.get_prn(state)) == 1
     @test @inferred(Tracking.get_code_phase(state)) == 100
     @test @inferred(Tracking.get_carrier_phase(state)) == 0.0
     @test @inferred(Tracking.get_init_code_doppler(state)) == 100Hz / 1540
@@ -45,7 +48,7 @@
     @test @inferred(Tracking.get_prompt_accumulator(state)) == 0.0
     @test @inferred(Tracking.get_integrated_samples(state)) == 0
 
-    state = TrackingState(gpsl1, carrier_doppler, code_phase, num_ants = NumAnts(2))
+    state = TrackingState(1, gpsl1, carrier_doppler, code_phase, num_ants = NumAnts(2))
     @test @inferred(Tracking.get_correlator(state)) == EarlyPromptLateCorrelator(NumAnts(2))
 
 end
