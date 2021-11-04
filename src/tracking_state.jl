@@ -60,12 +60,12 @@ TrackingState that holds the tracking state.
 struct TrackingState{
         S <: AbstractGNSS,
         C <: AbstractCorrelator,
-        CALF <: AbstractLoopFilter,
-        COLF <: AbstractLoopFilter,
+        CAD <: AbstractCarrierDopplerEstimatorState,
+        COD <: AbstractCodeDopplerEstimatorState,
         CN <: AbstractCN0Estimator,
-        DS <: DownconvertedSignalCPU, # Union{DownconvertedSignalCPU, CuArray{ComplexF32}}
-        CAR <: CarrierReplicaCPU, # Union{CarrierReplicaCPU, CuArray{ComplexF32}}
-        COR <: Vector{Int8}, # Union{Vector{Int8}, CuArray{Float32}}
+        DS <: DownconvertedSignalCPU,
+        CAR <: CarrierReplicaCPU,
+        COR <: Vector{Int8},
     }
     system::S
     init_carrier_doppler::typeof(1.0Hz)
@@ -75,8 +75,8 @@ struct TrackingState{
     carrier_phase::Float64
     code_phase::Float64
     correlator::C
-    carrier_loop_filter::CALF
-    code_loop_filter::COLF
+    carrier_doppler_estimator_state::CAD
+    code_doppler_estimator_state::COD
     sc_bit_detector::SecondaryCodeOrBitDetector
     integrated_samples::Int
     prompt_accumulator::ComplexF64
@@ -106,10 +106,10 @@ function TrackingState(
     system::S,
     carrier_doppler,
     code_phase;
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(system),
+    code_doppler = 0.0Hz,
     carrier_phase = 0.0,
-    carrier_loop_filter::CALF = ThirdOrderBilinearLF(),
-    code_loop_filter::COLF = SecondOrderBilinearLF(),
+    carrier_doppler_estimator_state::CAD = CostasLoopState(ThirdOrderBilinearLF()),
+    code_doppler_estimator_state::COD = EarlyPromptLateLoopState(SecondOrderBilinearLF()),
     sc_bit_detector = SecondaryCodeOrBitDetector(),
     num_ants = NumAnts(1),
     correlator::C = get_default_correlator(system, num_ants),
@@ -119,8 +119,8 @@ function TrackingState(
 ) where {
     S <: AbstractGNSS,
     C <: AbstractCorrelator,
-    CALF <: AbstractLoopFilter,
-    COLF <: AbstractLoopFilter,
+    CAD <: AbstractCarrierDopplerEstimatorState,
+    COD <: AbstractCodeDopplerEstimatorState,
     CN <: AbstractCN0Estimator
 }
     if found(sc_bit_detector)
@@ -133,7 +133,7 @@ function TrackingState(
     carrier = CarrierReplicaCPU()
     code = Vector{Int8}(undef, 0)
 
-    TrackingState{S, C, CALF, COLF, CN, typeof(downconverted_signal), typeof(carrier), typeof(code)}(
+    TrackingState{S, C, CAD, COD, CN, typeof(downconverted_signal), typeof(carrier), typeof(code)}(
         system,
         carrier_doppler,
         code_doppler,
@@ -142,8 +142,8 @@ function TrackingState(
         carrier_phase / 2π,
         code_phase,
         correlator,
-        carrier_loop_filter,
-        code_loop_filter,
+        carrier_doppler_estimator_state,
+        code_doppler_estimator_state,
         sc_bit_detector,
         integrated_samples,
         prompt_accumulator,
@@ -163,8 +163,8 @@ end
 @inline get_carrier_doppler(state::TrackingState) = state.carrier_doppler
 @inline get_correlator(state::TrackingState) = state.correlator
 @inline get_sc_bit_detector(state::TrackingState) = state.sc_bit_detector
-@inline get_carrier_loop_filter(state::TrackingState) = state.carrier_loop_filter
-@inline get_code_loop_filter(state::TrackingState) = state.code_loop_filter
+@inline get_carrier_doppler_estimator_state(state::TrackingState) = state.carrier_doppler_estimator_state
+@inline get_code_doppler_estimator_state(state::TrackingState) = state.code_doppler_estimator_state
 @inline get_prompt_accumulator(state::TrackingState) = state.prompt_accumulator
 @inline get_integrated_samples(state::TrackingState) = state.integrated_samples
 @inline get_cn0_estimator(state::TrackingState) = state.cn0_estimator

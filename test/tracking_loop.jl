@@ -127,23 +127,13 @@ end
 
 @testset "Doppler aiding" begin
     gpsl1 = GPSL1()
-    init_carrier_doppler = 10Hz
-    init_code_doppler = 1Hz
-    carrier_freq_update = 2Hz
+    carrier_doppler = 2Hz
     code_freq_update = -0.5Hz
     velocity_aiding = 3Hz
 
-    carrier_freq, code_freq = @inferred Tracking.aid_dopplers(
-        gpsl1,
-        init_carrier_doppler,
-        init_code_doppler,
-        carrier_freq_update,
-        code_freq_update,
-        velocity_aiding
-    )
+    @test @inferred(Tracking.aid_by_velocity(2Hz, 3Hz)) == 5Hz
 
-    @test carrier_freq == 10Hz + 2Hz + 3Hz
-    @test code_freq == 1Hz + (2Hz + 3Hz) / 1540 - 0.5Hz
+    @test @inferred(Tracking.aid_by_carrier(-0.5Hz, 2.0Hz, gpsl1)) == -0.5Hz + 2.0Hz / 1540
 end
 
 @testset "Tracking with signal of type $type" for type in (Int16, Int32, Int64, Float32, Float64)

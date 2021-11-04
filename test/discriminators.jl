@@ -23,9 +23,9 @@
     )
     gpsl1 = GPSL1()
     correlator_sample_shifts = SVector(-1, 0, 1)
-    @test @inferred(Tracking.pll_disc(gpsl1, correlator_minus60off, correlator_sample_shifts)) == -π / 3  #-60°
-    @test @inferred(Tracking.pll_disc(gpsl1, correlator_0off, correlator_sample_shifts)) == 0
-    @test @inferred(Tracking.pll_disc(gpsl1, correlator_plus60off, correlator_sample_shifts)) == π / 3  #+60°
+    @test @inferred(Tracking.pll_disc(correlator_minus60off, correlator_sample_shifts)) == -π / 3  #-60°
+    @test @inferred(Tracking.pll_disc(correlator_0off, correlator_sample_shifts)) == 0
+    @test @inferred(Tracking.pll_disc(correlator_plus60off, correlator_sample_shifts)) == π / 3  #+60°
 end
 
 
@@ -44,18 +44,18 @@ end
     very_late_correlator = EarlyPromptLateCorrelator(SVector(0.0 + 0.0im, 0.5 + 0.0im, 1.0 + 0.0im))
 
     @test @inferred(
-        Tracking.dll_disc(gpsl1, very_early_correlator, sample_shifts, index_shift, delta)
+        Tracking.dll_disc(very_early_correlator, sample_shifts, index_shift, delta)
     ) == -0.5
     @test @inferred(
-        Tracking.dll_disc(gpsl1, early_correlator, sample_shifts, index_shift, delta)
+        Tracking.dll_disc(early_correlator, sample_shifts, index_shift, delta)
     ) == -0.25
     @test @inferred(
-        Tracking.dll_disc(gpsl1, prompt_correlator, sample_shifts, index_shift, delta)
+        Tracking.dll_disc(prompt_correlator, sample_shifts, index_shift, delta)
     ) == 0
     @test @inferred(
-        Tracking.dll_disc(gpsl1, late_correlator, sample_shifts, index_shift, delta)
+        Tracking.dll_disc(late_correlator, sample_shifts, index_shift, delta)
     ) == 0.25
     @test @inferred(
-        Tracking.dll_disc(gpsl1, very_late_correlator, sample_shifts, index_shift, delta)
+        Tracking.dll_disc(very_late_correlator, sample_shifts, index_shift, delta)
     ) == 0.5
 end

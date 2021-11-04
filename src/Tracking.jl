@@ -44,7 +44,10 @@ module Tracking
         EarlyPromptLateCorrelator,
         #VeryEarlyPromptLateCorrelator,
         SecondaryCodeOrBitDetector,
-        GainControlledSignal
+        CostasLoopState,
+        CostasLoopBandwidth,
+        EarlyPromptLateLoopState,
+        EarlyPromptLateLoopBandwidth
 
     struct NumAnts{x}
     end
@@ -56,6 +59,8 @@ module Tracking
 
     NumAccumulators(x) = NumAccumulators{x}()
 
+    include("carrier_doppler_estimator.jl")
+    include("code_doppler_estimator.jl")
     include("code_replica.jl")
     include("carrier_replica.jl")
     include("downconvert.jl")

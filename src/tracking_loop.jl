@@ -19,7 +19,7 @@ Track the signal `signal` based on the current tracking `state`, the sampling fr
 """
 function track(
         signal,
-        state::TrackingState{S, C, CALF, COLF, CN, DS, CAR, COR},
+        state::TrackingState{S, C, CAD, COD, CN, DS, CAR, COR},
         prn::Integer,
         sampling_frequency;
         post_corr_filter = get_default_post_corr_filter(get_correlator(state)),
@@ -30,14 +30,14 @@ function track(
             get_correlator(state), sampling_frequency, 0.5),
         early_late_index_shift = get_early_late_index_shift(get_system(state),
             correlator_sample_shifts, get_correlator(state), sampling_frequency, 0.5),
-        carrier_loop_filter_bandwidth = 18Hz,
-        code_loop_filter_bandwidth = 1Hz,
+        carrier_doppler_estimator_variable::AbstractCarrierDopplerEstimatorVariable = CostasLoopBandwidth(18Hz),
+        code_doppler_estimator_variable::AbstractCodeDopplerEstimatorVariable = EarlyPromptLateLoopBandwidth(1Hz),
         velocity_aiding = 0Hz,
 ) where {
     S <: AbstractGNSS,
     C <: AbstractCorrelator,
-    CALF <: AbstractLoopFilter,
-    COLF <: AbstractLoopFilter,
+    CAD <: AbstractCarrierDopplerEstimatorState,
+    COD <: AbstractCodeDopplerEstimatorState,
     CN <: AbstractCN0Estimator,
     DS,
     CAR,
@@ -63,8 +63,8 @@ function track(
     carrier_phase = get_carrier_phase(state)
     code_phase = get_code_phase(state)
     sc_bit_detector = get_sc_bit_detector(state)
-    carrier_loop_filter = get_carrier_loop_filter(state)
-    code_loop_filter = get_code_loop_filter(state)
+    carrier_doppler_estimator_state = get_carrier_doppler_estimator_state(state)
+    code_doppler_estimator_state = get_code_doppler_estimator_state(state)
     prompt_accumulator = get_prompt_accumulator(state)
     integrated_samples = get_integrated_samples(state)
     cn0_estimator = get_cn0_estimator(state)
@@ -75,21 +75,23 @@ function track(
     valid_correlator_carrier_frequency = 0.0Hz
     got_correlator = false
     while true
+        aided_carrier_doppler = aid_by_velocity(carrier_doppler, velocity_aiding)
+        carrier_frequency = get_current_carrier_frequency(
+            intermediate_frequency,
+            aided_carrier_doppler
+        )
+        aided_code_doppler = aid_by_carrier(code_doppler, aided_carrier_doppler, system)
+        code_frequency = get_current_code_frequency(system, aided_code_doppler)
         num_samples_left_to_integrate = get_num_samples_left_to_integrate(
             system,
             max_integration_time,
             sampling_frequency,
-            code_doppler,
+            aided_code_doppler,
             code_phase,
             found(sc_bit_detector)
         )
         signal_samples_left = get_num_samples(signal) - signal_start_sample + 1
         num_samples_left = min(num_samples_left_to_integrate, signal_samples_left)
-        carrier_frequency = get_current_carrier_frequency(
-            intermediate_frequency,
-            carrier_doppler
-        )
-        code_frequency = get_current_code_frequency(system, code_doppler)
         correlator = downconvert_and_correlate!(
             system,
             signal,
@@ -132,37 +134,26 @@ function track(
             valid_correlator_carrier_phase = carrier_phase
             valid_correlator_carrier_frequency = carrier_frequency
             filtered_correlator = filter(post_corr_filter, correlator)
-            pll_discriminator = pll_disc(
-                system,
+            carrier_doppler, carrier_doppler_estimator_state = est_carrier_doppler(
+                carrier_doppler_estimator_state,
+                carrier_doppler_estimator_variable,
+                correlator,
                 filtered_correlator,
-                correlator_sample_shifts
+                correlator_sample_shifts,
+                integration_time,
+                init_carrier_doppler,
             )
-            dll_discriminator = dll_disc(
-                system,
+            code_doppler, code_doppler_estimator_state = est_code_doppler(
+                code_doppler_estimator_state,
+                code_doppler_estimator_variable,
+                correlator,
                 filtered_correlator,
                 correlator_sample_shifts,
                 early_late_index_shift,
-                code_frequency / sampling_frequency
-            )
-            carrier_freq_update, carrier_loop_filter = filter_loop(
-                carrier_loop_filter,
-                pll_discriminator,
+                code_frequency,
+                sampling_frequency,
                 integration_time,
-                carrier_loop_filter_bandwidth
-            )
-            code_freq_update, code_loop_filter = filter_loop(
-                code_loop_filter,
-                dll_discriminator,
-                integration_time,
-                code_loop_filter_bandwidth
-            )
-            carrier_doppler, code_doppler = aid_dopplers(
-                system,
-                init_carrier_doppler,
                 init_code_doppler,
-                carrier_freq_update,
-                code_freq_update,
-                velocity_aiding
             )
             cn0_estimator = update(
                 cn0_estimator,
@@ -190,7 +181,7 @@ function track(
         num_samples_left == signal_samples_left && break
         signal_start_sample += num_samples_left
     end
-    next_state = TrackingState{S, C, CALF, COLF, CN, DS, CAR, COR}(
+    next_state = TrackingState{S, C, CAD, COD, CN, DS, CAR, COR}(
         system,
         init_carrier_doppler,
         init_code_doppler,
@@ -199,8 +190,8 @@ function track(
         carrier_phase,
         code_phase,
         correlator,
-        carrier_loop_filter,
-        code_loop_filter,
+        carrier_doppler_estimator_state,
+        code_doppler_estimator_state,
         sc_bit_detector,
         integrated_samples,
         prompt_accumulator,
@@ -369,18 +360,9 @@ $(SIGNATURES)
 Aid dopplers. That is velocity aiding for the carrier doppler and carrier aiding
 for the code doppler.
 """
-function aid_dopplers(
-    system::AbstractGNSS,
-    init_carrier_doppler,
-    init_code_doppler,
-    carrier_freq_update,
-    code_freq_update,
-    velocity_aiding
-)
-    carrier_doppler = carrier_freq_update + velocity_aiding
-    code_doppler = code_freq_update + carrier_doppler * get_code_center_frequency_ratio(system)
-    init_carrier_doppler + carrier_doppler, init_code_doppler + code_doppler
-end
+aid_by_velocity(carrier_doppler, velocity_aiding) = carrier_doppler + velocity_aiding
+aid_by_carrier(code_doppler, carrier_doppler, system) =
+    code_doppler + carrier_doppler * get_code_center_frequency_ratio(system)
 
 """
 $(SIGNATURES)
