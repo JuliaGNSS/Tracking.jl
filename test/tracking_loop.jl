@@ -145,7 +145,7 @@ end
     prn = 1
     range = 0:3999
     start_carrier_phase = π / 2
-    state = TrackingState(gpsl1, carrier_doppler - 20Hz, start_code_phase)
+    state = TrackingState(prn, gpsl1, carrier_doppler - 20Hz, start_code_phase)
 
     signal_temp = cis.(
             2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase
@@ -158,7 +158,7 @@ end
     scaling = 512
     signal = type <: Integer ? complex.(floor.(type, real.(signal_temp) * scaling), floor.(type, imag.(signal_temp) * scaling)) : Complex{type}.(signal_temp)
 
-    track_result = @inferred track(signal, state, prn, sampling_frequency)
+    track_result = @inferred track(signal, state, sampling_frequency)
 
     iterations = 2000
     code_phases = zeros(iterations)
@@ -186,7 +186,6 @@ end
         track_result = @inferred track(
             signal,
             get_state(track_result),
-            prn,
             sampling_frequency
         )
         comp_carrier_phase = mod2pi(2π * carrier_doppler * 4000 * (i + 1) /
@@ -232,7 +231,7 @@ end
     prn = 1
     range = 0:3999
     start_carrier_phase = π / 2
-    state = TrackingState(gpsl1, carrier_doppler - 20Hz, start_code_phase, num_ants = NumAnts(3))
+    state = TrackingState(prn, gpsl1, carrier_doppler - 20Hz, start_code_phase, num_ants = NumAnts(3))
 
     signal = cis.(
             2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase
@@ -246,9 +245,9 @@ end
     scaling = 512
     signal_mat = type <: Integer ? complex.(floor.(type, real.(signal_mat_temp) * scaling), floor.(type, imag.(signal_mat_temp) * scaling)) : Complex{type}.(signal_mat_temp)
 
-    @test_throws ArgumentError track(signal_mat', state, prn, sampling_frequency)
+    @test_throws ArgumentError track(signal_mat', state, sampling_frequency)
 
-    track_result = @inferred track(signal_mat, state, prn, sampling_frequency)
+    track_result = @inferred track(signal_mat, state, sampling_frequency)
 
     iterations = 2000
     code_phases = zeros(iterations)
@@ -276,7 +275,6 @@ end
         track_result = @inferred track(
             signal_mat,
             get_state(track_result),
-            prn,
             sampling_frequency
         )
         comp_carrier_phase = mod2pi(2π * carrier_doppler * 4000 * (i + 1) /

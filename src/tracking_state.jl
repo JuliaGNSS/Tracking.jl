@@ -67,6 +67,7 @@ struct TrackingState{
         CAR <: CarrierReplicaCPU,
         COR <: Vector{Int8},
     }
+    prn::Int
     system::S
     init_carrier_doppler::typeof(1.0Hz)
     init_code_doppler::typeof(1.0Hz)
@@ -103,6 +104,7 @@ carrier doppler `carrier_doppler` and the code phase `code_phase`. Optional para
 - CN0 estimator `cn0_estimator`, that defaults to `MomentsCN0Estimator(20)`
 """
 function TrackingState(
+    prn::Integer,
     system::S,
     carrier_doppler,
     code_phase;
@@ -134,6 +136,7 @@ function TrackingState(
     code = Vector{Int8}(undef, 0)
 
     TrackingState{S, C, CAD, COD, CN, typeof(downconverted_signal), typeof(carrier), typeof(code)}(
+        prn,
         system,
         carrier_doppler,
         code_doppler,
@@ -171,3 +174,4 @@ end
 @inline get_downconverted_signal(state::TrackingState) = state.downconverted_signal
 @inline get_carrier(state::TrackingState) = state.carrier
 @inline get_code(state::TrackingState) = state.code
+@inline get_prn(state::TrackingState) = state.prn
