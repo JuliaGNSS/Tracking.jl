@@ -112,7 +112,7 @@ end
 
     carrier_phases = cu(2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase)
     code_phases = get_code_frequency(gpsl1) / sampling_frequency .* range .+ start_code_phase
-    upsampled_code = gpsl1.codes[1 .+ mod.(floor.(Int, code_phases), code_length), prn]
+    upsampled_code = gpsl1.codes[1 .+ mod.(floor.(Int, code_phases), 1023), prn]
     signal = StructArray{ComplexF32}((cos.(carrier_phases), sin.(carrier_phases)))
     @. signal *= upsampled_code 
     

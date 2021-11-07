@@ -67,7 +67,7 @@ function downconvert_and_correlate_kernel(
         # @cuprintln("+++++ Current (sample_idx, antenna_idx, corr_idx): ($(sample_idx), $(antenna_idx), $(corr_idx)) +++++")
 
         # generate carrier
-        carrier_im[sample_idx], carrier_re[sample_idx] = CUDA.sincos(2π * (sample_idx - 1) * carrier_frequency / sampling_frequency + carrier_phase)
+        carrier_im[sample_idx], carrier_re[sample_idx] = CUDA.sincos(2π * ((sample_idx - 1) * carrier_frequency / sampling_frequency + carrier_phase))
         # @cuprintln("(sample_idx, antenna_idx, corr_idx): ($(sample_idx), $(antenna_idx), $(corr_idx)) Calculated (carrier_re, carrier_im) to be: ($(carrier_re[sample_idx]), $(carrier_im[sample_idx]))")
         
         # downconvert with the conjugate of the carrier
