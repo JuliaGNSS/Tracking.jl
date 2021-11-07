@@ -1,5 +1,5 @@
 @testset "CUDA: CN0 estimation" begin
-
+    CUDA.allowscalar(true)
     Random.seed!(1234)
     carrier_doppler = 0Hz
     start_code_phase = 0
