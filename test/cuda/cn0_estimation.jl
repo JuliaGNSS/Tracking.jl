@@ -1,5 +1,5 @@
 @testset "CUDA: CN0 estimation" begin
-    CUDA.allowscalar(true)
+    CUDA.allowscalar() do
     Random.seed!(1234)
     carrier_doppler = 0Hz
     start_code_phase = 0
@@ -46,5 +46,5 @@
     cn0_estimate = @inferred Tracking.estimate_cn0(cn0_estimator, 1ms)
 
     @test cn0_estimate ≈ 45dBHz atol = 1.05dBHz
-
+end
 end
