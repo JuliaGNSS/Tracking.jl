@@ -91,7 +91,7 @@ end
 
 function DownconvertedSignalGPU(num_samples, num_ants::NumAnts{N}) where N
     DownconvertedSignalGPU(
-        StructArray{ComplexF32}((CuArray{Float32}(undef, (num_samples, num_ants)),CuArray{Float32}(undef, (num_samples, num_ants))))
+        StructArray{ComplexF32}((CuArray{Float32}(undef, (num_samples, N)),CuArray{Float32}(undef, (num_samples, N))))
     )
 end
 
