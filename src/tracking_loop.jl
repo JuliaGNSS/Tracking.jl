@@ -314,7 +314,7 @@ function downconvert_and_correlate!(
         num_samples_left,
         prn
     )
-    return T(map(+, get_accumulators(correlator), vec(accumulator_result)))
+    return T(get_accumulators(correlator) .+ Array(vec(accumulator_result)))
 end
 
 function choose(replica::CarrierReplicaCPU, signal::AbstractArray{Complex{Float64}})
