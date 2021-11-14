@@ -38,29 +38,6 @@ end
 """
 $(SIGNATURES)
 
-GPU Code replica function
-"""
-function gen_code_replica!(
-    code_replica::CuArray{T},
-    system,
-    code_frequency,
-    sampling_frequency,
-    start_code_phase::AbstractFloat,
-    start_sample::Integer,
-    num_samples::Integer,
-    early_late_sample_shift,
-    prn::Integer
-) where T
-    idxs = start_sample:start_sample - 1 + num_samples + 2*early_late_sample_shift
-    phases = code_frequency .* (0:num_samples - 1 + 2 * early_late_sample_shift) ./ sampling_frequency .+ start_code_phase
-    code_length = get_code_length(system) * get_secondary_code_length(system)
-    @inbounds @views code_replica[idxs] .= system.codes[2 .+ mod.(floor.(Int, phases), code_length), prn]
-    return code_replica
-end
-
-"""
-$(SIGNATURES)
-
 Updates the code phase.
 """
 function update_code_phase(

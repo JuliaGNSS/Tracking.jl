@@ -31,7 +31,7 @@ function downconvert_and_correlate(
 end
 =#
 
-
+# CUDA Kernel 
 function downconvert_and_correlate_kernel(
     res_re,
     res_im,
@@ -63,33 +63,22 @@ function downconvert_and_correlate_kernel(
     mod_floor_code_phase = Int(0)
 
     if sample_idx <= num_samples && antenna_idx <= num_ants && corr_idx <= num_corrs
-
-        # @cuprintln("+++++ Current (sample_idx, antenna_idx, corr_idx): ($(sample_idx), $(antenna_idx), $(corr_idx)) +++++")
-
         # generate carrier
         carrier_im[sample_idx], carrier_re[sample_idx] = CUDA.sincos(2π * ((sample_idx - 1) * carrier_frequency / sampling_frequency + carrier_phase))
-        # @cuprintln("(sample_idx, antenna_idx, corr_idx): ($(sample_idx), $(antenna_idx), $(corr_idx)) Calculated (carrier_re, carrier_im) to be: ($(carrier_re[sample_idx]), $(carrier_im[sample_idx]))")
-        
+    
         # downconvert with the conjugate of the carrier
         dw_re = signal_re[sample_idx, antenna_idx] * carrier_re[sample_idx] + signal_im[sample_idx, antenna_idx] * carrier_im[sample_idx]
         dw_im = signal_im[sample_idx, antenna_idx] * carrier_re[sample_idx] - signal_re[sample_idx, antenna_idx] * carrier_im[sample_idx]
-        # @cuprintln("(sample_idx, antenna_idx, corr_idx): ($(sample_idx), $(antenna_idx), $(corr_idx)) Calculated (dw_re, dw_im) to be: ($(dw_re), $(dw_im))")
 
         # calculate the code phase
         code_phase = code_frequency / sampling_frequency * ((sample_idx - 1) + correlator_sample_shifts[corr_idx]) + start_code_phase
-        # @cuprintln("(sample_idx, antenna_idx, corr_idx): ($(sample_idx), $(antenna_idx), $(corr_idx)) Calculated phase to be: $phase")
-        
+
         # wrap the code phase around the code length e.g. phase = 1024 -> modfloorphase = 1
         mod_floor_code_phase = 1 + mod(floor(Int32, code_phase), code_length)
-        # @cuprintln("(sample_idx, antenna_idx, corr_idx): ($(sample_idx), $(antenna_idx), $(corr_idx)) Calculated mod floor phase to be: $modfloorphase")
-
-        # save the upsampled code
-        # upsampled_code[sample_idx, corr_idx] = codes[mod_floor_code_phase, prn]
 
         # multiply elementwise with the code
         accum_re += codes[mod_floor_code_phase, prn] * dw_re
         accum_im += codes[mod_floor_code_phase, prn] * dw_im
-        # @cuprintln("(sample_idx, antenna_idx, corr_idx): ($(sample_idx), $(antenna_idx), $(corr_idx)) Calculated correlator to be: ($(correlator_re[sample_idx, corr_idx]), $(correlator_im[sample_idx, corr_idx]))")
     end
 
     cache[1 + cache_index + 0 * iq_offset, antenna_idx, corr_idx] = accum_re

@@ -279,7 +279,7 @@ function downconvert_and_correlate!(
     )
 end
 
-# GPU Kenrel wrapper
+# CUDA downconvert_and_correlate for num_ants > 1
 function downconvert_and_correlate!(
     system::AbstractGNSS{C},
     signal::AbstractMatrix,
@@ -317,6 +317,7 @@ function downconvert_and_correlate!(
     return T(map(+, get_accumulators(correlator), eachcol(Array(accumulator_result[1,:,:]))))
 end
 
+# CUDA downconvert_and_correlate for num_ants = 1
 function downconvert_and_correlate!(
     system::AbstractGNSS{C},
     signal::AbstractVector,
