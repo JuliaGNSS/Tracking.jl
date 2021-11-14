@@ -1,7 +1,7 @@
 @testset "Tracking results" begin
     gpsl1 = GPSL1()
     results = Tracking.TrackingResults(
-        TrackingState(gpsl1, 100Hz, 100),
+        TrackingState(1, gpsl1, 100Hz, 100),
         EarlyPromptLateCorrelator(NumAnts(2)),
         SVector(-1, 0, 1),
         1,
@@ -31,7 +31,7 @@
     @test @inferred(get_cn0(results)) == 45dBHz
 
     results = Tracking.TrackingResults(
-        TrackingState(gpsl1, 100Hz, 100),
+        TrackingState(1, gpsl1, 100Hz, 100),
         EarlyPromptLateCorrelator(NumAnts(2)),
         SVector(-1, 0, 1),
         1,
