@@ -109,7 +109,7 @@ end
     prn = 1
     range = 0:3999
     start_carrier_phase = π / 2
-    state = TrackingState(gpsl1, carrier_doppler - 20Hz, start_code_phase, num_samples = 4000)
+    state = TrackingState(prn, gpsl1, carrier_doppler - 20Hz, start_code_phase, num_samples = 4000)
 
     carrier_phases = cu(2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase)
     code_phases = get_code_frequency(gpsl1) / sampling_frequency .* range .+ start_code_phase
@@ -117,7 +117,7 @@ end
     signal = StructArray{ComplexF32}((cos.(carrier_phases), sin.(carrier_phases)))
     @. signal *= upsampled_code 
     
-    track_result = @inferred track(signal, state, prn, sampling_frequency)
+    track_result = @inferred track(signal, state, sampling_frequency)
 
     iterations = 2000
     code_phases = zeros(iterations)
@@ -147,7 +147,6 @@ end
         track_result = @inferred track(
             signal,
             get_state(track_result),
-            prn,
             sampling_frequency
         )
         comp_carrier_phase = mod2pi(2π * carrier_doppler * 4000 * (i + 1) /

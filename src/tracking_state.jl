@@ -204,6 +204,7 @@ end
 
 # CUDA dispatch
 function TrackingState(
+    prn::Integer,
     system::S,
     carrier_doppler,
     code_phase;
@@ -236,6 +237,7 @@ function TrackingState(
     carrier =  CarrierReplicaGPU(num_samples) #nothing
     code = nothing
     TrackingState{S, C, CALF, COLF, CN, typeof(downconverted_signal), typeof(carrier), Nothing}(
+        prn,
         system,
         carrier_doppler,
         code_doppler,
