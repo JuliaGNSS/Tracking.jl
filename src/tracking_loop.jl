@@ -282,7 +282,44 @@ end
 # GPU Kenrel wrapper
 function downconvert_and_correlate!(
     system::AbstractGNSS{C},
-    signal,
+    signal::AbstractMatrix,
+    correlator::T,
+    code_replica,
+    code_phase,
+    carrier_replica,
+    carrier_phase,
+    downconverted_signal,
+    code_frequency,
+    correlator_sample_shifts,
+    carrier_frequency,
+    sampling_frequency,
+    signal_start_sample,
+    num_samples_left,
+    prn
+) where {C <: CuMatrix, T <: AbstractCorrelator}
+    accumulator_result = downconvert_and_correlate_kernel_wrapper(
+        system,
+        view(signal, signal_start_sample:signal_start_sample - 1 + num_samples_left,:),
+        correlator,
+        code_replica,
+        code_phase,
+        carrier_replica,
+        carrier_phase,
+        downconverted_signal,
+        code_frequency,
+        correlator_sample_shifts,
+        carrier_frequency,
+        sampling_frequency,
+        signal_start_sample,
+        num_samples_left,
+        prn
+    )
+    return T(map(+, get_accumulators(correlator), eachcol(Array(accumulator_result[1,:,:]))))
+end
+
+function downconvert_and_correlate!(
+    system::AbstractGNSS{C},
+    signal::AbstractVector,
     correlator::T,
     code_replica,
     code_phase,
@@ -314,7 +351,8 @@ function downconvert_and_correlate!(
         num_samples_left,
         prn
     )
-    return T(get_accumulators(correlator) .+ Array(vec(accumulator_result)))
+    addition(a,b) = a + first(b)
+    return T(map(addition, get_accumulators(correlator), eachcol(Array(accumulator_result[1,:,:]))))
 end
 
 function choose(replica::CarrierReplicaCPU, signal::AbstractArray{Complex{Float64}})
