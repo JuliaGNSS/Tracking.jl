@@ -13,10 +13,7 @@ This implements a basic tracking functionality for GNSS signals. The correlation
 * Secondary code detection
 * Bit detection
 * Phased array tracking
-
-## Under Development
-
-* GPU-based tracking loop
+* GPU acceleration (CUDA)
 
 ## Getting started
 
@@ -47,4 +44,25 @@ If you'd like to track several signals at once (e.g. in the case of phased anten
 ```julia
 state = TrackingState(GPSL1, carrier_doppler, code_phase, num_ants = NumAnts(4)) # 4 antenna channels
 results = track(signal, state, prn, sampling_frequency, post_corr_filter = x -> x[1]) # Post corr filter is optional
+```
+
+### Usage with `CUDA.jl`
+This package supports accelerating the tracking loop by using the GPU. At the moment support is only provided for `CUDA.jl`. If you'd like to use this option, you'd have to opt-in by providing the following argument upon creating an `AbstractGNSS`:
+``` julia
+gpsl1_gpu = GPSL1(use_gpu = Val(true))
+```
+Beware that `num_samples` must be provided explicitly upon creating a `TrackingState`:
+``` julia
+state_gpu = TrackingState(gpsl1_gpu, carrier_doppler, code_phase, num_samples = N)
+```
+Moreover, your signal must be a `StructArray{ComplexF32}` of `CuArray{Float32}` type:
+``` julia
+using StructArrays
+signal_cu = CuArray{ComplexF32}(signal_cpu)
+signal_gpu = StructArray(signal_cu)
+```
+Otherwise the usage is identical to the example provided above, including the case for multi-antenna tracking:
+``` julia
+results_gpu = track(signal_gpu, state_gpu, prn, sampling_frequency)
+next_results_gpu = track(next_signal_gpu, get_state(results_gpu), prn, sampling_frequency)
 ```
