@@ -34,9 +34,9 @@ code_phase = 50
 sampling_frequency = 2.5e6Hz
 prn = 1
 gpsl1 = GPSL1()
-state = TrackingState(gpsl1, carrier_doppler, code_phase)
-results = track(signal, state, prn, sampling_frequency)
-next_results = track(next_signal, get_state(results), prn, sampling_frequency)
+state = TrackingState(prn, gpsl1, carrier_doppler, code_phase)
+results = track(signal, state, sampling_frequency)
+next_results = track(next_signal, get_state(results), sampling_frequency)
 ```
 
 If you'd like to track several signals at once (e.g. in the case of phased antenna arrays), you will have to specify the optional parameter `num_ants::NumAnts{N}` and pass a beamforming function to the `track` function:
@@ -53,7 +53,7 @@ gpsl1_gpu = GPSL1(use_gpu = Val(true))
 ```
 Beware that `num_samples` must be provided explicitly upon creating a `TrackingState`:
 ``` julia
-state_gpu = TrackingState(gpsl1_gpu, carrier_doppler, code_phase, num_samples = N)
+state_gpu = TrackingState(prn, gpsl1_gpu, carrier_doppler, code_phase, num_samples = N)
 ```
 Moreover, your signal must be a `StructArray{ComplexF32}` of `CuArray{Float32}` type:
 ``` julia
@@ -63,6 +63,6 @@ signal_gpu = StructArray(signal_cu)
 ```
 Otherwise the usage is identical to the example provided above, including the case for multi-antenna tracking:
 ``` julia
-results_gpu = track(signal_gpu, state_gpu, prn, sampling_frequency)
-next_results_gpu = track(next_signal_gpu, get_state(results_gpu), prn, sampling_frequency)
+results_gpu = track(signal_gpu, state_gpu, sampling_frequency)
+next_results_gpu = track(next_signal_gpu, get_state(results_gpu), sampling_frequency)
 ```
