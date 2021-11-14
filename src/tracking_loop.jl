@@ -20,7 +20,6 @@ Track the signal `signal` based on the current tracking `state`, the sampling fr
 function track(
         signal,
         state::TrackingState{S, C, CALF, COLF, CN, DS, CAR, COR},
-        prn::Integer,
         sampling_frequency;
         post_corr_filter = get_default_post_corr_filter(get_correlator(state)),
         intermediate_frequency = 0.0Hz,
@@ -43,6 +42,7 @@ function track(
     CAR,
     COR
 }
+    prn = get_prn(state)
     system = get_system(state)
     if get_data_frequency(system) != 0Hz
         @assert rem(1 / get_data_frequency(system), max_integration_time) == 0ms
@@ -194,6 +194,7 @@ function track(
         signal_start_sample += num_samples_left
     end
     next_state = TrackingState{S, C, CALF, COLF, CN, DS, CAR, COR}(
+        prn,
         system,
         init_carrier_doppler,
         init_code_doppler,
