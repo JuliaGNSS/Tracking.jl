@@ -1,4 +1,4 @@
-@testset "Tracking results GPU" begin
+@testset "CUDA: Tracking results" begin
     gpsl1 = GPSL1(use_gpu = Val(true))
     results = Tracking.TrackingResults(
         TrackingState(1, gpsl1, 100Hz, 100, num_samples = 2500),

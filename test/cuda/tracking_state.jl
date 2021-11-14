@@ -1,4 +1,4 @@
-@testset "Tracking state GPU" begin
+@testset "CUDA: Tracking state" begin
 
     carrier_doppler = 100Hz
     code_phase = 100
