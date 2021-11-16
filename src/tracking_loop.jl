@@ -136,11 +136,13 @@ function track(
             valid_correlator_carrier_phase = carrier_phase
             valid_correlator_carrier_frequency = carrier_frequency
             filtered_correlator = filter(post_corr_filter, correlator)
-            carrier_doppler, carrier_doppler_estimator_state = est_carrier_doppler(
+            carrier_doppler, carrier_phase, carrier_doppler_estimator_state = est_carrier_doppler(
                 carrier_doppler_estimator_state,
                 carrier_doppler_estimator_variable,
                 correlator,
                 filtered_correlator,
+                carrier_phase,
+                carrier_frequency,
                 correlator_sample_shifts,
                 sampling_frequency,
                 integration_time,
@@ -152,6 +154,7 @@ function track(
                 code_doppler_estimator_variable,
                 correlator,
                 filtered_correlator,
+                code_phase,
                 correlator_sample_shifts,
                 early_late_index_shift,
                 code_frequency,

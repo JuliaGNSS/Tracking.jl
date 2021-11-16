@@ -25,6 +25,8 @@ function est_carrier_doppler(
     costas_loop_bandwidth::CostasLoopBandwidth,
     correlator,
     filtered_correlator,
+    carrier_phase,
+    carrier_frequency,
     correlator_sample_shifts,
     sampling_frequency,
     integration_time,
@@ -42,5 +44,5 @@ function est_carrier_doppler(
         costas_loop_bandwidth.bandwidth
     )
     carrier_doppler = carrier_freq_update + init_carrier_doppler
-    carrier_doppler, CostasLoopState(loop_filter)
+    carrier_doppler, carrier_phase, CostasLoopState(loop_filter)
 end

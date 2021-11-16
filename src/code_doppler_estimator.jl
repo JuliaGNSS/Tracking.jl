@@ -34,6 +34,7 @@ function est_code_doppler(
     epl_loop_bandwidth::EarlyPromptLateLoopBandwidth,
     correlator,
     filtered_correlator,
+    code_phase,
     correlator_sample_shifts,
     early_late_index_shift,
     code_frequency,
