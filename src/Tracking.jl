@@ -5,9 +5,11 @@ module Tracking
         StaticArrays,
         TrackingLoopFilters,
         StructArrays,
-        LoopVectorization
+        LoopVectorization,
+        CUDA
+
     using Unitful: upreferred, Hz, dBHz, ms
-    import Base.zero, Base.length, Base.resize!
+    import Base.zero, Base.length, Base.resize!, LinearAlgebra.dot  
 
     export
         get_early,
@@ -48,7 +50,7 @@ module Tracking
 
     struct NumAnts{x}
     end
-
+    
     NumAnts(x) = NumAnts{x}()
 
     struct NumAccumulators{x}

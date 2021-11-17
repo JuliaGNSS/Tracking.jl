@@ -1,3 +1,8 @@
+"""
+$(SIGNATURES)
+
+Fixed point CPU StructArray carrier replica generation
+"""
 function gen_carrier_replica!(
     carrier_replica::StructArray{Complex{T}},
     carrier_frequency,
