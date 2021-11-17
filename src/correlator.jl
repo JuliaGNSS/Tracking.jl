@@ -124,7 +124,7 @@ Get prompt correlator
 function get_prompt(correlator::AbstractCorrelator, correlator_sample_shifts)
     correlator.accumulators[get_prompt_index(correlator_sample_shifts)]
 end
-CUDA.dot
+
 """
 $(SIGNATURES)
 
