@@ -37,8 +37,6 @@ function downconvert_and_correlate_kernel(
     res_im,
     signal_re,
     signal_im,
-    carrier_re,
-    carrier_im,
     codes,
     code_frequency,
     correlator_sample_shifts,
@@ -59,16 +57,16 @@ function downconvert_and_correlate_kernel(
     iq_offset = blockDim().x
     cache_index = threadIdx().x - 1 
 
-    code_phase = accum_re = accum_im = dw_re = dw_im = 0.0f0
+    code_phase = accum_re = accum_im = dw_re = dw_im = carrier_re = carrier_im = 0.0f0
     mod_floor_code_phase = Int(0)
 
     if sample_idx <= num_samples && antenna_idx <= num_ants && corr_idx <= num_corrs
         # generate carrier
-        carrier_im[sample_idx], carrier_re[sample_idx] = CUDA.sincos(2π * ((sample_idx - 1) * carrier_frequency / sampling_frequency + carrier_phase))
+        carrier_im, carrier_re = CUDA.sincos(2π * ((sample_idx - 1) * carrier_frequency / sampling_frequency + carrier_phase))
     
         # downconvert with the conjugate of the carrier
-        dw_re = signal_re[sample_idx, antenna_idx] * carrier_re[sample_idx] + signal_im[sample_idx, antenna_idx] * carrier_im[sample_idx]
-        dw_im = signal_im[sample_idx, antenna_idx] * carrier_re[sample_idx] - signal_re[sample_idx, antenna_idx] * carrier_im[sample_idx]
+        dw_re = signal_re[sample_idx, antenna_idx] * carrier_re + signal_im[sample_idx, antenna_idx] * carrier_im
+        dw_im = signal_im[sample_idx, antenna_idx] * carrier_re - signal_re[sample_idx, antenna_idx] * carrier_im
 
         # calculate the code phase
         code_phase = code_frequency / sampling_frequency * ((sample_idx - 1) + correlator_sample_shifts[corr_idx]) + start_code_phase
@@ -109,11 +107,8 @@ function downconvert_and_correlate_kernel_wrapper(
     system,
     signal,
     correlator,
-    code_replica,
     code_phase,
-    carrier_replica,
     carrier_phase,
-    downconverted_signal,
     code_frequency,
     correlator_sample_shifts,
     carrier_frequency,
@@ -138,9 +133,7 @@ function downconvert_and_correlate_kernel_wrapper(
         res_re, 
         res_im, 
         signal.re, 
-        signal.im, 
-        carrier_replica.re, 
-        carrier_replica.im, 
+        signal.im,
         system.codes,
         Float32(code_frequency),
         correlator_sample_shifts,

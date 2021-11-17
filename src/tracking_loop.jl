@@ -303,11 +303,8 @@ function downconvert_and_correlate!(
         system,
         view(signal, signal_start_sample:signal_start_sample - 1 + num_samples_left,:),
         correlator,
-        code_replica,
         code_phase,
-        carrier_replica,
         carrier_phase,
-        downconverted_signal,
         code_frequency,
         correlator_sample_shifts,
         carrier_frequency,
@@ -341,11 +338,8 @@ function downconvert_and_correlate!(
         system,
         view(signal, signal_start_sample:signal_start_sample - 1 + num_samples_left),
         correlator,
-        code_replica,
         code_phase,
-        carrier_replica,
         carrier_phase,
-        downconverted_signal,
         code_frequency,
         correlator_sample_shifts,
         carrier_frequency,
@@ -364,7 +358,7 @@ end
 function choose(replica::CarrierReplicaCPU, signal::AbstractArray{Complex{T}}) where T <: Number
     replica.carrier_f32
 end
-function choose(replica::StructVector{ComplexF32, NamedTuple{(:re, :im), Tuple{CuArray{Float32, 1, CUDA.Mem.DeviceBuffer}, CuArray{Float32, 1, CUDA.Mem.DeviceBuffer}}}, Int64}, signal::AbstractArray)
+function choose(replica::Nothing, signal::AbstractArray)
     nothing
 end
 function choose(replica::DownconvertedSignalCPU, signal::AbstractArray{Complex{Float64}})

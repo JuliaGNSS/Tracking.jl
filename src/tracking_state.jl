@@ -64,7 +64,7 @@ struct TrackingState{
         COLF <: AbstractLoopFilter,
         CN <: AbstractCN0Estimator,
         DS <: Union{DownconvertedSignalCPU, Nothing},
-        CAR <: Union{CarrierReplicaCPU, StructVector{ComplexF32, NamedTuple{(:re, :im), Tuple{CuArray{Float32, 1, CUDA.Mem.DeviceBuffer}, CuArray{Float32, 1, CUDA.Mem.DeviceBuffer}}}, Int64}},
+        CAR <: Union{CarrierReplicaCPU, Nothing},
         COR <: Union{Vector{Int8}, Nothing}
     }
     prn::Int
@@ -191,10 +191,10 @@ function TrackingState(
         code_phase = mod(code_phase, get_code_length(system))
     end
     downconverted_signal = nothing
-    carrier = gen_blank_carrier_gpu(system, num_samples)
+    carrier = nothing
     code = nothing
 
-    TrackingState{S, C, CALF, COLF, CN, Nothing, typeof(carrier), Nothing}(
+    TrackingState{S, C, CALF, COLF, CN, Nothing, Nothing, Nothing}(
         prn,
         system,
         carrier_doppler,
