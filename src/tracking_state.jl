@@ -50,8 +50,6 @@ function DownconvertedSignalCPU(num_ants::NumAnts{N}) where N
     )
 end
 
-@inline gen_blank_carrier_gpu(system::S, num_samples) where {CO <: CuMatrix,S <: AbstractGNSS{CO}} = StructArray{ComplexF32}((CuArray{Float32}(undef, num_samples), CuArray{Float32}(undef, num_samples)))
-
 """
 $(SIGNATURES)
 

@@ -358,9 +358,6 @@ end
 function choose(replica::CarrierReplicaCPU, signal::AbstractArray{Complex{T}}) where T <: Number
     replica.carrier_f32
 end
-function choose(replica::Nothing, signal::AbstractArray)
-    nothing
-end
 function choose(replica::DownconvertedSignalCPU, signal::AbstractArray{Complex{Float64}})
     replica.downconverted_signal_f64
 end
