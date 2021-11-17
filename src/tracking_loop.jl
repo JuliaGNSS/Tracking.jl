@@ -364,8 +364,8 @@ end
 function choose(replica::CarrierReplicaCPU, signal::AbstractArray{Complex{T}}) where T <: Number
     replica.carrier_f32
 end
-function choose(replica::CarrierReplicaGPU, signal::AbstractArray)
-    replica.carrier
+function choose(replica::StructVector{ComplexF32, NamedTuple{(:re, :im), Tuple{CuArray{Float32, 1, CUDA.Mem.DeviceBuffer}, CuArray{Float32, 1, CUDA.Mem.DeviceBuffer}}}, Int64}, signal::AbstractArray)
+    nothing
 end
 function choose(replica::DownconvertedSignalCPU, signal::AbstractArray{Complex{Float64}})
     replica.downconverted_signal_f64
@@ -373,8 +373,8 @@ end
 function choose(replica::DownconvertedSignalCPU, signal::AbstractArray{Complex{T}}) where T <: Number
     replica.downconverted_signal_f32
 end
-function choose(replica::DownconvertedSignalGPU, signal::AbstractArray)
-    replica.downconverted_signal
+function choose(replica::Nothing, signal::AbstractArray)
+    nothing
 end
 
 """
@@ -509,10 +509,10 @@ function resize!(ds::DownconvertedSignalCPU, b::Integer, signal::AbstractMatrix{
 end
 
 # No need for resizing when dealing with GPU signals
-function resize!(ds::DownconvertedSignalGPU, b::Integer, signal::AbstractArray)
+function resize!(ds::Nothing, b::Integer, signal::AbstractArray)
     return ds
 end
 # No need for resizing the GPU GNSS codes
-function resize!(codes::typeof(nothing), b::Integer)
+function resize!(codes::Nothing, b::Integer)
     return codes
 end

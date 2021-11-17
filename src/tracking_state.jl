@@ -20,25 +20,6 @@ function CarrierReplicaCPU()
         StructArray{Complex{Float64}}(undef, 0)
     )
 end
-
-"""
-$(SIGNATURES)
-
-CarrierReplicaCPU that holds possible carrier representations.
-The type is unknown, when TrackingState is initialized.
-It is determined based on the signal, which is given in the track
-function.
-"""
-struct CarrierReplicaGPU{
-        CF32 <: StructArray{ComplexF32}
-    }
-    carrier::CF32
-end
-
-function CarrierReplicaGPU(num_samples)
-    CarrierReplicaGPU(StructArray{ComplexF32}((CuArray{Float32}(undef, num_samples),CuArray{Float32}(undef, num_samples))))
-end
-
 """
 $(SIGNATURES)
 
@@ -69,31 +50,7 @@ function DownconvertedSignalCPU(num_ants::NumAnts{N}) where N
     )
 end
 
-"""
-$(SIGNATURES)
-
-DownconvertedSignalGPU that holds possible downconverted signal representations.
-The type is unknown, when TrackingState is initialized.
-It is determined based on the signal, which is given in the track
-function.
-"""
-struct DownconvertedSignalGPU{
-    DSF32 <: StructArray{ComplexF32}
-}
-    downconverted_signal::DSF32
-end
-
-function DownconvertedSignalGPU(num_samples, num_ants::NumAnts{1})
-    DownconvertedSignalGPU(
-        StructArray{ComplexF32}((CuArray{Float32}(undef, num_samples), CuArray{Float32}(undef, num_samples)))
-    )
-end
-
-function DownconvertedSignalGPU(num_samples, num_ants::NumAnts{N}) where N
-    DownconvertedSignalGPU(
-        StructArray{ComplexF32}((CuArray{Float32}(undef, (num_samples, N)),CuArray{Float32}(undef, (num_samples, N))))
-    )
-end
+@inline gen_blank_carrier_gpu(system::S, num_samples) where {CO <: CuMatrix,S <: AbstractGNSS{CO}} = StructArray{ComplexF32}((CuArray{Float32}(undef, num_samples), CuArray{Float32}(undef, num_samples)))
 
 """
 $(SIGNATURES)
@@ -106,8 +63,8 @@ struct TrackingState{
         CALF <: AbstractLoopFilter,
         COLF <: AbstractLoopFilter,
         CN <: AbstractCN0Estimator,
-        DS <: Union{DownconvertedSignalCPU, DownconvertedSignalGPU},
-        CAR <: Union{CarrierReplicaCPU, CarrierReplicaGPU},
+        DS <: Union{DownconvertedSignalCPU, Nothing},
+        CAR <: Union{CarrierReplicaCPU, StructVector{ComplexF32, NamedTuple{(:re, :im), Tuple{CuArray{Float32, 1, CUDA.Mem.DeviceBuffer}, CuArray{Float32, 1, CUDA.Mem.DeviceBuffer}}}, Int64}},
         COR <: Union{Vector{Int8}, Nothing}
     }
     prn::Int
@@ -233,10 +190,11 @@ function TrackingState(
     else
         code_phase = mod(code_phase, get_code_length(system))
     end
-    downconverted_signal =  DownconvertedSignalGPU(num_samples, num_ants)
-    carrier =  CarrierReplicaGPU(num_samples) #nothing
+    downconverted_signal = nothing
+    carrier = gen_blank_carrier_gpu(system, num_samples)
     code = nothing
-    TrackingState{S, C, CALF, COLF, CN, typeof(downconverted_signal), typeof(carrier), Nothing}(
+
+    TrackingState{S, C, CALF, COLF, CN, Nothing, typeof(carrier), Nothing}(
         prn,
         system,
         carrier_doppler,
