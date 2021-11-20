@@ -66,7 +66,7 @@ $(SIGNATURES)
 
 Get early correlator index
 """
-get_early_index(correlator_sample_shifts, early_late_index_shift) =
+@inline get_early_index(correlator_sample_shifts, early_late_index_shift) =
     get_prompt_index(correlator_sample_shifts) + early_late_index_shift
 
 """
@@ -74,14 +74,14 @@ $(SIGNATURES)
 
 Get prompt correlator index
 """
-get_prompt_index(correlator_sample_shifts) = findfirst(iszero, correlator_sample_shifts)
+@inline get_prompt_index(correlator_sample_shifts) = findfirst(iszero, correlator_sample_shifts)
 
 """
 $(SIGNATURES)
 
 Get late correlator index
 """
-get_late_index(correlator_sample_shifts, early_late_index_shift) =
+@inline get_late_index(correlator_sample_shifts, early_late_index_shift) =
     get_prompt_index(correlator_sample_shifts) - early_late_index_shift
 
 """
@@ -261,22 +261,26 @@ function correlate(
     start_sample,
     num_samples
 ) where {T <: AbstractCorrelator}
-    accumulators = zero_accumulators(get_accumulators(correlator), downconverted_signal)
-    @inbounds @fastmath for i = start_sample:num_samples + start_sample - 1
-        for j = 1:length(accumulators)
+    a_re = zero_accumulators(get_accumulators(correlator), downconverted_signal)
+    a_im = zero_accumulators(get_accumulators(correlator), downconverted_signal)
+    d_re = downconverted_signal.re
+    d_im = downconverted_signal.im
+    @avx for i = start_sample:num_samples + start_sample - 1
+        for j = 1:length(a_re)
             sample_shift = correlator_sample_shifts[j] - correlator_sample_shifts[1]
-            accumulators[j] += downconverted_signal[i] * code[i + sample_shift]
+            a_re[j] += d_re[i] * code[i + sample_shift]
+            a_im[j] += d_im[i] * code[i + sample_shift]
         end
     end
-
-    T(map(+, get_accumulators(correlator), accumulators))
+    accumulators_result = complex.(a_re, a_im)
+    T(map(+, get_accumulators(correlator), accumulators_result))
 end
 
 function zero_accumulators(accumulators::SVector, signal)
-    zeros(MVector{length(accumulators), eltype(signal)})
+    zeros(MVector{length(accumulators), real(eltype(signal))})
 end
 function zero_accumulators(accumulators::Vector, signal)
-    zeros(eltype(signal), length(accumulators))
+    zeros(real(eltype(signal)), length(accumulators))
 end
 
 """
@@ -292,32 +296,26 @@ function correlate(
     start_sample,
     num_samples,
 ) where {N}
-
-    accumulators = map(correlator_sample_shifts) do correlator_sample_shift
-        correlate_single_tap(
-            NumAnts(N),
-            correlator_sample_shift - correlator_sample_shifts[1],
-            start_sample,
-            num_samples,
-            downconverted_signal,
-            code
-        )
+    a_re = zero_accumulators(get_accumulators(correlator), downconverted_signal)
+    a_im = zero_accumulators(get_accumulators(correlator), downconverted_signal)
+    d_re = downconverted_signal.re
+    d_im = downconverted_signal.im
+    @avx for i = start_sample:num_samples + start_sample - 1
+        for k = 1:size(a_re, 2)
+            for j = 1:size(a_re, 1)
+                shift = correlator_sample_shifts[k] - correlator_sample_shifts[1]
+                a_re[j,k] += d_re[i,j] * code[shift + i]
+                a_im[j,k] += d_im[i,j] * code[shift + i]
+            end
+        end
     end
 
-    typeof(correlator)(map(+, get_accumulators(correlator), accumulators))
+    typeof(correlator)(map(+, get_accumulators(correlator), eachcol(complex.(a_re, a_im))))
 end
 
-function correlate_single_tap(
-    ::NumAnts{N},
-    offset,
-    start_sample,
-    num_samples,
-    downconverted_signal,
-    code
-) where N
-    accumulator = zero(MVector{N, eltype(downconverted_signal)})
-    @inbounds @fastmath for i = start_sample:num_samples + start_sample - 1, j = 1:length(accumulator)
-        accumulator[j] += downconverted_signal[i,j] * code[i + offset]
-    end
-    SVector(accumulator)
+function zero_accumulators(accumulators::SVector{NC, <:SVector{NA}}, signal) where {NC, NA}
+    zeros(MMatrix{NA, NC, real(eltype(signal))})
+end
+function zero_accumulators(accumulators::Vector{<:SVector{NA}}, signal) where NA
+    zeros(real(eltype(signal)), NA, length(accumulators))
 end

@@ -5,9 +5,11 @@ module Tracking
         StaticArrays,
         TrackingLoopFilters,
         StructArrays,
-        LoopVectorization
+        LoopVectorization,
+        CUDA
+
     using Unitful: upreferred, Hz, dBHz, ms
-    import Base.zero, Base.length, Base.resize!
+    import Base.zero, Base.length, Base.resize!, LinearAlgebra.dot  
 
     export
         get_early,
@@ -48,7 +50,7 @@ module Tracking
 
     struct NumAnts{x}
     end
-
+    
     NumAnts(x) = NumAnts{x}()
 
     struct NumAccumulators{x}
@@ -71,4 +73,5 @@ module Tracking
     include("gpsl5.jl")
     include("galileo_e1b.jl")
     include("boc.jl")
+    include("downconvert_and_correlate.jl")
 end

@@ -1,4 +1,4 @@
-@testset "Bit buffer" begin
+@testset "CUDA: Bit buffer" begin
     bit_buffer = Tracking.BitBuffer()
     @test @inferred(get_bits(bit_buffer)) == 0
     @test @inferred(Tracking.length(bit_buffer)) == 0
@@ -10,7 +10,7 @@
     code_phase = 1023
     prompt_correlator = 1.0 + 0.0im
     integration_time = 5ms
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1(use_gpu = Val(true))
     next_bit_buffer, next_prompt_accumulator = @inferred Tracking.buffer(
         gpsl1,
         bit_buffer,

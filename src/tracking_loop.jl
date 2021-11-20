@@ -20,7 +20,6 @@ Track the signal `signal` based on the current tracking `state`, the sampling fr
 function track(
         signal,
         state::TrackingState{S, C, CALF, COLF, CN, DS, CAR, COR},
-        prn::Integer,
         sampling_frequency;
         post_corr_filter = get_default_post_corr_filter(get_correlator(state)),
         intermediate_frequency = 0.0Hz,
@@ -43,6 +42,7 @@ function track(
     CAR,
     COR
 }
+    prn = get_prn(state)
     system = get_system(state)
     if get_data_frequency(system) != 0Hz
         @assert rem(1 / get_data_frequency(system), max_integration_time) == 0ms
@@ -50,6 +50,10 @@ function track(
     correlator = get_correlator(state)
     num_ants = get_num_ants(correlator)
     size(signal, 2) == num_ants || throw(ArgumentError("The second dimension of the signal should be equal to the number of antennas specified by num_ants = NumAnts(N) in the TrackingState."))
+    if typeof(system.codes) <: CuMatrix
+        typeof(signal) <: StructArray || throw(ArgumentError("Signal is not a StructArray, initialize the signal properly and try again."))
+        typeof(signal.re) <: CuArray && typeof(state.system.codes) <: CuArray || throw(ArgumentError("Signal and GNSS codes are not of the same type. Please check if CPU or GPU is used."))
+    end
     downconverted_signal_temp = get_downconverted_signal(state)
     downconverted_signal = resize!(downconverted_signal_temp, size(signal, 1), signal)
     carrier_replica = get_carrier(state)
@@ -127,7 +131,6 @@ function track(
         if num_samples_left == num_samples_left_to_integrate &&
                 integration_time >= min_integration_time
             got_correlator = true
-
             correlator = normalize(correlator, integrated_samples)
             valid_correlator = correlator
             valid_correlator_carrier_phase = carrier_phase
@@ -192,6 +195,7 @@ function track(
         signal_start_sample += num_samples_left
     end
     next_state = TrackingState{S, C, CALF, COLF, CN, DS, CAR, COR}(
+        prn,
         system,
         init_carrier_doppler,
         init_code_doppler,
@@ -277,17 +281,91 @@ function downconvert_and_correlate!(
     )
 end
 
+# CUDA downconvert_and_correlate for num_ants > 1
+function downconvert_and_correlate!(
+    system::AbstractGNSS{C},
+    signal::AbstractMatrix,
+    correlator::T,
+    code_replica,
+    code_phase,
+    carrier_replica,
+    carrier_phase,
+    downconverted_signal,
+    code_frequency,
+    correlator_sample_shifts,
+    carrier_frequency,
+    sampling_frequency,
+    signal_start_sample,
+    num_samples_left,
+    prn
+) where {C <: CuMatrix, T <: AbstractCorrelator}
+    accumulator_result = downconvert_and_correlate_kernel_wrapper(
+        system,
+        view(signal, signal_start_sample:signal_start_sample - 1 + num_samples_left,:),
+        correlator,
+        code_phase,
+        carrier_phase,
+        code_frequency,
+        correlator_sample_shifts,
+        carrier_frequency,
+        sampling_frequency,
+        signal_start_sample,
+        num_samples_left,
+        prn
+    )
+    return T(map(+, get_accumulators(correlator), eachcol(Array(accumulator_result[1,:,:]))))
+end
+
+# CUDA downconvert_and_correlate for num_ants = 1
+function downconvert_and_correlate!(
+    system::AbstractGNSS{C},
+    signal::AbstractVector,
+    correlator::T,
+    code_replica,
+    code_phase,
+    carrier_replica,
+    carrier_phase,
+    downconverted_signal,
+    code_frequency,
+    correlator_sample_shifts,
+    carrier_frequency,
+    sampling_frequency,
+    signal_start_sample,
+    num_samples_left,
+    prn
+) where {C <: CuMatrix, T <: AbstractCorrelator}
+    accumulator_result = downconvert_and_correlate_kernel_wrapper(
+        system,
+        view(signal, signal_start_sample:signal_start_sample - 1 + num_samples_left),
+        correlator,
+        code_phase,
+        carrier_phase,
+        code_frequency,
+        correlator_sample_shifts,
+        carrier_frequency,
+        sampling_frequency,
+        signal_start_sample,
+        num_samples_left,
+        prn
+    )
+    addition(a,b) = a + first(b)
+    return T(map(addition, get_accumulators(correlator), eachcol(Array(accumulator_result[1,:,:]))))
+end
+
 function choose(replica::CarrierReplicaCPU, signal::AbstractArray{Complex{Float64}})
     replica.carrier_f64
 end
-function choose(replica::CarrierReplicaCPU, signal::AbstractArray{Complex{Float32}})
+function choose(replica::CarrierReplicaCPU, signal::AbstractArray{Complex{T}}) where T <: Number
     replica.carrier_f32
 end
 function choose(replica::DownconvertedSignalCPU, signal::AbstractArray{Complex{Float64}})
     replica.downconverted_signal_f64
 end
-function choose(replica::DownconvertedSignalCPU, signal::AbstractArray{Complex{Float32}})
+function choose(replica::DownconvertedSignalCPU, signal::AbstractArray{Complex{T}}) where T <: Number
     replica.downconverted_signal_f32
+end
+function choose(replica::Nothing, signal::AbstractArray)
+    nothing
 end
 
 """
@@ -338,7 +416,7 @@ function get_num_chips_to_integrate(
     max_phase = Int(upreferred(get_code_frequency(system) *
         get_integration_time(system, max_integration_time, secondary_code_or_bit_found)))
     current_phase_mod_max_phase = mod(current_code_phase, max_phase)
-    max_phase - current_phase_mod_max_phase
+    return max_phase - current_phase_mod_max_phase
 end
 
 """
@@ -411,7 +489,7 @@ function resize!(ds::DownconvertedSignalCPU, b::Integer, signal::AbstractMatrix{
     )
 end
 
-function resize!(ds::DownconvertedSignalCPU, b::Integer, signal::AbstractMatrix{Complex{Float32}})
+function resize!(ds::DownconvertedSignalCPU, b::Integer, signal::AbstractMatrix{Complex{T}}) where T <: Number
     num_ants = size(signal, 2)
     DownconvertedSignalCPU(
         size(ds.downconverted_signal_f32, 1) == b ?
@@ -419,4 +497,13 @@ function resize!(ds::DownconvertedSignalCPU, b::Integer, signal::AbstractMatrix{
             StructArray{Complex{Float32}}((Matrix{Float32}(undef, b, num_ants), Matrix{Float32}(undef, b, num_ants))),
         ds.downconverted_signal_f64
     )
+end
+
+# No need for resizing when dealing with GPU signals
+function resize!(ds::Nothing, b::Integer, signal::AbstractArray)
+    return ds
+end
+# No need for resizing the GPU GNSS codes
+function resize!(codes::Nothing, b::Integer)
+    return codes
 end

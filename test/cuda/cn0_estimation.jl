@@ -1,30 +1,5 @@
-@testset "Update CN0 Estimator" begin
-
-    cn0_estimator = MomentsCN0Estimator(20)
-    @test @inferred(Tracking.get_prompt_buffer(cn0_estimator)) == zero(SVector{20, ComplexF64})
-    @test @inferred(Tracking.get_current_index(cn0_estimator)) == 0
-    @test @inferred(Tracking.length(cn0_estimator)) == 0
-
-    next_cn0_estimator = @inferred Tracking.update(cn0_estimator, 1 + 2im)
-    @test @inferred(Tracking.get_prompt_buffer(next_cn0_estimator))[1] == 1 + 2im
-    @test @inferred(Tracking.get_current_index(next_cn0_estimator)) == 1
-    @test @inferred(Tracking.length(next_cn0_estimator)) == 1
-
-    cn0_estimator = MomentsCN0Estimator(ones(SVector{20, ComplexF64}), 20, 20)
-    next_cn0_estimator = @inferred Tracking.update(cn0_estimator, 1 + 2im)
-    @test @inferred(Tracking.get_prompt_buffer(next_cn0_estimator))[1] == 1 + 2im
-    @test @inferred(Tracking.get_current_index(next_cn0_estimator)) == 1
-    @test @inferred(Tracking.length(next_cn0_estimator)) == 20
-
-    cn0_estimator = MomentsCN0Estimator(ones(SVector{20, ComplexF64}), 19, 20)
-    @test @inferred(Tracking.get_current_index(cn0_estimator)) == 19
-    @test @inferred(Tracking.length(cn0_estimator)) == 20
-
-    @test @allocated(Tracking.update(MomentsCN0Estimator(20), 1 + 2im)) == 0
-end
-
-@testset "CN0 estimation" begin
-
+@testset "CUDA: CN0 estimation" begin
+    CUDA.allowscalar() do
     Random.seed!(1234)
     carrier_doppler = 0Hz
     start_code_phase = 0
@@ -37,7 +12,7 @@ end
     correlator_sample_shifts = SVector(-2, 0, 2)
     start_sample = 1
     num_samples = 4000
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1(use_gpu = Val(true))
 
     for i = 1:20
         signal = get_code.(
@@ -71,5 +46,5 @@ end
     cn0_estimate = @inferred Tracking.estimate_cn0(cn0_estimator, 1ms)
 
     @test cn0_estimate ≈ 45dBHz atol = 1.05dBHz
-
+end
 end

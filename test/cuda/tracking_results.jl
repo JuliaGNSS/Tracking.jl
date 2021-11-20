@@ -1,7 +1,7 @@
-@testset "Tracking results" begin
-    gpsl1 = GPSL1()
+@testset "CUDA: Tracking results" begin
+    gpsl1 = GPSL1(use_gpu = Val(true))
     results = Tracking.TrackingResults(
-        TrackingState(1, gpsl1, 100Hz, 100),
+        TrackingState(1, gpsl1, 100Hz, 100, num_samples = 2500),
         EarlyPromptLateCorrelator(NumAnts(2)),
         SVector(-1, 0, 1),
         1,
@@ -31,7 +31,7 @@
     @test @inferred(get_cn0(results)) == 45dBHz
 
     results = Tracking.TrackingResults(
-        TrackingState(1, gpsl1, 100Hz, 100),
+        TrackingState(1, gpsl1, 100Hz, 100, num_samples = 2500),
         EarlyPromptLateCorrelator(NumAnts(2)),
         SVector(-1, 0, 1),
         1,

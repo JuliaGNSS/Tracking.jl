@@ -6,7 +6,8 @@ using
     StaticArrays,
     TrackingLoopFilters,
     StructArrays,
-    Statistics
+    Statistics,
+    CUDA
 
 import Unitful: MHz, kHz, Hz, s, ms, dBHz
 
@@ -25,3 +26,17 @@ include("tracking_state.jl")
 include("tracking_results.jl")
 include("tracking_loop.jl")
 include("cn0_estimation.jl")
+
+if CUDA.functional()
+    include("cuda/bit_buffer.jl")
+    include("cuda/boc.jl")
+    include("cuda/cn0_estimation.jl")
+    include("cuda/discriminators.jl")
+    include("cuda/galileo_e1b.jl")
+    include("cuda/gps_l1.jl")
+    include("cuda/gps_l5.jl")
+    include("cuda/secondary_code_or_bit_detector.jl")
+    include("cuda/tracking_loop.jl")
+    include("cuda/tracking_results.jl")
+    include("cuda/tracking_state.jl")
+end
