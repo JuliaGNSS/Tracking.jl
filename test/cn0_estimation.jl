@@ -70,6 +70,6 @@ end
     @test @inferred(Tracking.length(cn0_estimator)) == 20
     cn0_estimate = @inferred Tracking.estimate_cn0(cn0_estimator, 1ms)
 
-    @test cn0_estimate ≈ 45dBHz atol = 1.05dBHz
+    @test cn0_estimate ≈ 45dBHz atol = 2.05dBHz
 
 end
