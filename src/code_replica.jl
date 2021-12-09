@@ -25,12 +25,13 @@ function gen_code_replica!(
     most_late_sample_shift  = correlator_sample_shifts[1]
     total_samples = num_samples + most_early_sample_shift - most_late_sample_shift
     gen_code!(
-        view(code_replica, start_sample:start_sample+total_samples-1),
+        view(code_replica, start_sample:start_sample + total_samples - 1),
         system,
         prn,
         sampling_frequency,
         code_frequency,
-        start_code_phase + most_late_sample_shift * code_frequency/sampling_frequency
+        start_code_phase,
+        most_late_sample_shift
     )
     code_replica
 end
