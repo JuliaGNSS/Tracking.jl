@@ -9,7 +9,8 @@ using
     Statistics,
     CUDA
 
-import Unitful: MHz, kHz, Hz, s, ms, dBHz
+using Acquisition: AcquisitionResults
+using Unitful: MHz, kHz, Hz, s, ms, dBHz
 
 include("code_replica.jl")
 include("carrier_replica.jl")
