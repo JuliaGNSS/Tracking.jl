@@ -1,13 +1,12 @@
-using
-    Test,
-    Tracking,
-    GNSSSignals,
-    Random,
-    StaticArrays,
-    TrackingLoopFilters,
-    StructArrays,
-    Statistics,
-    CUDA
+using CUDA
+using GNSSSignals
+using Random
+using StaticArrays
+using Statistics
+using StructArrays
+using Test
+using Tracking
+using TrackingLoopFilters
 
 using Acquisition: AcquisitionResults
 using Unitful: MHz, kHz, Hz, s, ms, dBHz
