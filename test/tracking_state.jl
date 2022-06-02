@@ -51,4 +51,19 @@
     state = TrackingState(1, gpsl1, carrier_doppler, code_phase, num_ants = NumAnts(2))
     @test @inferred(Tracking.get_correlator(state)) == EarlyPromptLateCorrelator(NumAnts(2))
 
+    acq = Acquisition.AcquisitionResults(GPSL1(), 5, 5e6Hz, 100.0Hz, 524.6, 45.0, randn(100,100), -500:100.0:500)
+    state = TrackingState(acq)
+    @test @inferred(Tracking.get_prn(state)) == 5
+    @test @inferred(Tracking.get_code_phase(state)) == 524.6
+    @test @inferred(Tracking.get_carrier_phase(state)) == 0.0
+    @test @inferred(Tracking.get_init_code_doppler(state)) == 100Hz / 1540
+    @test @inferred(Tracking.get_init_carrier_doppler(state)) == 100Hz
+    @test @inferred(Tracking.get_code_doppler(state)) == 100Hz / 1540
+    @test @inferred(Tracking.get_carrier_doppler(state)) == 100Hz
+    @test @inferred(Tracking.get_correlator(state)) == EarlyPromptLateCorrelator(NumAnts(1))
+    @test @inferred(Tracking.get_sc_bit_detector(state)) == SecondaryCodeOrBitDetector()
+    @test @inferred(Tracking.get_carrier_loop_filter(state)) == ThirdOrderBilinearLF()
+    @test @inferred(Tracking.get_code_loop_filter(state)) == SecondOrderBilinearLF()
+    @test @inferred(Tracking.get_prompt_accumulator(state)) == 0.0
+    @test @inferred(Tracking.get_integrated_samples(state)) == 0
 end
