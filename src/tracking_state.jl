@@ -85,7 +85,7 @@ struct TrackingState{
     code::COR
 end
 
-""" 
+"""
 $(SIGNATURES)
 
 Convenient TrackingState constructor. Mandatory parameters are the GNSS system, the
@@ -173,7 +173,7 @@ function TrackingState(
     correlator::C = get_default_correlator(system, num_ants),
     integrated_samples = 0,
     prompt_accumulator = zero(ComplexF64),
-    cn0_estimator::CN = MomentsCN0Estimator(20)   
+    cn0_estimator::CN = MomentsCN0Estimator(20)
 ) where {
     T <: CuMatrix,
     S <: AbstractGNSS{T},
@@ -211,6 +211,16 @@ function TrackingState(
         downconverted_signal,
         carrier,
         code
+    )
+end
+
+function TrackingState(acq::AcquisitionResults; args...)
+    TrackingState(
+        acq.prn,
+        acq.system,
+        acq.carrier_doppler,
+        acq.code_phase;
+        args...
     )
 end
 

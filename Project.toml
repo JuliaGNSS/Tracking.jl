@@ -5,6 +5,7 @@ authors = ["Soeren Schoenbrod <soeren.schoenbrod@nav.rwth-aachen.de>",
 version = "0.14.10"
 
 [deps]
+Acquisition = "d4bbf60b-102b-5ffb-8f97-a7ea5817e69f"
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 DocStringExtensions = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
 GNSSSignals = "52c80523-2a4e-5c38-8979-05588f836870"
@@ -16,6 +17,7 @@ TrackingLoopFilters = "0814aff9-93cb-554c-9fff-9bf1cfdb5efa"
 Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
 [compat]
+Acquisition = "0.0.2"
 CUDA = "3.5"
 DocStringExtensions = "0.6, 0.7, 0.8"
 GNSSSignals = "0.15.4"
