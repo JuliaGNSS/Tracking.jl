@@ -6,6 +6,7 @@
     state = TrackingState(1, gpsl1, carrier_doppler, code_phase)
 
     @test @inferred(Tracking.get_prn(state)) == 1
+    @test @inferred(Tracking.get_image_band(state)) == false
     @test @inferred(Tracking.get_code_phase(state)) == 100
     @test @inferred(Tracking.get_carrier_phase(state)) == 0.0
     @test @inferred(Tracking.get_init_code_doppler(state)) == 100Hz / 1540
@@ -35,6 +36,7 @@
     )
 
     @test @inferred(Tracking.get_prn(state)) == 1
+    @test @inferred(Tracking.get_image_band(state)) == false
     @test @inferred(Tracking.get_code_phase(state)) == 100
     @test @inferred(Tracking.get_carrier_phase(state)) == 0.0
     @test @inferred(Tracking.get_init_code_doppler(state)) == 100Hz / 1540
@@ -66,4 +68,7 @@
     @test @inferred(Tracking.get_code_loop_filter(state)) == SecondOrderBilinearLF()
     @test @inferred(Tracking.get_prompt_accumulator(state)) == 0.0
     @test @inferred(Tracking.get_integrated_samples(state)) == 0
+
+    state = TrackingState(1, GPSL1(), 100Hz, 0.0; image_band = true)
+    @test @inferred(Tracking.get_code_doppler(state)) == -100Hz / 1540
 end

@@ -67,6 +67,7 @@ struct TrackingState{
     }
     prn::Int
     system::S
+    image_band::Bool
     init_carrier_doppler::typeof(1.0Hz)
     init_code_doppler::typeof(1.0Hz)
     carrier_doppler::typeof(1.0Hz)
@@ -106,7 +107,8 @@ function TrackingState(
     system::S,
     carrier_doppler,
     code_phase;
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(system),
+    image_band = false,
+    code_doppler = (1 - 2image_band) * carrier_doppler * get_code_center_frequency_ratio(system),
     carrier_phase = 0.0,
     carrier_loop_filter::CALF = ThirdOrderBilinearLF(),
     code_loop_filter::COLF = SecondOrderBilinearLF(),
@@ -138,6 +140,7 @@ function TrackingState(
     TrackingState{S, C, CALF, COLF, CN, typeof(downconverted_signal), typeof(carrier), typeof(code)}(
         prn,
         system,
+        image_band,
         carrier_doppler,
         code_doppler,
         carrier_doppler,
@@ -164,7 +167,8 @@ function TrackingState(
     carrier_doppler,
     code_phase;
     num_samples,
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(system),
+    image_band = false,
+    code_doppler = (1 - 2image_band) * carrier_doppler * get_code_center_frequency_ratio(system),
     carrier_phase = 0.0,
     carrier_loop_filter::CALF = ThirdOrderBilinearLF(),
     code_loop_filter::COLF = SecondOrderBilinearLF(),
@@ -195,6 +199,7 @@ function TrackingState(
     TrackingState{S, C, CALF, COLF, CN, Nothing, Nothing, Nothing}(
         prn,
         system,
+        image_band,
         carrier_doppler,
         code_doppler,
         carrier_doppler,
@@ -242,3 +247,4 @@ end
 @inline get_carrier(state::TrackingState) = state.carrier
 @inline get_code(state::TrackingState) = state.code
 @inline get_prn(state::TrackingState) = state.prn
+@inline get_image_band(state::TrackingState) = state.image_band

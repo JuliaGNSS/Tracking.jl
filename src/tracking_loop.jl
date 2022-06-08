@@ -166,7 +166,8 @@ function track(
                 init_code_doppler,
                 carrier_freq_update,
                 code_freq_update,
-                velocity_aiding
+                velocity_aiding,
+                get_image_band(state)
             )
             cn0_estimator = update(
                 cn0_estimator,
@@ -197,6 +198,7 @@ function track(
     next_state = TrackingState{S, C, CALF, COLF, CN, DS, CAR, COR}(
         prn,
         system,
+        state.image_band,
         init_carrier_doppler,
         init_code_doppler,
         carrier_doppler,
@@ -454,10 +456,11 @@ function aid_dopplers(
     init_code_doppler,
     carrier_freq_update,
     code_freq_update,
-    velocity_aiding
+    velocity_aiding,
+    image_band = false
 )
     carrier_doppler = carrier_freq_update + velocity_aiding
-    code_doppler = code_freq_update + carrier_doppler * get_code_center_frequency_ratio(system)
+    code_doppler = code_freq_update + (1 - 2image_band) * carrier_doppler * get_code_center_frequency_ratio(system)
     init_carrier_doppler + carrier_doppler, init_code_doppler + code_doppler
 end
 
