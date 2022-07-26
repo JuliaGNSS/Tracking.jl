@@ -50,9 +50,9 @@ function track(
     correlator = get_correlator(state)
     num_ants = get_num_ants(correlator)
     size(signal, 2) == num_ants || throw(ArgumentError("The second dimension of the signal should be equal to the number of antennas specified by num_ants = NumAnts(N) in the TrackingState."))
-    if typeof(system.codes) <: CuMatrix
+    if typeof(get_codes(system)) <: CuMatrix
         typeof(signal) <: StructArray || throw(ArgumentError("Signal is not a StructArray, initialize the signal properly and try again."))
-        typeof(signal.re) <: CuArray && typeof(state.system.codes) <: CuArray || throw(ArgumentError("Signal and GNSS codes are not of the same type. Please check if CPU or GPU is used."))
+        typeof(signal.re) <: CuArray && typeof(get_codes(system)) <: CuArray || throw(ArgumentError("Signal and GNSS codes are not of the same type. Please check if CPU or GPU is used."))
     end
     downconverted_signal_temp = get_downconverted_signal(state)
     downconverted_signal = resize!(downconverted_signal_temp, size(signal, 1), signal)
