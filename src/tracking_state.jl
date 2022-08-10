@@ -63,7 +63,7 @@ struct TrackingState{
         CN <: AbstractCN0Estimator,
         DS <: Union{DownconvertedSignalCPU, Nothing},
         CAR <: Union{CarrierReplicaCPU, Nothing},
-        COR <: Union{Vector{Int8}, Nothing}
+        COR <: Union{Vector{<:Real}, Nothing}
     }
     prn::Int
     system::S
@@ -133,7 +133,7 @@ function TrackingState(
     end
     downconverted_signal = DownconvertedSignalCPU(num_ants)
     carrier = CarrierReplicaCPU()
-    code = Vector{Int8}(undef, 0)
+    code = Vector{get_code_type(system)}(undef, 0)
 
     TrackingState{S, C, CALF, COLF, CN, typeof(downconverted_signal), typeof(carrier), typeof(code)}(
         prn,
