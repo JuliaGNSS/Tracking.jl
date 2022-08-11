@@ -1,7 +1,6 @@
 name = "Tracking"
 uuid = "10b2438b-ffd4-5096-aa58-44041d5c8f3b"
-authors = ["Soeren Schoenbrod <soeren.schoenbrod@nav.rwth-aachen.de>",
-           "Michael Niestroj <michael.niestroj@nav.rwth-aachen.de>"]
+authors = ["Soeren Schoenbrod <soeren.schoenbrod@nav.rwth-aachen.de>", "Michael Niestroj <michael.niestroj@nav.rwth-aachen.de>"]
 version = "0.14.11"
 
 [deps]
@@ -17,7 +16,7 @@ TrackingLoopFilters = "0814aff9-93cb-554c-9fff-9bf1cfdb5efa"
 Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
 [compat]
-Acquisition = "0.0.2"
+Acquisition = "0.0.2, 0.0.4"
 CUDA = "3.5"
 DocStringExtensions = "0.6, 0.7, 0.8"
 GNSSSignals = "0.15.5"
@@ -27,4 +26,3 @@ StructArrays = "0.4"
 TrackingLoopFilters = "0.1"
 Unitful = "0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 1.0"
 julia = "1.6"
-
