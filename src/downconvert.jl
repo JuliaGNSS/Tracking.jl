@@ -111,7 +111,7 @@ end
         signal_real = reinterpret(reshape, ST, signal)
         ds_re = downconverted_signal.re; ds_im = downconverted_signal.im
         c_re = carrier_replica.re; c_im = carrier_replica.im
-        @avx for i = start_sample:num_samples + start_sample - 1, j = 1:size(signal_real, 3)
+        @avx for i = start_sample:num_samples + start_sample - 1, j = 1:size(ds_re, 2)
             ds_re[i, j] = signal_real[1, i, j] * c_re[i] + signal_real[2, i, j] * c_im[i]
             ds_im[i, j] = signal_real[2, i, j] * c_re[i] - signal_real[1, i, j] * c_im[i]
         end
