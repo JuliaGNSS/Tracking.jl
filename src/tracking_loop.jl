@@ -74,6 +74,7 @@ function track(
     cn0_estimator = get_cn0_estimator(state)
     signal_start_sample = 1
     bit_buffer = BitBuffer()
+    filtered_prompt = zero(ComplexF64)
     valid_correlator = zero(correlator)
     valid_correlator_carrier_phase = 0.0
     valid_correlator_carrier_frequency = 0.0Hz
@@ -136,6 +137,7 @@ function track(
             valid_correlator_carrier_phase = carrier_phase
             valid_correlator_carrier_frequency = carrier_frequency
             filtered_correlator = filter(post_corr_filter, correlator)
+            filtered_prompt = get_prompt(filtered_correlator, correlator_sample_shifts)
             pll_discriminator = pll_disc(
                 system,
                 filtered_correlator,
@@ -218,6 +220,7 @@ function track(
     TrackingResults(
         next_state,
         valid_correlator,
+        filtered_prompt,
         correlator_sample_shifts,
         early_late_index_shift,
         valid_correlator_carrier_frequency,

@@ -30,6 +30,7 @@ module Tracking
     export track
     export get_bits
     export get_num_bits
+    export get_filtered_prompt
 
     export TrackingState
     export NumAnts
