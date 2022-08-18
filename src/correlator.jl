@@ -154,8 +154,8 @@ $(SIGNATURES)
 
 Filter the Correlator by the function `post_corr_filter`
 """
-function filter(post_corr_filter, correlator::T) where T <: AbstractCorrelator
-    (T.name.wrapper)(map(x -> post_corr_filter(x), get_accumulators(correlator)))
+function apply(post_corr_filter, correlator::T) where T <: AbstractCorrelator
+    (T.name.wrapper)(map(post_corr_filter, get_accumulators(correlator)))
 end
 
 """
@@ -246,7 +246,7 @@ $(SIGNATURES)
 Normalize the correlator
 """
 function normalize(correlator::AbstractCorrelator, integrated_samples)
-    filter(x -> x / integrated_samples, correlator)
+    apply(x -> x / integrated_samples, correlator)
 end
 """
 $(SIGNATURES)

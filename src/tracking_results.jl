@@ -168,3 +168,10 @@ $(SIGNATURES)
 Get filtered prompt.
 """
 @inline get_filtered_prompt(results::TrackingResults) = results.filtered_prompt
+
+"""
+$(SIGNATURES)
+    
+Get Post correlation filter.
+"""
+@inline get_post_corr_filter(results::TrackingResults) = get_post_corr_filter(get_state(results))

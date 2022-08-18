@@ -63,10 +63,12 @@ struct TrackingState{
         CN <: AbstractCN0Estimator,
         DS <: Union{DownconvertedSignalCPU, Nothing},
         CAR <: Union{CarrierReplicaCPU, Nothing},
-        COR <: Union{Vector{<:Real}, Nothing}
+        COR <: Union{Vector{<:Real}, Nothing},
+        PCF <: AbstractPostCorrFilter,
     }
     prn::Int
     system::S
+    post_corr_filter::PCF
     init_carrier_doppler::typeof(1.0Hz)
     init_code_doppler::typeof(1.0Hz)
     carrier_doppler::typeof(1.0Hz)
@@ -106,6 +108,7 @@ function TrackingState(
     system::S,
     carrier_doppler,
     code_phase;
+    post_corr_filter::PCF = DefaultPostCorrFilter(),
     code_doppler = carrier_doppler * get_code_center_frequency_ratio(system),
     carrier_phase = 0.0,
     carrier_loop_filter::CALF = ThirdOrderBilinearLF(),
@@ -123,7 +126,8 @@ function TrackingState(
     C <: AbstractCorrelator,
     CALF <: AbstractLoopFilter,
     COLF <: AbstractLoopFilter,
-    CN <: AbstractCN0Estimator
+    CN <: AbstractCN0Estimator,
+    PCF <: AbstractPostCorrFilter
 }
     if found(sc_bit_detector)
         code_phase = mod(code_phase, get_code_length(system) *
@@ -135,9 +139,10 @@ function TrackingState(
     carrier = CarrierReplicaCPU()
     code = Vector{get_code_type(system)}(undef, 0)
 
-    TrackingState{S, C, CALF, COLF, CN, typeof(downconverted_signal), typeof(carrier), typeof(code)}(
+    TrackingState{S, C, CALF, COLF, CN, typeof(downconverted_signal), typeof(carrier), typeof(code), PCF}(
         prn,
         system,
+        post_corr_filter,
         carrier_doppler,
         code_doppler,
         carrier_doppler,
@@ -164,6 +169,7 @@ function TrackingState(
     carrier_doppler,
     code_phase;
     num_samples,
+    post_corr_filter::PCF = DefaultPostCorrFilter(),
     code_doppler = carrier_doppler * get_code_center_frequency_ratio(system),
     carrier_phase = 0.0,
     carrier_loop_filter::CALF = ThirdOrderBilinearLF(),
@@ -180,7 +186,8 @@ function TrackingState(
     C <: AbstractCorrelator,
     CALF <: AbstractLoopFilter,
     COLF <: AbstractLoopFilter,
-    CN <: AbstractCN0Estimator
+    CN <: AbstractCN0Estimator,
+    PCF <: AbstractPostCorrFilter
 }
     if found(sc_bit_detector)
         code_phase = mod(code_phase, get_code_length(system) *
@@ -192,9 +199,10 @@ function TrackingState(
     carrier = nothing
     code = nothing
 
-    TrackingState{S, C, CALF, COLF, CN, Nothing, Nothing, Nothing}(
+    TrackingState{S, C, CALF, COLF, CN, Nothing, Nothing, Nothing, PCF}(
         prn,
         system,
+        post_corr_filter,
         carrier_doppler,
         code_doppler,
         carrier_doppler,
@@ -242,3 +250,4 @@ end
 @inline get_carrier(state::TrackingState) = state.carrier
 @inline get_code(state::TrackingState) = state.code
 @inline get_prn(state::TrackingState) = state.prn
+@inline get_post_corr_filter(state::TrackingState) = state.post_corr_filter

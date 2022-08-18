@@ -31,6 +31,7 @@ module Tracking
     export get_bits
     export get_num_bits
     export get_filtered_prompt
+    export get_post_corr_filter
 
     export TrackingState
     export NumAnts
@@ -41,6 +42,7 @@ module Tracking
     #export VeryEarlyPromptLateCorrelator
     export SecondaryCodeOrBitDetector
     export GainControlledSignal
+    export AbstractPostCorrFilter
 
     struct NumAnts{x}
     end
@@ -52,6 +54,7 @@ module Tracking
 
     NumAccumulators(x) = NumAccumulators{x}()
 
+    include("post_corr_filter.jl")
     include("code_replica.jl")
     include("carrier_replica.jl")
     include("downconvert.jl")

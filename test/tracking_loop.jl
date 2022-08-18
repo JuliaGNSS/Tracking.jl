@@ -1,13 +1,3 @@
-@testset "Default post correlation Filter" begin
-    post_corr_filter = Tracking.get_default_post_corr_filter(EarlyPromptLateCorrelator())
-    @test @inferred(post_corr_filter(1.0 + 0.0im)) == 1.0 + 0.0im
-
-    post_corr_filter = Tracking.get_default_post_corr_filter(
-        EarlyPromptLateCorrelator(NumAnts(2))
-    )
-    @test @inferred(post_corr_filter(SVector(1.0 + 0.0im, 2.0 + 0.0im))) == 1.0 + 0.0im
-end
-
 @testset "Resize downconverted signal ($type) for multiple ants" for type in (Int16, Int32, Int64, Float32, Float64)
     downconverted_signal_temp = Tracking.DownconvertedSignalCPU(NumAnts(4))
     signal = StructArray(ones(Complex{type}, 2500, 4))

@@ -11,6 +11,7 @@ using TrackingLoopFilters
 using Acquisition: AcquisitionResults
 using Unitful: MHz, kHz, Hz, s, ms, dBHz
 
+include("post_corr_filter.jl")
 include("code_replica.jl")
 include("carrier_replica.jl")
 include("downconvert.jl")
