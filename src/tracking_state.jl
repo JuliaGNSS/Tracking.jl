@@ -87,6 +87,33 @@ struct TrackingState{
     code::COR
 end
 
+function TrackingState(
+    track_state::TrackingState;
+    post_corr_filter,
+)
+    TrackingState(
+        track_state.prn,
+        track_state.system,
+        post_corr_filter,
+        track_state.init_carrier_doppler,
+        track_state.init_code_doppler,
+        track_state.carrier_doppler,
+        track_state.code_doppler,
+        track_state.carrier_phase,
+        track_state.code_phase,
+        track_state.correlator,
+        track_state.carrier_loop_filter,
+        track_state.code_loop_filter,
+        track_state.sc_bit_detector,
+        track_state.integrated_samples,
+        track_state.prompt_accumulator,
+        track_state.cn0_estimator,
+        track_state.downconverted_signal,
+        track_state.carrier,
+        track_state.code
+    )
+end
+
 """
 $(SIGNATURES)
 
