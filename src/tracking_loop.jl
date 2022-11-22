@@ -201,7 +201,6 @@ function track(
     next_state = TrackingState{S, C, CALF, COLF, CN, DS, CAR, COR, PCF}(
         prn,
         system,
-        post_corr_filter,
         init_carrier_doppler,
         init_code_doppler,
         carrier_doppler,
@@ -217,7 +216,8 @@ function track(
         cn0_estimator,
         downconverted_signal,
         carrier_replica,
-        code_replica
+        code_replica,
+        post_corr_filter,
     )
     estimated_cn0 = estimate_cn0(cn0_estimator, max_integration_time)
     TrackingResults(

@@ -68,7 +68,6 @@ struct TrackingState{
     }
     prn::Int
     system::S
-    post_corr_filter::PCF
     init_carrier_doppler::typeof(1.0Hz)
     init_code_doppler::typeof(1.0Hz)
     carrier_doppler::typeof(1.0Hz)
@@ -85,6 +84,7 @@ struct TrackingState{
     downconverted_signal::DS
     carrier::CAR
     code::COR
+    post_corr_filter::PCF
 end
 
 function TrackingState(
@@ -94,7 +94,6 @@ function TrackingState(
     TrackingState(
         track_state.prn,
         track_state.system,
-        post_corr_filter,
         track_state.init_carrier_doppler,
         track_state.init_code_doppler,
         track_state.carrier_doppler,
@@ -110,7 +109,8 @@ function TrackingState(
         track_state.cn0_estimator,
         track_state.downconverted_signal,
         track_state.carrier,
-        track_state.code
+        track_state.code,
+        post_corr_filter
     )
 end
 
@@ -135,7 +135,6 @@ function TrackingState(
     system::S,
     carrier_doppler,
     code_phase;
-    post_corr_filter::PCF = DefaultPostCorrFilter(),
     code_doppler = carrier_doppler * get_code_center_frequency_ratio(system),
     carrier_phase = 0.0,
     carrier_loop_filter::CALF = ThirdOrderBilinearLF(),
@@ -146,6 +145,7 @@ function TrackingState(
     integrated_samples = 0,
     prompt_accumulator = zero(ComplexF64),
     cn0_estimator::CN = MomentsCN0Estimator(20),
+    post_corr_filter::PCF = DefaultPostCorrFilter(),
     num_samples = 0
 ) where {
     T <: AbstractMatrix,
@@ -169,7 +169,6 @@ function TrackingState(
     TrackingState{S, C, CALF, COLF, CN, typeof(downconverted_signal), typeof(carrier), typeof(code), PCF}(
         prn,
         system,
-        post_corr_filter,
         carrier_doppler,
         code_doppler,
         carrier_doppler,
@@ -185,7 +184,8 @@ function TrackingState(
         cn0_estimator,
         downconverted_signal,
         carrier,
-        code
+        code,
+        post_corr_filter,
     )
 end
 
@@ -196,7 +196,6 @@ function TrackingState(
     carrier_doppler,
     code_phase;
     num_samples,
-    post_corr_filter::PCF = DefaultPostCorrFilter(),
     code_doppler = carrier_doppler * get_code_center_frequency_ratio(system),
     carrier_phase = 0.0,
     carrier_loop_filter::CALF = ThirdOrderBilinearLF(),
@@ -206,7 +205,8 @@ function TrackingState(
     correlator::C = get_default_correlator(system, num_ants),
     integrated_samples = 0,
     prompt_accumulator = zero(ComplexF64),
-    cn0_estimator::CN = MomentsCN0Estimator(20)
+    cn0_estimator::CN = MomentsCN0Estimator(20),
+    post_corr_filter::PCF = DefaultPostCorrFilter(),
 ) where {
     T <: CuMatrix,
     S <: AbstractGNSS{T},
@@ -229,7 +229,6 @@ function TrackingState(
     TrackingState{S, C, CALF, COLF, CN, Nothing, Nothing, Nothing, PCF}(
         prn,
         system,
-        post_corr_filter,
         carrier_doppler,
         code_doppler,
         carrier_doppler,
@@ -245,7 +244,8 @@ function TrackingState(
         cn0_estimator,
         downconverted_signal,
         carrier,
-        code
+        code,
+        post_corr_filter,
     )
 end
 
