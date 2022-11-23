@@ -63,7 +63,8 @@ struct TrackingState{
         CN <: AbstractCN0Estimator,
         DS <: Union{DownconvertedSignalCPU, Nothing},
         CAR <: Union{CarrierReplicaCPU, Nothing},
-        COR <: Union{Vector{Int8}, Nothing}
+        COR <: Union{Vector{<:Real}, Nothing},
+        PCF <: AbstractPostCorrFilter,
     }
     prn::Int
     system::S
@@ -83,6 +84,34 @@ struct TrackingState{
     downconverted_signal::DS
     carrier::CAR
     code::COR
+    post_corr_filter::PCF
+end
+
+function TrackingState(
+    track_state::TrackingState;
+    post_corr_filter,
+)
+    TrackingState(
+        track_state.prn,
+        track_state.system,
+        track_state.init_carrier_doppler,
+        track_state.init_code_doppler,
+        track_state.carrier_doppler,
+        track_state.code_doppler,
+        track_state.carrier_phase,
+        track_state.code_phase,
+        track_state.correlator,
+        track_state.carrier_loop_filter,
+        track_state.code_loop_filter,
+        track_state.sc_bit_detector,
+        track_state.integrated_samples,
+        track_state.prompt_accumulator,
+        track_state.cn0_estimator,
+        track_state.downconverted_signal,
+        track_state.carrier,
+        track_state.code,
+        post_corr_filter
+    )
 end
 
 """
@@ -116,6 +145,7 @@ function TrackingState(
     integrated_samples = 0,
     prompt_accumulator = zero(ComplexF64),
     cn0_estimator::CN = MomentsCN0Estimator(20),
+    post_corr_filter::PCF = DefaultPostCorrFilter(),
     num_samples = 0
 ) where {
     T <: AbstractMatrix,
@@ -123,7 +153,8 @@ function TrackingState(
     C <: AbstractCorrelator,
     CALF <: AbstractLoopFilter,
     COLF <: AbstractLoopFilter,
-    CN <: AbstractCN0Estimator
+    CN <: AbstractCN0Estimator,
+    PCF <: AbstractPostCorrFilter
 }
     if found(sc_bit_detector)
         code_phase = mod(code_phase, get_code_length(system) *
@@ -133,9 +164,9 @@ function TrackingState(
     end
     downconverted_signal = DownconvertedSignalCPU(num_ants)
     carrier = CarrierReplicaCPU()
-    code = Vector{Int8}(undef, 0)
+    code = Vector{get_code_type(system)}(undef, 0)
 
-    TrackingState{S, C, CALF, COLF, CN, typeof(downconverted_signal), typeof(carrier), typeof(code)}(
+    TrackingState{S, C, CALF, COLF, CN, typeof(downconverted_signal), typeof(carrier), typeof(code), PCF}(
         prn,
         system,
         carrier_doppler,
@@ -153,7 +184,8 @@ function TrackingState(
         cn0_estimator,
         downconverted_signal,
         carrier,
-        code
+        code,
+        post_corr_filter,
     )
 end
 
@@ -173,14 +205,16 @@ function TrackingState(
     correlator::C = get_default_correlator(system, num_ants),
     integrated_samples = 0,
     prompt_accumulator = zero(ComplexF64),
-    cn0_estimator::CN = MomentsCN0Estimator(20)
+    cn0_estimator::CN = MomentsCN0Estimator(20),
+    post_corr_filter::PCF = DefaultPostCorrFilter(),
 ) where {
     T <: CuMatrix,
     S <: AbstractGNSS{T},
     C <: AbstractCorrelator,
     CALF <: AbstractLoopFilter,
     COLF <: AbstractLoopFilter,
-    CN <: AbstractCN0Estimator
+    CN <: AbstractCN0Estimator,
+    PCF <: AbstractPostCorrFilter
 }
     if found(sc_bit_detector)
         code_phase = mod(code_phase, get_code_length(system) *
@@ -192,7 +226,7 @@ function TrackingState(
     carrier = nothing
     code = nothing
 
-    TrackingState{S, C, CALF, COLF, CN, Nothing, Nothing, Nothing}(
+    TrackingState{S, C, CALF, COLF, CN, Nothing, Nothing, Nothing, PCF}(
         prn,
         system,
         carrier_doppler,
@@ -210,7 +244,8 @@ function TrackingState(
         cn0_estimator,
         downconverted_signal,
         carrier,
-        code
+        code,
+        post_corr_filter,
     )
 end
 
@@ -242,3 +277,4 @@ end
 @inline get_carrier(state::TrackingState) = state.carrier
 @inline get_code(state::TrackingState) = state.code
 @inline get_prn(state::TrackingState) = state.prn
+@inline get_post_corr_filter(state::TrackingState) = state.post_corr_filter

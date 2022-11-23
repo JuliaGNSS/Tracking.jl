@@ -55,4 +55,6 @@
     state = TrackingState(1, gpsl1, carrier_doppler, code_phase, num_samples = num_samples, num_ants = NumAnts(2))
     @test @inferred(Tracking.get_correlator(state)) == EarlyPromptLateCorrelator(NumAnts(2))
 
+    changed_state = @inferred(TrackingState(state, post_corr_filter = Tracking.DefaultPostCorrFilter()))
+    @test get_post_corr_filter(changed_state) == Tracking.DefaultPostCorrFilter()
 end

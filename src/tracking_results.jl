@@ -11,6 +11,7 @@ struct TrackingResults{
     }
     state::TS
     correlator::C
+    filtered_prompt::ComplexF64
     correlator_sample_shifts::CS
     early_late_index_shift::ELI
     correlator_carrier_frequency::typeof(1.0Hz)
@@ -157,6 +158,20 @@ Check if the secondary code or bit has been found.
 """
 $(SIGNATURES)
     
-Check if the secondary code or bit has been found.
+Get used system.
 """
 @inline get_system(results::TrackingResults) = get_system(get_state(results))
+
+"""
+$(SIGNATURES)
+    
+Get filtered prompt.
+"""
+@inline get_filtered_prompt(results::TrackingResults) = results.filtered_prompt
+
+"""
+$(SIGNATURES)
+    
+Get Post correlation filter.
+"""
+@inline get_post_corr_filter(results::TrackingResults) = get_post_corr_filter(get_state(results))

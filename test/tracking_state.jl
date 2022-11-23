@@ -18,6 +18,7 @@
     @test @inferred(Tracking.get_code_loop_filter(state)) == SecondOrderBilinearLF()
     @test @inferred(Tracking.get_prompt_accumulator(state)) == 0.0
     @test @inferred(Tracking.get_integrated_samples(state)) == 0
+    @test @inferred(get_post_corr_filter(state)) == Tracking.DefaultPostCorrFilter()
 
     state = TrackingState(
         1,
@@ -66,4 +67,7 @@
     @test @inferred(Tracking.get_code_loop_filter(state)) == SecondOrderBilinearLF()
     @test @inferred(Tracking.get_prompt_accumulator(state)) == 0.0
     @test @inferred(Tracking.get_integrated_samples(state)) == 0
+
+    changed_state = @inferred(TrackingState(state, post_corr_filter = Tracking.DefaultPostCorrFilter()))
+    @test get_post_corr_filter(changed_state) == Tracking.DefaultPostCorrFilter()
 end

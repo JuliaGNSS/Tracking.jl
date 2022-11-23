@@ -19,9 +19,8 @@ Track the signal `signal` based on the current tracking `state`, the sampling fr
 """
 function track(
         signal,
-        state::TrackingState{S, C, CALF, COLF, CN, DS, CAR, COR},
+        state::TrackingState{S, C, CALF, COLF, CN, DS, CAR, COR, PCF},
         sampling_frequency;
-        post_corr_filter = get_default_post_corr_filter(get_correlator(state)),
         intermediate_frequency = 0.0Hz,
         max_integration_time::typeof(1ms) = 1ms,
         min_integration_time::typeof(1.0ms) = 0.75ms,
@@ -40,7 +39,8 @@ function track(
     CN <: AbstractCN0Estimator,
     DS,
     CAR,
-    COR
+    COR,
+    PCF <: AbstractPostCorrFilter,
 }
     prn = get_prn(state)
     system = get_system(state)
@@ -72,8 +72,10 @@ function track(
     prompt_accumulator = get_prompt_accumulator(state)
     integrated_samples = get_integrated_samples(state)
     cn0_estimator = get_cn0_estimator(state)
+    post_corr_filter = get_post_corr_filter(state)
     signal_start_sample = 1
     bit_buffer = BitBuffer()
+    filtered_prompt = zero(ComplexF64)
     valid_correlator = zero(correlator)
     valid_correlator_carrier_phase = 0.0
     valid_correlator_carrier_frequency = 0.0Hz
@@ -135,7 +137,9 @@ function track(
             valid_correlator = correlator
             valid_correlator_carrier_phase = carrier_phase
             valid_correlator_carrier_frequency = carrier_frequency
-            filtered_correlator = filter(post_corr_filter, correlator)
+            post_corr_filter = update(post_corr_filter, get_prompt(correlator, correlator_sample_shifts))
+            filtered_correlator = apply(post_corr_filter, correlator)
+            filtered_prompt = get_prompt(filtered_correlator, correlator_sample_shifts)
             pll_discriminator = pll_disc(
                 system,
                 filtered_correlator,
@@ -194,7 +198,7 @@ function track(
         num_samples_left == signal_samples_left && break
         signal_start_sample += num_samples_left
     end
-    next_state = TrackingState{S, C, CALF, COLF, CN, DS, CAR, COR}(
+    next_state = TrackingState{S, C, CALF, COLF, CN, DS, CAR, COR, PCF}(
         prn,
         system,
         init_carrier_doppler,
@@ -212,12 +216,14 @@ function track(
         cn0_estimator,
         downconverted_signal,
         carrier_replica,
-        code_replica
+        code_replica,
+        post_corr_filter,
     )
     estimated_cn0 = estimate_cn0(cn0_estimator, max_integration_time)
     TrackingResults(
         next_state,
         valid_correlator,
+        filtered_prompt,
         correlator_sample_shifts,
         early_late_index_shift,
         valid_correlator_carrier_frequency,

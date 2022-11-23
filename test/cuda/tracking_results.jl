@@ -3,6 +3,7 @@
     results = Tracking.TrackingResults(
         TrackingState(1, gpsl1, 100Hz, 100, num_samples = 2500),
         EarlyPromptLateCorrelator(NumAnts(2)),
+        complex(1.2,1.3),
         SVector(-1, 0, 1),
         1,
         1.0Hz,
@@ -22,6 +23,7 @@
     @test correlator == EarlyPromptLateCorrelator(NumAnts(2))
     @test @inferred(get_correlator_sample_shifts(results)) == SVector(-1, 0, 1)
     @test @inferred(get_early_late_index_shift(results)) == 1
+    @test @inferred(get_filtered_prompt(results)) == complex(1.2,1.3)
     @test @inferred(get_early(results)) == [0.0, 0.0]
     @test @inferred(get_prompt(results)) == [0.0, 0.0]
     @test @inferred(get_late(results)) == [0.0, 0.0]
@@ -33,6 +35,7 @@
     results = Tracking.TrackingResults(
         TrackingState(1, gpsl1, 100Hz, 100, num_samples = 2500),
         EarlyPromptLateCorrelator(NumAnts(2)),
+        complex(1.2,1.3),
         SVector(-1, 0, 1),
         1,
         1.0Hz,
@@ -42,6 +45,7 @@
         45dBHz
     )
     correlator = @inferred get_correlator(results)
+    @test @inferred(get_filtered_prompt(results)) == complex(1.2,1.3)
     @test @inferred(get_early(results)) == [0, 0]
     @test @inferred(get_prompt(results)) == [0, 0]
     @test @inferred(get_late(results)) == [0, 0]

@@ -73,17 +73,18 @@
     @testset "Filter correlator" begin
         correlator = @inferred EarlyPromptLateCorrelator(
             SVector(
-                SVector(1.0 + 0.0im, 1.0 + 0.0im),
-                SVector(1.0 + 0.0im, 1.0 + 0.0im),
-                SVector(1.0 + 0.0im, 1.0 + 0.0im)
+                SVector(1.0 + 0.0im, 1.0 + 1.0im),
+                SVector(1.0 + 0.0im, 2.0 + 0.0im),
+                SVector(1.0 + 1.0im, 1.0 + 3.0im)
             )
         )
-        filtered_correlator = @inferred Tracking.filter(x -> x[1], correlator)
+        default_post_corr_filter = Tracking.DefaultPostCorrFilter()
+        filtered_correlator = @inferred Tracking.apply(default_post_corr_filter, correlator)
         @test filtered_correlator == EarlyPromptLateCorrelator(
             SVector(
-                1.0 + 0.0im,
-                1.0 + 0.0im,
-                1.0 + 0.0im
+                1.0 + 1.0im,
+                2.0 + 0.0im,
+                1.0 + 3.0im
             )
         )
 
@@ -94,7 +95,7 @@
                 1.0 + 0.0im
             )
         )
-        filtered_correlator = @inferred Tracking.filter(x -> 2 * x, correlator)
+        filtered_correlator = @inferred Tracking.apply(x -> 2 * x, correlator)
         @test filtered_correlator == EarlyPromptLateCorrelator(
             SVector(
                 2.0 + 0.0im,
