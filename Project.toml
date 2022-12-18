@@ -17,7 +17,7 @@ TrackingLoopFilters = "0814aff9-93cb-554c-9fff-9bf1cfdb5efa"
 Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
 [compat]
-Acquisition = "0.0.2, 0.0.4, 0.0.5, 0.1.0"
+Acquisition = "0.1.0"
 CUDA = "3.5"
 DocStringExtensions = "0.6, 0.7, 0.8, 0.9"
 GNSSSignals = "0.16"
