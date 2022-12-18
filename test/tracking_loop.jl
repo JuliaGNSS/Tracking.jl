@@ -156,7 +156,7 @@ end
             prn
         )
     scaling = 512
-    signal = type <: Integer ? complex.(floor.(type, real.(signal_temp) * scaling), floor.(type, imag.(signal_temp) * scaling)) : Complex{type}.(signal_temp)
+    signal = type <: Integer ? complex.(round.(type, real.(signal_temp) * scaling), round.(type, imag.(signal_temp) * scaling)) : Complex{type}.(signal_temp)
 
     track_result = @inferred track(signal, state, sampling_frequency)
 
@@ -189,6 +189,91 @@ end
             sampling_frequency
         )
         comp_carrier_phase = mod2pi(2π * carrier_doppler * 4000 * (i + 1) /
+            sampling_frequency + start_carrier_phase + π) - π
+        comp_code_phase = mod(
+            code_frequency * 4000 * (i + 1) / sampling_frequency + start_code_phase,
+            1023
+        )
+        tracked_code_phases[i] = get_code_phase(track_result)
+        tracked_carrier_phases[i] = get_carrier_phase(track_result)
+        tracked_carrier_dopplers[i] = get_carrier_doppler(track_result)/Hz
+        tracked_code_dopplers[i] = get_code_doppler(track_result)/Hz
+        tracked_prompts[i] = get_prompt(track_result)
+        code_phases[i] = comp_code_phase
+        carrier_phases[i] = comp_carrier_phase
+    end
+    @test tracked_code_phases[end] ≈ code_phases[end] atol = 2e-4
+    @test tracked_carrier_phases[end] + π ≈ carrier_phases[end] atol = 5e-2
+
+#    using PyPlot
+#    pygui(true)
+#    figure("carrier_phases")
+#    plot(tracked_carrier_phases)
+#    plot(carrier_phases)
+#    grid(true)
+#    figure("Code Phases")
+#    plot(300 * (tracked_code_phases .- code_phases))
+#    figure("Carrier Doppler")
+#    plot(tracked_carrier_dopplers)
+#    figure("Code Doppler")
+#    plot(tracked_code_dopplers)
+#    figure("Prompt")
+#    plot(real.(tracked_prompts))
+#    plot(imag.(tracked_prompts))
+end
+
+@testset "Tracking with intermediate frequency of $intermediate_frequency" for intermediate_frequency in (0.0Hz, -10000.0Hz, 10000.0Hz, -30000.0Hz, 30000.0Hz)
+    gpsl1 = GPSL1()
+    carrier_doppler = 200Hz
+    start_code_phase = 100
+    code_frequency = carrier_doppler / 1540 + 1023e3Hz
+    sampling_frequency = 4e6Hz
+    prn = 1
+    range = 0:3999
+    start_carrier_phase = π / 2
+    state = TrackingState(prn, gpsl1, carrier_doppler - 20Hz, start_code_phase)
+
+    signal = cis.(
+            2π .* (carrier_doppler + intermediate_frequency) .* range ./ sampling_frequency .+ start_carrier_phase
+        ) .*
+        get_code.(
+            gpsl1,
+            code_frequency .* range ./ sampling_frequency .+ start_code_phase,
+            prn
+        )
+
+    track_result = @inferred track(signal, state, sampling_frequency; intermediate_frequency)
+
+    iterations = 2000
+    code_phases = zeros(iterations)
+    carrier_phases = zeros(iterations)
+    tracked_code_phases = zeros(iterations)
+    tracked_carrier_phases = zeros(iterations)
+    tracked_code_dopplers = zeros(iterations)
+    tracked_carrier_dopplers = zeros(iterations)
+    tracked_prompts = zeros(ComplexF64, iterations)
+    for i = 1:iterations
+        carrier_phase = mod2pi(2π * (carrier_doppler + intermediate_frequency) * 4000 * i / sampling_frequency +
+            start_carrier_phase + π) - π
+        code_phase = mod(
+            code_frequency * 4000 * i / sampling_frequency + start_code_phase,
+            1023
+        )
+        signal = cis.(
+                2π .* (carrier_doppler + intermediate_frequency) .* range ./ sampling_frequency .+ carrier_phase
+            ) .*
+            get_code.(
+                gpsl1,
+                code_frequency .* range ./ sampling_frequency .+ code_phase,
+                prn
+            )
+        track_result = @inferred track(
+            signal,
+            get_state(track_result),
+            sampling_frequency;
+            intermediate_frequency
+        )
+        comp_carrier_phase = mod2pi(2π * (carrier_doppler + intermediate_frequency) * 4000 * (i + 1) /
             sampling_frequency + start_carrier_phase + π) - π
         comp_code_phase = mod(
             code_frequency * 4000 * (i + 1) / sampling_frequency + start_code_phase,
