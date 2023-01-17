@@ -51,7 +51,7 @@ function downconvert!(
     start_phase,
     start_sample,
     num_samples
-) where {N, T, TS}
+) where {T, TS}
     ds_re = downconverted_signal.re; ds_im = downconverted_signal.im
     s_re = signal.re; s_im = signal.im
     carrier_freq = upreferred(carrier_frequency / Hz)

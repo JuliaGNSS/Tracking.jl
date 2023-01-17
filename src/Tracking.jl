@@ -12,37 +12,42 @@ module Tracking
     using Unitful: upreferred, Hz, dBHz, ms
     import Base.zero, Base.length, Base.resize!, LinearAlgebra.dot
 
-    export get_early, get_prompt, get_late
-    export get_early_index,get_prompt_index, get_late_index
-    export get_correlator
-    export get_accumulator, get_accumulators
-    export get_num_accumulators
-    export get_carrier_doppler, get_carrier_phase
-    export get_code_doppler, get_code_phase
-    export get_correlator_sample_shifts
-    export get_early_late_sample_spacing
-    export get_early_late_index_shift
-    export get_secondary_code_or_bit_found
-    export get_correlator_carrier_phase, get_correlator_carrier_frequency
-    export get_state
-    export get_system
-    export get_cn0
-    export track
-    export get_bits
-    export get_num_bits
-    export get_filtered_prompt
-    export get_post_corr_filter
-
-    export TrackingState
-    export NumAnts
-    export NumAccumulators
-    export MomentsCN0Estimator
-    export AbstractCN0Estimator
-    export EarlyPromptLateCorrelator
-    #export VeryEarlyPromptLateCorrelator
-    export SecondaryCodeOrBitDetector
-    export GainControlledSignal
-    export AbstractPostCorrFilter
+    export get_early, get_prompt, get_late,
+        get_prn,
+        get_code_phase,
+        get_code_doppler,
+        get_carrier_phase,
+        get_carrier_doppler,
+        get_integrated_samples,
+        get_correlator,
+        get_last_fully_integrated_correlator,
+        get_last_fully_integrated_filtered_prompt,
+        get_sample_of_last_fully_integrated_correlator,
+        get_secondary_code_or_bit_detector,
+        get_prompts_buffer,
+        get_bit_buffer,
+        get_bits,
+        get_accumulators,
+        get_early_late_sample_spacing,
+        track,
+        NumAnts,
+        NumAccumulators,
+        MomentsCN0Estimator,
+        AbstractCN0Estimator,
+        EarlyPromptLateCorrelator,
+        #export VeryEarlyPromptLateCorrelator
+        SecondaryCodeOrBitDetector,
+        GainControlledSignal,
+        AbstractPostCorrFilter,
+        SatState,
+        SystemSatsState,
+        CPUDownconvertAndCorrelator,
+        ConventionalPLLAndDLL,
+        ConventionalPLLsAndDLLs,
+        DefaultPostCorrFilter,
+        TrackState,
+        add_sats!,
+        remove_sats!
 
     struct NumAnts{x}
     end
@@ -54,7 +59,25 @@ module Tracking
 
     NumAccumulators(x) = NumAccumulators{x}()
 
-    include("post_corr_filter.jl")
+    struct DopplersAndFilteredPrompt
+        carrier_doppler::typeof(1.0Hz)
+        code_doppler::typeof(1.0Hz)
+        filtered_prompt::ComplexF64
+    end
+
+    """
+    $(SIGNATURES)
+
+    Get the number of samples in the signal.
+    """
+    @inline function get_num_samples(signal)
+        length(signal)
+    end
+
+    @inline function get_num_samples(signal::AbstractMatrix)
+        size(signal, 1)
+    end
+
     include("code_replica.jl")
     include("carrier_replica.jl")
     include("downconvert.jl")
@@ -62,12 +85,15 @@ module Tracking
     include("discriminators.jl")
     include("bit_buffer.jl")
     include("correlator.jl")
+    include("post_corr_filter.jl")
     include("secondary_code_or_bit_detector.jl")
-    include("tracking_state.jl")
-    include("tracking_results.jl")
-    include("tracking_loop.jl")
     include("gpsl1.jl")
     include("gpsl5.jl")
     include("galileo_e1b.jl")
+    include("sample_parameters.jl")
+    include("sat_state.jl")
     include("downconvert_and_correlate.jl")
+    include("conventional_pll_and_dll.jl")
+    include("tracking_state.jl")
+    include("track.jl")
 end

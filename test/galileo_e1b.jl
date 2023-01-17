@@ -10,6 +10,10 @@
 
     @test @inferred(Tracking.is_upcoming_integration_new_bit(galileo_e1b, 0xf0, 8)) == true
 
-    @test @inferred(Tracking.get_default_correlator(galileo_e1b, NumAnts(1))) == EarlyPromptLateCorrelator(NumAnts(1))
-    @test @inferred(Tracking.get_default_correlator(galileo_e1b, NumAnts(3))) == EarlyPromptLateCorrelator(NumAnts(3))
+    sampling_frequency = 5e6Hz
+
+    @test @inferred(Tracking.get_default_correlator(galileo_e1b, sampling_frequency, NumAnts(1))) ==
+        EarlyPromptLateCorrelator(galileo_e1b, sampling_frequency, num_ants = NumAnts(1))
+    @test @inferred(Tracking.get_default_correlator(galileo_e1b, sampling_frequency, NumAnts(3))) ==
+        EarlyPromptLateCorrelator(galileo_e1b, sampling_frequency, num_ants = NumAnts(3))
 end

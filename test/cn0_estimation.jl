@@ -1,26 +1,24 @@
-@testset "Update CN0 Estimator" begin
+@testset "Prompts buffer" begin
 
-    cn0_estimator = MomentsCN0Estimator(20)
-    @test @inferred(Tracking.get_prompt_buffer(cn0_estimator)) == zero(SVector{20, ComplexF64})
-    @test @inferred(Tracking.get_current_index(cn0_estimator)) == 0
-    @test @inferred(Tracking.length(cn0_estimator)) == 0
+    prompts_buffer = Tracking.PromptsBuffer(20)
+    @test @inferred(Tracking.get_prompt_buffer(prompts_buffer)) == zero(SVector{20, ComplexF64})
+    @test @inferred(Tracking.get_current_index(prompts_buffer)) == 0
+    @test @inferred(Tracking.length(prompts_buffer)) == 0
 
-    next_cn0_estimator = @inferred Tracking.update(cn0_estimator, 1 + 2im)
-    @test @inferred(Tracking.get_prompt_buffer(next_cn0_estimator))[1] == 1 + 2im
-    @test @inferred(Tracking.get_current_index(next_cn0_estimator)) == 1
-    @test @inferred(Tracking.length(next_cn0_estimator)) == 1
+    next_prompts_buffer = @inferred Tracking.update(prompts_buffer, 1 + 2im)
+    @test @inferred(Tracking.get_prompt_buffer(next_prompts_buffer))[1] == 1 + 2im
+    @test @inferred(Tracking.get_current_index(next_prompts_buffer)) == 1
+    @test @inferred(Tracking.length(next_prompts_buffer)) == 1
 
-    cn0_estimator = MomentsCN0Estimator(ones(SVector{20, ComplexF64}), 20, 20)
-    next_cn0_estimator = @inferred Tracking.update(cn0_estimator, 1 + 2im)
-    @test @inferred(Tracking.get_prompt_buffer(next_cn0_estimator))[1] == 1 + 2im
-    @test @inferred(Tracking.get_current_index(next_cn0_estimator)) == 1
-    @test @inferred(Tracking.length(next_cn0_estimator)) == 20
+    prompts_buffer = Tracking.PromptsBuffer(ones(SVector{20, ComplexF64}), 20, 20)
+    next_prompts_buffer = @inferred Tracking.update(prompts_buffer, 1 + 2im)
+    @test @inferred(Tracking.get_prompt_buffer(next_prompts_buffer))[1] == 1 + 2im
+    @test @inferred(Tracking.get_current_index(next_prompts_buffer)) == 1
+    @test @inferred(Tracking.length(next_prompts_buffer)) == 20
 
-    cn0_estimator = MomentsCN0Estimator(ones(SVector{20, ComplexF64}), 19, 20)
-    @test @inferred(Tracking.get_current_index(cn0_estimator)) == 19
-    @test @inferred(Tracking.length(cn0_estimator)) == 20
-
-    @test @allocated(Tracking.update(MomentsCN0Estimator(20), 1 + 2im)) == 0
+    prompts_buffer = Tracking.PromptsBuffer(ones(SVector{20, ComplexF64}), 19, 20)
+    @test @inferred(Tracking.get_current_index(prompts_buffer)) == 19
+    @test @inferred(Tracking.length(prompts_buffer)) == 20
 end
 
 @testset "CN0 estimation" begin
@@ -33,8 +31,8 @@ end
     prn = 1
     range = 0:3999
     start_carrier_phase = π / 2
-    cn0_estimator = MomentsCN0Estimator(20)
-    correlator_sample_shifts = SVector(-2, 0, 2)
+    cn0_estimator = MomentsCN0Estimator()
+    prompts_buffer = Tracking.PromptsBuffer(20)
     start_sample = 1
     num_samples = 4000
     gpsl1 = GPSL1()
@@ -51,24 +49,23 @@ end
             code_frequency .* (-2:4001) ./ sampling_frequency .+ start_code_phase,
             prn
         )
-        correlator = EarlyPromptLateCorrelator()
+        correlator = EarlyPromptLateCorrelator(gpsl1, sampling_frequency)
         signal_struct = StructArray(signal)
         correlator = Tracking.correlate(
             correlator,
             signal_struct,
             code,
-            correlator_sample_shifts,
             start_sample,
             num_samples,
         )
-        cn0_estimator = Tracking.update(
-            cn0_estimator,
-            get_prompt(correlator, correlator_sample_shifts)
+        prompts_buffer = Tracking.update(
+            prompts_buffer,
+            get_prompt(correlator)
         )
     end
-    @test @inferred(Tracking.get_current_index(cn0_estimator)) == 20
-    @test @inferred(Tracking.length(cn0_estimator)) == 20
-    cn0_estimate = @inferred Tracking.estimate_cn0(cn0_estimator, 1ms)
+    @test @inferred(Tracking.get_current_index(prompts_buffer)) == 20
+    @test @inferred(Tracking.length(prompts_buffer)) == 20
+    cn0_estimate = @inferred Tracking.estimate_cn0(prompts_buffer, cn0_estimator, 1ms)
 
     @test cn0_estimate ≈ 45dBHz atol = 2.05dBHz
 
