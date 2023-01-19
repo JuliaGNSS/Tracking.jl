@@ -13,5 +13,5 @@ end
 
 # TODO: Very early very late correlator?
 function get_default_correlator(galileo_e1b::GalileoE1B, sampling_frequency, num_ants::NumAnts)
-    EarlyPromptLateCorrelator(galileo_e1b, sampling_frequency; num_ants)
+    VeryEarlyPromptLateCorrelator(galileo_e1b, sampling_frequency; num_ants)
 end

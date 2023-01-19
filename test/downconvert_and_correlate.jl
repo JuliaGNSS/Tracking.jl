@@ -63,7 +63,7 @@
     @test size(downconvert_and_correlator2.buffers[1][1].downconvert_signal_buffer) == (5000,)
     @test eltype(downconvert_and_correlator2.buffers[1][1].downconvert_signal_buffer) == ComplexF32
 
-    @test size(downconvert_and_correlator2.buffers[2][1].code_replica_buffer) == (5004,)
+    @test size(downconvert_and_correlator2.buffers[2][1].code_replica_buffer) == (5006,)
     @test eltype(downconvert_and_correlator2.buffers[2][1].code_replica_buffer) == Float32
     @test size(downconvert_and_correlator2.buffers[2][1].carrier_replica_buffer) == (5000,)
     @test eltype(downconvert_and_correlator2.buffers[2][1].carrier_replica_buffer) == ComplexF32

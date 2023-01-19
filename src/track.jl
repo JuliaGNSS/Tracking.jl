@@ -4,6 +4,7 @@ function track(
     sampling_frequency;
     intermediate_frequency = 0.0Hz,
     preferred_num_code_blocks_to_integrate = 1,
+    min_integration_time = 0.75ms
 )
     system_sats_states = track_state.system_sats_states
     doppler_estimator = track_state.doppler_estimator
@@ -41,7 +42,8 @@ function track(
             doppler_estimator,
             system_sats_states,
             sat_sample_params,
-            sampling_frequency
+            sampling_frequency,
+            min_integration_time
         )
         system_sats_states = update(
             system_sats_states,

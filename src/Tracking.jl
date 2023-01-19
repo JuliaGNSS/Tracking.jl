@@ -35,7 +35,7 @@ module Tracking
         MomentsCN0Estimator,
         AbstractCN0Estimator,
         EarlyPromptLateCorrelator,
-        #export VeryEarlyPromptLateCorrelator
+        VeryEarlyPromptLateCorrelator,
         SecondaryCodeOrBitDetector,
         GainControlledSignal,
         AbstractPostCorrFilter,
@@ -58,6 +58,8 @@ module Tracking
     end
 
     NumAccumulators(x) = NumAccumulators{x}()
+
+    TupleLike{T <: Tuple} = Union{T, NamedTuple{<:Any, T}}
 
     struct DopplersAndFilteredPrompt
         carrier_doppler::typeof(1.0Hz)
@@ -82,16 +84,17 @@ module Tracking
     include("carrier_replica.jl")
     include("downconvert.jl")
     include("cn0_estimation.jl")
-    include("discriminators.jl")
     include("bit_buffer.jl")
     include("correlator.jl")
+    include("discriminators.jl")
     include("post_corr_filter.jl")
     include("secondary_code_or_bit_detector.jl")
     include("gpsl1.jl")
     include("gpsl5.jl")
     include("galileo_e1b.jl")
-    include("sample_parameters.jl")
     include("sat_state.jl")
+    include("sample_parameters.jl")
+    include("update_sat_state.jl")
     include("downconvert_and_correlate.jl")
     include("conventional_pll_and_dll.jl")
     include("tracking_state.jl")

@@ -304,16 +304,16 @@ function CPUBuffers(
     CPUBuffers(Float32, system, state, num_samples)
 end
 
-struct CPUDownconvertAndCorrelator{N, B <: NTuple{N, Vector{<:CPUBuffers}}} <: AbstractDownconvertAndCorrelator
+struct CPUDownconvertAndCorrelator{N, B <: TupleLike{<:NTuple{N, Vector{<:CPUBuffers}}}} <: AbstractDownconvertAndCorrelator
     buffers::B
-    function CPUDownconvertAndCorrelator(buffers::NTuple{N, Vector{<:CPUBuffers}}) where N
+    function CPUDownconvertAndCorrelator(buffers::TupleLike{<:NTuple{N, Vector{<:CPUBuffers}}}) where N
         new{N, typeof(buffers)}(buffers)
     end
 end
 
 function CPUDownconvertAndCorrelator(
     ::Type{T},
-    system_sats_states::NTuple{N, SystemSatsState},
+    system_sats_states::TupleLike{<:NTuple{N, SystemSatsState}},
     num_samples::Integer,
 ) where {T, N}
     CPUDownconvertAndCorrelator(
@@ -326,7 +326,7 @@ function CPUDownconvertAndCorrelator(
     )
 end
 function CPUDownconvertAndCorrelator(
-    system_sats_states::NTuple{N, SystemSatsState},
+    system_sats_states::TupleLike{<:NTuple{N, SystemSatsState}},
     num_samples::Integer,
 ) where N
     CPUDownconvertAndCorrelator(Float32, system_sats_states, num_samples)
@@ -344,8 +344,8 @@ function downconvert_and_correlate(
     signal,
     sampling_frequency,
     intermediate_frequency,
-    system_sats_states::NTuple{N, SystemSatsState},
-    params::NTuple{N, Vector{SampleParams}},
+    system_sats_states::TupleLike{<:NTuple{N, SystemSatsState}},
+    params::TupleLike{<:NTuple{N, Vector{SampleParams}}},
 ) where N
     map(params, system_sats_states, downconvert_and_correlator.buffers) do system_params, system_sats, buffers
         map(system_params, system_sats.states, buffers) do sat_params, sat_state, buffer

@@ -35,9 +35,9 @@ end
 
 struct ConventionalPLLsAndDLLs{
     N,
-    PD <: ConventionalPLLAndDLL
+    PD <: TupleLike{<:NTuple{N, Vector{<:ConventionalPLLAndDLL}}},
 } <: AbstractDopplerEstimator
-    plls_and_dlls::NTuple{N, Vector{PD}}
+    plls_and_dlls::PD
 end
 
 """
@@ -60,14 +60,15 @@ end
 
 function estimate_dopplers_and_filter_prompt(
     doppler_estimator::ConventionalPLLsAndDLLs,
-    system_sats_state::Tuple,
-    sat_sample_params::NTuple{N, Vector{SampleParams}},
-    sampling_frequency
+    system_sats_state::TupleLike{<:NTuple{N, SystemSatsState}},
+    sat_sample_params::TupleLike{<:NTuple{N, Vector{SampleParams}}},
+    sampling_frequency,
+    min_integration_time
 ) where N
     results = map(doppler_estimator.plls_and_dlls, system_sats_state, sat_sample_params) do estimator_per_system, system_sats, sat_sample_params_per_system
         map(estimator_per_system, system_sats.states, sat_sample_params_per_system) do estimator, state, sample_params
-            return if sample_params.signal_samples_to_integrate == sample_params.samples_to_integrate_until_code_end
-                integration_time = state.integrated_samples / sampling_frequency
+            integration_time = state.integrated_samples / sampling_frequency
+            return if sample_params.signal_samples_to_integrate == sample_params.samples_to_integrate_until_code_end && integration_time >= min_integration_time
                 correlator = normalize(state.correlator, state.integrated_samples)
                 post_corr_filter = update(estimator.post_corr_filter, get_prompt(correlator))
                 filtered_correlator = apply(post_corr_filter, correlator)

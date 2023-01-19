@@ -172,6 +172,8 @@
                 SVector(1.0 + 0.0im, 1.0 + 0.0im),
                 SVector(1.0 + 0.0im, 1.0 + 0.0im),
                 SVector(1.0 + 0.0im, 1.0 + 0.0im),
+                SVector(1.0 + 0.0im, 1.0 + 0.0im),
+                SVector(1.0 + 0.0im, 1.0 + 0.0im),
             ),
             -2:2,
             5, 3, 1

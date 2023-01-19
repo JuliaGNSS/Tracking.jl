@@ -75,10 +75,44 @@ end
         doppler_estimators,
         (system_sats_state,),
         next_system_sats_sample_params,
-        sampling_frequency
+        sampling_frequency,
+        0.75ms
+    )
+
+    @test dopplers_and_filtered_prompts[1][1].carrier_doppler == 0.0Hz
+    @test dopplers_and_filtered_prompts[1][1].code_doppler == 0.0Hz
+    @test dopplers_and_filtered_prompts[1][1].filtered_prompt == 0.0
+
+    system_sats_state = SystemSatsState(
+        gpsl1, 
+        [
+            SatState(
+                1,
+                0.5,
+                1.0Hz,
+                0.01,
+                100.0Hz,
+                4500,
+                EarlyPromptLateCorrelator(complex.([1000, 2000, 1000], 0.0), -1:1, 3, 2, 1),
+                EarlyPromptLateCorrelator(complex.(zeros(3), zeros(3)), -1:1, 3, 2, 1),
+                complex(0.0, 0.0),
+                14,
+                Tracking.SecondaryCodeOrBitDetector(),
+                Tracking.PromptsBuffer(20),
+                Tracking.BitBuffer()
+            ),
+        ]
+    )
+
+    next_doppler_estimators, dopplers_and_filtered_prompts = Tracking.estimate_dopplers_and_filter_prompt(
+        doppler_estimators,
+        (system_sats_state,),
+        next_system_sats_sample_params,
+        sampling_frequency,
+        0.75ms
     )
 
     @test dopplers_and_filtered_prompts[1][1].carrier_doppler == 100.0Hz
     @test dopplers_and_filtered_prompts[1][1].code_doppler == 1.0Hz
-    @test dopplers_and_filtered_prompts[1][1].filtered_prompt == 2000 / 150
+    @test dopplers_and_filtered_prompts[1][1].filtered_prompt == 2000 / 4500
 end

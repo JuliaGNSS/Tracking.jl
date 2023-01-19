@@ -1,4 +1,5 @@
 abstract type AbstractCorrelator{M} end
+abstract type AbstractEarlyPromptLateCorrelator{M} <: AbstractCorrelator{M} end
 """
 $(SIGNATURES)
 
@@ -9,7 +10,7 @@ struct EarlyPromptLateCorrelator{
     T,
     TA <: AbstractVector{T},
     S <: AbstractVector{Int}
-} <: AbstractCorrelator{M}
+} <: AbstractEarlyPromptLateCorrelator{M}
     accumulators::TA
     shifts::S
     early_shift::Int
@@ -22,9 +23,14 @@ struct EarlyPromptLateCorrelator{
         prompt_shift::Int,
         late_shift::Int,
     ) where {M, T <: Complex, S}
+        idxs = SVector(early_shift, prompt_shift, late_shift)
         length(accumulators) < 3 ?
-            error("Early-Prompt-Late-Correlator needs at least 3 accumulators") :
-            new{M, SVector{M, T}, typeof(accumulators), S}(accumulators, shifts, early_shift, prompt_shift, late_shift)
+            error("Early-Prompt-Late-Correlator needs at least 3 distinct accumulators") :
+            length(shifts) != length(accumulators) ?
+                error("Number of accumulators and shifts must be the same.") :
+                !allunique(shifts[idxs]) ?
+                    error("Early, Prompt and Late must not have the same sample shift. Either increase sample rate or adjust the preferred code shift.") :
+                    new{M, SVector{M, T}, typeof(accumulators), S}(accumulators, shifts, early_shift, prompt_shift, late_shift)
     end
     function EarlyPromptLateCorrelator(
         accumulators::AbstractVector{T},
@@ -33,14 +39,16 @@ struct EarlyPromptLateCorrelator{
         prompt_shift::Int,
         late_shift::Int,
     ) where {T <: Complex, S}
+        idxs = SVector(early_shift, prompt_shift, late_shift)
         length(accumulators) < 3 ?
-            error("Early-Prompt-Late-Correlator needs at least 3 accumulators") :
-            new{1, T, typeof(accumulators), S}(accumulators, shifts, early_shift, prompt_shift, late_shift)
+            error("Early-Prompt-Late-Correlator needs at least 3 distinct accumulators") :
+            length(shifts) != length(accumulators) ?
+                error("Number of accumulators and shifts must be the same.") :
+                !allunique(shifts[idxs]) ?
+                    error("Early, Prompt and Late must not have the same sample shift. Either increase sample rate or adjust the preferred code shift.") :
+                    new{1, T, typeof(accumulators), S}(accumulators, shifts, early_shift, prompt_shift, late_shift)
     end
 end
-
-type_for_num_ants(num_ants::NumAnts{1}) = ComplexF64
-type_for_num_ants(num_ants::NumAnts{N}) where N = SVector{N, ComplexF64}
 
 """
 $(SIGNATURES)
@@ -51,7 +59,7 @@ function EarlyPromptLateCorrelator(
     system::AbstractGNSS,
     sampling_frequency;
     preferred_code_shift = 0.5,
-    preferred_early_late_code_shift = 0.5,
+    preferred_early_late_to_prompt_code_shift = 0.5, # TODO: At the momemnt this must be similar to preferred_code_shift
     num_ants::NumAnts = NumAnts(1),
     num_accumulators = NumAccumulators(3),
 )
@@ -64,7 +72,7 @@ function EarlyPromptLateCorrelator(
     prompt_shift = length(shifts) >> 1 + 1
 
     sample_shift = preferred_code_shift_to_sample_shift(
-        preferred_early_late_code_shift,
+        preferred_early_late_to_prompt_code_shift,
         sampling_frequency,
         system
     )
@@ -79,6 +87,107 @@ function EarlyPromptLateCorrelator(
         late_shift
     )
 end
+
+"""
+$(SIGNATURES)
+
+EarlyPromptLateCorrelator holding a user defined number of correlation values.
+"""
+struct VeryEarlyPromptLateCorrelator{
+    M,
+    T,
+    TA <: AbstractVector{T},
+    S <: AbstractVector{Int}
+} <: AbstractEarlyPromptLateCorrelator{M}
+    accumulators::TA
+    shifts::S
+    very_early_shift::Int
+    early_shift::Int
+    prompt_shift::Int
+    late_shift::Int
+    very_late_shift::Int
+    function VeryEarlyPromptLateCorrelator(
+        accumulators::AbstractVector{SVector{M, T}},
+        shifts::S,
+        very_early_shift::Int,
+        early_shift::Int,
+        prompt_shift::Int,
+        late_shift::Int,
+        very_late_shift::Int
+    ) where {M, T <: Complex, S}
+        idxs = SVector(very_early_shift, early_shift, prompt_shift, late_shift, very_late_shift)
+        length(accumulators) < 5 ?
+            error("Very-Early-Prompt-Late-Correlator needs at least 5 distinct accumulators") :
+            length(shifts) != length(accumulators) ?
+                error("Number of accumulators and shifts must be the same.") :
+                !allunique(shifts[idxs]) ?
+                    error("Early, Prompt and Late must not have the same sample shift. Either increase sample rate or adjust the preferred code shift.") :
+                    new{M, SVector{M, T}, typeof(accumulators), S}(accumulators, shifts, very_early_shift, early_shift, prompt_shift, late_shift, very_late_shift)
+    end
+    function VeryEarlyPromptLateCorrelator(
+        accumulators::AbstractVector{T},
+        shifts::S,
+        very_early_shift::Int,
+        early_shift::Int,
+        prompt_shift::Int,
+        late_shift::Int,
+        very_late_shift::Int
+    ) where {T <: Complex, S}
+        idxs = SVector(very_early_shift, early_shift, prompt_shift, late_shift, very_late_shift)
+        length(accumulators) < 5 ?
+            error("Very-Early-Prompt-Late-Correlator needs at least 5 distinct accumulators") :
+            length(shifts) != length(accumulators) ?
+                error("Number of accumulators and shifts must be the same.") :
+                !allunique(shifts[idxs]) ?
+                    error("Early, Prompt and Late must not have the same sample shift. Either increase sample rate or adjust the preferred code shift.") :
+                    new{1, T, typeof(accumulators), S}(accumulators, shifts, very_early_shift, early_shift, prompt_shift, late_shift, very_late_shift)
+    end
+end
+
+"""
+$(SIGNATURES)
+
+VeryEarlyPromptLateCorrelator constructor without parameters and some default parameters.
+Default parameters take from https://gnss-sdr.org/docs/sp-blocks/tracking/#implementation-galileo_e1_dll_pll_veml_tracking
+"""
+function VeryEarlyPromptLateCorrelator(
+    system::AbstractGNSS,
+    sampling_frequency;
+    preferred_early_late_to_prompt_code_shift = 0.15,
+    preferred_very_early_late_to_prompt_code_shift = 0.6,
+    num_ants::NumAnts = NumAnts(1),
+)
+    early_late_sample_shift = preferred_code_shift_to_sample_shift(
+        preferred_early_late_to_prompt_code_shift,
+        sampling_frequency,
+        system
+    )
+    very_early_late_sample_shift = preferred_code_shift_to_sample_shift(
+        preferred_very_early_late_to_prompt_code_shift,
+        sampling_frequency,
+        system
+    )
+    shifts = SVector(
+        -very_early_late_sample_shift,
+        -early_late_sample_shift,
+        0,
+        early_late_sample_shift,
+        very_early_late_sample_shift
+    )
+
+    VeryEarlyPromptLateCorrelator(
+        get_initial_accumulator(num_ants, NumAccumulators(5)),
+        shifts,
+        5,
+        4,
+        3,
+        2,
+        1
+    )
+end
+
+type_for_num_ants(num_ants::NumAnts{1}) = ComplexF64
+type_for_num_ants(num_ants::NumAnts{N}) where N = SVector{N, ComplexF64}
 
 function get_initial_accumulator(
     num_ants::NumAnts,
@@ -116,21 +225,35 @@ $(SIGNATURES)
 
 Get early correlator index
 """
-@inline get_early_index(corr::EarlyPromptLateCorrelator) = corr.early_shift
+@inline get_very_early_index(corr::VeryEarlyPromptLateCorrelator) = corr.very_early_shift
+
+"""
+$(SIGNATURES)
+
+Get early correlator index
+"""
+@inline get_early_index(corr::AbstractEarlyPromptLateCorrelator) = corr.early_shift
 
 """
 $(SIGNATURES)
 
 Get prompt correlator index
 """
-@inline get_prompt_index(corr::EarlyPromptLateCorrelator) = corr.prompt_shift
+@inline get_prompt_index(corr::AbstractEarlyPromptLateCorrelator) = corr.prompt_shift
 
 """
 $(SIGNATURES)
 
 Get late correlator index
 """
-@inline get_late_index(corr::EarlyPromptLateCorrelator) = corr.late_shift
+@inline get_late_index(corr::AbstractEarlyPromptLateCorrelator) = corr.late_shift
+
+"""
+$(SIGNATURES)
+
+Get late correlator index
+"""
+@inline get_very_late_index(corr::VeryEarlyPromptLateCorrelator) = corr.very_late_shift
 
 """
 $(SIGNATURES)
@@ -152,9 +275,18 @@ end
 """
 $(SIGNATURES)
 
+Get very early correlator
+"""
+function get_very_early(correlator::VeryEarlyPromptLateCorrelator)
+    correlator.accumulators[get_very_early_index(correlator)]
+end
+
+"""
+$(SIGNATURES)
+
 Get early correlator
 """
-function get_early(correlator::EarlyPromptLateCorrelator)
+function get_early(correlator::AbstractEarlyPromptLateCorrelator)
     correlator.accumulators[get_early_index(correlator)]
 end
 
@@ -172,8 +304,17 @@ $(SIGNATURES)
 
 Get late correlator
 """
-function get_late(correlator::EarlyPromptLateCorrelator)
+function get_late(correlator::AbstractEarlyPromptLateCorrelator)
     correlator.accumulators[get_late_index(correlator)]
+end
+
+"""
+$(SIGNATURES)
+
+Get very late correlator
+"""
+function get_very_late(correlator::VeryEarlyPromptLateCorrelator)
+    correlator.accumulators[get_very_late_index(correlator)]
 end
 
 """
@@ -188,6 +329,17 @@ function update_accumulator(correlator::EarlyPromptLateCorrelator, accumulators)
         correlator.early_shift,
         correlator.prompt_shift,
         correlator.late_shift
+    )
+end
+function update_accumulator(correlator::VeryEarlyPromptLateCorrelator, accumulators) 
+    VeryEarlyPromptLateCorrelator(
+        accumulators,
+        correlator.shifts,
+        correlator.very_early_shift,
+        correlator.early_shift,
+        correlator.prompt_shift,
+        correlator.late_shift,
+        correlator.very_late_shift
     )
 end
 
@@ -266,7 +418,7 @@ $(SIGNATURES)
 Calculate the total spacing between early and late correlator in samples.
 """
 function get_early_late_sample_spacing(
-    correlator::EarlyPromptLateCorrelator
+    correlator::AbstractEarlyPromptLateCorrelator
 )
     correlator.shifts[get_early_index(correlator)] -
     correlator.shifts[get_late_index(correlator)]

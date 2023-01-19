@@ -110,9 +110,9 @@ function SampleParams(
 end
 
 function init_sample_params(
-    system_sats_states::Tuple,
+    system_sats_states::TupleLike{<:NTuple{N, SystemSatsState}},
     preferred_num_code_blocks_to_integrate::Int,
-)
+) where N
     map(system_sats_states) do states
         map(states.states) do state
             SampleParams(
@@ -125,12 +125,12 @@ function init_sample_params(
 end
 
 function calc_sample_params(
-    system_sats_states::Tuple,
+    system_sats_states::TupleLike{<:NTuple{N, SystemSatsState}},
     prev_system_sats_sample_params,
     num_samples_signal,
     sampling_frequency,
     preferred_num_code_blocks_to_integrate::Int,
-)
+) where N
     map(system_sats_states, prev_system_sats_sample_params) do states, prev_sats_sample_params
         map(states.states, prev_sats_sample_params) do state, prev_sample_params
             SampleParams(

@@ -1,5 +1,5 @@
 struct TrackState{
-    S <: NTuple{N, SystemSatsState} where N,
+    S <: TupleLike{<:NTuple{N, SystemSatsState}} where N,
     DE <: AbstractDopplerEstimator,
     DC <: AbstractDownconvertAndCorrelator,
 }
@@ -26,11 +26,11 @@ function TrackState(
 end
 
 function TrackState(
-    system_sats_states;
+    system_sats_states::TupleLike{<:NTuple{N, SystemSatsState}};
     num_samples,
     doppler_estimators = ConventionalPLLsAndDLLs(map(sat_states -> map(sat_state -> ConventionalPLLAndDLL(sat_state), sat_states.states), system_sats_states)),
     downconvert_and_correlator = CPUDownconvertAndCorrelator(system_sats_states, num_samples), 
-)
+) where N
     TrackState(
         system_sats_states,
         doppler_estimators,

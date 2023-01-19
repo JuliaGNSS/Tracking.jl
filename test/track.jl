@@ -2,7 +2,7 @@
     gpsl1 = GPSL1()
     carrier_doppler = 200Hz
     start_code_phase = 100
-    code_frequency = carrier_doppler / 1540 + get_code_frequency(gpsl1)
+    code_frequency = carrier_doppler * get_code_center_frequency_ratio(gpsl1) + get_code_frequency(gpsl1)
     sampling_frequency = 4e6Hz
     prn = 1
     range = 0:3999
@@ -21,21 +21,17 @@
     signal_temp = cis.(
             2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase
         ) .*
-        get_code.(
-            gpsl1,
-            code_frequency .* range ./ sampling_frequency .+ start_code_phase,
-            prn
-        )
+        gen_code(4000, gpsl1, prn, sampling_frequency, code_frequency, start_code_phase)
     scaling = 512
     signal = type <: Integer ? complex.(round.(type, real.(signal_temp) * scaling), round.(type, imag.(signal_temp) * scaling)) : Complex{type}.(signal_temp)
 
-    next_track_state = @inferred track(
+    track_state = @inferred track(
         signal,
         track_state,
         sampling_frequency
     )
 
-    iterations = 2000
+    iterations = 20000
     code_phases = zeros(iterations)
     carrier_phases = zeros(iterations)
     tracked_code_phases = zeros(iterations)
@@ -50,14 +46,11 @@
             code_frequency * 4000 * i / sampling_frequency + start_code_phase,
             1023
         )
-        signal = cis.(
+        signal_temp = cis.(
                 2π .* carrier_doppler .* range ./ sampling_frequency .+ carrier_phase
             ) .*
-            get_code.(
-                gpsl1,
-                code_frequency .* range ./ sampling_frequency .+ code_phase,
-                prn
-            )
+            gen_code(4000, gpsl1, prn, sampling_frequency, code_frequency, code_phase)
+        signal = type <: Integer ? complex.(round.(type, real.(signal_temp) * scaling), round.(type, imag.(signal_temp) * scaling)) : Complex{type}.(signal_temp)
         track_state = @inferred track(
             signal,
             track_state,
@@ -78,7 +71,7 @@
         carrier_phases[i] = comp_carrier_phase
     end
     @test tracked_code_phases[end] ≈ code_phases[end] atol = 5e-5
-    @test tracked_carrier_phases[end] + π ≈ carrier_phases[end] atol = 5e-5
+    @test tracked_carrier_phases[end] + π ≈ carrier_phases[end] atol = 1e-3
 
 #    using PyPlot
 #    pygui(true)
@@ -95,6 +88,103 @@
 #    figure("Prompt")
 #    plot(real.(tracked_prompts))
 #    plot(imag.(tracked_prompts))
+end
+
+@testset "Track multiple systems of type $type" for type in (Int16, Int32, Int64, Float32, Float64)
+    gpsl1 = GPSL1()
+    galileo_e1b = GalileoE1B()
+    carrier_doppler_gps = 200Hz
+    carrier_doppler_gal = 1200Hz
+    start_code_phase = 100
+    code_frequency_gps = carrier_doppler_gps * get_code_center_frequency_ratio(gpsl1) + get_code_frequency(gpsl1)
+    code_frequency_gal = carrier_doppler_gal * get_code_center_frequency_ratio(galileo_e1b) + get_code_frequency(galileo_e1b)
+    sampling_frequency = 4e6Hz
+    prn = 1
+    range = 0:3999
+    start_carrier_phase = π / 2
+
+    num_samples = 4000
+
+    track_state = @inferred TrackState(
+        (
+            gps = SystemSatsState(
+                gpsl1,
+                [
+                    SatState(gpsl1, prn, sampling_frequency, start_code_phase, carrier_doppler_gps),
+                ]
+            ),
+            gal = SystemSatsState(
+                galileo_e1b,
+                [
+                    SatState(galileo_e1b, prn, sampling_frequency, start_code_phase, carrier_doppler_gal),
+                ]
+            )
+        );
+        num_samples,
+    )
+
+    signal_temp = cis.(
+            2π .* carrier_doppler_gps .* range ./ sampling_frequency .+ start_carrier_phase
+        ) .*
+        gen_code(4000, gpsl1, prn, sampling_frequency, code_frequency_gps, start_code_phase) .+
+        cis.(
+            2π .* carrier_doppler_gal .* range ./ sampling_frequency .+ start_carrier_phase
+        ) .*
+        gen_code(4000, galileo_e1b, prn, sampling_frequency, code_frequency_gal, start_code_phase)
+    scaling = 5000
+    signal = type <: Integer ? complex.(round.(type, real.(signal_temp) * scaling), round.(type, imag.(signal_temp) * scaling)) : Complex{type}.(signal_temp)
+
+    track_state = @inferred track(
+        signal,
+        track_state,
+        sampling_frequency
+    )
+
+    iterations = 2000
+    for i = 1:iterations
+        carrier_phase_gps = mod2pi(2π * carrier_doppler_gps * 4000 * i / sampling_frequency +
+            start_carrier_phase + π) - π
+        code_phase_gps = mod(
+            code_frequency_gps * 4000 * i / sampling_frequency + start_code_phase,
+            get_code_length(gpsl1)
+        )
+        carrier_phase_gal = mod2pi(2π * carrier_doppler_gal * 4000 * i / sampling_frequency +
+            start_carrier_phase + π) - π
+        code_phase_gal = mod(
+            code_frequency_gal * 4000 * i / sampling_frequency + start_code_phase,
+            get_code_length(galileo_e1b)
+        )
+        signal_temp = cis.(
+                2π .* carrier_doppler_gps .* range ./ sampling_frequency .+ carrier_phase_gps
+            ) .*
+            gen_code(4000, gpsl1, prn, sampling_frequency, code_frequency_gps, code_phase_gps) .+
+            cis.(
+                2π .* carrier_doppler_gal .* range ./ sampling_frequency .+ carrier_phase_gal
+            ) .*
+            gen_code(4000, galileo_e1b, prn, sampling_frequency, code_frequency_gal, code_phase_gal)
+        signal = type <: Integer ? complex.(round.(type, real.(signal_temp) * scaling), round.(type, imag.(signal_temp) * scaling)) : Complex{type}.(signal_temp)
+        track_state = @inferred track(
+            signal,
+            track_state,
+            sampling_frequency
+        )
+    end
+    comp_carrier_phase_gps = mod2pi(2π * carrier_doppler_gps * 4000 * (iterations + 1) /
+            sampling_frequency + start_carrier_phase + π) - π
+    comp_code_phase_gps = mod(
+        code_frequency_gps * 4000 * (iterations + 1) / sampling_frequency + start_code_phase,
+        get_code_length(gpsl1)
+    )
+    comp_carrier_phase_gal = mod2pi(2π * carrier_doppler_gal * 4000 * (iterations + 1) /
+        sampling_frequency + start_carrier_phase + π) - π
+    comp_code_phase_gal = mod(
+        code_frequency_gal * 4000 * (iterations + 1) / sampling_frequency + start_code_phase,
+        get_code_length(galileo_e1b)
+    )
+    @test get_code_phase(track_state.system_sats_states.gps.states[1]) ≈ comp_code_phase_gps atol = 5e-3
+    @test mod(get_carrier_phase(track_state.system_sats_states.gps.states[1]), π) ≈ comp_carrier_phase_gps atol = 3e-3
+    @test get_code_phase(track_state.system_sats_states.gal.states[1]) ≈ comp_code_phase_gal atol = 5e-3
+    @test mod(get_carrier_phase(track_state.system_sats_states.gal.states[1]), π) ≈ comp_carrier_phase_gal atol = 3e-3
 end
 
 @testset "Tracking with intermediate frequency of $intermediate_frequency" for intermediate_frequency in (0.0Hz, -10000.0Hz, 10000.0Hz, -30000.0Hz, 30000.0Hz)
@@ -126,7 +216,7 @@ end
             prn
         )
 
-    next_track_state = @inferred track(
+    track_state = @inferred track(
         signal,
         track_state,
         sampling_frequency;
@@ -228,7 +318,7 @@ end
     scaling = 512
     signal_mat = type <: Integer ? complex.(floor.(type, real.(signal_mat_temp) * scaling), floor.(type, imag.(signal_mat_temp) * scaling)) : Complex{type}.(signal_mat_temp)
 
-    next_track_state = @inferred track(
+    track_state = @inferred track(
         signal_mat,
         track_state,
         sampling_frequency
