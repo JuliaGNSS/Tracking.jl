@@ -47,7 +47,10 @@ module Tracking
         DefaultPostCorrFilter,
         TrackState,
         add_sats!,
-        remove_sats!
+        remove_sats!,
+        get_sat_states,
+        get_sat_state,
+        get_system
 
     struct NumAnts{x}
     end

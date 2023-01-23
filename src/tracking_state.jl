@@ -39,39 +39,108 @@ function TrackState(
     )
 end
 
+function get_sat_states(
+    track_state::TrackState{<:TupleLike{<:NTuple{N, SystemSatsState}}},
+    system_idx::Union{Symbol, Integer}
+) where N
+    track_state.system_sats_states[system_idx].states
+end
+
+function get_sat_states(
+    track_state::TrackState{<:TupleLike{<:NTuple{N, SystemSatsState}}},
+    system_idx::Val{M}
+) where {N, M}
+    track_state.system_sats_states[M].states
+end
+
+function get_sat_states(
+    track_state::TrackState{<:TupleLike{<:NTuple{1, SystemSatsState}}},
+)
+    get_sat_states(track_state, 1)
+end
+
+function get_system(
+    track_state::TrackState{<:TupleLike{<:NTuple{N, SystemSatsState}}},
+    system_idx::Union{Symbol, Integer}
+) where N
+    track_state.system_sats_states[system_idx].system
+end
+
+function get_system(
+    track_state::TrackState{<:TupleLike{<:NTuple{N, SystemSatsState}}},
+    system_idx::Val{M}
+) where {N, M}
+    track_state.system_sats_states[M].system
+end
+
+function get_system(
+    track_state::TrackState{<:TupleLike{<:NTuple{1, SystemSatsState}}},
+)
+    get_system(track_state, 1)
+end
+
+function get_sat_state(
+    track_state::TrackState{<:TupleLike{<:NTuple{N, SystemSatsState}}},
+    system_idx::Union{Symbol, Integer, Val},
+    sat_idx::Integer
+) where N
+    get_sat_states(track_state, system_idx)[sat_idx]
+end
+
+function get_sat_state(
+    track_state::TrackState{<:TupleLike{<:NTuple{1, SystemSatsState}}},
+    sat_idx::Integer
+)
+    get_sat_states(track_state, 1)[sat_idx]
+end
+
 function add_sats!(
-    track_state::TrackState{S, <: ConventionalPLLsAndDLLs},
+    track_state::TrackState{<:TupleLike{<:NTuple{N, SystemSatsState}}, <: ConventionalPLLsAndDLLs},
+    system_idx::Union{Symbol, Integer},
     system::AbstractGNSS,
     sat_states::Union{SatState, Vector{<:SatState}},
-) where S
-    foreach(track_state.system_sats_states, track_state.doppler_estimator.plls_and_dlls, track_state.downconvert_and_correlator.buffers) do system_sats_state, pll_and_dlls, buffers
-        if typeof(system) == typeof(system_sats_state.system)
-            if sat_states isa Vector
-                append!(system_sats_state.states, sat_states)
-                append!(pll_and_dlls, map(sat_state -> ConventionalPLLAndDLL(sat_state), sat_states))
-                append!(buffers, map(sat_state -> CPUBuffers(system, sat_state, track_state.num_samples), sat_states))
-            else
-                push!(system_sats_state.states, sat_states)
-                push!(pll_and_dlls, ConventionalPLLAndDLL(sat_states))
-                push!(buffers, CPUBuffers(system, sat_states, track_state.num_samples))
-            end
-        end
+) where N
+    system_sats_state = track_state.system_sats_states[system_idx]
+    pll_and_dlls = track_state.doppler_estimator.plls_and_dlls[system_idx]
+    buffers = track_state.downconvert_and_correlator.buffers[system_idx]
+    if sat_states isa Vector
+        append!(system_sats_state.states, sat_states)
+        append!(pll_and_dlls, map(sat_state -> ConventionalPLLAndDLL(sat_state), sat_states))
+        append!(buffers, map(sat_state -> CPUBuffers(system, sat_state, track_state.num_samples), sat_states))
+    else
+        push!(system_sats_state.states, sat_states)
+        push!(pll_and_dlls, ConventionalPLLAndDLL(sat_states))
+        push!(buffers, CPUBuffers(system, sat_states, track_state.num_samples))
     end
     track_state
 end
 
-function remove_sats!(
-    track_state::TrackState{S, <: ConventionalPLLsAndDLLs},
+function add_sats!(
+    track_state::TrackState{<:TupleLike{<:NTuple{1, SystemSatsState}}, <: ConventionalPLLsAndDLLs},
     system::AbstractGNSS,
+    sat_states::Union{SatState, Vector{<:SatState}},
+)
+    add_sats!(track_state, 1, system, sat_states)
+end
+
+function remove_sats!(
+    track_state::TrackState{<:TupleLike{<:NTuple{N, SystemSatsState}}, <: ConventionalPLLsAndDLLs},
+    system_idx::Union{Symbol, Integer},
     prns::Union{Int, Vector{Int}},
-) where S
-    foreach(track_state.system_sats_states, track_state.doppler_estimator.plls_and_dlls, track_state.downconvert_and_correlator.buffers) do system_sats_state, pll_and_dlls, buffers
-        if typeof(system) == typeof(system_sats_state.system)
-            idxs_to_delete = findall(state -> state.prn in prns, system_sats_state.states)
-            deleteat!(system_sats_state.states, idxs_to_delete)
-            deleteat!(pll_and_dlls, idxs_to_delete)
-            deleteat!(buffers, idxs_to_delete)
-        end
-    end
+) where N
+    system_sats_state = track_state.system_sats_states[system_idx]
+    pll_and_dlls = track_state.doppler_estimator.plls_and_dlls[system_idx]
+    buffers = track_state.downconvert_and_correlator.buffers[system_idx]
+    idxs_to_delete = findall(state -> state.prn in prns, system_sats_state.states)
+    deleteat!(system_sats_state.states, idxs_to_delete)
+    deleteat!(pll_and_dlls, idxs_to_delete)
+    deleteat!(buffers, idxs_to_delete)
     track_state
+end
+
+function remove_sats!(
+    track_state::TrackState{<:TupleLike{<:NTuple{1, SystemSatsState}}, <: ConventionalPLLsAndDLLs},
+    prns::Union{Int, Vector{Int}},
+)
+    remove_sats!(track_state, 1, prns)
 end
