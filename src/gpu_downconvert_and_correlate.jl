@@ -198,5 +198,5 @@ function gpu_add_to_accumulators(correlator::AbstractCorrelator{1}, result)
 end
 
 function gpu_add_to_accumulators(correlator::AbstractCorrelator{M}, result) where M
-	update_accumulator(correlator, SVector(map((a, b) -> SVector(a + b), get_accumulators(correlator), eachcol(result))))
+	update_accumulator(correlator, SVector(map(+, get_accumulators(correlator), eachcol(result))))
 end
