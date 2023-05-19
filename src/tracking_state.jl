@@ -94,6 +94,12 @@ function get_sat_state(
     get_sat_states(track_state, 1)[sat_idx]
 end
 
+create_buffer(buffers::Vector{<:CPUBuffers}, system, sat_states, num_samples) = 
+    CPUBuffers(system, sat_states, num_samples)
+
+create_buffer(buffers::Vector{<:GPUBuffers}, system, sat_states, num_samples) = 
+    GPUBuffers(system, sat_states, num_samples)
+
 function add_sats!(
     track_state::TrackState{<:TupleLike{<:NTuple{N, SystemSatsState}}, <: ConventionalPLLsAndDLLs},
     system_idx::Union{Symbol, Integer},
@@ -106,11 +112,11 @@ function add_sats!(
     if sat_states isa Vector
         append!(system_sats_state.states, sat_states)
         append!(pll_and_dlls, map(sat_state -> ConventionalPLLAndDLL(sat_state), sat_states))
-        append!(buffers, map(sat_state -> CPUBuffers(system, sat_state, track_state.num_samples), sat_states))
+        append!(buffers, map(sat_state -> create_buffer(buffers, system, sat_state, track_state.num_samples), sat_states))
     else
         push!(system_sats_state.states, sat_states)
         push!(pll_and_dlls, ConventionalPLLAndDLL(sat_states))
-        push!(buffers, CPUBuffers(system, sat_states, track_state.num_samples))
+        push!(buffers, create_buffer(buffers, system, sat_states, track_state.num_samples))
     end
     track_state
 end
