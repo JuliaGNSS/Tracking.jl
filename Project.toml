@@ -1,26 +1,27 @@
 name = "Tracking"
 uuid = "10b2438b-ffd4-5096-aa58-44041d5c8f3b"
-authors = ["Soeren Schoenbrod <soeren.schoenbrod@nav.rwth-aachen.de>",
-           "Michael Niestroj <michael.niestroj@nav.rwth-aachen.de>"]
+authors = ["Soeren Schoenbrod <soeren.schoenbrod@nav.rwth-aachen.de>", "Michael Niestroj <michael.niestroj@nav.rwth-aachen.de>"]
 version = "0.15.2"
 
 [deps]
 Acquisition = "d4bbf60b-102b-5ffb-8f97-a7ea5817e69f"
+Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 DocStringExtensions = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
 GNSSSignals = "52c80523-2a4e-5c38-8979-05588f836870"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 LoopVectorization = "bdcacae8-1622-11e9-2a5c-532679323890"
+Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 StructArrays = "09ab397b-f2b6-538f-b94a-2f83cf4a842a"
 TrackingLoopFilters = "0814aff9-93cb-554c-9fff-9bf1cfdb5efa"
 Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
 [compat]
-Acquisition = "0.1.0"
-CUDA = "3.5"
+Acquisition = "0.1.1"
+CUDA = "4.0"
 DocStringExtensions = "0.6, 0.7, 0.8, 0.9"
-GNSSSignals = "0.16"
+GNSSSignals = "0.17"
 LoopVectorization = "0.8, 0.9, 0.10, 0.11, 0.12"
 StaticArrays = "0.9, 0.10, 0.11, 0.12, 1.0"
 StructArrays = "0.4, 0.6.5"

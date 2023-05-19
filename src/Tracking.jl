@@ -42,6 +42,7 @@ module Tracking
         SatState,
         SystemSatsState,
         CPUDownconvertAndCorrelator,
+        GPUDownconvertAndCorrelator,
         ConventionalPLLAndDLL,
         ConventionalPLLsAndDLLs,
         DefaultPostCorrFilter,
@@ -99,6 +100,7 @@ module Tracking
     include("sample_parameters.jl")
     include("update_sat_state.jl")
     include("downconvert_and_correlate.jl")
+    include("gpu_downconvert_and_correlate.jl")
     include("conventional_pll_and_dll.jl")
     include("tracking_state.jl")
     include("track.jl")

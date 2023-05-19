@@ -15,6 +15,7 @@ struct SatState{C <: AbstractCorrelator}
 end
 
 get_prn(s::SatState) = s.prn
+get_num_ants(s::SatState{<: AbstractCorrelator{M}}) where M = M
 get_code_phase(s::SatState) = s.code_phase
 get_code_doppler(s::SatState) = s.code_doppler
 get_carrier_phase(s::SatState) = s.carrier_phase * 2π
@@ -78,3 +79,6 @@ struct SystemSatsState{
     system::S
     states::Vector{SS}
 end
+
+get_system(sss::SystemSatsState) = sss.system
+get_states(sss::SystemSatsState) = sss.states
