@@ -124,6 +124,7 @@ end
 		next_system_sats_sample_params,
 	)
 
+    # GPU uses floating point arithmetic and might differ a little with the fixed point arithmetic
 	@test real.(correlators[1][1].accumulators) ≈ [2921, 4949, 2917] || real.(correlators[1][1].accumulators) ≈ [2921, 4949, 2921]
 
 	signal = arch_function[type].array_transform(gen_code(
@@ -145,5 +146,6 @@ end
 		next_system_sats_sample_params,
 	)
 
+    # GPU uses floating point arithmetic and might differ a little with the fixed point arithmetic
 	@test real.(correlators[1][2].accumulators) ≈ [2919, 4947, 2915] || real.(correlators[1][2].accumulators) ≈ [2919, 4947, 2919]
 end

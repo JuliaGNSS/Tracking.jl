@@ -194,7 +194,7 @@ function downconvert_and_correlate!(
 end
 
 function gpu_add_to_accumulators(correlator::AbstractCorrelator{1}, result)
-	update_accumulator(correlator, map((a, b) -> a + b[1], get_accumulators(correlator), eachcol(result)))
+	update_accumulator(correlator, SVector(map((a, b) -> a + b[1], get_accumulators(correlator), eachcol(result))))
 end
 
 function gpu_add_to_accumulators(correlator::AbstractCorrelator{M}, result) where M
