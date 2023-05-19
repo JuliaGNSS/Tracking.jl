@@ -170,8 +170,8 @@ function downconvert_and_correlate!(
 ) where M
 	# Assume 1024 to be the max number of threads
 	# TODO: Evaluate this at run time
-	threads = min(size(signal, 1), 1024)
-	blocks = cld(size(signal, 1), threads)
+	threads = min(num_samples_left, 1024)
+	blocks = cld(num_samples_left, threads)
 	num_correlators = size(downconverted_and_decoded_signal, 3)
 	@cuda threads=threads blocks=blocks downconvert_and_decode_prn_kernel!(
 		downconverted_and_decoded_signal,
