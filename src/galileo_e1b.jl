@@ -12,6 +12,6 @@ function is_upcoming_integration_new_bit(galileo_e1b::GalileoE1B, prns, num_prns
 end
 
 # TODO: Very early very late correlator?
-function get_default_correlator(galileo_e1b::GalileoE1B, num_ants::NumAnts{N}) where N
-    EarlyPromptLateCorrelator(num_ants)
+function get_default_correlator(galileo_e1b::GalileoE1B, sampling_frequency, num_ants::NumAnts)
+    VeryEarlyPromptLateCorrelator(galileo_e1b, sampling_frequency; num_ants)
 end

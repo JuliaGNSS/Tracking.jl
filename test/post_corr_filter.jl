@@ -1,5 +1,5 @@
 @testset "Post correlation filter" begin
-    default_post_corr_filter = Tracking.DefaultPostCorrFilter()
+    default_post_corr_filter = DefaultPostCorrFilter()
 
     @test Tracking.update(default_post_corr_filter, randn(ComplexF64)) == default_post_corr_filter
 

@@ -11,6 +11,6 @@ function is_upcoming_integration_new_bit(gpsl5::GPSL5, prns, num_prns)
     xored_bit_synchronizer == 0 || xored_bit_synchronizer == 0x3ff
 end
 
-function get_default_correlator(gpsl5::GPSL5, num_ants::NumAnts{N}) where N
-    EarlyPromptLateCorrelator(num_ants)
+function get_default_correlator(gpsl5::GPSL5, sampling_frequency, num_ants::NumAnts)
+    EarlyPromptLateCorrelator(gpsl5, sampling_frequency; num_ants)
 end
