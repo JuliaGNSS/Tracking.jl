@@ -117,6 +117,23 @@ end
         end
         downconverted_signal
     end
+
+    function downconvert!(
+        downconverted_signal::StructArray{Complex{T}, 1},
+        signal::AbstractArray{ST, 1},
+        carrier_replica::StructArray{Complex{T}, 1},
+        start_sample::Integer,
+        num_samples::Integer
+    ) where {T, ST <: Real}
+        ds_re = downconverted_signal.re; ds_im = downconverted_signal.im
+        c_re = carrier_replica.re; c_im = carrier_replica.im
+        @avx for i = start_sample:num_samples + start_sample - 1
+            ds_re[i] = signal[i] *  c_re[i] 
+            ds_im[i] = signal[i] * -c_im[i] 
+        end
+        downconverted_signal
+    end
+
 else
     function downconvert!(
         downconverted_signal,
