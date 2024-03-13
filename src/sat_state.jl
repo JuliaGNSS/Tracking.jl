@@ -1,4 +1,4 @@
-struct SatState{C <: AbstractCorrelator}
+struct SatState{C<:AbstractCorrelator}
     prn::Int
     code_phase::Float64
     code_doppler::typeof(1.0Hz)
@@ -15,7 +15,7 @@ struct SatState{C <: AbstractCorrelator}
 end
 
 get_prn(s::SatState) = s.prn
-get_num_ants(s::SatState{<: AbstractCorrelator{M}}) where M = M
+get_num_ants(s::SatState{<:AbstractCorrelator{M}}) where {M} = M
 get_code_phase(s::SatState) = s.code_phase
 get_code_doppler(s::SatState) = s.code_doppler
 get_carrier_phase(s::SatState) = s.carrier_phase * 2π
@@ -23,12 +23,13 @@ get_carrier_doppler(s::SatState) = s.carrier_doppler
 get_integrated_samples(s::SatState) = s.integrated_samples
 get_correlator(s::SatState) = s.correlator
 get_last_fully_integrated_correlator(s::SatState) = s.last_fully_integrated_correlator
-get_last_fully_integrated_filtered_prompt(s::SatState) = s.last_fully_integrated_filtered_prompt
-get_sample_of_last_fully_integrated_correlator(s::SatState) = s.sample_of_last_fully_integrated_correlator
+get_last_fully_integrated_filtered_prompt(s::SatState) =
+    s.last_fully_integrated_filtered_prompt
+get_sample_of_last_fully_integrated_correlator(s::SatState) =
+    s.sample_of_last_fully_integrated_correlator
 get_secondary_code_or_bit_detector(s::SatState) = s.sc_bit_detector
 get_prompts_buffer(s::SatState) = s.prompts_buffer
 get_bit_buffer(s::SatState) = s.bit_buffer
-
 
 function SatState(
     system::AbstractGNSS,
@@ -54,28 +55,22 @@ function SatState(
         -1,
         SecondaryCodeOrBitDetector(),
         PromptsBuffer(num_prompts_buffer),
-        BitBuffer()
+        BitBuffer(),
     )
 end
 
-function SatState(
-    acq::AcquisitionResults;
-    args...
-)
+function SatState(acq::AcquisitionResults; args...)
     SatState(
         acq.system,
         acq.prn,
         acq.sampling_frequency,
         acq.code_phase,
         acq.carrier_doppler;
-        args...
+        args...,
     )
 end
 
-struct SystemSatsState{
-    S <: AbstractGNSS,
-    SS <: SatState
-}
+struct SystemSatsState{S<:AbstractGNSS,SS<:SatState}
     system::S
     states::Vector{SS}
 end

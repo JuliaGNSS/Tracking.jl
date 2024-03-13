@@ -21,9 +21,7 @@ end
     gpsl1 = GPSL1()
     sat_state = SatState(gpsl1, 1, 5e6Hz, 10.0, 500.0Hz)
 
-    pll_and_dll = @inferred ConventionalPLLAndDLL(
-        sat_state,
-    )
+    pll_and_dll = @inferred ConventionalPLLAndDLL(sat_state)
 
     @test pll_and_dll.init_carrier_doppler == 500.0Hz
     @test pll_and_dll.init_code_doppler == 500.0Hz * get_code_center_frequency_ratio(gpsl1)
@@ -37,7 +35,7 @@ end
 
     gpsl1 = GPSL1()
     system_sats_state = SystemSatsState(
-        gpsl1, 
+        gpsl1,
         [
             SatState(
                 1,
@@ -52,17 +50,20 @@ end
                 14,
                 Tracking.SecondaryCodeOrBitDetector(),
                 Tracking.PromptsBuffer(20),
-                Tracking.BitBuffer()
+                Tracking.BitBuffer(),
             ),
-        ]
+        ],
     )
 
-    doppler_estimators = ConventionalPLLsAndDLLs(map(sat_states -> map(sat_state -> ConventionalPLLAndDLL(sat_state), sat_states.states), (system_sats_state,)))
-
-    system_sats_sample_params = Tracking.init_sample_params(
-        (system_sats_state,),
-        1,
+    doppler_estimators = ConventionalPLLsAndDLLs(
+        map(
+            sat_states ->
+                map(sat_state -> ConventionalPLLAndDLL(sat_state), sat_states.states),
+            (system_sats_state,),
+        ),
     )
+
+    system_sats_sample_params = Tracking.init_sample_params((system_sats_state,), 1)
     next_system_sats_sample_params = Tracking.calc_sample_params(
         (system_sats_state,),
         system_sats_sample_params,
@@ -71,20 +72,21 @@ end
         1,
     )
 
-    next_doppler_estimators, dopplers_and_filtered_prompts = Tracking.estimate_dopplers_and_filter_prompt(
-        doppler_estimators,
-        (system_sats_state,),
-        next_system_sats_sample_params,
-        sampling_frequency,
-        0.75ms
-    )
+    next_doppler_estimators, dopplers_and_filtered_prompts =
+        Tracking.estimate_dopplers_and_filter_prompt(
+            doppler_estimators,
+            (system_sats_state,),
+            next_system_sats_sample_params,
+            sampling_frequency,
+            0.75ms,
+        )
 
     @test dopplers_and_filtered_prompts[1][1].carrier_doppler == 0.0Hz
     @test dopplers_and_filtered_prompts[1][1].code_doppler == 0.0Hz
     @test dopplers_and_filtered_prompts[1][1].filtered_prompt == 0.0
 
     system_sats_state = SystemSatsState(
-        gpsl1, 
+        gpsl1,
         [
             SatState(
                 1,
@@ -99,18 +101,19 @@ end
                 14,
                 Tracking.SecondaryCodeOrBitDetector(),
                 Tracking.PromptsBuffer(20),
-                Tracking.BitBuffer()
+                Tracking.BitBuffer(),
             ),
-        ]
+        ],
     )
 
-    next_doppler_estimators, dopplers_and_filtered_prompts = Tracking.estimate_dopplers_and_filter_prompt(
-        doppler_estimators,
-        (system_sats_state,),
-        next_system_sats_sample_params,
-        sampling_frequency,
-        0.75ms
-    )
+    next_doppler_estimators, dopplers_and_filtered_prompts =
+        Tracking.estimate_dopplers_and_filter_prompt(
+            doppler_estimators,
+            (system_sats_state,),
+            next_system_sats_sample_params,
+            sampling_frequency,
+            0.75ms,
+        )
 
     @test dopplers_and_filtered_prompts[1][1].carrier_doppler == 100.0Hz
     @test dopplers_and_filtered_prompts[1][1].code_doppler == 1.0Hz

@@ -15,7 +15,7 @@
         bit_buffer,
         integrated_code_blocks,
         secondary_code_or_bit_found,
-        prompt_correlator
+        prompt_correlator,
     )
 
     @test next_bit_buffer.prompt_accumulator == 0.0 + 0.0im
@@ -31,7 +31,7 @@
         bit_buffer,
         integrated_code_blocks,
         secondary_code_or_bit_found,
-        prompt_correlator
+        prompt_correlator,
     )
     @test next_bit_buffer.prompt_accumulator == 21.0 + 0.0im
     @test next_bit_buffer.prompt_accumulator_integrated_code_blocks == 2
@@ -45,7 +45,7 @@
         bit_buffer,
         integrated_code_blocks,
         secondary_code_or_bit_found,
-        prompt_correlator
+        prompt_correlator,
     )
     @test next_bit_buffer.prompt_accumulator == 0.0 + 0.0im
     @test next_bit_buffer.prompt_accumulator_integrated_code_blocks == 0

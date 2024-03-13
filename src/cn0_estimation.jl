@@ -5,8 +5,7 @@ $(SIGNATURES)
 
 MomentsCN0Estimator to estimate the CN0
 """
-struct MomentsCN0Estimator <: AbstractCN0Estimator
-end
+struct MomentsCN0Estimator <: AbstractCN0Estimator end
 
 """
 $(SIGNATURES)
@@ -33,7 +32,7 @@ $(SIGNATURES)
 Updates the `cn0_estimator` to include the information of the current prompt value.
 """
 function update(buffer::PromptsBuffer, prompt)
-    buffer_length = length(buffer.prompt_buffer) 
+    buffer_length = length(buffer.prompt_buffer)
     next_index = mod(get_current_index(buffer), buffer_length) + 1
     buffer.prompt_buffer[next_index] = prompt
     next_length = min(length(buffer) + 1, buffer_length)
@@ -48,7 +47,7 @@ Estimates the CN0 based on the struct `cn0_estimator`.
 function estimate_cn0(
     buffer::PromptsBuffer,
     cn0_estimator::MomentsCN0Estimator,
-    integration_time
+    integration_time,
 )
     length(buffer) == 0 && return 0.0dBHz
     abs2_prompt_buffer = abs2.(get_prompt_buffer(buffer))

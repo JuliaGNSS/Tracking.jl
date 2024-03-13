@@ -12,8 +12,18 @@
 
     sampling_frequency = 5e6Hz
 
-    @test @inferred(Tracking.get_default_correlator(galileo_e1b, sampling_frequency, NumAnts(1))) ==
-        VeryEarlyPromptLateCorrelator(galileo_e1b, sampling_frequency, num_ants = NumAnts(1))
-    @test @inferred(Tracking.get_default_correlator(galileo_e1b, sampling_frequency, NumAnts(3))) ==
-        VeryEarlyPromptLateCorrelator(galileo_e1b, sampling_frequency, num_ants = NumAnts(3))
+    @test @inferred(
+        Tracking.get_default_correlator(galileo_e1b, sampling_frequency, NumAnts(1))
+    ) == VeryEarlyPromptLateCorrelator(
+        galileo_e1b,
+        sampling_frequency;
+        num_ants = NumAnts(1),
+    )
+    @test @inferred(
+        Tracking.get_default_correlator(galileo_e1b, sampling_frequency, NumAnts(3))
+    ) == VeryEarlyPromptLateCorrelator(
+        galileo_e1b,
+        sampling_frequency;
+        num_ants = NumAnts(3),
+    )
 end

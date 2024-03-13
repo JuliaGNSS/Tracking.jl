@@ -19,19 +19,19 @@ function gen_code_replica!(
     start_sample::Integer,
     num_samples::Integer,
     correlator_sample_shifts::AbstractVector,
-    prn::Integer
+    prn::Integer,
 )
     earliest_sample_shift = correlator_sample_shifts[end]
-    latest_sample_shift  = correlator_sample_shifts[1]
+    latest_sample_shift = correlator_sample_shifts[1]
     total_samples = num_samples + earliest_sample_shift - latest_sample_shift
     gen_code!(
-        view(code_replica, start_sample:start_sample + total_samples - 1),
+        view(code_replica, start_sample:start_sample+total_samples-1),
         system,
         prn,
         sampling_frequency,
         code_frequency,
         start_code_phase,
-        latest_sample_shift
+        latest_sample_shift,
     )
     code_replica
 end
@@ -47,20 +47,24 @@ function update_code_phase(
     code_frequency,
     sampling_frequency,
     start_code_phase,
-    secondary_code_or_bit_found
+    secondary_code_or_bit_found,
 )
-    secondary_code_or_bit_length = get_data_frequency(system) == 0Hz ?
-        get_secondary_code_length(system) :
-        Int(get_code_frequency(system) / (get_data_frequency(system) * get_code_length(system)))
+    secondary_code_or_bit_length =
+        get_data_frequency(system) == 0Hz ? get_secondary_code_length(system) :
+        Int(
+            get_code_frequency(system) /
+            (get_data_frequency(system) * get_code_length(system)),
+        )
 
-    code_length = get_code_length(system) *
+    code_length =
+        get_code_length(system) *
         (secondary_code_or_bit_found ? secondary_code_or_bit_length : 1)
     mod(code_frequency * num_samples / sampling_frequency + start_code_phase, code_length)
-#    fixed_point = sizeof(Int) * 8 - 1 - min_bits_for_code_length(S)
-#    delta = floor(Int, code_frequency * 1 << fixed_point / sampling_frequency)
-#    fixed_point_start_phase = floor(Int, start_code_phase * 1 << fixed_point)
-#    phase_fixed_point = delta * num_samples + fixed_point_start_phase
-#    mod(phase_fixed_point / 1 << fixed_point, code_length)
+    #    fixed_point = sizeof(Int) * 8 - 1 - min_bits_for_code_length(S)
+    #    delta = floor(Int, code_frequency * 1 << fixed_point / sampling_frequency)
+    #    fixed_point_start_phase = floor(Int, start_code_phase * 1 << fixed_point)
+    #    phase_fixed_point = delta * num_samples + fixed_point_start_phase
+    #    mod(phase_fixed_point / 1 << fixed_point, code_length)
 end
 
 """
