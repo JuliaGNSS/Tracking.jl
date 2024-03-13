@@ -8,15 +8,18 @@ blocks to integrate is limited by the bit shift.
 function calc_num_code_blocks_to_integrate(
     system::AbstractGNSS,
     preferred_num_code_blocks::Int,
-    secondary_code_or_bit_found::Bool
+    secondary_code_or_bit_found::Bool,
 )
     ifelse(
         secondary_code_or_bit_found,
         min(
-            Int(get_code_frequency(system) / (get_code_length(system) * get_data_frequency(system))),
-            preferred_num_code_blocks
+            Int(
+                get_code_frequency(system) /
+                (get_code_length(system) * get_data_frequency(system)),
+            ),
+            preferred_num_code_blocks,
         ),
-        1
+        1,
     )
 end
 
@@ -28,7 +31,7 @@ Calculates the number of chips to integrate.
 function calc_num_chips_to_integrate(
     system::AbstractGNSS,
     num_code_blocks::Int,
-    current_code_phase
+    current_code_phase,
 )
     max_phase = num_code_blocks * get_code_length(system)
     current_phase_mod_max_phase = mod(current_code_phase, max_phase)
@@ -47,11 +50,8 @@ function calc_num_samples_left_to_integrate(
     current_code_doppler,
     current_code_phase,
 )
-    chips_to_integrate = calc_num_chips_to_integrate(
-        system,
-        num_code_blocks,
-        current_code_phase,
-    )
+    chips_to_integrate =
+        calc_num_chips_to_integrate(system, num_code_blocks, current_code_phase)
     code_frequency = get_code_frequency(system) + current_code_doppler
     ceil(Int, chips_to_integrate * sampling_frequency / code_frequency)
 end
@@ -66,12 +66,12 @@ end
 function SampleParams(
     system::AbstractGNSS,
     preferred_num_code_blocks_to_integrate::Int,
-    secondary_code_or_bit_found::Bool
+    secondary_code_or_bit_found::Bool,
 )
     num_code_blocks_to_integrate = calc_num_code_blocks_to_integrate(
         system,
         preferred_num_code_blocks_to_integrate,
-        secondary_code_or_bit_found
+        secondary_code_or_bit_found,
     )
     SampleParams(0, 1, 0, num_code_blocks_to_integrate)
 end
@@ -84,54 +84,60 @@ function SampleParams(
     code_doppler,
     code_phase,
     preferred_num_code_blocks_to_integrate::Int,
-    secondary_code_or_bit_found::Bool
+    secondary_code_or_bit_found::Bool,
 )
     num_code_blocks_to_integrate = calc_num_code_blocks_to_integrate(
         system,
         preferred_num_code_blocks_to_integrate,
-        secondary_code_or_bit_found
+        secondary_code_or_bit_found,
     )
     samples_to_integrate_until_code_end = calc_num_samples_left_to_integrate(
         system,
         num_code_blocks_to_integrate,
         sampling_frequency,
         code_doppler,
-        code_phase
+        code_phase,
     )
-    signal_start_sample = prev_sample_params.signal_start_sample + prev_sample_params.signal_samples_to_integrate
+    signal_start_sample =
+        prev_sample_params.signal_start_sample +
+        prev_sample_params.signal_samples_to_integrate
     signal_samples_left = num_samples_signal - signal_start_sample + 1
-    signal_samples_to_integrate = min(samples_to_integrate_until_code_end, signal_samples_left)
+    signal_samples_to_integrate =
+        min(samples_to_integrate_until_code_end, signal_samples_left)
     SampleParams(
         signal_samples_to_integrate,
         signal_start_sample,
         samples_to_integrate_until_code_end,
-        num_code_blocks_to_integrate
+        num_code_blocks_to_integrate,
     )
 end
 
 function init_sample_params(
-    system_sats_states::TupleLike{<:NTuple{N, SystemSatsState}},
+    system_sats_states::TupleLike{<:NTuple{N,SystemSatsState}},
     preferred_num_code_blocks_to_integrate::Int,
-) where N
+) where {N}
     map(system_sats_states) do states
         map(states.states) do state
             SampleParams(
                 states.system,
                 preferred_num_code_blocks_to_integrate,
-                found(state.sc_bit_detector)
+                found(state.sc_bit_detector),
             )
         end
     end
 end
 
 function calc_sample_params(
-    system_sats_states::TupleLike{<:NTuple{N, SystemSatsState}},
+    system_sats_states::TupleLike{<:NTuple{N,SystemSatsState}},
     prev_system_sats_sample_params,
     num_samples_signal,
     sampling_frequency,
     preferred_num_code_blocks_to_integrate::Int,
-) where N
-    map(system_sats_states, prev_system_sats_sample_params) do states, prev_sats_sample_params
+) where {N}
+    map(
+        system_sats_states,
+        prev_system_sats_sample_params,
+    ) do states, prev_sats_sample_params
         map(states.states, prev_sats_sample_params) do state, prev_sample_params
             SampleParams(
                 states.system,
@@ -141,7 +147,7 @@ function calc_sample_params(
                 state.code_doppler,
                 state.code_phase,
                 preferred_num_code_blocks_to_integrate,
-                found(state.sc_bit_detector)
+                found(state.sc_bit_detector),
             )
         end
     end
