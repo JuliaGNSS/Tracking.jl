@@ -51,18 +51,25 @@ function TrackState(
     )
 end
 
-function get_sat_states(
+function get_sats_states(
     track_state::TrackState{<:TupleLike{<:NTuple{N,SystemSatsState}}},
     system_idx::Union{Symbol,Integer},
 ) where {N}
-    track_state.system_sats_states[system_idx].states
+    track_state.system_sats_states[system_idx]
+end
+
+function get_sats_states(
+    track_state::TrackState{<:TupleLike{<:NTuple{N,SystemSatsState}}},
+    system_idx::Val{M},
+) where {N,M}
+    track_state.system_sats_states[M]
 end
 
 function get_sat_states(
     track_state::TrackState{<:TupleLike{<:NTuple{N,SystemSatsState}}},
-    system_idx::Val{M},
-) where {N,M}
-    track_state.system_sats_states[M].states
+    system_idx::Union{Symbol,Integer,Val},
+) where {N}
+    get_sats_states(track_state, system_idx).states
 end
 
 function get_sat_states(track_state::TrackState{<:TupleLike{<:NTuple{1,SystemSatsState}}})
@@ -71,16 +78,9 @@ end
 
 function get_system(
     track_state::TrackState{<:TupleLike{<:NTuple{N,SystemSatsState}}},
-    system_idx::Union{Symbol,Integer},
+    system_idx::Union{Symbol,Integer,Val},
 ) where {N}
-    track_state.system_sats_states[system_idx].system
-end
-
-function get_system(
-    track_state::TrackState{<:TupleLike{<:NTuple{N,SystemSatsState}}},
-    system_idx::Val{M},
-) where {N,M}
-    track_state.system_sats_states[M].system
+    get_sats_states(track_state, system_idx).system
 end
 
 function get_system(track_state::TrackState{<:TupleLike{<:NTuple{1,SystemSatsState}}})
@@ -92,14 +92,29 @@ function get_sat_state(
     system_idx::Union{Symbol,Integer,Val},
     sat_idx::Integer,
 ) where {N}
-    get_sat_states(track_state, system_idx)[sat_idx]
+    get_sat_state(get_sats_states(track_state, system_idx), sat_idx)
 end
 
 function get_sat_state(
     track_state::TrackState{<:TupleLike{<:NTuple{1,SystemSatsState}}},
     sat_idx::Integer,
 )
-    get_sat_states(track_state, 1)[sat_idx]
+    get_sat_state(track_state, 1, sat_idx)
+end
+
+function estimate_cn0(
+    track_state::TrackState{<:TupleLike{<:NTuple{N,SystemSatsState}}},
+    system_idx::Union{Symbol,Integer,Val},
+    sat_idx::Integer,
+) where {N}
+    estimate_cn0(get_sats_states(track_state, system_idx), sat_idx)
+end
+
+function estimate_cn0(
+    track_state::TrackState{<:TupleLike{<:NTuple{1,SystemSatsState}}},
+    sat_idx::Integer,
+)
+    estimate_cn0(track_state, 1, sat_idx)
 end
 
 create_buffer(buffers::Vector{<:CPUBuffers}, system, sat_states, num_samples) =

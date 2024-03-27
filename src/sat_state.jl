@@ -10,7 +10,7 @@ struct SatState{C<:AbstractCorrelator}
     last_fully_integrated_filtered_prompt::ComplexF64
     sample_of_last_fully_integrated_correlator::Int
     sc_bit_detector::SecondaryCodeOrBitDetector
-    prompts_buffer::PromptsBuffer
+    cn0_estimator::MomentsCN0Estimator
     bit_buffer::BitBuffer
 end
 
@@ -28,7 +28,7 @@ get_last_fully_integrated_filtered_prompt(s::SatState) =
 get_sample_of_last_fully_integrated_correlator(s::SatState) =
     s.sample_of_last_fully_integrated_correlator
 get_secondary_code_or_bit_detector(s::SatState) = s.sc_bit_detector
-get_prompts_buffer(s::SatState) = s.prompts_buffer
+get_cn0_estimator(s::SatState) = s.cn0_estimator
 get_bit_buffer(s::SatState) = s.bit_buffer
 
 function SatState(
@@ -40,7 +40,7 @@ function SatState(
     num_ants::NumAnts = NumAnts(1),
     carrier_phase = 0.0,
     code_doppler = carrier_doppler * get_code_center_frequency_ratio(system),
-    num_prompts_buffer::Int = 20,
+    num_prompts_for_cn0_estimation::Int = 100,
 )
     SatState(
         prn,
@@ -54,7 +54,7 @@ function SatState(
         complex(0.0, 0.0),
         -1,
         SecondaryCodeOrBitDetector(),
-        PromptsBuffer(num_prompts_buffer),
+        MomentsCN0Estimator(num_prompts_for_cn0_estimation),
         BitBuffer(),
     )
 end
@@ -77,3 +77,12 @@ end
 
 get_system(sss::SystemSatsState) = sss.system
 get_states(sss::SystemSatsState) = sss.states
+get_sat_state(sss::SystemSatsState, sat_idx::Integer) = sss.states[sat_idx]
+
+function estimate_cn0(sss::SystemSatsState, sat_idx::Integer)
+    system = sss.system
+    estimate_cn0(
+        get_cn0_estimator(get_sat_state(sss, sat_idx)),
+        get_code_length(system) / get_code_frequency(system),
+    )
+end

@@ -48,7 +48,7 @@ function update(
                 sat_state.last_fully_integrated_filtered_prompt,
                 sample_of_last_fully_integrated_correlator,
                 sat_state.sc_bit_detector,
-                sat_state.prompts_buffer,
+                sat_state.cn0_estimator,
                 sat_state.bit_buffer,
             )
         end
@@ -77,7 +77,7 @@ function update(
                 filtered_prompt = dopplers_and_filtered_prompt.filtered_prompt
                 carrier_doppler = dopplers_and_filtered_prompt.carrier_doppler
                 code_doppler = dopplers_and_filtered_prompt.code_doppler
-                prompts_buffer = update(state.prompts_buffer, filtered_prompt)
+                cn0_estimator = update(get_cn0_estimator(state), filtered_prompt)
                 bit_buffer = buffer(
                     system_sats.system,
                     state.bit_buffer,
@@ -103,7 +103,7 @@ function update(
                     sample_params.signal_start_sample +
                     sample_params.signal_samples_to_integrate - 1,
                     sc_bit_detector,
-                    prompts_buffer,
+                    cn0_estimator,
                     bit_buffer,
                 )
                 new_state

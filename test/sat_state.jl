@@ -12,7 +12,6 @@
     @test get_last_fully_integrated_filtered_prompt(sat_state) == complex(0.0, 0.0)
     @test get_sample_of_last_fully_integrated_correlator(sat_state) == -1
     @test Tracking.found(get_secondary_code_or_bit_detector(sat_state)) == false
-    @test length(get_prompts_buffer(sat_state)) == 0
     @test length(get_bit_buffer(sat_state)) == 0
 
     acq = AcquisitionResults(
@@ -38,7 +37,6 @@
     @test get_last_fully_integrated_filtered_prompt(sat_state) == complex(0.0, 0.0)
     @test get_sample_of_last_fully_integrated_correlator(sat_state) == -1
     @test Tracking.found(get_secondary_code_or_bit_detector(sat_state)) == false
-    @test length(get_prompts_buffer(sat_state)) == 0
     @test length(get_bit_buffer(sat_state)) == 0
 
     sampling_frequency = 5e6Hz
@@ -58,7 +56,7 @@
                 complex(0.0, 0.0),
                 14,
                 Tracking.SecondaryCodeOrBitDetector(),
-                Tracking.PromptsBuffer(20),
+                Tracking.MomentsCN0Estimator(20),
                 Tracking.BitBuffer(),
             ),
             SatState(
@@ -79,7 +77,7 @@
                 complex(0.0, 0.0),
                 15,
                 Tracking.SecondaryCodeOrBitDetector(),
-                Tracking.PromptsBuffer(20),
+                Tracking.MomentsCN0Estimator(20),
                 Tracking.BitBuffer(),
             ),
             SatState(
@@ -100,7 +98,7 @@
                 complex(0.0, 0.0),
                 -1,
                 Tracking.SecondaryCodeOrBitDetector(),
-                Tracking.PromptsBuffer(20),
+                Tracking.MomentsCN0Estimator(20),
                 Tracking.BitBuffer(),
             ),
         ],
