@@ -5,57 +5,45 @@ $(SIGNATURES)
 
 MomentsCN0Estimator to estimate the CN0
 """
-struct MomentsCN0Estimator <: AbstractCN0Estimator end
-
-"""
-$(SIGNATURES)
-
-MomentsCN0Estimator to estimate the CN0
-"""
-struct PromptsBuffer
+struct MomentsCN0Estimator <: AbstractCN0Estimator
     prompt_buffer::Vector{ComplexF64}
-    current_index::Int
-    length::Int
+    buffer_current_index::Int
+    filled_buffer_length::Int
 end
 
-function PromptsBuffer(N)
-    PromptsBuffer(zeros(ComplexF64, N), 0, 0)
+function MomentsCN0Estimator(N)
+    MomentsCN0Estimator(zeros(ComplexF64, N), 0, 0)
 end
 
-length(buffer::PromptsBuffer) = buffer.length
-get_prompt_buffer(buffer::PromptsBuffer) = buffer.prompt_buffer
-get_current_index(buffer::PromptsBuffer) = buffer.current_index
+length(estimator::MomentsCN0Estimator) = estimator.filled_buffer_length
+get_prompt_buffer(estimator::MomentsCN0Estimator) = estimator.prompt_buffer
+get_current_index(estimator::MomentsCN0Estimator) = estimator.buffer_current_index
 
 """
 $(SIGNATURES)
 
-Updates the `cn0_estimator` to include the information of the current prompt value.
+Buffers the prompts such that they can be used to estimate the CN0
 """
-function update(buffer::PromptsBuffer, prompt)
-    buffer_length = length(buffer.prompt_buffer)
-    next_index = mod(get_current_index(buffer), buffer_length) + 1
-    buffer.prompt_buffer[next_index] = prompt
-    next_length = min(length(buffer) + 1, buffer_length)
-    PromptsBuffer(buffer.prompt_buffer, next_index, next_length)
+function update(estimator::MomentsCN0Estimator, prompt)
+    buffer_length = length(estimator.prompt_buffer)
+    next_index = mod(get_current_index(estimator), buffer_length) + 1
+    estimator.prompt_buffer[next_index] = prompt
+    filled_buffer_length = min(length(estimator) + 1, buffer_length)
+    MomentsCN0Estimator(estimator.prompt_buffer, next_index, filled_buffer_length)
 end
 
 """
 $(SIGNATURES)
 
-Estimates the CN0 based on the struct `cn0_estimator`.
+Estimates the CN0 based on the struct `MomentsCN0Estimator`.
 """
-function estimate_cn0(
-    buffer::PromptsBuffer,
-    cn0_estimator::MomentsCN0Estimator,
-    integration_time,
-)
-    length(buffer) == 0 && return 0.0dBHz
-    abs2_prompt_buffer = abs2.(get_prompt_buffer(buffer))
-    M₂ = 1 / length(buffer) * sum(abs2_prompt_buffer)
-    M₄ = 1 / length(buffer) * sum(abs2_prompt_buffer .^ 2)
+function estimate_cn0(estimator::MomentsCN0Estimator, integration_time)
+    length(estimator) == 0 && return 0.0dBHz
+    prompt_buffer = get_prompt_buffer(estimator)
+    M₂ = 1 / length(estimator) * sum(abs2, prompt_buffer)
+    M₄ = 1 / length(estimator) * sum(x -> abs2(x)^2, prompt_buffer)
     Pd = sqrt(abs(2 * M₂^2 - M₄))
-    noise_power = (M₂ - Pd)
-    noise_power_non_neg = noise_power - 2 * (noise_power < 0) * noise_power
-    SNR = Pd / noise_power_non_neg
+    noise_power = abs(M₂ - Pd)
+    SNR = Pd / noise_power
     dBHz(SNR / integration_time)
 end

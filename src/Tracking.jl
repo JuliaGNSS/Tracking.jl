@@ -26,7 +26,6 @@ export get_early,
     get_last_fully_integrated_filtered_prompt,
     get_sample_of_last_fully_integrated_correlator,
     get_secondary_code_or_bit_detector,
-    get_prompts_buffer,
     get_bit_buffer,
     get_bits,
     get_accumulators,
@@ -53,7 +52,8 @@ export get_early,
     remove_sats!,
     get_sat_states,
     get_sat_state,
-    get_system
+    get_system,
+    estimate_cn0
 
 const StructVecOrMat{T} = Union{StructVector{T},StructArray{T,2}}
 
