@@ -46,11 +46,14 @@ function track(
         )
         system_sats_states =
             update(system_sats_states, dopplers_and_prompts, sat_sample_params)
+        track_state = TrackState(
+            track_state.post_process,
+            system_sats_states,
+            doppler_estimator,
+            track_state.downconvert_and_correlator,
+            track_state.num_samples,
+        )
+        track_state = post_process(track_state)
     end
-    TrackState(
-        system_sats_states,
-        doppler_estimator,
-        track_state.downconvert_and_correlator,
-        track_state.num_samples,
-    )
+    return track_state
 end
