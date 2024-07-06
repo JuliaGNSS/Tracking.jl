@@ -1,6 +1,7 @@
 [deps]
 Acquisition = "d4bbf60b-102b-5ffb-8f97-a7ea5817e69f"
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+Dictionaries = "85a47980-9c8c-11e8-2b9f-f7ca1fa99fb4"
 GNSSSignals = "52c80523-2a4e-5c38-8979-05588f836870"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"

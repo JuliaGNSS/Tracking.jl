@@ -88,6 +88,8 @@ end
                 code_frequency .* range ./ sampling_frequency .+ start_code_phase,
                 prn,
             ) .* 10^(45 / 20) .+ randn(ComplexF64, length(range)) .* sqrt(4e6)
+        start_code_phase =
+            code_frequency * length(range) ./ sampling_frequency + start_code_phase
         track_state = @inferred track(signal, track_state, sampling_frequency)
     end
     cn0_estimate = @inferred estimate_cn0(track_state, 1)

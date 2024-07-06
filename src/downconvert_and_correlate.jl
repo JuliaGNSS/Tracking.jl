@@ -1,25 +1,39 @@
-"""
-$(SIGNATURES)
-
-Abstract downconverter and correlator type. Structs for
-downconversion and correlation must have this abstract type as a
-parent.
-"""
-abstract type AbstractDownconvertAndCorrelator end
-
-function get_downconvert_signal_buffer(
-    ::Type{T},
-    num_samples::Int,
-    state::SatState{<:AbstractCorrelator{1}},
-) where {T}
-    StructVector{Complex{T}}(undef, num_samples)
-end
-function get_downconvert_signal_buffer(
-    ::Type{T},
-    num_samples::Int,
-    state::SatState{<:AbstractCorrelator{M}},
-) where {T,M}
-    StructArray{Complex{T}}(undef, num_samples, M)
+function update(
+    system::AbstractGNSS,
+    sat_state::SatState,
+    sat_params::SampleParams,
+    intermediate_frequency,
+    sampling_frequency,
+    correlator,
+    num_samples_signal::Int,
+)
+    carrier_frequency = sat_state.carrier_doppler + intermediate_frequency
+    code_frequency = sat_state.code_doppler + get_code_frequency(system)
+    carrier_phase = update_carrier_phase(
+        sat_params.signal_samples_to_integrate,
+        carrier_frequency,
+        sampling_frequency,
+        sat_state.carrier_phase,
+    )
+    code_phase = update_code_phase(
+        system,
+        sat_params.signal_samples_to_integrate,
+        code_frequency,
+        sampling_frequency,
+        sat_state.code_phase,
+        found(sat_state.sc_bit_detector),
+    )
+    sample_of_last_fully_integrated_correlator =
+        sat_state.sample_of_last_fully_integrated_correlator -
+        (sat_params.signal_start_sample == 1 ? num_samples_signal : 0)
+    SatState(
+        sat_state,
+        code_phase,
+        carrier_phase,
+        sat_state.integrated_samples + sat_params.signal_samples_to_integrate,
+        correlator,
+        sample_of_last_fully_integrated_correlator,
+    )
 end
 
 """

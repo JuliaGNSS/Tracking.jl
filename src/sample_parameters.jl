@@ -113,22 +113,34 @@ function SampleParams(
 end
 
 function init_sample_params(
-    system_sats_states::TupleLike{<:NTuple{N,SystemSatsState}},
+    system_sats_states::MultipleSystemSatsState{N},
     preferred_num_code_blocks_to_integrate::Int,
 ) where {N}
     map(system_sats_states) do states
-        map(states.states) do state
-            SampleParams(
+        map(states.states) do sat_state
+            init_sample_params(
                 states.system,
+                sat_state,
                 preferred_num_code_blocks_to_integrate,
-                found(state.sc_bit_detector),
             )
         end
     end
 end
 
+function init_sample_params(
+    system::AbstractGNSS,
+    sat_state::SatState,
+    preferred_num_code_blocks_to_integrate::Int,
+)
+    SampleParams(
+        system,
+        preferred_num_code_blocks_to_integrate,
+        found(sat_state.sc_bit_detector),
+    )
+end
+
 function calc_sample_params(
-    system_sats_states::TupleLike{<:NTuple{N,SystemSatsState}},
+    system_sats_states::MultipleSystemSatsState{N},
     prev_system_sats_sample_params,
     num_samples_signal,
     sampling_frequency,
@@ -138,17 +150,35 @@ function calc_sample_params(
         system_sats_states,
         prev_system_sats_sample_params,
     ) do states, prev_sats_sample_params
-        map(states.states, prev_sats_sample_params) do state, prev_sample_params
-            SampleParams(
+        map(states.states, prev_sats_sample_params) do sat_state, prev_sample_params
+            calc_sample_params(
                 states.system,
+                sat_state,
                 prev_sample_params,
                 num_samples_signal,
                 sampling_frequency,
-                state.code_doppler,
-                state.code_phase,
                 preferred_num_code_blocks_to_integrate,
-                found(state.sc_bit_detector),
             )
         end
     end
+end
+
+function calc_sample_params(
+    system::AbstractGNSS,
+    sat_state::SatState,
+    prev_sample_params::SampleParams,
+    num_samples_signal::Int,
+    sampling_frequency,
+    preferred_num_code_blocks_to_integrate::Int,
+)
+    SampleParams(
+        system,
+        prev_sample_params,
+        num_samples_signal,
+        sampling_frequency,
+        sat_state.code_doppler,
+        sat_state.code_phase,
+        preferred_num_code_blocks_to_integrate,
+        found(sat_state.sc_bit_detector),
+    )
 end
