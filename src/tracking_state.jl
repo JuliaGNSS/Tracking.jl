@@ -1,218 +1,230 @@
-abstract type AbstractPostProcess end
-const MultipleSystemSatsState{N} = TupleLike{<:NTuple{N,SystemSatsState}}
-
-struct TrackState{
-    P<:AbstractPostProcess,
-    S<:MultipleSystemSatsState{N} where {N},
-    DE<:AbstractDopplerEstimator,
-    DC<:AbstractDownconvertAndCorrelator,
-}
-    post_process::P
-    system_sats_states::S
-    doppler_estimator::DE
-    downconvert_and_correlator::DC
-    num_samples::Int
-end
-
-struct NoPostProcess <: AbstractPostProcess end
-
-post_process(track_state::TrackState{NoPostProcess}) = track_state
-
 function TrackState(
     system::AbstractGNSS,
-    sat_states::Vector{<:SatState};
+    sat_states;
     num_samples,
-    post_process = NoPostProcess(),
-    doppler_estimator = map(sat_state -> ConventionalPLLAndDLL(sat_state), sat_states),
-    downconvert_and_correlator = CPUDownconvertAndCorrelator(
-        (SystemSatsState(system, sat_states),),
-        num_samples,
-    ),
+    doppler_estimator::AbstractTrackingDopplerEstimator = TrackingConventionalPLLAndDLL(),
+    post_process::AbstractTrackingPostProcess = NoTrackingPostProcess(),
 )
-    system_sats_stats = (SystemSatsState(system, sat_states),)
+    multiple_system_sats_state = (SystemSatsState(system, sat_states),)
+    TrackState(multiple_system_sats_state; doppler_estimator, post_process, num_samples)
+end
+
+function TrackState(
+    system_sat_states::SystemSatsState;
+    num_samples,
+    doppler_estimator::AbstractTrackingDopplerEstimator = TrackingConventionalPLLAndDLL(),
+    post_process::AbstractTrackingPostProcess = NoTrackingPostProcess(),
+)
+    multiple_system_sats_state = (system_sat_states,)
+    TrackState(multiple_system_sats_state; doppler_estimator, post_process, num_samples)
+end
+
+function TrackState(
+    multiple_system_sats_state::MultipleSystemSatsState{N};
+    num_samples,
+    doppler_estimator::AbstractTrackingDopplerEstimator = TrackingConventionalPLLAndDLL(),
+    post_process::AbstractTrackingPostProcess = NoTrackingPostProcess(),
+) where {N}
     TrackState(
+        initiate_downconvert_and_correlator(multiple_system_sats_state, num_samples),
+        doppler_estimator,
         post_process,
-        system_sats_stats,
-        ConventionalPLLsAndDLLs((doppler_estimator,)),
-        downconvert_and_correlator,
         num_samples,
+    )
+end
+
+function initiate_downconvert_and_correlator(multiple_system_sats_state, num_samples)
+    multiple_system_sats_state
+end
+
+function initiate_downconvert_and_correlator(
+    multiple_system_sats_state::MultipleSystemSatsState{
+        N,
+        <:AbstractGNSS,
+        <:SatState{<:AbstractCorrelator,<:AbstractSatDopplerEstimator,<:Nothing},
+        <:AbstractSystemDopplerEstimator,
+        <:CPUSystemDownconvertAndCorrelator,
+    },
+    num_samples::Int,
+) where {N}
+    return map(multiple_system_sats_state) do system_sats_state
+        sat_states = map(system_sats_state.states) do sat_state
+            initiate_downconvert_and_correlator(
+                system_sats_state.system,
+                sat_state,
+                num_samples,
+            )
+        end
+        return SystemSatsState(system_sats_state, sat_states)
+    end
+end
+
+function initiate_downconvert_and_correlator(
+    system::AbstractGNSS,
+    sat_state::SatState,
+    num_samples::Int,
+)
+    sat_state
+end
+
+function initiate_downconvert_and_correlator(
+    system::AbstractGNSS,
+    sat_state::SatState{<:AbstractCorrelator,<:AbstractSatDopplerEstimator,<:Nothing},
+    num_samples::Int,
+)
+    downconvert_and_correlator =
+        CPUSatDownconvertAndCorrelator(system, sat_state.correlator, num_samples)
+    return @set sat_state.downconvert_and_correlator = downconvert_and_correlator
+end
+
+function TrackState(
+    track_state::TrackState,
+    multiple_system_sats_state::MultipleSystemSatsState,
+)
+    TrackState(
+        multiple_system_sats_state,
+        track_state.doppler_estimator,
+        track_state.post_process,
+        track_state.num_samples,
     )
 end
 
 function TrackState(
-    system_sats_states::MultipleSystemSatsState{N};
-    num_samples,
-    post_process = NoPostProcess(),
-    doppler_estimators = ConventionalPLLsAndDLLs(
-        map(
-            sat_states ->
-                map(sat_state -> ConventionalPLLAndDLL(sat_state), sat_states.states),
-            system_sats_states,
-        ),
-    ),
-    downconvert_and_correlator = CPUDownconvertAndCorrelator(
-        system_sats_states,
-        num_samples,
-    ),
-) where {N}
+    track_state::TrackState,
+    multiple_system_sats_state::MultipleSystemSatsState,
+    doppler_estimator::AbstractTrackingDopplerEstimator,
+)
     TrackState(
-        post_process,
-        system_sats_states,
-        doppler_estimators,
-        downconvert_and_correlator,
-        num_samples,
+        multiple_system_sats_state,
+        doppler_estimator,
+        track_state.post_process,
+        track_state.num_samples,
     )
 end
 
-function get_sats_states(
-    track_state::TrackState{<:AbstractPostProcess,<:MultipleSystemSatsState{N}},
+function get_system_sats_state(
+    track_state::TrackState{<:MultipleSystemSatsState{N}},
+    system_idx,
+) where {N}
+    get_system_sats_state(track_state.multiple_system_sats_state, system_idx)
+end
+
+function get_system_sats_state(
+    multiple_system_sats_state::MultipleSystemSatsState{N},
     system_idx::Union{Symbol,Integer},
 ) where {N}
-    track_state.system_sats_states[system_idx]
+    multiple_system_sats_state[system_idx]
 end
 
-function get_sats_states(
-    track_state::TrackState{<:AbstractPostProcess,<:MultipleSystemSatsState{N}},
+function get_system_sats_state(
+    multiple_system_sats_state::MultipleSystemSatsState{N},
     system_idx::Val{M},
 ) where {N,M}
-    track_state.system_sats_states[M]
+    multiple_system_sats_state[M]
 end
 
 function get_sat_states(
-    track_state::TrackState{<:AbstractPostProcess,<:MultipleSystemSatsState{N}},
+    multiple_system_sats_state::MultipleSystemSatsState{N},
     system_idx::Union{Symbol,Integer,Val},
 ) where {N}
-    get_sats_states(track_state, system_idx).states
+    get_system_sats_state(multiple_system_sats_state, system_idx).states
+end
+
+function get_sat_states(multiple_system_sats_state::MultipleSystemSatsState{1})
+    get_sat_states(multiple_system_sats_state, 1)
 end
 
 function get_sat_states(
-    track_state::TrackState{<:AbstractPostProcess,<:MultipleSystemSatsState{1}},
-)
-    get_sat_states(track_state, 1)
-end
-
-function get_system(
-    track_state::TrackState{<:AbstractPostProcess,<:MultipleSystemSatsState{N}},
+    track_state::TrackState{<:MultipleSystemSatsState{N}},
     system_idx::Union{Symbol,Integer,Val},
 ) where {N}
-    get_sats_states(track_state, system_idx).system
+    get_sat_states(track_state.multiple_system_sats_state, system_idx)
+end
+
+function get_sat_states(track_state::TrackState{<:MultipleSystemSatsState{1}})
+    get_sat_states(track_state.multiple_system_sats_state)
 end
 
 function get_system(
-    track_state::TrackState{<:AbstractPostProcess,<:MultipleSystemSatsState{1}},
-)
+    track_state::TrackState{<:MultipleSystemSatsState{N}},
+    system_idx::Union{Symbol,Integer,Val},
+) where {N}
+    get_system_sats_state(track_state, system_idx).system
+end
+
+function get_system(track_state::TrackState{<:MultipleSystemSatsState{1}})
     get_system(track_state, 1)
 end
 
 function get_sat_state(
-    track_state::TrackState{<:AbstractPostProcess,<:MultipleSystemSatsState{N}},
+    track_state::TrackState{<:MultipleSystemSatsState{N}},
     system_idx::Union{Symbol,Integer,Val},
-    sat_idx::Integer,
+    sat_identifier,
 ) where {N}
-    get_sat_state(get_sats_states(track_state, system_idx), sat_idx)
+    get_sat_state(get_system_sats_state(track_state, system_idx), sat_identifier)
 end
 
 function get_sat_state(
-    track_state::TrackState{<:AbstractPostProcess,<:MultipleSystemSatsState{1}},
-    sat_idx::Integer,
+    track_state::TrackState{<:MultipleSystemSatsState{1}},
+    sat_identifier,
 )
-    get_sat_state(track_state, 1, sat_idx)
+    get_sat_state(track_state, 1, sat_identifier)
 end
 
 function estimate_cn0(
-    track_state::TrackState{<:AbstractPostProcess,<:MultipleSystemSatsState{N}},
+    track_state::TrackState{<:MultipleSystemSatsState{N}},
     system_idx::Union{Symbol,Integer,Val},
-    sat_idx::Integer,
+    sat_identifier,
 ) where {N}
-    estimate_cn0(get_sats_states(track_state, system_idx), sat_idx)
+    estimate_cn0(get_system_sats_state(track_state, system_idx), sat_identifier)
 end
 
-function estimate_cn0(
-    track_state::TrackState{<:AbstractPostProcess,<:MultipleSystemSatsState{1}},
-    sat_idx::Integer,
-)
-    estimate_cn0(track_state, 1, sat_idx)
+function estimate_cn0(track_state::TrackState{<:MultipleSystemSatsState{1}}, sat_identifier)
+    estimate_cn0(track_state, 1, sat_identifier)
 end
 
-create_buffer(buffers::Vector{<:CPUBuffers}, system, sat_states, num_samples) =
-    CPUBuffers(system, sat_states, num_samples)
-
-create_buffer(buffers::Vector{<:GPUBuffers}, system, sat_states, num_samples) =
-    GPUBuffers(system, sat_states, num_samples)
-
-function add_sats!(
-    track_state::TrackState{
-        <:AbstractPostProcess,
-        <:MultipleSystemSatsState{N},
-        <:ConventionalPLLsAndDLLs,
-    },
+function merge_sats(
+    track_state::TS,
     system_idx::Union{Symbol,Integer},
-    system::AbstractGNSS,
-    sat_states::Union{SatState,Vector{<:SatState}},
-) where {N}
-    system_sats_state = track_state.system_sats_states[system_idx]
-    pll_and_dlls = track_state.doppler_estimator.plls_and_dlls[system_idx]
-    buffers = track_state.downconvert_and_correlator.buffers[system_idx]
-    if sat_states isa Vector
-        append!(system_sats_state.states, sat_states)
-        append!(
-            pll_and_dlls,
-            map(sat_state -> ConventionalPLLAndDLL(sat_state), sat_states),
-        )
-        append!(
-            buffers,
-            map(
-                sat_state ->
-                    create_buffer(buffers, system, sat_state, track_state.num_samples),
-                sat_states,
-            ),
-        )
-    else
-        push!(system_sats_state.states, sat_states)
-        push!(pll_and_dlls, ConventionalPLLAndDLL(sat_states))
-        push!(buffers, create_buffer(buffers, system, sat_states, track_state.num_samples))
-    end
-    track_state
+    sat_states::Union{SatState,Vector{<:SatState},Dictionary{Any,<:SatState}},
+) where {TS<:TrackState{<:MultipleSystemSatsState{N}} where {N}}
+    TS(
+        merge_sats(
+            track_state.multiple_system_sats_state,
+            system_idx,
+            to_dictionary(sat_states),
+            track_state.num_samples,
+        ),
+        track_state.doppler_estimator,
+        track_state.post_process,
+        track_state.num_samples,
+    )
 end
 
-function add_sats!(
-    track_state::TrackState{
-        <:AbstractPostProcess,
-        <:MultipleSystemSatsState{1},
-        <:ConventionalPLLsAndDLLs,
-    },
-    system::AbstractGNSS,
-    sat_states::Union{SatState,Vector{<:SatState}},
+function merge_sats(
+    track_state::TrackState{<:MultipleSystemSatsState{1}},
+    sat_states::Union{SatState,Vector{<:SatState},Dictionary{Any,<:SatState}},
 )
-    add_sats!(track_state, 1, system, sat_states)
+    merge_sats(track_state, 1, sat_states)
 end
 
-function remove_sats!(
-    track_state::TrackState{
-        <:AbstractPostProcess,
-        <:MultipleSystemSatsState{N},
-        <:ConventionalPLLsAndDLLs,
-    },
+function filter_out_sats(
+    track_state::TS,
     system_idx::Union{Symbol,Integer},
-    prns::Union{Int,Vector{Int}},
-) where {N}
-    system_sats_state = track_state.system_sats_states[system_idx]
-    pll_and_dlls = track_state.doppler_estimator.plls_and_dlls[system_idx]
-    buffers = track_state.downconvert_and_correlator.buffers[system_idx]
-    idxs_to_delete = findall(state -> state.prn in prns, system_sats_state.states)
-    deleteat!(system_sats_state.states, idxs_to_delete)
-    deleteat!(pll_and_dlls, idxs_to_delete)
-    deleteat!(buffers, idxs_to_delete)
-    track_state
+    identifiers,
+) where {TS<:TrackState{<:MultipleSystemSatsState{N}} where {N}}
+    new_states = map(
+        ((id, sat_state),) -> sat_state,
+        filter(
+            ((id, sat_state),) -> !in(id, identifiers),
+            pairs(track_state.multiple_system_sats_state[system_idx].states),
+        ),
+    )
+    new_track_state =
+        @set track_state.multiple_system_sats_state[system_idx].states = new_states
+    return new_track_state::TS
 end
 
-function remove_sats!(
-    track_state::TrackState{
-        <:AbstractPostProcess,
-        <:MultipleSystemSatsState{1},
-        <:ConventionalPLLsAndDLLs,
-    },
-    prns::Union{Int,Vector{Int}},
-)
-    remove_sats!(track_state, 1, prns)
+function filter_out_sats(track_state::TrackState{<:MultipleSystemSatsState{1}}, identifiers)
+    filter_out_sats(track_state, 1, identifiers)
 end

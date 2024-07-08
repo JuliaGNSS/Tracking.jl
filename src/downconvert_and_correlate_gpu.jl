@@ -1,10 +1,16 @@
+struct GPUSystemDownconvertAndCorrelator{S<:AbstractGNSS{<:CuTexture}} <:
+       AbstractSystemDownconvertAndCorrelator
+    textured_system::S
+end
+
 """
 $(SIGNATURES)
 
 A buffer that holds GPU buffers for necessary replicas and downconverted
 signal.
 """
-struct GPUBuffers{T,DS<:CuArray{Complex{T},3}}
+struct GPUSatDownconvertAndCorrelator{T,DS<:CuArray{Complex{T},3}} <:
+       AbstractSatDownconvertAndCorrelator
     downconverted_and_decoded_signal::DS
 end
 
@@ -14,12 +20,14 @@ $(SIGNATURES)
 Convenient constructor to initialize buffers for the GPU with the correct lengths for a single
 satellite.
 """
-function GPUBuffers(::Type{T}, system::AbstractGNSS, state::SatState, num_samples) where {T}
-    GPUBuffers(
-        CuArray{ComplexF32}(
-            undef,
-            (num_samples, get_num_ants(state), get_num_accumulators(get_correlator(state))),
-        ),
+function GPUSatDownconvertAndCorrelator(
+    ::Type{T},
+    system::AbstractGNSS,
+    correlator::AbstractCorrelator{M},
+    num_samples,
+) where {T,M}
+    GPUSatDownconvertAndCorrelator(
+        CuArray{ComplexF32}(undef, (num_samples, M, get_num_accumulators(correlator))),
     )
 end
 
@@ -29,56 +37,12 @@ $(SIGNATURES)
 Convenient constructor to initialize buffers for the GPU with the correct lengths for a single
 satellite. This constructor uses Float32 as the sample data type.
 """
-function GPUBuffers(system::AbstractGNSS, state::SatState, num_samples)
-    GPUBuffers(Float32, system, state, num_samples)
-end
-
-"""
-$(SIGNATURES)
-
-A GPU downconverter and correlator. It holds the necessary buffers.
-"""
-struct GPUDownconvertAndCorrelator{
-    N,
-    CB<:TupleLike{<:NTuple{N,<:AbstractGNSS}},
-    B<:TupleLike{<:NTuple{N,Vector{<:GPUBuffers}}},
-} <: AbstractDownconvertAndCorrelator
-    code_buffers::CB
-    buffers::B
-    function GPUDownconvertAndCorrelator(
-        code_buffers::TupleLike{<:NTuple{N,<:AbstractGNSS}},
-        buffers::TupleLike{<:NTuple{N,Vector{<:GPUBuffers}}},
-    ) where {N}
-        new{N,typeof(code_buffers),typeof(buffers)}(code_buffers, buffers)
-    end
-end
-
-"""
-$(SIGNATURES)
-
-Convenient constructor for the GPU downconverter and correlator.
-"""
-function GPUDownconvertAndCorrelator(
-    ::Type{T},
-    system_sats_states::TupleLike{<:NTuple{N,SystemSatsState}},
+function GPUSatDownconvertAndCorrelator(
+    system::AbstractGNSS,
+    correlator::AbstractCorrelator{M},
     num_samples,
-) where {T,N}
-    GPUDownconvertAndCorrelator(
-        map(convert_code_to_texture_memory, map(get_system, system_sats_states)),
-        map(system_sats_states) do system_sats_state
-            system = system_sats_state.system
-            map(system_sats_state.states) do state
-                GPUBuffers(T, system, state, num_samples)
-            end
-        end,
-    )
-end
-
-function GPUDownconvertAndCorrelator(
-    system_sats_states::TupleLike{<:NTuple{N,SystemSatsState}},
-    num_samples::Integer,
-) where {N}
-    GPUDownconvertAndCorrelator(Float32, system_sats_states, num_samples)
+) where {M}
+    GPUSatDownconvertAndCorrelator(Float32, system, correlator, num_samples)
 end
 
 import Adapt
@@ -115,41 +79,64 @@ $(SIGNATURES)
 Downconvert and correlate all available satellites on the GPU.
 """
 function downconvert_and_correlate(
-    downconvert_and_correlator::GPUDownconvertAndCorrelator,
     signal,
+    track_state::TrackState{
+        <:MultipleSystemSatsState{
+            N,
+            <:AbstractGNSS,
+            <:SatState{
+                <:AbstractCorrelator,
+                <:AbstractSatDopplerEstimator,
+                <:GPUSatDownconvertAndCorrelator,
+            },
+            <:AbstractSystemDopplerEstimator,
+            <:GPUSystemDownconvertAndCorrelator,
+        },
+    },
+    sample_params::TupleLike{<:NTuple{N,Dictionary{I,SampleParams}}},
     sampling_frequency,
     intermediate_frequency,
-    system_sats_states::TupleLike{<:NTuple{N,SystemSatsState}},
-    params::TupleLike{<:NTuple{N,Vector{SampleParams}}},
-) where {N}
-    map(
-        params,
-        system_sats_states,
-        downconvert_and_correlator.code_buffers,
-        downconvert_and_correlator.buffers,
-    ) do system_params, system_sats, system, buffers
-        map(system_params, system_sats.states, buffers) do sat_params, sat_state, buffer
-            if sat_params.signal_samples_to_integrate == 0
-                return sat_state.correlator
+    num_samples_signal::Int,
+) where {I,N}
+    new_multiple_system_sats_state = map(
+        track_state.multiple_system_sats_state,
+        sample_params,
+    ) do system_sats_state, system_sat_params
+        new_sat_states =
+            map(system_sat_params, system_sats_state.states) do sat_params, sat_state
+                if sat_params.signal_samples_to_integrate == 0
+                    return sat_state
+                end
+                carrier_frequency = sat_state.carrier_doppler + intermediate_frequency
+                code_frequency =
+                    sat_state.code_doppler + get_code_frequency(system_sats_state.system)
+                new_correlator = downconvert_and_correlate!(
+                    system_sats_state.downconvert_and_correlator.textured_system,
+                    signal,
+                    sat_state.correlator,
+                    sat_state.code_phase,
+                    sat_state.carrier_phase,
+                    code_frequency,
+                    carrier_frequency,
+                    sampling_frequency,
+                    sat_params.signal_start_sample,
+                    sat_params.signal_samples_to_integrate,
+                    sat_state.prn,
+                    sat_state.downconvert_and_correlator.downconverted_and_decoded_signal,
+                )::typeof(sat_state.correlator)
+                return update(
+                    system_sats_state.system,
+                    sat_state,
+                    sat_params,
+                    intermediate_frequency,
+                    sampling_frequency,
+                    new_correlator,
+                    num_samples_signal,
+                )
             end
-            carrier_frequency = sat_state.carrier_doppler + intermediate_frequency
-            code_frequency = sat_state.code_doppler + get_code_frequency(system)
-            downconvert_and_correlate!(
-                system,
-                signal,
-                sat_state.correlator,
-                sat_state.code_phase,
-                sat_state.carrier_phase,
-                code_frequency,
-                carrier_frequency,
-                sampling_frequency,
-                sat_params.signal_start_sample,
-                sat_params.signal_samples_to_integrate,
-                sat_state.prn,
-                buffer.downconverted_and_decoded_signal,
-            )::typeof(sat_state.correlator)
-        end
+        return SystemSatsState(system_sats_state, new_sat_states)
     end
+    return TrackState(track_state, new_multiple_system_sats_state)
 end
 
 """

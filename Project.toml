@@ -4,9 +4,11 @@ authors = ["Soeren Schoenbrod <soeren.schoenbrod@nav.rwth-aachen.de>", "Michael 
 version = "0.15.2"
 
 [deps]
+Accessors = "7d9f7c33-5ae7-4f3b-8dc6-eff91059b697"
 Acquisition = "d4bbf60b-102b-5ffb-8f97-a7ea5817e69f"
 Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+Dictionaries = "85a47980-9c8c-11e8-2b9f-f7ca1fa99fb4"
 DocStringExtensions = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
 GNSSSignals = "52c80523-2a4e-5c38-8979-05588f836870"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
@@ -18,7 +20,8 @@ Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
 [compat]
 Acquisition = "0.1.1"
-CUDA = "4.0"
+CUDA = "5.0"
+Dictionaries = "0.4.1"
 DocStringExtensions = "0.6, 0.7, 0.8, 0.9"
 GNSSSignals = "0.17.1"
 LoopVectorization = "0.8, 0.9, 0.10, 0.11, 0.12"
@@ -26,4 +29,4 @@ StaticArrays = "0.9, 0.10, 0.11, 0.12, 1.0"
 StructArrays = "0.4, 0.6.5"
 TrackingLoopFilters = "0.1"
 Unitful = "0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 1.0"
-julia = "1.6"
+julia = "1.8"

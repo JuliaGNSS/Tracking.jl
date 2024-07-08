@@ -548,3 +548,5 @@ end
 function zero_accumulators(accumulators::Vector{<:SVector{NA}}, signal) where {NA}
     zeros(real(eltype(signal)), NA, length(accumulators))
 end
+
+get_shifts(c::AbstractCorrelator) = c.shifts
