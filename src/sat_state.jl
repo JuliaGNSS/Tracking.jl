@@ -205,9 +205,9 @@ end
 function SystemSatsState(
     system::AbstractGNSS,
     states;
-    doppler_estimator::AbstractSystemDopplerEstimator = SystemConventionalPLLAndDLL(),
-    downconvert_and_correlator::AbstractSystemDownconvertAndCorrelator = CPUSystemDownconvertAndCorrelator(),
-    post_process = NoSystemPostProcess(),
+    doppler_estimator::Maybe{AbstractSystemDopplerEstimator} = SystemConventionalPLLAndDLL(),
+    downconvert_and_correlator::Maybe{AbstractSystemDownconvertAndCorrelator} = nothing,
+    post_process::Maybe{AbstractSystemPostProcess} = NoSystemPostProcess(),
 )
     SystemSatsState(
         system,
@@ -220,14 +220,17 @@ end
 
 function SystemSatsState(
     system_sats_state::SystemSatsState,
-    states::Dictionary{I,<:SatState},
+    states::Dictionary{I,<:SatState};
+    doppler_estimator = system_sats_state.doppler_estimator,
+    downconvert_and_correlator = system_sats_state.downconvert_and_correlator,
+    post_process = system_sats_state.post_process,
 ) where {I}
     SystemSatsState(
         system_sats_state.system,
         states,
-        system_sats_state.doppler_estimator,
-        system_sats_state.downconvert_and_correlator,
-        system_sats_state.post_process,
+        doppler_estimator,
+        downconvert_and_correlator,
+        post_process,
     )
 end
 

@@ -6,6 +6,7 @@ post_process(
     track_state::TrackState{
         <:MultipleSystemSatsState,
         <:AbstractTrackingDopplerEstimator,
+        <:AbstractDownconvertAndCorrelator,
         <:NoTrackingPostProcess,
     },
 ) = track_state

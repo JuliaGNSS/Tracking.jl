@@ -1,6 +1,12 @@
+struct GPUDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator end
+
 struct GPUSystemDownconvertAndCorrelator{S<:AbstractGNSS{<:CuTexture}} <:
        AbstractSystemDownconvertAndCorrelator
     textured_system::S
+end
+
+function GPUSystemDownconvertAndCorrelator(system::AbstractGNSS)
+    GPUSystemDownconvertAndCorrelator(convert_code_to_texture_memory(system))
 end
 
 """

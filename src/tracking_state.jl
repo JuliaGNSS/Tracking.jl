@@ -4,9 +4,16 @@ function TrackState(
     num_samples,
     doppler_estimator::AbstractTrackingDopplerEstimator = TrackingConventionalPLLAndDLL(),
     post_process::AbstractTrackingPostProcess = NoTrackingPostProcess(),
+    downconvert_and_correlator::AbstractDownconvertAndCorrelator = CPUDownconvertAndCorrelator(),
 )
     multiple_system_sats_state = (SystemSatsState(system, sat_states),)
-    TrackState(multiple_system_sats_state; doppler_estimator, post_process, num_samples)
+    TrackState(
+        multiple_system_sats_state;
+        doppler_estimator,
+        post_process,
+        downconvert_and_correlator,
+        num_samples,
+    )
 end
 
 function TrackState(
@@ -14,9 +21,16 @@ function TrackState(
     num_samples,
     doppler_estimator::AbstractTrackingDopplerEstimator = TrackingConventionalPLLAndDLL(),
     post_process::AbstractTrackingPostProcess = NoTrackingPostProcess(),
+    downconvert_and_correlator::AbstractDownconvertAndCorrelator = CPUDownconvertAndCorrelator(),
 )
     multiple_system_sats_state = (system_sat_states,)
-    TrackState(multiple_system_sats_state; doppler_estimator, post_process, num_samples)
+    TrackState(
+        multiple_system_sats_state;
+        doppler_estimator,
+        post_process,
+        downconvert_and_correlator,
+        num_samples,
+    )
 end
 
 function TrackState(
@@ -24,57 +38,87 @@ function TrackState(
     num_samples,
     doppler_estimator::AbstractTrackingDopplerEstimator = TrackingConventionalPLLAndDLL(),
     post_process::AbstractTrackingPostProcess = NoTrackingPostProcess(),
+    downconvert_and_correlator::AbstractDownconvertAndCorrelator = CPUDownconvertAndCorrelator(),
 ) where {N}
     TrackState(
-        initiate_downconvert_and_correlator(multiple_system_sats_state, num_samples),
+        initiate_downconvert_and_correlator(
+            downconvert_and_correlator,
+            multiple_system_sats_state,
+            num_samples,
+        ),
         doppler_estimator,
+        downconvert_and_correlator,
         post_process,
         num_samples,
     )
 end
 
-function initiate_downconvert_and_correlator(multiple_system_sats_state, num_samples)
+function initiate_downconvert_and_correlator(
+    downconvert_and_correlator,
+    multiple_system_sats_state,
+    num_samples,
+)
     multiple_system_sats_state
 end
 
 function initiate_downconvert_and_correlator(
+    downconvert_and_correlator::CPUDownconvertAndCorrelator,
     multiple_system_sats_state::MultipleSystemSatsState{
         N,
         <:AbstractGNSS,
         <:SatState{<:AbstractCorrelator,<:AbstractSatDopplerEstimator,<:Nothing},
         <:AbstractSystemDopplerEstimator,
-        <:CPUSystemDownconvertAndCorrelator,
+        <:Nothing,
     },
     num_samples::Int,
 ) where {N}
     return map(multiple_system_sats_state) do system_sats_state
         sat_states = map(system_sats_state.states) do sat_state
-            initiate_downconvert_and_correlator(
+            sat_downconvert_and_correlator = CPUSatDownconvertAndCorrelator(
                 system_sats_state.system,
-                sat_state,
+                sat_state.correlator,
                 num_samples,
             )
+            return @set sat_state.downconvert_and_correlator =
+                sat_downconvert_and_correlator
         end
-        return SystemSatsState(system_sats_state, sat_states)
+        return SystemSatsState(
+            system_sats_state,
+            sat_states;
+            downconvert_and_correlator = CPUSystemDownconvertAndCorrelator(),
+        )
     end
 end
 
 function initiate_downconvert_and_correlator(
-    system::AbstractGNSS,
-    sat_state::SatState,
+    downconvert_and_correlator::GPUDownconvertAndCorrelator,
+    multiple_system_sats_state::MultipleSystemSatsState{
+        N,
+        <:AbstractGNSS,
+        <:SatState{<:AbstractCorrelator,<:AbstractSatDopplerEstimator,<:Nothing},
+        <:AbstractSystemDopplerEstimator,
+        <:Nothing,
+    },
     num_samples::Int,
-)
-    sat_state
-end
-
-function initiate_downconvert_and_correlator(
-    system::AbstractGNSS,
-    sat_state::SatState{<:AbstractCorrelator,<:AbstractSatDopplerEstimator,<:Nothing},
-    num_samples::Int,
-)
-    downconvert_and_correlator =
-        CPUSatDownconvertAndCorrelator(system, sat_state.correlator, num_samples)
-    return @set sat_state.downconvert_and_correlator = downconvert_and_correlator
+) where {N}
+    return map(multiple_system_sats_state) do system_sats_state
+        sat_states = map(system_sats_state.states) do sat_state
+            sat_downconvert_and_correlator = GPUSatDownconvertAndCorrelator(
+                system_sats_state.system,
+                sat_state.correlator,
+                num_samples,
+            )
+            return @set sat_state.downconvert_and_correlator =
+                sat_downconvert_and_correlator
+        end
+        return SystemSatsState(
+            system_sats_state,
+            sat_states;
+            downconvert_and_correlator = GPUSystemDownconvertAndCorrelator(
+                system_sats_state.system,
+            ),
+        )
+    end
 end
 
 function TrackState(
@@ -84,6 +128,7 @@ function TrackState(
     TrackState(
         multiple_system_sats_state,
         track_state.doppler_estimator,
+        track_state.downconvert_and_correlator,
         track_state.post_process,
         track_state.num_samples,
     )
@@ -97,6 +142,7 @@ function TrackState(
     TrackState(
         multiple_system_sats_state,
         doppler_estimator,
+        track_state.downconvert_and_correlator,
         track_state.post_process,
         track_state.num_samples,
     )
@@ -192,13 +238,66 @@ function merge_sats(
         merge_sats(
             track_state.multiple_system_sats_state,
             system_idx,
-            to_dictionary(sat_states),
+            instantiate_downconvert_and_correlator(
+                track_state,
+                to_dictionary(sat_states),
+                track_state.multiple_system_sats_state[system_idx].system,
+            ),
             track_state.num_samples,
         ),
         track_state.doppler_estimator,
+        track_state.downconvert_and_correlator,
         track_state.post_process,
         track_state.num_samples,
     )
+end
+
+function instantiate_downconvert_and_correlator(track_state, sat_states, system)
+    sat_states
+end
+
+function instantiate_downconvert_and_correlator(
+    track_state::TrackState{
+        <:MultipleSystemSatsState,
+        <:AbstractTrackingDopplerEstimator,
+        <:CPUDownconvertAndCorrelator,
+    },
+    sat_states::Dictionary{
+        I,
+        <:SatState{<:AbstractCorrelator,<:Maybe{<:AbstractSatDopplerEstimator},Nothing},
+    },
+    system::AbstractGNSS,
+) where {I}
+    map(sat_states) do sat_state
+        sat_downconvert_and_correlator = CPUSatDownconvertAndCorrelator(
+            system,
+            sat_state.correlator,
+            track_state.num_samples,
+        )
+        return @set sat_state.downconvert_and_correlator = sat_downconvert_and_correlator
+    end
+end
+
+function instantiate_downconvert_and_correlator(
+    track_state::TrackState{
+        <:MultipleSystemSatsState,
+        <:AbstractTrackingDopplerEstimator,
+        <:GPUDownconvertAndCorrelator,
+    },
+    sat_states::Dictionary{
+        I,
+        <:SatState{<:AbstractCorrelator,<:Maybe{<:AbstractSatDopplerEstimator},Nothing},
+    },
+    system::AbstractGNSS,
+) where {I}
+    map(sat_states) do sat_state
+        sat_downconvert_and_correlator = GPUSatDownconvertAndCorrelator(
+            system,
+            sat_state.correlator,
+            track_state.num_samples,
+        )
+        return @set sat_state.downconvert_and_correlator = sat_downconvert_and_correlator
+    end
 end
 
 function merge_sats(

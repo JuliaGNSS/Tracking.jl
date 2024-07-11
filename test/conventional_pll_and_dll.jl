@@ -58,7 +58,7 @@ end
         Tracking.MomentsCN0Estimator(20),
         Tracking.BitBuffer(),
         doppler_estimator,
-        CPUSatDownconvertAndCorrelator(gpsl1, correlator, num_samples),
+        nothing,
         NoSatPostProcess(),
     )
 
@@ -101,7 +101,7 @@ end
         Tracking.MomentsCN0Estimator(20),
         Tracking.BitBuffer(),
         doppler_estimator,
-        CPUSatDownconvertAndCorrelator(gpsl1, correlator, num_samples),
+        nothing,
         NoSatPostProcess(),
     )
 
