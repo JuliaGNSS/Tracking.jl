@@ -121,54 +121,29 @@ end
 
     arch_function = (
         CPU = (
-            sat_downconvert_and_correlator = CPUSatDownconvertAndCorrelator,
-            system_downconvert_and_correlator = CPUSystemDownconvertAndCorrelator(),
+            downconvert_and_correlator = CPUDownconvertAndCorrelator(),
             array_transform = Array,
         ),
         GPU = (
-            sat_downconvert_and_correlator = GPUSatDownconvertAndCorrelator,
-            system_downconvert_and_correlator = CUDA.functional() &&
-                                                GPUSystemDownconvertAndCorrelator(
-                convert_code_to_texture_memory(gpsl1),
-            ),
+            downconvert_and_correlator = GPUDownconvertAndCorrelator(),
             array_transform = cu,
         ),
     )
 
-    correlator1 = get_default_correlator(gpsl1, sampling_frequency)
-    downconvert_and_correlator1 =
-        arch_function[type].sat_downconvert_and_correlator(gpsl1, correlator1, 5000)
-    correlator2 = get_default_correlator(gpsl1, sampling_frequency)
-    downconvert_and_correlator2 =
-        arch_function[type].sat_downconvert_and_correlator(gpsl1, correlator2, 5000)
-
     system_sats_state = SystemSatsState(
         gpsl1,
         [
-            SatState(
-                gpsl1,
-                1,
-                sampling_frequency,
-                code_phase,
-                1000.0Hz;
-                correlator = correlator1,
-                downconvert_and_correlator = downconvert_and_correlator1,
-            ),
-            SatState(
-                gpsl1,
-                2,
-                sampling_frequency,
-                11.0,
-                500.0Hz;
-                correlator = correlator2,
-                downconvert_and_correlator = downconvert_and_correlator2,
-            ),
+            SatState(gpsl1, 1, sampling_frequency, code_phase, 1000.0Hz),
+            SatState(gpsl1, 2, sampling_frequency, 11.0, 500.0Hz),
         ];
-        downconvert_and_correlator = arch_function[type].system_downconvert_and_correlator,
     )
     multiple_system_sats_state = (system_sats_state,)
 
-    track_state = TrackState(multiple_system_sats_state; num_samples = num_samples_signal)
+    track_state = TrackState(
+        multiple_system_sats_state;
+        num_samples = num_samples_signal,
+        downconvert_and_correlator = arch_function[type].downconvert_and_correlator,
+    )
 
     system_sats_sample_params = Tracking.init_sample_params(multiple_system_sats_state, 1)
     next_system_sats_sample_params = Tracking.calc_sample_params(

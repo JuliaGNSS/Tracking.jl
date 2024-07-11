@@ -1,4 +1,5 @@
 struct CPUSystemDownconvertAndCorrelator <: AbstractSystemDownconvertAndCorrelator end
+struct CPUDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator end
 
 """
 $(SIGNATURES)

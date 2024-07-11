@@ -48,6 +48,8 @@ export get_early,
     CPUSystemDownconvertAndCorrelator,
     GPUSatDownconvertAndCorrelator,
     GPUSystemDownconvertAndCorrelator,
+    CPUDownconvertAndCorrelator,
+    GPUDownconvertAndCorrelator,
     SystemConventionalPLLAndDLL,
     TrackingConventionalPLLAndDLL,
     NoSatPostProcess,
@@ -92,6 +94,7 @@ parent.
 """
 abstract type AbstractSatDownconvertAndCorrelator end
 abstract type AbstractSystemDownconvertAndCorrelator end
+abstract type AbstractDownconvertAndCorrelator end
 
 abstract type AbstractSatPostProcess end
 abstract type AbstractSystemPostProcess end
@@ -139,10 +142,12 @@ struct TrackState{
         <:AbstractSystemPostProcess,
     } where {N},
     DE<:AbstractTrackingDopplerEstimator,
+    DC<:AbstractDownconvertAndCorrelator,
     P<:AbstractTrackingPostProcess,
 }
     multiple_system_sats_state::S
     doppler_estimator::DE
+    downconvert_and_correlator::DC
     post_process::P
     num_samples::Int
 end
