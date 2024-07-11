@@ -44,7 +44,10 @@ using BenchmarkTools, InteractiveUtils
 
     println("Benchmark downconvert and correlate with $type:")
     versioninfo()
-    type == :GPU && !CUDA.functional() && CUDA.versioninfo()
+    if (type == :GPU && CUDA.functional())
+        display(CUDA.versioninfo())
+        display(CUDA.device())
+    end
     @btime Tracking.downconvert_and_correlate(
         $signal,
         $track_state,
