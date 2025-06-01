@@ -1,11 +1,18 @@
-using BenchmarkTools, InteractiveUtils
-@testset "Benchmark with $type" for type in (:CPU, :GPU)
+using BenchmarkTools
+using GNSSSignals
+using Unitful: Hz
+using CUDA
+using Tracking
+
+function bench_downconvert_and_correlate(
+    type;
+    num_samples_signal = 2000,
+    sampling_frequency = 5e6Hz,
+    system = GPSL1(),
+)
     type == :GPU && !CUDA.functional() && return
 
-    gpsl1 = GPSL1()
-    sampling_frequency = 5e6Hz
     code_phase = 10.5
-    num_samples_signal = 1000
     intermediate_frequency = 0.0Hz
 
     arch_function = (
@@ -20,8 +27,8 @@ using BenchmarkTools, InteractiveUtils
     )
 
     system_sats_state = SystemSatsState(
-        gpsl1,
-        [SatState(gpsl1, 1, sampling_frequency, code_phase, 1000.0Hz)];
+        system,
+        [SatState(system, 1, sampling_frequency, code_phase, 1000.0Hz)];
     )
     multiple_system_sats_state = (system_sats_state,)
 
@@ -42,15 +49,20 @@ using BenchmarkTools, InteractiveUtils
 
     signal = arch_function[type].array_transform(randn(ComplexF32, num_samples_signal))
 
-    println("Benchmark downconvert and correlate with $type:")
-    versioninfo()
     type == :GPU && !CUDA.functional() && CUDA.versioninfo()
-    @btime Tracking.downconvert_and_correlate(
+    @benchmarkable Tracking.downconvert_and_correlate(
         $signal,
         $track_state,
         $next_system_sats_sample_params,
         $sampling_frequency,
         $intermediate_frequency,
         $num_samples_signal,
-    )
+    ) evals = 10 samples = 10000
+end
+
+const SUITE = BenchmarkGroup()
+
+SUITE["downconvert and correlate"]["CPU"] = bench_downconvert_and_correlate(:CPU)
+if (CUDA.functional())
+    SUITE["downconvert and correlate"]["GPU"] = bench_downconvert_and_correlate(:GPU)
 end
