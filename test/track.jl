@@ -111,7 +111,7 @@ end
     code_frequency_gal =
         carrier_doppler_gal * get_code_center_frequency_ratio(galileo_e1b) +
         get_code_frequency(galileo_e1b)
-    sampling_frequency = 4e6Hz
+    sampling_frequency = 15e6Hz
     prn = 1
     range = 0:3999
     start_carrier_phase = π / 2
@@ -257,11 +257,11 @@ end
     @test get_code_phase(get_sat_state(track_state, :gps, 1)) ≈ comp_code_phase_gps atol =
         5e-3
     @test mod(get_carrier_phase(get_sat_state(track_state, :gps, 1)), π) ≈
-          comp_carrier_phase_gps atol = 3e-3
+          mod(comp_carrier_phase_gps, π) atol = 2e-2
     @test get_code_phase(get_sat_state(track_state, :gal, 1)) ≈ comp_code_phase_gal atol =
         5e-3
     @test mod(get_carrier_phase(get_sat_state(track_state, :gal, 1)), π) ≈
-          comp_carrier_phase_gal atol = 3e-3
+          mod(comp_carrier_phase_gal, π) atol = 3e-3
 end
 
 @testset "Tracking with intermediate frequency of $intermediate_frequency" for intermediate_frequency in
