@@ -6,6 +6,7 @@ using Tracking
 
 function bench_downconvert_and_correlate(
     type;
+    signal_type = Float32,
     num_samples_signal = 2000,
     sampling_frequency = 5e6Hz,
     system = GPSL1(),
@@ -47,22 +48,63 @@ function bench_downconvert_and_correlate(
         1,
     )
 
-    signal = arch_function[type].array_transform(randn(ComplexF32, num_samples_signal))
+    signal =
+        arch_function[type].array_transform(rand(Complex{signal_type}, num_samples_signal))
 
     type == :GPU && !CUDA.functional() && CUDA.versioninfo()
-    @benchmarkable Tracking.downconvert_and_correlate(
-        $signal,
-        $track_state,
-        $next_system_sats_sample_params,
-        $sampling_frequency,
-        $intermediate_frequency,
-        $num_samples_signal,
-    ) evals = 10 samples = 10000
+    return if PACKAGE_VERSION <= v"0.15.2"
+        @benchmarkable Tracking.downconvert_and_correlate(
+            $signal,
+            $track_state,
+            $next_system_sats_sample_params,
+            $sampling_frequency,
+            $intermediate_frequency,
+            $num_samples_signal,
+        )
+    else
+        @benchmarkable Tracking.downconvert_and_correlate(
+            $signal,
+            $track_state,
+            $next_system_sats_sample_params,
+            $sampling_frequency,
+            $intermediate_frequency,
+            $num_samples_signal,
+            $(Val(sampling_frequency)),
+        )
+    end
+end
+
+function bench_track(;
+    signal_type,
+    num_samples_signal = 2000,
+    sampling_frequency = 5e6Hz,
+    system = GPSL1(),
+)
+    track_state = TrackState(
+        system,
+        [SatState(system, 1, sampling_frequency, 0.0, 1000Hz)];
+        num_samples = num_samples_signal,
+    )
+    signal = rand(Complex{signal_type}, num_samples_signal)
+    return if PACKAGE_VERSION <= v"0.15.2"
+        @benchmarkable track($signal, $track_state, $sampling_frequency)
+    else
+        @benchmarkable track(
+            $signal,
+            $track_state,
+            $sampling_frequency,
+            maximum_expected_sampling_frequency = $(Val(sampling_frequency)),
+        )
+    end
 end
 
 const SUITE = BenchmarkGroup()
 
-SUITE["downconvert and correlate"]["CPU"] = bench_downconvert_and_correlate(:CPU)
+foreach((Int16, Int32, Float32, Float64)) do signal_type
+    SUITE["downconvert and correlate"]["CPU"][string(signal_type)] =
+        bench_downconvert_and_correlate(:CPU; signal_type)
+end
 if (CUDA.functional())
     SUITE["downconvert and correlate"]["GPU"] = bench_downconvert_and_correlate(:GPU)
 end
+SUITE["track"]["Float32"] = bench_track(; signal_type = Float32)

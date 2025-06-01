@@ -172,6 +172,7 @@ end
         sampling_frequency,
         intermediate_frequency,
         num_samples_signal,
+        Val(sampling_frequency),
     )
 
     # GPU uses floating point arithmetic and might differ a little with the fixed point arithmetic
@@ -200,6 +201,7 @@ end
         sampling_frequency,
         intermediate_frequency,
         num_samples_signal,
+        Val(sampling_frequency),
     )
 
     # GPU uses floating point arithmetic and might differ a little with the fixed point arithmetic

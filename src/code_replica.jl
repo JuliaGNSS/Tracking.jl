@@ -20,6 +20,7 @@ function gen_code_replica!(
     num_samples::Integer,
     correlator_sample_shifts::AbstractVector,
     prn::Integer,
+    maximum_expected_sampling_frequency::Val
 )
     earliest_sample_shift = correlator_sample_shifts[end]
     latest_sample_shift = correlator_sample_shifts[1]
@@ -32,6 +33,7 @@ function gen_code_replica!(
         code_frequency,
         start_code_phase,
         latest_sample_shift,
+        maximum_expected_sampling_frequency
     )
     code_replica
 end
