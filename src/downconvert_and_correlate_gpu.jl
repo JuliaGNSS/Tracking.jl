@@ -103,6 +103,7 @@ function downconvert_and_correlate(
     sampling_frequency,
     intermediate_frequency,
     num_samples_signal::Int,
+    maximum_expected_sampling_frequency::Val,
 ) where {I,N}
     new_multiple_system_sats_state = map(
         track_state.multiple_system_sats_state,

@@ -50,14 +50,26 @@ function bench_downconvert_and_correlate(
     signal = arch_function[type].array_transform(randn(ComplexF32, num_samples_signal))
 
     type == :GPU && !CUDA.functional() && CUDA.versioninfo()
-    @benchmarkable Tracking.downconvert_and_correlate(
-        $signal,
-        $track_state,
-        $next_system_sats_sample_params,
-        $sampling_frequency,
-        $intermediate_frequency,
-        $num_samples_signal,
-    ) evals = 10 samples = 10000
+    return if PACKAGE_VERSION <= v"0.15.2"
+        @benchmarkable Tracking.downconvert_and_correlate(
+            $signal,
+            $track_state,
+            $next_system_sats_sample_params,
+            $sampling_frequency,
+            $intermediate_frequency,
+            $num_samples_signal,
+        )
+    else
+        @benchmarkable Tracking.downconvert_and_correlate(
+            $signal,
+            $track_state,
+            $next_system_sats_sample_params,
+            $sampling_frequency,
+            $intermediate_frequency,
+            $num_samples_signal,
+            $(Val(sampling_frequency)),
+        )
+    end
 end
 
 const SUITE = BenchmarkGroup()

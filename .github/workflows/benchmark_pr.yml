@@ -11,6 +11,6 @@ jobs:
     steps:
       - uses: MilesCranmer/AirspeedVelocity.jl@action-v1
         with:
-          julia-version: '1.8'
+          julia-version: '1'
           extra-pkgs: CUDA,GNSSSignals,Unitful
           bench-on: ${{github.event.pull_request.head.sha}}

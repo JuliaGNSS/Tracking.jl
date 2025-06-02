@@ -56,6 +56,7 @@ function downconvert_and_correlate!(
     signal_start_sample,
     num_samples_left,
     prn,
+    maximum_expected_sampling_frequency
 )
     gen_code_replica!(
         code_replica,
@@ -67,6 +68,7 @@ function downconvert_and_correlate!(
         num_samples_left,
         correlator.shifts,
         prn,
+        maximum_expected_sampling_frequency
     )
     gen_carrier_replica!(
         carrier_replica,
