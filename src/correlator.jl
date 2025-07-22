@@ -71,7 +71,7 @@ function EarlyPromptLateCorrelator(
     system::AbstractGNSS,
     sampling_frequency;
     preferred_code_shift = 0.5,
-    preferred_early_late_to_prompt_code_shift = 0.5, # TODO: At the momemnt this must be similar to preferred_code_shift
+    preferred_early_late_to_prompt_code_shift = 0.5, # TODO: At the moment this must be similar to preferred_code_shift
     num_ants::NumAnts = NumAnts(1),
     num_accumulators = NumAccumulators(3),
 )
@@ -356,7 +356,7 @@ end
 """
 $(SIGNATURES)
 
-Update the Correlator
+Update the correlator
 """
 function update_accumulator(correlator::EarlyPromptLateCorrelator, accumulators)
     EarlyPromptLateCorrelator(
@@ -382,7 +382,7 @@ end
 """
 $(SIGNATURES)
 
-Zero the Correlator
+Zero the correlator
 """
 function zero(correlator::AbstractCorrelator)
     update_accumulator(correlator, zero(correlator.accumulators))
@@ -391,7 +391,16 @@ end
 """
 $(SIGNATURES)
 
-Filter the Correlator by the function `post_corr_filter`
+Is zero correlator
+"""
+function is_zero(correlator::AbstractCorrelator)
+    get_prompt(correlator)[1] == 0
+end
+
+"""
+$(SIGNATURES)
+
+Filter the correlator by the function `post_corr_filter`
 """
 function apply(post_corr_filter, correlator::AbstractCorrelator)
     update_accumulator(correlator, map(post_corr_filter, get_accumulators(correlator)))

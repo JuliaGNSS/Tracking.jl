@@ -1,4 +1,4 @@
-@testset "Sample parameters" begin
+@testset "Calculate number of code blocks / chips to integrate" begin
     gpsl1 = GPSL1()
 
     @test @inferred(Tracking.calc_num_code_blocks_to_integrate(gpsl1, 1, false)) == 1
@@ -11,145 +11,39 @@
     @test @inferred(Tracking.calc_num_chips_to_integrate(gpsl1, 1, 1023 + 10.5)) ==
           1023 - 10.5
     @test @inferred(Tracking.calc_num_chips_to_integrate(gpsl1, 2, 10.5)) == 2 * 1023 - 10.5
+end
 
-    code_freq = get_code_frequency(gpsl1)
-    @test @inferred(
-        Tracking.calc_num_samples_left_to_integrate(gpsl1, 1, 5e6Hz, 0.0Hz, 10.5)
-    ) == ceil(Int, (1023 - 10.5) * 5e6Hz / code_freq)
-
-    sample_params = @inferred Tracking.SampleParams(gpsl1, 1, false)
-
-    @test sample_params.signal_samples_to_integrate == 0
-    @test sample_params.signal_start_sample == 1
-    @test sample_params.samples_to_integrate_until_code_end == 0
-    @test sample_params.num_code_blocks_to_integrate == 1
-
-    num_samples_signal = 5000
-    sampling_frequency = 5e6Hz
-    code_doppler = 0.0Hz
-    code_phase = 10.5
+@testset "Calculate number of samples to integrate" begin
+    gpsl1 = GPSL1()
+    signal_start_sample = 1
+    sampling_frequency = 4MHz
+    code_doppler = -0.00022901219179036268Hz
+    code_phase = 0.0
     preferred_num_code_blocks_to_integrate = 1
-    secondary_code_or_bit_found = false
+    secondary_code_or_bit_found = true
+    num_samples_signal = 4000
 
-    next_sample_params = @inferred Tracking.SampleParams(
+    num_samples_left_to_integrate = Tracking.calc_num_samples_left_to_integrate(
         gpsl1,
-        sample_params,
-        num_samples_signal,
+        preferred_num_code_blocks_to_integrate,
         sampling_frequency,
         code_doppler,
         code_phase,
-        preferred_num_code_blocks_to_integrate,
-        secondary_code_or_bit_found,
     )
+    @test num_samples_left_to_integrate == 4001
 
-    @test next_sample_params.signal_samples_to_integrate ==
-          ceil(Int, (1023 - 10.5) * 5e6Hz / code_freq)
-    @test next_sample_params.signal_start_sample == 1
-    @test next_sample_params.samples_to_integrate_until_code_end ==
-          ceil(Int, (1023 - 10.5) * 5e6Hz / code_freq)
-    @test next_sample_params.num_code_blocks_to_integrate == 1
+    samples_to_integrate, is_integration_completed =
+        Tracking.calc_signal_samples_to_integrate(
+            gpsl1,
+            signal_start_sample,
+            sampling_frequency,
+            code_doppler,
+            code_phase,
+            preferred_num_code_blocks_to_integrate,
+            secondary_code_or_bit_found,
+            num_samples_signal,
+        )
 
-    # Bit not found -> It should default to one code block to integrate
-    next_sample_params = @inferred Tracking.SampleParams(
-        gpsl1,
-        sample_params,
-        num_samples_signal,
-        sampling_frequency,
-        code_doppler,
-        code_phase,
-        2,
-        secondary_code_or_bit_found,
-    )
-
-    @test next_sample_params.signal_samples_to_integrate ==
-          ceil(Int, (1023 - 10.5) * 5e6Hz / code_freq)
-    @test next_sample_params.signal_start_sample == 1
-    @test next_sample_params.samples_to_integrate_until_code_end ==
-          ceil(Int, (1023 - 10.5) * 5e6Hz / code_freq)
-    @test next_sample_params.num_code_blocks_to_integrate == 1
-
-    # Bit found
-    next_sample_params = @inferred Tracking.SampleParams(
-        gpsl1,
-        sample_params,
-        num_samples_signal,
-        sampling_frequency,
-        code_doppler,
-        code_phase,
-        2,
-        true,
-    )
-
-    @test next_sample_params.signal_samples_to_integrate == 5000
-    @test next_sample_params.signal_start_sample == 1
-    @test next_sample_params.samples_to_integrate_until_code_end ==
-          ceil(Int, (2 * 1023 - 10.5) * 5e6Hz / code_freq)
-    @test next_sample_params.num_code_blocks_to_integrate == 2
-
-    system_sats_state = SystemSatsState(
-        gpsl1,
-        [
-            SatState(gpsl1, 1, sampling_frequency, code_phase, 0.0Hz),
-            SatState(gpsl1, 2, sampling_frequency, 11.5, 0.0Hz),
-        ],
-    )
-
-    system_sats_sample_params =
-        @inferred Tracking.init_sample_params((system_sats_state,), 1)
-
-    @test system_sats_sample_params[1][1].signal_samples_to_integrate == 0
-    @test system_sats_sample_params[1][1].signal_start_sample == 1
-    @test system_sats_sample_params[1][1].samples_to_integrate_until_code_end == 0
-    @test system_sats_sample_params[1][1].num_code_blocks_to_integrate == 1
-
-    @test system_sats_sample_params[1][2].signal_samples_to_integrate == 0
-    @test system_sats_sample_params[1][2].signal_start_sample == 1
-    @test system_sats_sample_params[1][2].samples_to_integrate_until_code_end == 0
-    @test system_sats_sample_params[1][2].num_code_blocks_to_integrate == 1
-
-    next_system_sats_sample_params = @inferred Tracking.calc_sample_params(
-        (system_sats_state,),
-        system_sats_sample_params,
-        num_samples_signal,
-        sampling_frequency,
-        preferred_num_code_blocks_to_integrate,
-    )
-
-    @test next_system_sats_sample_params[1][1].signal_samples_to_integrate ==
-          ceil(Int, (1023 - 10.5) * 5e6Hz / code_freq)
-    @test next_system_sats_sample_params[1][1].signal_start_sample == 1
-    @test next_system_sats_sample_params[1][1].samples_to_integrate_until_code_end ==
-          ceil(Int, (1023 - 10.5) * 5e6Hz / code_freq)
-    @test next_system_sats_sample_params[1][1].num_code_blocks_to_integrate == 1
-
-    @test next_system_sats_sample_params[1][2].signal_samples_to_integrate ==
-          ceil(Int, (1023 - 11.5) * 5e6Hz / code_freq)
-    @test next_system_sats_sample_params[1][2].signal_start_sample == 1
-    @test next_system_sats_sample_params[1][2].samples_to_integrate_until_code_end ==
-          ceil(Int, (1023 - 11.5) * 5e6Hz / code_freq)
-    @test next_system_sats_sample_params[1][2].num_code_blocks_to_integrate == 1
-
-    next_next_system_sats_sample_params = @inferred Tracking.calc_sample_params(
-        (system_sats_state,),
-        next_system_sats_sample_params,
-        num_samples_signal,
-        sampling_frequency,
-        preferred_num_code_blocks_to_integrate,
-    )
-
-    @test next_next_system_sats_sample_params[1][1].signal_samples_to_integrate ==
-          5000 - ceil(Int, (1023 - 10.5) * 5e6Hz / code_freq)
-    @test next_next_system_sats_sample_params[1][1].signal_start_sample ==
-          ceil(Int, (1023 - 10.5) * 5e6Hz / code_freq) + 1
-    @test next_next_system_sats_sample_params[1][1].samples_to_integrate_until_code_end ==
-          ceil(Int, (1023 - 10.5) * 5e6Hz / code_freq)
-    @test next_next_system_sats_sample_params[1][1].num_code_blocks_to_integrate == 1
-
-    @test next_next_system_sats_sample_params[1][2].signal_samples_to_integrate ==
-          5000 - ceil(Int, (1023 - 11.5) * 5e6Hz / code_freq)
-    @test next_next_system_sats_sample_params[1][2].signal_start_sample ==
-          ceil(Int, (1023 - 11.5) * 5e6Hz / code_freq) + 1
-    @test next_next_system_sats_sample_params[1][2].samples_to_integrate_until_code_end ==
-          ceil(Int, (1023 - 11.5) * 5e6Hz / code_freq)
-    @test next_next_system_sats_sample_params[1][2].num_code_blocks_to_integrate == 1
+    @test samples_to_integrate == num_samples_signal
+    @test is_integration_completed == false
 end
