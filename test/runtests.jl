@@ -14,7 +14,6 @@ using Unitful: MHz, kHz, Hz, s, ms, dBHz
 
 include("conventional_pll_and_dll.jl")
 include("sat_state.jl")
-include("sample_parameters.jl")
 include("downconvert_and_correlate.jl")
 include("post_corr_filter.jl")
 include("code_replica.jl")

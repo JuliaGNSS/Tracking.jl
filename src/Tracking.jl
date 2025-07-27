@@ -23,10 +23,10 @@ export get_early,
     get_carrier_phase,
     get_carrier_doppler,
     get_integrated_samples,
+    get_signal_start_sample,
     get_correlator,
     get_last_fully_integrated_correlator,
     get_last_fully_integrated_filtered_prompt,
-    get_sample_of_last_fully_integrated_correlator,
     get_secondary_code_or_bit_detector,
     get_bit_buffer,
     get_bits,
@@ -133,6 +133,7 @@ struct TrackState{
         <:AbstractGNSS,
         <:SatState{
             <:AbstractCorrelator,
+            <:AbstractPostCorrFilter,
             <:AbstractSatDopplerEstimator,
             <:AbstractSatDownconvertAndCorrelator,
             <:AbstractSatPostProcess,
@@ -153,7 +154,6 @@ struct TrackState{
 end
 
 include("sample_parameters.jl")
-include("doppler_estimator.jl")
 include("downconvert_and_correlate.jl")
 include("downconvert_and_correlate_cpu.jl")
 include("downconvert_and_correlate_gpu.jl")

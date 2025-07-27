@@ -145,14 +145,7 @@ end
         downconvert_and_correlator = arch_function[type].downconvert_and_correlator,
     )
 
-    system_sats_sample_params = Tracking.init_sample_params(multiple_system_sats_state, 1)
-    next_system_sats_sample_params = Tracking.calc_sample_params(
-        multiple_system_sats_state,
-        system_sats_sample_params,
-        num_samples_signal,
-        sampling_frequency,
-        1,
-    )
+    preferred_num_code_blocks_to_integrate = 1
 
     signal = arch_function[type].array_transform(
         gen_code(
@@ -168,7 +161,7 @@ end
     next_track_state = @inferred Tracking.downconvert_and_correlate(
         signal,
         track_state,
-        next_system_sats_sample_params,
+        preferred_num_code_blocks_to_integrate,
         sampling_frequency,
         intermediate_frequency,
         num_samples_signal,
@@ -177,10 +170,10 @@ end
 
     # GPU uses floating point arithmetic and might differ a little with the fixed point arithmetic
     @test real.(
-        next_track_state.multiple_system_sats_state[1].states[1].correlator.accumulators
+        next_track_state.multiple_system_sats_state[1].states[1].last_fully_integrated_correlator.accumulators
     ) ≈ [2921, 4949, 2917] ||
           real.(
-        next_track_state.multiple_system_sats_state[1].states[1].correlator.accumulators
+        next_track_state.multiple_system_sats_state[1].states[1].last_fully_integrated_correlator.accumulators
     ) ≈ [2921, 4949, 2921]
 
     signal = arch_function[type].array_transform(
@@ -197,7 +190,7 @@ end
     next_track_state = @inferred Tracking.downconvert_and_correlate(
         signal,
         track_state,
-        next_system_sats_sample_params,
+        preferred_num_code_blocks_to_integrate,
         sampling_frequency,
         intermediate_frequency,
         num_samples_signal,
@@ -205,10 +198,10 @@ end
     )
 
     # GPU uses floating point arithmetic and might differ a little with the fixed point arithmetic
-    @test real.(
-        next_track_state.multiple_system_sats_state[1].states[2].correlator.accumulators
+    @test real.( #CPU
+        next_track_state.multiple_system_sats_state[1].states[2].last_fully_integrated_correlator.accumulators
     ) ≈ [2919, 4947, 2915] ||
-          real.(
-        next_track_state.multiple_system_sats_state[1].states[2].correlator.accumulators
+          real.( #GPU
+        next_track_state.multiple_system_sats_state[1].states[2].last_fully_integrated_correlator.accumulators
     ) ≈ [2919, 4947, 2919]
 end

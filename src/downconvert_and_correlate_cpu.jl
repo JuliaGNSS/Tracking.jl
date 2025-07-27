@@ -79,6 +79,7 @@ function downconvert_and_correlate(
             <:AbstractGNSS,
             <:SatState{
                 <:AbstractCorrelator,
+                <:AbstractPostCorrFilter,
                 <:AbstractSatDopplerEstimator,
                 <:CPUSatDownconvertAndCorrelator,
             },
@@ -86,19 +87,27 @@ function downconvert_and_correlate(
             <:CPUSystemDownconvertAndCorrelator,
         },
     },
-    sample_params::TupleLike{<:NTuple{N,Dictionary{I,SampleParams}}},
+    preferred_num_code_blocks_to_integrate::Int,
     sampling_frequency,
     intermediate_frequency,
     num_samples_signal::Int,
     maximum_expected_sampling_frequency::Val,
-) where {I,N}
-    new_multiple_system_sats_state = map(
-        track_state.multiple_system_sats_state,
-        sample_params,
-    ) do system_sats_state, system_sat_params
-        new_sat_states =
-            map(system_sat_params, system_sats_state.states) do sat_params, sat_state
-                if sat_params.signal_samples_to_integrate == 0
+) where {N}
+    new_multiple_system_sats_state =
+        map(track_state.multiple_system_sats_state) do system_sats_state
+            new_sat_states = map(system_sats_state.states) do sat_state
+                signal_samples_to_integrate, is_integration_completed =
+                    calc_signal_samples_to_integrate(
+                        system_sats_state.system,
+                        sat_state.signal_start_sample,
+                        sampling_frequency,
+                        sat_state.code_doppler,
+                        sat_state.code_phase,
+                        preferred_num_code_blocks_to_integrate,
+                        found(sat_state.sc_bit_detector),
+                        num_samples_signal,
+                    )
+                if signal_samples_to_integrate == 0
                     return sat_state
                 end
                 carrier_frequency = sat_state.carrier_doppler + intermediate_frequency
@@ -117,23 +126,23 @@ function downconvert_and_correlate(
                     code_frequency,
                     carrier_frequency,
                     sampling_frequency,
-                    sat_params.signal_start_sample,
-                    sat_params.signal_samples_to_integrate,
+                    sat_state.signal_start_sample,
+                    signal_samples_to_integrate,
                     sat_state.prn,
                     maximum_expected_sampling_frequency,
                 )::typeof(sat_state.correlator)
                 return update(
                     system_sats_state.system,
                     sat_state,
-                    sat_params,
+                    signal_samples_to_integrate,
                     intermediate_frequency,
                     sampling_frequency,
                     new_correlator,
-                    num_samples_signal,
+                    is_integration_completed,
                 )
             end
-        return SystemSatsState(system_sats_state, new_sat_states)
-    end
+            return SystemSatsState(system_sats_state, new_sat_states)
+        end
     return TrackState(track_state, new_multiple_system_sats_state)
 end
 

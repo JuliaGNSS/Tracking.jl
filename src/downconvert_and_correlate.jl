@@ -1,38 +1,39 @@
 function update(
     system::AbstractGNSS,
     sat_state::SatState,
-    sat_params::SampleParams,
+    integrated_samples::Int,
     intermediate_frequency,
     sampling_frequency,
     correlator,
-    num_samples_signal::Int,
+    is_integration_completed::Bool,
 )
     carrier_frequency = sat_state.carrier_doppler + intermediate_frequency
     code_frequency = sat_state.code_doppler + get_code_frequency(system)
     carrier_phase = update_carrier_phase(
-        sat_params.signal_samples_to_integrate,
+        integrated_samples,
         carrier_frequency,
         sampling_frequency,
         sat_state.carrier_phase,
     )
     code_phase = update_code_phase(
         system,
-        sat_params.signal_samples_to_integrate,
+        integrated_samples,
         code_frequency,
         sampling_frequency,
         sat_state.code_phase,
         found(sat_state.sc_bit_detector),
     )
-    sample_of_last_fully_integrated_correlator =
-        sat_state.sample_of_last_fully_integrated_correlator -
-        (sat_params.signal_start_sample == 1 ? num_samples_signal : 0)
+    total_integrated_samples = sat_state.integrated_samples + integrated_samples
+
     SatState(
-        sat_state,
+        sat_state;
         code_phase,
         carrier_phase,
-        sat_state.integrated_samples + sat_params.signal_samples_to_integrate,
-        correlator,
-        sample_of_last_fully_integrated_correlator,
+        integrated_samples = total_integrated_samples,
+        signal_start_sample = sat_state.signal_start_sample + integrated_samples,
+        correlator = is_integration_completed ? zero(correlator) : correlator,
+        last_fully_integrated_correlator = is_integration_completed ? correlator :
+                                           sat_state.last_fully_integrated_correlator,
     )
 end
 
@@ -56,7 +57,7 @@ function downconvert_and_correlate!(
     signal_start_sample,
     num_samples_left,
     prn,
-    maximum_expected_sampling_frequency
+    maximum_expected_sampling_frequency,
 )
     gen_code_replica!(
         code_replica,
@@ -68,7 +69,7 @@ function downconvert_and_correlate!(
         num_samples_left,
         correlator.shifts,
         prn,
-        maximum_expected_sampling_frequency
+        maximum_expected_sampling_frequency,
     )
     gen_carrier_replica!(
         carrier_replica,

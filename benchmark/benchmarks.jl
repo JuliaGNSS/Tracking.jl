@@ -39,33 +39,47 @@ function bench_downconvert_and_correlate(
         downconvert_and_correlator = arch_function[type].downconvert_and_correlator,
     )
 
-    system_sats_sample_params = Tracking.init_sample_params(multiple_system_sats_state, 1)
-    next_system_sats_sample_params = Tracking.calc_sample_params(
-        multiple_system_sats_state,
-        system_sats_sample_params,
-        num_samples_signal,
-        sampling_frequency,
-        1,
-    )
-
     signal =
         arch_function[type].array_transform(rand(Complex{signal_type}, num_samples_signal))
 
     type == :GPU && !CUDA.functional() && CUDA.versioninfo()
-    return if PACKAGE_VERSION <= v"0.15.2"
-        @benchmarkable Tracking.downconvert_and_correlate(
-            $signal,
-            $track_state,
-            $next_system_sats_sample_params,
-            $sampling_frequency,
-            $intermediate_frequency,
-            $num_samples_signal,
+    if PACKAGE_VERSION <= v"0.15.3"
+        system_sats_sample_params =
+            Tracking.init_sample_params(multiple_system_sats_state, 1)
+        next_system_sats_sample_params = Tracking.calc_sample_params(
+            multiple_system_sats_state,
+            system_sats_sample_params,
+            num_samples_signal,
+            sampling_frequency,
+            1,
         )
+
+        return if PACKAGE_VERSION <= v"0.15.2"
+            @benchmarkable Tracking.downconvert_and_correlate(
+                $signal,
+                $track_state,
+                $next_system_sats_sample_params,
+                $sampling_frequency,
+                $intermediate_frequency,
+                $num_samples_signal,
+            )
+        else
+            @benchmarkable Tracking.downconvert_and_correlate(
+                $signal,
+                $track_state,
+                $next_system_sats_sample_params,
+                $sampling_frequency,
+                $intermediate_frequency,
+                $num_samples_signal,
+                $(Val(sampling_frequency)),
+            )
+        end
     else
-        @benchmarkable Tracking.downconvert_and_correlate(
+        preferred_num_code_blocks_to_integrate = 1
+        return @benchmarkable Tracking.downconvert_and_correlate(
             $signal,
             $track_state,
-            $next_system_sats_sample_params,
+            $preferred_num_code_blocks_to_integrate,
             $sampling_frequency,
             $intermediate_frequency,
             $num_samples_signal,
