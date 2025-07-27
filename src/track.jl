@@ -5,6 +5,7 @@ function track(
     intermediate_frequency = 0.0Hz,
     preferred_num_code_blocks_to_integrate = 1,
     min_integration_time = 0.75ms,
+    maximum_expected_sampling_frequency = Val(sampling_frequency),
 ) where {TS<:TrackState}
     multiple_system_sats_state = track_state.multiple_system_sats_state
     sat_sample_params = init_sample_params(
@@ -30,6 +31,7 @@ function track(
             sampling_frequency,
             intermediate_frequency,
             num_samples_signal,
+            maximum_expected_sampling_frequency,
         )::TS
         track_state = estimate_dopplers_and_filter_prompt(
             track_state,
