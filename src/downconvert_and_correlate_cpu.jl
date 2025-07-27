@@ -90,6 +90,7 @@ function downconvert_and_correlate(
     sampling_frequency,
     intermediate_frequency,
     num_samples_signal::Int,
+    maximum_expected_sampling_frequency::Val,
 ) where {I,N}
     new_multiple_system_sats_state = map(
         track_state.multiple_system_sats_state,
@@ -119,6 +120,7 @@ function downconvert_and_correlate(
                     sat_params.signal_start_sample,
                     sat_params.signal_samples_to_integrate,
                     sat_state.prn,
+                    maximum_expected_sampling_frequency,
                 )::typeof(sat_state.correlator)
                 return update(
                     system_sats_state.system,
