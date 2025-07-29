@@ -52,3 +52,12 @@
     @test @inferred(get_bits(next_bit_buffer)) == 1
     @test @inferred(Tracking.length(next_bit_buffer)) == 1
 end
+
+@testset "Reset bit buffer" begin
+    bit_buffer = Tracking.BitBuffer(32, 8, 3.1 + 2.1im, 2)
+    reset_bit_buffer = Tracking.reset(bit_buffer)
+    @test reset_bit_buffer.buffer == 0
+    @test reset_bit_buffer.length == 0
+    @test reset_bit_buffer.prompt_accumulator == 3.1 + 2.1im
+    @test reset_bit_buffer.prompt_accumulator_integrated_code_blocks == 2
+end
