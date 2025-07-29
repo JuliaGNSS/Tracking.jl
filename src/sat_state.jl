@@ -1,10 +1,4 @@
-struct SatState{
-    C<:AbstractCorrelator,
-    PCF<:Maybe{<:AbstractPostCorrFilter},
-    DE<:Maybe{<:AbstractSatDopplerEstimator},
-    DC<:Maybe{<:AbstractSatDownconvertAndCorrelator},
-    P<:Maybe{AbstractSatPostProcess},
-}
+struct SatState{C<:AbstractCorrelator,PCF<:AbstractPostCorrFilter}
     prn::Int
     code_phase::Float64
     code_doppler::typeof(1.0Hz)
@@ -19,9 +13,6 @@ struct SatState{
     cn0_estimator::MomentsCN0Estimator
     bit_buffer::BitBuffer
     post_corr_filter::PCF
-    doppler_estimator::DE
-    downconvert_and_correlator::DC
-    post_process::P
 end
 
 get_prn(s::SatState) = s.prn
@@ -40,9 +31,6 @@ get_secondary_code_or_bit_detector(s::SatState) = s.sc_bit_detector
 get_post_corr_filter(s::SatState) = s.post_corr_filter
 get_cn0_estimator(s::SatState) = s.cn0_estimator
 get_bit_buffer(s::SatState) = s.bit_buffer
-get_doppler_estimator(s::SatState) = s.doppler_estimator
-get_downconvert_and_correlator(s::SatState) =
-    s.downconvert_and_correlator, get_post_process(s::SatState) = s.post_process
 
 function SatState(
     system::AbstractGNSS,
@@ -55,13 +43,7 @@ function SatState(
     carrier_phase = 0.0,
     code_doppler = carrier_doppler * get_code_center_frequency_ratio(system),
     num_prompts_for_cn0_estimation::Int = 100,
-    post_corr_filter::Maybe{AbstractPostCorrFilter} = DefaultPostCorrFilter(),
-    doppler_estimator::Maybe{AbstractSatDopplerEstimator} = ConventionalPLLAndDLL(
-        carrier_doppler,
-        code_doppler,
-    ),
-    downconvert_and_correlator::Maybe{AbstractSatDownconvertAndCorrelator} = nothing,
-    post_process::Maybe{AbstractSatPostProcess} = NoSatPostProcess(),
+    post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),
 )
     SatState(
         prn,
@@ -78,9 +60,6 @@ function SatState(
         MomentsCN0Estimator(num_prompts_for_cn0_estimation),
         BitBuffer(),
         post_corr_filter,
-        doppler_estimator,
-        downconvert_and_correlator,
-        post_process,
     )
 end
 
@@ -96,7 +75,7 @@ function SatState(acq::AcquisitionResults; args...)
 end
 
 function SatState(
-    sat_state::SatState{C,PCF,DE,DC,P};
+    sat_state::SatState{C,PCF};
     prn = nothing,
     code_phase = nothing,
     code_doppler = nothing,
@@ -104,24 +83,15 @@ function SatState(
     carrier_doppler = nothing,
     integrated_samples = nothing,
     signal_start_sample = nothing,
-    correlator = nothing,
+    correlator::Maybe{C} = nothing,
     last_fully_integrated_correlator = nothing,
     last_fully_integrated_filtered_prompt = nothing,
     sc_bit_detector = nothing,
     cn0_estimator = nothing,
     bit_buffer = nothing,
-    post_corr_filter = nothing,
-    doppler_estimator = nothing,
-    downconvert_and_correlator = nothing,
-    post_process = nothing,
-) where {
-    C<:AbstractCorrelator,
-    PCF<:Maybe{<:AbstractPostCorrFilter},
-    DE<:Maybe{<:AbstractSatDopplerEstimator},
-    DC<:Maybe{<:AbstractSatDownconvertAndCorrelator},
-    P<:Maybe{AbstractSatPostProcess},
-}
-    SatState{C,PCF,DE,DC,P}(
+    post_corr_filter::Maybe{PCF} = nothing,
+) where {C<:AbstractCorrelator,PCF<:AbstractPostCorrFilter}
+    SatState{C,PCF}(
         isnothing(prn) ? sat_state.prn : prn,
         isnothing(code_phase) ? sat_state.code_phase : code_phase,
         isnothing(code_doppler) ? sat_state.code_doppler : code_doppler,
@@ -140,88 +110,51 @@ function SatState(
         isnothing(cn0_estimator) ? sat_state.cn0_estimator : cn0_estimator,
         isnothing(bit_buffer) ? sat_state.bit_buffer : bit_buffer,
         isnothing(post_corr_filter) ? sat_state.post_corr_filter : post_corr_filter,
-        isnothing(doppler_estimator) ? sat_state.doppler_estimator : doppler_estimator,
-        isnothing(downconvert_and_correlator) ? sat_state.downconvert_and_correlator :
-        downconvert_and_correlator,
-        isnothing(post_process) ? sat_state.post_process : post_process,
     )
 end
 
-function SatState(
-    sat_state::SatState{C,PCF,DE,Nothing,P},
-    downconvert_and_correlator::DC,
-) where {
-    C<:AbstractCorrelator,
-    PCF<:Maybe{<:AbstractPostCorrFilter},
-    DE<:Maybe{<:AbstractSatDopplerEstimator},
-    DC<:AbstractSatDownconvertAndCorrelator,
-    P<:Maybe{AbstractSatPostProcess},
-}
-    SatState{C,PCF,DE,DC,P}(
-        sat_state.prn,
-        sat_state.code_phase,
-        sat_state.code_doppler,
-        sat_state.carrier_phase,
-        sat_state.carrier_doppler,
-        sat_state.integrated_samples,
-        sat_state.signal_start_sample,
-        sat_state.correlator,
-        sat_state.last_fully_integrated_correlator,
-        sat_state.last_fully_integrated_filtered_prompt,
-        sat_state.sc_bit_detector,
-        sat_state.cn0_estimator,
-        sat_state.bit_buffer,
-        sat_state.post_corr_filter,
-        sat_state.doppler_estimator,
-        downconvert_and_correlator,
-        sat_state.post_process,
-    )
+function reset_start_sample_and_bit_buffer(sat_state)
+    SatState(sat_state; signal_start_sample = 1, bit_buffer = reset(sat_state.bit_buffer))
 end
 
-function reset_start_sample(sat_state)
-    SatState(sat_state; signal_start_sample = 1)
-end
-
-struct SystemSatsState{
-    S<:AbstractGNSS,
-    SS<:SatState,
-    DE<:Maybe{AbstractSystemDopplerEstimator},
-    DC<:Maybe{AbstractSystemDownconvertAndCorrelator},
-    P<:Maybe{AbstractSystemPostProcess},
-    I,
-}
+struct SystemSatsState{S<:AbstractGNSS,SS<:SatState,I}
     system::S
     states::Dictionary{I,SS}
-    doppler_estimator::DE
-    downconvert_and_correlator::DC
-    post_process::P
 end
 
-const MultipleSystemSatsState{N,S,SS,DE,DC,P,I} =
-    TupleLike{<:NTuple{N,SystemSatsState{<:S,<:SS,<:DE,<:DC,<:P,<:I}}}
+const MultipleSystemSatsState{N,I,S,SS} =
+    TupleLike{<:NTuple{N,SystemSatsState{<:S,<:SS,<:I}}}
 
 function merge_sats(
     multiple_system_sats_state::MultipleSystemSatsState{N},
     system_idx,
     new_sat_states::Dictionary{I,<:SatState},
-    num_samples::Int,
 ) where {N,I}
     system_sats_state = get_system_sats_state(multiple_system_sats_state, system_idx)
-    initiated_new_sat_states = map(
-        sat_state -> initiate_downconvert_and_correlator(
-            system_sats_state.system,
-            sat_state,
-            num_samples,
-        ),
-        new_sat_states,
-    )
     @set multiple_system_sats_state[system_idx].states =
-        merge(system_sats_state.states, initiated_new_sat_states)
+        merge(system_sats_state.states, new_sat_states)
 end
 
-function reset_start_sample(multiple_system_sats_state::MultipleSystemSatsState)
+function filter_out_sats(
+    multiple_system_sats_state::MultipleSystemSatsState,
+    system_idx::Union{Symbol,Integer},
+    identifiers,
+)
+    filtered_sat_states = map(
+        last,
+        filter(
+            ((id,),) -> !in(id, identifiers),
+            pairs(multiple_system_sats_state[system_idx].states),
+        ),
+    )
+    @set multiple_system_sats_state[system_idx].states = filtered_sat_states
+end
+
+function reset_start_sample_and_bit_buffer(
+    multiple_system_sats_state::MultipleSystemSatsState,
+)
     map(multiple_system_sats_state) do system_sats_state
-        new_sat_states = map(reset_start_sample, system_sats_state.states)
+        new_sat_states = map(reset_start_sample_and_bit_buffer, system_sats_state.states)
         SystemSatsState(system_sats_state, new_sat_states)
     end
 end
@@ -238,43 +171,20 @@ function to_dictionary(sat_state::SatState)
     dictionary((get_prn(sat_state) => sat_state,))
 end
 
-function SystemSatsState(
-    system::AbstractGNSS,
-    states;
-    doppler_estimator::Maybe{AbstractSystemDopplerEstimator} = SystemConventionalPLLAndDLL(),
-    downconvert_and_correlator::Maybe{AbstractSystemDownconvertAndCorrelator} = nothing,
-    post_process::Maybe{AbstractSystemPostProcess} = NoSystemPostProcess(),
-)
-    SystemSatsState(
-        system,
-        to_dictionary(states),
-        doppler_estimator,
-        downconvert_and_correlator,
-        post_process,
-    )
+function SystemSatsState(system::AbstractGNSS, states;)
+    SystemSatsState(system, to_dictionary(states))
 end
 
 function SystemSatsState(
     system_sats_state::SystemSatsState,
     states::Dictionary{I,<:SatState};
-    doppler_estimator = system_sats_state.doppler_estimator,
-    downconvert_and_correlator = system_sats_state.downconvert_and_correlator,
-    post_process = system_sats_state.post_process,
 ) where {I}
-    SystemSatsState(
-        system_sats_state.system,
-        states,
-        doppler_estimator,
-        downconvert_and_correlator,
-        post_process,
-    )
+    SystemSatsState(system_sats_state.system, states)
 end
 
 get_system(sss::SystemSatsState) = sss.system
 get_states(sss::SystemSatsState) = sss.states
 get_sat_state(sss::SystemSatsState, identifier) = sss.states[identifier]
-get_downconvert_and_correlator(sss::SystemSatsState) = sss.downconvert_and_correlator
-get_post_process(sss::SystemSatsState) = sss.post_process
 
 function estimate_cn0(sss::SystemSatsState, sat_identifier)
     system = sss.system

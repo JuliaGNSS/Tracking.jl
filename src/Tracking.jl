@@ -9,6 +9,7 @@ using StructArrays
 using TrackingLoopFilters
 using Dictionaries
 using Accessors
+using ConstructionBase
 
 using Acquisition: AcquisitionResults
 using Unitful: upreferred, Hz, dBHz, ms
@@ -45,16 +46,10 @@ export get_early,
     SatState,
     SystemSatsState,
     CPUSatDownconvertAndCorrelator,
-    CPUSystemDownconvertAndCorrelator,
     GPUSatDownconvertAndCorrelator,
     GPUSystemDownconvertAndCorrelator,
     CPUDownconvertAndCorrelator,
     GPUDownconvertAndCorrelator,
-    SystemConventionalPLLAndDLL,
-    TrackingConventionalPLLAndDLL,
-    NoSatPostProcess,
-    NoSystemPostProcess,
-    NoTrackingPostProcess,
     ConventionalPLLAndDLL,
     DefaultPostCorrFilter,
     TrackState,
@@ -81,9 +76,7 @@ NumAccumulators(x) = NumAccumulators{x}()
 
 TupleLike{T<:Tuple} = Union{T,NamedTuple{<:Any,T}}
 
-abstract type AbstractSatDopplerEstimator end
-abstract type AbstractSystemDopplerEstimator end
-abstract type AbstractTrackingDopplerEstimator end
+abstract type AbstractDopplerEstimator{N,I} end
 
 """
 $(SIGNATURES)
@@ -92,13 +85,7 @@ Abstract downconverter and correlator type. Structs for
 downconversion and correlation must have this abstract type as a
 parent.
 """
-abstract type AbstractSatDownconvertAndCorrelator end
-abstract type AbstractSystemDownconvertAndCorrelator end
-abstract type AbstractDownconvertAndCorrelator end
-
-abstract type AbstractSatPostProcess end
-abstract type AbstractSystemPostProcess end
-abstract type AbstractTrackingPostProcess end
+abstract type AbstractDownconvertAndCorrelator{N,I} end
 
 """
 $(SIGNATURES)
@@ -127,29 +114,17 @@ include("gpsl5.jl")
 include("galileo_e1b.jl")
 include("sat_state.jl")
 
+const MultipleSystemType{N,T} = TupleLike{<:NTuple{N,T}}
+const MultipleSystemSatType{N,I,T} = MultipleSystemType{N,Dictionary{I,T}}
+
 struct TrackState{
-    S<:MultipleSystemSatsState{
-        N,
-        <:AbstractGNSS,
-        <:SatState{
-            <:AbstractCorrelator,
-            <:AbstractPostCorrFilter,
-            <:AbstractSatDopplerEstimator,
-            <:AbstractSatDownconvertAndCorrelator,
-            <:AbstractSatPostProcess,
-        },
-        <:AbstractSystemDopplerEstimator,
-        <:AbstractSystemDownconvertAndCorrelator,
-        <:AbstractSystemPostProcess,
-    } where {N},
-    DE<:AbstractTrackingDopplerEstimator,
+    S<:MultipleSystemSatsState,
+    DE<:AbstractDopplerEstimator,
     DC<:AbstractDownconvertAndCorrelator,
-    P<:AbstractTrackingPostProcess,
 }
     multiple_system_sats_state::S
     doppler_estimator::DE
     downconvert_and_correlator::DC
-    post_process::P
     num_samples::Int
 end
 
@@ -159,6 +134,5 @@ include("downconvert_and_correlate_cpu.jl")
 include("downconvert_and_correlate_gpu.jl")
 include("conventional_pll_and_dll.jl")
 include("tracking_state.jl")
-include("post_process.jl")
 include("track.jl")
 end

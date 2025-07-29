@@ -79,6 +79,7 @@ end
         gpsl1,
         [SatState(gpsl1, prn, sampling_frequency, start_code_phase, carrier_doppler)];
         num_samples,
+        maximum_expected_sampling_frequency = Val(sampling_frequency),
     )
 
     for i = 1:100
