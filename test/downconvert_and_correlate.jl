@@ -49,65 +49,47 @@
         SystemSatsState(galileo_e1b, [SatState(galileo_e1b, 1, 5e6Hz, 10.0, 500.0Hz)]),
     )
 
-    track_state = TrackState(multiple_system_sats_state; num_samples)
+    track_state = TrackState(
+        multiple_system_sats_state;
+        num_samples,
+        maximum_expected_sampling_frequency = Val(5e6Hz),
+    )
 
-    @test size(
-        get_sat_state(track_state, 1, 1).downconvert_and_correlator.code_replica_buffer,
-    ) == (5004,)
+    @test size(track_state.downconvert_and_correlator.buffers[1][1].code_replica_buffer) ==
+          (5004,)
     @test eltype(
-        get_sat_state(track_state, 1, 1).downconvert_and_correlator.code_replica_buffer,
+        track_state.downconvert_and_correlator.buffers[1][1].code_replica_buffer,
     ) == Int16
     @test size(
-        get_sat_state(track_state, 1, 1).downconvert_and_correlator.carrier_replica_buffer,
+        track_state.downconvert_and_correlator.buffers[1][1].carrier_replica_buffer,
     ) == (5000,)
     @test eltype(
-        get_sat_state(track_state, 1, 1).downconvert_and_correlator.carrier_replica_buffer,
+        track_state.downconvert_and_correlator.buffers[1][1].carrier_replica_buffer,
     ) == ComplexF32
     @test size(
-        get_sat_state(
-            track_state,
-            1,
-            1,
-        ).downconvert_and_correlator.downconvert_signal_buffer,
+        track_state.downconvert_and_correlator.buffers[1][1].downconvert_signal_buffer,
     ) == (5000,)
     @test eltype(
-        get_sat_state(
-            track_state,
-            1,
-            1,
-        ).downconvert_and_correlator.downconvert_signal_buffer,
+        track_state.downconvert_and_correlator.buffers[1][1].downconvert_signal_buffer,
     ) == ComplexF32
-    @test typeof(get_system_sats_state(track_state, 1).downconvert_and_correlator) <:
-          CPUSystemDownconvertAndCorrelator
 
-    @test size(
-        get_sat_state(track_state, 2, 1).downconvert_and_correlator.code_replica_buffer,
-    ) == (5006,)
+    @test size(track_state.downconvert_and_correlator.buffers[2][1].code_replica_buffer) ==
+          (5006,)
     @test eltype(
-        get_sat_state(track_state, 2, 1).downconvert_and_correlator.code_replica_buffer,
+        track_state.downconvert_and_correlator.buffers[2][1].code_replica_buffer,
     ) == Float32
     @test size(
-        get_sat_state(track_state, 2, 1).downconvert_and_correlator.carrier_replica_buffer,
+        track_state.downconvert_and_correlator.buffers[2][1].carrier_replica_buffer,
     ) == (5000,)
     @test eltype(
-        get_sat_state(track_state, 2, 1).downconvert_and_correlator.carrier_replica_buffer,
+        track_state.downconvert_and_correlator.buffers[2][1].carrier_replica_buffer,
     ) == ComplexF32
     @test size(
-        get_sat_state(
-            track_state,
-            2,
-            1,
-        ).downconvert_and_correlator.downconvert_signal_buffer,
+        track_state.downconvert_and_correlator.buffers[2][1].downconvert_signal_buffer,
     ) == (5000,)
     @test eltype(
-        get_sat_state(
-            track_state,
-            2,
-            1,
-        ).downconvert_and_correlator.downconvert_signal_buffer,
+        track_state.downconvert_and_correlator.buffers[2][1].downconvert_signal_buffer,
     ) == ComplexF32
-    @test typeof(get_system_sats_state(track_state, 2).downconvert_and_correlator) <:
-          CPUSystemDownconvertAndCorrelator
 end
 
 @testset "Downconvert and correlate with $type" for type in (:CPU, :GPU)
@@ -119,17 +101,6 @@ end
     num_samples_signal = 5000
     intermediate_frequency = 0.0Hz
 
-    arch_function = (
-        CPU = (
-            downconvert_and_correlator = CPUDownconvertAndCorrelator(),
-            array_transform = Array,
-        ),
-        GPU = (
-            downconvert_and_correlator = GPUDownconvertAndCorrelator(),
-            array_transform = cu,
-        ),
-    )
-
     system_sats_state = SystemSatsState(
         gpsl1,
         [
@@ -139,15 +110,28 @@ end
     )
     multiple_system_sats_state = (system_sats_state,)
 
+    maximum_expected_sampling_frequency = Val(sampling_frequency)
+
+    downconvert_and_correlator =
+        type == :CPU ?
+        CPUDownconvertAndCorrelator(
+            maximum_expected_sampling_frequency,
+            multiple_system_sats_state,
+            num_samples_signal,
+        ) : GPUDownconvertAndCorrelator(multiple_system_sats_state, num_samples_signal)
+
+    array_transform = type == :CPU ? Array : cu
+
     track_state = TrackState(
         multiple_system_sats_state;
         num_samples = num_samples_signal,
-        downconvert_and_correlator = arch_function[type].downconvert_and_correlator,
+        downconvert_and_correlator,
+        maximum_expected_sampling_frequency,
     )
 
     preferred_num_code_blocks_to_integrate = 1
 
-    signal = arch_function[type].array_transform(
+    signal = array_transform(
         gen_code(
             num_samples_signal,
             gpsl1,
@@ -165,7 +149,6 @@ end
         sampling_frequency,
         intermediate_frequency,
         num_samples_signal,
-        Val(sampling_frequency),
     )
 
     # GPU uses floating point arithmetic and might differ a little with the fixed point arithmetic
@@ -176,7 +159,7 @@ end
         next_track_state.multiple_system_sats_state[1].states[1].last_fully_integrated_correlator.accumulators
     ) ≈ [2921, 4949, 2921]
 
-    signal = arch_function[type].array_transform(
+    signal = array_transform(
         gen_code(
             num_samples_signal,
             gpsl1,
@@ -194,7 +177,6 @@ end
         sampling_frequency,
         intermediate_frequency,
         num_samples_signal,
-        Val(sampling_frequency),
     )
 
     # GPU uses floating point arithmetic and might differ a little with the fixed point arithmetic

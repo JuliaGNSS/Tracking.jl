@@ -16,6 +16,7 @@
         gpsl1,
         [SatState(gpsl1, 1, sampling_frequency, start_code_phase, carrier_doppler - 20Hz)];
         num_samples,
+        maximum_expected_sampling_frequency = Val(sampling_frequency),
     )
 
     signal_temp =
@@ -146,6 +147,7 @@ end
             ),
         );
         num_samples,
+        maximum_expected_sampling_frequency = Val(sampling_frequency),
     )
 
     signal_temp =
@@ -287,6 +289,7 @@ end
         gpsl1,
         [SatState(gpsl1, 1, sampling_frequency, start_code_phase, carrier_doppler - 20Hz)];
         num_samples,
+        maximum_expected_sampling_frequency = Val(sampling_frequency),
     )
 
     signal =
@@ -405,6 +408,7 @@ end
             ),
         ];
         num_samples,
+        maximum_expected_sampling_frequency = Val(sampling_frequency),
     )
 
     signal =
@@ -515,23 +519,20 @@ end
             carrier_doppler - 20Hz;
             num_ants,
             correlator,
-            downconvert_and_correlator = GPUSatDownconvertAndCorrelator(
-                gpsl1,
-                correlator,
-                5000,
-            ),
         ),
     ]
 
-    system_sats_state = SystemSatsState(
-        gpsl1,
-        sat_states;
-        downconvert_and_correlator = GPUSystemDownconvertAndCorrelator(
-            convert_code_to_texture_memory(gpsl1),
+    system_sats_state = SystemSatsState(gpsl1, sat_states)
+
+    track_state = @inferred TrackState(
+        system_sats_state;
+        num_samples,
+        maximum_expected_sampling_frequency = Val(sampling_frequency),
+        downconvert_and_correlator = GPUDownconvertAndCorrelator(
+            (system_sats_state,),
+            num_samples,
         ),
     )
-
-    track_state = @inferred TrackState(system_sats_state; num_samples)
 
     signal =
         cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase) .*

@@ -57,3 +57,12 @@ function buffer(
         )
     end
 end
+
+function reset(bit_buffer::BitBuffer)
+    BitBuffer(
+        0,
+        0,
+        bit_buffer.prompt_accumulator,
+        bit_buffer.prompt_accumulator_integrated_code_blocks,
+    )
+end

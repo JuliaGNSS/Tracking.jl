@@ -1,23 +1,11 @@
-struct GPUDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator end
-
-struct GPUSystemDownconvertAndCorrelator{S<:AbstractGNSS{<:CuTexture}} <:
-       AbstractSystemDownconvertAndCorrelator
-    textured_system::S
-end
-
-function GPUSystemDownconvertAndCorrelator(system::AbstractGNSS)
-    GPUSystemDownconvertAndCorrelator(convert_code_to_texture_memory(system))
-end
-
 """
 $(SIGNATURES)
 
 A buffer that holds GPU buffers for necessary replicas and downconverted
 signal.
 """
-struct GPUSatDownconvertAndCorrelator{T,DS<:CuArray{Complex{T},3}} <:
-       AbstractSatDownconvertAndCorrelator
-    downconverted_and_decoded_signal::DS
+struct GPUSatDownconvertAndCorrelator{T}
+    downconverted_and_decoded_signal::CuArray{Complex{T},3}
 end
 
 """
@@ -28,7 +16,6 @@ satellite.
 """
 function GPUSatDownconvertAndCorrelator(
     ::Type{T},
-    system::AbstractGNSS,
     correlator::AbstractCorrelator{M},
     num_samples,
 ) where {T,M}
@@ -44,11 +31,70 @@ Convenient constructor to initialize buffers for the GPU with the correct length
 satellite. This constructor uses Float32 as the sample data type.
 """
 function GPUSatDownconvertAndCorrelator(
-    system::AbstractGNSS,
     correlator::AbstractCorrelator{M},
     num_samples,
 ) where {M}
-    GPUSatDownconvertAndCorrelator(Float32, system, correlator, num_samples)
+    GPUSatDownconvertAndCorrelator(Float32, correlator, num_samples)
+end
+
+struct GPUSystemDownconvertAndCorrelator{I,T,S<:AbstractGNSS{<:CuTexture}}
+    buffers::Dictionary{I,GPUSatDownconvertAndCorrelator{T}}
+    textured_system::S
+end
+
+struct GPUDownconvertAndCorrelator{N,I,T<:GPUSystemDownconvertAndCorrelator{I}} <:
+       AbstractDownconvertAndCorrelator{N,I}
+    buffers::MultipleSystemType{N,T}
+end
+
+function GPUDownconvertAndCorrelator(
+    multiple_system_sats_state::MultipleSystemSatsState,
+    num_samples::Int,
+)
+    buffers = map(multiple_system_sats_state) do system_sats_state
+        buffers = map(system_sats_state.states) do sat_state
+            GPUSatDownconvertAndCorrelator(Float32, sat_state.correlator, num_samples)
+        end
+        GPUSystemDownconvertAndCorrelator(
+            buffers,
+            convert_code_to_texture_memory(system_sats_state.system),
+        )
+    end
+    GPUDownconvertAndCorrelator(buffers)
+end
+
+function merge_sats(
+    downconvert_and_correlator::GPUDownconvertAndCorrelator{N,I,G},
+    system_idx,
+    sats_state::Dictionary{I,<:SatState},
+    num_samples::Int,
+) where {N,I,T,G<:GPUSystemDownconvertAndCorrelator{I,T}}
+    system_sats_state = get_system_sats_state(multiple_system_sats_state, system_idx)
+    new_buffers = map(sats_state) do sat_state
+        GPUSatDownconvertAndCorrelator{T}(
+            T,
+            system_sats_state.system,
+            sat_state.correlator,
+            num_samples,
+        )
+    end
+    @set downconvert_and_correlator.buffers[system_idx].buffers =
+        merge(downconvert_and_correlator.buffers[system_idx].buffers, new_buffers)
+end
+
+function filter_out_sats(
+    downconvert_and_correlator::GPUDownconvertAndCorrelator,
+    system_idx::Union{Symbol,Integer},
+    identifiers,
+)
+    filtered_buffers = map(
+        last,
+        filter(
+            ((id,),) -> !in(id, identifiers),
+            pairs(downconvert_and_correlator.buffers[system_idx].buffers),
+        ),
+    )
+    @set downconvert_and_correlator.buffers[system_idx].buffers = filtered_buffers
 end
 
 import Adapt
@@ -87,28 +133,21 @@ Downconvert and correlate all available satellites on the GPU.
 function downconvert_and_correlate(
     signal,
     track_state::TrackState{
-        <:MultipleSystemSatsState{
-            N,
-            <:AbstractGNSS,
-            <:SatState{
-                <:AbstractCorrelator,
-                <:AbstractPostCorrFilter,
-                <:AbstractSatDopplerEstimator,
-                <:GPUSatDownconvertAndCorrelator,
-            },
-            <:AbstractSystemDopplerEstimator,
-            <:GPUSystemDownconvertAndCorrelator,
-        },
+        <:MultipleSystemSatsState,
+        <:AbstractDopplerEstimator,
+        <:GPUDownconvertAndCorrelator,
     },
     preferred_num_code_blocks_to_integrate::Int,
     sampling_frequency,
     intermediate_frequency,
     num_samples_signal::Int,
-    maximum_expected_sampling_frequency::Val,
-) where {N}
-    new_multiple_system_sats_state =
-        map(track_state.multiple_system_sats_state) do system_sats_state
-            new_sat_states = map(system_sats_state.states) do sat_state
+)
+    new_multiple_system_sats_state = map(
+        track_state.multiple_system_sats_state,
+        track_state.downconvert_and_correlator.buffers,
+    ) do system_sats_state, system_buffers
+        new_sat_states =
+            map(system_sats_state.states, system_buffers.buffers) do sat_state, buffer
                 signal_samples_to_integrate, is_integration_completed =
                     calc_signal_samples_to_integrate(
                         system_sats_state.system,
@@ -127,7 +166,7 @@ function downconvert_and_correlate(
                 code_frequency =
                     sat_state.code_doppler + get_code_frequency(system_sats_state.system)
                 new_correlator = downconvert_and_correlate!(
-                    system_sats_state.downconvert_and_correlator.textured_system,
+                    system_buffers.textured_system,
                     signal,
                     sat_state.correlator,
                     sat_state.code_phase,
@@ -138,7 +177,7 @@ function downconvert_and_correlate(
                     sat_state.signal_start_sample,
                     signal_samples_to_integrate,
                     sat_state.prn,
-                    sat_state.downconvert_and_correlator.downconverted_and_decoded_signal,
+                    buffer.downconverted_and_decoded_signal,
                 )::typeof(sat_state.correlator)
                 return update(
                     system_sats_state.system,
@@ -150,9 +189,12 @@ function downconvert_and_correlate(
                     is_integration_completed,
                 )
             end
-            return SystemSatsState(system_sats_state, new_sat_states)
-        end
-    return TrackState(track_state, new_multiple_system_sats_state)
+        return SystemSatsState(system_sats_state, new_sat_states)
+    end
+    return TrackState(
+        track_state;
+        multiple_system_sats_state = new_multiple_system_sats_state,
+    )
 end
 
 """
