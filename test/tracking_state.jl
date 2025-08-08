@@ -7,17 +7,19 @@
         SatState(gpsl1, 2, sampling_frequency, 11.5, 20.0Hz),
     ]
 
-    track_state = @inferred TrackState(gpsl1, sat_states; num_samples)
+    track_state = @inferred TrackState(
+        gpsl1,
+        sat_states;
+        num_samples,
+        maximum_expected_sampling_frequency = Val(sampling_frequency),
+    )
 
     @test get_system(track_state) isa GPSL1
     @test get_sat_state(track_state, 1).prn == 1
     @test get_sat_state(track_state, 2).prn == 2
 
-    @test get_sat_state(track_state, 1, 1).doppler_estimator.init_carrier_doppler == 10.0Hz
-    @test get_sat_state(track_state, 1, 2).doppler_estimator.init_carrier_doppler == 20.0Hz
-
-    @test get_system_sats_state(track_state, 1).downconvert_and_correlator isa
-          CPUSystemDownconvertAndCorrelator
+    @test track_state.doppler_estimator.states[1][1].init_carrier_doppler == 10.0Hz
+    @test track_state.doppler_estimator.states[1][2].init_carrier_doppler == 20.0Hz
 
     system_sats_states = (
         SystemSatsState(
@@ -29,67 +31,49 @@
         ),
     )
 
-    track_state = @inferred TrackState(system_sats_states; num_samples)
+    track_state = @inferred TrackState(
+        system_sats_states;
+        num_samples,
+        maximum_expected_sampling_frequency = Val(sampling_frequency),
+    )
 
     @test @inferred(get_system(track_state)) isa GPSL1
     @test @inferred(get_sat_state(track_state, 1)).prn == 1
     @test @inferred(get_sat_state(track_state, 2)).prn == 2
 
-    @test get_sat_state(track_state, 1, 1).doppler_estimator.init_carrier_doppler == 10.0Hz
-    @test get_sat_state(track_state, 1, 2).doppler_estimator.init_carrier_doppler == 20.0Hz
-
-    @test get_system_sats_state(track_state, 1).downconvert_and_correlator isa
-          CPUSystemDownconvertAndCorrelator
+    @test track_state.doppler_estimator.states[1][1].init_carrier_doppler == 10.0Hz
+    @test track_state.doppler_estimator.states[1][2].init_carrier_doppler == 20.0Hz
 
     sat_states_num_ants2 = [
         SatState(gpsl1, 1, sampling_frequency, 10.5, 10.0Hz; num_ants = NumAnts(2)),
         SatState(gpsl1, 2, sampling_frequency, 11.5, 20.0Hz; num_ants = NumAnts(2)),
     ]
 
-    track_state = @inferred TrackState(gpsl1, sat_states_num_ants2; num_samples)
+    track_state = @inferred TrackState(
+        gpsl1,
+        sat_states_num_ants2;
+        num_samples,
+        maximum_expected_sampling_frequency = Val(sampling_frequency),
+    )
 
-    @test get_system_sats_state(track_state, 1).downconvert_and_correlator isa
-          CPUSystemDownconvertAndCorrelator
-    @test get_sat_state(
-        track_state,
-        1,
-        1,
-    ).downconvert_and_correlator.downconvert_signal_buffer isa AbstractMatrix
+    @test track_state.downconvert_and_correlator.buffers[1][1].downconvert_signal_buffer isa
+          AbstractMatrix
     @test size(
-        get_sat_state(
-            track_state,
-            1,
-            1,
-        ).downconvert_and_correlator.downconvert_signal_buffer,
+        track_state.downconvert_and_correlator.buffers[1][1].downconvert_signal_buffer,
         2,
     ) == 2
     @test size(
-        get_sat_state(
-            track_state,
-            1,
-            1,
-        ).downconvert_and_correlator.downconvert_signal_buffer,
+        track_state.downconvert_and_correlator.buffers[1][1].downconvert_signal_buffer,
         1,
     ) == 5000
-    @test get_sat_state(
-        track_state,
-        1,
-        2,
-    ).downconvert_and_correlator.downconvert_signal_buffer isa AbstractMatrix
+    @test track_state.downconvert_and_correlator.buffers[1][2].downconvert_signal_buffer isa
+          AbstractMatrix
     @test size(
-        get_sat_state(
-            track_state,
-            1,
-            2,
-        ).downconvert_and_correlator.downconvert_signal_buffer,
+        track_state.downconvert_and_correlator.buffers[1][2].downconvert_signal_buffer,
         2,
     ) == 2
     @test size(
-        get_sat_state(
-            track_state,
-            1,
-            2,
-        ).downconvert_and_correlator.downconvert_signal_buffer,
+        track_state.downconvert_and_correlator.buffers[1][2].downconvert_signal_buffer,
         1,
     ) == 5000
 end
@@ -103,7 +87,12 @@ end
         SatState(gpsl1, 2, sampling_frequency, 11.5, 20.0Hz),
     ]
 
-    track_state = @inferred TrackState(gpsl1, sat_states; num_samples)
+    track_state = @inferred TrackState(
+        gpsl1,
+        sat_states;
+        num_samples,
+        maximum_expected_sampling_frequency = Val(sampling_frequency),
+    )
 
     new_track_state = @inferred merge_sats(
         track_state,
@@ -164,7 +153,11 @@ end
         ),
     )
 
-    track_state = @inferred TrackState(system_sats_states; num_samples)
+    track_state = @inferred TrackState(
+        system_sats_states;
+        num_samples,
+        maximum_expected_sampling_frequency = Val(sampling_frequency),
+    )
 
     new_track_state = @inferred merge_sats(
         track_state,
