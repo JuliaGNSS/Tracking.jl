@@ -10,7 +10,7 @@
     @test get_signal_start_sample(sat_state) == 1
     @test get_correlator(sat_state).accumulators == zeros(3)
     @test get_last_fully_integrated_correlator(sat_state).accumulators == zeros(3)
-    @test Tracking.found(get_secondary_code_or_bit_detector(sat_state)) == false
+    @test has_bit_or_secondary_code_been_found(sat_state) == false
     @test length(get_bit_buffer(sat_state)) == 0
 
     acq = AcquisitionResults(
@@ -34,6 +34,6 @@
     @test get_correlator(sat_state).accumulators == zeros(3)
     @test get_last_fully_integrated_correlator(sat_state).accumulators == zeros(3)
     @test get_last_fully_integrated_filtered_prompt(sat_state) == complex(0.0, 0.0)
-    @test Tracking.found(get_secondary_code_or_bit_detector(sat_state)) == false
+    @test has_bit_or_secondary_code_been_found(sat_state) == false
     @test length(get_bit_buffer(sat_state)) == 0
 end

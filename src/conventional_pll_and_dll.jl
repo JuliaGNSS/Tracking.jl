@@ -160,7 +160,7 @@ function estimate_dopplers_and_filter_prompt(
             integrated_code_blocks = calc_num_code_blocks_to_integrate(
                 system_sats_state.system,
                 preferred_num_code_blocks_to_integrate,
-                found(sat_state.sc_bit_detector),
+                has_bit_or_secondary_code_been_found(sat_state.bit_buffer),
             )
 
             normalized_correlator = normalize(
@@ -174,13 +174,10 @@ function estimate_dopplers_and_filter_prompt(
             filtered_correlator = apply(post_corr_filter, normalized_correlator)
             prompt = get_prompt(filtered_correlator)
             cn0_estimator = update(get_cn0_estimator(sat_state), prompt)
-            sc_bit_detector =
-                find(system_sats_state.system, sat_state.sc_bit_detector, prompt)
             bit_buffer = buffer(
                 system_sats_state.system,
                 sat_state.bit_buffer,
                 integrated_code_blocks,
-                found(sc_bit_detector),
                 prompt,
             )
             integration_time = sat_state.integrated_samples / sampling_frequency
@@ -223,7 +220,6 @@ function estimate_dopplers_and_filter_prompt(
                     integrated_samples = 0,
                     last_fully_integrated_filtered_prompt = prompt,
                     bit_buffer,
-                    sc_bit_detector,
                     cn0_estimator,
                     post_corr_filter,
                 ),

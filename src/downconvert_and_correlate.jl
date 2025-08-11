@@ -21,7 +21,7 @@ function update(
         code_frequency,
         sampling_frequency,
         sat_state.code_phase,
-        found(sat_state.sc_bit_detector),
+        has_bit_or_secondary_code_been_found(sat_state),
     )
     total_integrated_samples = sat_state.integrated_samples + integrated_samples
 
