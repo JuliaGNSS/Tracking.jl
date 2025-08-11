@@ -9,7 +9,6 @@ struct SatState{C<:AbstractCorrelator,PCF<:AbstractPostCorrFilter}
     correlator::C
     last_fully_integrated_correlator::C
     last_fully_integrated_filtered_prompt::ComplexF64
-    sc_bit_detector::SecondaryCodeOrBitDetector
     cn0_estimator::MomentsCN0Estimator
     bit_buffer::BitBuffer
     post_corr_filter::PCF
@@ -27,10 +26,11 @@ get_correlator(s::SatState) = s.correlator
 get_last_fully_integrated_correlator(s::SatState) = s.last_fully_integrated_correlator
 get_last_fully_integrated_filtered_prompt(s::SatState) =
     s.last_fully_integrated_filtered_prompt
-get_secondary_code_or_bit_detector(s::SatState) = s.sc_bit_detector
 get_post_corr_filter(s::SatState) = s.post_corr_filter
 get_cn0_estimator(s::SatState) = s.cn0_estimator
 get_bit_buffer(s::SatState) = s.bit_buffer
+@inline has_bit_or_secondary_code_been_found(s::SatState) =
+    has_bit_or_secondary_code_been_found(get_bit_buffer(s))
 
 function SatState(
     system::AbstractGNSS,
@@ -56,7 +56,6 @@ function SatState(
         correlator,
         correlator,
         complex(0.0, 0.0),
-        SecondaryCodeOrBitDetector(),
         MomentsCN0Estimator(num_prompts_for_cn0_estimation),
         BitBuffer(),
         post_corr_filter,
@@ -86,7 +85,6 @@ function SatState(
     correlator::Maybe{C} = nothing,
     last_fully_integrated_correlator = nothing,
     last_fully_integrated_filtered_prompt = nothing,
-    sc_bit_detector = nothing,
     cn0_estimator = nothing,
     bit_buffer = nothing,
     post_corr_filter::Maybe{PCF} = nothing,
@@ -106,7 +104,6 @@ function SatState(
         isnothing(last_fully_integrated_filtered_prompt) ?
         sat_state.last_fully_integrated_filtered_prompt :
         last_fully_integrated_filtered_prompt,
-        isnothing(sc_bit_detector) ? sat_state.sc_bit_detector : sc_bit_detector,
         isnothing(cn0_estimator) ? sat_state.cn0_estimator : cn0_estimator,
         isnothing(bit_buffer) ? sat_state.bit_buffer : bit_buffer,
         isnothing(post_corr_filter) ? sat_state.post_corr_filter : post_corr_filter,

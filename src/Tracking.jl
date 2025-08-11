@@ -28,12 +28,12 @@ export get_early,
     get_correlator,
     get_last_fully_integrated_correlator,
     get_last_fully_integrated_filtered_prompt,
-    get_secondary_code_or_bit_detector,
     get_bit_buffer,
     get_bits,
     get_accumulators,
     get_early_late_sample_spacing,
     get_system_sats_state,
+    has_bit_or_secondary_code_been_found,
     track,
     NumAnts,
     NumAccumulators,
@@ -41,7 +41,6 @@ export get_early,
     AbstractCN0Estimator,
     EarlyPromptLateCorrelator,
     VeryEarlyPromptLateCorrelator,
-    SecondaryCodeOrBitDetector,
     AbstractPostCorrFilter,
     SatState,
     SystemSatsState,
@@ -108,7 +107,6 @@ include("bit_buffer.jl")
 include("correlator.jl")
 include("discriminators.jl")
 include("post_corr_filter.jl")
-include("secondary_code_or_bit_detector.jl")
 include("gpsl1.jl")
 include("gpsl5.jl")
 include("galileo_e1b.jl")

@@ -156,7 +156,7 @@ function downconvert_and_correlate(
                         sat_state.code_doppler,
                         sat_state.code_phase,
                         preferred_num_code_blocks_to_integrate,
-                        found(sat_state.sc_bit_detector),
+                        has_bit_or_secondary_code_been_found(sat_state),
                         num_samples_signal,
                     )
                 if signal_samples_to_integrate == 0
