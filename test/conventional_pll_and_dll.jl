@@ -64,11 +64,10 @@ end
     )
 
     # Since number of samples is too small the state doesn't change
-    @test get_carrier_doppler(get_sat_state(new_track_state, prn)) == carrier_doppler
-    @test get_code_doppler(get_sat_state(new_track_state, prn)) ==
+    @test get_carrier_doppler(new_track_state) == carrier_doppler
+    @test get_code_doppler(new_track_state) ==
           get_code_center_frequency_ratio(gpsl1) * carrier_doppler
-    @test get_last_fully_integrated_filtered_prompt(get_sat_state(new_track_state, prn)) ==
-          0.0
+    @test get_last_fully_integrated_filtered_prompt(new_track_state) == 0.0
 
     # This time it is large enough to produce new dopplers and phases
     num_samples = 5000
@@ -85,9 +84,8 @@ end
         sampling_frequency,
     )
 
-    @test get_carrier_doppler(get_sat_state(new_track_state, prn)) == 100.0Hz
-    @test get_code_doppler(get_sat_state(new_track_state, prn)) ==
+    @test get_carrier_doppler(new_track_state) == 100.0Hz
+    @test get_code_doppler(new_track_state) ==
           get_code_center_frequency_ratio(gpsl1) * carrier_doppler
-    @test get_last_fully_integrated_filtered_prompt(get_sat_state(new_track_state, prn)) ==
-          0.0
+    @test get_last_fully_integrated_filtered_prompt(new_track_state) == 0.0
 end

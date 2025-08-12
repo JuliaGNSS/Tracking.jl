@@ -69,13 +69,12 @@
             code_frequency * 4000 * (i + 1) / sampling_frequency + start_code_phase,
             1023,
         )
-        tracked_code_phases[i] = get_code_phase(get_sat_state(track_state, 1, 1))
-        tracked_carrier_phases[i] = get_carrier_phase(get_sat_state(track_state, 1, 1))
-        tracked_carrier_dopplers[i] =
-            get_carrier_doppler(get_sat_state(track_state, 1, 1)) / Hz
-        tracked_code_dopplers[i] = get_code_doppler(get_sat_state(track_state, 1, 1)) / Hz
-        tracked_prompts[i] =
-            get_last_fully_integrated_filtered_prompt(get_sat_state(track_state, 1, 1))
+        tracked_code_phases[i] = get_code_phase(track_state)
+        tracked_carrier_phases[i] = get_carrier_phase(track_state)
+        tracked_carrier_dopplers[i] = get_carrier_doppler(track_state) / Hz
+        tracked_code_dopplers[i] = get_code_doppler(track_state) / Hz
+        @test get_signal_start_sample(track_state) == 4001
+        tracked_prompts[i] = get_last_fully_integrated_filtered_prompt(track_state)
         code_phases[i] = comp_code_phase
         carrier_phases[i] = comp_carrier_phase
     end
@@ -256,14 +255,12 @@ end
         start_code_phase,
         get_code_length(galileo_e1b),
     )
-    @test get_code_phase(get_sat_state(track_state, :gps, 1)) ≈ comp_code_phase_gps atol =
-        5e-3
-    @test mod(get_carrier_phase(get_sat_state(track_state, :gps, 1)), π) ≈
-          mod(comp_carrier_phase_gps, π) atol = 2e-2
-    @test get_code_phase(get_sat_state(track_state, :gal, 1)) ≈ comp_code_phase_gal atol =
-        5e-3
-    @test mod(get_carrier_phase(get_sat_state(track_state, :gal, 1)), π) ≈
-          mod(comp_carrier_phase_gal, π) atol = 3e-3
+    @test get_code_phase(track_state, :gps, 1) ≈ comp_code_phase_gps atol = 5e-3
+    @test mod(get_carrier_phase(track_state, :gps, 1), π) ≈ mod(comp_carrier_phase_gps, π) atol =
+        2e-2
+    @test get_code_phase(track_state, :gal, 1) ≈ comp_code_phase_gal atol = 5e-3
+    @test mod(get_carrier_phase(track_state, :gal, 1), π) ≈ mod(comp_carrier_phase_gal, π) atol =
+        3e-3
 end
 
 @testset "Tracking with intermediate frequency of $intermediate_frequency" for intermediate_frequency in
@@ -347,13 +344,11 @@ end
             code_frequency * 4000 * (i + 1) / sampling_frequency + start_code_phase,
             1023,
         )
-        tracked_code_phases[i] = get_code_phase(get_sat_state(track_state, 1, 1))
-        tracked_carrier_phases[i] = get_carrier_phase(get_sat_state(track_state, 1, 1))
-        tracked_carrier_dopplers[i] =
-            get_carrier_doppler(get_sat_state(track_state, 1, 1)) / Hz
-        tracked_code_dopplers[i] = get_code_doppler(get_sat_state(track_state, 1, 1)) / Hz
-        tracked_prompts[i] =
-            get_last_fully_integrated_filtered_prompt(get_sat_state(track_state, 1, 1))
+        tracked_code_phases[i] = get_code_phase(track_state)
+        tracked_carrier_phases[i] = get_carrier_phase(track_state)
+        tracked_carrier_dopplers[i] = get_carrier_doppler(track_state) / Hz
+        tracked_code_dopplers[i] = get_code_doppler(track_state) / Hz
+        tracked_prompts[i] = get_last_fully_integrated_filtered_prompt(track_state)
         code_phases[i] = comp_code_phase
         carrier_phases[i] = comp_carrier_phase
     end
@@ -411,6 +406,8 @@ end
         maximum_expected_sampling_frequency = Val(sampling_frequency),
     )
 
+    @test get_num_ants(track_state) == 3
+
     signal =
         cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase) .*
         get_code.(
@@ -465,13 +462,11 @@ end
             code_frequency * 4000 * (i + 1) / sampling_frequency + start_code_phase,
             1023,
         )
-        tracked_code_phases[i] = get_code_phase(get_sat_state(track_state, 1, 1))
-        tracked_carrier_phases[i] = get_carrier_phase(get_sat_state(track_state, 1, 1))
-        tracked_carrier_dopplers[i] =
-            get_carrier_doppler(get_sat_state(track_state, 1, 1)) / Hz
-        tracked_code_dopplers[i] = get_code_doppler(get_sat_state(track_state, 1, 1)) / Hz
-        tracked_prompts[i] =
-            get_last_fully_integrated_filtered_prompt(get_sat_state(track_state, 1, 1))
+        tracked_code_phases[i] = get_code_phase(track_state)
+        tracked_carrier_phases[i] = get_carrier_phase(track_state)
+        tracked_carrier_dopplers[i] = get_carrier_doppler(track_state) / Hz
+        tracked_code_dopplers[i] = get_code_doppler(track_state) / Hz
+        tracked_prompts[i] = get_last_fully_integrated_filtered_prompt(track_state)
         code_phases[i] = comp_code_phase
         carrier_phases[i] = comp_carrier_phase
     end
@@ -581,13 +576,11 @@ end
             code_frequency * 4000 * (i + 1) / sampling_frequency + start_code_phase,
             1023,
         )
-        tracked_code_phases[i] = get_code_phase(get_sat_state(track_state, 1, 1))
-        tracked_carrier_phases[i] = get_carrier_phase(get_sat_state(track_state, 1, 1))
-        tracked_carrier_dopplers[i] =
-            get_carrier_doppler(get_sat_state(track_state, 1, 1)) / Hz
-        tracked_code_dopplers[i] = get_code_doppler(get_sat_state(track_state, 1, 1)) / Hz
-        tracked_prompts[i] =
-            get_last_fully_integrated_filtered_prompt(get_sat_state(track_state, 1, 1))
+        tracked_code_phases[i] = get_code_phase(track_state)
+        tracked_carrier_phases[i] = get_carrier_phase(track_state)
+        tracked_carrier_dopplers[i] = get_carrier_doppler(track_state) / Hz
+        tracked_code_dopplers[i] = get_code_doppler(track_state) / Hz
+        tracked_prompts[i] = get_last_fully_integrated_filtered_prompt(track_state)
         code_phases[i] = comp_code_phase
         carrier_phases[i] = comp_carrier_phase
     end

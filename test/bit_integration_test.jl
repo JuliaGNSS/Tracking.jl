@@ -9,7 +9,8 @@ using Tracking:
     track,
     get_sat_state,
     get_code_phase,
-    get_bit_buffer,
+    get_bits,
+    get_num_bits,
     has_bit_or_secondary_code_been_found
 
 @testset "Bit detection integration test" begin
@@ -39,10 +40,9 @@ using Tracking:
             ) .*
             gen_code(num_samples, system, 1, sampling_frequency, code_frequency, code_phase)
         track_state = track(signal, track_state, sampling_frequency)
-        @test has_bit_or_secondary_code_been_found(get_sat_state(track_state, 1)) ==
-              (index >= 40)
-        @test get_bit_buffer(get_sat_state(track_state, 1)).buffer == (index == 40 ? 2 : 0)
-        @test get_bit_buffer(get_sat_state(track_state, 1)).length == (index == 40 ? 2 : 0)
+        @test has_bit_or_secondary_code_been_found(track_state) == (index >= 40)
+        @test get_bits(track_state) == (index == 40 ? 2 : 0)
+        @test get_num_bits(track_state) == (index == 40 ? 2 : 0)
     end
 end
 
