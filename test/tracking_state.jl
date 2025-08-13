@@ -15,8 +15,16 @@
     )
 
     @test get_system(track_state) isa GPSL1
-    @test get_sat_state(track_state, 1).prn == 1
-    @test get_sat_state(track_state, 2).prn == 2
+    @test get_prn(track_state, 1) == 1
+    @test get_prn(track_state, 2) == 2
+    @test get_num_ants(track_state, 1) == 1
+    @test get_integrated_samples(track_state, 1) == 0
+    @test get_signal_start_sample(track_state, 1) == 1
+    @test get_correlator(track_state, 1).accumulators == zeros(3)
+    @test get_last_fully_integrated_correlator(track_state, 1).accumulators == zeros(3)
+    @test Tracking.get_post_corr_filter(track_state, 1) isa DefaultPostCorrFilter
+    @test Tracking.get_cn0_estimator(track_state, 1) isa MomentsCN0Estimator
+    @test get_bit_buffer(track_state, 1) isa Tracking.BitBuffer
 
     @test track_state.doppler_estimator.states[1][1].init_carrier_doppler == 10.0Hz
     @test track_state.doppler_estimator.states[1][2].init_carrier_doppler == 20.0Hz
@@ -101,13 +109,13 @@ end
     )
 
     @test length(@inferred(get_sat_states(new_track_state))) == 3
-    @test @inferred(get_sat_state(new_track_state, 3)).prn == 3
-    @test @inferred(get_sat_state(new_track_state, 1, 3)).prn == 3
+    @test @inferred(get_prn(new_track_state, 3)) == 3
+    @test @inferred(get_prn(new_track_state, 1, 3)) == 3
 
     filtered_new_track_state = @inferred filter_out_sats(new_track_state, 1, 2)
     @test length(@inferred(get_sat_states(filtered_new_track_state))) == 2
-    @test @inferred(get_sat_state(filtered_new_track_state, 1)).prn == 1
-    @test @inferred(get_sat_state(filtered_new_track_state, 3)).prn == 3
+    @test @inferred(get_prn(filtered_new_track_state, 1)) == 1
+    @test @inferred(get_prn(filtered_new_track_state, 3)) == 3
 
     new_new_track_state = @inferred merge_sats(
         filtered_new_track_state,
@@ -118,16 +126,16 @@ end
     )
 
     @test length(@inferred(get_sat_states(new_new_track_state))) == 4
-    @test @inferred(get_sat_state(new_new_track_state, 1)).prn == 1
-    @test @inferred(get_sat_state(new_new_track_state, 3)).prn == 3
-    @test @inferred(get_sat_state(new_new_track_state, 6)).prn == 6
-    @test @inferred(get_sat_state(new_new_track_state, 8)).prn == 8
+    @test @inferred(get_prn(new_new_track_state, 1)) == 1
+    @test @inferred(get_prn(new_new_track_state, 3)) == 3
+    @test @inferred(get_prn(new_new_track_state, 6)) == 6
+    @test @inferred(get_prn(new_new_track_state, 8)) == 8
 
     filtered_new_new_track_state = @inferred filter_out_sats(new_new_track_state, [1, 6])
 
     @test length(@inferred(get_sat_states(filtered_new_new_track_state))) == 2
-    @test @inferred(get_sat_state(filtered_new_new_track_state, 3)).prn == 3
-    @test @inferred(get_sat_state(filtered_new_new_track_state, 8)).prn == 8
+    @test @inferred(get_prn(filtered_new_new_track_state, 3)) == 3
+    @test @inferred(get_prn(filtered_new_new_track_state, 8)) == 8
 end
 
 @testset "Add and remove satellite state to track state with multiple systems" begin
@@ -169,16 +177,16 @@ end
     @test length(@inferred(get_sat_states(new_track_state, Val(:gal)))) == 2
     @test length(@inferred(get_sat_states(new_track_state, Val(1)))) == 3
     @test length(@inferred(get_sat_states(new_track_state, Val(2)))) == 2
-    @test @inferred(get_sat_state(new_track_state, Val(:gps), 3)).prn == 3
-    @test @inferred(get_sat_state(new_track_state, Val(1), 3)).prn == 3
+    @test @inferred(get_prn(new_track_state, Val(:gps), 3)) == 3
+    @test @inferred(get_prn(new_track_state, Val(1), 3)) == 3
 
     filtered_new_track_state = @inferred filter_out_sats(new_track_state, 1, 2)
     @test length(get_sat_states(filtered_new_track_state, :gps)) == 2
     @test length(get_sat_states(filtered_new_track_state, :gal)) == 2
     @test length(get_sat_states(filtered_new_track_state, 1)) == 2
     @test length(get_sat_states(filtered_new_track_state, 2)) == 2
-    @test get_sat_state(filtered_new_track_state, :gps, 1).prn == 1
-    @test get_sat_state(filtered_new_track_state, :gps, 3).prn == 3
+    @test get_prn(filtered_new_track_state, :gps, 1) == 1
+    @test get_prn(filtered_new_track_state, :gps, 3) == 3
 
     new_new_track_state = @inferred merge_sats(
         filtered_new_track_state,
@@ -187,15 +195,15 @@ end
     )
     @test length(get_sat_states(new_new_track_state, :gps)) == 3
     @test length(get_sat_states(new_new_track_state, :gal)) == 2
-    @test get_sat_state(new_new_track_state, :gps, 1).prn == 1
-    @test get_sat_state(new_new_track_state, :gps, 3).prn == 3
-    @test get_sat_state(new_new_track_state, :gps, 2).prn == 2
+    @test get_prn(new_new_track_state, :gps, 1) == 1
+    @test get_prn(new_new_track_state, :gps, 3) == 3
+    @test get_prn(new_new_track_state, :gps, 2) == 2
 
     filtered_new_new_track_state = @inferred filter_out_sats(new_new_track_state, :gps, 2)
     @test length(get_sat_states(filtered_new_new_track_state, :gps)) == 2
     @test length(get_sat_states(filtered_new_new_track_state, :gal)) == 2
-    @test get_sat_state(filtered_new_new_track_state, :gps, 1).prn == 1
-    @test get_sat_state(filtered_new_new_track_state, :gps, 3).prn == 3
+    @test get_prn(filtered_new_new_track_state, :gps, 1) == 1
+    @test get_prn(filtered_new_new_track_state, :gps, 3) == 3
 
     new_new_new_track_state = @inferred merge_sats(
         filtered_new_new_track_state,
@@ -208,16 +216,16 @@ end
 
     @test length(get_sat_states(new_new_new_track_state, :gps)) == 4
     @test length(get_sat_states(new_new_new_track_state, :gal)) == 2
-    @test get_sat_state(new_new_new_track_state, :gps, 1).prn == 1
-    @test get_sat_state(new_new_new_track_state, :gps, 3).prn == 3
-    @test get_sat_state(new_new_new_track_state, :gps, 6).prn == 6
-    @test get_sat_state(new_new_new_track_state, :gps, 8).prn == 8
+    @test get_prn(new_new_new_track_state, :gps, 1) == 1
+    @test get_prn(new_new_new_track_state, :gps, 3) == 3
+    @test get_prn(new_new_new_track_state, :gps, 6) == 6
+    @test get_prn(new_new_new_track_state, :gps, 8) == 8
 
     filtered_new_new_new_track_state =
         @inferred filter_out_sats(new_new_new_track_state, :gps, [1, 6])
 
     @test length(get_sat_states(filtered_new_new_new_track_state, :gps)) == 2
     @test length(get_sat_states(filtered_new_new_new_track_state, :gal)) == 2
-    @test get_sat_state(filtered_new_new_new_track_state, :gps, 3).prn == 3
-    @test get_sat_state(filtered_new_new_new_track_state, :gps, 8).prn == 8
+    @test get_prn(filtered_new_new_new_track_state, :gps, 3) == 3
+    @test get_prn(filtered_new_new_new_track_state, :gps, 8) == 8
 end

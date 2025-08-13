@@ -197,16 +197,24 @@ function get_sat_state(
     get_sat_state(track_state, 1, sat_identifier)
 end
 
+function get_sat_state(track_state::TrackState{<:MultipleSystemSatsState{1}})
+    only(get_sat_states(track_state, 1))
+end
+
 function estimate_cn0(
-    track_state::TrackState{<:MultipleSystemSatsState{N}},
+    track_state::TrackState{<:MultipleSystemSatsState},
     system_idx::Union{Symbol,Integer,Val},
     sat_identifier,
-) where {N}
+)
     estimate_cn0(get_system_sats_state(track_state, system_idx), sat_identifier)
 end
 
 function estimate_cn0(track_state::TrackState{<:MultipleSystemSatsState{1}}, sat_identifier)
     estimate_cn0(track_state, 1, sat_identifier)
+end
+
+function estimate_cn0(track_state::TrackState{<:MultipleSystemSatsState{1}})
+    estimate_cn0(get_system_sats_state(track_state, 1))
 end
 
 function merge_sats(
@@ -263,3 +271,27 @@ end
 function filter_out_sats(track_state::TrackState{<:MultipleSystemSatsState{1}}, identifiers)
     filter_out_sats(track_state, 1, identifiers)
 end
+
+# Convenient methods
+get_prn(s::TrackState, id...) = get_prn(get_sat_state(s, id...))
+get_num_ants(s::TrackState, id...) = get_num_ants(get_sat_state(s, id...))
+get_code_phase(s::TrackState, id...) = get_code_phase(get_sat_state(s, id...))
+get_code_doppler(s::TrackState, id...) = get_code_doppler(get_sat_state(s, id...))
+get_carrier_phase(s::TrackState, id...) = get_carrier_phase(get_sat_state(s, id...))
+get_carrier_doppler(s::TrackState, id...) = get_carrier_doppler(get_sat_state(s, id...))
+get_integrated_samples(s::TrackState, id...) =
+    get_integrated_samples(get_sat_state(s, id...))
+get_signal_start_sample(s::TrackState, id...) =
+    get_signal_start_sample(get_sat_state(s, id...))
+get_correlator(s::TrackState, id...) = get_correlator(get_sat_state(s, id...))
+get_last_fully_integrated_correlator(s::TrackState, id...) =
+    get_last_fully_integrated_correlator(get_sat_state(s, id...))
+get_last_fully_integrated_filtered_prompt(s::TrackState, id...) =
+    get_last_fully_integrated_filtered_prompt(get_sat_state(s, id...))
+get_post_corr_filter(s::TrackState, id...) = get_post_corr_filter(get_sat_state(s, id...))
+get_cn0_estimator(s::TrackState, id...) = get_cn0_estimator(get_sat_state(s, id...))
+get_bit_buffer(s::TrackState, id...) = get_bit_buffer(get_sat_state(s, id...))
+get_bits(s::TrackState, id...) = get_bits(get_sat_state(s, id...))
+get_num_bits(s::TrackState, id...) = get_num_bits(get_sat_state(s, id...))
+has_bit_or_secondary_code_been_found(s::TrackState, id...) =
+    has_bit_or_secondary_code_been_found(get_sat_state(s, id...))

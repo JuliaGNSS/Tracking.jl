@@ -93,6 +93,6 @@ end
             code_frequency * length(range) ./ sampling_frequency + start_code_phase
         track_state = @inferred track(signal, track_state, sampling_frequency)
     end
-    cn0_estimate = @inferred estimate_cn0(track_state, 1)
+    cn0_estimate = @inferred estimate_cn0(track_state)
     @test cn0_estimate ≈ 45dBHz atol = 1.0dBHz
 end

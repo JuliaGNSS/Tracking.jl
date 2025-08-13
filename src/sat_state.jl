@@ -29,7 +29,9 @@ get_last_fully_integrated_filtered_prompt(s::SatState) =
 get_post_corr_filter(s::SatState) = s.post_corr_filter
 get_cn0_estimator(s::SatState) = s.cn0_estimator
 get_bit_buffer(s::SatState) = s.bit_buffer
-@inline has_bit_or_secondary_code_been_found(s::SatState) =
+get_bits(s::SatState) = get_bits(get_bit_buffer(s))
+get_num_bits(s::SatState) = length(get_bit_buffer(s))
+has_bit_or_secondary_code_been_found(s::SatState) =
     has_bit_or_secondary_code_been_found(get_bit_buffer(s))
 
 function SatState(
@@ -182,11 +184,12 @@ end
 get_system(sss::SystemSatsState) = sss.system
 get_states(sss::SystemSatsState) = sss.states
 get_sat_state(sss::SystemSatsState, identifier) = sss.states[identifier]
+get_sat_state(sss::SystemSatsState) = only(sss.states)
 
-function estimate_cn0(sss::SystemSatsState, sat_identifier)
+function estimate_cn0(sss::SystemSatsState, id...)
     system = sss.system
     estimate_cn0(
-        get_cn0_estimator(get_sat_state(sss, sat_identifier)),
+        get_cn0_estimator(get_sat_state(sss, id...)),
         get_code_length(system) / get_code_frequency(system),
     )
 end
