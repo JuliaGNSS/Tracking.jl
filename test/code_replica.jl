@@ -1,18 +1,14 @@
+module CodeReplicaTest
+
+using Test: @test, @testset, @inferred
+using Unitful: Hz
+using GNSSSignals: GPSL1, get_code
+using Tracking: gen_code_replica!, update_code_phase
+
 @testset "Code replica" begin
     code = zeros(Int16, 2502)
     gpsl1 = GPSL1()
-    Tracking.gen_code_replica!(
-        code,
-        gpsl1,
-        1023e3Hz,
-        2.5e6Hz,
-        2.0,
-        11,
-        2480,
-        -1:1,
-        1,
-        Val(2.5e6Hz),
-    )
+    gen_code_replica!(code, gpsl1, 1023e3Hz, 2.5e6Hz, 2.0, 11, 2480, -1:1, 1, Val(2.5e6Hz))
 
     # TODO: The new code generation `gen_code!` seems to be off in the first two samples
     #@test code[11:2492] == get_code.(gpsl1, (-1:2480) * 1023e3 / 2.5e6 .+ 2.0, 1)
@@ -20,7 +16,7 @@
     @testset "More than 1ms" begin
         code = zeros(Int16, 6502)
         gpsl1 = GPSL1()
-        Tracking.gen_code_replica!(
+        gen_code_replica!(
             code,
             gpsl1,
             1023e3Hz,
@@ -41,7 +37,7 @@
     @testset "code_length is less than 1ms" begin
         code = zeros(Int16, 2502)
         gpsl1 = GPSL1()
-        Tracking.gen_code_replica!(
+        gen_code_replica!(
             code,
             gpsl1,
             1023e3Hz + 1000Hz,
@@ -68,7 +64,7 @@ end
     sampling_frequency = 100Hz
     num_samples = 2000
     bit_found = true
-    phase = @inferred Tracking.update_code_phase(
+    phase = @inferred update_code_phase(
         gpsl1,
         num_samples,
         code_frequency,
@@ -77,4 +73,6 @@ end
         bit_found,
     )
     @test phase ≈ mod(10 + 0.1 * 2000, 1023)
+end
+
 end

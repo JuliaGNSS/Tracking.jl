@@ -1,6 +1,33 @@
+module TrackingStateTest
+
+using Test: @test, @testset, @inferred
+using Unitful: Hz
+using GNSSSignals: GPSL1, GalileoE1B
+using Tracking:
+    SatState,
+    TrackState,
+    SystemSatsState,
+    get_system,
+    get_prn,
+    get_num_ants,
+    get_integrated_samples,
+    get_signal_start_sample,
+    get_correlator,
+    get_last_fully_integrated_correlator,
+    get_post_corr_filter,
+    get_cn0_estimator,
+    get_bit_buffer,
+    get_sat_state,
+    get_sat_states,
+    merge_sats,
+    filter_out_sats,
+    DefaultPostCorrFilter,
+    MomentsCN0Estimator,
+    BitBuffer,
+    NumAnts
+
 @testset "Tracking state" begin
     sampling_frequency = 5e6Hz
-    num_samples = 5000
     gpsl1 = GPSL1()
     sat_states = [
         SatState(gpsl1, 1, sampling_frequency, 10.5, 10.0Hz),
@@ -17,9 +44,9 @@
     @test get_signal_start_sample(track_state, 1) == 1
     @test get_correlator(track_state, 1).accumulators == zeros(3)
     @test get_last_fully_integrated_correlator(track_state, 1).accumulators == zeros(3)
-    @test Tracking.get_post_corr_filter(track_state, 1) isa DefaultPostCorrFilter
-    @test Tracking.get_cn0_estimator(track_state, 1) isa MomentsCN0Estimator
-    @test get_bit_buffer(track_state, 1) isa Tracking.BitBuffer
+    @test get_post_corr_filter(track_state, 1) isa DefaultPostCorrFilter
+    @test get_cn0_estimator(track_state, 1) isa MomentsCN0Estimator
+    @test get_bit_buffer(track_state, 1) isa BitBuffer
 
     @test track_state.doppler_estimator.states[1][1].init_carrier_doppler == 10.0Hz
     @test track_state.doppler_estimator.states[1][2].init_carrier_doppler == 20.0Hz
@@ -51,7 +78,6 @@ end
 
 @testset "Add and remove satellite state to and from track state" begin
     sampling_frequency = 5e6Hz
-    num_samples = 5000
     gpsl1 = GPSL1()
     sat_states = [
         SatState(gpsl1, 1, sampling_frequency, 10.5, 10.0Hz),
@@ -98,7 +124,6 @@ end
 
 @testset "Add and remove satellite state to track state with multiple systems" begin
     sampling_frequency = 5e6Hz
-    num_samples = 5000
     gpsl1 = GPSL1()
     galileo_e1b = GalileoE1B()
 
@@ -182,4 +207,6 @@ end
     @test length(get_sat_states(filtered_new_new_new_track_state, :gal)) == 2
     @test get_prn(filtered_new_new_new_track_state, :gps, 3) == 3
     @test get_prn(filtered_new_new_new_track_state, :gps, 8) == 8
+end
+
 end

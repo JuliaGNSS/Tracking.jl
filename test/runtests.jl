@@ -1,18 +1,3 @@
-using CUDA
-using GNSSSignals
-using Random
-using StaticArrays
-using Statistics
-using StructArrays
-using Test
-using Tracking
-using TrackingLoopFilters
-using Dictionaries
-using Bumper
-
-using Acquisition: AcquisitionResults
-using Unitful: MHz, kHz, Hz, s, ms, dBHz
-
 include("conventional_pll_and_dll.jl")
 include("sat_state.jl")
 include("downconvert_and_correlate.jl")

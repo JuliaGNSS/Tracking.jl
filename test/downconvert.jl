@@ -1,3 +1,9 @@
+module DownconvertTest
+
+using Test: @test, @testset
+using StructArrays: StructArray
+using Tracking: downconvert!
+
 @testset "Downconvert" begin
     downconverted_signal = StructArray{Complex{Float32}}(undef, 2500)
 
@@ -7,13 +13,13 @@
 
     carrier_replica = copy(signal_struct)
 
-    Tracking.downconvert!(downconverted_signal, signal_struct, carrier_replica, 11, 2490)
+    downconvert!(downconverted_signal, signal_struct, carrier_replica, 11, 2490)
 
     @test downconverted_signal[11:2500] ≈
           signal_struct[11:2500] .* conj(carrier_replica[11:2500])
     downconverted_signal = StructArray{Complex{Float32}}(undef, 2500)
     signal = Array(signal_struct)
-    Tracking.downconvert!(downconverted_signal, signal, carrier_replica, 11, 2490)
+    downconvert!(downconverted_signal, signal, carrier_replica, 11, 2490)
     @test downconverted_signal[11:2500] ≈ signal[11:2500] .* conj(carrier_replica[11:2500])
 end
 
@@ -26,20 +32,16 @@ end
 
     carrier_replica = copy(signal)
 
-    Tracking.downconvert!(
-        downconverted_signal,
-        signal_mat_struct,
-        carrier_replica,
-        11,
-        2490,
-    )
+    downconvert!(downconverted_signal, signal_mat_struct, carrier_replica, 11, 2490)
 
     @test downconverted_signal[11:2500, :] ≈
           signal_mat_struct[11:2500, :] .* conj(carrier_replica[11:2500])
     downconverted_signal = StructArray{Complex{Float32}}(undef, 2500, 3)
     signal_mat = Array(signal_mat_struct)
-    Tracking.downconvert!(downconverted_signal, signal_mat, carrier_replica, 11, 2490)
+    downconvert!(downconverted_signal, signal_mat, carrier_replica, 11, 2490)
 
     @test downconverted_signal[11:2500, :] ≈
           signal_mat[11:2500, :] .* conj(carrier_replica[11:2500])
+end
+
 end

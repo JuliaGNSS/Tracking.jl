@@ -1,3 +1,25 @@
+module ConventionalPLLAndDLLTest
+
+using Test: @test, @testset, @inferred
+using Unitful: Hz
+using GNSSSignals: GPSL1, get_code_center_frequency_ratio
+using TrackingLoopFilters: ThirdOrderBilinearLF, SecondOrderBilinearLF
+using StaticArrays: SVector
+using Tracking:
+    aid_dopplers,
+    SatConventionalPLLAndDLL,
+    EarlyPromptLateCorrelator,
+    SatState,
+    SystemSatsState,
+    ConventionalPLLAndDLL,
+    TrackState,
+    estimate_dopplers_and_filter_prompt,
+    get_carrier_doppler,
+    get_code_doppler,
+    get_last_fully_integrated_filtered_prompt,
+    update_accumulator,
+    get_default_correlator
+
 @testset "Doppler aiding" begin
     gpsl1 = GPSL1()
     init_carrier_doppler = 10Hz
@@ -5,7 +27,7 @@
     carrier_freq_update = 2Hz
     code_freq_update = -0.5Hz
 
-    carrier_freq, code_freq = @inferred Tracking.aid_dopplers(
+    carrier_freq, code_freq = @inferred aid_dopplers(
         gpsl1,
         init_carrier_doppler,
         init_code_doppler,
@@ -18,7 +40,7 @@
 end
 
 @testset "Satellite Conventional PLL and DLL" begin
-    pll_and_dll = @inferred Tracking.SatConventionalPLLAndDLL(
+    pll_and_dll = @inferred SatConventionalPLLAndDLL(
         init_carrier_doppler = 500.0Hz,
         init_code_doppler = 100.0Hz,
     )
@@ -35,9 +57,7 @@ end
     gpsl1 = GPSL1()
 
     carrier_doppler = 100.0Hz
-    correlator = EarlyPromptLateCorrelator(complex.([1000, 2000, 1000], 0.0), -1:1, 3, 2, 1)
     prn = 1
-
     code_phase = 0.5
     preferred_num_code_blocks_to_integrate = 1
 
@@ -49,9 +69,16 @@ end
 
     # Number of samples too small to generate a new estimate for phases and dopplers
     num_samples = 2000
-    track_state = TrackState(gpsl1, sat_state; doppler_estimator)
+    correlator = update_accumulator(
+        get_default_correlator(gpsl1, sampling_frequency),
+        SVector(1000.0 + 10im, 2000.0 + 20im, 750.0 + 10im),
+    )
+    sat_state_after_small_integration =
+        SatState(sat_state; integrated_samples = num_samples, correlator)
 
-    new_track_state = @inferred Tracking.estimate_dopplers_and_filter_prompt(
+    track_state = TrackState(gpsl1, sat_state_after_small_integration; doppler_estimator)
+
+    new_track_state = @inferred estimate_dopplers_and_filter_prompt(
         track_state,
         preferred_num_code_blocks_to_integrate,
         sampling_frequency,
@@ -65,16 +92,25 @@ end
 
     # This time it is large enough to produce new dopplers and phases
     num_samples = 5000
-    track_state = TrackState(gpsl1, sat_state)
+    sat_state_after_full_integration = SatState(
+        sat_state;
+        integrated_samples = num_samples,
+        last_fully_integrated_correlator = correlator,
+    )
+    track_state = TrackState(gpsl1, sat_state_after_full_integration)
 
-    new_track_state = @inferred Tracking.estimate_dopplers_and_filter_prompt(
+    new_track_state_after_full_integration = @inferred estimate_dopplers_and_filter_prompt(
         track_state,
         preferred_num_code_blocks_to_integrate,
         sampling_frequency,
     )
 
-    @test get_carrier_doppler(new_track_state) == 100.0Hz
-    @test get_code_doppler(new_track_state) ==
-          get_code_center_frequency_ratio(gpsl1) * carrier_doppler
-    @test get_last_fully_integrated_filtered_prompt(new_track_state) == 0.0
+    @test get_carrier_doppler(new_track_state_after_full_integration) ==
+          100.52615628464486Hz
+    @test get_code_doppler(new_track_state_after_full_integration) == -0.09660213509822249Hz
+    @test get_last_fully_integrated_filtered_prompt(
+        new_track_state_after_full_integration,
+    ) == 0.4 + 0.004im
+end
+
 end

@@ -29,10 +29,9 @@ using Tracking:
         carrier_phase =
             2π * (index - 1) * num_samples * carrier_doppler / sampling_frequency
         signal =
-            (bit * 2 - 1) .*
-            cis.(
-                2π * (0:num_samples-1) * carrier_doppler / sampling_frequency .+
-                carrier_phase
+            (bit * 2 - 1) .* cis.(
+                2π * (0:(num_samples-1)) * carrier_doppler / sampling_frequency .+
+                carrier_phase,
             ) .*
             gen_code(num_samples, system, 1, sampling_frequency, code_frequency, code_phase)
         track_state = track(signal, track_state, sampling_frequency)
