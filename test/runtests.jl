@@ -8,6 +8,7 @@ using Test
 using Tracking
 using TrackingLoopFilters
 using Dictionaries
+using Bumper
 
 using Acquisition: AcquisitionResults
 using Unitful: MHz, kHz, Hz, s, ms, dBHz

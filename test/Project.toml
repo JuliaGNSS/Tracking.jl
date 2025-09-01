@@ -1,6 +1,7 @@
 [deps]
 Acquisition = "d4bbf60b-102b-5ffb-8f97-a7ea5817e69f"
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+Bumper = "8ce10254-0962-460f-a3d8-1f77fea1446e"
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 Dictionaries = "85a47980-9c8c-11e8-2b9f-f7ca1fa99fb4"
 GNSSSignals = "52c80523-2a4e-5c38-8979-05588f836870"

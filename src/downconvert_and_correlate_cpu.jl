@@ -1,118 +1,12 @@
-"""
-$(SIGNATURES)
-
-A buffer that holds CPU buffers for necessary replicas and downconverted
-signal.
-"""
-struct CPUSatDownconvertAndCorrelator{T,CT,DS<:StructVecOrMat{Complex{T}}}
-    code_replica_buffer::Vector{CT}
-    carrier_replica_buffer::StructVector{Complex{T}}
-    downconvert_signal_buffer::DS
-end
-
-"""
-$(SIGNATURES)
-
-Convenient constructor to initialize buffers for the CPU with the correct lengths for a single
-satellite.
-"""
-function CPUSatDownconvertAndCorrelator(
-    ::Type{T},
-    system::AbstractGNSS,
-    correlator::AbstractCorrelator,
-    num_samples,
-) where {T}
-    code_shifts = get_shifts(correlator)
-    CPUSatDownconvertAndCorrelator(
-        Vector{get_code_type(system)}(
-            undef,
-            num_samples + maximum(code_shifts) - minimum(code_shifts),
-        ),
-        StructVector{Complex{T}}(undef, num_samples),
-        get_downconvert_signal_buffer(T, num_samples, correlator),
-    )
-end
-
-const MultipleSystemSatCPUDownconvertAndCorrelator{N,I,T,CT,DS} =
-    TupleLike{<:NTuple{N,Dictionary{I,<:CPUSatDownconvertAndCorrelator{<:T,<:CT,<:DS}}}}
-struct CPUDownconvertAndCorrelator{
-    MESF,
-    N,
-    I,
-    B<:MultipleSystemSatCPUDownconvertAndCorrelator{N,I},
-} <: AbstractDownconvertAndCorrelator{N,I}
-    buffers::B
-end
-
-function CPUDownconvertAndCorrelator(
-    maximum_expected_sampling_frequency::Maybe{Val},
-    multiple_system_sats_state::MultipleSystemSatsState{N,I},
-    num_samples::Int,
-) where {N,I}
-    if isnothing(maximum_expected_sampling_frequency)
-        error(
-            "The maximum expected sampling frequency needs to be specified, when downconverting and correlating on the CPU. You can either specify it when initializing the track state or directly when constructing the CPUDownconvertAndCorrelator",
-        )
-    end
-    buffers = map(multiple_system_sats_state) do system_sats_state
-        map(system_sats_state.states) do sat_state
-            CPUSatDownconvertAndCorrelator(
-                Float32,
-                system_sats_state.system,
-                sat_state.correlator,
-                num_samples,
-            )
-        end
-    end
-    CPUDownconvertAndCorrelator(maximum_expected_sampling_frequency, buffers)
+struct CPUDownconvertAndCorrelator{MESF,B} <: AbstractDownconvertAndCorrelator
+    buffer::B
 end
 
 function CPUDownconvertAndCorrelator(
     maximum_expected_sampling_frequency::Val{MESF},
-    buffers::B,
-) where {MESF,N,I,B<:MultipleSystemSatCPUDownconvertAndCorrelator{N,I}}
-    CPUDownconvertAndCorrelator{MESF,N,I,B}(buffers)
-end
-
-# See https://github.com/JuliaLang/julia/issues/43155
-# Remove when https://github.com/JuliaLang/julia/pull/43338 is merged
-function Base.setindex(nt::NamedTuple{names,T}, val::X, idx::Int) where {names,T,X}
-    NamedTuple{names}(Base.setindex(Tuple(nt), val, idx))
-end
-
-function merge_sats(
-    system::AbstractGNSS,
-    downconvert_and_correlator::CPUDownconvertAndCorrelator{MESF,N,I,B},
-    system_idx,
-    sats_state::Dictionary{I,<:SatState},
-    num_samples::Int,
-) where {MESF,N,I,T,CT,DS,B<:MultipleSystemSatCPUDownconvertAndCorrelator{N,I,T,CT,DS}}
-    new_buffers = map(sats_state) do sat_state
-        CPUSatDownconvertAndCorrelator(T, system, sat_state.correlator, num_samples)
-    end
-    new_downconvert_and_correlator_buffers = setindex(
-        downconvert_and_correlator.buffers,
-        merge(downconvert_and_correlator.buffers[system_idx], new_buffers),
-        system_idx,
-    )
-    CPUDownconvertAndCorrelator{MESF,N,I,B}(new_downconvert_and_correlator_buffers)
-end
-
-function filter_out_sats(
-    downconvert_and_correlator::CPUDownconvertAndCorrelator{MESF,N,I,B},
-    system_idx::Union{Symbol,Integer},
-    identifiers,
-) where {MESF,N,I,T,CT,DS,B<:MultipleSystemSatCPUDownconvertAndCorrelator{N,I,T,CT,DS}}
-    filtered_buffers = map(
-        last,
-        filter(
-            ((id,),) -> !in(id, identifiers),
-            pairs(downconvert_and_correlator.buffers[system_idx]),
-        ),
-    )
-    new_downconvert_and_correlator_buffers =
-        setindex(downconvert_and_correlator.buffers, filtered_buffers, system_idx)
-    CPUDownconvertAndCorrelator{MESF,N,I,B}(new_downconvert_and_correlator_buffers)
+    buffer::B = default_buffer(),
+) where {MESF,B}
+    CPUDownconvertAndCorrelator{MESF,B}(buffer)
 end
 
 function get_downconvert_signal_buffer(
@@ -133,89 +27,147 @@ end
 """
 $(SIGNATURES)
 
-Convenient constructor to initialize buffers for the CPU with the correct lengths for a single
-satellite. This constructor uses Float32 as the sample data type.
+Downconvert und correlate all available satellites on the CPU.
 """
-function CPUSatDownconvertAndCorrelator(
-    system::AbstractGNSS,
-    correlator::AbstractCorrelator,
-    num_samples,
-)
-    CPUSatDownconvertAndCorrelator(Float32, system, correlator, num_samples)
+function downconvert_and_correlate(
+    downconvert_and_correlator::CPUDownconvertAndCorrelator{MESF},
+    signal,
+    track_state::TrackState,
+    preferred_num_code_blocks_to_integrate::Int,
+    sampling_frequency,
+    intermediate_frequency,
+) where {MESF}
+    num_samples_signal = get_num_samples(signal)
+    new_multiple_system_sats_state =
+        map(track_state.multiple_system_sats_state) do system_sats_state
+            new_sat_states = map(system_sats_state.states) do sat_state
+                signal_samples_to_integrate, is_integration_completed =
+                    calc_signal_samples_to_integrate(
+                        system_sats_state.system,
+                        sat_state.signal_start_sample,
+                        sampling_frequency,
+                        sat_state.code_doppler,
+                        sat_state.code_phase,
+                        preferred_num_code_blocks_to_integrate,
+                        has_bit_or_secondary_code_been_found(sat_state),
+                        num_samples_signal,
+                    )
+                if signal_samples_to_integrate == 0
+                    return sat_state
+                end
+                carrier_frequency = sat_state.carrier_doppler + intermediate_frequency
+                code_frequency =
+                    sat_state.code_doppler + get_code_frequency(system_sats_state.system)
+
+                code_shifts = get_shifts(sat_state.correlator)
+                @no_escape downconvert_and_correlator.buffer begin
+                    code_replica_buffer = @alloc(
+                        get_code_type(system_sats_state.system),
+                        num_samples_signal + maximum(code_shifts) - minimum(code_shifts)
+                    )
+                    carrier_replica_buffer_re = @alloc(Float32, num_samples_signal)
+                    carrier_replica_buffer_im = @alloc(Float32, num_samples_signal)
+                    carrier_replica_buffer = StructArray{ComplexF32}((
+                        carrier_replica_buffer_re,
+                        carrier_replica_buffer_im,
+                    ))
+                    downconvert_signal_buffer_re = @alloc(Float32, size(signal)...)
+                    downconvert_signal_buffer_im = @alloc(Float32, size(signal)...)
+                    downconvert_signal_buffer = StructArray{ComplexF32}((
+                        downconvert_signal_buffer_re,
+                        downconvert_signal_buffer_im,
+                    ))
+                    new_correlator = downconvert_and_correlate!(
+                        system_sats_state.system,
+                        signal,
+                        sat_state.correlator,
+                        code_replica_buffer,
+                        sat_state.code_phase,
+                        carrier_replica_buffer,
+                        sat_state.carrier_phase,
+                        downconvert_signal_buffer,
+                        code_frequency,
+                        carrier_frequency,
+                        sampling_frequency,
+                        sat_state.signal_start_sample,
+                        signal_samples_to_integrate,
+                        sat_state.prn,
+                        Val{MESF}(),
+                    )::typeof(sat_state.correlator)
+                end
+                return update(
+                    system_sats_state.system,
+                    sat_state,
+                    signal_samples_to_integrate,
+                    intermediate_frequency,
+                    sampling_frequency,
+                    new_correlator,
+                    is_integration_completed,
+                )
+            end
+            return SystemSatsState(system_sats_state, new_sat_states)
+        end
+    return TrackState(
+        track_state;
+        multiple_system_sats_state = new_multiple_system_sats_state,
+    )
 end
 
 """
 $(SIGNATURES)
 
-Downconvert und correlate all available satellites on the CPU.
+Downconvert and correlate a single satellite on the CPU.
 """
-function downconvert_and_correlate(
+function downconvert_and_correlate!(
+    system,
     signal,
-    track_state::TrackState{
-        <:MultipleSystemSatsState,
-        <:AbstractDopplerEstimator,
-        <:CPUDownconvertAndCorrelator{MESF},
-    },
-    preferred_num_code_blocks_to_integrate::Int,
+    correlator,
+    code_replica,
+    code_phase,
+    carrier_replica,
+    carrier_phase,
+    downconverted_signal,
+    code_frequency,
+    carrier_frequency,
     sampling_frequency,
-    intermediate_frequency,
-    num_samples_signal::Int,
-) where {MESF}
-    new_multiple_system_sats_state = map(
-        track_state.multiple_system_sats_state,
-        track_state.downconvert_and_correlator.buffers,
-    ) do system_sats_state, buffers
-        new_sat_states = map(system_sats_state.states, buffers) do sat_state, buffer
-            signal_samples_to_integrate, is_integration_completed =
-                calc_signal_samples_to_integrate(
-                    system_sats_state.system,
-                    sat_state.signal_start_sample,
-                    sampling_frequency,
-                    sat_state.code_doppler,
-                    sat_state.code_phase,
-                    preferred_num_code_blocks_to_integrate,
-                    has_bit_or_secondary_code_been_found(sat_state),
-                    num_samples_signal,
-                )
-            if signal_samples_to_integrate == 0
-                return sat_state
-            end
-            carrier_frequency = sat_state.carrier_doppler + intermediate_frequency
-            code_frequency =
-                sat_state.code_doppler + get_code_frequency(system_sats_state.system)
-
-            new_correlator = downconvert_and_correlate!(
-                system_sats_state.system,
-                signal,
-                sat_state.correlator,
-                buffer.code_replica_buffer,
-                sat_state.code_phase,
-                buffer.carrier_replica_buffer,
-                sat_state.carrier_phase,
-                buffer.downconvert_signal_buffer,
-                code_frequency,
-                carrier_frequency,
-                sampling_frequency,
-                sat_state.signal_start_sample,
-                signal_samples_to_integrate,
-                sat_state.prn,
-                Val{MESF}(),
-            )::typeof(sat_state.correlator)
-            return update(
-                system_sats_state.system,
-                sat_state,
-                signal_samples_to_integrate,
-                intermediate_frequency,
-                sampling_frequency,
-                new_correlator,
-                is_integration_completed,
-            )
-        end
-        return SystemSatsState(system_sats_state, new_sat_states)
-    end
-    return TrackState(
-        track_state;
-        multiple_system_sats_state = new_multiple_system_sats_state,
+    signal_start_sample,
+    num_samples_left,
+    prn,
+    maximum_expected_sampling_frequency,
+)
+    gen_code_replica!(
+        code_replica,
+        system,
+        code_frequency,
+        sampling_frequency,
+        code_phase,
+        signal_start_sample,
+        num_samples_left,
+        correlator.shifts,
+        prn,
+        maximum_expected_sampling_frequency,
+    )
+    gen_carrier_replica!(
+        carrier_replica,
+        carrier_frequency,
+        sampling_frequency,
+        carrier_phase,
+        signal_start_sample,
+        num_samples_left,
+    )
+    downconvert!(
+        downconverted_signal,
+        signal,
+        carrier_replica,
+        signal_start_sample,
+        num_samples_left,
+    )
+    correlate(
+        correlator,
+        downconverted_signal,
+        code_replica,
+        signal_start_sample,
+        num_samples_left,
     )
 end
 

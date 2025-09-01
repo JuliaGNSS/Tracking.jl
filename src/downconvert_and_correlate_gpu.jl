@@ -43,7 +43,7 @@ struct GPUSystemDownconvertAndCorrelator{I,T,S<:AbstractGNSS{<:CuTexture}}
 end
 
 struct GPUDownconvertAndCorrelator{N,I,T<:GPUSystemDownconvertAndCorrelator{I}} <:
-       AbstractDownconvertAndCorrelator{N,I}
+       AbstractDownconvertAndCorrelator
     buffers::MultipleSystemType{N,T}
 end
 
@@ -131,20 +131,17 @@ $(SIGNATURES)
 Downconvert and correlate all available satellites on the GPU.
 """
 function downconvert_and_correlate(
+    downconvert_and_correlator::GPUDownconvertAndCorrelator,
     signal,
-    track_state::TrackState{
-        <:MultipleSystemSatsState,
-        <:AbstractDopplerEstimator,
-        <:GPUDownconvertAndCorrelator,
-    },
+    track_state::TrackState,
     preferred_num_code_blocks_to_integrate::Int,
     sampling_frequency,
     intermediate_frequency,
-    num_samples_signal::Int,
 )
+    num_samples_signal = get_num_samples(signal)
     new_multiple_system_sats_state = map(
         track_state.multiple_system_sats_state,
-        track_state.downconvert_and_correlator.buffers,
+        downconvert_and_correlator.buffers,
     ) do system_sats_state, system_buffers
         new_sat_states =
             map(system_sats_state.states, system_buffers.buffers) do sat_state, buffer

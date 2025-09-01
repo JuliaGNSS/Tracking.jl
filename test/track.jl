@@ -14,9 +14,7 @@
 
     track_state = @inferred TrackState(
         gpsl1,
-        [SatState(gpsl1, 1, sampling_frequency, start_code_phase, carrier_doppler - 20Hz)];
-        num_samples,
-        maximum_expected_sampling_frequency = Val(sampling_frequency),
+        [SatState(gpsl1, 1, sampling_frequency, start_code_phase, carrier_doppler - 20Hz)],
     )
 
     signal_temp =
@@ -118,36 +116,32 @@ end
 
     num_samples = 4000
 
-    track_state = @inferred TrackState(
-        (
-            gps = SystemSatsState(
-                gpsl1,
-                [
-                    SatState(
-                        gpsl1,
-                        prn,
-                        sampling_frequency,
-                        start_code_phase,
-                        carrier_doppler_gps,
-                    ),
-                ],
-            ),
-            gal = SystemSatsState(
-                galileo_e1b,
-                [
-                    SatState(
-                        galileo_e1b,
-                        prn,
-                        sampling_frequency,
-                        start_code_phase,
-                        carrier_doppler_gal,
-                    ),
-                ],
-            ),
-        );
-        num_samples,
-        maximum_expected_sampling_frequency = Val(sampling_frequency),
-    )
+    track_state = @inferred TrackState((
+        gps = SystemSatsState(
+            gpsl1,
+            [
+                SatState(
+                    gpsl1,
+                    prn,
+                    sampling_frequency,
+                    start_code_phase,
+                    carrier_doppler_gps,
+                ),
+            ],
+        ),
+        gal = SystemSatsState(
+            galileo_e1b,
+            [
+                SatState(
+                    galileo_e1b,
+                    prn,
+                    sampling_frequency,
+                    start_code_phase,
+                    carrier_doppler_gal,
+                ),
+            ],
+        ),
+    );)
 
     signal_temp =
         cis.(
@@ -285,8 +279,6 @@ end
     track_state = @inferred TrackState(
         gpsl1,
         [SatState(gpsl1, 1, sampling_frequency, start_code_phase, carrier_doppler - 20Hz)];
-        num_samples,
-        maximum_expected_sampling_frequency = Val(sampling_frequency),
     )
 
     signal =
@@ -401,9 +393,7 @@ end
                 carrier_doppler - 20Hz;
                 num_ants = NumAnts(3),
             ),
-        ];
-        num_samples,
-        maximum_expected_sampling_frequency = Val(sampling_frequency),
+        ],
     )
 
     @test get_num_ants(track_state) == 3
@@ -519,15 +509,11 @@ end
 
     system_sats_state = SystemSatsState(gpsl1, sat_states)
 
-    track_state = @inferred TrackState(
-        system_sats_state;
-        num_samples,
-        maximum_expected_sampling_frequency = Val(sampling_frequency),
-        downconvert_and_correlator = GPUDownconvertAndCorrelator(
-            (system_sats_state,),
-            num_samples,
-        ),
-    )
+    # TODO: Why doesn't @inferred work here?
+    downconvert_and_correlator =
+        GPUDownconvertAndCorrelator((system_sats_state,), num_samples)
+
+    track_state = @inferred TrackState(system_sats_state)
 
     signal =
         cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase) .*
@@ -538,7 +524,12 @@ end
         )
     signal_mat = cu(repeat(signal; outer = (1, 3)))
 
-    track_state = @inferred track(signal_mat, track_state, sampling_frequency)
+    track_state = @inferred track(
+        signal_mat,
+        track_state,
+        sampling_frequency;
+        downconvert_and_correlator,
+    )
 
     iterations = 2000
     code_phases = zeros(iterations)
@@ -565,7 +556,12 @@ end
                 prn,
             )
         signal_mat = cu(repeat(signal; outer = (1, 3)))
-        track_state = @inferred track(signal_mat, track_state, sampling_frequency)
+        track_state = @inferred track(
+            signal_mat,
+            track_state,
+            sampling_frequency;
+            downconvert_and_correlator,
+        )
         comp_carrier_phase =
             mod2pi(
                 2π * carrier_doppler * 4000 * (i + 1) / sampling_frequency +

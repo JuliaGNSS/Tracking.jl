@@ -28,12 +28,21 @@ function bench_downconvert_and_correlate(
         PACKAGE_VERSION <= v"0.15.4" ?
         (type == :CPU ? CPUDownconvertAndCorrelator() : GPUDownconvertAndCorrelator()) :
         (
-            type == :CPU ?
-            CPUDownconvertAndCorrelator(
-                maximum_expected_sampling_frequency,
-                multiple_system_sats_state,
-                num_samples_signal,
-            ) : GPUDownconvertAndCorrelator(multiple_system_sats_state, num_samples_signal)
+            PACKAGE_VERSION <= v"0.15.5" ?
+            (
+                type == :CPU ?
+                CPUDownconvertAndCorrelator(
+                    maximum_expected_sampling_frequency,
+                    multiple_system_sats_state,
+                    num_samples_signal,
+                ) :
+                GPUDownconvertAndCorrelator(multiple_system_sats_state, num_samples_signal)
+            ) :
+            (
+                type == :CPU ?
+                CPUDownconvertAndCorrelator(maximum_expected_sampling_frequency) :
+                GPUDownconvertAndCorrelator()
+            )
         )
 
     array_transform = type == :CPU ? Array : cu
@@ -45,11 +54,14 @@ function bench_downconvert_and_correlate(
             num_samples = num_samples_signal,
             downconvert_and_correlator,
         ) :
-        TrackState(
-            multiple_system_sats_state;
-            num_samples = num_samples_signal,
-            downconvert_and_correlator,
-            maximum_expected_sampling_frequency,
+        (
+            PACKAGE_VERSION <= v"0.15.5" ?
+            TrackState(
+                multiple_system_sats_state;
+                num_samples = num_samples_signal,
+                downconvert_and_correlator,
+                maximum_expected_sampling_frequency,
+            ) : TrackState(multiple_system_sats_state)
         )
 
     signal = array_transform(rand(Complex{signal_type}, num_samples_signal))
@@ -99,14 +111,25 @@ function bench_downconvert_and_correlate(
                 $(Val(sampling_frequency)),
             )
         else
-            @benchmarkable Tracking.downconvert_and_correlate(
-                $signal,
-                $track_state,
-                $preferred_num_code_blocks_to_integrate,
-                $sampling_frequency,
-                $intermediate_frequency,
-                $num_samples_signal,
-            )
+            return if PACKAGE_VERSION <= v"0.15.5"
+                @benchmarkable Tracking.downconvert_and_correlate(
+                    $signal,
+                    $track_state,
+                    $preferred_num_code_blocks_to_integrate,
+                    $sampling_frequency,
+                    $intermediate_frequency,
+                    $num_samples_signal,
+                )
+            else
+                @benchmarkable Tracking.downconvert_and_correlate(
+                    $downconvert_and_correlator,
+                    $signal,
+                    $track_state,
+                    $preferred_num_code_blocks_to_integrate,
+                    $sampling_frequency,
+                    $intermediate_frequency,
+                )
+            end
         end
     end
 end
@@ -124,11 +147,14 @@ function bench_track(;
             [SatState(system, 1, sampling_frequency, 0.0, 1000Hz)];
             num_samples = num_samples_signal,
         ) :
-        TrackState(
-            system,
-            [SatState(system, 1, sampling_frequency, 0.0, 1000Hz)];
-            num_samples = num_samples_signal,
-            maximum_expected_sampling_frequency = Val(sampling_frequency),
+        (
+            PACKAGE_VERSION <= v"0.15.5" ?
+            TrackState(
+                system,
+                [SatState(system, 1, sampling_frequency, 0.0, 1000Hz)];
+                num_samples = num_samples_signal,
+                maximum_expected_sampling_frequency = Val(sampling_frequency),
+            ) : TrackState(system, [SatState(system, 1, sampling_frequency, 0.0, 1000Hz)])
         )
     signal = rand(Complex{signal_type}, num_samples_signal)
     return if PACKAGE_VERSION <= v"0.15.2"
@@ -142,7 +168,18 @@ function bench_track(;
                 maximum_expected_sampling_frequency = $(Val(sampling_frequency)),
             )
         else
-            @benchmarkable track($signal, $track_state, $sampling_frequency)
+            return if PACKAGE_VERSION <= v"0.15.5"
+                @benchmarkable track($signal, $track_state, $sampling_frequency)
+            else
+                downconvert_and_correlator =
+                    CPUDownconvertAndCorrelator(Val(sampling_frequency))
+                @benchmarkable track(
+                    $signal,
+                    $track_state,
+                    $sampling_frequency;
+                    downconvert_and_correlator = $downconvert_and_correlator,
+                )
+            end
         end
     end
 end
