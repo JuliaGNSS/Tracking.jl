@@ -2,6 +2,9 @@ function track(
     signal::AbstractVecOrMat,
     track_state::TS,
     sampling_frequency;
+    downconvert_and_correlator::AbstractDownconvertAndCorrelator = CPUDownconvertAndCorrelator(
+        Val(sampling_frequency),
+    ),
     intermediate_frequency = 0.0Hz,
     preferred_num_code_blocks_to_integrate = 1,
 ) where {TS<:TrackState}
@@ -14,12 +17,12 @@ function track(
         ) && break
 
         track_state = downconvert_and_correlate(
+            downconvert_and_correlator,
             signal,
             track_state,
             preferred_num_code_blocks_to_integrate,
             sampling_frequency,
             intermediate_frequency,
-            num_samples_signal,
         )::TS
         track_state = estimate_dopplers_and_filter_prompt(
             track_state,

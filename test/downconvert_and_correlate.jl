@@ -1,95 +1,6 @@
 @testset "Downconvert and Correlator" begin
-    gpsl1 = GPSL1()
-
-    correlator = get_default_correlator(gpsl1, 5e6Hz)
-
-    downconvert_and_correlator =
-        @inferred CPUSatDownconvertAndCorrelator(gpsl1, correlator, 5000)
-
-    @test size(downconvert_and_correlator.code_replica_buffer) == (5004,)
-    @test eltype(downconvert_and_correlator.code_replica_buffer) == Int16
-    @test size(downconvert_and_correlator.carrier_replica_buffer) == (5000,)
-    @test eltype(downconvert_and_correlator.carrier_replica_buffer) == ComplexF32
-    @test size(downconvert_and_correlator.downconvert_signal_buffer) == (5000,)
-    @test eltype(downconvert_and_correlator.downconvert_signal_buffer) == ComplexF32
-
-    downconvert_and_correlator_f64 =
-        @inferred CPUSatDownconvertAndCorrelator(Float64, gpsl1, correlator, 5000)
-    @test size(downconvert_and_correlator_f64.code_replica_buffer) == (5004,)
-    @test eltype(downconvert_and_correlator_f64.code_replica_buffer) == Int16
-    @test size(downconvert_and_correlator_f64.carrier_replica_buffer) == (5000,)
-    @test eltype(downconvert_and_correlator_f64.carrier_replica_buffer) == ComplexF64
-    @test size(downconvert_and_correlator_f64.downconvert_signal_buffer) == (5000,)
-    @test eltype(downconvert_and_correlator_f64.downconvert_signal_buffer) == ComplexF64
-
-    system_sats_states_numants2 = (
-        SystemSatsState(
-            gpsl1,
-            [SatState(gpsl1, 1, 5e6Hz, 10.0, 500.0Hz; num_ants = NumAnts(2))],
-        ),
-    )
-
-    correlator_numants2 = get_default_correlator(gpsl1, 5e6Hz, NumAnts(2))
-
-    downconvert_and_correlator_numants2 =
-        @inferred CPUSatDownconvertAndCorrelator(gpsl1, correlator_numants2, 5000)
-
-    @test size(downconvert_and_correlator_numants2.code_replica_buffer) == (5004,)
-    @test eltype(downconvert_and_correlator_numants2.code_replica_buffer) == Int16
-    @test size(downconvert_and_correlator_numants2.carrier_replica_buffer) == (5000,)
-    @test eltype(downconvert_and_correlator_numants2.carrier_replica_buffer) == ComplexF32
-    @test size(downconvert_and_correlator_numants2.downconvert_signal_buffer) == (5000, 2)
-    @test eltype(downconvert_and_correlator_numants2.downconvert_signal_buffer) ==
-          ComplexF32
-
-    num_samples = 5000
-    galileo_e1b = GalileoE1B()
-    multiple_system_sats_state = (
-        SystemSatsState(gpsl1, [SatState(gpsl1, 1, 5e6Hz, 10.0, 500.0Hz)]),
-        SystemSatsState(galileo_e1b, [SatState(galileo_e1b, 1, 5e6Hz, 10.0, 500.0Hz)]),
-    )
-
-    track_state = TrackState(
-        multiple_system_sats_state;
-        num_samples,
-        maximum_expected_sampling_frequency = Val(5e6Hz),
-    )
-
-    @test size(track_state.downconvert_and_correlator.buffers[1][1].code_replica_buffer) ==
-          (5004,)
-    @test eltype(
-        track_state.downconvert_and_correlator.buffers[1][1].code_replica_buffer,
-    ) == Int16
-    @test size(
-        track_state.downconvert_and_correlator.buffers[1][1].carrier_replica_buffer,
-    ) == (5000,)
-    @test eltype(
-        track_state.downconvert_and_correlator.buffers[1][1].carrier_replica_buffer,
-    ) == ComplexF32
-    @test size(
-        track_state.downconvert_and_correlator.buffers[1][1].downconvert_signal_buffer,
-    ) == (5000,)
-    @test eltype(
-        track_state.downconvert_and_correlator.buffers[1][1].downconvert_signal_buffer,
-    ) == ComplexF32
-
-    @test size(track_state.downconvert_and_correlator.buffers[2][1].code_replica_buffer) ==
-          (5006,)
-    @test eltype(
-        track_state.downconvert_and_correlator.buffers[2][1].code_replica_buffer,
-    ) == Float32
-    @test size(
-        track_state.downconvert_and_correlator.buffers[2][1].carrier_replica_buffer,
-    ) == (5000,)
-    @test eltype(
-        track_state.downconvert_and_correlator.buffers[2][1].carrier_replica_buffer,
-    ) == ComplexF32
-    @test size(
-        track_state.downconvert_and_correlator.buffers[2][1].downconvert_signal_buffer,
-    ) == (5000,)
-    @test eltype(
-        track_state.downconvert_and_correlator.buffers[2][1].downconvert_signal_buffer,
-    ) == ComplexF32
+    downconvert_and_correlator = CPUDownconvertAndCorrelator(Val(5e6Hz))
+    @test downconvert_and_correlator.buffer isa Bumper.SlabBuffer
 end
 
 @testset "Downconvert and correlate with $type" for type in (:CPU, :GPU)
@@ -113,21 +24,12 @@ end
     maximum_expected_sampling_frequency = Val(sampling_frequency)
 
     downconvert_and_correlator =
-        type == :CPU ?
-        CPUDownconvertAndCorrelator(
-            maximum_expected_sampling_frequency,
-            multiple_system_sats_state,
-            num_samples_signal,
-        ) : GPUDownconvertAndCorrelator(multiple_system_sats_state, num_samples_signal)
+        type == :CPU ? CPUDownconvertAndCorrelator(maximum_expected_sampling_frequency) :
+        GPUDownconvertAndCorrelator(multiple_system_sats_state, num_samples_signal)
 
     array_transform = type == :CPU ? Array : cu
 
-    track_state = TrackState(
-        multiple_system_sats_state;
-        num_samples = num_samples_signal,
-        downconvert_and_correlator,
-        maximum_expected_sampling_frequency,
-    )
+    track_state = TrackState(multiple_system_sats_state)
 
     preferred_num_code_blocks_to_integrate = 1
 
@@ -143,12 +45,12 @@ end
     )
 
     next_track_state = @inferred Tracking.downconvert_and_correlate(
+        downconvert_and_correlator,
         signal,
         track_state,
         preferred_num_code_blocks_to_integrate,
         sampling_frequency,
         intermediate_frequency,
-        num_samples_signal,
     )
 
     # GPU uses floating point arithmetic and might differ a little with the fixed point arithmetic
@@ -171,12 +73,12 @@ end
     )
 
     next_track_state = @inferred Tracking.downconvert_and_correlate(
+        downconvert_and_correlator,
         signal,
         track_state,
         preferred_num_code_blocks_to_integrate,
         sampling_frequency,
         intermediate_frequency,
-        num_samples_signal,
     )
 
     # GPU uses floating point arithmetic and might differ a little with the fixed point arithmetic

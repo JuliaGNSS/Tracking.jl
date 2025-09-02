@@ -49,13 +49,7 @@ end
 
     # Number of samples too small to generate a new estimate for phases and dopplers
     num_samples = 2000
-    track_state = TrackState(
-        gpsl1,
-        sat_state;
-        num_samples,
-        doppler_estimator,
-        maximum_expected_sampling_frequency = Val(sampling_frequency),
-    )
+    track_state = TrackState(gpsl1, sat_state; doppler_estimator)
 
     new_track_state = @inferred Tracking.estimate_dopplers_and_filter_prompt(
         track_state,
@@ -71,12 +65,7 @@ end
 
     # This time it is large enough to produce new dopplers and phases
     num_samples = 5000
-    track_state = TrackState(
-        gpsl1,
-        sat_state;
-        num_samples,
-        maximum_expected_sampling_frequency = Val(sampling_frequency),
-    )
+    track_state = TrackState(gpsl1, sat_state)
 
     new_track_state = @inferred Tracking.estimate_dopplers_and_filter_prompt(
         track_state,

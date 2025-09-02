@@ -10,6 +10,7 @@ using TrackingLoopFilters
 using Dictionaries
 using Accessors
 using ConstructionBase
+using Bumper
 
 using Acquisition: AcquisitionResults
 using Unitful: upreferred, Hz, dBHz, ms
@@ -85,7 +86,7 @@ Abstract downconverter and correlator type. Structs for
 downconversion and correlation must have this abstract type as a
 parent.
 """
-abstract type AbstractDownconvertAndCorrelator{N,I} end
+abstract type AbstractDownconvertAndCorrelator end
 
 """
 $(SIGNATURES)
@@ -116,15 +117,9 @@ include("sat_state.jl")
 const MultipleSystemType{N,T} = TupleLike{<:NTuple{N,T}}
 const MultipleSystemSatType{N,I,T} = MultipleSystemType{N,Dictionary{I,T}}
 
-struct TrackState{
-    S<:MultipleSystemSatsState,
-    DE<:AbstractDopplerEstimator,
-    DC<:AbstractDownconvertAndCorrelator,
-}
+struct TrackState{S<:MultipleSystemSatsState,DE<:AbstractDopplerEstimator}
     multiple_system_sats_state::S
     doppler_estimator::DE
-    downconvert_and_correlator::DC
-    num_samples::Int
 end
 
 include("sample_parameters.jl")
