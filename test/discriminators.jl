@@ -1,3 +1,10 @@
+module DiscriminatorsTest
+
+using Test: @test, @testset, @inferred
+using GNSSSignals: GPSL1
+using StaticArrays: SVector
+using Tracking: EarlyPromptLateCorrelator, pll_disc, dll_disc, get_early_late_sample_spacing
+
 @testset "PLL discriminator" begin
     correlator_minus60off = EarlyPromptLateCorrelator(
         SVector(-0.5 + sqrt(3) / 2im, -1 + sqrt(3) * 1im, -0.5 + sqrt(3) / 2im),
@@ -21,9 +28,9 @@
         1,
     )
     gpsl1 = GPSL1()
-    @test @inferred(Tracking.pll_disc(gpsl1, correlator_minus60off)) == -π / 3  #-60°
-    @test @inferred(Tracking.pll_disc(gpsl1, correlator_0off)) == 0
-    @test @inferred(Tracking.pll_disc(gpsl1, correlator_plus60off)) == π / 3  #+60°
+    @test @inferred(pll_disc(gpsl1, correlator_minus60off)) == -π / 3  #-60°
+    @test @inferred(pll_disc(gpsl1, correlator_0off)) == 0
+    @test @inferred(pll_disc(gpsl1, correlator_plus60off)) == π / 3  #+60°
 end
 
 @testset "DLL discriminator" begin
@@ -67,11 +74,13 @@ end
         1,
     )
 
-    @test @inferred(Tracking.get_early_late_sample_spacing(prompt_correlator)) == 4
+    @test @inferred(get_early_late_sample_spacing(prompt_correlator)) == 4
 
-    @test @inferred(Tracking.dll_disc(gpsl1, very_early_correlator, delta)) == -0.5
-    @test @inferred(Tracking.dll_disc(gpsl1, early_correlator, delta)) == -0.25
-    @test @inferred(Tracking.dll_disc(gpsl1, prompt_correlator, delta)) == 0
-    @test @inferred(Tracking.dll_disc(gpsl1, late_correlator, delta)) == 0.25
-    @test @inferred(Tracking.dll_disc(gpsl1, very_late_correlator, delta)) == 0.5
+    @test @inferred(dll_disc(gpsl1, very_early_correlator, delta)) == -0.5
+    @test @inferred(dll_disc(gpsl1, early_correlator, delta)) == -0.25
+    @test @inferred(dll_disc(gpsl1, prompt_correlator, delta)) == 0
+    @test @inferred(dll_disc(gpsl1, late_correlator, delta)) == 0.25
+    @test @inferred(dll_disc(gpsl1, very_late_correlator, delta)) == 0.5
+end
+
 end

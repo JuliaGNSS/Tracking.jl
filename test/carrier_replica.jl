@@ -1,7 +1,14 @@
+module CarrierReplicaTest
+
+using Test: @test, @testset, @inferred
+using Unitful: Hz
+using StructArrays: StructArray
+using Tracking: gen_carrier_replica!, update_carrier_phase
+
 @testset "Carrier replica" begin
     carrier = StructArray(zeros(Complex{Float32}, 2500))
 
-    Tracking.gen_carrier_replica!(
+    gen_carrier_replica!(
         carrier,
         1500Hz,
         2.5e6Hz,
@@ -21,7 +28,7 @@ end
     carrier_frequency = 10Hz
     sampling_frequency = 100Hz
     num_samples = 2000
-    phase = @inferred Tracking.update_carrier_phase(
+    phase = @inferred update_carrier_phase(
         num_samples,
         carrier_frequency,
         sampling_frequency,
@@ -33,11 +40,13 @@ end
     carrier_frequency = 10Hz
     sampling_frequency = 2.5e6Hz
     num_samples = 2500
-    phase = @inferred Tracking.update_carrier_phase(
+    phase = @inferred update_carrier_phase(
         num_samples,
         carrier_frequency,
         sampling_frequency,
         carrier_phase,
     )
     @test phase ≈ mod(0.25 + 10 * 2500 / 2.5e6 + 0.5, 1) - 0.5
+end
+
 end

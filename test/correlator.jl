@@ -1,3 +1,23 @@
+module CorrelatorTest
+
+using Test: @test, @testset, @inferred
+using Unitful: Hz
+using GNSSSignals: GPSL1, get_code
+using StaticArrays: SVector
+using StructArrays: StructArray
+using Tracking:
+    EarlyPromptLateCorrelator,
+    NumAnts,
+    get_early,
+    get_prompt,
+    get_late,
+    get_accumulators,
+    get_early_late_sample_spacing,
+    DefaultPostCorrFilter,
+    apply,
+    normalize,
+    correlate
+
 @testset "Correlator" begin
     @testset "Correlator constructor" begin
         gpsl1 = GPSL1()
@@ -135,8 +155,8 @@
             2,
             1,
         )
-        default_post_corr_filter = Tracking.DefaultPostCorrFilter()
-        filtered_correlator = @inferred Tracking.apply(default_post_corr_filter, correlator)
+        default_post_corr_filter = DefaultPostCorrFilter()
+        filtered_correlator = @inferred apply(default_post_corr_filter, correlator)
         @test filtered_correlator == EarlyPromptLateCorrelator(
             SVector(1.0 + 1.0im, 2.0 + 0.0im, 1.0 + 3.0im),
             -1:1,
@@ -152,7 +172,7 @@
             2,
             1,
         )
-        filtered_correlator = @inferred Tracking.apply(x -> 2 * x, correlator)
+        filtered_correlator = @inferred apply(x -> 2 * x, correlator)
         @test filtered_correlator == EarlyPromptLateCorrelator(
             SVector(2.0 + 0.0im, 2.0 + 0.0im, 2.0 + 0.0im),
             -1:1,
@@ -211,7 +231,7 @@
             2,
             1,
         )
-        normalized_correlator = @inferred Tracking.normalize(correlator, 10)
+        normalized_correlator = @inferred normalize(correlator, 10)
         @test normalized_correlator == EarlyPromptLateCorrelator(
             SVector(0.1 + 0.0im, 0.1 + 0.0im, 0.1 + 0.0im),
             -1:1,
@@ -231,7 +251,7 @@
             2,
             1,
         )
-        normalized_correlator = @inferred Tracking.normalize(correlator, 10)
+        normalized_correlator = @inferred normalize(correlator, 10)
         @test normalized_correlator == EarlyPromptLateCorrelator(
             SVector(
                 SVector(0.1 + 0.0im, 0.1 + 0.0im),
@@ -252,7 +272,7 @@
             Float32.(get_code.(gpsl1, (1:2500) * 1023e3 / (sampling_frequency / Hz), 1)),
             zeros(Float32, 2500),
         ))
-        code = get_code.(gpsl1, (1+-1:2500+1) * 1023e3 / 2.5e6, 1)
+        code = get_code.(gpsl1, ((1+-1):(2500+1)) * 1023e3 / 2.5e6, 1)
 
         @testset "↳ $na antennas" for na ∈ [1, 4]
             signal_mat = na == 1 ? signal : repeat(signal; outer = (1, na))
@@ -274,7 +294,7 @@
                 end
 
                 correlator_result =
-                    @inferred Tracking.correlate(correlator, signal_mat, code, 1, 2500)
+                    @inferred correlate(correlator, signal_mat, code, 1, 2500)
                 early = get_early(correlator_result)
                 prompt = get_prompt(correlator_result)
                 late = get_late(correlator_result)
@@ -284,4 +304,6 @@
             end
         end
     end
+end
+
 end

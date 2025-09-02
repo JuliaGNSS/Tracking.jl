@@ -1,3 +1,38 @@
+module TrackTest
+
+using Test: @test, @testset, @inferred
+using Random: Random
+using Unitful: Hz, kHz, MHz
+using Statistics: mean
+using CUDA: CUDA, cu
+using GNSSSignals:
+    GPSL1,
+    GPSL5,
+    GalileoE1B,
+    gen_code,
+    get_code_center_frequency_ratio,
+    get_code_frequency,
+    get_code
+
+using Tracking:
+    SatState,
+    TrackState,
+    SystemSatsState,
+    GPUDownconvertAndCorrelator,
+    track,
+    get_code_phase,
+    get_carrier_phase,
+    get_code_doppler,
+    get_carrier_doppler,
+    get_prompt,
+    estimate_cn0,
+    get_signal_start_sample,
+    get_last_fully_integrated_filtered_prompt,
+    get_code_length,
+    NumAnts,
+    get_num_ants,
+    get_default_correlator
+
 @testset "Tracking with signal of type $type" for type in
                                                   (Int16, Int32, Int64, Float32, Float64)
     gpsl1 = GPSL1()
@@ -9,8 +44,6 @@
     prn = 1
     range = 0:3999
     start_carrier_phase = π / 2
-
-    num_samples = 4000
 
     track_state = @inferred TrackState(
         gpsl1,
@@ -114,8 +147,6 @@ end
     range = 0:3999
     start_carrier_phase = π / 2
 
-    num_samples = 4000
-
     track_state = @inferred TrackState((
         gps = SystemSatsState(
             gpsl1,
@@ -145,7 +176,7 @@ end
 
     signal_temp =
         cis.(
-            2π .* carrier_doppler_gps .* range ./ sampling_frequency .+ start_carrier_phase
+            2π .* carrier_doppler_gps .* range ./ sampling_frequency .+ start_carrier_phase,
         ) .* gen_code(
             4000,
             gpsl1,
@@ -155,7 +186,7 @@ end
             start_code_phase,
         ) .+
         cis.(
-            2π .* carrier_doppler_gal .* range ./ sampling_frequency .+ start_carrier_phase
+            2π .* carrier_doppler_gal .* range ./ sampling_frequency .+ start_carrier_phase,
         ) .* gen_code(
             4000,
             galileo_e1b,
@@ -199,7 +230,7 @@ end
         signal_temp =
             cis.(
                 2π .* carrier_doppler_gps .* range ./ sampling_frequency .+
-                carrier_phase_gps
+                carrier_phase_gps,
             ) .* gen_code(
                 4000,
                 gpsl1,
@@ -210,7 +241,7 @@ end
             ) .+
             cis.(
                 2π .* carrier_doppler_gal .* range ./ sampling_frequency .+
-                carrier_phase_gal
+                carrier_phase_gal,
             ) .* gen_code(
                 4000,
                 galileo_e1b,
@@ -274,8 +305,6 @@ end
     range = 0:3999
     start_carrier_phase = π / 2
 
-    num_samples = 4000
-
     track_state = @inferred TrackState(
         gpsl1,
         [SatState(gpsl1, 1, sampling_frequency, start_code_phase, carrier_doppler - 20Hz)];
@@ -284,7 +313,7 @@ end
     signal =
         cis.(
             2π .* (carrier_doppler + intermediate_frequency) .* range ./
-            sampling_frequency .+ start_carrier_phase
+            sampling_frequency .+ start_carrier_phase,
         ) .*
         get_code.(
             gpsl1,
@@ -316,7 +345,7 @@ end
         signal =
             cis.(
                 2π .* (carrier_doppler + intermediate_frequency) .* range ./
-                sampling_frequency .+ carrier_phase
+                sampling_frequency .+ carrier_phase,
             ) .*
             get_code.(
                 gpsl1,
@@ -379,8 +408,6 @@ end
     prn = 1
     range = 0:3999
     start_carrier_phase = π / 2
-
-    num_samples = 4000
 
     track_state = @inferred TrackState(
         gpsl1,
@@ -598,4 +625,6 @@ end
     #    figure("Prompt")
     #    plot(real.(tracked_prompts))
     #    plot(imag.(tracked_prompts))
+end
+
 end
