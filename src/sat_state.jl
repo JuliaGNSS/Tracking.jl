@@ -37,15 +37,14 @@ has_bit_or_secondary_code_been_found(s::SatState) =
 function SatState(
     system::AbstractGNSS,
     prn::Int,
-    sampling_frequency,
     code_phase,
     carrier_doppler;
-    num_ants::NumAnts = NumAnts(1),
-    correlator = get_default_correlator(system, sampling_frequency, num_ants),
-    carrier_phase = 0.0,
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(system),
-    num_prompts_for_cn0_estimation::Int = 100,
-    post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),
+    num_ants::NumAnts=NumAnts(1),
+    correlator=get_default_correlator(system, num_ants),
+    carrier_phase=0.0,
+    code_doppler=carrier_doppler * get_code_center_frequency_ratio(system),
+    num_prompts_for_cn0_estimation::Int=100,
+    post_corr_filter::AbstractPostCorrFilter=DefaultPostCorrFilter(),
 )
     SatState(
         prn,
@@ -65,31 +64,24 @@ function SatState(
 end
 
 function SatState(acq::AcquisitionResults; args...)
-    SatState(
-        acq.system,
-        acq.prn,
-        acq.sampling_frequency,
-        acq.code_phase,
-        acq.carrier_doppler;
-        args...,
-    )
+    SatState(acq.system, acq.prn, acq.code_phase, acq.carrier_doppler; args...)
 end
 
 function SatState(
     sat_state::SatState{C,PCF};
-    prn = nothing,
-    code_phase = nothing,
-    code_doppler = nothing,
-    carrier_phase = nothing,
-    carrier_doppler = nothing,
-    integrated_samples = nothing,
-    signal_start_sample = nothing,
-    correlator::Maybe{C} = nothing,
-    last_fully_integrated_correlator = nothing,
-    last_fully_integrated_filtered_prompt = nothing,
-    cn0_estimator = nothing,
-    bit_buffer = nothing,
-    post_corr_filter::Maybe{PCF} = nothing,
+    prn=nothing,
+    code_phase=nothing,
+    code_doppler=nothing,
+    carrier_phase=nothing,
+    carrier_doppler=nothing,
+    integrated_samples=nothing,
+    signal_start_sample=nothing,
+    correlator::Maybe{C}=nothing,
+    last_fully_integrated_correlator=nothing,
+    last_fully_integrated_filtered_prompt=nothing,
+    cn0_estimator=nothing,
+    bit_buffer=nothing,
+    post_corr_filter::Maybe{PCF}=nothing,
 ) where {C<:AbstractCorrelator,PCF<:AbstractPostCorrFilter}
     SatState{C,PCF}(
         isnothing(prn) ? sat_state.prn : prn,
@@ -113,7 +105,7 @@ function SatState(
 end
 
 function reset_start_sample_and_bit_buffer(sat_state)
-    SatState(sat_state; signal_start_sample = 1, bit_buffer = reset(sat_state.bit_buffer))
+    SatState(sat_state; signal_start_sample=1, bit_buffer=reset(sat_state.bit_buffer))
 end
 
 struct SystemSatsState{S<:AbstractGNSS,SS<:SatState,I}
@@ -125,10 +117,10 @@ const MultipleSystemSatsState{N,I,S,SS} =
     TupleLike{<:NTuple{N,SystemSatsState{<:S,<:SS,<:I}}}
 
 function merge_sats(
-    multiple_system_sats_state::MultipleSystemSatsState{N},
+    multiple_system_sats_state::MultipleSystemSatsState{N,I,S,SS},
     system_idx,
-    new_sat_states::Dictionary{I,<:SatState},
-) where {N,I}
+    new_sat_states::Dictionary{I,<:SS},
+) where {N,I,S,SS}
     system_sats_state = get_system_sats_state(multiple_system_sats_state, system_idx)
     @set multiple_system_sats_state[system_idx].states =
         merge(system_sats_state.states, new_sat_states)
@@ -187,9 +179,12 @@ get_sat_state(sss::SystemSatsState, identifier) = sss.states[identifier]
 get_sat_state(sss::SystemSatsState) = only(sss.states)
 
 function estimate_cn0(sss::SystemSatsState, id...)
-    system = sss.system
+    estimate_cn0(sss.system, get_sat_state(sss, id...))
+end
+
+function estimate_cn0(system::AbstractGNSS, sat_state::SatState)
     estimate_cn0(
-        get_cn0_estimator(get_sat_state(sss, id...)),
+        get_cn0_estimator(sat_state),
         get_code_length(system) / get_code_frequency(system),
     )
 end

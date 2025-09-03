@@ -47,7 +47,7 @@ using Tracking:
 
     track_state = @inferred TrackState(
         gpsl1,
-        [SatState(gpsl1, 1, sampling_frequency, start_code_phase, carrier_doppler - 20Hz)],
+        [SatState(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)],
     )
 
     signal_temp =
@@ -150,27 +150,11 @@ end
     track_state = @inferred TrackState((
         gps = SystemSatsState(
             gpsl1,
-            [
-                SatState(
-                    gpsl1,
-                    prn,
-                    sampling_frequency,
-                    start_code_phase,
-                    carrier_doppler_gps,
-                ),
-            ],
+            [SatState(gpsl1, prn, start_code_phase, carrier_doppler_gps)],
         ),
         gal = SystemSatsState(
             galileo_e1b,
-            [
-                SatState(
-                    galileo_e1b,
-                    prn,
-                    sampling_frequency,
-                    start_code_phase,
-                    carrier_doppler_gal,
-                ),
-            ],
+            [SatState(galileo_e1b, prn, start_code_phase, carrier_doppler_gal)],
         ),
     );)
 
@@ -307,7 +291,7 @@ end
 
     track_state = @inferred TrackState(
         gpsl1,
-        [SatState(gpsl1, 1, sampling_frequency, start_code_phase, carrier_doppler - 20Hz)];
+        [SatState(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)];
     )
 
     signal =
@@ -415,7 +399,6 @@ end
             SatState(
                 gpsl1,
                 1,
-                sampling_frequency,
                 start_code_phase,
                 carrier_doppler - 20Hz;
                 num_ants = NumAnts(3),
@@ -521,18 +504,9 @@ end
     num_samples = 4000
     num_ants = NumAnts(3)
 
-    correlator = get_default_correlator(gpsl1, sampling_frequency, num_ants)
-    sat_states = [
-        SatState(
-            gpsl1,
-            1,
-            sampling_frequency,
-            start_code_phase,
-            carrier_doppler - 20Hz;
-            num_ants,
-            correlator,
-        ),
-    ]
+    correlator = get_default_correlator(gpsl1, num_ants)
+    sat_states =
+        [SatState(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz; num_ants, correlator)]
 
     system_sats_state = SystemSatsState(gpsl1, sat_states)
 

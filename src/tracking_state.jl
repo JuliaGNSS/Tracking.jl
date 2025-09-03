@@ -163,7 +163,7 @@ end
 function merge_sats(
     track_state::TrackState{S,DE},
     system_idx::Union{Symbol,Integer},
-    sat_states::Union{SatState,Vector{<:SatState},Dictionary{Any,<:SatState}},
+    sat_states::Union{SatState,Vector{<:SatState},Dictionary{<:Any,<:SatState}},
 ) where {S<:MultipleSystemSatsState,DE<:AbstractDopplerEstimator}
     TrackState{S,DE}(
         merge_sats(

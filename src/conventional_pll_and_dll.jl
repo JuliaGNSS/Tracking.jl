@@ -185,7 +185,8 @@ function estimate_dopplers_and_filter_prompt(
             dll_discriminator = dll_disc(
                 system_sats_state.system,
                 filtered_correlator,
-                (sat_state.code_doppler + get_code_frequency(system_sats_state.system)) / sampling_frequency,
+                sat_state.code_doppler,
+                sampling_frequency,
             )
             carrier_freq_update, carrier_loop_filter = filter_loop(
                 pll_and_dll_state.carrier_loop_filter,

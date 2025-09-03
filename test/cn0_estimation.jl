@@ -14,6 +14,7 @@ using Tracking:
     EarlyPromptLateCorrelator,
     correlate,
     get_prompt,
+    get_correlator_sample_shifts,
     estimate_cn0,
     SatState,
     TrackState,
@@ -68,9 +69,18 @@ end
                 code_frequency .* (-2:4001) ./ sampling_frequency .+ start_code_phase,
                 prn,
             )
-        correlator = EarlyPromptLateCorrelator(gpsl1, sampling_frequency)
+        correlator = EarlyPromptLateCorrelator()
+        sample_shifts =
+            get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
         signal_struct = StructArray(signal)
-        correlator = correlate(correlator, signal_struct, code, start_sample, num_samples)
+        correlator = correlate(
+            correlator,
+            signal_struct,
+            sample_shifts,
+            code,
+            start_sample,
+            num_samples,
+        )
         cn0_estimator = update(cn0_estimator, get_prompt(correlator))
     end
     @test @inferred(get_current_index(cn0_estimator)) == 100
@@ -95,7 +105,7 @@ end
 
     track_state = @inferred TrackState(
         gpsl1,
-        [SatState(gpsl1, prn, sampling_frequency, start_code_phase, carrier_doppler)];
+        [SatState(gpsl1, prn, start_code_phase, carrier_doppler)];
     )
 
     for i = 1:100

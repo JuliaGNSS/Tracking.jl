@@ -31,6 +31,7 @@ export get_early,
     get_last_fully_integrated_filtered_prompt,
     get_bit_buffer,
     get_bits,
+    get_num_bits,
     get_accumulators,
     get_early_late_sample_spacing,
     get_system_sats_state,
@@ -106,7 +107,9 @@ include("carrier_replica.jl")
 include("downconvert.jl")
 include("cn0_estimation.jl")
 include("bit_buffer.jl")
-include("correlator.jl")
+include("correlators/correlator.jl")
+include("correlators/early_prompt_late.jl")
+include("correlators/very_early_prompt_late.jl")
 include("discriminators.jl")
 include("post_corr_filter.jl")
 include("gpsl1.jl")

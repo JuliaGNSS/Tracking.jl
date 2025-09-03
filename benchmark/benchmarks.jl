@@ -18,10 +18,13 @@ function bench_downconvert_and_correlate(
 
     maximum_expected_sampling_frequency = Val(sampling_frequency)
 
-    system_sats_state = SystemSatsState(
-        system,
-        [SatState(system, 1, sampling_frequency, code_phase, 1000.0Hz)];
-    )
+    system_sats_state =
+        PACKAGE_VERSION <= v"0.15.6" ?
+        SystemSatsState(
+            system,
+            [SatState(system, 1, sampling_frequency, code_phase, 1000.0Hz)],
+        ) : SystemSatsState(system, [SatState(system, 1, code_phase, 1000.0Hz)])
+
     multiple_system_sats_state = (system_sats_state,)
 
     downconvert_and_correlator =
@@ -154,7 +157,10 @@ function bench_track(;
                 [SatState(system, 1, sampling_frequency, 0.0, 1000Hz)];
                 num_samples = num_samples_signal,
                 maximum_expected_sampling_frequency = Val(sampling_frequency),
-            ) : TrackState(system, [SatState(system, 1, sampling_frequency, 0.0, 1000Hz)])
+            ) :
+            PACKAGE_VERSION <= v"0.15.6" ?
+            TrackState(system, [SatState(system, 1, sampling_frequency, 0.0, 1000Hz)]) :
+            TrackState(system, [SatState(system, 1, 0.0, 1000Hz)])
         )
     signal = rand(Complex{signal_type}, num_samples_signal)
     return if PACKAGE_VERSION <= v"0.15.2"
