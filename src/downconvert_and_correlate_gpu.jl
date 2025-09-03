@@ -162,10 +162,16 @@ function downconvert_and_correlate(
                 carrier_frequency = sat_state.carrier_doppler + intermediate_frequency
                 code_frequency =
                     sat_state.code_doppler + get_code_frequency(system_sats_state.system)
+                sample_shifts = get_correlator_sample_shifts(
+                    sat_state.correlator,
+                    sampling_frequency,
+                    code_frequency,
+                )
                 new_correlator = downconvert_and_correlate!(
                     system_buffers.textured_system,
                     signal,
                     sat_state.correlator,
+                    sample_shifts,
                     sat_state.code_phase,
                     sat_state.carrier_phase,
                     code_frequency,
@@ -287,6 +293,7 @@ function downconvert_and_correlate!(
     code_buffer,
     signal,
     correlator::AbstractCorrelator{M},
+    sample_shifts,
     code_phase,
     carrier_phase,
     code_frequency,
@@ -307,7 +314,7 @@ function downconvert_and_correlate!(
         signal,
         code_buffer,
         Int32(prn),
-        correlator.shifts,
+        sample_shifts,
         Int32(num_samples_left),
         Float32(code_frequency / Hz),
         Float32(carrier_frequency / Hz),

@@ -19,10 +19,10 @@ using Tracking:
 
     sampling_frequency = 5e6Hz
 
-    @test @inferred(get_default_correlator(gpsl1, sampling_frequency, NumAnts(1))) ==
-          EarlyPromptLateCorrelator(gpsl1, sampling_frequency; num_ants = NumAnts(1))
-    @test @inferred(get_default_correlator(gpsl1, sampling_frequency, NumAnts(3))) ==
-          EarlyPromptLateCorrelator(gpsl1, sampling_frequency; num_ants = NumAnts(3))
+    @test @inferred(get_default_correlator(gpsl1, NumAnts(1))) ==
+          EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
+    @test @inferred(get_default_correlator(gpsl1, NumAnts(3))) ==
+          EarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 end
 
 end
