@@ -37,11 +37,10 @@ has_bit_or_secondary_code_been_found(s::SatState) =
 function SatState(
     system::AbstractGNSS,
     prn::Int,
-    sampling_frequency,
     code_phase,
     carrier_doppler;
     num_ants::NumAnts = NumAnts(1),
-    correlator = get_default_correlator(system, sampling_frequency, num_ants),
+    correlator = get_default_correlator(system, num_ants),
     carrier_phase = 0.0,
     code_doppler = carrier_doppler * get_code_center_frequency_ratio(system),
     num_prompts_for_cn0_estimation::Int = 100,
@@ -65,14 +64,7 @@ function SatState(
 end
 
 function SatState(acq::AcquisitionResults; args...)
-    SatState(
-        acq.system,
-        acq.prn,
-        acq.sampling_frequency,
-        acq.code_phase,
-        acq.carrier_doppler;
-        args...,
-    )
+    SatState(acq.system, acq.prn, acq.code_phase, acq.carrier_doppler; args...)
 end
 
 function SatState(
@@ -125,10 +117,10 @@ const MultipleSystemSatsState{N,I,S,SS} =
     TupleLike{<:NTuple{N,SystemSatsState{<:S,<:SS,<:I}}}
 
 function merge_sats(
-    multiple_system_sats_state::MultipleSystemSatsState{N},
+    multiple_system_sats_state::MultipleSystemSatsState{N,I,S,SS},
     system_idx,
-    new_sat_states::Dictionary{I,<:SatState},
-) where {N,I}
+    new_sat_states::Dictionary{I,<:SS},
+) where {N,I,S,SS}
     system_sats_state = get_system_sats_state(multiple_system_sats_state, system_idx)
     @set multiple_system_sats_state[system_idx].states =
         merge(system_sats_state.states, new_sat_states)

@@ -20,8 +20,7 @@ using Tracking:
     code_frequency = get_code_frequency(system)
     carrier_doppler = 0.0Hz
 
-    track_state =
-        TrackState(system, [SatState(system, 1, sampling_frequency, 0, carrier_doppler)];)
+    track_state = TrackState(system, [SatState(system, 1, 0, carrier_doppler)];)
 
     bits = vcat(ones(20), zeros(20), ones(1))
     foreach(enumerate(bits)) do (index, bit)
@@ -29,7 +28,8 @@ using Tracking:
         carrier_phase =
             2π * (index - 1) * num_samples * carrier_doppler / sampling_frequency
         signal =
-            (bit * 2 - 1) .* cis.(
+            (bit * 2 - 1) .*
+            cis.(
                 2π * (0:(num_samples-1)) * carrier_doppler / sampling_frequency .+
                 carrier_phase,
             ) .*

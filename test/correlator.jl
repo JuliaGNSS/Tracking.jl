@@ -2,106 +2,171 @@ module CorrelatorTest
 
 using Test: @test, @testset, @inferred
 using Unitful: Hz
-using GNSSSignals: GPSL1, get_code
-using StaticArrays: SVector
+using GNSSSignals: GPSL1, GalileoE1B, get_code, get_code_frequency
+using StaticArrays: SVector, MVector, MMatrix
 using StructArrays: StructArray
 using Tracking:
     EarlyPromptLateCorrelator,
+    VeryEarlyPromptLateCorrelator,
     NumAnts,
+    NumAccumulators,
+    add_to_previous,
+    get_very_early,
     get_early,
     get_prompt,
     get_late,
+    get_num_ants,
+    get_very_late,
     get_accumulators,
     get_early_late_sample_spacing,
     DefaultPostCorrFilter,
     apply,
     normalize,
-    correlate
+    correlate,
+    get_correlator_sample_shifts,
+    get_initial_accumulator,
+    zero_accumulators
 
 @testset "Correlator" begin
+    @testset "Get initial accumulators" begin
+        @test @inferred(get_initial_accumulator(NumAnts(1), NumAccumulators(3))) isa
+              SVector{3,ComplexF64}
+        @test @inferred(get_initial_accumulator(NumAnts(4), NumAccumulators(3))) isa
+              SVector{3,SVector{4,ComplexF64}}
+        @test @inferred(get_initial_accumulator(NumAnts(1), 3)) isa Vector{ComplexF64}
+        @test @inferred(get_initial_accumulator(NumAnts(4), 3)) isa
+              Vector{SVector{4,ComplexF64}}
+    end
+
+    @testset "Zero accumulators" begin
+        accumulator =
+            @inferred(zero_accumulators(ones(SVector{3,ComplexF64}), zeros(ComplexF32, 1)))
+        @test accumulator isa MVector{3,Float32}
+        @test accumulator == [0, 0, 0]
+
+        accumulator = @inferred(
+            zero_accumulators(
+                SVector(ones(SVector{3,ComplexF64}), ones(SVector{3,ComplexF64})),
+                zeros(ComplexF32, 1),
+            )
+        )
+        @test accumulator isa MMatrix{3,2,Float32}
+        @test accumulator == [0.0 0.0; 0.0 0.0; 0.0 0.0]
+
+        accumulator =
+            @inferred(zero_accumulators(ones(ComplexF64, 3), zeros(ComplexF32, 1)))
+        @test accumulator isa Vector{Float32}
+        @test accumulator == [0, 0, 0]
+
+        accumulator = @inferred(
+            zero_accumulators(
+                [ones(SVector{3,ComplexF64}), ones(SVector{3,ComplexF64})],
+                zeros(ComplexF32, 1),
+            )
+        )
+        @test accumulator isa Matrix{Float32}
+        @test accumulator == [0.0 0.0; 0.0 0.0; 0.0 0.0]
+    end
+
+    @testset "Add to previous accumulators" begin
+        accumulator = @inferred(
+            add_to_previous(
+                get_initial_accumulator(NumAnts(2), NumAccumulators(3)),
+                ones(MMatrix{2,3,Float32}),
+                ones(MMatrix{2,3,Float32}),
+            )
+        )
+        @test accumulator isa SVector{3,SVector{2,ComplexF64}}
+        @test accumulator == [
+            [1.0 + 1.0im, 1.0 + 1.0im],
+            [1.0 + 1.0im, 1.0 + 1.0im],
+            [1.0 + 1.0im, 1.0 + 1.0im],
+        ]
+
+        accumulator = @inferred(
+            add_to_previous(
+                get_initial_accumulator(NumAnts(2), 3),
+                ones(Float32, 2, 3),
+                ones(Float32, 2, 3),
+            )
+        )
+        @test accumulator isa Vector{SVector{2,ComplexF64}}
+        @test accumulator == [
+            [1.0 + 1.0im, 1.0 + 1.0im],
+            [1.0 + 1.0im, 1.0 + 1.0im],
+            [1.0 + 1.0im, 1.0 + 1.0im],
+        ]
+    end
+
     @testset "Correlator constructor" begin
         gpsl1 = GPSL1()
         sampling_frequency = 5e6Hz
-        correlator = @inferred EarlyPromptLateCorrelator(gpsl1, sampling_frequency)
+        correlator = @inferred EarlyPromptLateCorrelator()
 
         @test @inferred(get_early(correlator)) == 0.0
         @test @inferred(get_prompt(correlator)) == 0.0
         @test @inferred(get_late(correlator)) == 0.0
-        @test correlator.shifts == -2:2:2
-        @test correlator.early_shift == 3
-        @test correlator.prompt_shift == 2
-        @test correlator.late_shift == 1
+        @test correlator.preferred_early_late_to_prompt_code_shift == 0.5
+        @test get_num_ants(correlator) == 1
 
-        correlator = @inferred EarlyPromptLateCorrelator(
-            gpsl1,
-            sampling_frequency,
-            num_ants = NumAnts(1),
-            num_accumulators = 3,
-        )
-        @test isa(get_accumulators(correlator), Vector)
-        @test correlator.shifts == -2:2:2
-        @test correlator.early_shift == 3
-        @test correlator.prompt_shift == 2
-        @test correlator.late_shift == 1
-
-        correlator = @inferred EarlyPromptLateCorrelator(
-            gpsl1,
-            sampling_frequency,
-            num_ants = NumAnts(1),
-        )
+        correlator = @inferred EarlyPromptLateCorrelator(num_ants = NumAnts(1))
 
         @test @inferred(get_early(correlator)) == 0.0
         @test @inferred(get_prompt(correlator)) == 0.0
         @test @inferred(get_late(correlator)) == 0.0
-        @test correlator.shifts == -2:2:2
-        @test correlator.early_shift == 3
-        @test correlator.prompt_shift == 2
-        @test correlator.late_shift == 1
+        @test correlator.preferred_early_late_to_prompt_code_shift == 0.5
+        @test get_num_ants(correlator) == 1
 
-        correlator = @inferred EarlyPromptLateCorrelator(
-            gpsl1,
-            sampling_frequency,
-            num_ants = NumAnts(1),
-            num_accumulators = 3,
-        )
-
-        @test @inferred(get_early(correlator)) == 0.0
-        @test @inferred(get_prompt(correlator)) == 0.0
-        @test @inferred(get_late(correlator)) == 0.0
-        @test correlator.shifts == -2:2:2
-        @test correlator.early_shift == 3
-        @test correlator.prompt_shift == 2
-        @test correlator.late_shift == 1
-
-        correlator = @inferred EarlyPromptLateCorrelator(
-            gpsl1,
-            sampling_frequency,
-            num_ants = NumAnts(2),
-        )
+        correlator = @inferred EarlyPromptLateCorrelator(num_ants = NumAnts(2))
 
         @test @inferred(get_early(correlator)) == SVector(0.0 + 0.0im, 0.0 + 0.0im)
         @test @inferred(get_prompt(correlator)) == SVector(0.0 + 0.0im, 0.0 + 0.0im)
         @test @inferred(get_late(correlator)) == SVector(0.0 + 0.0im, 0.0 + 0.0im)
-        @test correlator.shifts == -2:2:2
-        @test correlator.early_shift == 3
-        @test correlator.prompt_shift == 2
-        @test correlator.late_shift == 1
+        @test correlator.preferred_early_late_to_prompt_code_shift == 0.5
+        @test get_num_ants(correlator) == 2
 
-        correlator = @inferred EarlyPromptLateCorrelator(
-            gpsl1,
-            sampling_frequency,
-            num_ants = NumAnts(2),
-            num_accumulators = 3,
+        correlator =
+            EarlyPromptLateCorrelator(SVector(1.0 + 0.0im, 2.0 + 0.0im, 3.0 + 0.0im), 0.5)
+        @test @inferred(get_early(correlator)) == 3.0
+        @test @inferred(get_prompt(correlator)) == 2.0
+        @test @inferred(get_late(correlator)) == 1.0
+        @test get_num_ants(correlator) == 1
+
+        correlator = VeryEarlyPromptLateCorrelator(
+            SVector(1.0 + 0.0im, 2.0 + 0.0im, 3.0 + 0.0im, 4.0 + 0.0im, 5.0 + 0.0im),
+            0.15,
+            0.6,
         )
-
-        @test @inferred(get_early(correlator)) == SVector(0.0 + 0.0im, 0.0 + 0.0im)
-        @test @inferred(get_prompt(correlator)) == SVector(0.0 + 0.0im, 0.0 + 0.0im)
-        @test @inferred(get_late(correlator)) == SVector(0.0 + 0.0im, 0.0 + 0.0im)
-        @test correlator.shifts == -2:2:2
-        @test correlator.early_shift == 3
-        @test correlator.prompt_shift == 2
-        @test correlator.late_shift == 1
+        @test @inferred(get_very_early(correlator)) == 5.0
+        @test @inferred(get_early(correlator)) == 4.0
+        @test @inferred(get_prompt(correlator)) == 3.0
+        @test @inferred(get_late(correlator)) == 2.0
+        @test @inferred(get_very_late(correlator)) == 1.0
+        @test get_num_ants(correlator) == 1
     end
+
+    @testset "Calculate sample shift" begin
+        gpsl1 = GPSL1()
+        code_frequency = get_code_frequency(gpsl1)
+        sampling_frequency = code_frequency * 4
+        correlator = EarlyPromptLateCorrelator()
+        @test @inferred(
+            get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
+        ) == -2:2:2
+
+        galileoE1B = GalileoE1B()
+        sampling_frequency = get_code_frequency(galileoE1B) * 4
+        correlator = VeryEarlyPromptLateCorrelator()
+        @test @inferred(
+            get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
+        ) == -2:1:2
+
+        sampling_frequency = get_code_frequency(galileoE1B) * 8
+        @test @inferred(
+            get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
+        ) == [-5, -1, 0, 1, 5]
+    end
+
     @testset "Zeroing correlator" begin
         correlator = @inferred EarlyPromptLateCorrelator(
             SVector(
@@ -109,10 +174,7 @@ using Tracking:
                 SVector(1.0 + 0.0im, 1.0 + 0.0im),
                 SVector(1.0 + 0.0im, 1.0 + 0.0im),
             ),
-            -1:1,
-            3,
-            2,
-            1,
+            0.5,
         )
 
         @test @inferred(zero(correlator)) == EarlyPromptLateCorrelator(
@@ -121,27 +183,16 @@ using Tracking:
                 SVector(0.0 + 0.0im, 0.0 + 0.0im),
                 SVector(0.0 + 0.0im, 0.0 + 0.0im),
             ),
-            -1:1,
-            3,
-            2,
-            1,
+            0.5,
         )
 
         correlator = @inferred EarlyPromptLateCorrelator(
             SVector(1.0 + 0.0im, 1.0 + 0.0im, 1.0 + 0.0im),
-            -1:1,
-            3,
-            2,
-            1,
+            0.5,
         )
 
-        @test @inferred(zero(correlator)) == EarlyPromptLateCorrelator(
-            SVector(0.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im),
-            -1:1,
-            3,
-            2,
-            1,
-        )
+        @test @inferred(zero(correlator)) ==
+              EarlyPromptLateCorrelator(SVector(0.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im), 0.5)
     end
     @testset "Filter correlator" begin
         correlator = @inferred EarlyPromptLateCorrelator(
@@ -150,50 +201,33 @@ using Tracking:
                 SVector(1.0 + 0.0im, 2.0 + 0.0im),
                 SVector(1.0 + 1.0im, 1.0 + 3.0im),
             ),
-            -1:1,
-            3,
-            2,
-            1,
+            0.5,
         )
         default_post_corr_filter = DefaultPostCorrFilter()
         filtered_correlator = @inferred apply(default_post_corr_filter, correlator)
-        @test filtered_correlator == EarlyPromptLateCorrelator(
-            SVector(1.0 + 1.0im, 2.0 + 0.0im, 1.0 + 3.0im),
-            -1:1,
-            3,
-            2,
-            1,
-        )
+        @test filtered_correlator ==
+              EarlyPromptLateCorrelator(SVector(1.0 + 1.0im, 2.0 + 0.0im, 1.0 + 3.0im), 0.5)
 
         correlator = @inferred EarlyPromptLateCorrelator(
             SVector(1.0 + 0.0im, 1.0 + 0.0im, 1.0 + 0.0im),
-            -1:1,
-            3,
-            2,
-            1,
+            0.5,
         )
         filtered_correlator = @inferred apply(x -> 2 * x, correlator)
-        @test filtered_correlator == EarlyPromptLateCorrelator(
-            SVector(2.0 + 0.0im, 2.0 + 0.0im, 2.0 + 0.0im),
-            -1:1,
-            3,
-            2,
-            1,
-        )
+        @test filtered_correlator ==
+              EarlyPromptLateCorrelator(SVector(2.0 + 0.0im, 2.0 + 0.0im, 2.0 + 0.0im), 0.5)
     end
     @testset "Early late sample spacing" begin
+        gpsl1 = GPSL1()
+        code_frequency = get_code_frequency(gpsl1)
         correlator = @inferred EarlyPromptLateCorrelator(
             SVector(
                 SVector(1.0 + 0.0im, 1.0 + 0.0im),
                 SVector(1.0 + 0.0im, 1.0 + 0.0im),
                 SVector(1.0 + 0.0im, 1.0 + 0.0im),
             ),
-            -1:1,
-            3,
-            2,
-            1,
+            0.5,
         )
-        @test get_early_late_sample_spacing(correlator) == 2
+        @test get_early_late_sample_spacing(correlator, 2e6Hz, code_frequency) == 2
 
         correlator = @inferred EarlyPromptLateCorrelator(
             SVector(
@@ -201,14 +235,11 @@ using Tracking:
                 SVector(1.0 + 0.0im, 1.0 + 0.0im),
                 SVector(1.0 + 0.0im, 1.0 + 0.0im),
             ),
-            -2:2:2,
-            3,
-            2,
-            1,
+            0.5,
         )
-        @test get_early_late_sample_spacing(correlator) == 4
+        @test get_early_late_sample_spacing(correlator, 4e6Hz, code_frequency) == 4
 
-        correlator = @inferred EarlyPromptLateCorrelator(
+        correlator = @inferred VeryEarlyPromptLateCorrelator(
             SVector(
                 SVector(1.0 + 0.0im, 1.0 + 0.0im),
                 SVector(1.0 + 0.0im, 1.0 + 0.0im),
@@ -216,29 +247,19 @@ using Tracking:
                 SVector(1.0 + 0.0im, 1.0 + 0.0im),
                 SVector(1.0 + 0.0im, 1.0 + 0.0im),
             ),
-            -2:2,
-            5,
-            3,
-            1,
+            0.15,
+            0.6,
         )
-        @test get_early_late_sample_spacing(correlator) == 4
+        @test get_early_late_sample_spacing(correlator, 4e6Hz, code_frequency) == 2
     end
     @testset "Normalize correlator" begin
         correlator = @inferred EarlyPromptLateCorrelator(
             SVector(1.0 + 0.0im, 1.0 + 0.0im, 1.0 + 0.0im),
-            -1:1,
-            3,
-            2,
-            1,
+            0.5,
         )
         normalized_correlator = @inferred normalize(correlator, 10)
-        @test normalized_correlator == EarlyPromptLateCorrelator(
-            SVector(0.1 + 0.0im, 0.1 + 0.0im, 0.1 + 0.0im),
-            -1:1,
-            3,
-            2,
-            1,
-        )
+        @test normalized_correlator ==
+              EarlyPromptLateCorrelator(SVector(0.1 + 0.0im, 0.1 + 0.0im, 0.1 + 0.0im), 0.5)
 
         correlator = EarlyPromptLateCorrelator(
             SVector(
@@ -246,10 +267,7 @@ using Tracking:
                 SVector(1.0 + 0.0im, 1.0 + 0.0im),
                 SVector(1.0 + 0.0im, 1.0 + 0.0im),
             ),
-            -1:1,
-            3,
-            2,
-            1,
+            0.5,
         )
         normalized_correlator = @inferred normalize(correlator, 10)
         @test normalized_correlator == EarlyPromptLateCorrelator(
@@ -258,10 +276,7 @@ using Tracking:
                 SVector(0.1 + 0.0im, 0.1 + 0.0im),
                 SVector(0.1 + 0.0im, 0.1 + 0.0im),
             ),
-            -1:1,
-            3,
-            2,
-            1,
+            0.5,
         )
     end
 
@@ -277,31 +292,22 @@ using Tracking:
         @testset "↳ $na antennas" for na ∈ [1, 4]
             signal_mat = na == 1 ? signal : repeat(signal; outer = (1, na))
 
-            @testset "↳ $(string(type)) accumulator" for type ∈ [:SVector, :Vector]
-                if type == :SVector
-                    correlator = EarlyPromptLateCorrelator(
-                        gpsl1,
-                        sampling_frequency;
-                        num_ants = NumAnts(na),
-                    )
-                else
-                    correlator = EarlyPromptLateCorrelator(
-                        gpsl1,
-                        sampling_frequency;
-                        num_ants = NumAnts(na),
-                        num_accumulators = 3,
-                    )
-                end
+            correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(na))
 
-                correlator_result =
-                    @inferred correlate(correlator, signal_mat, code, 1, 2500)
-                early = get_early(correlator_result)
-                prompt = get_prompt(correlator_result)
-                late = get_late(correlator_result)
-                @test early == late
-                @test all(early .== 1476)
-                @test all(prompt .== 2500)
-            end
+            sample_shifts = get_correlator_sample_shifts(
+                correlator,
+                sampling_frequency,
+                get_code_frequency(gpsl1),
+            )
+
+            correlator_result =
+                @inferred correlate(correlator, signal_mat, sample_shifts, code, 1, 2500)
+            early = get_early(correlator_result)
+            prompt = get_prompt(correlator_result)
+            late = get_late(correlator_result)
+            @test early == late
+            @test all(early .== 1476)
+            @test all(prompt .== 2500)
         end
     end
 end

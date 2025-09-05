@@ -61,7 +61,7 @@ end
     code_phase = 0.5
     preferred_num_code_blocks_to_integrate = 1
 
-    sat_state = SatState(gpsl1, prn, sampling_frequency, code_phase, carrier_doppler)
+    sat_state = SatState(gpsl1, prn, code_phase, carrier_doppler)
 
     system_sats_state = (SystemSatsState(gpsl1, sat_state),)
 
@@ -70,7 +70,7 @@ end
     # Number of samples too small to generate a new estimate for phases and dopplers
     num_samples = 2000
     correlator = update_accumulator(
-        get_default_correlator(gpsl1, sampling_frequency),
+        get_default_correlator(gpsl1),
         SVector(1000.0 + 10im, 2000.0 + 20im, 750.0 + 10im),
     )
     sat_state_after_small_integration =

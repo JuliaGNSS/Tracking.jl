@@ -29,10 +29,7 @@ end
 
     system_sats_state = SystemSatsState(
         gpsl1,
-        [
-            SatState(gpsl1, 1, sampling_frequency, code_phase, 1000.0Hz),
-            SatState(gpsl1, 2, sampling_frequency, 11.0, 500.0Hz),
-        ];
+        [SatState(gpsl1, 1, code_phase, 1000.0Hz), SatState(gpsl1, 2, 11.0, 500.0Hz)];
     )
     multiple_system_sats_state = (system_sats_state,)
 

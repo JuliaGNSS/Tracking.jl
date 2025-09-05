@@ -59,11 +59,16 @@ function downconvert_and_correlate(
                 code_frequency =
                     sat_state.code_doppler + get_code_frequency(system_sats_state.system)
 
-                code_shifts = get_shifts(sat_state.correlator)
+                sample_shifts = get_correlator_sample_shifts(
+                    sat_state.correlator,
+                    sampling_frequency,
+                    code_frequency,
+                )
                 @no_escape downconvert_and_correlator.buffer begin
                     code_replica_buffer = @alloc(
                         get_code_type(system_sats_state.system),
-                        num_samples_signal + maximum(code_shifts) - minimum(code_shifts)
+                        num_samples_signal + maximum(sample_shifts) -
+                        minimum(sample_shifts)
                     )
                     carrier_replica_buffer_re = @alloc(Float32, num_samples_signal)
                     carrier_replica_buffer_im = @alloc(Float32, num_samples_signal)
@@ -135,6 +140,8 @@ function downconvert_and_correlate!(
     prn,
     maximum_expected_sampling_frequency,
 )
+    sample_shifts =
+        get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
     gen_code_replica!(
         code_replica,
         system,
@@ -143,7 +150,7 @@ function downconvert_and_correlate!(
         code_phase,
         signal_start_sample,
         num_samples_left,
-        correlator.shifts,
+        sample_shifts,
         prn,
         maximum_expected_sampling_frequency,
     )
@@ -165,6 +172,7 @@ function downconvert_and_correlate!(
     correlate(
         correlator,
         downconverted_signal,
+        sample_shifts,
         code_replica,
         signal_start_sample,
         num_samples_left,
