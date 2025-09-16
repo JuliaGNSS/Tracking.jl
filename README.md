@@ -2,6 +2,7 @@
 [![](https://img.shields.io/badge/docs-dev-blue.svg)](https://JuliaGNSS.github.io/Tracking.jl/dev)
 [![DOI](https://zenodo.org/badge/171484097.svg)](https://zenodo.org/badge/latestdoi/171484097)
 [![Coverage Status](https://coveralls.io/repos/github/JuliaGNSS/Tracking.jl/badge.svg?branch=master)](https://coveralls.io/github/JuliaGNSS/Tracking.jl?branch=master)
+[![[Semantic Release]](https://img.shields.io/badge/%20%20%F0%9F%93%A6%F0%9F%9A%80-semantic--release-e10079.svg)](https://github.com/semantic-release/semantic-release)
 
 # Tracking
 This package implements the tracking functionality of GNSS satellites that's part of the larger GNSS receiver.
