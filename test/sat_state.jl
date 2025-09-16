@@ -21,7 +21,7 @@ using Tracking:
 
 @testset "Satellite state" begin
     gpsl1 = GPSL1()
-    sat_state = @inferred SatState(gpsl1, 1, 5e6Hz, 10.0, 500.0Hz)
+    sat_state = @inferred SatState(gpsl1, 1, 10.0, 500.0Hz)
     @test get_prn(sat_state) == 1
     @test get_code_phase(sat_state) == 10.0
     @test get_code_doppler(sat_state) == 500.0Hz * get_code_center_frequency_ratio(gpsl1)

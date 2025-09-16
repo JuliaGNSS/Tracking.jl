@@ -11,10 +11,6 @@ function is_upcoming_integration_new_bit(gpsl1::GPSL1, code_block_bits, num_code
     masked_bit_synchronizer == 0xfffff || masked_bit_synchronizer == 0xfffff00000
 end
 
-function get_default_correlator(
-    gpsl1::GPSL1,
-    sampling_frequency,
-    num_ants::NumAnts = NumAnts(1),
-)
-    EarlyPromptLateCorrelator(gpsl1, sampling_frequency; num_ants)
+function get_default_correlator(gpsl1::GPSL1, num_ants::NumAnts = NumAnts(1))
+    EarlyPromptLateCorrelator(; num_ants)
 end
