@@ -18,6 +18,7 @@ jobs:
         id: semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUNNER_DEBUG: 1
         with:
           semantic_version: 23.0.2
           extends: |
