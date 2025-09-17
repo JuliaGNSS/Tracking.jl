@@ -20,6 +20,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUNNER_DEBUG: 1
         with:
+          branches: |
+            ['+([0-9])?(.{+([0-9]),x}).x', 'master', 'main', 'next', 'next-major', {name: 'beta', prerelease: true}, {name: 'alpha', prerelease: true}]
           extends: |
             @ethima/semantic-release-configuration
           extra_plugins: |
