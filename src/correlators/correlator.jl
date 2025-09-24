@@ -145,7 +145,7 @@ end
 """
 $(SIGNATURES)
 
-Perform a correlation for multi antenna systems
+Perform a correlation for single antenna systems
 """
 function correlate(
     correlator::AbstractCorrelator{1},
@@ -159,9 +159,10 @@ function correlate(
     a_im = zero_accumulators(get_accumulators(correlator), downconverted_signal)
     d_re = downconverted_signal.re
     d_im = downconverted_signal.im
+    latest_sample_shift = minimum(sample_shifts)
     @avx for i = start_sample:num_samples+start_sample-1
         for j = 1:length(a_re)
-            sample_shift = sample_shifts[j] - sample_shifts[1]
+            sample_shift = sample_shifts[j] - latest_sample_shift
             a_re[j] += d_re[i] * code[i+sample_shift]
             a_im[j] += d_im[i] * code[i+sample_shift]
         end
@@ -197,10 +198,11 @@ function correlate(
     a_im = zero_accumulators(get_accumulators(correlator), downconverted_signal)
     d_re = downconverted_signal.re
     d_im = downconverted_signal.im
+    latest_sample_shift = minimum(sample_shifts)
     @avx for i = start_sample:num_samples+start_sample-1
         for k = 1:size(a_re, 2)
             for j = 1:size(a_re, 1)
-                shift = sample_shifts[k] - sample_shifts[1]
+                shift = sample_shifts[k] - latest_sample_shift
                 a_re[j, k] += d_re[i, j] * code[shift+i]
                 a_im[j, k] += d_im[i, j] * code[shift+i]
             end
