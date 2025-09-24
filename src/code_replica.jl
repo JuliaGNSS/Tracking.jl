@@ -22,8 +22,8 @@ function gen_code_replica!(
     prn::Integer,
     maximum_expected_sampling_frequency::Val
 )
-    earliest_sample_shift = correlator_sample_shifts[end]
-    latest_sample_shift = correlator_sample_shifts[1]
+    earliest_sample_shift = maximum(correlator_sample_shifts)
+    latest_sample_shift = minimum(correlator_sample_shifts)
     total_samples = num_samples + earliest_sample_shift - latest_sample_shift
     gen_code!(
         view(code_replica, start_sample:start_sample+total_samples-1),
