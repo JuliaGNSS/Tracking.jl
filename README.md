@@ -5,16 +5,16 @@
 [![[Semantic Release]](https://img.shields.io/badge/%20%20%F0%9F%93%A6%F0%9F%9A%80-semantic--release-e10079.svg)](https://github.com/semantic-release/semantic-release)
 
 # Tracking
-This package implements the tracking functionality of GNSS satellites that's part of the larger GNSS receiver.
+This package implements the tracking functionality of GNSS satellites that's part of a larger GNSS receiver.
 Tracking.jl primarily consists of two main blocks:
 
 1. Signal down-conversion and correlation
 2. Code and carrier estimation to generate replicas and close the loop
 
-Tracking.jl provides defaults for both blocks, but it provides mechanisms to hook in your own implementation (by using multiple dispatch). 
-For signal down-conversion and correlation Tracking.jl provides a highly optimized CPU implementation. There is also a GPU implementation that is mainly there for reference, but is not yet as fast as the CPU implementation.
-With respect to the second block Tracking.jl provides conventional DLLs and PLLs.
-Down-conversion and correlation is done in full code blocks meaning from code start to code end or multiples of that (e.g. in GPS L1 from 0 to `N`*1023). The factor `N` can be specified, but will be `1` as long as the bit start is unknown in order to find the bit start. Once that is done for every tracked satellite the result will be handed over to the code and carrier estimation block.
+Tracking.jl provides defaults for both blocks, but also provides mechanisms to hook in your own implementation (by using multiple dispatch). 
+For signal down-conversion and correlation, Tracking.jl provides a highly optimized CPU implementation. There is also a GPU implementation that is mainly there for reference, but is not yet as fast as the CPU implementation.
+With respect to the second block, Tracking.jl provides conventional DLLs and PLLs.
+Down-conversion and correlation are done in full code blocks, meaning from code start to code end or multiples of that (e.g. in GPS L1 from 0 to `N`*1023). The factor `N` can be specified, but will be `1` as long as the bit start is unknown in order to find the bit start. Once that is done for every tracked satellite the result will be handed over to the code and carrier estimation block.
 Moreover, Tracking.jl allows tracking of signals from phased antenna arrays meaning that they are down-converted and correlated by the very same replica to conserve phase relationships.
 
 ## Features
