@@ -11,7 +11,8 @@ using Tracking:
     SystemSatsState,
     SatState,
     TrackState,
-    downconvert_and_correlate
+    downconvert_and_correlate,
+    get_last_fully_integrated_correlator
 
 @testset "Downconvert and Correlator" begin
     downconvert_and_correlator = CPUDownconvertAndCorrelator(Val(5e6Hz))
@@ -66,12 +67,15 @@ end
     )
 
     # GPU uses floating point arithmetic and might differ a little with the fixed point arithmetic
-    @test real.(
-        next_track_state.multiple_system_sats_state[1].states[1].last_fully_integrated_correlator.accumulators,
-    ) ≈ [2921, 4949, 2917] ||
-          real.(
-        next_track_state.multiple_system_sats_state[1].states[1].last_fully_integrated_correlator.accumulators,
-    ) ≈ [2921, 4949, 2921]
+    if type == :CPU
+        @test real.(
+            get_last_fully_integrated_correlator(next_track_state, 1).accumulators
+        ) ≈ [2921, 4949, 2917]
+    else
+        @test real.(
+            get_last_fully_integrated_correlator(next_track_state, 1).accumulators
+        ) ≈ [2921, 4949, 2921]
+    end
 
     signal = array_transform(
         gen_code(
@@ -94,12 +98,15 @@ end
     )
 
     # GPU uses floating point arithmetic and might differ a little with the fixed point arithmetic
-    @test real.( #CPU
-        next_track_state.multiple_system_sats_state[1].states[2].last_fully_integrated_correlator.accumulators,
-    ) ≈ [2919, 4947, 2915] ||
-          real.( #GPU
-        next_track_state.multiple_system_sats_state[1].states[2].last_fully_integrated_correlator.accumulators,
-    ) ≈ [2919, 4947, 2919]
+    if type == :CPU
+        @test real.(
+            get_last_fully_integrated_correlator(next_track_state, 2).accumulators
+        ) ≈ [2919, 4947, 2915]
+    else
+        @test real.(
+            get_last_fully_integrated_correlator(next_track_state, 2).accumulators
+        ) ≈ [2919, 4947, 2919]
+    end
 end
 
 end
