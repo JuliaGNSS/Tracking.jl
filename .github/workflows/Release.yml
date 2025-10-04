@@ -17,7 +17,7 @@ jobs:
         uses: cycjimmy/semantic-release-action@v5
         id: semantic-release
         env:
-          GITHUB_TOKEN: ${{ secrets.PAT }}
+          GH_TOKEN: ${{ secrets.PAT }}
           RUNNER_DEBUG: 1
         with:
           branches: |
