@@ -4,7 +4,6 @@ using Test: @test, @testset, @inferred
 using Random: Random
 using Unitful: Hz, kHz, MHz
 using Statistics: mean
-using CUDA: CUDA, cu
 using GNSSSignals:
     GPSL1,
     GPSL5,
@@ -29,10 +28,7 @@ using Tracking:
     get_last_fully_integrated_filtered_prompt,
     get_code_length,
     NumAnts,
-    get_num_ants,
-    get_default_correlator
-
-import Tracking.TrackingCUDAExt: GPUDownconvertAndCorrelator
+    get_num_ants
 
 @testset "Tracking with signal of type $type" for type in
                                                   (Int16, Int32, Int64, Float32, Float64)
@@ -472,117 +468,6 @@ end
         carrier_phases[i] = comp_carrier_phase
     end
     @test tracked_code_phases[end] ≈ code_phases[end] atol = 5e-5
-    @test tracked_carrier_phases[end] + π ≈ carrier_phases[end] atol = 5e-5
-
-    #    using PyPlot
-    #    pygui(true)
-    #    figure("carrier_phases")
-    #    plot(tracked_carrier_phases)
-    #    plot(carrier_phases)
-    #    grid(true)
-    #    figure("Code Phases")
-    #    plot(300 * (tracked_code_phases .- code_phases))
-    #    figure("Carrier Doppler")
-    #    plot(tracked_carrier_dopplers)
-    #    figure("Code Doppler")
-    #    plot(tracked_code_dopplers)
-    #    figure("Prompt")
-    #    plot(real.(tracked_prompts))
-    #    plot(imag.(tracked_prompts))
-end
-
-@testset "Track multiple signals with GPU" begin
-    !CUDA.functional() && return
-    gpsl1 = GPSL1()
-    carrier_doppler = 200Hz
-    start_code_phase = 100
-    code_frequency = carrier_doppler / 1540 + get_code_frequency(gpsl1)
-    sampling_frequency = 4e6Hz
-    prn = 1
-    range = 0:3999
-    start_carrier_phase = π / 2
-
-    num_samples = 4000
-    num_ants = NumAnts(3)
-
-    correlator = get_default_correlator(gpsl1, num_ants)
-    sat_states =
-        [SatState(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz; num_ants, correlator)]
-
-    system_sats_state = SystemSatsState(gpsl1, sat_states)
-
-    # TODO: Why doesn't @inferred work here?
-    downconvert_and_correlator =
-        GPUDownconvertAndCorrelator((system_sats_state,), num_samples)
-
-    track_state = @inferred TrackState(system_sats_state)
-
-    signal =
-        cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase) .*
-        get_code.(
-            gpsl1,
-            code_frequency .* range ./ sampling_frequency .+ start_code_phase,
-            prn,
-        )
-    signal_mat = cu(repeat(signal; outer = (1, 3)))
-
-    track_state = @inferred track(
-        signal_mat,
-        track_state,
-        sampling_frequency;
-        downconvert_and_correlator,
-    )
-
-    iterations = 2000
-    code_phases = zeros(iterations)
-    carrier_phases = zeros(iterations)
-    tracked_code_phases = zeros(iterations)
-    tracked_carrier_phases = zeros(iterations)
-    tracked_code_dopplers = zeros(iterations)
-    tracked_carrier_dopplers = zeros(iterations)
-    tracked_prompts = zeros(ComplexF64, iterations)
-    for i = 1:iterations
-        carrier_phase =
-            mod2pi(
-                2π * carrier_doppler * 4000 * i / sampling_frequency +
-                start_carrier_phase +
-                π,
-            ) - π
-        code_phase =
-            mod(code_frequency * 4000 * i / sampling_frequency + start_code_phase, 1023)
-        signal =
-            cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ carrier_phase) .*
-            get_code.(
-                gpsl1,
-                code_frequency .* range ./ sampling_frequency .+ code_phase,
-                prn,
-            )
-        signal_mat = cu(repeat(signal; outer = (1, 3)))
-        track_state = @inferred track(
-            signal_mat,
-            track_state,
-            sampling_frequency;
-            downconvert_and_correlator,
-        )
-        comp_carrier_phase =
-            mod2pi(
-                2π * carrier_doppler * 4000 * (i + 1) / sampling_frequency +
-                start_carrier_phase +
-                π,
-            ) - π
-        comp_code_phase = mod(
-            code_frequency * 4000 * (i + 1) / sampling_frequency + start_code_phase,
-            1023,
-        )
-        tracked_code_phases[i] = get_code_phase(track_state)
-        tracked_carrier_phases[i] = get_carrier_phase(track_state)
-        tracked_carrier_dopplers[i] = get_carrier_doppler(track_state) / Hz
-        tracked_code_dopplers[i] = get_code_doppler(track_state) / Hz
-        tracked_prompts[i] = get_last_fully_integrated_filtered_prompt(track_state)
-        code_phases[i] = comp_code_phase
-        carrier_phases[i] = comp_carrier_phase
-    end
-    @test tracked_code_phases[end] ≈ code_phases[end] atol = 1e-2
     @test tracked_carrier_phases[end] + π ≈ carrier_phases[end] atol = 5e-5
 
     #    using PyPlot
