@@ -7,7 +7,7 @@ steps:
       - JuliaCI/julia#v1:
           version: "1.10"
     commands:
-      - julia --project=ext/TrackingCUDAExt/test -e 'using Pkg; Pkg.instantiate()'
+      - julia --project=ext/TrackingCUDAExt/test -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
       - julia --project=ext/TrackingCUDAExt/test ext/TrackingCUDAExt/test/runtests.jl
     agents:
       queue: "juliagpu"
@@ -19,7 +19,7 @@ steps:
       - JuliaCI/julia#v1:
           version: "1.11"
     commands:
-      - julia --project=ext/TrackingCUDAExt/test -e 'using Pkg; Pkg.instantiate()'
+      - julia --project=ext/TrackingCUDAExt/test -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
       - julia --project=ext/TrackingCUDAExt/test ext/TrackingCUDAExt/test/runtests.jl
     agents:
       queue: "juliagpu"
