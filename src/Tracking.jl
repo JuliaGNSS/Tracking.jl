@@ -1,6 +1,5 @@
 module Tracking
 
-using CUDA
 using DocStringExtensions
 using GNSSSignals
 using LoopVectorization
@@ -48,10 +47,7 @@ export get_early,
     SatState,
     SystemSatsState,
     CPUSatDownconvertAndCorrelator,
-    GPUSatDownconvertAndCorrelator,
-    GPUSystemDownconvertAndCorrelator,
     CPUDownconvertAndCorrelator,
-    GPUDownconvertAndCorrelator,
     ConventionalPLLAndDLL,
     DefaultPostCorrFilter,
     TrackState,
@@ -61,8 +57,7 @@ export get_early,
     get_sat_state,
     get_system,
     estimate_cn0,
-    get_default_correlator,
-    convert_code_to_texture_memory
+    get_default_correlator
 
 const Maybe{T} = Union{T,Nothing}
 
@@ -128,7 +123,6 @@ end
 include("sample_parameters.jl")
 include("downconvert_and_correlate.jl")
 include("downconvert_and_correlate_cpu.jl")
-include("downconvert_and_correlate_gpu.jl")
 include("conventional_pll_and_dll.jl")
 include("tracking_state.jl")
 include("track.jl")
