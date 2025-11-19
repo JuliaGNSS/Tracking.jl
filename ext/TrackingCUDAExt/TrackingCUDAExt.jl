@@ -12,6 +12,9 @@ using DocStringExtensions
 using Unitful: Hz
 import Adapt
 
+# Import functions from Tracking that we need to extend
+import Tracking: downconvert_and_correlate, downconvert_and_correlate!
+
 # Include the GPU implementation
 include("downconvert_and_correlate_gpu.jl")
 
