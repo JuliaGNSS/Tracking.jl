@@ -141,16 +141,4 @@ include("conventional_pll_and_dll.jl")
 include("tracking_state.jl")
 include("track.jl")
 
-# Pre-declare GPU types that will be assigned by TrackingCUDAExt
-# These need to exist in the parent module for extensions to assign to them
-function __init__()
-    # GPU types are assigned by TrackingCUDAExt when CUDA is loaded
-end
-
-# Declare global variables for GPU types (assigned by extension)
-global GPUSatDownconvertAndCorrelator
-global GPUSystemDownconvertAndCorrelator
-global GPUDownconvertAndCorrelator
-global convert_code_to_texture_memory
-
 end

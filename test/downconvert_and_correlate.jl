@@ -8,12 +8,12 @@ using Pkg
 using Bumper: SlabBuffer
 using Tracking:
     CPUDownconvertAndCorrelator,
-    GPUDownconvertAndCorrelator,
     SystemSatsState,
     SatState,
     TrackState,
     downconvert_and_correlate,
     get_last_fully_integrated_correlator
+import Tracking.TrackingCUDAExt: GPUDownconvertAndCorrelator
 
 # Helper function to check CUDA.jl version
 function is_cuda_below_version(version_string::String)
