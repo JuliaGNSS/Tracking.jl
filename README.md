@@ -24,7 +24,7 @@ Moreover, Tracking.jl allows tracking of signals from phased antenna arrays mean
 * Secondary code detection
 * Bit detection
 * Phased array tracking
-* GPU acceleration (CUDA)
+* GPU acceleration (requires `using CUDA`)
 
 ## Getting started
 
@@ -32,4 +32,16 @@ Install:
 ```julia
 julia> ]
 pkg> add Tracking
+```
+
+### GPU Support
+
+To use GPU acceleration features, you need to explicitly load CUDA:
+
+```julia
+using Tracking
+using CUDA  # Activates GPU functionality
+
+# GPU types are available via the extension module
+correlator = Tracking.TrackingCUDAExt.GPUDownconvertAndCorrelator(...)
 ```
