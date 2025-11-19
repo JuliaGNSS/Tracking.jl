@@ -15,7 +15,8 @@ import Adapt
 # Include the GPU implementation
 include("downconvert_and_correlate_gpu.jl")
 
-# Export GPU types - accessible as Tracking.TrackingCUDAExt.GPUDownconvertAndCorrelator
+# Export GPU types from the extension
+# Users access these via: Base.get_extension(Tracking, :TrackingCUDAExt).GPUDownconvertAndCorrelator
 export GPUSatDownconvertAndCorrelator,
        GPUSystemDownconvertAndCorrelator,
        GPUDownconvertAndCorrelator,
