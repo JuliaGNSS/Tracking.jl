@@ -57,7 +57,21 @@ export get_early,
     get_sat_state,
     get_system,
     estimate_cn0,
-    get_default_correlator
+    get_default_correlator,
+    AbstractCorrelator,
+    AbstractDownconvertAndCorrelator,
+    MultipleSystemType,
+    MultipleSystemSatsState,
+    get_num_accumulators,
+    get_correlator_sample_shifts,
+    calc_signal_samples_to_integrate,
+    update,
+    get_code_frequency,
+    get_code_length,
+    get_codes,
+    get_modulation,
+    get_secondary_code,
+    update_accumulator
 
 const Maybe{T} = Union{T,Nothing}
 
