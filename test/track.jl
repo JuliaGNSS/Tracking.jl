@@ -18,7 +18,6 @@ using Tracking:
     SatState,
     TrackState,
     SystemSatsState,
-    GPUDownconvertAndCorrelator,
     track,
     get_code_phase,
     get_carrier_phase,
@@ -32,6 +31,8 @@ using Tracking:
     NumAnts,
     get_num_ants,
     get_default_correlator
+
+import Tracking.TrackingCUDAExt: GPUDownconvertAndCorrelator
 
 @testset "Tracking with signal of type $type" for type in
                                                   (Int16, Int32, Int64, Float32, Float64)
