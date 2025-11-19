@@ -42,6 +42,7 @@ To use GPU acceleration features, you need to explicitly load CUDA:
 using Tracking
 using CUDA  # Activates GPU functionality
 
-# GPU types are available via the extension module
-correlator = Tracking.TrackingCUDAExt.GPUDownconvertAndCorrelator(...)
+# Access GPU types via the extension
+ext = Base.get_extension(Tracking, :TrackingCUDAExt)
+gpu_correlator = ext.GPUDownconvertAndCorrelator(...)
 ```
