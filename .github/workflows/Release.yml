@@ -29,7 +29,7 @@ jobs:
           extra_plugins: |
             @ethima/semantic-release-configuration
       - name: Notify JuliaRegistrator of new release
-        uses: peter-evans/commit-comment@v3
+        uses: peter-evans/commit-comment@v4
         if: steps.semantic-release.outputs.new_release_published == 'true'
         with:
           body: '@JuliaRegistrator register branch=${{ steps.semantic-release.outputs.new_release_git_tag }}'
