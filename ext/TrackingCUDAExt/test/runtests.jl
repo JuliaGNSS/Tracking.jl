@@ -2,6 +2,7 @@ module TrackingCUDAExtTests
 
 using Test: @test, @testset, @inferred
 using Unitful: Hz
+using Tracking
 using CUDA: CUDA, cu
 using GNSSSignals: GPSL1, gen_code, get_code_frequency, get_code_center_frequency_ratio, get_code
 using Pkg
@@ -21,7 +22,10 @@ using Tracking:
     get_last_fully_integrated_filtered_prompt,
     NumAnts,
     get_default_correlator
-import Tracking.TrackingCUDAExt: GPUDownconvertAndCorrelator
+
+# Access extension types via Base.get_extension
+const TrackingCUDAExt = Base.get_extension(Tracking, :TrackingCUDAExt)
+const GPUDownconvertAndCorrelator = TrackingCUDAExt.GPUDownconvertAndCorrelator
 
 # Helper function to check CUDA.jl version
 function is_cuda_below_version(version_string::String)
