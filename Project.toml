@@ -27,7 +27,7 @@ TrackingCUDAExt = "CUDA"
 
 [compat]
 Accessors = "0.1"
-Acquisition = "0.1.1"
+Acquisition = "0.1.1, 0.2"
 Adapt = "4.3"
 Bumper = "0.7.1"
 CUDA = "5.0"
