@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v0.16.0...v0.16.1) (2025-12-09)
+
+
+### Bug Fixes
+
+* update acquisition to 0.2 ([1c756c0](https://github.com/JuliaGNSS/Tracking.jl/commit/1c756c0c9e70ce6e71e38a491f41e93643746eda))
+
 # [0.16.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v0.15.8...v0.16.0) (2025-11-19)
 
 
