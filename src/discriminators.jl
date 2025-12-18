@@ -53,3 +53,28 @@ function pll_disc(system::AbstractGNSS, correlator)
     p = get_prompt(correlator)
     atan(imag(p) / real(p))
 end
+
+"""
+$(SIGNATURES)
+
+Calculates the carrier frequency error in Hz.
+"""
+function fll_disc(system::AbstractGNSS, correlator, previous_prompt, integration_time)
+    current_prompt = get_prompt(correlator)
+    
+    pervious_prompt_re = real(previous_prompt)
+    pervious_prompt_im = imag(previous_prompt)
+    current_prompt_re = real(current_prompt)
+    current_prompt_im = imag(current_prompt)
+
+    cross = pervious_prompt_re * current_prompt_im - current_prompt_re * pervious_prompt_im
+    dot   = pervious_prompt_re * current_prompt_re + current_prompt_im * pervious_prompt_im
+    
+    if dot == 0
+        fll_discriminator = 0.0Hz
+    else
+        fll_discriminator = atan(cross/dot) / (2 * pi * ustrip(s, integration_time)) * 1Hz
+    end
+    
+    return fll_discriminator
+end
