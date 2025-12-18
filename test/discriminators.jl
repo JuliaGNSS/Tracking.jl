@@ -23,6 +23,23 @@ using Tracking: EarlyPromptLateCorrelator, pll_disc, dll_disc, get_early_late_sa
     @test @inferred(pll_disc(gpsl1, correlator_plus60off)) == π / 3  #+60°
 end
 
+@testset "FLL discriminator" begin
+    correlator_minus60off = EarlyPromptLateCorrelator(
+        SVector(-0.5 + sqrt(3) / 2im, -1 + sqrt(3) * 1im, -0.5 + sqrt(3) / 2im),
+        0.5,
+    )
+    correlator_0off =
+        EarlyPromptLateCorrelator(SVector(0.5 + 0.0im, 1 + 0.0im, 0.5 + 0.0im), 0.5)
+    correlator_plus60off = EarlyPromptLateCorrelator(
+        SVector(0.5 + sqrt(3) / 2im, 1 + sqrt(3) * 1im, 0.5 + sqrt(3) / 2im),
+        0.5,
+    )
+    gpsl1 = GPSL1()
+    @test @inferred(fll_disc(gpsl1, correlator_0off, get_prompt(correlator_minus60off), 1ms)) == (166 + 2/3) * 1Hz
+    @test @inferred(fll_disc(gpsl1, correlator_0off, get_prompt(correlator_0off), 1ms)) == 0.0Hz
+    @test @inferred(fll_disc(gpsl1, correlator_0off, get_prompt(correlator_plus60off), 1ms)) == - (166 + 2/3) * 1Hz
+end
+
 @testset "DLL discriminator" begin
     gpsl1 = GPSL1()
     sampling_frequency = get_code_frequency(gpsl1) * 4
