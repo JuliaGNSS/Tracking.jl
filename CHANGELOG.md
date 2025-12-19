@@ -1,5 +1,20 @@
 # Changelog
 
+# [0.17.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v0.16.1...v0.17.0) (2025-12-19)
+
+
+### Bug Fixes
+
+* added missing imports for fll discriminator test ([8242dab](https://github.com/JuliaGNSS/Tracking.jl/commit/8242dab6840f3f95f19683a5c7ce0f34b4eaca7a))
+* correct units in fll discriminator test ([1b19ed1](https://github.com/JuliaGNSS/Tracking.jl/commit/1b19ed182faca872c81f84b1250586cda3f09ffd))
+* simplify fll discriminator ([51ba424](https://github.com/JuliaGNSS/Tracking.jl/commit/51ba424ac1295ee6ce0dd6febc6fab9cbe16d5da))
+* simplify units of fll discriminator ([28dfa8f](https://github.com/JuliaGNSS/Tracking.jl/commit/28dfa8f04cdc607098e69d5e54d7507dc4570eae))
+
+
+### Features
+
+* fll discriminator ([b9b7124](https://github.com/JuliaGNSS/Tracking.jl/commit/b9b7124af03f1a5626330eed882f934a0d46d156))
+
 ## [0.16.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v0.16.0...v0.16.1) (2025-12-09)
 
 
