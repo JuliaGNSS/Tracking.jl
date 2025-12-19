@@ -61,16 +61,11 @@ Calculates the carrier frequency error in Hz.
 """
 function fll_disc(system::AbstractGNSS, correlator, previous_prompt, integration_time)
     current_prompt = get_prompt(correlator)
-    
+
     result = conj(previous_prompt) * current_prompt
     cross = imag(result)
     dot = real(result)
-    
-    if dot == 0
-        fll_discriminator = 0.0Hz
-    else
-        fll_discriminator = atan(cross/dot) / (2 * pi * integration_time)
-    end
-    
-    return fll_discriminator
+
+    # atan(+-Int) produces valid outputs (+-π / 2)
+    return atan(cross / dot) / (2 * pi * integration_time)
 end
