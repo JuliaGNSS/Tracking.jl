@@ -3,8 +3,8 @@ module DiscriminatorsTest
 using Test: @test, @testset, @inferred
 using GNSSSignals: GPSL1, get_code_frequency
 using StaticArrays: SVector
-using Unitful: Hz
-using Tracking: EarlyPromptLateCorrelator, pll_disc, dll_disc, get_early_late_sample_spacing
+using Unitful: Hz, ms
+using Tracking: EarlyPromptLateCorrelator, pll_disc, fll_disc, dll_disc, get_early_late_sample_spacing, get_prompt
 
 @testset "PLL discriminator" begin
     correlator_minus60off = EarlyPromptLateCorrelator(
