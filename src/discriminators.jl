@@ -69,7 +69,7 @@ function fll_disc(system::AbstractGNSS, correlator, previous_prompt, integration
     if dot == 0
         fll_discriminator = 0.0Hz
     else
-        fll_discriminator = atan(cross/dot) / (2 * pi * ustrip(s, integration_time)) * 1Hz
+        fll_discriminator = atan(cross/dot) / (2 * pi * integration_time)
     end
     
     return fll_discriminator
