@@ -42,6 +42,7 @@ end
     )
     correlator_plus90off =
         EarlyPromptLateCorrelator(SVector(0.0 + 0.5im, 0.0 + 1.0im, 0.0 + 0.5im), 0.5)
+    correlator_empty = EarlyPromptLateCorrelator()
     gpsl1 = GPSL1()
     @test @inferred(
         fll_disc(gpsl1, correlator_0off, get_prompt(correlator_minus60off), 1ms)
@@ -54,6 +55,9 @@ end
     @test @inferred(
         fll_disc(gpsl1, correlator_0off, get_prompt(correlator_plus90off), 1ms)
     ) == -250Hz
+    @test @inferred(
+        fll_disc(gpsl1, correlator_0off, get_prompt(correlator_empty), 1ms)
+    ) == 0Hz
 end
 
 @testset "DLL discriminator" begin
