@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v0.17.0...v0.17.1) (2025-12-20)
+
+
+### Bug Fixes
+
+* initial fll discriminator ([3eb5a13](https://github.com/JuliaGNSS/Tracking.jl/commit/3eb5a13decd952e72685bac4e0b799fbd0a7977b))
+
 # [0.17.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v0.16.1...v0.17.0) (2025-12-19)
 
 
