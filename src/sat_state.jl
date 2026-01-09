@@ -6,6 +6,7 @@ struct SatState{C<:AbstractCorrelator,PCF<:AbstractPostCorrFilter}
     carrier_doppler::typeof(1.0Hz)
     integrated_samples::Int
     signal_start_sample::Int
+    is_integration_completed::Bool
     correlator::C
     last_fully_integrated_correlator::C
     last_fully_integrated_filtered_prompt::ComplexF64
@@ -39,12 +40,12 @@ function SatState(
     prn::Int,
     code_phase,
     carrier_doppler;
-    num_ants::NumAnts=NumAnts(1),
-    correlator=get_default_correlator(system, num_ants),
-    carrier_phase=0.0,
-    code_doppler=carrier_doppler * get_code_center_frequency_ratio(system),
-    num_prompts_for_cn0_estimation::Int=100,
-    post_corr_filter::AbstractPostCorrFilter=DefaultPostCorrFilter(),
+    num_ants::NumAnts = NumAnts(1),
+    correlator = get_default_correlator(system, num_ants),
+    carrier_phase = 0.0,
+    code_doppler = carrier_doppler * get_code_center_frequency_ratio(system),
+    num_prompts_for_cn0_estimation::Int = 100,
+    post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),
 )
     SatState(
         prn,
@@ -54,6 +55,7 @@ function SatState(
         float(carrier_doppler),
         0,
         1,
+        false,
         correlator,
         correlator,
         complex(0.0, 0.0),
@@ -69,19 +71,20 @@ end
 
 function SatState(
     sat_state::SatState{C,PCF};
-    prn=nothing,
-    code_phase=nothing,
-    code_doppler=nothing,
-    carrier_phase=nothing,
-    carrier_doppler=nothing,
-    integrated_samples=nothing,
-    signal_start_sample=nothing,
-    correlator::Maybe{C}=nothing,
-    last_fully_integrated_correlator=nothing,
-    last_fully_integrated_filtered_prompt=nothing,
-    cn0_estimator=nothing,
-    bit_buffer=nothing,
-    post_corr_filter::Maybe{PCF}=nothing,
+    prn = nothing,
+    code_phase = nothing,
+    code_doppler = nothing,
+    carrier_phase = nothing,
+    carrier_doppler = nothing,
+    integrated_samples = nothing,
+    signal_start_sample = nothing,
+    is_integration_completed = nothing,
+    correlator::Maybe{C} = nothing,
+    last_fully_integrated_correlator = nothing,
+    last_fully_integrated_filtered_prompt = nothing,
+    cn0_estimator = nothing,
+    bit_buffer = nothing,
+    post_corr_filter::Maybe{PCF} = nothing,
 ) where {C<:AbstractCorrelator,PCF<:AbstractPostCorrFilter}
     SatState{C,PCF}(
         isnothing(prn) ? sat_state.prn : prn,
@@ -92,6 +95,8 @@ function SatState(
         isnothing(integrated_samples) ? sat_state.integrated_samples : integrated_samples,
         isnothing(signal_start_sample) ? sat_state.signal_start_sample :
         signal_start_sample,
+        isnothing(is_integration_completed) ? sat_state.is_integration_completed :
+        is_integration_completed,
         isnothing(correlator) ? sat_state.correlator : correlator,
         isnothing(last_fully_integrated_correlator) ?
         sat_state.last_fully_integrated_correlator : last_fully_integrated_correlator,
@@ -105,7 +110,7 @@ function SatState(
 end
 
 function reset_start_sample_and_bit_buffer(sat_state)
-    SatState(sat_state; signal_start_sample=1, bit_buffer=reset(sat_state.bit_buffer))
+    SatState(sat_state; signal_start_sample = 1, bit_buffer = reset(sat_state.bit_buffer))
 end
 
 struct SystemSatsState{S<:AbstractGNSS,SS<:SatState,I}

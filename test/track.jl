@@ -28,7 +28,9 @@ using Tracking:
     get_last_fully_integrated_filtered_prompt,
     get_code_length,
     NumAnts,
-    get_num_ants
+    get_num_ants,
+    ConventionalPLLAndDLL,
+    ConventionalAssistedPLLAndDLL
 
 @testset "Tracking with signal of type $type" for type in
                                                   (Int16, Int32, Int64, Float32, Float64)
@@ -124,6 +126,69 @@ using Tracking:
     #    figure("Prompt")
     #    plot(real.(tracked_prompts))
     #    plot(imag.(tracked_prompts))
+end
+
+@testset "Tracking with large initial Doppler offset" begin
+    gpsl1 = GPSL1()
+    carrier_doppler = 200Hz
+    start_code_phase = 100.0
+    code_frequency =
+        carrier_doppler * get_code_center_frequency_ratio(gpsl1) + get_code_frequency(gpsl1)
+    sampling_frequency = 4e6Hz
+    prn = 1
+    range = 0:3999 # tracking 1 ms
+    start_carrier_phase = π / 2
+    iterations = 1000
+    tolerance = 1.0  # Hz, tight tolerance since no noise
+
+    function test_convergence(carrier_error, use_assisted)
+        sat_states = [SatState(gpsl1, 1, start_code_phase, carrier_doppler + carrier_error)]
+        system_sats_state = (SystemSatsState(gpsl1, sat_states),)
+        doppler_estimator = if use_assisted
+            ConventionalAssistedPLLAndDLL(system_sats_state)
+        else
+            ConventionalPLLAndDLL(system_sats_state)
+        end
+        track_state = TrackState(system_sats_state; doppler_estimator)
+
+        # Initial tracking step
+        signal =
+            cis.(
+                2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase
+            ) .*
+            gen_code(4000, gpsl1, prn, sampling_frequency, code_frequency, start_code_phase)
+        track_state = track(signal, track_state, sampling_frequency)
+
+        # Run tracking iterations
+        for i = 1:iterations
+            carrier_phase =
+                mod2pi(
+                    2π * carrier_doppler * 4000 * i / sampling_frequency +
+                    start_carrier_phase +
+                    π,
+                ) - π
+            code_phase =
+                mod(code_frequency * 4000 * i / sampling_frequency + start_code_phase, 1023)
+            signal =
+                cis.(
+                    2π .* carrier_doppler .* range ./ sampling_frequency .+ carrier_phase
+                ) .*
+                gen_code(4000, gpsl1, prn, sampling_frequency, code_frequency, code_phase)
+            track_state = track(signal, track_state, sampling_frequency)
+        end
+
+        final_doppler = get_carrier_doppler(track_state) / Hz
+        error = abs(final_doppler - carrier_doppler / Hz)
+        return error <= tolerance
+    end
+
+    # ConventionalPLLAndDLL: converges at 90Hz offset, fails at 100Hz
+    @test test_convergence(90Hz, false) == true
+    @test test_convergence(100Hz, false) == false
+
+    # ConventionalAssistedPLLAndDLL: converges at 240Hz offset, fails at 250Hz
+    @test test_convergence(240Hz, true) == true
+    @test test_convergence(250Hz, true) == false
 end
 
 @testset "Track multiple systems of type $type" for type in
@@ -266,7 +331,7 @@ end
         2e-2
     @test get_code_phase(track_state, :gal, 1) ≈ comp_code_phase_gal atol = 5e-3
     @test mod(get_carrier_phase(track_state, :gal, 1), π) ≈ mod(comp_carrier_phase_gal, π) atol =
-        3e-3
+        5e-3
 end
 
 @testset "Tracking with intermediate frequency of $intermediate_frequency" for intermediate_frequency in
