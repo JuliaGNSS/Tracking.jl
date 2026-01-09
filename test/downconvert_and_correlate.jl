@@ -10,7 +10,7 @@ using Tracking:
     SatState,
     TrackState,
     downconvert_and_correlate,
-    get_last_fully_integrated_correlator
+    get_correlator
 
 @testset "Downconvert and Correlator" begin
     downconvert_and_correlator = CPUDownconvertAndCorrelator(Val(5e6Hz))
@@ -39,14 +39,15 @@ end
 
     preferred_num_code_blocks_to_integrate = 1
 
-    signal = gen_code(
-        num_samples_signal,
-        gpsl1,
-        1,
-        sampling_frequency,
-        get_code_frequency(gpsl1) + 1000Hz * get_code_center_frequency_ratio(gpsl1),
-        code_phase,
-    ) .* cis.(2π * (0:(num_samples_signal-1)) * 1000.0Hz / sampling_frequency)
+    signal =
+        gen_code(
+            num_samples_signal,
+            gpsl1,
+            1,
+            sampling_frequency,
+            get_code_frequency(gpsl1) + 1000Hz * get_code_center_frequency_ratio(gpsl1),
+            code_phase,
+        ) .* cis.(2π * (0:(num_samples_signal-1)) * 1000.0Hz / sampling_frequency)
 
     next_track_state = @inferred downconvert_and_correlate(
         downconvert_and_correlator,
@@ -57,18 +58,17 @@ end
         intermediate_frequency,
     )
 
-    @test real.(
-        get_last_fully_integrated_correlator(next_track_state, 1).accumulators
-    ) ≈ [2921, 4949, 2917]
+    @test real.(get_correlator(next_track_state, 1).accumulators) ≈ [2921, 4949, 2917]
 
-    signal = gen_code(
-        num_samples_signal,
-        gpsl1,
-        2,
-        sampling_frequency,
-        get_code_frequency(gpsl1) + 500Hz * get_code_center_frequency_ratio(gpsl1),
-        11.0,
-    ) .* cis.(2π * (0:(num_samples_signal-1)) * 500.0Hz / sampling_frequency)
+    signal =
+        gen_code(
+            num_samples_signal,
+            gpsl1,
+            2,
+            sampling_frequency,
+            get_code_frequency(gpsl1) + 500Hz * get_code_center_frequency_ratio(gpsl1),
+            11.0,
+        ) .* cis.(2π * (0:(num_samples_signal-1)) * 500.0Hz / sampling_frequency)
 
     next_track_state = @inferred downconvert_and_correlate(
         downconvert_and_correlator,
@@ -79,9 +79,7 @@ end
         intermediate_frequency,
     )
 
-    @test real.(
-        get_last_fully_integrated_correlator(next_track_state, 2).accumulators
-    ) ≈ [2919, 4947, 2915]
+    @test real.(get_correlator(next_track_state, 2).accumulators) ≈ [2919, 4947, 2915]
 end
 
 end

@@ -4,7 +4,8 @@ using Test: @test, @testset, @inferred
 using Unitful: Hz
 using Tracking
 using CUDA: CUDA, cu
-using GNSSSignals: GPSL1, gen_code, get_code_frequency, get_code_center_frequency_ratio, get_code
+using GNSSSignals:
+    GPSL1, gen_code, get_code_frequency, get_code_center_frequency_ratio, get_code
 using Pkg
 using Bumper: SlabBuffer
 using Tracking:
@@ -13,7 +14,7 @@ using Tracking:
     SatState,
     TrackState,
     downconvert_and_correlate,
-    get_last_fully_integrated_correlator,
+    get_correlator,
     track,
     get_code_phase,
     get_carrier_phase,
@@ -77,15 +78,10 @@ end
 
     # GPU uses floating point arithmetic and might differ a little with the fixed point arithmetic
     if is_cuda_below_version("5.8.0")
-        @test real.(
-            get_last_fully_integrated_correlator(next_track_state, 1).accumulators
-        ) ≈ [2921, 4949, 2921]
+        @test real.(get_correlator(next_track_state, 1).accumulators) ≈ [2921, 4949, 2921]
     else
         # Unfortuntely, the texture index rounding is off with CUDA 5.9 TODO: report
-        accumulator =
-            real.(
-                get_last_fully_integrated_correlator(next_track_state, 1).accumulators
-            )
+        accumulator = real.(get_correlator(next_track_state, 1).accumulators)
         @test 2900 < accumulator[1] < 3000
         @test 4900 < accumulator[2] < 5000
         @test 2900 < accumulator[3] < 3000
@@ -113,15 +109,10 @@ end
 
     # GPU uses floating point arithmetic and might differ a little with the fixed point arithmetic
     if is_cuda_below_version("5.8.0")
-        @test real.(
-            get_last_fully_integrated_correlator(next_track_state, 2).accumulators
-        ) ≈ [2919, 4947, 2919]
+        @test real.(get_correlator(next_track_state, 2).accumulators) ≈ [2919, 4947, 2919]
     else
         # Unfortuntely, the texture index rounding is off with CUDA 5.9 TODO: report
-        accumulator =
-            real.(
-                get_last_fully_integrated_correlator(next_track_state, 2).accumulators
-            )
+        accumulator = real.(get_correlator(next_track_state, 2).accumulators)
         @test 2900 < accumulator[1] < 3000
         @test 4900 < accumulator[2] < 5000
         @test 2900 < accumulator[3] < 3000

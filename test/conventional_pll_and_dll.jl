@@ -94,8 +94,9 @@ end
     num_samples = 5000
     sat_state_after_full_integration = SatState(
         sat_state;
+        is_integration_completed = true,
         integrated_samples = num_samples,
-        last_fully_integrated_correlator = correlator,
+        correlator,
     )
     track_state = TrackState(gpsl1, sat_state_after_full_integration)
 
