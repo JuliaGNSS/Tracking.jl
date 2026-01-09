@@ -31,8 +31,7 @@ function update(
         carrier_phase,
         integrated_samples = total_integrated_samples,
         signal_start_sample = sat_state.signal_start_sample + integrated_samples,
-        correlator = is_integration_completed ? zero(correlator) : correlator,
-        last_fully_integrated_correlator = is_integration_completed ? correlator :
-                                           sat_state.last_fully_integrated_correlator,
+        is_integration_completed,
+        correlator,
     )
 end

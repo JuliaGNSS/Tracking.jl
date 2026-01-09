@@ -1,7 +1,7 @@
 function TrackState(
     system::AbstractGNSS,
     sat_states;
-    doppler_estimator::AbstractDopplerEstimator = ConventionalPLLAndDLL((
+    doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL((
         SystemSatsState(system, sat_states),
     )),
 )
@@ -11,7 +11,7 @@ end
 
 function TrackState(
     system_sat_states::SystemSatsState;
-    doppler_estimator::AbstractDopplerEstimator = ConventionalPLLAndDLL((
+    doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL((
         system_sat_states,
     )),
 )
@@ -21,7 +21,7 @@ end
 
 function TrackState(
     multiple_system_sats_state::MultipleSystemSatsState;
-    doppler_estimator::AbstractDopplerEstimator = ConventionalPLLAndDLL(
+    doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(
         multiple_system_sats_state,
     ),
 )

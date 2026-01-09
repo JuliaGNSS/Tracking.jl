@@ -5,12 +5,16 @@
     code_loop_filter::CO = SecondOrderBilinearLF()
 end
 
-function SatConventionalPLLAndDLL(sat_state::SatState)
+function SatConventionalPLLAndDLL(
+    sat_state::SatState,
+    carrier_loop_filter::CA,
+    code_loop_filter::CO,
+) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     SatConventionalPLLAndDLL(
         sat_state.carrier_doppler,
         sat_state.code_doppler,
-        ThirdOrderBilinearLF(),
-        SecondOrderBilinearLF(),
+        carrier_loop_filter,
+        code_loop_filter,
     )
 end
 
@@ -37,12 +41,16 @@ end
 end
 
 function ConventionalPLLAndDLL(
-    multiple_system_sats_state::MultipleSystemSatsState;
+    multiple_system_sats_state::MultipleSystemSatsState,
+    ::Type{CA} = ThirdOrderBilinearLF,
+    ::Type{CO} = SecondOrderBilinearLF;
     carrier_loop_filter_bandwidth::typeof(1.0Hz) = 18.0Hz,
     code_loop_filter_bandwidth::typeof(1.0Hz) = 1.0Hz,
-)
+) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     states = map(multiple_system_sats_state) do system_sats_state
-        map(SatConventionalPLLAndDLL, system_sats_state.states)
+        map(system_sats_state.states) do sat_state
+            SatConventionalPLLAndDLL(sat_state, CA(), CO())
+        end
     end
     ConventionalPLLAndDLL(states, carrier_loop_filter_bandwidth, code_loop_filter_bandwidth)
 end
@@ -55,6 +63,21 @@ function ConventionalPLLAndDLL(
         states,
         conventional_pll_and_dll.carrier_loop_filter_bandwidth,
         conventional_pll_and_dll.code_loop_filter_bandwidth,
+    )
+end
+
+function ConventionalAssistedPLLAndDLL(
+    multiple_system_sats_state::MultipleSystemSatsState,
+    ::Type{CO} = SecondOrderBilinearLF;
+    carrier_loop_filter_bandwidth::typeof(1.0Hz) = 18.0Hz,
+    code_loop_filter_bandwidth::typeof(1.0Hz) = 1.0Hz,
+) where {CO<:AbstractLoopFilter}
+    ConventionalPLLAndDLL(
+        multiple_system_sats_state,
+        ThirdOrderAssistedBilinearLF,
+        CO;
+        carrier_loop_filter_bandwidth,
+        code_loop_filter_bandwidth,
     )
 end
 
@@ -152,9 +175,7 @@ function estimate_dopplers_and_filter_prompt(
             system_sats_state.states,
             pll_and_dll_states,
         ) do sat_state, pll_and_dll_state
-            if !is_zero(sat_state.correlator) ||
-               is_zero(sat_state.last_fully_integrated_correlator) ||
-               sat_state.integrated_samples == 0
+            if !sat_state.is_integration_completed || sat_state.integrated_samples == 0
                 return (estimator = pll_and_dll_state, state = sat_state)
             end
             integrated_code_blocks = calc_num_code_blocks_to_integrate(
@@ -163,10 +184,8 @@ function estimate_dopplers_and_filter_prompt(
                 has_bit_or_secondary_code_been_found(sat_state.bit_buffer),
             )
 
-            normalized_correlator = normalize(
-                sat_state.last_fully_integrated_correlator,
-                sat_state.integrated_samples,
-            )
+            normalized_correlator =
+                normalize(sat_state.correlator, sat_state.integrated_samples)
             post_corr_filter = update(
                 sat_state.post_corr_filter,
                 get_prompt(normalized_correlator),
@@ -181,22 +200,22 @@ function estimate_dopplers_and_filter_prompt(
                 prompt,
             )
             integration_time = sat_state.integrated_samples / sampling_frequency
-            pll_discriminator = pll_disc(system_sats_state.system, filtered_correlator)
-            dll_discriminator = dll_disc(
+
+            carrier_freq_update, carrier_loop_filter =
+                calculate_carrier_frequency_update(
+                    system_sats_state.system,
+                    pll_and_dll_state.carrier_loop_filter,
+                    filtered_correlator,
+                    get_last_fully_integrated_filtered_prompt(sat_state),
+                    integration_time,
+                    track_state.doppler_estimator.carrier_loop_filter_bandwidth,
+                )
+            code_freq_update, code_loop_filter = calculate_code_frequency_update(
                 system_sats_state.system,
+                pll_and_dll_state.code_loop_filter,
                 filtered_correlator,
                 sat_state.code_doppler,
                 sampling_frequency,
-            )
-            carrier_freq_update, carrier_loop_filter = filter_loop(
-                pll_and_dll_state.carrier_loop_filter,
-                pll_discriminator,
-                integration_time,
-                track_state.doppler_estimator.carrier_loop_filter_bandwidth,
-            )
-            code_freq_update, code_loop_filter = filter_loop(
-                pll_and_dll_state.code_loop_filter,
-                dll_discriminator,
                 integration_time,
                 track_state.doppler_estimator.code_loop_filter_bandwidth,
             )
@@ -219,10 +238,13 @@ function estimate_dopplers_and_filter_prompt(
                     carrier_doppler,
                     code_doppler,
                     integrated_samples = 0,
+                    is_integration_completed = false,
                     last_fully_integrated_filtered_prompt = prompt,
                     bit_buffer,
                     cn0_estimator,
                     post_corr_filter,
+                    correlator = zero(sat_state.correlator),
+                    last_fully_integrated_correlator = sat_state.correlator,
                 ),
             )
         end
@@ -237,4 +259,47 @@ function estimate_dopplers_and_filter_prompt(
         ConventionalPLLAndDLL(track_state.doppler_estimator, new_doppler_estimators)
     new_multiple_system_sats_state = map(x -> x.states, new_multiple_system_states)
     return TrackState(track_state, new_multiple_system_sats_state, new_doppler_estimator)
+end
+
+function calculate_carrier_frequency_update(
+    system::AbstractGNSS,
+    carrier_loop_filter::ThirdOrderAssistedBilinearLF,
+    correlator::AbstractCorrelator,
+    previous_prompt::Complex,
+    integration_time,
+    loop_bandwidth,
+)
+    pll_discriminator = pll_disc(system, correlator)
+    fll_discriminator = fll_disc(system, correlator, previous_prompt, integration_time)
+    filter_loop(
+        carrier_loop_filter,
+        (pll_discriminator, fll_discriminator),
+        integration_time,
+        loop_bandwidth,
+    )
+end
+
+function calculate_carrier_frequency_update(
+    system::AbstractGNSS,
+    carrier_loop_filter::AbstractLoopFilter,
+    correlator::AbstractCorrelator,
+    previous_prompt::Complex,
+    integration_time,
+    loop_bandwidth,
+)
+    pll_discriminator = pll_disc(system, correlator)
+    filter_loop(carrier_loop_filter, pll_discriminator, integration_time, loop_bandwidth)
+end
+
+function calculate_code_frequency_update(
+    system::AbstractGNSS,
+    code_loop_filter::AbstractLoopFilter,
+    correlator::AbstractCorrelator,
+    code_doppler,
+    sampling_frequency,
+    integration_time,
+    loop_bandwidth,
+)
+    dll_discriminator = dll_disc(system, correlator, code_doppler, sampling_frequency)
+    filter_loop(code_loop_filter, dll_discriminator, integration_time, loop_bandwidth)
 end
