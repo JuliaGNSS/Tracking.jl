@@ -1,5 +1,12 @@
 # Changelog
 
+# [0.18.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v0.17.1...v0.18.0) (2026-01-11)
+
+
+### Features
+
+* add type-stable loop filter selection for ConventionalPLLAndDLL ([18f3bc2](https://github.com/JuliaGNSS/Tracking.jl/commit/18f3bc2a5cd714fdbff1623e05bf4a84b8974277))
+
 ## [0.17.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v0.17.0...v0.17.1) (2025-12-20)
 
 
