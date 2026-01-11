@@ -1,6 +1,6 @@
 [![](https://img.shields.io/badge/docs-stable-blue.svg)](https://JuliaGNSS.github.io/Tracking.jl/stable)
 [![](https://img.shields.io/badge/docs-dev-blue.svg)](https://JuliaGNSS.github.io/Tracking.jl/dev)
-[![DOI](https://zenodo.org/badge/171484097.svg)](https://zenodo.org/badge/latestdoi/171484097)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7454547.svg)](https://doi.org/10.5281/zenodo.7454547)
 [![codecov](https://codecov.io/gh/JuliaGNSS/Tracking.jl/branch/master/graph/badge.svg)](https://codecov.io/gh/JuliaGNSS/Tracking.jl)
 [![[Semantic Release]](https://img.shields.io/badge/%20%20%F0%9F%93%A6%F0%9F%9A%80-semantic--release-e10079.svg)](https://github.com/semantic-release/semantic-release)
 
