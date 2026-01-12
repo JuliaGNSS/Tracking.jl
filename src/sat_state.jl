@@ -1,3 +1,9 @@
+"""
+$(SIGNATURES)
+
+Holds the state of a single satellite being tracked. Contains code and carrier
+phase/doppler information, correlator state, CN0 estimator, and bit buffer.
+"""
 struct SatState{C<:AbstractCorrelator,PCF<:AbstractPostCorrFilter}
     prn::Int
     code_phase::Float64
@@ -15,23 +21,106 @@ struct SatState{C<:AbstractCorrelator,PCF<:AbstractPostCorrFilter}
     post_corr_filter::PCF
 end
 
+"""
+$(SIGNATURES)
+
+Get the PRN (Pseudo-Random Noise) number of the satellite.
+"""
 get_prn(s::SatState) = s.prn
 get_num_ants(s::SatState{<:AbstractCorrelator{M}}) where {M} = M
+
+"""
+$(SIGNATURES)
+
+Get the current code phase in chips.
+"""
 get_code_phase(s::SatState) = s.code_phase
+
+"""
+$(SIGNATURES)
+
+Get the current code Doppler frequency.
+"""
 get_code_doppler(s::SatState) = s.code_doppler
+
+"""
+$(SIGNATURES)
+
+Get the current carrier phase in radians.
+"""
 get_carrier_phase(s::SatState) = s.carrier_phase * 2π
+
+"""
+$(SIGNATURES)
+
+Get the current carrier Doppler frequency.
+"""
 get_carrier_doppler(s::SatState) = s.carrier_doppler
+
+"""
+$(SIGNATURES)
+
+Get the number of samples that have been integrated so far.
+"""
 get_integrated_samples(s::SatState) = s.integrated_samples
+
+"""
+$(SIGNATURES)
+
+Get the starting sample index in the signal for the next integration.
+"""
 get_signal_start_sample(s::SatState) = s.signal_start_sample
+
+"""
+$(SIGNATURES)
+
+Get the current correlator state.
+"""
 get_correlator(s::SatState) = s.correlator
+
+"""
+$(SIGNATURES)
+
+Get the correlator from the last fully completed integration period.
+"""
 get_last_fully_integrated_correlator(s::SatState) = s.last_fully_integrated_correlator
+
+"""
+$(SIGNATURES)
+
+Get the filtered prompt value from the last fully completed integration period.
+"""
 get_last_fully_integrated_filtered_prompt(s::SatState) =
     s.last_fully_integrated_filtered_prompt
 get_post_corr_filter(s::SatState) = s.post_corr_filter
 get_cn0_estimator(s::SatState) = s.cn0_estimator
+
+"""
+$(SIGNATURES)
+
+Get the bit buffer containing decoded navigation bits.
+"""
 get_bit_buffer(s::SatState) = s.bit_buffer
+
+"""
+$(SIGNATURES)
+
+Get the decoded navigation bits as an integer.
+"""
 get_bits(s::SatState) = get_bits(get_bit_buffer(s))
+
+"""
+$(SIGNATURES)
+
+Get the number of decoded navigation bits.
+"""
 get_num_bits(s::SatState) = length(get_bit_buffer(s))
+
+"""
+$(SIGNATURES)
+
+Check if the bit or secondary code synchronization has been achieved.
+"""
 has_bit_or_secondary_code_been_found(s::SatState) =
     has_bit_or_secondary_code_been_found(get_bit_buffer(s))
 
@@ -113,24 +202,45 @@ function reset_start_sample_and_bit_buffer(sat_state)
     SatState(sat_state; signal_start_sample = 1, bit_buffer = reset(sat_state.bit_buffer))
 end
 
+"""
+$(SIGNATURES)
+
+Holds the state of multiple satellites for a single GNSS system. Contains the
+system definition and a dictionary of satellite states indexed by identifier.
+"""
 struct SystemSatsState{S<:AbstractGNSS,SS<:SatState,I}
     system::S
     states::Dictionary{I,SS}
 end
 
+"""
+Type alias for a tuple or named tuple of `SystemSatsState` objects, representing
+tracking state across multiple GNSS systems.
+"""
 const MultipleSystemSatsState{N,I,S,SS} =
     TupleLike{<:NTuple{N,SystemSatsState{<:S,<:SS,<:I}}}
 
+"""
+$(SIGNATURES)
+
+Merge new satellite states into the existing tracking state. Adds or updates
+satellites in the specified system.
+"""
 function merge_sats(
-    multiple_system_sats_state::MultipleSystemSatsState{N,I,S,SS},
+    multiple_system_sats_state::MultipleSystemSatsState,
     system_idx,
-    new_sat_states::Dictionary{I,<:SS},
-) where {N,I,S,SS}
+    new_sat_states::Dictionary,
+)
     system_sats_state = get_system_sats_state(multiple_system_sats_state, system_idx)
     @set multiple_system_sats_state[system_idx].states =
         merge(system_sats_state.states, new_sat_states)
 end
 
+"""
+$(SIGNATURES)
+
+Remove satellites with the specified identifiers from the tracking state.
+"""
 function filter_out_sats(
     multiple_system_sats_state::MultipleSystemSatsState,
     system_idx::Union{Symbol,Integer},
@@ -178,8 +288,19 @@ function SystemSatsState(
     SystemSatsState(system_sats_state.system, states)
 end
 
+"""
+$(SIGNATURES)
+
+Get the GNSS system definition from a SystemSatsState.
+"""
 get_system(sss::SystemSatsState) = sss.system
 get_states(sss::SystemSatsState) = sss.states
+
+"""
+$(SIGNATURES)
+
+Get the satellite state for a specific satellite identifier.
+"""
 get_sat_state(sss::SystemSatsState, identifier) = sss.states[identifier]
 get_sat_state(sss::SystemSatsState) = only(sss.states)
 

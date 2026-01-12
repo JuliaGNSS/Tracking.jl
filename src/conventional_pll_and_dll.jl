@@ -1,3 +1,7 @@
+"""
+Per-satellite state for the conventional PLL and DLL Doppler estimator.
+Holds initial Doppler values and loop filter states.
+"""
 @kwdef struct SatConventionalPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     init_carrier_doppler::typeof(1.0Hz)
     init_code_doppler::typeof(1.0Hz)
@@ -33,15 +37,55 @@ function SatConventionalPLLAndDLL(
     )
 end
 
-@kwdef struct ConventionalPLLAndDLL{N,I,CA<:AbstractLoopFilter,CO<:AbstractLoopFilter} <:
-              AbstractDopplerEstimator{N,I}
-    states::MultipleSystemSatType{N,I,SatConventionalPLLAndDLL{CA,CO}}
-    carrier_loop_filter_bandwidth::typeof(1.0Hz) = 18.0Hz
-    code_loop_filter_bandwidth::typeof(1.0Hz) = 1.0Hz
+"""
+$(SIGNATURES)
+
+Conventional Phase-Locked Loop (PLL) and Delay-Locked Loop (DLL) Doppler estimator.
+Uses configurable loop filters for carrier and code tracking with adjustable
+bandwidths.
+"""
+struct ConventionalPLLAndDLL{N,I,CA<:AbstractLoopFilter,CO<:AbstractLoopFilter} <:
+       AbstractDopplerEstimator{N,I}
+    states::TupleLike{<:NTuple{N,Dictionary{I,SatConventionalPLLAndDLL{CA,CO}}}}
+    carrier_loop_filter_bandwidth::typeof(1.0Hz)
+    code_loop_filter_bandwidth::typeof(1.0Hz)
+
+    # Inner constructor that properly binds type parameters
+    function ConventionalPLLAndDLL{N,I,CA,CO}(
+        states::TupleLike{<:NTuple{N,Dictionary{I,SatConventionalPLLAndDLL{CA,CO}}}},
+        carrier_loop_filter_bandwidth::typeof(1.0Hz),
+        code_loop_filter_bandwidth::typeof(1.0Hz),
+    ) where {N,I,CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
+        new{N,I,CA,CO}(states, carrier_loop_filter_bandwidth, code_loop_filter_bandwidth)
+    end
+end
+
+# Outer constructor for ConstructionBase.setproperties compatibility (used by @set macro)
+# This uses length(states) to determine N instead of exposing it in the where clause
+function ConventionalPLLAndDLL(
+    states::TupleLike{T},
+    carrier_loop_filter_bandwidth::typeof(1.0Hz),
+    code_loop_filter_bandwidth::typeof(1.0Hz),
+) where {I,CA<:AbstractLoopFilter,CO<:AbstractLoopFilter,T<:Tuple{Dictionary{I,SatConventionalPLLAndDLL{CA,CO}},Vararg{Dictionary{I,SatConventionalPLLAndDLL{CA,CO}}}}}
+    N = length(states)
+    ConventionalPLLAndDLL{N,I,CA,CO}(
+        states, carrier_loop_filter_bandwidth, code_loop_filter_bandwidth
+    )
 end
 
 function ConventionalPLLAndDLL(
-    multiple_system_sats_state::MultipleSystemSatsState,
+    states::TupleLike{<:Tuple{Dictionary{I,SatConventionalPLLAndDLL{CA,CO}},Vararg{Dictionary{I,SatConventionalPLLAndDLL{CA,CO}}}}};
+    carrier_loop_filter_bandwidth::typeof(1.0Hz) = 18.0Hz,
+    code_loop_filter_bandwidth::typeof(1.0Hz) = 1.0Hz,
+) where {I,CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
+    N = length(states)
+    ConventionalPLLAndDLL{N,I,CA,CO}(
+        states, carrier_loop_filter_bandwidth, code_loop_filter_bandwidth
+    )
+end
+
+function ConventionalPLLAndDLL(
+    multiple_system_sats_state::TupleLike{<:Tuple{SystemSatsState,Vararg{SystemSatsState}}},
     ::Type{CA} = ThirdOrderBilinearLF,
     ::Type{CO} = SecondOrderBilinearLF;
     carrier_loop_filter_bandwidth::typeof(1.0Hz) = 18.0Hz,
@@ -52,7 +96,7 @@ function ConventionalPLLAndDLL(
             SatConventionalPLLAndDLL(sat_state, CA(), CO())
         end
     end
-    ConventionalPLLAndDLL(states, carrier_loop_filter_bandwidth, code_loop_filter_bandwidth)
+    ConventionalPLLAndDLL(states; carrier_loop_filter_bandwidth, code_loop_filter_bandwidth)
 end
 
 function ConventionalPLLAndDLL(
@@ -66,6 +110,14 @@ function ConventionalPLLAndDLL(
     )
 end
 
+"""
+$(SIGNATURES)
+
+Create a ConventionalPLLAndDLL with FLL-assisted carrier tracking. This is the
+default Doppler estimator used by TrackState. Uses a ThirdOrderAssistedBilinearLF
+for the carrier loop filter which combines PLL and FLL discriminators for
+improved tracking under high dynamics.
+"""
 function ConventionalAssistedPLLAndDLL(
     multiple_system_sats_state::MultipleSystemSatsState,
     ::Type{CO} = SecondOrderBilinearLF;

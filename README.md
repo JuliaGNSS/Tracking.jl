@@ -4,16 +4,17 @@
 [![codecov](https://codecov.io/gh/JuliaGNSS/Tracking.jl/branch/master/graph/badge.svg)](https://codecov.io/gh/JuliaGNSS/Tracking.jl)
 [![[Semantic Release]](https://img.shields.io/badge/%20%20%F0%9F%93%A6%F0%9F%9A%80-semantic--release-e10079.svg)](https://github.com/semantic-release/semantic-release)
 
-# Tracking
+# Tracking.jl
+
 This package implements the tracking functionality of GNSS satellites that's part of the larger GNSS receiver.
 Tracking.jl primarily consists of two main blocks:
 
 1. Signal down-conversion and correlation
 2. Code and carrier estimation to generate replicas and close the loop
 
-Tracking.jl provides defaults for both blocks, but it provides mechanisms to hook in your own implementation (by using multiple dispatch). 
-For signal down-conversion and correlation Tracking.jl provides a highly optimized CPU implementation. There is also a GPU implementation that is mainly there for reference, but is not yet as fast as the CPU implementation.
-With respect to the second block Tracking.jl provides conventional DLLs and PLLs.
+Tracking.jl provides defaults for both blocks, but it provides mechanisms to hook in your own implementation (by using multiple dispatch).
+For signal down-conversion and correlation Tracking.jl provides a highly optimized CPU implementation using SIMD vectorization via LoopVectorization.jl.
+With respect to the second block Tracking.jl provides conventional DLLs and PLLs with FLL-assisted carrier tracking as the default.
 Down-conversion and correlation is done in full code blocks meaning from code start to code end or multiples of that (e.g. in GPS L1 from 0 to `N`*1023). The factor `N` can be specified, but will be `1` as long as the bit start is unknown in order to find the bit start. Once that is done for every tracked satellite the result will be handed over to the code and carrier estimation block.
 Moreover, Tracking.jl allows tracking of signals from phased antenna arrays meaning that they are down-converted and correlated by the very same replica to conserve phase relationships.
 
@@ -24,25 +25,20 @@ Moreover, Tracking.jl allows tracking of signals from phased antenna arrays mean
 * Secondary code detection
 * Bit detection
 * Phased array tracking
+* Multi-satellite and multi-system tracking
 * GPU acceleration (requires `using CUDA`)
 
-## Getting started
+## Installation
 
-Install:
 ```julia
 julia> ]
 pkg> add Tracking
 ```
 
-### GPU Support
+## Documentation
 
-To use GPU acceleration features, you need to explicitly load CUDA:
+For usage examples and detailed documentation, see the [stable docs](https://JuliaGNSS.github.io/Tracking.jl/stable) or [dev docs](https://JuliaGNSS.github.io/Tracking.jl/dev).
 
-```julia
-using Tracking
-using CUDA  # Activates GPU functionality
+## License
 
-# Access GPU types via the extension
-ext = Base.get_extension(Tracking, :TrackingCUDAExt)
-gpu_correlator = ext.GPUDownconvertAndCorrelator(...)
-```
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

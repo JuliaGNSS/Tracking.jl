@@ -71,6 +71,12 @@ function has_integration_reached_signal_end_for_all_satellites(
     end
 end
 
+"""
+$(SIGNATURES)
+
+Get the SystemSatsState for a specific GNSS system from a TrackState or
+MultipleSystemSatsState by index or symbol.
+"""
 function get_system_sats_state(
     track_state::TrackState{<:MultipleSystemSatsState{N}},
     system_idx,
@@ -92,6 +98,11 @@ function get_system_sats_state(
     multiple_system_sats_state[M]
 end
 
+"""
+$(SIGNATURES)
+
+Get the dictionary of satellite states for a specific GNSS system.
+"""
 function get_sat_states(
     multiple_system_sats_state::MultipleSystemSatsState{N},
     system_idx::Union{Symbol,Integer,Val},

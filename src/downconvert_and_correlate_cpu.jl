@@ -1,3 +1,10 @@
+"""
+$(SIGNATURES)
+
+CPU-based implementation of downconversion and correlation. Uses LoopVectorization
+for SIMD-optimized processing. The MESF type parameter specifies the maximum
+expected sampling frequency for buffer allocation.
+"""
 struct CPUDownconvertAndCorrelator{MESF,B} <: AbstractDownconvertAndCorrelator
     buffer::B
 end
@@ -27,7 +34,7 @@ end
 """
 $(SIGNATURES)
 
-Downconvert und correlate all available satellites on the CPU.
+Downconvert and correlate all available satellites on the CPU.
 """
 function downconvert_and_correlate(
     downconvert_and_correlator::CPUDownconvertAndCorrelator{MESF},

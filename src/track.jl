@@ -1,3 +1,11 @@
+"""
+$(SIGNATURES)
+
+Main tracking function that processes a signal and updates the tracking state.
+Performs downconversion, correlation, and Doppler estimation for all satellites
+in the track state. Returns an updated TrackState with new phase/Doppler estimates
+and decoded bits.
+"""
 function track(
     signal::AbstractVecOrMat,
     track_state::TS,
