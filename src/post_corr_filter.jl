@@ -9,7 +9,8 @@ abstract type AbstractPostCorrFilter end
 $(SIGNATURES)
 
 This is the default post correlation filter. For a single antenna
-channel it will just return 
+channel it will just return the prompt value as is. For multi antenna
+systems it will return the first antenna's value.
 """
 struct DefaultPostCorrFilter <: AbstractPostCorrFilter end
 

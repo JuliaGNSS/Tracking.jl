@@ -46,7 +46,6 @@ export get_early,
     AbstractPostCorrFilter,
     SatState,
     SystemSatsState,
-    CPUSatDownconvertAndCorrelator,
     CPUDownconvertAndCorrelator,
     ConventionalPLLAndDLL,
     ConventionalAssistedPLLAndDLL,
@@ -78,10 +77,22 @@ const Maybe{T} = Union{T,Nothing}
 
 const StructVecOrMat{T} = Union{StructVector{T},StructArray{T,2}}
 
+"""
+$(SIGNATURES)
+
+Type parameter wrapper for specifying the number of antennas in the system.
+Use `NumAnts(n)` to create an instance.
+"""
 struct NumAnts{x} end
 
 NumAnts(x) = NumAnts{x}()
 
+"""
+$(SIGNATURES)
+
+Type parameter wrapper for specifying the number of correlator accumulators.
+Use `NumAccumulators(n)` to create an instance.
+"""
 struct NumAccumulators{x} end
 
 NumAccumulators(x) = NumAccumulators{x}()
@@ -127,9 +138,20 @@ include("gpsl5.jl")
 include("galileo_e1b.jl")
 include("sat_state.jl")
 
+"""
+Type alias for a tuple or named tuple of N elements of type T, used to represent
+multiple GNSS systems.
+"""
 const MultipleSystemType{N,T} = TupleLike{<:NTuple{N,T}}
 const MultipleSystemSatType{N,I,T} = MultipleSystemType{N,Dictionary{I,T}}
 
+"""
+$(SIGNATURES)
+
+Main tracking state container holding satellite states for multiple GNSS systems
+and the Doppler estimator (e.g., PLL/DLL). This is the primary struct used for
+tracking operations.
+"""
 struct TrackState{S<:MultipleSystemSatsState,DE<:AbstractDopplerEstimator}
     multiple_system_sats_state::S
     doppler_estimator::DE

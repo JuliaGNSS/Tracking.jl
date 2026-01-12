@@ -1,38 +1,60 @@
 # Loop Filter
 
-The default loop filter are provided by
-[TrackingLoopFilters.jl](https://github.com/JuliaGNSS/TrackingLoopFilters.jl). This includes
+The loop filters are provided by
+[TrackingLoopFilters.jl](https://github.com/JuliaGNSS/TrackingLoopFilters.jl). This includes:
 - first order loop filter `FirstOrderLF`
-- second order biliner loop filter `SecondOrderBilinearLF`
+- second order bilinear loop filter `SecondOrderBilinearLF`
 - second order boxcar loop filter `SecondOrderBoxcarLF`
-- third order bilinear loop filter `ThirdOrderBilinarLF`
+- third order bilinear loop filter `ThirdOrderBilinearLF`
 - third order boxcar loop filter `ThirdOrderBoxcarLF`
+- third order assisted bilinear loop filter `ThirdOrderAssistedBilinearLF` (combines PLL and FLL)
 
-The default loop filter for the carrier loop is `ThirdOrderBilinarLF` and the default loop
-filter for the code loop is `SecondOrderBilinearLF`. This is set by the initialization of
-the `TrackingState` and can be changed by:
-```julia
-state = TrackingState(
-  GPSL1,
-  carrier_doppler,
-  code_phase,
-  carrier_loop_filter = ThirdOrderBilinearLF(),
-  code_loop_filter = SecondOrderBilinearLF()
-)
+## Default Configuration
+
+The default Doppler estimator is `ConventionalAssistedPLLAndDLL` which uses:
+- `ThirdOrderAssistedBilinearLF` for the carrier loop (FLL-assisted PLL for improved dynamics)
+- `SecondOrderBilinearLF` for the code loop
+
+The default bandwidths are:
+- Carrier loop: 18 Hz
+- Code loop: 1 Hz
+
+## Doppler Estimators
+
+```@docs
+ConventionalPLLAndDLL
+ConventionalAssistedPLLAndDLL
 ```
 
-The bandwidth of the loop filter is set by the `track` function:
-```julia
-next_results = track(
-  next_signal,
-  get_state(results),
-  prn,
-  sampling_frequency,
-  carrier_loop_filter_bandwidth = 18Hz,
-  code_loop_filter_bandwidth = 1Hz
-)
+## Custom Configuration
+
+You can customize the loop filters and bandwidths when creating the Doppler estimator:
+
+```jldoctest custom_loop
+julia> using Tracking, GNSSSignals, TrackingLoopFilters
+
+julia> using Tracking: Hz
+
+julia> system = GPSL1();
+
+julia> sat_state = SatState(system, 1, 50.0, 1000.0Hz);
+
+julia> system_sats_state = SystemSatsState(system, sat_state);
+
+julia> # Use non-assisted PLL with custom loop filter types
+       doppler_estimator = ConventionalPLLAndDLL(
+           (system_sats_state,),
+           ThirdOrderBilinearLF,      # carrier loop filter type
+           SecondOrderBilinearLF;     # code loop filter type
+           carrier_loop_filter_bandwidth = 15.0Hz,
+           code_loop_filter_bandwidth = 0.5Hz
+       );
+
+julia> track_state = TrackState((system_sats_state,); doppler_estimator);
 ```
 
-You can easily implement a custom loop filter `MyLoopFilter <: AbstractLoopFilter`. In this
-case, a specialized `propagate` and `get_filter_output` is needed. For more information
+## Custom Loop Filters
+
+You can implement a custom loop filter `MyLoopFilter <: AbstractLoopFilter`. In this
+case, a specialized `filter_loop` function is needed. For more information
 refer to [TrackingLoopFilters.jl](https://github.com/JuliaGNSS/TrackingLoopFilters.jl).

@@ -1,3 +1,4 @@
+include("aqua.jl")
 include("conventional_pll_and_dll.jl")
 include("sat_state.jl")
 include("downconvert_and_correlate.jl")

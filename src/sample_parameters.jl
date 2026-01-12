@@ -56,6 +56,14 @@ function calc_num_samples_left_to_integrate(
     ceil(Int, chips_to_integrate * sampling_frequency / code_frequency)
 end
 
+"""
+$(SIGNATURES)
+
+Calculate the number of signal samples to integrate and whether the integration
+will complete a full code period. Returns a tuple of (samples_to_integrate,
+is_integration_completed). Takes into account available signal samples and
+code block boundaries.
+"""
 function calc_signal_samples_to_integrate(
     system::AbstractGNSS,
     signal_start_sample::Int,
