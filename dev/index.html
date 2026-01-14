@@ -1,11 +1,137 @@
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Tracking.jl · Tracking.jl</title><link href="https://fonts.googleapis.com/css?family=Lato|Roboto+Mono" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.11.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.11.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.11.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.11.1/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="assets/documenter.js"></script><script src="siteinfo.js"></script><script src="../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/documenter-dark.css" data-theme-name="documenter-dark"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit">Tracking.jl</span></div><form class="docs-search" action="search.html"><input class="docs-search-query" id="documenter-search-query" name="q" type="text" placeholder="Search docs"/></form><ul class="docs-menu"><li class="is-active"><a class="tocitem" href="index.html">Tracking.jl</a><ul class="internal"><li><a class="tocitem" href="#Installation-1"><span>Installation</span></a></li><li><a class="tocitem" href="#Usage-1"><span>Usage</span></a></li><li><a class="tocitem" href="#Track-multiple-signals-coherently-1"><span>Track multiple signals coherently</span></a></li><li><a class="tocitem" href="#Q/A-1"><span>Q/A</span></a></li></ul></li><li><a class="tocitem" href="track.html">Track</a></li><li><a class="tocitem" href="tracking_state.html">Tracking State</a></li><li><a class="tocitem" href="tracking_results.html">Tracking Results</a></li><li><a class="tocitem" href="loop_filter.html">Loop Filter</a></li><li><a class="tocitem" href="correlator.html">Correlator</a></li><li><a class="tocitem" href="cn0_estimator.html">CN0 Estimator</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href="index.html">Tracking.jl</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href="index.html">Tracking.jl</a></li></ul></nav><div class="docs-right"><a class="docs-edit-link" href="https://github.com/JuliaGNSS/Tracking.jl/blob/master/docs/src/index.md" title="Edit on GitHub"><span class="docs-icon fab"></span><span class="docs-label is-hidden-touch">Edit on GitHub</span></a><a class="docs-settings-button fas fa-cog" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-sidebar-button fa fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a></div></header><article class="content" id="documenter-page"><h1 id="Tracking.jl-1"><a class="docs-heading-anchor" href="#Tracking.jl-1">Tracking.jl</a><a class="docs-heading-anchor-permalink" href="#Tracking.jl-1" title="Permalink"></a></h1><p><em>Modular tracking algorithm for various Global Navigation Satellite Systems (GNSS)</em></p><p>Tracking.jl provides a modular and performant tracking algorithm.</p><ul><li><a href="track.html#Track-1">Track</a></li><li><a href="tracking_state.html#Tracking-State-1">Tracking State</a></li><li><a href="tracking_results.html#Tracking-Results-1">Tracking Results</a></li><li><a href="loop_filter.html#Loop-Filter-1">Loop Filter</a></li><li><a href="correlator.html#Correlator-1">Correlator</a></li><li><a href="cn0_estimator.html#CN0-Estimator-1">CN0 Estimator</a></li></ul><h2 id="Installation-1"><a class="docs-heading-anchor" href="#Installation-1">Installation</a><a class="docs-heading-anchor-permalink" href="#Installation-1" title="Permalink"></a></h2><pre><code class="language-julia-repl">julia&gt; ]
-pkg&gt; add Tracking</code></pre><h2 id="Usage-1"><a class="docs-heading-anchor" href="#Usage-1">Usage</a><a class="docs-heading-anchor-permalink" href="#Usage-1" title="Permalink"></a></h2><p>Tracking.jl processes each satellite individually. That means for each satellite a tracking state <code>TrackingState</code> must be initialized. From there, the <code>track</code> function needs to be called for every state and for every incoming signal to update the tracking parameters. The required parameters to initialize the tracking state are the GNSS system, carrier Doppler and the code phase, e.g.</p><pre><code class="language-julia">state = TrackingState(GPSL1, carrier_doppler, code_phase)</code></pre><p>These parameters are usually provided by the acquisition process of the satellite. Refer to <a href="tracking_state.html#Tracking.TrackingState"><code>TrackingState</code></a> to find about other optional parameters.</p><p>The signal is tracked by</p><pre><code class="language-julia">results = track(signal, state, prn, sample_frequency)</code></pre><p>where <code>prn</code> is the PRN and <code>sample_frequency</code> the sample frequency. Refer to <a href="track.html#Tracking.track"><code>track</code></a> to find about other optional parameters. The result contains the current state as well as some additional information such as the last valid correlator output, found data bits, etc. For each of those parameters a helper function exists to get the parameter (e.g. <code>get_prompt(results)</code>) - see <a href="tracking_results.html#Tracking-Results-1">Tracking Results</a>. The next track function needs the updated state:</p><pre><code class="language-julia">next_results = track(next_signal, get_state(results), prn, sample_frequency)</code></pre><p>Here is an example for a single PRN:</p><pre><code class="language-julia">using Tracking
-using Tracking: Hz, GPSL1
-carrier_doppler = 1000Hz
-code_phase = 50
-sample_frequency = 2.5e6Hz
-prn = 1
-state = TrackingState(GPSL1, carrier_doppler, code_phase)
-results = track(signal, state, prn, sample_frequency)
-next_results = track(next_signal, get_state(results), prn, sample_frequency)</code></pre><h2 id="Track-multiple-signals-coherently-1"><a class="docs-heading-anchor" href="#Track-multiple-signals-coherently-1">Track multiple signals coherently</a><a class="docs-heading-anchor-permalink" href="#Track-multiple-signals-coherently-1" title="Permalink"></a></h2><p>Tracking.jl provides a way to track multiple signals coherently, e.g. to track signals from a phased array. In that case the input <code>signal</code> should be a Matrix instead of a Vector, where the number of rows is equal to the number of antenna elements and the number of columns is equal to the number of samples. Furthermore, you need to specify the number of antenna elements to the tracking state:</p><pre><code class="language-julia">state = TrackingState(GPSL1, carrier_doppler, code_phase, num_ants = NumAnts(4))</code></pre><p>By default the track function will use the first antenna channel as the reference signal to drive the discriminators etc. However, an appropiate beamforming algorithm will probably suit better. For that, you&#39;ll have to pass a function <code>post_corr_filter</code> to the track function like the following:</p><pre><code class="language-julia">results = track(signal, state, prn, sample_frequency, post_corr_filter = x -&gt; x[end])</code></pre><h2 id="Q/A-1"><a class="docs-heading-anchor" href="#Q/A-1">Q/A</a><a class="docs-heading-anchor-permalink" href="#Q/A-1" title="Permalink"></a></h2><ul><li>Why are the correlator values zero?</li></ul><p>The correlator output given in the tracking results is the correlation result after the code phase has reached the full code length or multiple of the code length depending on the maximal integration time <code>max_integration_time</code> (default: 1ms) you have set. If the current tracked signal does not include the end of the PRN sequency (or multiples of that), the correlator output will be zero. Moreover, a correlator output will only be valid, if the integration time has been at least the miminimum configured integration time <code>min_integration_time</code> (default: 0.75ms). Otherwise the correlator output will be zero as well. This case occurs at the beginning of the tracking.</p></article><nav class="docs-footer"><a class="docs-footer-nextpage" href="track.html">Track »</a></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> on <span class="colophon-date" title="Thursday 5 December 2019 15:42">Thursday 5 December 2019</span>. Using Julia version 1.1.1.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Tracking.jl · Tracking.jl</title><meta name="title" content="Tracking.jl · Tracking.jl"/><meta property="og:title" content="Tracking.jl · Tracking.jl"/><meta property="twitter:title" content="Tracking.jl · Tracking.jl"/><meta name="description" content="Documentation for Tracking.jl."/><meta property="og:description" content="Documentation for Tracking.jl."/><meta property="twitter:description" content="Documentation for Tracking.jl."/><script data-outdated-warner src="assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="assets/documenter.js"></script><script src="search_index.js"></script><script src="siteinfo.js"></script><script src="../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="index.html">Tracking.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li class="is-active"><a class="tocitem" href="index.html">Tracking.jl</a><ul class="internal"><li><a class="tocitem" href="#Installation"><span>Installation</span></a></li><li><a class="tocitem" href="#Usage"><span>Usage</span></a></li><li><a class="tocitem" href="#Track-Multiple-Signals-Coherently-(Phased-Arrays)"><span>Track Multiple Signals Coherently (Phased Arrays)</span></a></li><li><a class="tocitem" href="#GPU-Support"><span>GPU Support</span></a></li><li><a class="tocitem" href="#Q/A"><span>Q/A</span></a></li></ul></li><li><a class="tocitem" href="track.html">Track</a></li><li><a class="tocitem" href="tracking_state.html">Tracking State</a></li><li><a class="tocitem" href="loop_filter.html">Loop Filter</a></li><li><a class="tocitem" href="correlator.html">Correlator</a></li><li><a class="tocitem" href="cn0_estimator.html">CN0 Estimator</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href="index.html">Tracking.jl</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href="index.html">Tracking.jl</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/JuliaGNSS/Tracking.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/JuliaGNSS/Tracking.jl/blob/master/docs/src/index.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Tracking.jl"><a class="docs-heading-anchor" href="#Tracking.jl">Tracking.jl</a><a id="Tracking.jl-1"></a><a class="docs-heading-anchor-permalink" href="#Tracking.jl" title="Permalink"></a></h1><p>This package implements the tracking functionality of GNSS satellites that&#39;s part of the larger GNSS receiver. Tracking.jl primarily consists of two main blocks:</p><ol><li>Signal down-conversion and correlation</li><li>Code and carrier estimation to generate replicas and close the loop</li></ol><p>Tracking.jl provides defaults for both blocks, but it provides mechanisms to hook in your own implementation (by using multiple dispatch). For signal down-conversion and correlation Tracking.jl provides a highly optimized CPU implementation using SIMD vectorization via LoopVectorization.jl. With respect to the second block Tracking.jl provides conventional DLLs and PLLs with FLL-assisted carrier tracking as the default. Down-conversion and correlation is done in full code blocks meaning from code start to code end or multiples of that (e.g. in GPS L1 from 0 to <code>N</code>*1023). The factor <code>N</code> can be specified, but will be <code>1</code> as long as the bit start is unknown in order to find the bit start. Once that is done for every tracked satellite the result will be handed over to the code and carrier estimation block. Moreover, Tracking.jl allows tracking of signals from phased antenna arrays meaning that they are down-converted and correlated by the very same replica to conserve phase relationships.</p><ul><li><a href="track.html#Track">Track</a></li><li><a href="tracking_state.html#Tracking-State">Tracking State</a></li><li><a href="loop_filter.html#Loop-Filter">Loop Filter</a></li><li><a href="correlator.html#Correlator">Correlator</a></li><li><a href="cn0_estimator.html#CN0-Estimator">CN0 Estimator</a></li></ul><h2 id="Installation"><a class="docs-heading-anchor" href="#Installation">Installation</a><a id="Installation-1"></a><a class="docs-heading-anchor-permalink" href="#Installation" title="Permalink"></a></h2><pre><code class="language-julia-repl hljs">julia&gt; ]
+pkg&gt; add Tracking</code></pre><h2 id="Usage"><a class="docs-heading-anchor" href="#Usage">Usage</a><a id="Usage-1"></a><a class="docs-heading-anchor-permalink" href="#Usage" title="Permalink"></a></h2><p>Tracking.jl can track one or multiple satellites simultaneously. The tracking state is held in a <code>TrackState</code> which contains <code>SatState</code> objects for each tracked satellite.</p><h3 id="Single-Satellite-Tracking"><a class="docs-heading-anchor" href="#Single-Satellite-Tracking">Single Satellite Tracking</a><a id="Single-Satellite-Tracking-1"></a><a class="docs-heading-anchor-permalink" href="#Single-Satellite-Tracking" title="Permalink"></a></h3><p>To track a single satellite, create a <code>SatState</code> with the GNSS system, PRN, code phase, and carrier Doppler (typically from acquisition):</p><pre><code class="language-julia-repl hljs">julia&gt; using Tracking, GNSSSignals
+
+julia&gt; using Tracking: Hz
+
+julia&gt; system = GPSL1();
+
+julia&gt; prn = 1;
+
+julia&gt; code_phase = 50.0;
+
+julia&gt; carrier_doppler = 1000.0Hz;
+
+julia&gt; sat_state = SatState(system, prn, code_phase, carrier_doppler);
+
+julia&gt; track_state = TrackState(system, sat_state);
+
+julia&gt; get_prn(track_state)
+1
+
+julia&gt; get_code_phase(track_state)
+50.0
+
+julia&gt; get_carrier_doppler(track_state)
+1000.0 Hz</code></pre><p>To process a signal, call the <code>track</code> function. The signal should be a vector of complex samples:</p><pre><code class="language-julia-repl hljs">julia&gt; using GNSSSignals: gen_code, get_code_frequency, get_code_center_frequency_ratio
+
+julia&gt; sampling_frequency = 4e6Hz;
+
+julia&gt; num_samples = 4000;
+
+julia&gt; code_frequency = carrier_doppler * get_code_center_frequency_ratio(system) + get_code_frequency(system);
+
+julia&gt; signal = cis.(2π .* carrier_doppler .* (0:num_samples-1) ./ sampling_frequency) .*
+           gen_code(num_samples, system, prn, sampling_frequency, code_frequency, code_phase);
+
+julia&gt; track_state = track(signal, track_state, sampling_frequency);</code></pre><p>After tracking, you can retrieve the updated tracking parameters and results:</p><pre><code class="language-julia-repl hljs">julia&gt; get_carrier_doppler(track_state)
+999.9999883655299 Hz
+
+julia&gt; get_code_phase(track_state)
+50.00064935064897
+
+julia&gt; get_prompt(get_last_fully_integrated_correlator(track_state))
+3805.0 - 0.000841952976770699im</code></pre><p>Note: <code>estimate_cn0(track_state)</code> returns the CN0 estimate in dB-Hz. With a noise-free test signal, this will be <code>Inf dB-Hz</code>. With real signals containing noise, you&#39;ll get finite values typically in the range of 30-50 dB-Hz.</p><h3 id="Multiple-Satellite-Tracking"><a class="docs-heading-anchor" href="#Multiple-Satellite-Tracking">Multiple Satellite Tracking</a><a id="Multiple-Satellite-Tracking-1"></a><a class="docs-heading-anchor-permalink" href="#Multiple-Satellite-Tracking" title="Permalink"></a></h3><p>To track multiple satellites of the same system:</p><pre><code class="language-julia-repl hljs">julia&gt; using Tracking, GNSSSignals
+
+julia&gt; using Tracking: Hz
+
+julia&gt; system = GPSL1();
+
+julia&gt; sat_state1 = SatState(system, 1, 50.0, 1000.0Hz);
+
+julia&gt; sat_state2 = SatState(system, 5, 120.0, -500.0Hz);
+
+julia&gt; sat_state3 = SatState(system, 17, 890.0, 2000.0Hz);
+
+julia&gt; track_state = TrackState(system, [sat_state1, sat_state2, sat_state3]);
+
+julia&gt; get_carrier_doppler(track_state, 5)
+-500.0 Hz
+
+julia&gt; get_code_phase(track_state, 17)
+890.0</code></pre><h3 id="Multi-System-Tracking"><a class="docs-heading-anchor" href="#Multi-System-Tracking">Multi-System Tracking</a><a id="Multi-System-Tracking-1"></a><a class="docs-heading-anchor-permalink" href="#Multi-System-Tracking" title="Permalink"></a></h3><p>Tracking.jl supports tracking satellites from different GNSS systems simultaneously:</p><pre><code class="language-julia-repl hljs">julia&gt; using Tracking, GNSSSignals
+
+julia&gt; using Tracking: Hz
+
+julia&gt; gps_sat = SatState(GPSL1(), 1, 50.0, 1000.0Hz);
+
+julia&gt; galileo_sat = SatState(GalileoE1B(), 11, 200.0, -300.0Hz);
+
+julia&gt; gps_system_state = SystemSatsState(GPSL1(), gps_sat);
+
+julia&gt; galileo_system_state = SystemSatsState(GalileoE1B(), galileo_sat);
+
+julia&gt; track_state = TrackState((gps_system_state, galileo_system_state));
+
+julia&gt; get_carrier_doppler(track_state, 1, 1)  # system 1, PRN 1
+1000.0 Hz
+
+julia&gt; get_carrier_doppler(track_state, 2, 11)  # system 2, PRN 11
+-300.0 Hz</code></pre><p>You can also use a named tuple for easier access:</p><pre><code class="language-julia-repl hljs">julia&gt; using Tracking, GNSSSignals
+
+julia&gt; using Tracking: Hz
+
+julia&gt; gps_sat = SatState(GPSL1(), 1, 50.0, 1000.0Hz);
+
+julia&gt; galileo_sat = SatState(GalileoE1B(), 11, 200.0, -300.0Hz);
+
+julia&gt; gps_system_state = SystemSatsState(GPSL1(), gps_sat);
+
+julia&gt; galileo_system_state = SystemSatsState(GalileoE1B(), galileo_sat);
+
+julia&gt; track_state = TrackState((gps = gps_system_state, galileo = galileo_system_state));
+
+julia&gt; get_carrier_doppler(track_state, :gps, 1)
+1000.0 Hz
+
+julia&gt; get_carrier_doppler(track_state, :galileo, 11)
+-300.0 Hz</code></pre><h3 id="Adding-and-Removing-Satellites"><a class="docs-heading-anchor" href="#Adding-and-Removing-Satellites">Adding and Removing Satellites</a><a id="Adding-and-Removing-Satellites-1"></a><a class="docs-heading-anchor-permalink" href="#Adding-and-Removing-Satellites" title="Permalink"></a></h3><p>Satellites can be dynamically added or removed during tracking:</p><pre><code class="language-julia-repl hljs">julia&gt; using Tracking, GNSSSignals
+
+julia&gt; using Tracking: Hz
+
+julia&gt; system = GPSL1();
+
+julia&gt; sat_state = SatState(system, 1, 50.0, 1000.0Hz);
+
+julia&gt; track_state = TrackState(system, sat_state);
+
+julia&gt; new_sat = SatState(system, 23, 500.0, 1500.0Hz);
+
+julia&gt; track_state = merge_sats(track_state, new_sat);
+
+julia&gt; get_carrier_doppler(track_state, 23)
+1500.0 Hz
+
+julia&gt; track_state = filter_out_sats(track_state, [1]);
+
+julia&gt; haskey(get_sat_states(track_state), 23)
+true
+
+julia&gt; haskey(get_sat_states(track_state), 1)
+false</code></pre><h2 id="Track-Multiple-Signals-Coherently-(Phased-Arrays)"><a class="docs-heading-anchor" href="#Track-Multiple-Signals-Coherently-(Phased-Arrays)">Track Multiple Signals Coherently (Phased Arrays)</a><a id="Track-Multiple-Signals-Coherently-(Phased-Arrays)-1"></a><a class="docs-heading-anchor-permalink" href="#Track-Multiple-Signals-Coherently-(Phased-Arrays)" title="Permalink"></a></h2><p>Tracking.jl provides a way to track multiple signals coherently, e.g. to track signals from a phased array. In that case the input <code>signal</code> should be a Matrix instead of a Vector, where the number of rows is equal to the number of samples and the number of columns is equal to the number of antenna elements. Furthermore, you need to specify the number of antenna elements to the satellite state:</p><pre><code class="language-julia-repl hljs">julia&gt; using Tracking, GNSSSignals
+
+julia&gt; using Tracking: Hz
+
+julia&gt; system = GPSL1();
+
+julia&gt; sat_state = SatState(system, 1, 50.0, 1000.0Hz, num_ants = NumAnts(4));
+
+julia&gt; track_state = TrackState(system, sat_state);
+
+julia&gt; get_num_ants(track_state)
+4</code></pre><p>By default the track function will use the first antenna channel as the reference signal to drive the discriminators. However, an appropriate beamforming algorithm will probably suit better. For that, you can pass a custom <code>post_corr_filter</code> to the <code>SatState</code>.</p><h2 id="GPU-Support"><a class="docs-heading-anchor" href="#GPU-Support">GPU Support</a><a id="GPU-Support-1"></a><a class="docs-heading-anchor-permalink" href="#GPU-Support" title="Permalink"></a></h2><p>To use GPU acceleration features, you need to explicitly load CUDA:</p><pre><code class="language-julia hljs">using Tracking
+using CUDA  # Activates GPU functionality
+
+# Access GPU types via the extension
+ext = Base.get_extension(Tracking, :TrackingCUDAExt)
+gpu_correlator = ext.GPUDownconvertAndCorrelator(...)</code></pre><p>Note: The GPU implementation is available for reference but is not yet as optimized as the CPU implementation which uses SIMD vectorization via LoopVectorization.jl.</p><h2 id="Q/A"><a class="docs-heading-anchor" href="#Q/A">Q/A</a><a id="Q/A-1"></a><a class="docs-heading-anchor-permalink" href="#Q/A" title="Permalink"></a></h2><ul><li>Why are the correlator values zero?</li></ul><p>The correlator output given by <code>get_last_fully_integrated_correlator</code> is the correlation result after the code phase has reached the full code length or multiples of the code length. If the current tracked signal does not include the end of the PRN sequence (or multiples of that), the correlator from the last complete integration will be returned. At the very start of tracking, before any complete integration has occurred, the correlator values will be zero.</p></article><nav class="docs-footer"><a class="docs-footer-nextpage" href="track.html">Track »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Wednesday 14 January 2026 18:36">Wednesday 14 January 2026</span>. Using Julia version 1.12.4.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
