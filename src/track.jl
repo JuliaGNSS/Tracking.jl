@@ -15,6 +15,7 @@ function track(
     ),
     intermediate_frequency = 0.0Hz,
     preferred_num_code_blocks_to_integrate = 1,
+    max_relative_code_error = 0.2,
 ) where {TS<:TrackState}
     track_state = reset_start_sample_and_bit_buffer(track_state)::TS
     num_samples_signal = get_num_samples(signal)
@@ -31,6 +32,7 @@ function track(
             preferred_num_code_blocks_to_integrate,
             sampling_frequency,
             intermediate_frequency,
+            max_relative_code_error,
         )::TS
         track_state = estimate_dopplers_and_filter_prompt(
             track_state,

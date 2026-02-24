@@ -43,6 +43,7 @@ function downconvert_and_correlate(
     preferred_num_code_blocks_to_integrate::Int,
     sampling_frequency,
     intermediate_frequency,
+    max_relative_code_error = 0.2,
 ) where {MESF}
     num_samples_signal = get_num_samples(signal)
     new_multiple_system_sats_state =
@@ -106,6 +107,7 @@ function downconvert_and_correlate(
                         signal_samples_to_integrate,
                         sat_state.prn,
                         Val{MESF}(),
+                        max_relative_code_error,
                     )::typeof(sat_state.correlator)
                 end
                 return update(
@@ -147,6 +149,7 @@ function downconvert_and_correlate!(
     num_samples_left,
     prn,
     maximum_expected_sampling_frequency,
+    max_relative_code_error = 0.2,
 )
     gen_carrier_replica!(
         carrier_replica,
@@ -163,7 +166,7 @@ function downconvert_and_correlate!(
         signal_start_sample,
         num_samples_left,
     )
-    if use_fast_code_replica(correlator, sampling_frequency, code_frequency)
+    if use_fast_code_replica(correlator, sampling_frequency, code_frequency; max_relative_error = max_relative_code_error)
         sample_shifts =
             get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
         code_replica = view(code_replicas, :, 1)
