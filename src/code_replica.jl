@@ -41,6 +41,40 @@ end
 """
 $(SIGNATURES)
 
+Generate separate code replicas for each correlator tap with exact
+fractional-chip phase offsets. Each column of `code_replicas` gets a
+separate code replica at `start_code_phase + correlator_code_shifts[j]`.
+"""
+function gen_code_replicas!(
+    code_replicas,
+    system::AbstractGNSS,
+    code_frequency,
+    sampling_frequency,
+    start_code_phase::AbstractFloat,
+    start_sample::Integer,
+    num_samples::Integer,
+    correlator_code_shifts::AbstractVector{<:AbstractFloat},
+    prn::Integer,
+    maximum_expected_sampling_frequency::Val,
+)
+    for (j, code_shift) in enumerate(correlator_code_shifts)
+        gen_code!(
+            view(code_replicas, start_sample:(start_sample + num_samples - 1), j),
+            system,
+            prn,
+            sampling_frequency,
+            code_frequency,
+            start_code_phase + code_shift,
+            0,
+            maximum_expected_sampling_frequency,
+        )
+    end
+    code_replicas
+end
+
+"""
+$(SIGNATURES)
+
 Updates the code phase.
 """
 function update_code_phase(

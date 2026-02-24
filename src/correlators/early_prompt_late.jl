@@ -10,17 +10,20 @@ close as possible, though. The algorithm makes sure that at least one sample is 
 struct EarlyPromptLateCorrelator{M,T} <: AbstractEarlyPromptLateCorrelator{M}
     accumulators::SVector{3,T}
     preferred_early_late_to_prompt_code_shift::Float64
+    actual_early_late_code_spacing::Float64
     function EarlyPromptLateCorrelator(
         accumulators::AbstractVector{SVector{M,T}},
         preferred_early_late_to_prompt_code_shift,
+        actual_early_late_code_spacing = 2 * preferred_early_late_to_prompt_code_shift,
     ) where {M,T<:Complex}
-        new{M,SVector{M,T}}(accumulators, preferred_early_late_to_prompt_code_shift)
+        new{M,SVector{M,T}}(accumulators, preferred_early_late_to_prompt_code_shift, actual_early_late_code_spacing)
     end
     function EarlyPromptLateCorrelator(
         accumulators::AbstractVector{T},
         preferred_early_late_to_prompt_code_shift,
+        actual_early_late_code_spacing = 2 * preferred_early_late_to_prompt_code_shift,
     ) where {T<:Complex}
-        new{1,T}(accumulators, preferred_early_late_to_prompt_code_shift)
+        new{1,T}(accumulators, preferred_early_late_to_prompt_code_shift, actual_early_late_code_spacing)
     end
 end
 
@@ -48,7 +51,29 @@ function update_accumulator(correlator::EarlyPromptLateCorrelator, accumulators)
     EarlyPromptLateCorrelator(
         accumulators,
         correlator.preferred_early_late_to_prompt_code_shift,
+        correlator.actual_early_late_code_spacing,
     )
+end
+
+function set_actual_early_late_code_spacing(
+    correlator::EarlyPromptLateCorrelator,
+    spacing::Float64,
+)
+    EarlyPromptLateCorrelator(
+        get_accumulators(correlator),
+        correlator.preferred_early_late_to_prompt_code_shift,
+        spacing,
+    )
+end
+
+"""
+$(SIGNATURES)
+
+Get the exact code phase shifts in chips for each correlator tap.
+"""
+function get_correlator_code_shifts(correlator::EarlyPromptLateCorrelator)
+    shift = correlator.preferred_early_late_to_prompt_code_shift
+    SVector(-shift, 0.0, shift)
 end
 
 """

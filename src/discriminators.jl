@@ -9,13 +9,9 @@ function dll_disc(
     code_doppler,
     sampling_frequency,
 )
-    code_frequency = code_doppler + get_code_frequency(system)
-    code_phase_delta = code_frequency / sampling_frequency
     E = abs(get_early(correlator))
     L = abs(get_late(correlator))
-    distance_between_early_and_late =
-        get_early_late_sample_spacing(correlator, sampling_frequency, code_frequency) *
-        code_phase_delta
+    distance_between_early_and_late = get_early_late_code_spacing(correlator)
     (E - L) / (E + L) / (2 * (2 - distance_between_early_and_late))
 end
 
@@ -32,15 +28,11 @@ function dll_disc(
     code_doppler,
     sampling_frequency,
 )
-    code_frequency = code_doppler + get_code_frequency(system)
-    code_phase_delta = code_frequency / sampling_frequency
     VE = abs(get_very_early(correlator))
     E = abs(get_early(correlator))
     L = abs(get_late(correlator))
     VL = abs(get_very_late(correlator))
-    distance_between_early_and_late =
-        get_early_late_sample_spacing(correlator, sampling_frequency, code_frequency) *
-        code_phase_delta
+    distance_between_early_and_late = get_early_late_code_spacing(correlator)
     (VE + E - VL - L) / (VE + E + VL + L) / (2 * (2 - distance_between_early_and_late))
 end
 

@@ -10,7 +10,11 @@ using Tracking:
     SatState,
     TrackState,
     downconvert_and_correlate,
-    get_correlator
+    get_correlator,
+    get_early_late_code_spacing,
+    get_prompt,
+    get_early,
+    get_late
 
 @testset "Downconvert and Correlator" begin
     downconvert_and_correlator = CPUDownconvertAndCorrelator(Val(5e6Hz))
@@ -80,6 +84,52 @@ end
     )
 
     @test real.(get_correlator(next_track_state, 2).accumulators) ≈ [2919, 4947, 2915]
+end
+
+@testset "Downconvert and correlate with CPU (2D code replica path)" begin
+    gpsl1 = GPSL1()
+    code_frequency = get_code_frequency(gpsl1)
+    # 3x oversampling triggers 2D path (0.5 chip shift → 2 samples → 0.667 chips, 33% error > 20%)
+    sampling_frequency = code_frequency * 3
+    code_phase = 10.5
+    num_samples_signal = 3069
+    intermediate_frequency = 0.0Hz
+
+    system_sats_state = SystemSatsState(
+        gpsl1,
+        [SatState(gpsl1, 1, code_phase, 1000.0Hz)];
+    )
+    multiple_system_sats_state = (system_sats_state,)
+
+    downconvert_and_correlator =
+        CPUDownconvertAndCorrelator(Val(sampling_frequency))
+
+    track_state = TrackState(multiple_system_sats_state)
+
+    signal =
+        gen_code(
+            num_samples_signal,
+            gpsl1,
+            1,
+            sampling_frequency,
+            code_frequency + 1000Hz * get_code_center_frequency_ratio(gpsl1),
+            code_phase,
+        ) .* cis.(2π * (0:(num_samples_signal-1)) * 1000.0Hz / sampling_frequency)
+
+    next_track_state = @inferred downconvert_and_correlate(
+        downconvert_and_correlator,
+        signal,
+        track_state,
+        1,
+        sampling_frequency,
+        intermediate_frequency,
+    )
+
+    correlator = get_correlator(next_track_state, 1)
+    @test real(get_prompt(correlator)) > real(get_early(correlator))
+    @test real(get_prompt(correlator)) > real(get_late(correlator))
+    # 2D path uses exact fractional chip offsets → actual spacing == preferred spacing
+    @test get_early_late_code_spacing(correlator) == 1.0
 end
 
 end

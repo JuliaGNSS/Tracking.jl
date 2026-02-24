@@ -19,6 +19,9 @@ using Tracking:
     get_very_late,
     get_accumulators,
     get_early_late_sample_spacing,
+    get_early_late_code_spacing,
+    get_correlator_code_shifts,
+    use_fast_code_replica,
     DefaultPostCorrFilter,
     apply,
     normalize,
@@ -309,6 +312,63 @@ using Tracking:
             @test all(early .== 1476)
             @test all(prompt .== 2500)
         end
+    end
+
+    @testset "Code shifts" begin
+        correlator = EarlyPromptLateCorrelator()
+        @test get_correlator_code_shifts(correlator) == SVector(-0.5, 0.0, 0.5)
+
+        correlator = EarlyPromptLateCorrelator(;
+            preferred_early_late_to_prompt_code_shift = 0.25,
+        )
+        @test get_correlator_code_shifts(correlator) == SVector(-0.25, 0.0, 0.25)
+
+        correlator = VeryEarlyPromptLateCorrelator()
+        @test get_correlator_code_shifts(correlator) ==
+              SVector(-0.6, -0.15, 0.0, 0.15, 0.6)
+    end
+
+    @testset "Early late code spacing" begin
+        correlator = EarlyPromptLateCorrelator()
+        @test get_early_late_code_spacing(correlator) == 1.0
+
+        correlator = EarlyPromptLateCorrelator(;
+            preferred_early_late_to_prompt_code_shift = 0.25,
+        )
+        @test get_early_late_code_spacing(correlator) == 0.5
+
+        correlator = VeryEarlyPromptLateCorrelator()
+        @test get_early_late_code_spacing(correlator) == 0.3
+    end
+
+    @testset "Use fast code replica decision" begin
+        gpsl1 = GPSL1()
+        code_frequency = get_code_frequency(gpsl1)
+
+        correlator = EarlyPromptLateCorrelator()
+
+        # High oversampling (4x): sample shift = round(0.5 * 4) = 2,
+        # actual = 2 / 4 = 0.5 chips, error = 0% → fast path
+        @test use_fast_code_replica(correlator, code_frequency * 4, code_frequency) == true
+
+        # Low oversampling (~1.111x): sample shift = max(1, round(0.5 * 1.111)) = 1,
+        # actual = 1 / 1.111 = 0.9 chips, error = 80% → slow path
+        @test use_fast_code_replica(correlator, code_frequency * 10 / 9, code_frequency) ==
+              false
+
+        # 2x oversampling: sample shift = round(0.5 * 2) = 1,
+        # actual = 1 / 2 = 0.5 chips, error = 0% → fast path
+        @test use_fast_code_replica(correlator, code_frequency * 2, code_frequency) == true
+
+        # VeryEarlyPromptLateCorrelator at 4x oversampling: 0.15 shift rounds to 1 sample,
+        # actual = 0.25 chips, 66% error → slow path
+        vepl_correlator = VeryEarlyPromptLateCorrelator()
+        @test use_fast_code_replica(vepl_correlator, code_frequency * 4, code_frequency) ==
+              false
+
+        # VeryEarlyPromptLateCorrelator at high oversampling (20x): all shifts round well
+        @test use_fast_code_replica(vepl_correlator, code_frequency * 20, code_frequency) ==
+              true
     end
 end
 

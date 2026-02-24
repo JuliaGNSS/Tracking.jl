@@ -100,6 +100,58 @@ end
 """
 $(SIGNATURES)
 
+Get the exact code phase shifts in chips for each correlator tap.
+Returns Float64 chip offsets without any rounding to sample boundaries.
+Ordered from latest to earliest replica (same convention as
+`get_correlator_sample_shifts`).
+"""
+function get_correlator_code_shifts end
+
+"""
+$(SIGNATURES)
+
+Get the total spacing between early and late correlator in chips.
+Returns the actual spacing used during correlation, which equals the preferred
+spacing when the 2D code replica path is used, or the sample-quantized spacing
+when the fast 1D path is used.
+"""
+function get_early_late_code_spacing(correlator::AbstractEarlyPromptLateCorrelator)
+    correlator.actual_early_late_code_spacing
+end
+
+"""
+$(SIGNATURES)
+
+Determine whether the fast 1D sample-shift code replica approach produces
+acceptable quantization of the early-late spacing, or whether the accurate
+2D per-tap code replica approach is needed.
+
+Returns `true` when the fast 1D path is acceptable (all taps have relative
+quantization error ≤ `max_relative_error`), `false` when the 2D path should
+be used.
+"""
+function use_fast_code_replica(
+    correlator::AbstractEarlyPromptLateCorrelator,
+    sampling_frequency,
+    code_frequency;
+    max_relative_error = 0.2,
+)
+    for preferred_shift in get_correlator_code_shifts(correlator)
+        preferred_shift == 0.0 && continue
+        abs_preferred = abs(preferred_shift)
+        sample_shift = max(1, round(Int, abs_preferred * sampling_frequency / code_frequency))
+        actual_shift = sample_shift * code_frequency / sampling_frequency
+        relative_error = abs(actual_shift - abs_preferred) / abs_preferred
+        if relative_error > max_relative_error
+            return false
+        end
+    end
+    return true
+end
+
+"""
+$(SIGNATURES)
+
 Zero the correlator
 """
 function zero(correlator::AbstractCorrelator)
@@ -184,6 +236,37 @@ end
 """
 $(SIGNATURES)
 
+Perform a correlation for single antenna systems using per-tap code replicas.
+Each column of `code_replicas` is a separate code replica at a different
+fractional chip offset.
+"""
+function correlate(
+    correlator::AbstractCorrelator{1},
+    downconverted_signal::AbstractVector,
+    code_replicas::AbstractMatrix,
+    start_sample,
+    num_samples,
+)
+    a_re = zero_accumulators(get_accumulators(correlator), downconverted_signal)
+    a_im = zero_accumulators(get_accumulators(correlator), downconverted_signal)
+    d_re = downconverted_signal.re
+    d_im = downconverted_signal.im
+    @avx for i = start_sample:num_samples+start_sample-1
+        for j = 1:length(a_re)
+            a_re[j] += d_re[i] * code_replicas[i, j]
+            a_im[j] += d_im[i] * code_replicas[i, j]
+        end
+    end
+    accumulators_result = complex.(a_re, a_im)
+    update_accumulator(
+        correlator,
+        map(+, get_accumulators(correlator), accumulators_result),
+    )
+end
+
+"""
+$(SIGNATURES)
+
 Perform a correlation for multi antenna systems
 """
 function correlate(
@@ -205,6 +288,38 @@ function correlate(
                 shift = sample_shifts[k] - latest_sample_shift
                 a_re[j, k] += d_re[i, j] * code[shift+i]
                 a_im[j, k] += d_im[i, j] * code[shift+i]
+            end
+        end
+    end
+    update_accumulator(
+        correlator,
+        add_to_previous(get_accumulators(correlator), a_re, a_im),
+    )
+end
+
+"""
+$(SIGNATURES)
+
+Perform a correlation for multi antenna systems using per-tap code replicas.
+Each column of `code_replicas` is a separate code replica at a different
+fractional chip offset.
+"""
+function correlate(
+    correlator::AbstractCorrelator{M},
+    downconverted_signal::AbstractMatrix,
+    code_replicas::AbstractMatrix,
+    start_sample,
+    num_samples,
+) where {M}
+    a_re = zero_accumulators(get_accumulators(correlator), downconverted_signal)
+    a_im = zero_accumulators(get_accumulators(correlator), downconverted_signal)
+    d_re = downconverted_signal.re
+    d_im = downconverted_signal.im
+    @avx for i = start_sample:num_samples+start_sample-1
+        for k = 1:size(a_re, 2)
+            for j = 1:size(a_re, 1)
+                a_re[j, k] += d_re[i, j] * code_replicas[i, k]
+                a_im[j, k] += d_im[i, j] * code_replicas[i, k]
             end
         end
     end

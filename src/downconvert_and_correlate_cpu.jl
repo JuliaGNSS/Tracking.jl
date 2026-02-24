@@ -66,16 +66,17 @@ function downconvert_and_correlate(
                 code_frequency =
                     sat_state.code_doppler + get_code_frequency(system_sats_state.system)
 
+                num_correlators = get_num_accumulators(sat_state.correlator)
                 sample_shifts = get_correlator_sample_shifts(
-                    sat_state.correlator,
-                    sampling_frequency,
-                    code_frequency,
+                    sat_state.correlator, sampling_frequency, code_frequency,
                 )
+                max_sample_shift_range =
+                    maximum(sample_shifts) - minimum(sample_shifts)
                 @no_escape downconvert_and_correlator.buffer begin
                     code_replica_buffer = @alloc(
                         get_code_type(system_sats_state.system),
-                        num_samples_signal + maximum(sample_shifts) -
-                        minimum(sample_shifts)
+                        num_samples_signal + max_sample_shift_range,
+                        num_correlators,
                     )
                     carrier_replica_buffer_re = @alloc(Float32, num_samples_signal)
                     carrier_replica_buffer_im = @alloc(Float32, num_samples_signal)
@@ -134,7 +135,7 @@ function downconvert_and_correlate!(
     system,
     signal,
     correlator,
-    code_replica,
+    code_replicas,
     code_phase,
     carrier_replica,
     carrier_phase,
@@ -147,20 +148,6 @@ function downconvert_and_correlate!(
     prn,
     maximum_expected_sampling_frequency,
 )
-    sample_shifts =
-        get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
-    gen_code_replica!(
-        code_replica,
-        system,
-        code_frequency,
-        sampling_frequency,
-        code_phase,
-        signal_start_sample,
-        num_samples_left,
-        sample_shifts,
-        prn,
-        maximum_expected_sampling_frequency,
-    )
     gen_carrier_replica!(
         carrier_replica,
         carrier_frequency,
@@ -176,14 +163,60 @@ function downconvert_and_correlate!(
         signal_start_sample,
         num_samples_left,
     )
-    correlate(
-        correlator,
-        downconverted_signal,
-        sample_shifts,
-        code_replica,
-        signal_start_sample,
-        num_samples_left,
-    )
+    if use_fast_code_replica(correlator, sampling_frequency, code_frequency)
+        sample_shifts =
+            get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
+        code_replica = view(code_replicas, :, 1)
+        gen_code_replica!(
+            code_replica,
+            system,
+            code_frequency,
+            sampling_frequency,
+            code_phase,
+            signal_start_sample,
+            num_samples_left,
+            sample_shifts,
+            prn,
+            maximum_expected_sampling_frequency,
+        )
+        actual_spacing =
+            Float64(upreferred(
+                (sample_shifts[get_early_accumulator_index(correlator)] -
+                 sample_shifts[get_late_accumulator_index(correlator)]) *
+                code_frequency / sampling_frequency
+            ))
+        updated_correlator =
+            set_actual_early_late_code_spacing(correlator, actual_spacing)
+        correlate(
+            updated_correlator,
+            downconverted_signal,
+            sample_shifts,
+            code_replica,
+            signal_start_sample,
+            num_samples_left,
+        )
+    else
+        code_shifts = get_correlator_code_shifts(correlator)
+        gen_code_replicas!(
+            code_replicas,
+            system,
+            code_frequency,
+            sampling_frequency,
+            code_phase,
+            signal_start_sample,
+            num_samples_left,
+            code_shifts,
+            prn,
+            maximum_expected_sampling_frequency,
+        )
+        correlate(
+            correlator,
+            downconverted_signal,
+            code_replicas,
+            signal_start_sample,
+            num_samples_left,
+        )
+    end
 end
 
 #=

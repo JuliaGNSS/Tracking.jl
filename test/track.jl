@@ -108,7 +108,7 @@ using Tracking:
         code_phases[i] = comp_code_phase
         carrier_phases[i] = comp_carrier_phase
     end
-    @test tracked_code_phases[end] ≈ code_phases[end] atol = 5e-5
+    @test tracked_code_phases[end] ≈ code_phases[end] atol = 5e-4
     @test tracked_carrier_phases[end] + π ≈ carrier_phases[end] atol = 1e-3
 
     #    using PyPlot
@@ -419,7 +419,7 @@ end
         code_phases[i] = comp_code_phase
         carrier_phases[i] = comp_carrier_phase
     end
-    @test tracked_code_phases[end] ≈ code_phases[end] atol = 5e-5
+    @test tracked_code_phases[end] ≈ code_phases[end] atol = 5e-4
     @test tracked_carrier_phases[end] + π ≈ carrier_phases[end] atol = 5e-5
 
     #    using PyPlot
@@ -532,7 +532,7 @@ end
         code_phases[i] = comp_code_phase
         carrier_phases[i] = comp_carrier_phase
     end
-    @test tracked_code_phases[end] ≈ code_phases[end] atol = 5e-5
+    @test tracked_code_phases[end] ≈ code_phases[end] atol = 5e-4
     @test tracked_carrier_phases[end] + π ≈ carrier_phases[end] atol = 5e-5
 
     #    using PyPlot

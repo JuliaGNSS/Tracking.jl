@@ -108,7 +108,7 @@ end
 
     @test get_carrier_doppler(new_track_state_after_full_integration) ==
           100.52615628464486Hz
-    @test get_code_doppler(new_track_state_after_full_integration) == -0.09660213509822249Hz
+    @test get_code_doppler(new_track_state_after_full_integration) == -0.12599932765737312Hz
     @test get_last_fully_integrated_filtered_prompt(
         new_track_state_after_full_integration,
     ) == 0.4 + 0.004im
