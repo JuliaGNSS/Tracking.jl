@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v1.0.0...v1.0.1) (2026-02-25)
+
+
+### Bug Fixes
+
+* correct DLL discriminator normalization and update docstrings ([bb9fa6f](https://github.com/JuliaGNSS/Tracking.jl/commit/bb9fa6ff7e1dd716548e5e9ea49e0df9dd8a5b16))
+
 # [0.18.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v0.17.1...v0.18.0) (2026-01-11)
 
 
