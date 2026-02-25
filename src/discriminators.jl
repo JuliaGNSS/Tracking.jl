@@ -1,7 +1,15 @@
 """
 $(SIGNATURES)
 
-Calculates the code phase error in chips.
+Calculates the code phase error in chips using the noncoherent early minus late
+envelope normalized discriminator.
+
+Uses the generalized normalization for arbitrary early-late spacing `d` (in chips):
+`(2 - d) / 2 * (E - L) / (E + L)`
+which reduces to `1/2 * (E - L) / (E + L)` for the standard 1-chip spacing.
+
+See: Kaplan & Hegarty, "Understanding GPS: Principles and Applications", 2nd ed.,
+Table 5.5; GNSS-SDR tracking_discriminators.cc.
 """
 function dll_disc(
     system::AbstractGNSS,
@@ -16,13 +24,15 @@ function dll_disc(
     distance_between_early_and_late =
         get_early_late_sample_spacing(correlator, sampling_frequency, code_frequency) *
         code_phase_delta
-    (E - L) / (E + L) / (2 * (2 - distance_between_early_and_late))
+    (2 - distance_between_early_and_late) / 2 * (E - L) / (E + L)
 end
 
 """
 $(SIGNATURES)
 
-DLL discriminator for very early prompt late correlator.
+Calculates the code phase error in chips using the noncoherent very early minus late
+envelope normalized discriminator for BOC signals.
+
 Implementation from:
 https://gnss-sdr.org/docs/sp-blocks/tracking/#implementation-galileo_e1_dll_pll_veml_tracking
 """
@@ -32,16 +42,11 @@ function dll_disc(
     code_doppler,
     sampling_frequency,
 )
-    code_frequency = code_doppler + get_code_frequency(system)
-    code_phase_delta = code_frequency / sampling_frequency
     VE = abs(get_very_early(correlator))
     E = abs(get_early(correlator))
     L = abs(get_late(correlator))
     VL = abs(get_very_late(correlator))
-    distance_between_early_and_late =
-        get_early_late_sample_spacing(correlator, sampling_frequency, code_frequency) *
-        code_phase_delta
-    (VE + E - VL - L) / (VE + E + VL + L) / (2 * (2 - distance_between_early_and_late))
+    (VE + E - VL - L) / (VE + E + VL + L)
 end
 
 """
