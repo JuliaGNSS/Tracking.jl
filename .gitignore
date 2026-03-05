@@ -6,6 +6,7 @@ test/Manifest.toml
 ext/**/test/Manifest.toml
 
 docs/build/
+docs/plans/
 docs/pdf/build/
 docs/site/
 docs/Manifest.toml

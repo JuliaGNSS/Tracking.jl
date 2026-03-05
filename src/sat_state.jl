@@ -28,6 +28,7 @@ Get the PRN (Pseudo-Random Noise) number of the satellite.
 """
 get_prn(s::SatState) = s.prn
 get_num_ants(s::SatState{<:AbstractCorrelator{M}}) where {M} = M
+get_num_ants(::Type{<:SatState{<:AbstractCorrelator{M}}}) where {M} = M
 
 """
 $(SIGNATURES)
@@ -212,6 +213,8 @@ struct SystemSatsState{S<:AbstractGNSS,SS<:SatState,I}
     system::S
     states::Dictionary{I,SS}
 end
+
+get_num_ants(::SystemSatsState{<:Any,SS}) where {SS} = get_num_ants(SS)
 
 """
 Type alias for a tuple or named tuple of `SystemSatsState` objects, representing

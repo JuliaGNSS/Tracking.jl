@@ -2,7 +2,8 @@ module DownconvertAndCorrelateTest
 
 using Test: @test, @testset, @inferred
 using Unitful: Hz
-using GNSSSignals: GPSL1, gen_code, get_code_frequency, get_code_center_frequency_ratio, get_code_type
+using GNSSSignals:
+    GPSL1, GalileoE1B, gen_code, get_code_frequency, get_code_center_frequency_ratio, get_code_type
 using Bumper: SlabBuffer
 import Tracking
 using Tracking:
@@ -10,6 +11,7 @@ using Tracking:
     CPUDownconvertAndCorrelator,
     CPUThreadedDownconvertAndCorrelator,
     EarlyPromptLateCorrelator,
+    KADownconvertAndCorrelator,
     NumAnts,
     SystemSatsState,
     SatState,
@@ -408,6 +410,261 @@ end
         downconvert_and_correlator, signal, ts_skip, 1, sampling_frequency, intermediate_frequency,
     )
     @test get_correlator(result_skip, 1).accumulators == sat_past_end.correlator.accumulators
+end
+
+@testset "Downconvert and correlate with KA (CPU backend)" begin
+    gpsl1 = GPSL1()
+    sampling_frequency = 5e6Hz
+    code_phase = 10.5
+    num_samples_signal = 5000
+    intermediate_frequency = 0.0Hz
+
+    system_sats_state = SystemSatsState(
+        gpsl1,
+        [SatState(gpsl1, 1, code_phase, 1000.0Hz), SatState(gpsl1, 2, 11.0, 500.0Hz)];
+    )
+    multiple_system_sats_state = (system_sats_state,)
+
+    downconvert_and_correlator = KADownconvertAndCorrelator((gpsl1,), Array)
+
+    track_state = TrackState(multiple_system_sats_state)
+
+    preferred_num_code_blocks_to_integrate = 1
+
+    signal =
+        gen_code(
+            num_samples_signal,
+            gpsl1,
+            1,
+            sampling_frequency,
+            get_code_frequency(gpsl1) + 1000Hz * get_code_center_frequency_ratio(gpsl1),
+            code_phase,
+        ) .* cis.(2π * (0:(num_samples_signal-1)) * 1000.0Hz / sampling_frequency)
+
+    next_track_state = downconvert_and_correlate(
+        downconvert_and_correlator,
+        signal,
+        track_state,
+        preferred_num_code_blocks_to_integrate,
+        sampling_frequency,
+        intermediate_frequency,
+    )
+
+    @test real.(get_correlator(next_track_state, 1).accumulators) ≈ [2921, 4949, 2917] atol = 25
+
+    signal =
+        gen_code(
+            num_samples_signal,
+            gpsl1,
+            2,
+            sampling_frequency,
+            get_code_frequency(gpsl1) + 500Hz * get_code_center_frequency_ratio(gpsl1),
+            11.0,
+        ) .* cis.(2π * (0:(num_samples_signal-1)) * 500.0Hz / sampling_frequency)
+
+    next_track_state = downconvert_and_correlate(
+        downconvert_and_correlator,
+        signal,
+        track_state,
+        preferred_num_code_blocks_to_integrate,
+        sampling_frequency,
+        intermediate_frequency,
+    )
+
+    @test real.(get_correlator(next_track_state, 2).accumulators) ≈ [2919, 4947, 2915] atol = 25
+
+    # Also test Int32 phase path
+    downconvert_and_correlator_i32 = KADownconvertAndCorrelator((gpsl1,), Array; phase_type=Int32)
+    next_track_state_i32 = downconvert_and_correlate(
+        downconvert_and_correlator_i32,
+        signal,
+        track_state,
+        preferred_num_code_blocks_to_integrate,
+        sampling_frequency,
+        intermediate_frequency,
+    )
+    @test real.(get_correlator(next_track_state_i32, 2).accumulators) ≈ [2919, 4947, 2915] atol = 25
+end
+
+@testset "Downconvert and correlate GalileoE1B: KA vs CPU" begin
+    gal = GalileoE1B()
+    sampling_frequency = 25e6Hz
+    code_phase = 10.5
+    num_samples_signal = 100000
+    intermediate_frequency = 0.0Hz
+
+    system_sats_state = SystemSatsState(
+        gal,
+        [SatState(gal, 1, code_phase, 100.0Hz), SatState(gal, 2, 11.0, 200.0Hz)];
+    )
+    track_state = TrackState((system_sats_state,))
+
+    preferred_num_code_blocks_to_integrate = 1
+
+    signal =
+        gen_code(
+            num_samples_signal,
+            gal,
+            1,
+            sampling_frequency,
+            get_code_frequency(gal) + 100Hz * get_code_center_frequency_ratio(gal),
+            code_phase,
+        ) .* cis.(2π * (0:(num_samples_signal-1)) * 100.0Hz / sampling_frequency)
+
+    cpu_dc = CPUDownconvertAndCorrelator(Val(sampling_frequency))
+    cpu_result = downconvert_and_correlate(
+        cpu_dc, signal, track_state, preferred_num_code_blocks_to_integrate,
+        sampling_frequency, intermediate_frequency,
+    )
+
+    ka_dc = KADownconvertAndCorrelator((gal,), Array)
+    ka_result = downconvert_and_correlate(
+        ka_dc, signal, track_state, preferred_num_code_blocks_to_integrate,
+        sampling_frequency, intermediate_frequency,
+    )
+
+    cpu_accum = real.(get_correlator(cpu_result, 1).accumulators)
+    ka_accum = real.(get_correlator(ka_result, 1).accumulators)
+    @test ka_accum ≈ cpu_accum rtol = 0.01
+
+    # Int32 mode: faster but ~4% sub-chip quantization for BOC/CBOC
+    ka_dc_i32 = KADownconvertAndCorrelator((gal,), Array; phase_type=Int32)
+    ka_result_i32 = downconvert_and_correlate(
+        ka_dc_i32, signal, track_state, preferred_num_code_blocks_to_integrate,
+        sampling_frequency, intermediate_frequency,
+    )
+    ka_accum_i32 = real.(get_correlator(ka_result_i32, 1).accumulators)
+    @test ka_accum_i32 ≈ cpu_accum rtol = 0.1
+
+    # Prompt correlator (index 3 for VeryEarlyPromptLate) should be peak
+    prompt_idx = length(cpu_accum) ÷ 2 + 1
+    @test abs(cpu_accum[prompt_idx]) == maximum(abs.(cpu_accum))
+end
+
+@testset "Downconvert and correlate multi-system GPSL1+GalileoE1B (KA CPU)" begin
+    gpsl1 = GPSL1()
+    gal = GalileoE1B()
+    sampling_frequency = 25e6Hz
+    num_samples_signal = 25000
+    intermediate_frequency = 0.0Hz
+
+    sss_l1 = SystemSatsState(
+        gpsl1,
+        [SatState(gpsl1, 1, 10.5, 1000.0Hz)];
+    )
+    sss_gal = SystemSatsState(
+        gal,
+        [SatState(gal, 1, 10.5, 100.0Hz)];
+    )
+    track_state = TrackState((sss_l1, sss_gal))
+
+    # Generate GPSL1 signal for PRN 1
+    signal =
+        gen_code(
+            num_samples_signal,
+            gpsl1,
+            1,
+            sampling_frequency,
+            get_code_frequency(gpsl1) + 1000Hz * get_code_center_frequency_ratio(gpsl1),
+            10.5,
+        ) .* cis.(2π * (0:(num_samples_signal-1)) * 1000.0Hz / sampling_frequency)
+
+    ka_dc = KADownconvertAndCorrelator((gpsl1, gal), Array)
+    result = downconvert_and_correlate(
+        ka_dc, signal, track_state, 1, sampling_frequency, intermediate_frequency,
+    )
+
+    # GPSL1 sat should correlate well (prompt peak at index 2 for EarlyPromptLate)
+    l1_accum = real.(get_correlator(result, 1, 1).accumulators)
+    l1_prompt_idx = length(l1_accum) ÷ 2 + 1
+    @test l1_accum[l1_prompt_idx] > l1_accum[1]
+    @test l1_accum[l1_prompt_idx] > l1_accum[end]
+    @test l1_accum[l1_prompt_idx] > 4000  # strong correlation
+
+    # GalileoE1B sat should NOT correlate with GPSL1 signal (noise-level)
+    gal_accum = real.(get_correlator(result, 2, 1).accumulators)
+    gal_prompt_idx = length(gal_accum) ÷ 2 + 1
+    @test abs(gal_accum[gal_prompt_idx]) < abs(l1_accum[l1_prompt_idx]) / 10
+end
+
+const AMDGPU_AVAILABLE = try
+    @eval using AMDGPU
+    AMDGPU.functional()
+catch
+    false
+end
+
+if AMDGPU_AVAILABLE
+    @testset "Downconvert and correlate with KA (AMDGPU backend)" begin
+        gpsl1 = GPSL1()
+        sampling_frequency = 5e6Hz
+        code_phase = 10.5
+        num_samples_signal = 5000
+        intermediate_frequency = 0.0Hz
+
+        system_sats_state = SystemSatsState(
+            gpsl1,
+            [
+                SatState(gpsl1, 1, code_phase, 1000.0Hz),
+                SatState(gpsl1, 2, 11.0, 500.0Hz),
+            ];
+        )
+        multiple_system_sats_state = (system_sats_state,)
+
+        downconvert_and_correlator = KADownconvertAndCorrelator((gpsl1,), ROCArray)
+
+        track_state = TrackState(multiple_system_sats_state)
+
+        preferred_num_code_blocks_to_integrate = 1
+
+        signal_cpu =
+            gen_code(
+                num_samples_signal,
+                gpsl1,
+                1,
+                sampling_frequency,
+                get_code_frequency(gpsl1) +
+                1000Hz * get_code_center_frequency_ratio(gpsl1),
+                code_phase,
+            ) .* cis.(2π * (0:(num_samples_signal-1)) * 1000.0Hz / sampling_frequency)
+        signal = ROCArray(ComplexF32.(signal_cpu))
+
+        next_track_state = downconvert_and_correlate(
+            downconvert_and_correlator,
+            signal,
+            track_state,
+            preferred_num_code_blocks_to_integrate,
+            sampling_frequency,
+            intermediate_frequency,
+        )
+
+        @test real.(get_correlator(next_track_state, 1).accumulators) ≈
+              [2921, 4949, 2917] atol = 25
+
+        signal_cpu =
+            gen_code(
+                num_samples_signal,
+                gpsl1,
+                2,
+                sampling_frequency,
+                get_code_frequency(gpsl1) +
+                500Hz * get_code_center_frequency_ratio(gpsl1),
+                11.0,
+            ) .* cis.(2π * (0:(num_samples_signal-1)) * 500.0Hz / sampling_frequency)
+        signal = ROCArray(ComplexF32.(signal_cpu))
+
+        next_track_state = downconvert_and_correlate(
+            downconvert_and_correlator,
+            signal,
+            track_state,
+            preferred_num_code_blocks_to_integrate,
+            sampling_frequency,
+            intermediate_frequency,
+        )
+
+        @test real.(get_correlator(next_track_state, 2).accumulators) ≈
+              [2919, 4947, 2915] atol = 25
+    end
 end
 
 end
