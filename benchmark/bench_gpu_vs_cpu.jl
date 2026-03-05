@@ -1,6 +1,5 @@
 # GPU (CUDA, AMDGPU) vs CPU downconvert-and-correlate benchmarks
 #
-# Compatible with master (no KA) and feature branch (with KA).
 # Returns a BenchmarkGroup with entries for each available backend.
 
 using BenchmarkTools
@@ -9,17 +8,13 @@ using Unitful: Hz
 using Tracking
 using Tracking:
     CPUDownconvertAndCorrelator,
+    KADownconvertAndCorrelator,
     SystemSatsState,
     SatState,
     TrackState,
     downconvert_and_correlate
 
-if !@isdefined(HAS_KA)
-    const HAS_KA = isdefined(Tracking, :KADownconvertAndCorrelator)
-    if HAS_KA
-        using Tracking: KADownconvertAndCorrelator
-    end
-
+if !@isdefined(HAS_CUDA)
     const HAS_CUDA = try
         @eval using CUDA: CUDA, cu, CuArray
         CUDA.functional()
@@ -29,15 +24,7 @@ if !@isdefined(HAS_KA)
 
     const HAS_AMDGPU = try
         @eval using AMDGPU: AMDGPU, ROCArray
-        true
-    catch
-        false
-    end
-
-    const HAS_CUDA_EXT = HAS_CUDA && try
-        ext = Base.get_extension(Tracking, :TrackingCUDAExt)
-        @eval const GPUDownconvertAndCorrelator = $ext.GPUDownconvertAndCorrelator
-        true
+        AMDGPU.functional()
     catch
         false
     end
@@ -49,6 +36,7 @@ function gpu_suite()
     gal = GalileoE1B()
 
     configs = [
+        ("L1 1sat/5K",    (gpsl1,),       [1],    5e6Hz,  5000,  32, 1000.0),
         ("L1 8sat/5K",    (gpsl1,),       [8],    5e6Hz,  5000,  32, 1000.0),
         ("E1B 8sat/25K",  (gal,),         [8],    25e6Hz, 25000, 50, 100.0),
         ("E1B 8sat/100K", (gal,),         [8],    25e6Hz, 100000,50, 100.0),
@@ -75,17 +63,8 @@ function gpu_suite()
             $cpu_dc, $signal_cpu, $ts, 1, $sfreq, $(0.0Hz),
         )
 
-        # Old CUDA extension
-        if HAS_CUDA_EXT
-            signal_cu = cu(signal_cpu)
-            cuda_dc = GPUDownconvertAndCorrelator(Tuple(all_sss), nsamp)
-            suite[label]["CUDA-ext"] = @benchmarkable downconvert_and_correlate(
-                $cuda_dc, $signal_cu, $ts, 1, $sfreq, $(0.0Hz),
-            )
-        end
-
         # KA + CUDA
-        if HAS_KA && HAS_CUDA
+        if HAS_CUDA
             signal_cu = cu(signal_cpu)
             ka = KADownconvertAndCorrelator(systems, CuArray; max_sats=max(total_sats, 4))
             suite[label]["KA-CUDA"] = @benchmarkable downconvert_and_correlate(
@@ -94,7 +73,7 @@ function gpu_suite()
         end
 
         # KA + AMDGPU
-        if HAS_KA && HAS_AMDGPU
+        if HAS_AMDGPU
             signal_roc = ROCArray(signal_cpu)
             ka = KADownconvertAndCorrelator(systems, ROCArray; max_sats=max(total_sats, 4))
             suite[label]["KA-AMD"] = @benchmarkable downconvert_and_correlate(

@@ -234,19 +234,20 @@ suit better. For that, you can pass a custom `post_corr_filter` to the `SatState
 
 ## GPU Support
 
-To use GPU acceleration features, you need to explicitly load CUDA:
+GPU acceleration is available via [KernelAbstractions.jl](https://github.com/JuliaGPU/KernelAbstractions.jl),
+which supports CUDA, AMDGPU, and other backends:
 
 ```julia
 using Tracking
-using CUDA  # Activates GPU functionality
+using Tracking: KADownconvertAndCorrelator
+using CUDA: CuArray  # or AMDGPU: ROCArray
 
-# Access GPU types via the extension
-ext = Base.get_extension(Tracking, :TrackingCUDAExt)
-gpu_correlator = ext.GPUDownconvertAndCorrelator(...)
+gpsl1 = GPSL1()
+ka_dc = KADownconvertAndCorrelator((gpsl1,), CuArray)
+track_state = track(signal_gpu, track_state, sampling_frequency;
+    downconvert_and_correlator = ka_dc,
+)
 ```
-
-Note: The GPU implementation is available for reference but is not yet as optimized as the
-CPU implementation which uses SIMD vectorization via LoopVectorization.jl.
 
 ## Q/A
 

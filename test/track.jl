@@ -722,4 +722,70 @@ end
         5e-3
 end
 
+const CUDA_AVAILABLE = try
+    @eval using CUDA: CUDA, CuArray
+    CUDA.functional()
+catch
+    false
+end
+
+if CUDA_AVAILABLE
+    @testset "Tracking GPSL1 with KADownconvertAndCorrelator (CUDA backend)" begin
+        gpsl1 = GPSL1()
+        carrier_doppler = 200Hz
+        start_code_phase = 100
+        code_frequency =
+            carrier_doppler * get_code_center_frequency_ratio(gpsl1) +
+            get_code_frequency(gpsl1)
+        sampling_frequency = 4e6Hz
+        prn = 1
+        range = 0:3999
+        start_carrier_phase = π / 2
+
+        ka_dc = KADownconvertAndCorrelator((gpsl1,), CuArray)
+
+        track_state = TrackState(
+            gpsl1,
+            [SatState(gpsl1, prn, start_code_phase, carrier_doppler - 20Hz)],
+        )
+
+        signal = CuArray(Complex{Float32}.(
+            cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase) .*
+            gen_code(4000, gpsl1, prn, sampling_frequency, code_frequency, start_code_phase)
+        ))
+        track_state = track(signal, track_state, sampling_frequency;
+            downconvert_and_correlator = ka_dc,
+        )
+
+        iterations = 2000
+        for i = 1:iterations
+            carrier_phase =
+                mod2pi(
+                    2π * carrier_doppler * 4000 * i / sampling_frequency +
+                    start_carrier_phase + π,
+                ) - π
+            code_phase =
+                mod(code_frequency * 4000 * i / sampling_frequency + start_code_phase, 1023)
+            signal = CuArray(Complex{Float32}.(
+                cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ carrier_phase) .*
+                gen_code(4000, gpsl1, prn, sampling_frequency, code_frequency, code_phase)
+            ))
+            track_state = track(signal, track_state, sampling_frequency;
+                downconvert_and_correlator = ka_dc,
+            )
+        end
+        comp_code_phase = mod(
+            code_frequency * 4000 * (iterations + 1) / sampling_frequency + start_code_phase,
+            1023,
+        )
+        comp_carrier_phase =
+            mod2pi(
+                2π * carrier_doppler * 4000 * (iterations + 1) / sampling_frequency +
+                start_carrier_phase + π,
+            ) - π
+        @test get_code_phase(track_state) ≈ comp_code_phase atol = 5e-5
+        @test get_carrier_phase(track_state) + π ≈ comp_carrier_phase atol = 1e-3
+    end
+end
+
 end
