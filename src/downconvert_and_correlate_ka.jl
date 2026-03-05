@@ -9,11 +9,10 @@ GPU-accelerated downconvert-and-correlate using KernelAbstractions.
 Expanded code tables (with subcarrier baked in) live permanently on GPU.
 Only a tiny param buffer is copied per call.
 
-The `P` type parameter selects the fixed-point phase integer type:
-- `Int64` (default): 32 fractional bits — essentially exact subcarrier indexing
-- `Int32`: ~36-45% faster on GPU, 18 fractional bits — slight subcarrier quantization for BOC/CBOC
+Uses Int64 fixed-point arithmetic with 32 fractional bits for essentially
+exact subcarrier indexing (zero quantization errors across 100K samples).
 """
-struct KADownconvertAndCorrelator{P<:Union{Int32,Int64},CT,AR<:AbstractArray{ComplexF64,3},AP<:AbstractMatrix{Float32}} <:
+struct KADownconvertAndCorrelator{CT,AR<:AbstractArray{ComplexF64,3},AP<:AbstractMatrix{Float32}} <:
        AbstractDownconvertAndCorrelator
     expanded_codes_gpu::CT        # Tuple of GPU Float32 matrices: (code_length*sub_per_chip) × num_prns
     sub_per_chip::Vector{Int32}   # sub-phases per chip for each system (1 for LOC, 12 for CBOC, etc.)
@@ -70,23 +69,19 @@ function _build_expanded_code_table(codes::AbstractMatrix, modulation, code_leng
 end
 
 """
-    KADownconvertAndCorrelator(systems, ArrayType; phase_type=Int64, kwargs...)
+    KADownconvertAndCorrelator(systems, ArrayType; kwargs...)
 
-Construct a GPU downconvert-and-correlator.
-
-`phase_type` selects fixed-point precision:
-- `Int64` (default): 32 fractional bits — essentially exact subcarrier indexing
-- `Int32`: ~36-45% faster on GPU, 18 fractional bits — slight subcarrier quantization for BOC/CBOC
+Construct a GPU downconvert-and-correlator using Int64 fixed-point
+arithmetic with 32 fractional bits for exact subcarrier indexing.
 """
 function KADownconvertAndCorrelator(
     systems,
     ArrayType::Type{<:AbstractArray};
-    phase_type::Type{P} = Int64,
     num_threads::Int = 256,
     max_ants::Int = 1,
     max_taps::Int = 5,
     max_sats::Int = 32,
-) where {P<:Union{Int32,Int64}}
+)
     expanded_codes_gpu = Tuple(
         let mod = get_modulation(typeof(sys)),
             codes = get_codes(sys),
@@ -102,17 +97,6 @@ function KADownconvertAndCorrelator(
 
     # Header layout per column (all Float32; integer values bit-packed via reinterpret):
     #
-    # Int32 mode (P=Int32): 7 + max_taps rows
-    #   Row 1: carrier_freq_ratio       Float32
-    #   Row 2: carrier_phase            Float32
-    #   Row 3: num_samples              Int32 reinterpreted
-    #   Row 4: start_sample             Int32 reinterpreted
-    #   Row 5: prn                      Int32 reinterpreted
-    #   Row 6: code_phase_fixed         Int32 reinterpreted (FIXED_POINT_BITS_I32 frac bits, CHIP units)
-    #   Row 7: delta_code_phase_fixed   Int32 reinterpreted (FIXED_POINT_BITS_I32 frac bits, CHIP units)
-    #   Rows 8..7+max_taps: tap_shift_fixed  Int32 reinterpreted
-    #
-    # Int64 mode (P=Int64): 7 + 2*max_taps rows (Int64 values use 2 Float32 slots each)
     #   Row 1: carrier_freq_ratio       Float32
     #   Row 2: carrier_phase            Float32
     #   Row 3: num_samples              Int32 reinterpreted
@@ -121,13 +105,13 @@ function KADownconvertAndCorrelator(
     #   Rows 6-7: code_phase_fixed      Int64 as 2×Float32
     #   Rows 8-9: delta_code_phase_fixed Int64 as 2×Float32
     #   Rows 10..9+2*max_taps: tap_shift_fixed  Int64 as 2×Float32 each
-    header_rows = P === Int32 ? 7 + max_taps : 9 + 2 * max_taps
+    header_rows = 9 + 2 * max_taps
 
     results_gpu = ArrayType{ComplexF64}(undef, max_sats, max_ants, max_taps)
     results_cpu = Array{ComplexF64}(undef, max_sats, max_ants, max_taps)
     sat_params_gpu = ArrayType{Float32}(undef, header_rows, max_sats)
     sat_params_cpu = Matrix{Float32}(undef, header_rows, max_sats)
-    KADownconvertAndCorrelator{P,typeof(expanded_codes_gpu),typeof(results_gpu),typeof(sat_params_gpu)}(
+    KADownconvertAndCorrelator{typeof(expanded_codes_gpu),typeof(results_gpu),typeof(sat_params_gpu)}(
         expanded_codes_gpu,
         sub_per_chip_vec,
         system_indices,
@@ -161,27 +145,23 @@ end
     reinterpret(Int64, lo_bits | (hi_bits << 32))
 end
 
-# Fixed-point constants
-const FIXED_POINT_BITS_I32 = 18
-const FIXED_POINT_SCALE_I32 = Int32(1) << FIXED_POINT_BITS_I32  # 262144
-const FIXED_POINT_MASK_I32 = FIXED_POINT_SCALE_I32 - Int32(1)   # 0x3FFFF
-const FIXED_POINT_BITS_I64 = 32
-const FIXED_POINT_SCALE_I64 = Int64(1) << FIXED_POINT_BITS_I64  # 4294967296
+# Fixed-point constants: 32 fractional bits
+const FIXED_POINT_BITS = 32
+const FIXED_POINT_SCALE = Int64(1) << FIXED_POINT_BITS  # 4294967296
 
 # ============================================================
-# Int32 kernel: phase in CHIP units, sub-phase decomposition
+# Single-antenna kernel: accumulate+wrap
 # ============================================================
-@kernel function ka_dc_kernel_i32!(
+@kernel function ka_dc_kernel!(
     results,
     @Const(signal),
     @Const(expanded_codes),
     ::Val{num_taps},
     ::Val{combined},
-    ::Val{sub_per_chip},
-    code_length::Int32,
+    expanded_code_length::Int32,
     @Const(sat_params),
     result_offset::Int32,
-) where {num_taps, combined, sub_per_chip}
+) where {num_taps, combined}
     N = @uniform @groupsize()[1]
     local_tid = @index(Local, Linear)
     group_idx = @index(Group, Linear)
@@ -189,8 +169,9 @@ const FIXED_POINT_SCALE_I64 = Int64(1) << FIXED_POINT_BITS_I64  # 4294967296
     shmem_re = @localmem Float64 (combined ? num_taps : 1, 256)
     shmem_im = @localmem Float64 (combined ? num_taps : 1, 256)
     sat_fp = @localmem Float32 (2,)
-    sat_ip = @localmem Int32 (5,)
-    sat_sh = @localmem Int32 (num_taps,)
+    sat_ip = @localmem Int32 (3,)            # num_samples, start_sample, prn
+    sat_phase = @localmem Int64 (2,)          # code_phase_fixed, delta_code_fixed
+    sat_sh = @localmem Int64 (num_taps,)
 
     if local_tid == 1
         col = result_offset + Int32(group_idx)
@@ -199,10 +180,10 @@ const FIXED_POINT_SCALE_I64 = Int64(1) << FIXED_POINT_BITS_I64  # 4294967296
         @inbounds sat_ip[1] = _i32_from_f32(sat_params[3, col])
         @inbounds sat_ip[2] = _i32_from_f32(sat_params[4, col])
         @inbounds sat_ip[3] = _i32_from_f32(sat_params[5, col])
-        @inbounds sat_ip[4] = _i32_from_f32(sat_params[6, col])
-        @inbounds sat_ip[5] = _i32_from_f32(sat_params[7, col])
+        @inbounds sat_phase[1] = _i64_from_f32_pair(sat_params[6, col], sat_params[7, col])
+        @inbounds sat_phase[2] = _i64_from_f32_pair(sat_params[8, col], sat_params[9, col])
         @inbounds for t in 1:num_taps
-            sat_sh[t] = _i32_from_f32(sat_params[7 + t, col])
+            sat_sh[t] = _i64_from_f32_pair(sat_params[9 + 2*(t-1) + 1, col], sat_params[9 + 2*(t-1) + 2, col])
         end
     end
     @synchronize
@@ -215,9 +196,16 @@ const FIXED_POINT_SCALE_I64 = Int64(1) << FIXED_POINT_BITS_I64  # 4294967296
     end
 
     @inbounds begin
-        initial_code_fixed = sat_ip[4]
-        delta_code_fixed = sat_ip[5]
+        initial_code_fixed = sat_phase[1]
+        delta_code_fixed = sat_phase[2]
         prn = sat_ip[3]
+
+        # Accumulate+wrap: track phase as running accumulator, avoid mod per sample
+        ecl_shifted = Int64(expanded_code_length) << Int64(FIXED_POINT_BITS)
+        delta_stride = delta_code_fixed * Int64(N)
+
+        # Initialize phase for this thread (one mod at init)
+        code_phase = mod((Int64(local_tid) - Int64(1)) * delta_code_fixed + initial_code_fixed, ecl_shifted)
 
         @fastmath begin
             step_phase = Float32(6.283185307179586) * sat_fp[1] * Float32(N)
@@ -234,24 +222,20 @@ const FIXED_POINT_SCALE_I64 = Int64(1) << FIXED_POINT_BITS_I64  # 4294967296
             dc_re = sig_re * c + sig_im * s
             dc_im = sig_im * c - sig_re * s
 
-            base_phase = (sample - Int32(1)) * delta_code_fixed + initial_code_fixed
-
             for tap in 1:num_taps
-                phase = base_phase + sat_sh[tap]
-                chip = phase >> Int32(FIXED_POINT_BITS_I32)
-                chip_idx = mod(chip, code_length)
-                if sub_per_chip == 1
-                    code_idx = chip_idx + Int32(1)
-                else
-                    frac = phase & FIXED_POINT_MASK_I32
-                    frac = frac < Int32(0) ? frac + FIXED_POINT_SCALE_I32 : frac
-                    sub_idx = (frac * Int32(sub_per_chip)) >> Int32(FIXED_POINT_BITS_I32)
-                    code_idx = chip_idx * Int32(sub_per_chip) + sub_idx + Int32(1)
-                end
-                code_val = expanded_codes[code_idx, prn]
+                tap_phase = code_phase + sat_sh[tap]
+                # Branchless wrap to [0, ecl_shifted)
+                tap_phase -= (tap_phase >= ecl_shifted) * ecl_shifted
+                tap_phase += (tap_phase < Int64(0)) * ecl_shifted
+                idx = Int32(tap_phase >> Int64(FIXED_POINT_BITS)) + Int32(1)
+                code_val = expanded_codes[idx, prn]
                 acc_re[tap] += dc_re * code_val
                 acc_im[tap] += dc_im * code_val
             end
+
+            # Advance phase by stride, branchless wrap
+            code_phase += delta_stride
+            code_phase -= (code_phase >= ecl_shifted) * ecl_shifted
 
             @fastmath begin
                 c_new = c * c_step - s * s_step
@@ -313,303 +297,9 @@ const FIXED_POINT_SCALE_I64 = Int64(1) << FIXED_POINT_BITS_I64  # 4294967296
 end
 
 # ============================================================
-# Int64 kernel: phase in EXPANDED units, accumulate+wrap
+# Multi-antenna kernel: accumulate+wrap
 # ============================================================
-@kernel function ka_dc_kernel_i64!(
-    results,
-    @Const(signal),
-    @Const(expanded_codes),
-    ::Val{num_taps},
-    ::Val{combined},
-    expanded_code_length::Int32,
-    @Const(sat_params),
-    result_offset::Int32,
-) where {num_taps, combined}
-    N = @uniform @groupsize()[1]
-    local_tid = @index(Local, Linear)
-    group_idx = @index(Group, Linear)
-
-    shmem_re = @localmem Float64 (combined ? num_taps : 1, 256)
-    shmem_im = @localmem Float64 (combined ? num_taps : 1, 256)
-    sat_fp = @localmem Float32 (2,)
-    sat_ip = @localmem Int32 (3,)            # num_samples, start_sample, prn
-    sat_phase = @localmem Int64 (2,)          # code_phase_fixed, delta_code_fixed
-    sat_sh = @localmem Int64 (num_taps,)
-
-    if local_tid == 1
-        col = result_offset + Int32(group_idx)
-        @inbounds sat_fp[1] = sat_params[1, col]
-        @inbounds sat_fp[2] = sat_params[2, col]
-        @inbounds sat_ip[1] = _i32_from_f32(sat_params[3, col])
-        @inbounds sat_ip[2] = _i32_from_f32(sat_params[4, col])
-        @inbounds sat_ip[3] = _i32_from_f32(sat_params[5, col])
-        @inbounds sat_phase[1] = _i64_from_f32_pair(sat_params[6, col], sat_params[7, col])
-        @inbounds sat_phase[2] = _i64_from_f32_pair(sat_params[8, col], sat_params[9, col])
-        @inbounds for t in 1:num_taps
-            sat_sh[t] = _i64_from_f32_pair(sat_params[9 + 2*(t-1) + 1, col], sat_params[9 + 2*(t-1) + 2, col])
-        end
-    end
-    @synchronize
-
-    acc_re = @private Float32 (num_taps,)
-    acc_im = @private Float32 (num_taps,)
-    for tap in 1:num_taps
-        @inbounds acc_re[tap] = zero(Float32)
-        @inbounds acc_im[tap] = zero(Float32)
-    end
-
-    @inbounds begin
-        initial_code_fixed = sat_phase[1]
-        delta_code_fixed = sat_phase[2]
-        prn = sat_ip[3]
-
-        # Accumulate+wrap: track phase as running accumulator, avoid mod per sample
-        ecl_shifted = Int64(expanded_code_length) << Int64(FIXED_POINT_BITS_I64)
-        delta_stride = delta_code_fixed * Int64(N)
-
-        # Initialize phase for this thread (one mod at init)
-        code_phase = mod((Int64(local_tid) - Int64(1)) * delta_code_fixed + initial_code_fixed, ecl_shifted)
-
-        @fastmath begin
-            step_phase = Float32(6.283185307179586) * sat_fp[1] * Float32(N)
-            s_step, c_step = sincos(step_phase)
-            init_phase = Float32(6.283185307179586) * (Float32(Int32(local_tid) - Int32(1)) * sat_fp[1] + sat_fp[2])
-            s, c = sincos(init_phase)
-        end
-
-        sample = Int32(local_tid)
-        while sample <= sat_ip[1]
-            sig = signal[sample + sat_ip[2] - Int32(1)]
-            sig_re = real(sig)
-            sig_im = imag(sig)
-            dc_re = sig_re * c + sig_im * s
-            dc_im = sig_im * c - sig_re * s
-
-            for tap in 1:num_taps
-                tap_phase = code_phase + sat_sh[tap]
-                # Branchless wrap to [0, ecl_shifted)
-                tap_phase -= (tap_phase >= ecl_shifted) * ecl_shifted
-                tap_phase += (tap_phase < Int64(0)) * ecl_shifted
-                idx = Int32(tap_phase >> Int64(FIXED_POINT_BITS_I64)) + Int32(1)
-                code_val = expanded_codes[idx, prn]
-                acc_re[tap] += dc_re * code_val
-                acc_im[tap] += dc_im * code_val
-            end
-
-            # Advance phase by stride, branchless wrap
-            code_phase += delta_stride
-            code_phase -= (code_phase >= ecl_shifted) * ecl_shifted
-
-            @fastmath begin
-                c_new = c * c_step - s * s_step
-                s_new = s * c_step + c * s_step
-                c = c_new
-                s = s_new
-            end
-            sample += Int32(N)
-        end
-    end
-
-    # Reduction (identical to Int32)
-    if combined
-        @inbounds for tap in 1:num_taps
-            shmem_re[tap, local_tid] = Float64(acc_re[tap])
-            shmem_im[tap, local_tid] = Float64(acc_im[tap])
-        end
-        for half in (128, 64, 32, 16, 8, 4, 2)
-            @synchronize
-            if local_tid <= half
-                @inbounds for tap in 1:num_taps
-                    shmem_re[tap, local_tid] += shmem_re[tap, local_tid + half]
-                    shmem_im[tap, local_tid] += shmem_im[tap, local_tid + half]
-                end
-            end
-        end
-        @synchronize
-        if local_tid == 1
-            col = result_offset + Int32(group_idx)
-            @inbounds for tap in 1:num_taps
-                results[col, 1, tap] = complex(
-                    shmem_re[tap, 1] + shmem_re[tap, 2],
-                    shmem_im[tap, 1] + shmem_im[tap, 2],
-                )
-            end
-        end
-    else
-        for tap in 1:num_taps
-            @inbounds shmem_re[1, local_tid] = Float64(acc_re[tap])
-            @inbounds shmem_im[1, local_tid] = Float64(acc_im[tap])
-            for half in (128, 64, 32, 16, 8, 4, 2)
-                @synchronize
-                if local_tid <= half
-                    @inbounds shmem_re[1, local_tid] += shmem_re[1, local_tid + half]
-                    @inbounds shmem_im[1, local_tid] += shmem_im[1, local_tid + half]
-                end
-            end
-            @synchronize
-            if local_tid == 1
-                col = result_offset + Int32(group_idx)
-                @inbounds results[col, 1, tap] = complex(
-                    shmem_re[1, 1] + shmem_re[1, 2],
-                    shmem_im[1, 1] + shmem_im[1, 2],
-                )
-            end
-            @synchronize
-        end
-    end
-end
-
-# ============================================================
-# Multi-antenna Int32 kernel
-# ============================================================
-@kernel function ka_dc_multi_ant_kernel_i32!(
-    results,
-    @Const(signal),
-    @Const(expanded_codes),
-    ::Val{num_taps},
-    ::Val{combined},
-    ::Val{sub_per_chip},
-    code_length::Int32,
-    num_ants::Int32,
-    @Const(sat_params),
-    result_offset::Int32,
-) where {num_taps, combined, sub_per_chip}
-    N = @uniform @groupsize()[1]
-    local_tid = @index(Local, Linear)
-    group_idx = @index(Group, Linear)
-
-    shmem_re = @localmem Float64 (combined ? num_taps : 1, 256)
-    shmem_im = @localmem Float64 (combined ? num_taps : 1, 256)
-    sat_fp = @localmem Float32 (2,)
-    sat_ip = @localmem Int32 (5,)
-    sat_sh = @localmem Int32 (num_taps,)
-
-    if local_tid == 1
-        col = result_offset + Int32(group_idx)
-        @inbounds sat_fp[1] = sat_params[1, col]
-        @inbounds sat_fp[2] = sat_params[2, col]
-        @inbounds sat_ip[1] = _i32_from_f32(sat_params[3, col])
-        @inbounds sat_ip[2] = _i32_from_f32(sat_params[4, col])
-        @inbounds sat_ip[3] = _i32_from_f32(sat_params[5, col])
-        @inbounds sat_ip[4] = _i32_from_f32(sat_params[6, col])
-        @inbounds sat_ip[5] = _i32_from_f32(sat_params[7, col])
-        @inbounds for t in 1:num_taps
-            sat_sh[t] = _i32_from_f32(sat_params[7 + t, col])
-        end
-    end
-    @synchronize
-
-    acc_re = @private Float32 (num_taps,)
-    acc_im = @private Float32 (num_taps,)
-
-    for ant in Int32(1):num_ants
-        for tap in 1:num_taps
-            @inbounds acc_re[tap] = zero(Float32)
-            @inbounds acc_im[tap] = zero(Float32)
-        end
-
-        @inbounds begin
-            initial_code_fixed = sat_ip[4]
-            delta_code_fixed = sat_ip[5]
-            prn = sat_ip[3]
-
-            @fastmath begin
-                step_phase = Float32(6.283185307179586) * sat_fp[1] * Float32(N)
-                s_step, c_step = sincos(step_phase)
-                init_phase = Float32(6.283185307179586) * (Float32(Int32(local_tid) - Int32(1)) * sat_fp[1] + sat_fp[2])
-                s, c = sincos(init_phase)
-            end
-
-            sample = Int32(local_tid)
-            while sample <= sat_ip[1]
-                sig = signal[sample + sat_ip[2] - Int32(1), ant]
-                sig_re = real(sig)
-                sig_im = imag(sig)
-                dc_re = sig_re * c + sig_im * s
-                dc_im = sig_im * c - sig_re * s
-
-                base_phase = (sample - Int32(1)) * delta_code_fixed + initial_code_fixed
-
-                for tap in 1:num_taps
-                    phase = base_phase + sat_sh[tap]
-                    chip = phase >> Int32(FIXED_POINT_BITS_I32)
-                    chip_idx = mod(chip, code_length)
-                    if sub_per_chip == 1
-                        code_idx = chip_idx + Int32(1)
-                    else
-                        frac = phase & FIXED_POINT_MASK_I32
-                        frac = frac < Int32(0) ? frac + FIXED_POINT_SCALE_I32 : frac
-                        sub_idx = (frac * Int32(sub_per_chip)) >> Int32(FIXED_POINT_BITS_I32)
-                        code_idx = chip_idx * Int32(sub_per_chip) + sub_idx + Int32(1)
-                    end
-                    code_val = expanded_codes[code_idx, prn]
-                    acc_re[tap] += dc_re * code_val
-                    acc_im[tap] += dc_im * code_val
-                end
-
-                @fastmath begin
-                    c_new = c * c_step - s * s_step
-                    s_new = s * c_step + c * s_step
-                    c = c_new
-                    s = s_new
-                end
-                sample += Int32(N)
-            end
-        end
-
-        if combined
-            @inbounds for tap in 1:num_taps
-                shmem_re[tap, local_tid] = Float64(acc_re[tap])
-                shmem_im[tap, local_tid] = Float64(acc_im[tap])
-            end
-            for half in (128, 64, 32, 16, 8, 4, 2)
-                @synchronize
-                if local_tid <= half
-                    @inbounds for tap in 1:num_taps
-                        shmem_re[tap, local_tid] += shmem_re[tap, local_tid + half]
-                        shmem_im[tap, local_tid] += shmem_im[tap, local_tid + half]
-                    end
-                end
-            end
-            @synchronize
-            if local_tid == 1
-                col = result_offset + Int32(group_idx)
-                @inbounds for tap in 1:num_taps
-                    results[col, ant, tap] = complex(
-                        shmem_re[tap, 1] + shmem_re[tap, 2],
-                        shmem_im[tap, 1] + shmem_im[tap, 2],
-                    )
-                end
-            end
-        else
-            for tap in 1:num_taps
-                @inbounds shmem_re[1, local_tid] = Float64(acc_re[tap])
-                @inbounds shmem_im[1, local_tid] = Float64(acc_im[tap])
-                for half in (128, 64, 32, 16, 8, 4, 2)
-                    @synchronize
-                    if local_tid <= half
-                        @inbounds shmem_re[1, local_tid] += shmem_re[1, local_tid + half]
-                        @inbounds shmem_im[1, local_tid] += shmem_im[1, local_tid + half]
-                    end
-                end
-                @synchronize
-                if local_tid == 1
-                    col = result_offset + Int32(group_idx)
-                    @inbounds results[col, ant, tap] = complex(
-                        shmem_re[1, 1] + shmem_re[1, 2],
-                        shmem_im[1, 1] + shmem_im[1, 2],
-                    )
-                end
-                @synchronize
-            end
-        end
-    end
-end
-
-# ============================================================
-# Multi-antenna Int64 kernel
-# ============================================================
-@kernel function ka_dc_multi_ant_kernel_i64!(
+@kernel function ka_dc_multi_ant_kernel!(
     results,
     @Const(signal),
     @Const(expanded_codes),
@@ -661,7 +351,7 @@ end
             prn = sat_ip[3]
 
             # Accumulate+wrap: track phase as running accumulator, avoid mod per sample
-            ecl_shifted = Int64(expanded_code_length) << Int64(FIXED_POINT_BITS_I64)
+            ecl_shifted = Int64(expanded_code_length) << Int64(FIXED_POINT_BITS)
             delta_stride = delta_code_fixed * Int64(N)
 
             # Initialize phase for this thread (one mod at init)
@@ -687,7 +377,7 @@ end
                     # Branchless wrap to [0, ecl_shifted)
                     tap_phase -= (tap_phase >= ecl_shifted) * ecl_shifted
                     tap_phase += (tap_phase < Int64(0)) * ecl_shifted
-                    idx = Int32(tap_phase >> Int64(FIXED_POINT_BITS_I64)) + Int32(1)
+                    idx = Int32(tap_phase >> Int64(FIXED_POINT_BITS)) + Int32(1)
                     code_val = expanded_codes[idx, prn]
                     acc_re[tap] += dc_re * code_val
                     acc_im[tap] += dc_im * code_val
@@ -757,7 +447,7 @@ end
 end
 
 # ============================================================
-# CPU-side result update helpers (unchanged)
+# CPU-side result update helpers
 # ============================================================
 function ka_update_from_results(
     correlator::AbstractCorrelator{1},
@@ -787,37 +477,9 @@ function ka_update_from_results(
 end
 
 # ============================================================
-# Dispatch: Int32 param packing
+# Param packing (Int64 expanded units)
 # ============================================================
-function _pack_sat_params_i32!(
-    sat_params_cpu, batch_idx,
-    carrier_freq_ratio, carrier_phase,
-    signal_samples_to_integrate, signal_start_sample, prn,
-    code_freq_ratio, norm_phase, code_length, spc,
-    sample_shifts, num_taps,
-)
-    delta_code_fixed = round(Int32, code_freq_ratio * FIXED_POINT_SCALE_I32)
-    code_phase_fixed = round(Int32, norm_phase * FIXED_POINT_SCALE_I32)
-
-    @inbounds sat_params_cpu[1, batch_idx] = carrier_freq_ratio
-    @inbounds sat_params_cpu[2, batch_idx] = carrier_phase
-    @inbounds sat_params_cpu[3, batch_idx] = _f32_from_i32(Int32(signal_samples_to_integrate))
-    @inbounds sat_params_cpu[4, batch_idx] = _f32_from_i32(Int32(signal_start_sample))
-    @inbounds sat_params_cpu[5, batch_idx] = _f32_from_i32(Int32(prn))
-    @inbounds sat_params_cpu[6, batch_idx] = _f32_from_i32(code_phase_fixed)
-    @inbounds sat_params_cpu[7, batch_idx] = _f32_from_i32(delta_code_fixed)
-
-    for t in 1:num_taps
-        tap_shift_chips = Float64(sample_shifts[t]) * code_freq_ratio
-        tap_shift_fixed = round(Int32, tap_shift_chips * FIXED_POINT_SCALE_I32)
-        @inbounds sat_params_cpu[7 + t, batch_idx] = _f32_from_i32(tap_shift_fixed)
-    end
-end
-
-# ============================================================
-# Dispatch: Int64 param packing (expanded units)
-# ============================================================
-function _pack_sat_params_i64!(
+function _pack_sat_params!(
     sat_params_cpu, batch_idx,
     carrier_freq_ratio, carrier_phase,
     signal_samples_to_integrate, signal_start_sample, prn,
@@ -827,8 +489,8 @@ function _pack_sat_params_i64!(
     expanded_freq_ratio = code_freq_ratio * spc
     expanded_norm_phase = norm_phase * spc
 
-    delta_code_fixed = round(Int64, expanded_freq_ratio * FIXED_POINT_SCALE_I64)
-    code_phase_fixed = round(Int64, expanded_norm_phase * FIXED_POINT_SCALE_I64)
+    delta_code_fixed = round(Int64, expanded_freq_ratio * FIXED_POINT_SCALE)
+    code_phase_fixed = round(Int64, expanded_norm_phase * FIXED_POINT_SCALE)
 
     @inbounds sat_params_cpu[1, batch_idx] = carrier_freq_ratio
     @inbounds sat_params_cpu[2, batch_idx] = carrier_phase
@@ -845,7 +507,7 @@ function _pack_sat_params_i64!(
 
     for t in 1:num_taps
         tap_shift_expanded = Float64(sample_shifts[t]) * expanded_freq_ratio
-        tap_shift_fixed = round(Int64, tap_shift_expanded * FIXED_POINT_SCALE_I64)
+        tap_shift_fixed = round(Int64, tap_shift_expanded * FIXED_POINT_SCALE)
         lo, hi = _f32_pair_from_i64(tap_shift_fixed)
         @inbounds sat_params_cpu[9 + 2*(t-1) + 1, batch_idx] = lo
         @inbounds sat_params_cpu[9 + 2*(t-1) + 2, batch_idx] = hi
@@ -856,13 +518,13 @@ end
 # Main dispatch: downconvert_and_correlate
 # ============================================================
 function downconvert_and_correlate(
-    dc::KADownconvertAndCorrelator{P},
+    dc::KADownconvertAndCorrelator,
     signal,
     track_state::TrackState,
     preferred_num_code_blocks_to_integrate::Int,
     sampling_frequency,
     intermediate_frequency,
-) where {P}
+)
     num_samples_signal = get_num_samples(signal)
     backend = get_backend(first(dc.expanded_codes_gpu))
 
@@ -928,23 +590,13 @@ function downconvert_and_correlate(
                 upreferred(sampling_frequency / Hz),
             )
 
-            if P === Int32
-                _pack_sat_params_i32!(
-                    dc.sat_params_cpu, batch_idx,
-                    carrier_freq_ratio, Float32(sat_state.carrier_phase),
-                    info.signal_samples_to_integrate, sat_state.signal_start_sample, sat_state.prn,
-                    code_freq_ratio, norm_phase, code_length, spc,
-                    info.sample_shifts, num_taps,
-                )
-            else
-                _pack_sat_params_i64!(
-                    dc.sat_params_cpu, batch_idx,
-                    carrier_freq_ratio, Float32(sat_state.carrier_phase),
-                    info.signal_samples_to_integrate, sat_state.signal_start_sample, sat_state.prn,
-                    code_freq_ratio, norm_phase, code_length, spc,
-                    info.sample_shifts, num_taps,
-                )
-            end
+            _pack_sat_params!(
+                dc.sat_params_cpu, batch_idx,
+                carrier_freq_ratio, Float32(sat_state.carrier_phase),
+                info.signal_samples_to_integrate, sat_state.signal_start_sample, sat_state.prn,
+                code_freq_ratio, norm_phase, code_length, spc,
+                info.sample_shifts, num_taps,
+            )
         end
 
         num_active = batch_idx - batch_offset
@@ -972,44 +624,24 @@ function downconvert_and_correlate(
 
         codes = dc.expanded_codes_gpu[sd.sys_idx]
         combined = Val(sd.system_num_taps <= 8)
+        expanded_code_length = Int32(sd.code_length * sd.spc)
 
-        if P === Int32
-            if M == 1
-                ka_dc_kernel_i32!(backend, (num_threads,))(
-                    dc.results_gpu, signal, codes,
-                    Val(sd.system_num_taps), combined,
-                    Val(Int(sd.spc)), Int32(sd.code_length),
-                    dc.sat_params_gpu, Int32(sd.batch_offset);
-                    ndrange = num_threads * sd.num_active,
-                )
-            else
-                ka_dc_multi_ant_kernel_i32!(backend, (num_threads,))(
-                    dc.results_gpu, signal, codes,
-                    Val(sd.system_num_taps), combined,
-                    Val(Int(sd.spc)), Int32(sd.code_length), Int32(M),
-                    dc.sat_params_gpu, Int32(sd.batch_offset);
-                    ndrange = num_threads * sd.num_active,
-                )
-            end
-        else # Int64
-            expanded_code_length = Int32(sd.code_length * sd.spc)
-            if M == 1
-                ka_dc_kernel_i64!(backend, (num_threads,))(
-                    dc.results_gpu, signal, codes,
-                    Val(sd.system_num_taps), combined,
-                    expanded_code_length,
-                    dc.sat_params_gpu, Int32(sd.batch_offset);
-                    ndrange = num_threads * sd.num_active,
-                )
-            else
-                ka_dc_multi_ant_kernel_i64!(backend, (num_threads,))(
-                    dc.results_gpu, signal, codes,
-                    Val(sd.system_num_taps), combined,
-                    expanded_code_length, Int32(M),
-                    dc.sat_params_gpu, Int32(sd.batch_offset);
-                    ndrange = num_threads * sd.num_active,
-                )
-            end
+        if M == 1
+            ka_dc_kernel!(backend, (num_threads,))(
+                dc.results_gpu, signal, codes,
+                Val(sd.system_num_taps), combined,
+                expanded_code_length,
+                dc.sat_params_gpu, Int32(sd.batch_offset);
+                ndrange = num_threads * sd.num_active,
+            )
+        else
+            ka_dc_multi_ant_kernel!(backend, (num_threads,))(
+                dc.results_gpu, signal, codes,
+                Val(sd.system_num_taps), combined,
+                expanded_code_length, Int32(M),
+                dc.sat_params_gpu, Int32(sd.batch_offset);
+                ndrange = num_threads * sd.num_active,
+            )
         end
     end
 

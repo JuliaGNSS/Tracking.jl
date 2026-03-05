@@ -38,10 +38,9 @@ function run_benchmarks()
 
     header = rpad("Config", 24) *
         rpad("CUDA (μs)", 14) *
-        rpad("KA-I64 (μs)", 14) *
-        rpad("KA-I32 (μs)", 14) *
+        rpad("KA (μs)", 14) *
         rpad("CPU (μs)", 14) *
-        "KA-I64/CUDA"
+        "KA/CUDA"
     println(header)
     println("-" ^ length(header))
 
@@ -67,17 +66,11 @@ function run_benchmarks()
         b_cuda = @benchmark downconvert_and_correlate($cuda_dc, $signal_cu, $ts, 1, $sfreq, $intermediate_frequency) samples=100
         t_cuda = round(median(b_cuda).time / 1000, digits=1)
 
-        # --- KA with CUDA backend (Int64, default) ---
-        ka_i64 = KADownconvertAndCorrelator((system,), CuArray; max_sats=max(nsats, 4))
-        downconvert_and_correlate(ka_i64, signal_cu, ts, 1, sfreq, intermediate_frequency)
-        b_ka_i64 = @benchmark downconvert_and_correlate($ka_i64, $signal_cu, $ts, 1, $sfreq, $intermediate_frequency) samples=100
-        t_ka_i64 = round(median(b_ka_i64).time / 1000, digits=1)
-
-        # --- KA with CUDA backend (Int32) ---
-        ka_i32 = KADownconvertAndCorrelator((system,), CuArray; phase_type=Int32, max_sats=max(nsats, 4))
-        downconvert_and_correlate(ka_i32, signal_cu, ts, 1, sfreq, intermediate_frequency)
-        b_ka_i32 = @benchmark downconvert_and_correlate($ka_i32, $signal_cu, $ts, 1, $sfreq, $intermediate_frequency) samples=100
-        t_ka_i32 = round(median(b_ka_i32).time / 1000, digits=1)
+        # --- KA with CUDA backend ---
+        ka = KADownconvertAndCorrelator((system,), CuArray; max_sats=max(nsats, 4))
+        downconvert_and_correlate(ka, signal_cu, ts, 1, sfreq, intermediate_frequency)
+        b_ka = @benchmark downconvert_and_correlate($ka, $signal_cu, $ts, 1, $sfreq, $intermediate_frequency) samples=100
+        t_ka = round(median(b_ka).time / 1000, digits=1)
 
         # --- CPU ---
         cpu_dc = CPUDownconvertAndCorrelator(Val(sfreq))
@@ -85,12 +78,11 @@ function run_benchmarks()
         b_cpu = @benchmark downconvert_and_correlate($cpu_dc, $signal_cpu, $ts, 1, $sfreq, $intermediate_frequency) samples=100
         t_cpu = round(median(b_cpu).time / 1000, digits=1)
 
-        ratio = round(t_ka_i64 / t_cuda, digits=2)
+        ratio = round(t_ka / t_cuda, digits=2)
         println(
             rpad(label, 24),
             rpad("$t_cuda", 14),
-            rpad("$t_ka_i64", 14),
-            rpad("$t_ka_i32", 14),
+            rpad("$t_ka", 14),
             rpad("$t_cpu", 14),
             "$(ratio)x",
         )
@@ -125,17 +117,11 @@ function run_benchmarks()
         b_cuda = @benchmark downconvert_and_correlate($cuda_dc, $signal_cu, $ts, 1, $sfreq, $intermediate_frequency) samples=100
         t_cuda = round(median(b_cuda).time / 1000, digits=1)
 
-        # --- KA with CUDA backend (Int64) ---
-        ka_i64 = KADownconvertAndCorrelator((gpsl1, gal), CuArray; max_sats=total_sats)
-        downconvert_and_correlate(ka_i64, signal_cu, ts, 1, sfreq, intermediate_frequency)
-        b_ka_i64 = @benchmark downconvert_and_correlate($ka_i64, $signal_cu, $ts, 1, $sfreq, $intermediate_frequency) samples=100
-        t_ka_i64 = round(median(b_ka_i64).time / 1000, digits=1)
-
-        # --- KA with CUDA backend (Int32) ---
-        ka_i32 = KADownconvertAndCorrelator((gpsl1, gal), CuArray; phase_type=Int32, max_sats=total_sats)
-        downconvert_and_correlate(ka_i32, signal_cu, ts, 1, sfreq, intermediate_frequency)
-        b_ka_i32 = @benchmark downconvert_and_correlate($ka_i32, $signal_cu, $ts, 1, $sfreq, $intermediate_frequency) samples=100
-        t_ka_i32 = round(median(b_ka_i32).time / 1000, digits=1)
+        # --- KA with CUDA backend ---
+        ka = KADownconvertAndCorrelator((gpsl1, gal), CuArray; max_sats=total_sats)
+        downconvert_and_correlate(ka, signal_cu, ts, 1, sfreq, intermediate_frequency)
+        b_ka = @benchmark downconvert_and_correlate($ka, $signal_cu, $ts, 1, $sfreq, $intermediate_frequency) samples=100
+        t_ka = round(median(b_ka).time / 1000, digits=1)
 
         # --- CPU ---
         cpu_dc = CPUDownconvertAndCorrelator(Val(sfreq))
@@ -143,12 +129,11 @@ function run_benchmarks()
         b_cpu = @benchmark downconvert_and_correlate($cpu_dc, $signal_cpu, $ts, 1, $sfreq, $intermediate_frequency) samples=100
         t_cpu = round(median(b_cpu).time / 1000, digits=1)
 
-        ratio = round(t_ka_i64 / t_cuda, digits=2)
+        ratio = round(t_ka / t_cuda, digits=2)
         println(
             rpad(label, 24),
             rpad("$t_cuda", 14),
-            rpad("$t_ka_i64", 14),
-            rpad("$t_ka_i32", 14),
+            rpad("$t_ka", 14),
             rpad("$t_cpu", 14),
             "$(ratio)x",
         )

@@ -472,18 +472,6 @@ end
     )
 
     @test real.(get_correlator(next_track_state, 2).accumulators) ≈ [2919, 4947, 2915] atol = 25
-
-    # Also test Int32 phase path
-    downconvert_and_correlator_i32 = KADownconvertAndCorrelator((gpsl1,), Array; phase_type=Int32)
-    next_track_state_i32 = downconvert_and_correlate(
-        downconvert_and_correlator_i32,
-        signal,
-        track_state,
-        preferred_num_code_blocks_to_integrate,
-        sampling_frequency,
-        intermediate_frequency,
-    )
-    @test real.(get_correlator(next_track_state_i32, 2).accumulators) ≈ [2919, 4947, 2915] atol = 25
 end
 
 @testset "Downconvert and correlate GalileoE1B: KA vs CPU" begin
@@ -526,15 +514,6 @@ end
     cpu_accum = real.(get_correlator(cpu_result, 1).accumulators)
     ka_accum = real.(get_correlator(ka_result, 1).accumulators)
     @test ka_accum ≈ cpu_accum rtol = 0.01
-
-    # Int32 mode: faster but ~4% sub-chip quantization for BOC/CBOC
-    ka_dc_i32 = KADownconvertAndCorrelator((gal,), Array; phase_type=Int32)
-    ka_result_i32 = downconvert_and_correlate(
-        ka_dc_i32, signal, track_state, preferred_num_code_blocks_to_integrate,
-        sampling_frequency, intermediate_frequency,
-    )
-    ka_accum_i32 = real.(get_correlator(ka_result_i32, 1).accumulators)
-    @test ka_accum_i32 ≈ cpu_accum rtol = 0.1
 
     # Prompt correlator (index 3 for VeryEarlyPromptLate) should be peak
     prompt_idx = length(cpu_accum) ÷ 2 + 1
