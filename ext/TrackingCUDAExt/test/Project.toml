@@ -1,5 +1,5 @@
 [deps]
-BenchmarkTools = "6e4b80f9-de5e-5049-a18d-a42ceaf0212b"
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 Bumper = "8ce10254-0962-460f-a3d8-1f77fea1446e"
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 GNSSSignals = "52c80523-2a4e-5c38-8979-05588f836870"
