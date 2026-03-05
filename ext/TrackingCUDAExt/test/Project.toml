@@ -1,7 +1,9 @@
 [deps]
+BenchmarkTools = "6e4b80f9-de5e-5049-a18d-a42ceaf0212b"
 Bumper = "8ce10254-0962-460f-a3d8-1f77fea1446e"
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 GNSSSignals = "52c80523-2a4e-5c38-8979-05588f836870"
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
 Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 Tracking = "10b2438b-ffd4-5096-aa58-44041d5c8f3b"
