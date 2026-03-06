@@ -206,6 +206,38 @@ if (CUDA.functional())
 end
 SUITE["track"]["Float32"] = bench_track(; signal_type = Float32)
 
+# Multi-antenna benchmark (4 antennas)
+function bench_downconvert_and_correlate_multi_antenna(;
+    num_ants = 4,
+    signal_type = Float32,
+    num_samples_signal = 2000,
+    sampling_frequency = 5e6Hz,
+    system = GPSL1(),
+)
+    code_phase = 10.5
+    maximum_expected_sampling_frequency = Val(sampling_frequency)
+    downconvert_and_correlator =
+        CPUDownconvertAndCorrelator(maximum_expected_sampling_frequency)
+    system_sats_state = SystemSatsState(
+        system,
+        [SatState(system, 1, code_phase, 1000.0Hz; num_ants = NumAnts(num_ants))],
+    )
+    track_state = TrackState((system_sats_state,))
+    signal = rand(Complex{signal_type}, num_samples_signal, num_ants)
+    preferred_num_code_blocks_to_integrate = 1
+    @benchmarkable Tracking.downconvert_and_correlate(
+        $downconvert_and_correlator,
+        $signal,
+        $track_state,
+        $preferred_num_code_blocks_to_integrate,
+        $sampling_frequency,
+        $(0.0Hz),
+    )
+end
+
+SUITE["downconvert and correlate"]["CPU"]["Float32 4ant"] =
+    bench_downconvert_and_correlate_multi_antenna()
+
 # ── Multi-satellite benchmarks (threaded if available, CPU fallback) ──────
 
 function _make_multi_sat_state(; systems, nsats_list, nsamp, prn_max=32, code_dop=1000.0)

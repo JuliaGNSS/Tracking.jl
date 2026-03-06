@@ -77,12 +77,6 @@ function downconvert_and_correlate(
                         num_samples_signal + maximum(sample_shifts) -
                         minimum(sample_shifts)
                     )
-                    carrier_replica_buffer_re = @alloc(Float32, num_samples_signal)
-                    carrier_replica_buffer_im = @alloc(Float32, num_samples_signal)
-                    carrier_replica_buffer = StructArray{ComplexF32}((
-                        carrier_replica_buffer_re,
-                        carrier_replica_buffer_im,
-                    ))
                     downconvert_signal_buffer_re = @alloc(Float32, size(signal)...)
                     downconvert_signal_buffer_im = @alloc(Float32, size(signal)...)
                     downconvert_signal_buffer = StructArray{ComplexF32}((
@@ -95,7 +89,6 @@ function downconvert_and_correlate(
                         sat_state.correlator,
                         code_replica_buffer,
                         sat_state.code_phase,
-                        carrier_replica_buffer,
                         sat_state.carrier_phase,
                         downconvert_signal_buffer,
                         code_frequency,
@@ -128,15 +121,15 @@ end
 """
 $(SIGNATURES)
 
-Downconvert and correlate a single satellite on the CPU.
+Downconvert and correlate a single satellite on the CPU. Uses fused carrier
+generation and downconversion to eliminate the carrier replica buffer.
 """
 function downconvert_and_correlate!(
     system,
     signal,
-    correlator,
+    correlator::AbstractCorrelator{NANT},
     code_replica,
     code_phase,
-    carrier_replica,
     carrier_phase,
     downconverted_signal,
     code_frequency,
@@ -146,7 +139,7 @@ function downconvert_and_correlate!(
     num_samples_left,
     prn,
     maximum_expected_sampling_frequency,
-)
+) where {NANT}
     sample_shifts =
         get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
     gen_code_replica!(
@@ -161,20 +154,15 @@ function downconvert_and_correlate!(
         prn,
         maximum_expected_sampling_frequency,
     )
-    gen_carrier_replica!(
-        carrier_replica,
+    downconvert!(
+        downconverted_signal,
+        signal,
         carrier_frequency,
         sampling_frequency,
         carrier_phase,
         signal_start_sample,
         num_samples_left,
-    )
-    downconvert!(
-        downconverted_signal,
-        signal,
-        carrier_replica,
-        signal_start_sample,
-        num_samples_left,
+        NumAnts{NANT}(),
     )
     correlate(
         correlator,
