@@ -9,7 +9,6 @@ include("bench_gpu_vs_cpu.jl")
 suite = gpu_suite()
 results = run(suite; verbose=true, seconds=5)
 
-# Collect config order from the suite (sorted alphabetically)
 configs = sort(collect(results), by=first)
 
 # Find all GPU backends present
@@ -23,30 +22,22 @@ for (_, backends) in configs
 end
 sort!(gpu_backends)
 
-println("\n## Benchmark Results (GPU vs CPU)\n")
-
-# Build header
-let header = "| Config | CPU (median)", separator = "|--------|-------------"
-    for gpu in gpu_backends
-        header *= " | $gpu (median) | Speedup"
-        separator *= "|--------------:|-------:"
-    end
-    println(header, " |")
-    println(separator, "|")
+function to_us(t_ns)
+    round(t_ns / 1e3, digits=1)
 end
 
-for (config, backends) in configs
-    haskey(backends, "CPU") || continue
-    cpu_med = median(backends["CPU"]).time
-    row = "| $config | $(BenchmarkTools.prettytime(cpu_med))"
-    for gpu in gpu_backends
-        if haskey(backends, gpu)
-            gpu_med = median(backends[gpu]).time
-            speedup = cpu_med / gpu_med
-            row *= " | $(BenchmarkTools.prettytime(gpu_med)) | $(round(speedup, digits=1))x"
-        else
-            row *= " | N/A | N/A"
-        end
+println("\n## Benchmark Results (GPU vs CPU)\n")
+
+for gpu in gpu_backends
+    println("| Config | GPU (μs) | CPU (μs) | GPU/CPU |")
+    println("|--------|--------:|--------:|--------:|")
+    for (config, backends) in configs
+        haskey(backends, "CPU") || continue
+        haskey(backends, gpu) || continue
+        cpu_us = to_us(median(backends["CPU"]).time)
+        gpu_us = to_us(median(backends[gpu]).time)
+        ratio = round(gpu_us / cpu_us, digits=2)
+        println("| $config | $gpu_us | $cpu_us | $(ratio)x |")
     end
-    println(row, " |")
+    println()
 end

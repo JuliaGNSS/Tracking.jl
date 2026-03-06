@@ -29,6 +29,12 @@ if !@isdefined(HAS_CUDA)
     catch
         false
     end
+
+    const AMD_GPU_CUS = HAS_AMDGPU ? try
+        AMDGPU.HIP.properties(AMDGPU.device()).multiProcessorCount
+    catch
+        0
+    end : 0
 end
 
 function gpu_suite()
@@ -45,7 +51,13 @@ function gpu_suite()
         ("8L1+8E1B/50K", (gpsl1, gal), [8, 8], 25e6Hz, 50000, 50, 100.0),
     ]
 
-    for (label, systems, nsats_list, sfreq, nsamp, prn_max, code_dop) in configs
+    # Limit GPU configs on low-CU GPUs to avoid freezing the display
+    max_gpu_configs = AMD_GPU_CUS <= 8 ? 2 : length(configs)
+    if AMD_GPU_CUS > 0 && max_gpu_configs < length(configs)
+        @info "AMD GPU has only $AMD_GPU_CUS CUs — limiting GPU benchmarks to first $max_gpu_configs configs"
+    end
+
+    for (cfg_idx, (label, systems, nsats_list, sfreq, nsamp, prn_max, code_dop)) in enumerate(configs)
         all_sss = []
         total_sats = 0
         for (si, sys) in enumerate(systems)
@@ -77,6 +89,7 @@ function gpu_suite()
             systems,
             Val(sfreq);
             max_sats = max(total_sats, 4),
+            max_num_samples = nsamp,
         )
         suite[label]["CPU-Threaded"] = @benchmarkable downconvert_and_correlate(
             $cpu_threaded_dc,
@@ -101,8 +114,8 @@ function gpu_suite()
             )
         end
 
-        # KA + AMDGPU
-        if HAS_AMDGPU
+        # KA + AMDGPU (skip heavy configs on low-CU GPUs)
+        if HAS_AMDGPU && cfg_idx <= max_gpu_configs
             signal_roc = ROCArray(signal_cpu)
             ka =
                 KADownconvertAndCorrelator(systems, ROCArray; max_sats = max(total_sats, 4))
