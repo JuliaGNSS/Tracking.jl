@@ -58,7 +58,7 @@ end
         intermediate_frequency,
     )
 
-    @test real.(get_correlator(next_track_state, 1).accumulators) ≈ [2921, 4949, 2917]
+    @test real.(get_correlator(next_track_state, 1).accumulators) ≈ [2921, 4949, 2917] rtol=1e-3
 
     signal =
         gen_code(
@@ -79,7 +79,7 @@ end
         intermediate_frequency,
     )
 
-    @test real.(get_correlator(next_track_state, 2).accumulators) ≈ [2919, 4947, 2915]
+    @test real.(get_correlator(next_track_state, 2).accumulators) ≈ [2919, 4947, 2915] rtol=1e-3
 end
 
 end

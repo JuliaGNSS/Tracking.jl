@@ -121,13 +121,12 @@ end
 """
 $(SIGNATURES)
 
-Downconvert and correlate a single satellite on the CPU. Uses fused carrier
-generation and downconversion to eliminate the carrier replica buffer.
+Downconvert and correlate a single satellite on the CPU.
 """
 function downconvert_and_correlate!(
     system,
     signal,
-    correlator::AbstractCorrelator{NANT},
+    correlator::AbstractCorrelator{M},
     code_replica,
     code_phase,
     carrier_phase,
@@ -139,7 +138,7 @@ function downconvert_and_correlate!(
     num_samples_left,
     prn,
     maximum_expected_sampling_frequency,
-) where {NANT}
+) where {M}
     sample_shifts =
         get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
     gen_code_replica!(
@@ -162,7 +161,7 @@ function downconvert_and_correlate!(
         carrier_phase,
         signal_start_sample,
         num_samples_left,
-        NumAnts{NANT}(),
+        NumAnts{M}(),
     )
     correlate(
         correlator,
