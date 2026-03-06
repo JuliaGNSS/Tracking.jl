@@ -161,6 +161,7 @@ end
 
 include("sample_parameters.jl")
 include("downconvert_and_correlate.jl")
+include("downconvert_and_correlate_fused.jl")
 include("downconvert_and_correlate_cpu.jl")
 include("conventional_pll_and_dll.jl")
 include("tracking_state.jl")
