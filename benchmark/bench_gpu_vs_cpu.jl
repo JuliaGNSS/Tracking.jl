@@ -8,6 +8,7 @@ using Unitful: Hz
 using Tracking
 using Tracking:
     CPUDownconvertAndCorrelator,
+    CPUThreadedDownconvertAndCorrelator,
     KADownconvertAndCorrelator,
     SystemSatsState,
     SatState,
@@ -36,11 +37,15 @@ function gpu_suite()
     gal = GalileoE1B()
 
     configs = [
-        ("L1 1sat/5K",    (gpsl1,),       [1],    5e6Hz,  5000,  32, 1000.0),
-        ("L1 8sat/5K",    (gpsl1,),       [8],    5e6Hz,  5000,  32, 1000.0),
-        ("E1B 8sat/25K",  (gal,),         [8],    25e6Hz, 25000, 50, 100.0),
-        ("E1B 8sat/100K", (gal,),         [8],    25e6Hz, 100000,50, 100.0),
-        ("8L1+8E1B/25K",  (gpsl1, gal),   [8, 8], 25e6Hz, 25000, 50, 100.0),
+        ("L1 4sat/5K",      (gpsl1,),       [4],    5e6Hz,  5000,   32, 1000.0),
+        ("L1 16sat/5K",     (gpsl1,),       [16],   5e6Hz,  5000,   32, 1000.0),
+        ("E1B 4sat/25K",    (gal,),         [4],    25e6Hz, 25000,  50, 100.0),
+        ("E1B 16sat/25K",   (gal,),         [16],   25e6Hz, 25000,  50, 100.0),
+        ("E1B 4sat/100K",   (gal,),         [4],    25e6Hz, 100000, 50, 100.0),
+        ("E1B 16sat/100K",  (gal,),         [16],   25e6Hz, 100000, 50, 100.0),
+        ("4L1+4E1B/25K",    (gpsl1, gal),   [4, 4], 25e6Hz, 25000,  50, 100.0),
+        ("8L1+8E1B/25K",    (gpsl1, gal),   [8, 8], 25e6Hz, 25000,  50, 100.0),
+        ("8L1+8E1B/100K",   (gpsl1, gal),   [8, 8], 25e6Hz, 100000, 50, 100.0),
     ]
 
     for (label, systems, nsats_list, sfreq, nsamp, prn_max, code_dop) in configs
@@ -61,6 +66,14 @@ function gpu_suite()
         cpu_dc = CPUDownconvertAndCorrelator(Val(sfreq))
         suite[label]["CPU"] = @benchmarkable downconvert_and_correlate(
             $cpu_dc, $signal_cpu, $ts, 1, $sfreq, $(0.0Hz),
+        )
+
+        # CPU threaded
+        cpu_threaded_dc = CPUThreadedDownconvertAndCorrelator(
+            systems, Val(sfreq); max_sats=max(total_sats, 4),
+        )
+        suite[label]["CPU-Threaded"] = @benchmarkable downconvert_and_correlate(
+            $cpu_threaded_dc, $signal_cpu, $ts, 1, $sfreq, $(0.0Hz),
         )
 
         # KA + CUDA
