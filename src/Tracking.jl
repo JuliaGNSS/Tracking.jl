@@ -1,8 +1,10 @@
 module Tracking
 
 using DocStringExtensions
+using FastSinCos
 using GNSSSignals
 using LoopVectorization
+using SIMD
 using StaticArrays
 using StructArrays
 using TrackingLoopFilters
