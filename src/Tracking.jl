@@ -3,10 +3,8 @@ module Tracking
 using DocStringExtensions
 using FastSinCos
 using GNSSSignals
-using LoopVectorization
 using SIMD
 using StaticArrays
-using StructArrays
 using TrackingLoopFilters
 using Dictionaries
 using Accessors
@@ -76,8 +74,6 @@ export get_early,
     update_accumulator
 
 const Maybe{T} = Union{T,Nothing}
-
-const StructVecOrMat{T} = Union{StructVector{T},StructArray{T,2}}
 
 """
 $(SIGNATURES)

@@ -1,9 +1,8 @@
 """
 $(SIGNATURES)
 
-CPU-based implementation of downconversion and correlation. Uses LoopVectorization
-for SIMD-optimized processing. The MESF type parameter specifies the maximum
-expected sampling frequency for buffer allocation.
+CPU-based implementation of downconversion and correlation. The MESF type
+parameter specifies the maximum expected sampling frequency.
 """
 struct CPUDownconvertAndCorrelator{MESF,B} <: AbstractDownconvertAndCorrelator
     buffer::B
@@ -14,21 +13,6 @@ function CPUDownconvertAndCorrelator(
     buffer::B = default_buffer(),
 ) where {MESF,B}
     CPUDownconvertAndCorrelator{MESF,B}(buffer)
-end
-
-function get_downconvert_signal_buffer(
-    ::Type{T},
-    num_samples::Int,
-    correlator::AbstractCorrelator{1},
-) where {T}
-    StructVector{Complex{T}}(undef, num_samples)
-end
-function get_downconvert_signal_buffer(
-    ::Type{T},
-    num_samples::Int,
-    correlator::AbstractCorrelator{M},
-) where {T,M}
-    StructArray{Complex{T}}(undef, num_samples, M)
 end
 
 """
@@ -157,36 +141,3 @@ function downconvert_and_correlate!(
         num_samples_left,
     )
 end
-
-#=
-# This is currently slower than splitting the loop.
-# See https://github.com/JuliaSIMD/LoopVectorization.jl/issues/284
-function downconvert_and_correlate(
-    signal::StructArray{Complex{T}},
-    correlator::C,
-    code,
-    correlator_sample_shifts,
-    carrier_frequency,
-    sampling_frequency,
-    start_phase,
-    start_sample,
-    num_samples
-) where {T, C <: AbstractCorrelator}
-    s_re = signal.re; s_im = signal.im
-    accumulators = zero_accumulators(get_accumulators(correlator), signal)
-    a_re = real.(accumulators)
-    a_im = imag.(accumulators)
-    @avx for i = start_sample:start_sample + num_samples - 1
-        c_im, c_re = sincos(T(2π) * ((i - start_sample) * T(upreferred(carrier_frequency / Hz)) / T(upreferred(sampling_frequency / Hz)) + T(start_phase)))
-        d_re = s_re[i] * c_re + s_im[i] * c_im
-        d_im = s_im[i] * c_re - s_re[i] * c_im
-        for j = 1:length(a_re)
-            sample_shift = correlator_sample_shifts[j] - correlator_sample_shifts[1]
-            a_re[j] += d_re * code[i + sample_shift]
-            a_im[j] += d_im * code[i + sample_shift]
-        end
-    end
-    accumulators_result = complex.(a_re, a_im)
-    C(map(+, get_accumulators(correlator), accumulators_result))
-end
-=#

@@ -2,16 +2,22 @@ module DownconvertAndCorrelateTest
 
 using Test: @test, @testset, @inferred
 using Unitful: Hz
-using GNSSSignals: GPSL1, gen_code, get_code_frequency, get_code_center_frequency_ratio
+using GNSSSignals: GPSL1, gen_code, get_code_frequency, get_code_center_frequency_ratio, get_code_type
 using Bumper: SlabBuffer
 import Tracking
 using Tracking:
+    AbstractCorrelator,
     CPUDownconvertAndCorrelator,
+    EarlyPromptLateCorrelator,
+    NumAnts,
     SystemSatsState,
     SatState,
     TrackState,
     downconvert_and_correlate,
-    get_correlator
+    get_accumulators,
+    get_correlator,
+    get_correlator_sample_shifts,
+    update_accumulator
 
 @testset "Downconvert and Correlator" begin
     downconvert_and_correlator = CPUDownconvertAndCorrelator(Val(5e6Hz))
@@ -84,30 +90,20 @@ end
 end
 
 @testset "Fused downconvert and correlate" begin
-    using StructArrays: StructVector
-    using GNSSSignals: get_code_center_frequency_ratio, get_code_frequency, get_code_type
-    using Tracking:
-        EarlyPromptLateCorrelator,
-        NumAnts,
-        get_accumulators,
-        get_correlator_sample_shifts
-
     gpsl1 = GPSL1()
     sampling_frequency = 5e6Hz
     code_phase = 10.5
     num_samples_signal = 5000
     carrier_doppler = 1000.0Hz
-    intermediate_frequency = 0.0Hz
     prn = 1
 
-    carrier_frequency = carrier_doppler + intermediate_frequency
+    carrier_frequency = carrier_doppler + 0.0Hz
     code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
     code_frequency = code_doppler + get_code_frequency(gpsl1)
 
     correlator = EarlyPromptLateCorrelator()
     sample_shifts = get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
 
-    # Generate a realistic signal
     signal =
         gen_code(
             num_samples_signal,
@@ -118,63 +114,92 @@ end
             code_phase,
         ) .* cis.(2π * (0:(num_samples_signal - 1)) * carrier_doppler / sampling_frequency)
 
-    # Generate code replica
     code_replica_length = num_samples_signal + maximum(sample_shifts) - minimum(sample_shifts)
     code_replica = Vector{get_code_type(gpsl1)}(undef, code_replica_length)
     Tracking.gen_code_replica!(
-        code_replica,
-        gpsl1,
-        code_frequency,
-        sampling_frequency,
-        code_phase,
-        1,
-        num_samples_signal,
-        sample_shifts,
-        prn,
+        code_replica, gpsl1, code_frequency, sampling_frequency,
+        code_phase, 1, num_samples_signal, sample_shifts, prn,
         Val(sampling_frequency),
     )
 
-    # Downconvert buffer for split path
-    downconvert_buffer = StructVector{ComplexF32}(undef, num_samples_signal)
-
-    carrier_phase = 0.0
-    start_sample = 1
-    num_samples = num_samples_signal
-
-    # Split path: downconvert then correlate
-    Tracking.downconvert!(
-        downconvert_buffer,
-        signal,
-        carrier_frequency,
-        sampling_frequency,
-        carrier_phase,
-        start_sample,
-        num_samples,
-        NumAnts{1}(),
-    )
-    split_correlator = Tracking.correlate(
-        correlator,
-        downconvert_buffer,
-        sample_shifts,
-        code_replica,
-        start_sample,
-        num_samples,
+    # Static (@generated) path
+    fused_static = Tracking.downconvert_and_correlate_fused!(
+        correlator, signal, code_replica, sample_shifts,
+        carrier_frequency, sampling_frequency, 0.0, 1, num_samples_signal,
     )
 
-    # Fused path
-    fused_correlator = Tracking.downconvert_and_correlate_fused!(
-        correlator,
-        signal,
-        code_replica,
-        sample_shifts,
-        carrier_frequency,
-        sampling_frequency,
-        carrier_phase,
-        start_sample,
-        num_samples,
+    # Prompt should be large (signal correlates with itself)
+    @test real(get_accumulators(fused_static)[2]) > 4000
+
+    # Dynamic (AbstractVector) path should match static
+    dynamic_shifts = collect(sample_shifts)
+    fused_dynamic = Tracking.downconvert_and_correlate_fused!(
+        correlator, signal, code_replica, dynamic_shifts,
+        carrier_frequency, sampling_frequency, 0.0, 1, num_samples_signal,
     )
 
-    @test get_accumulators(fused_correlator) ≈ get_accumulators(split_correlator) rtol = 1e-3
+    @test get_accumulators(fused_dynamic) ≈ get_accumulators(fused_static) rtol = 1e-3
+end
+
+@testset "Fused downconvert and correlate with Vector accumulators" begin
+    # Minimal correlator with Vector (not SVector) accumulators
+    struct DynamicCorrelator <: AbstractCorrelator{1}
+        accumulators::Vector{ComplexF64}
+        shifts::Vector{Int}
+    end
+    Tracking.get_accumulators(c::DynamicCorrelator) = c.accumulators
+    Tracking.update_accumulator(c::DynamicCorrelator, acc) =
+        DynamicCorrelator(collect(acc), c.shifts)
+
+    gpsl1 = GPSL1()
+    sampling_frequency = 5e6Hz
+    code_phase = 10.5
+    num_samples_signal = 5000
+    carrier_doppler = 1000.0Hz
+    prn = 1
+
+    carrier_frequency = carrier_doppler + 0.0Hz
+    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
+    code_frequency = code_doppler + get_code_frequency(gpsl1)
+
+    # Use the same shifts as EarlyPromptLateCorrelator but as a Vector
+    epl = EarlyPromptLateCorrelator()
+    static_shifts = get_correlator_sample_shifts(epl, sampling_frequency, code_frequency)
+    dynamic_shifts = collect(static_shifts)
+
+    dynamic_correlator = DynamicCorrelator(zeros(ComplexF64, 3), dynamic_shifts)
+
+    signal =
+        gen_code(
+            num_samples_signal,
+            gpsl1,
+            prn,
+            sampling_frequency,
+            code_frequency,
+            code_phase,
+        ) .* cis.(2π * (0:(num_samples_signal - 1)) * carrier_doppler / sampling_frequency)
+
+    code_replica_length = num_samples_signal + maximum(dynamic_shifts) - minimum(dynamic_shifts)
+    code_replica = Vector{get_code_type(gpsl1)}(undef, code_replica_length)
+    Tracking.gen_code_replica!(
+        code_replica, gpsl1, code_frequency, sampling_frequency,
+        code_phase, 1, num_samples_signal, static_shifts, prn,
+        Val(sampling_frequency),
+    )
+
+    # Reference: use the @generated SVector path
+    fused_static = Tracking.downconvert_and_correlate_fused!(
+        epl, signal, code_replica, static_shifts,
+        carrier_frequency, sampling_frequency, 0.0, 1, num_samples_signal,
+    )
+
+    # Test: use the dynamic Vector path
+    fused_dynamic = Tracking.downconvert_and_correlate_fused!(
+        dynamic_correlator, signal, code_replica, dynamic_shifts,
+        carrier_frequency, sampling_frequency, 0.0, 1, num_samples_signal,
+    )
+
+    @test get_accumulators(fused_dynamic) ≈ get_accumulators(fused_static) rtol = 1e-3
 end
 
 end
