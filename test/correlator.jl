@@ -3,14 +3,12 @@ module CorrelatorTest
 using Test: @test, @testset, @inferred
 using Unitful: Hz
 using GNSSSignals: GPSL1, GalileoE1B, get_code, get_code_frequency
-using StaticArrays: SVector, MVector, MMatrix
-using StructArrays: StructArray
+using StaticArrays: SVector
 using Tracking:
     EarlyPromptLateCorrelator,
     VeryEarlyPromptLateCorrelator,
     NumAnts,
     NumAccumulators,
-    add_to_previous,
     get_very_early,
     get_early,
     get_prompt,
@@ -22,10 +20,8 @@ using Tracking:
     DefaultPostCorrFilter,
     apply,
     normalize,
-    correlate,
     get_correlator_sample_shifts,
-    get_initial_accumulator,
-    zero_accumulators
+    get_initial_accumulator
 
 @testset "Correlator" begin
     @testset "Get initial accumulators" begin
@@ -36,66 +32,6 @@ using Tracking:
         @test @inferred(get_initial_accumulator(NumAnts(1), 3)) isa Vector{ComplexF64}
         @test @inferred(get_initial_accumulator(NumAnts(4), 3)) isa
               Vector{SVector{4,ComplexF64}}
-    end
-
-    @testset "Zero accumulators" begin
-        accumulator =
-            @inferred(zero_accumulators(ones(SVector{3,ComplexF64}), zeros(ComplexF32, 1)))
-        @test accumulator isa MVector{3,Float32}
-        @test accumulator == [0, 0, 0]
-
-        accumulator = @inferred(
-            zero_accumulators(
-                SVector(ones(SVector{3,ComplexF64}), ones(SVector{3,ComplexF64})),
-                zeros(ComplexF32, 1),
-            )
-        )
-        @test accumulator isa MMatrix{3,2,Float32}
-        @test accumulator == [0.0 0.0; 0.0 0.0; 0.0 0.0]
-
-        accumulator =
-            @inferred(zero_accumulators(ones(ComplexF64, 3), zeros(ComplexF32, 1)))
-        @test accumulator isa Vector{Float32}
-        @test accumulator == [0, 0, 0]
-
-        accumulator = @inferred(
-            zero_accumulators(
-                [ones(SVector{3,ComplexF64}), ones(SVector{3,ComplexF64})],
-                zeros(ComplexF32, 1),
-            )
-        )
-        @test accumulator isa Matrix{Float32}
-        @test accumulator == [0.0 0.0; 0.0 0.0; 0.0 0.0]
-    end
-
-    @testset "Add to previous accumulators" begin
-        accumulator = @inferred(
-            add_to_previous(
-                get_initial_accumulator(NumAnts(2), NumAccumulators(3)),
-                ones(MMatrix{2,3,Float32}),
-                ones(MMatrix{2,3,Float32}),
-            )
-        )
-        @test accumulator isa SVector{3,SVector{2,ComplexF64}}
-        @test accumulator == [
-            [1.0 + 1.0im, 1.0 + 1.0im],
-            [1.0 + 1.0im, 1.0 + 1.0im],
-            [1.0 + 1.0im, 1.0 + 1.0im],
-        ]
-
-        accumulator = @inferred(
-            add_to_previous(
-                get_initial_accumulator(NumAnts(2), 3),
-                ones(Float32, 2, 3),
-                ones(Float32, 2, 3),
-            )
-        )
-        @test accumulator isa Vector{SVector{2,ComplexF64}}
-        @test accumulator == [
-            [1.0 + 1.0im, 1.0 + 1.0im],
-            [1.0 + 1.0im, 1.0 + 1.0im],
-            [1.0 + 1.0im, 1.0 + 1.0im],
-        ]
     end
 
     @testset "Correlator constructor" begin
@@ -280,36 +216,6 @@ using Tracking:
         )
     end
 
-    @testset "Correlate" begin
-        gpsl1 = GPSL1()
-        sampling_frequency = 2.5e6Hz
-        signal = StructArray{Complex{Float32}}((
-            Float32.(get_code.(gpsl1, (1:2500) * 1023e3 / (sampling_frequency / Hz), 1)),
-            zeros(Float32, 2500),
-        ))
-        code = get_code.(gpsl1, ((1+-1):(2500+1)) * 1023e3 / 2.5e6, 1)
-
-        @testset "↳ $na antennas" for na ∈ [1, 4]
-            signal_mat = na == 1 ? signal : repeat(signal; outer = (1, na))
-
-            correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(na))
-
-            sample_shifts = get_correlator_sample_shifts(
-                correlator,
-                sampling_frequency,
-                get_code_frequency(gpsl1),
-            )
-
-            correlator_result =
-                @inferred correlate(correlator, signal_mat, sample_shifts, code, 1, 2500)
-            early = get_early(correlator_result)
-            prompt = get_prompt(correlator_result)
-            late = get_late(correlator_result)
-            @test early == late
-            @test all(early .== 1476)
-            @test all(prompt .== 2500)
-        end
-    end
 end
 
 end

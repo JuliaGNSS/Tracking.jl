@@ -2,26 +2,7 @@ module CarrierReplicaTest
 
 using Test: @test, @testset, @inferred
 using Unitful: Hz
-using StructArrays: StructArray
-using Tracking: gen_carrier_replica!, update_carrier_phase
-
-@testset "Carrier replica" begin
-    carrier = StructArray(zeros(Complex{Float32}, 2500))
-
-    gen_carrier_replica!(
-        carrier,
-        1500Hz,
-        2.5e6Hz,
-        0.25, # π / 2
-        111,
-        2390,
-    )
-
-    @test carrier[111:2500] ≈ cis.(2π * (0:2389) * 1500Hz / 2.5e6Hz .+ π / 2)
-
-    #   @test sqrt(mean(abs2.(carrier.re[111:2500] ./ 1 << 7 .-
-    #                        cos.(2π * (0:2389) * 1500Hz / 2.5e6Hz .+ π / 2)))) < 8e-3
-end
+using Tracking: update_carrier_phase
 
 @testset "Update carrier phase" begin
     carrier_phase = 0.25

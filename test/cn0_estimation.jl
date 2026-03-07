@@ -4,15 +4,14 @@ using Test: @test, @testset, @inferred
 using Random: Random
 using Unitful: kHz, MHz, Hz, ms, dBHz
 using StaticArrays: SVector
-using StructArrays: StructArray
 using GNSSSignals: GPSL1, get_code
+import Tracking
 using Tracking:
     MomentsCN0Estimator,
     get_prompt_buffer,
     get_current_index,
     update,
     EarlyPromptLateCorrelator,
-    correlate,
     get_prompt,
     get_correlator_sample_shifts,
     estimate_cn0,
@@ -72,12 +71,14 @@ end
         correlator = EarlyPromptLateCorrelator()
         sample_shifts =
             get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
-        signal_struct = StructArray(signal)
-        correlator = correlate(
+        correlator = Tracking.downconvert_and_correlate_fused!(
             correlator,
-            signal_struct,
-            sample_shifts,
+            signal,
             code,
+            sample_shifts,
+            0.0Hz,
+            sampling_frequency,
+            0.0,
             start_sample,
             num_samples,
         )

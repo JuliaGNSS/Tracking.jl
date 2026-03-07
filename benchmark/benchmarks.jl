@@ -2,241 +2,132 @@ using BenchmarkTools
 using GNSSSignals
 using GNSSSignals: GalileoE1B
 using Unitful: Hz
-using CUDA
 using Tracking
 using Tracking: EarlyPromptLateCorrelator, get_correlator_sample_shifts, get_code_type,
     NumAnts, gen_code_replica!, SystemSatsState, SatState, TrackState,
     downconvert_and_correlate
 using StaticArrays
 
-function bench_downconvert_and_correlate(
-    type;
-    signal_type = Float32,
-    num_samples_signal = 2000,
-    sampling_frequency = 5e6Hz,
-    system = GPSL1(),
-)
-    type == :GPU && !CUDA.functional() && return
-
-    code_phase = 10.5
-    intermediate_frequency = 0.0Hz
-
-    maximum_expected_sampling_frequency = Val(sampling_frequency)
-
-    system_sats_state =
-        PACKAGE_VERSION <= v"0.15.6" ?
-        SystemSatsState(
-            system,
-            [SatState(system, 1, sampling_frequency, code_phase, 1000.0Hz)],
-        ) : SystemSatsState(system, [SatState(system, 1, code_phase, 1000.0Hz)])
-
-    multiple_system_sats_state = (system_sats_state,)
-
-    downconvert_and_correlator =
-        PACKAGE_VERSION <= v"0.15.4" ?
-        (type == :CPU ? CPUDownconvertAndCorrelator() : GPUDownconvertAndCorrelator()) :
-        (
-            PACKAGE_VERSION <= v"0.15.5" ?
-            (
-                type == :CPU ?
-                CPUDownconvertAndCorrelator(
-                    maximum_expected_sampling_frequency,
-                    multiple_system_sats_state,
-                    num_samples_signal,
-                ) :
-                GPUDownconvertAndCorrelator(multiple_system_sats_state, num_samples_signal)
-            ) :
-            (
-                type == :CPU ?
-                CPUDownconvertAndCorrelator(maximum_expected_sampling_frequency) :
-                GPUDownconvertAndCorrelator()
-            )
-        )
-
-    array_transform = type == :CPU ? Array : cu
-
-    track_state =
-        PACKAGE_VERSION <= v"0.15.4" ?
-        TrackState(
-            multiple_system_sats_state;
-            num_samples = num_samples_signal,
-            downconvert_and_correlator,
-        ) :
-        (
-            PACKAGE_VERSION <= v"0.15.5" ?
-            TrackState(
-                multiple_system_sats_state;
-                num_samples = num_samples_signal,
-                downconvert_and_correlator,
-                maximum_expected_sampling_frequency,
-            ) : TrackState(multiple_system_sats_state)
-        )
-
-    signal = array_transform(rand(Complex{signal_type}, num_samples_signal))
-
-    type == :GPU && !CUDA.functional() && CUDA.versioninfo()
-    if PACKAGE_VERSION <= v"0.15.3"
-        system_sats_sample_params =
-            Tracking.init_sample_params(multiple_system_sats_state, 1)
-        next_system_sats_sample_params = Tracking.calc_sample_params(
-            multiple_system_sats_state,
-            system_sats_sample_params,
-            num_samples_signal,
-            sampling_frequency,
-            1,
-        )
-
-        return if PACKAGE_VERSION <= v"0.15.2"
-            @benchmarkable Tracking.downconvert_and_correlate(
-                $signal,
-                $track_state,
-                $next_system_sats_sample_params,
-                $sampling_frequency,
-                $intermediate_frequency,
-                $num_samples_signal,
-            )
-        else
-            @benchmarkable Tracking.downconvert_and_correlate(
-                $signal,
-                $track_state,
-                $next_system_sats_sample_params,
-                $sampling_frequency,
-                $intermediate_frequency,
-                $num_samples_signal,
-                $(Val(sampling_frequency)),
-            )
-        end
-    else
-        preferred_num_code_blocks_to_integrate = 1
-        return if PACKAGE_VERSION <= v"0.15.4"
-            @benchmarkable Tracking.downconvert_and_correlate(
-                $signal,
-                $track_state,
-                $preferred_num_code_blocks_to_integrate,
-                $sampling_frequency,
-                $intermediate_frequency,
-                $num_samples_signal,
-                $(Val(sampling_frequency)),
-            )
-        else
-            return if PACKAGE_VERSION <= v"0.15.5"
-                @benchmarkable Tracking.downconvert_and_correlate(
-                    $signal,
-                    $track_state,
-                    $preferred_num_code_blocks_to_integrate,
-                    $sampling_frequency,
-                    $intermediate_frequency,
-                    $num_samples_signal,
-                )
-            else
-                @benchmarkable Tracking.downconvert_and_correlate(
-                    $downconvert_and_correlator,
-                    $signal,
-                    $track_state,
-                    $preferred_num_code_blocks_to_integrate,
-                    $sampling_frequency,
-                    $intermediate_frequency,
-                )
-            end
-        end
-    end
-end
-
-function bench_track(;
-    signal_type,
-    num_samples_signal = 2000,
-    sampling_frequency = 5e6Hz,
-    system = GPSL1(),
-)
-    track_state =
-        PACKAGE_VERSION <= v"0.15.4" ?
-        TrackState(
-            system,
-            [SatState(system, 1, sampling_frequency, 0.0, 1000Hz)];
-            num_samples = num_samples_signal,
-        ) :
-        (
-            PACKAGE_VERSION <= v"0.15.5" ?
-            TrackState(
-                system,
-                [SatState(system, 1, sampling_frequency, 0.0, 1000Hz)];
-                num_samples = num_samples_signal,
-                maximum_expected_sampling_frequency = Val(sampling_frequency),
-            ) :
-            PACKAGE_VERSION <= v"0.15.6" ?
-            TrackState(system, [SatState(system, 1, sampling_frequency, 0.0, 1000Hz)]) :
-            TrackState(system, [SatState(system, 1, 0.0, 1000Hz)])
-        )
-    signal = rand(Complex{signal_type}, num_samples_signal)
-    return if PACKAGE_VERSION <= v"0.15.2"
-        @benchmarkable track($signal, $track_state, $sampling_frequency)
-    else
-        return if PACKAGE_VERSION <= v"0.15.4"
-            @benchmarkable track(
-                $signal,
-                $track_state,
-                $sampling_frequency,
-                maximum_expected_sampling_frequency = $(Val(sampling_frequency)),
-            )
-        else
-            return if PACKAGE_VERSION <= v"0.15.5"
-                @benchmarkable track($signal, $track_state, $sampling_frequency)
-            else
-                downconvert_and_correlator =
-                    CPUDownconvertAndCorrelator(Val(sampling_frequency))
-                @benchmarkable track(
-                    $signal,
-                    $track_state,
-                    $sampling_frequency;
-                    downconvert_and_correlator = $downconvert_and_correlator,
-                )
-            end
-        end
-    end
-end
-
 const SUITE = BenchmarkGroup()
 
-foreach((Int16, Int32, Float32, Float64)) do signal_type
-    SUITE["downconvert and correlate"]["CPU"][string(signal_type)] =
-        bench_downconvert_and_correlate(:CPU; signal_type)
-end
-if (CUDA.functional())
-    SUITE["downconvert and correlate"]["GPU"] = bench_downconvert_and_correlate(:GPU)
-end
-SUITE["track"]["Float32"] = bench_track(; signal_type = Float32)
+# ── Helper: set up common benchmark state ──────────────────────────────────
 
-# Multi-antenna benchmark (4 antennas)
-function bench_downconvert_and_correlate_multi_antenna(;
-    num_ants = 4,
+function setup_benchmark(;
     signal_type = Float32,
-    num_samples_signal = 2000,
+    num_samples = 2000,
     sampling_frequency = 5e6Hz,
     system = GPSL1(),
+    num_ants = 1,
 )
     code_phase = 10.5
-    maximum_expected_sampling_frequency = Val(sampling_frequency)
-    downconvert_and_correlator =
-        CPUDownconvertAndCorrelator(maximum_expected_sampling_frequency)
-    system_sats_state = SystemSatsState(
-        system,
-        [SatState(system, 1, code_phase, 1000.0Hz; num_ants = NumAnts(num_ants))],
+    carrier_doppler = 1000.0Hz
+    code_doppler = carrier_doppler * GNSSSignals.get_code_center_frequency_ratio(system)
+    code_frequency = code_doppler + get_code_frequency(system)
+
+    correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(num_ants))
+    static_shifts = get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
+    dynamic_shifts = collect(static_shifts)
+
+    signal = num_ants == 1 ?
+        rand(Complex{signal_type}, num_samples) :
+        rand(Complex{signal_type}, num_samples, num_ants)
+
+    code_replica = Vector{get_code_type(system)}(
+        undef, num_samples + maximum(static_shifts) - minimum(static_shifts),
     )
-    track_state = TrackState((system_sats_state,))
-    signal = rand(Complex{signal_type}, num_samples_signal, num_ants)
-    preferred_num_code_blocks_to_integrate = 1
-    @benchmarkable Tracking.downconvert_and_correlate(
-        $downconvert_and_correlator,
-        $signal,
-        $track_state,
-        $preferred_num_code_blocks_to_integrate,
-        $sampling_frequency,
-        $(0.0Hz),
+    gen_code_replica!(
+        code_replica, system, code_frequency, sampling_frequency,
+        code_phase, 1, num_samples, static_shifts, 1, Val(sampling_frequency),
+    )
+
+    return (;
+        correlator, signal, code_replica,
+        static_shifts, dynamic_shifts,
+        sampling_frequency, carrier_doppler, code_phase,
+        system, num_samples,
     )
 end
 
+# ── High-level downconvert_and_correlate (full pipeline) ───────────────────
+
+function bench_downconvert_and_correlate(;
+    signal_type = Float32,
+    num_samples = 2000,
+    sampling_frequency = 5e6Hz,
+    system = GPSL1(),
+    num_ants = 1,
+)
+    downconvert_and_correlator = CPUDownconvertAndCorrelator(Val(sampling_frequency))
+    system_sats_state = SystemSatsState(
+        system,
+        [SatState(system, 1, 10.5, 1000.0Hz; num_ants = NumAnts(num_ants))],
+    )
+    track_state = TrackState((system_sats_state,))
+    signal = num_ants == 1 ?
+        rand(Complex{signal_type}, num_samples) :
+        rand(Complex{signal_type}, num_samples, num_ants)
+
+    @benchmarkable Tracking.downconvert_and_correlate(
+        $downconvert_and_correlator, $signal, $track_state, 1,
+        $sampling_frequency, $(0.0Hz),
+    )
+end
+
+# ── Fused kernel microbenchmarks ───────────────────────────────────────────
+
+function bench_fused_kernel(;
+    signal_type = Float32,
+    num_samples = 2000,
+    num_ants = 1,
+    shifts = :static,
+)
+    s = setup_benchmark(; signal_type, num_samples, num_ants)
+    sample_shifts = shifts == :static ? s.static_shifts : s.dynamic_shifts
+    # Warmup to trigger compilation
+    Tracking.downconvert_and_correlate_fused!(
+        s.correlator, s.signal, s.code_replica, sample_shifts,
+        s.carrier_doppler, s.sampling_frequency, 0.0, 1, s.num_samples,
+    )
+    @benchmarkable Tracking.downconvert_and_correlate_fused!(
+        $(s.correlator), $(s.signal), $(s.code_replica), $sample_shifts,
+        $(s.carrier_doppler), $(s.sampling_frequency), 0.0, 1, $(s.num_samples),
+    )
+end
+
+# ── Register benchmarks ───────────────────────────────────────────────────
+
+# Full pipeline: CPU, various signal types
+foreach((Int16, Int32, Float32, Float64)) do signal_type
+    SUITE["downconvert and correlate"]["CPU"][string(signal_type)] =
+        bench_downconvert_and_correlate(; signal_type)
+end
+
+# Full pipeline: multi-antenna
 SUITE["downconvert and correlate"]["CPU"]["Float32 4ant"] =
-    bench_downconvert_and_correlate_multi_antenna()
+    bench_downconvert_and_correlate(; num_ants = 4)
+SUITE["downconvert and correlate"]["CPU"]["Int16 4ant"] =
+    bench_downconvert_and_correlate(; signal_type = Int16, num_ants = 4)
+
+# Full pipeline: track
+function bench_track(; signal_type = Float32, num_samples = 2000, sampling_frequency = 5e6Hz)
+    system = GPSL1()
+    downconvert_and_correlator = CPUDownconvertAndCorrelator(Val(sampling_frequency))
+    track_state = TrackState(system, [SatState(system, 1, 0.0, 1000Hz)])
+    signal = rand(Complex{signal_type}, num_samples)
+    @benchmarkable track(
+        $signal, $track_state, $sampling_frequency;
+        downconvert_and_correlator = $downconvert_and_correlator,
+    )
+end
+SUITE["track"]["Float32"] = bench_track()
+
+# Fused kernel microbenchmarks: 1-antenna
+SUITE["fused kernel"]["1-ant static"]  = bench_fused_kernel(; shifts = :static)
+SUITE["fused kernel"]["1-ant dynamic"] = bench_fused_kernel(; shifts = :dynamic)
+
+# Fused kernel microbenchmarks: 4-antenna
+SUITE["fused kernel"]["4-ant static"]  = bench_fused_kernel(; num_ants = 4, shifts = :static)
+SUITE["fused kernel"]["4-ant dynamic"] = bench_fused_kernel(; num_ants = 4, shifts = :dynamic)
 
 # ── Multi-satellite benchmarks (threaded if available, CPU fallback) ──────
 
