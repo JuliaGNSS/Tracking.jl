@@ -9,5 +9,6 @@ docs/build/
 docs/pdf/build/
 docs/site/
 docs/Manifest.toml
+docs/plans
 
 .worktrees/
