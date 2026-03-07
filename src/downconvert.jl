@@ -1,9 +1,10 @@
 # SIMD helpers shared by the fused downconvert+correlate kernel.
 
 using Base.Cartesian: @nexprs
+using VectorizationBase: pick_vector_width
 
-# Optimal SIMD width for type T: number of T values that fit in a 256-bit register.
-_simd_width(::Type{T}) where {T} = 256 ÷ 8 ÷ sizeof(T)
+# Optimal SIMD width for type T, determined at precompile time from CPU features.
+_simd_width(::Type{T}) where {T} = Int(pick_vector_width(T))
 
 # Convert Vec{N,S} to Vec{N,T}. No-op when S == T.
 @inline _to_vec(::Type{SIMD.Vec{N,T}}, v::SIMD.Vec{N,T}) where {N,T} = v

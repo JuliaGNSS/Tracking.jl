@@ -17,6 +17,7 @@ SIMD = "fdea26ae-647d-5447-a871-4b548cad5224"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 TrackingLoopFilters = "0814aff9-93cb-554c-9fff-9bf1cfdb5efa"
 Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
+VectorizationBase = "3d5dd08c-fd9d-11e8-17fa-ed2836048c2f"
 
 [sources]
 FastSinCos = {url = "https://github.com/JuliaGNSS/FastSinCos.jl.git"}
@@ -44,4 +45,5 @@ SIMD = "3"
 StaticArrays = "0.9, 0.10, 0.11, 0.12, 1.0"
 TrackingLoopFilters = "0.2, 1"
 Unitful = "0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 1.0"
+VectorizationBase = "0.21.72"
 julia = "1.10"
