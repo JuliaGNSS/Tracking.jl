@@ -77,12 +77,6 @@ function downconvert_and_correlate(
                         num_samples_signal + maximum(sample_shifts) -
                         minimum(sample_shifts)
                     )
-                    downconvert_signal_buffer_re = @alloc(Float32, size(signal)...)
-                    downconvert_signal_buffer_im = @alloc(Float32, size(signal)...)
-                    downconvert_signal_buffer = StructArray{ComplexF32}((
-                        downconvert_signal_buffer_re,
-                        downconvert_signal_buffer_im,
-                    ))
                     new_correlator = downconvert_and_correlate!(
                         system_sats_state.system,
                         signal,
@@ -90,7 +84,6 @@ function downconvert_and_correlate(
                         code_replica_buffer,
                         sat_state.code_phase,
                         sat_state.carrier_phase,
-                        downconvert_signal_buffer,
                         code_frequency,
                         carrier_frequency,
                         sampling_frequency,
@@ -130,7 +123,6 @@ function downconvert_and_correlate!(
     code_replica,
     code_phase,
     carrier_phase,
-    downconverted_signal,
     code_frequency,
     carrier_frequency,
     sampling_frequency,
@@ -153,21 +145,14 @@ function downconvert_and_correlate!(
         prn,
         maximum_expected_sampling_frequency,
     )
-    downconvert!(
-        downconverted_signal,
+    downconvert_and_correlate_fused!(
+        correlator,
         signal,
+        code_replica,
+        sample_shifts,
         carrier_frequency,
         sampling_frequency,
         carrier_phase,
-        signal_start_sample,
-        num_samples_left,
-        NumAnts{M}(),
-    )
-    correlate(
-        correlator,
-        downconverted_signal,
-        sample_shifts,
-        code_replica,
         signal_start_sample,
         num_samples_left,
     )
