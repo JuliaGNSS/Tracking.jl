@@ -157,6 +157,82 @@ end
     @test get_accumulators(fused_static) ≈ get_accumulators(fused_dynamic) rtol = 1e-4
 end
 
+@testset "Fused downconvert and correlate multi-antenna" begin
+    using StaticArrays: SVector
+
+    gpsl1 = GPSL1()
+    sampling_frequency = 5e6Hz
+    code_phase = 10.5
+    num_samples_signal = 5000
+    carrier_doppler = 1000.0Hz
+    prn = 1
+    num_ants = 2
+
+    carrier_frequency = carrier_doppler + 0.0Hz
+    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
+    code_frequency = code_doppler + get_code_frequency(gpsl1)
+
+    correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(num_ants))
+    sample_shifts = get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
+
+    # Multi-antenna signal: each antenna gets slightly different data
+    signal_ant1 =
+        gen_code(
+            num_samples_signal, gpsl1, prn, sampling_frequency,
+            code_frequency, code_phase,
+        ) .* cis.(2π * (0:(num_samples_signal - 1)) * carrier_doppler / sampling_frequency)
+    signal_ant2 = signal_ant1 .* cis(0.3)  # phase-shifted copy
+    signal = hcat(signal_ant1, signal_ant2)
+
+    code_replica_length = num_samples_signal + maximum(sample_shifts) - minimum(sample_shifts)
+    code_replica = Vector{get_code_type(gpsl1)}(undef, code_replica_length)
+    Tracking.gen_code_replica!(
+        code_replica, gpsl1, code_frequency, sampling_frequency,
+        code_phase, 1, num_samples_signal, sample_shifts, prn,
+        Val(sampling_frequency),
+    )
+
+    # Scalar reference for multi-antenna
+    NC = length(sample_shifts)
+    min_shift = minimum(sample_shifts)
+    ref_accumulators = [zeros(ComplexF64, num_ants) for _ in 1:NC]
+    carrier_step = 2π * Float64(carrier_frequency / sampling_frequency)
+    for i in 1:num_samples_signal
+        carrier = cis(-carrier_step * (i - 1))
+        for j in 1:num_ants
+            dc_sample = signal[i, j] * carrier
+            for tap in 1:NC
+                code_idx = i + sample_shifts[tap] - min_shift
+                ref_accumulators[tap][j] += dc_sample * code_replica[code_idx]
+            end
+        end
+    end
+
+    # Static (@generated) path
+    fused_static = Tracking.downconvert_and_correlate_fused!(
+        correlator, signal, code_replica, sample_shifts,
+        carrier_frequency, sampling_frequency, 0.0, 1, num_samples_signal,
+    )
+    for tap in 1:NC
+        @test collect(get_accumulators(fused_static)[tap]) ≈ ref_accumulators[tap] rtol = 1e-4
+    end
+
+    # Dynamic (AbstractVector) path
+    dynamic_shifts = collect(sample_shifts)
+    fused_dynamic = Tracking.downconvert_and_correlate_fused!(
+        correlator, signal, code_replica, dynamic_shifts,
+        carrier_frequency, sampling_frequency, 0.0, 1, num_samples_signal,
+    )
+    for tap in 1:NC
+        @test collect(get_accumulators(fused_dynamic)[tap]) ≈ ref_accumulators[tap] rtol = 1e-4
+    end
+
+    # Static and dynamic should match
+    for k in 1:NC
+        @test collect(get_accumulators(fused_static)[k]) ≈ collect(get_accumulators(fused_dynamic)[k]) rtol = 1e-4
+    end
+end
+
 @testset "Fused downconvert and correlate with Vector accumulators" begin
     # Minimal correlator with Vector (not SVector) accumulators
     struct DynamicCorrelator <: AbstractCorrelator{1}
