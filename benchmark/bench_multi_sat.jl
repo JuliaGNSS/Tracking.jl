@@ -1,4 +1,5 @@
-# GPU (CUDA, AMDGPU) vs CPU downconvert-and-correlate benchmarks
+# Multi-satellite / multi-system downconvert-and-correlate benchmarks
+# across all available backends (CPU, CPU-Threaded, KA-CUDA, KA-AMDGPU).
 #
 # Returns a BenchmarkGroup with entries for each available backend.
 
@@ -35,7 +36,7 @@ if !@isdefined(HAS_CUDA)
     end : 0
 end
 
-function gpu_suite()
+function multi_sat_suite()
     suite = BenchmarkGroup()
     gpsl1 = GPSL1()
     gal = GalileoE1B()

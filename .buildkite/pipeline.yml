@@ -20,8 +20,8 @@ steps:
           version: "1.11"
     commands:
       - julia --project=benchmark -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
-      - JULIA_NUM_THREADS=auto julia --project=benchmark benchmark/run_gpu_benchmarks.jl 2>&1 | tee benchmark_results.txt
-      - BODY=$$(awk '/^## Benchmark/,0' benchmark_results.txt); if [ -n "$$BODY" ]; then echo "$$BODY" | buildkite-agent annotate --style "info" --context "benchmarks"; fi
+      - JULIA_NUM_THREADS=auto julia --project=benchmark benchmark/run_multi_sat_benchmarks.jl 2>&1 | tee benchmark_results.txt
+      - BODY=$$(awk '/^## Multi-Satellite/,0' benchmark_results.txt); if [ -n "$$BODY" ]; then echo "$$BODY" | buildkite-agent annotate --style "info" --context "benchmarks"; fi
     agents:
       queue: "juliagpu"
       cuda: "*"

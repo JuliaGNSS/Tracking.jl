@@ -1,17 +1,17 @@
-# Run GPU vs CPU benchmarks and print results as a markdown table.
-# Usage: julia --project benchmark/run_gpu_benchmarks.jl
+# Run multi-satellite benchmarks across all backends and print results as a markdown table.
+# Usage: JULIA_NUM_THREADS=auto julia --project=benchmark benchmark/run_multi_sat_benchmarks.jl
 
 using Pkg
 Pkg.instantiate()
 
-include("bench_gpu_vs_cpu.jl")
+include("bench_multi_sat.jl")
 
-suite = gpu_suite()
+suite = multi_sat_suite()
 results = run(suite; verbose=true, seconds=5)
 
 configs = sort(collect(results), by=first)
 
-# Find all GPU backends present (exclude CPU and CPU-Threaded)
+# Find all GPU backends (exclude CPU and CPU-Threaded)
 gpu_backends = String[]
 has_threaded = false
 for (_, backends) in configs
@@ -29,7 +29,7 @@ function to_us(t_ns)
     round(t_ns / 1e3, digits=1)
 end
 
-println("\n## Benchmark Results (GPU vs CPU)\n")
+println("\n## Multi-Satellite Benchmark Results\n")
 println("Julia threads: $(Threads.nthreads())\n")
 
 for gpu in gpu_backends
