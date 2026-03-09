@@ -40,21 +40,36 @@ jobs:
       - name: Run benchmarks
         env:
           GITHUB_TOKEN: ""
+          JULIA_NUM_THREADS: auto
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           export PATH="$HOME/.julia/bin:$PATH"
           mkdir results
+          if [ "$BASE_REF" = "master" ]; then
+            REVS="master,$HEAD_SHA"
+          else
+            REVS="master,$BASE_REF,$HEAD_SHA"
+          fi
           benchpkg Tracking \
-            --rev=${{ github.event.pull_request.base.ref }},${{ github.event.pull_request.head.sha }} \
+            --rev=$REVS \
             --url=${{ github.event.repository.clone_url }} \
-            --bench-on=${{ github.event.pull_request.head.sha }} \
+            --bench-on=$HEAD_SHA \
             --output-dir=results/ \
             --add=GNSSSignals,Unitful,StaticArrays
 
       - name: Create comment body
         env:
           GITHUB_TOKEN: ""
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           export PATH="$HOME/.julia/bin:$PATH"
+          if [ "$BASE_REF" = "master" ]; then
+            REVS="master,$HEAD_SHA"
+          else
+            REVS="master,$BASE_REF,$HEAD_SHA"
+          fi
           echo "## Benchmark Results" > body.md
           echo "" >> body.md
           for m in time memory; do
@@ -63,7 +78,7 @@ jobs:
               echo ""
               benchpkgtable Tracking \
                 --input-dir=results/ \
-                --rev=${{ github.event.pull_request.base.ref }},${{ github.event.pull_request.head.sha }} \
+                --rev=$REVS \
                 --mode=$m \
                 --ratio
               echo ""
