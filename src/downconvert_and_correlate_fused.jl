@@ -52,6 +52,7 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
     start_sample::Integer,
     num_samples::Integer,
 ) where {M,ST,NC}
+    W = _simd_width(Float32)  # Compute at generation time, embed as literal
     # ── Accumulator init: acc_re_j_k, acc_im_j_k (SIMD), s_re_j_k, s_im_j_k (scalar) ──
     acc_init = Expr(:block)
     for j in 1:M, k in 1:NC
@@ -172,7 +173,7 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
         CT = eltype(code_replica)
         sizeof_CT = sizeof(CT)
         sizeof_ST = sizeof(ST)
-        W = _simd_width(T)
+        W = $W
         min_shift = minimum(sample_shifts)
 
         carrier_freq = T(upreferred(carrier_frequency / Hz))
