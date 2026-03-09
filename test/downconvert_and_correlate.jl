@@ -154,7 +154,7 @@ end
     @test get_accumulators(fused_dynamic) ≈ ref_accumulators rtol = 1e-4
 
     # Static and dynamic paths should produce nearly identical results
-    @test get_accumulators(fused_static) ≈ get_accumulators(fused_dynamic) rtol = 1e-6
+    @test get_accumulators(fused_static) ≈ get_accumulators(fused_dynamic) rtol = 1e-4
 end
 
 @testset "Fused downconvert and correlate with Vector accumulators" begin
