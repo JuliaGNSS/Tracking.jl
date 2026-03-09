@@ -210,6 +210,7 @@ end
 
 # Convenient methods
 get_prn(s::TrackState, id...) = get_prn(get_sat_state(s, id...))
+get_num_ants(s::TrackState) = get_num_ants(first(s.multiple_system_sats_state))
 get_num_ants(s::TrackState, id...) = get_num_ants(get_sat_state(s, id...))
 get_code_phase(s::TrackState, id...) = get_code_phase(get_sat_state(s, id...))
 get_code_doppler(s::TrackState, id...) = get_code_doppler(get_sat_state(s, id...))

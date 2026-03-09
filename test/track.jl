@@ -30,7 +30,8 @@ using Tracking:
     NumAnts,
     get_num_ants,
     ConventionalPLLAndDLL,
-    ConventionalAssistedPLLAndDLL
+    ConventionalAssistedPLLAndDLL,
+    KADownconvertAndCorrelator
 
 @testset "Tracking with signal of type $type" for type in
                                                   (Int16, Int32, Int64, Float32, Float64)
@@ -550,6 +551,241 @@ end
     #    figure("Prompt")
     #    plot(real.(tracked_prompts))
     #    plot(imag.(tracked_prompts))
+end
+
+@testset "Tracking GPSL1 with KADownconvertAndCorrelator (CPU backend)" begin
+    gpsl1 = GPSL1()
+    carrier_doppler = 200Hz
+    start_code_phase = 100
+    code_frequency =
+        carrier_doppler * get_code_center_frequency_ratio(gpsl1) + get_code_frequency(gpsl1)
+    sampling_frequency = 4e6Hz
+    prn = 1
+    range = 0:3999
+    start_carrier_phase = π / 2
+
+    ka_dc = KADownconvertAndCorrelator((gpsl1,), Array)
+
+    track_state = TrackState(
+        gpsl1,
+        [SatState(gpsl1, prn, start_code_phase, carrier_doppler - 20Hz)],
+    )
+
+    signal = Complex{Float32}.(
+        cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase) .*
+        gen_code(4000, gpsl1, prn, sampling_frequency, code_frequency, start_code_phase)
+    )
+    track_state = track(signal, track_state, sampling_frequency;
+        downconvert_and_correlator = ka_dc,
+    )
+
+    iterations = 2000
+    for i = 1:iterations
+        carrier_phase =
+            mod2pi(
+                2π * carrier_doppler * 4000 * i / sampling_frequency +
+                start_carrier_phase + π,
+            ) - π
+        code_phase =
+            mod(code_frequency * 4000 * i / sampling_frequency + start_code_phase, 1023)
+        signal = Complex{Float32}.(
+            cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ carrier_phase) .*
+            gen_code(4000, gpsl1, prn, sampling_frequency, code_frequency, code_phase)
+        )
+        track_state = track(signal, track_state, sampling_frequency;
+            downconvert_and_correlator = ka_dc,
+        )
+    end
+    comp_code_phase = mod(
+        code_frequency * 4000 * (iterations + 1) / sampling_frequency + start_code_phase,
+        1023,
+    )
+    comp_carrier_phase =
+        mod2pi(
+            2π * carrier_doppler * 4000 * (iterations + 1) / sampling_frequency +
+            start_carrier_phase + π,
+        ) - π
+    @test get_code_phase(track_state) ≈ comp_code_phase atol = 5e-5
+    @test get_carrier_phase(track_state) + π ≈ comp_carrier_phase atol = 1e-3
+end
+
+@testset "Track GPSL1+GalileoE1B with KADownconvertAndCorrelator (CPU backend)" begin
+    gpsl1 = GPSL1()
+    galileo_e1b = GalileoE1B()
+    carrier_doppler_gps = 200Hz
+    carrier_doppler_gal = 1200Hz
+    start_code_phase = 100
+    code_frequency_gps =
+        carrier_doppler_gps * get_code_center_frequency_ratio(gpsl1) +
+        get_code_frequency(gpsl1)
+    code_frequency_gal =
+        carrier_doppler_gal * get_code_center_frequency_ratio(galileo_e1b) +
+        get_code_frequency(galileo_e1b)
+    sampling_frequency = 15e6Hz
+    prn = 1
+    range = 0:3999
+    start_carrier_phase = π / 2
+
+    ka_dc = KADownconvertAndCorrelator((gpsl1, galileo_e1b), Array)
+
+    track_state = TrackState((
+        gps = SystemSatsState(
+            gpsl1,
+            [SatState(gpsl1, prn, start_code_phase, carrier_doppler_gps)],
+        ),
+        gal = SystemSatsState(
+            galileo_e1b,
+            [SatState(galileo_e1b, prn, start_code_phase, carrier_doppler_gal)],
+        ),
+    );)
+
+    signal_temp =
+        cis.(
+            2π .* carrier_doppler_gps .* range ./ sampling_frequency .+ start_carrier_phase,
+        ) .* gen_code(
+            4000, gpsl1, prn, sampling_frequency, code_frequency_gps, start_code_phase,
+        ) .+
+        cis.(
+            2π .* carrier_doppler_gal .* range ./ sampling_frequency .+ start_carrier_phase,
+        ) .* gen_code(
+            4000, galileo_e1b, prn, sampling_frequency, code_frequency_gal, start_code_phase,
+        )
+    signal = ComplexF32.(signal_temp)
+
+    track_state = track(signal, track_state, sampling_frequency;
+        downconvert_and_correlator = ka_dc,
+    )
+
+    iterations = 2000
+    for i = 1:iterations
+        carrier_phase_gps =
+            mod2pi(
+                2π * carrier_doppler_gps * 4000 * i / sampling_frequency +
+                start_carrier_phase + π,
+            ) - π
+        code_phase_gps = mod(
+            code_frequency_gps * 4000 * i / sampling_frequency + start_code_phase,
+            get_code_length(gpsl1),
+        )
+        carrier_phase_gal =
+            mod2pi(
+                2π * carrier_doppler_gal * 4000 * i / sampling_frequency +
+                start_carrier_phase + π,
+            ) - π
+        code_phase_gal = mod(
+            code_frequency_gal * 4000 * i / sampling_frequency + start_code_phase,
+            get_code_length(galileo_e1b),
+        )
+        signal_temp =
+            cis.(
+                2π .* carrier_doppler_gps .* range ./ sampling_frequency .+
+                carrier_phase_gps,
+            ) .* gen_code(
+                4000, gpsl1, prn, sampling_frequency, code_frequency_gps, code_phase_gps,
+            ) .+
+            cis.(
+                2π .* carrier_doppler_gal .* range ./ sampling_frequency .+
+                carrier_phase_gal,
+            ) .* gen_code(
+                4000, galileo_e1b, prn, sampling_frequency, code_frequency_gal, code_phase_gal,
+            )
+        signal = ComplexF32.(signal_temp)
+        track_state = track(signal, track_state, sampling_frequency;
+            downconvert_and_correlator = ka_dc,
+        )
+    end
+    comp_code_phase_gps = mod(
+        code_frequency_gps * 4000 * (iterations + 1) / sampling_frequency +
+        start_code_phase,
+        get_code_length(gpsl1),
+    )
+    comp_carrier_phase_gps =
+        mod2pi(
+            2π * carrier_doppler_gps * 4000 * (iterations + 1) / sampling_frequency +
+            start_carrier_phase + π,
+        ) - π
+    comp_code_phase_gal = mod(
+        code_frequency_gal * 4000 * (iterations + 1) / sampling_frequency +
+        start_code_phase,
+        get_code_length(galileo_e1b),
+    )
+    comp_carrier_phase_gal =
+        mod2pi(
+            2π * carrier_doppler_gal * 4000 * (iterations + 1) / sampling_frequency +
+            start_carrier_phase + π,
+        ) - π
+    @test get_code_phase(track_state, :gps, 1) ≈ comp_code_phase_gps atol = 5e-3
+    @test mod(get_carrier_phase(track_state, :gps, 1), π) ≈ mod(comp_carrier_phase_gps, π) atol =
+        2e-2
+    @test get_code_phase(track_state, :gal, 1) ≈ comp_code_phase_gal atol = 5e-3
+    @test mod(get_carrier_phase(track_state, :gal, 1), π) ≈ mod(comp_carrier_phase_gal, π) atol =
+        5e-3
+end
+
+const CUDA_AVAILABLE = try
+    @eval using CUDA: CUDA, CuArray
+    CUDA.functional()
+catch
+    false
+end
+
+if CUDA_AVAILABLE
+    @testset "Tracking GPSL1 with KADownconvertAndCorrelator (CUDA backend)" begin
+        gpsl1 = GPSL1()
+        carrier_doppler = 200Hz
+        start_code_phase = 100
+        code_frequency =
+            carrier_doppler * get_code_center_frequency_ratio(gpsl1) +
+            get_code_frequency(gpsl1)
+        sampling_frequency = 4e6Hz
+        prn = 1
+        range = 0:3999
+        start_carrier_phase = π / 2
+
+        ka_dc = KADownconvertAndCorrelator((gpsl1,), CuArray)
+
+        track_state = TrackState(
+            gpsl1,
+            [SatState(gpsl1, prn, start_code_phase, carrier_doppler - 20Hz)],
+        )
+
+        signal = CuArray(Complex{Float32}.(
+            cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase) .*
+            gen_code(4000, gpsl1, prn, sampling_frequency, code_frequency, start_code_phase)
+        ))
+        track_state = track(signal, track_state, sampling_frequency;
+            downconvert_and_correlator = ka_dc,
+        )
+
+        iterations = 2000
+        for i = 1:iterations
+            carrier_phase =
+                mod2pi(
+                    2π * carrier_doppler * 4000 * i / sampling_frequency +
+                    start_carrier_phase + π,
+                ) - π
+            code_phase =
+                mod(code_frequency * 4000 * i / sampling_frequency + start_code_phase, 1023)
+            signal = CuArray(Complex{Float32}.(
+                cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ carrier_phase) .*
+                gen_code(4000, gpsl1, prn, sampling_frequency, code_frequency, code_phase)
+            ))
+            track_state = track(signal, track_state, sampling_frequency;
+                downconvert_and_correlator = ka_dc,
+            )
+        end
+        comp_code_phase = mod(
+            code_frequency * 4000 * (iterations + 1) / sampling_frequency + start_code_phase,
+            1023,
+        )
+        comp_carrier_phase =
+            mod2pi(
+                2π * carrier_doppler * 4000 * (iterations + 1) / sampling_frequency +
+                start_carrier_phase + π,
+            ) - π
+        @test get_code_phase(track_state) ≈ comp_code_phase atol = 5e-5
+        @test get_carrier_phase(track_state) + π ≈ comp_carrier_phase atol = 1e-3
+    end
 end
 
 end

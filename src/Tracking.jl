@@ -10,6 +10,7 @@ using Dictionaries
 using Accessors
 using ConstructionBase
 using Bumper
+using KernelAbstractions
 
 using Acquisition: AcquisitionResults
 using Unitful: upreferred, Hz, dBHz, ms
@@ -72,7 +73,8 @@ export get_early,
     get_codes,
     get_modulation,
     get_secondary_code,
-    update_accumulator
+    update_accumulator,
+    KADownconvertAndCorrelator
 
 const Maybe{T} = Union{T,Nothing}
 
@@ -160,6 +162,7 @@ include("sample_parameters.jl")
 include("downconvert_and_correlate.jl")
 include("downconvert_and_correlate_fused.jl")
 include("downconvert_and_correlate_cpu.jl")
+include("downconvert_and_correlate_ka.jl")
 include("conventional_pll_and_dll.jl")
 include("tracking_state.jl")
 include("track.jl")
