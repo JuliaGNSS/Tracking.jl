@@ -7,9 +7,13 @@ using VectorizationBase: pick_vector_width
 _simd_width(::Type{T}) where {T} = Int(pick_vector_width(T))
 
 # Convert Vec{N,S} to Vec{N,T}. No-op when S == T.
+# Uses @generated to unroll element-wise conversion, avoiding ntuple heap allocation
+# that occurs for large N (e.g. N=16 on AVX-512).
 @inline _to_vec(::Type{SIMD.Vec{N,T}}, v::SIMD.Vec{N,T}) where {N,T} = v
-@inline _to_vec(::Type{SIMD.Vec{N,T}}, v::SIMD.Vec{N,S}) where {N,T,S} =
-    SIMD.Vec{N,T}(ntuple(k -> T(v[k]), N))
+@inline @generated function _to_vec(::Type{SIMD.Vec{N,T}}, v::SIMD.Vec{N,S}) where {N,T,S}
+    elems = [:(T(v[$k])) for k in 1:N]
+    :(SIMD.Vec{$N,T}(($(elems...),)))
+end
 
 # SIMD deinterleave load: load N interleaved complex pairs [re1,im1,re2,im2,...]
 # and separate into (re_vec, im_vec) using shufflevector.
