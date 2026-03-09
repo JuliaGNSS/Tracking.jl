@@ -122,23 +122,39 @@ end
         Val(sampling_frequency),
     )
 
+    # Scalar reference: plain Julia loop, no SIMD, no tricks
+    NC = length(sample_shifts)
+    min_shift = minimum(sample_shifts)
+    ref_accumulators = zeros(ComplexF64, NC)
+    carrier_step = 2π * Float64(carrier_frequency / sampling_frequency)
+    for i in 1:num_samples_signal
+        carrier = cis(-carrier_step * (i - 1))
+        dc_sample = signal[i] * carrier
+        for tap in 1:NC
+            code_idx = i + sample_shifts[tap] - min_shift
+            ref_accumulators[tap] += dc_sample * code_replica[code_idx]
+        end
+    end
+
     # Static (@generated) path
     fused_static = Tracking.downconvert_and_correlate_fused!(
         correlator, signal, code_replica, sample_shifts,
         carrier_frequency, sampling_frequency, 0.0, 1, num_samples_signal,
     )
 
-    # Prompt should be large (signal correlates with itself)
-    @test real(get_accumulators(fused_static)[2]) > 4000
+    @test get_accumulators(fused_static) ≈ ref_accumulators rtol = 1e-4
 
-    # Dynamic (AbstractVector) path should match static
+    # Dynamic (AbstractVector) path
     dynamic_shifts = collect(sample_shifts)
     fused_dynamic = Tracking.downconvert_and_correlate_fused!(
         correlator, signal, code_replica, dynamic_shifts,
         carrier_frequency, sampling_frequency, 0.0, 1, num_samples_signal,
     )
 
-    @test get_accumulators(fused_dynamic) ≈ get_accumulators(fused_static) rtol = 1e-3
+    @test get_accumulators(fused_dynamic) ≈ ref_accumulators rtol = 1e-4
+
+    # Static and dynamic paths should produce nearly identical results
+    @test get_accumulators(fused_static) ≈ get_accumulators(fused_dynamic) rtol = 1e-6
 end
 
 @testset "Fused downconvert and correlate with Vector accumulators" begin
@@ -187,19 +203,27 @@ end
         Val(sampling_frequency),
     )
 
-    # Reference: use the @generated SVector path
-    fused_static = Tracking.downconvert_and_correlate_fused!(
-        epl, signal, code_replica, static_shifts,
-        carrier_frequency, sampling_frequency, 0.0, 1, num_samples_signal,
-    )
+    # Scalar reference
+    NC = length(dynamic_shifts)
+    min_shift = minimum(dynamic_shifts)
+    ref_accumulators = zeros(ComplexF64, NC)
+    carrier_step = 2π * Float64(carrier_frequency / sampling_frequency)
+    for i in 1:num_samples_signal
+        carrier = cis(-carrier_step * (i - 1))
+        dc_sample = signal[i] * carrier
+        for tap in 1:NC
+            code_idx = i + dynamic_shifts[tap] - min_shift
+            ref_accumulators[tap] += dc_sample * code_replica[code_idx]
+        end
+    end
 
-    # Test: use the dynamic Vector path
+    # Test: use the dynamic Vector accumulator path
     fused_dynamic = Tracking.downconvert_and_correlate_fused!(
         dynamic_correlator, signal, code_replica, dynamic_shifts,
         carrier_frequency, sampling_frequency, 0.0, 1, num_samples_signal,
     )
 
-    @test get_accumulators(fused_dynamic) ≈ get_accumulators(fused_static) rtol = 1e-3
+    @test get_accumulators(fused_dynamic) ≈ ref_accumulators rtol = 1e-4
 end
 
 end
