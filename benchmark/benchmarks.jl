@@ -1,16 +1,14 @@
 using BenchmarkTools
 
 include("bench_cpu.jl")
-include("bench_gpu_vs_cpu.jl")
-
 const SUITE = BenchmarkGroup()
 
 for (k, v) in cpu_suite()
     SUITE[k] = v
 end
-for (k, v) in gpu_suite()
-    SUITE[k] = v
-end
+
+# GPU vs CPU benchmarks are run separately via Buildkite (benchmark/run_gpu_benchmarks.jl),
+# not through AirspeedVelocity, since they require a GPU runner.
 
 # ── Multi-satellite benchmarks (threaded if available, CPU fallback) ──────
 
