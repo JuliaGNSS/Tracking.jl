@@ -17,7 +17,7 @@ has_threaded = false
 for (_, backends) in configs
     for (name, _) in backends
         if name == "CPU-Threaded"
-            has_threaded = true
+            global has_threaded = true
         elseif name != "CPU" && name ∉ gpu_backends
             push!(gpu_backends, name)
         end
