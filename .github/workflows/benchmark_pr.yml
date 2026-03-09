@@ -1,7 +1,7 @@
 name: Benchmark this PR
 on:
   pull_request_target:
-    branches: [ master ]
+    branches: [ '**' ]
 permissions:
   pull-requests: write
 
@@ -44,7 +44,7 @@ jobs:
           export PATH="$HOME/.julia/bin:$PATH"
           mkdir results
           benchpkg Tracking \
-            --rev=master,${{ github.event.pull_request.head.sha }} \
+            --rev=${{ github.event.pull_request.base.ref }},${{ github.event.pull_request.head.sha }} \
             --url=${{ github.event.repository.clone_url }} \
             --bench-on=${{ github.event.pull_request.head.sha }} \
             --output-dir=results/ \
@@ -63,7 +63,7 @@ jobs:
               echo ""
               benchpkgtable Tracking \
                 --input-dir=results/ \
-                --rev=master,${{ github.event.pull_request.head.sha }} \
+                --rev=${{ github.event.pull_request.base.ref }},${{ github.event.pull_request.head.sha }} \
                 --mode=$m \
                 --ratio
               echo ""
