@@ -9,8 +9,10 @@ using Base.Cartesian: @nexprs
 @inline _hsum(v::SIMD.Vec) = sum(Tuple(v))
 
 # Build SIMD offset vector for unroll index u (1-based).
-@inline function _make_offset(::Type{T}, W::Int, u::Int) where {T}
-    SIMD.Vec{W,T}(ntuple(k -> T(k - 1 + (u - 1) * W), W))
+# Uses @generated to produce a literal tuple, avoiding ntuple heap allocation on AVX-512.
+@inline @generated function _make_offset(::Type{T}, ::Val{W}, ::Val{U}) where {T,W,U}
+    elems = [:(T($(k - 1 + (U - 1) * W))) for k in 1:W]
+    :(SIMD.Vec{$W,T}(($(elems...),)))
 end
 
 # Stack-friendly mutable copy / immutable conversion for accumulators.
@@ -191,10 +193,10 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
         $acc_init
         $shift_init
 
-        off_1 = _make_offset(T, W, 1)
-        off_2 = _make_offset(T, W, 2)
-        off_3 = _make_offset(T, W, 3)
-        off_4 = _make_offset(T, W, 4)
+        off_1 = _make_offset(T, Val{W}(), Val{1}())
+        off_2 = _make_offset(T, Val{W}(), Val{2}())
+        off_3 = _make_offset(T, Val{W}(), Val{3}())
+        off_4 = _make_offset(T, Val{W}(), Val{4}())
 
         # Phase via muladd: p_u = base_phase + init_u where
         #   base_phase = 2π·freq_ratio·(i - start_sample)  (scalar, broadcast)
@@ -262,7 +264,7 @@ function downconvert_and_correlate_fused!(
 ) where {M,ST}
     T = Float32
     sizeof_ST = sizeof(ST)
-    W = _simd_width(T)
+    W = _simd_width(Float32)
     num_taps = length(sample_shifts)
     min_shift = minimum(sample_shifts)
 
@@ -275,7 +277,7 @@ function downconvert_and_correlate_fused!(
     p_sig = Ptr{ST}(pointer(signal))
     sig_col_bytes = num_samples_signal * 2 * sizeof_ST
 
-    off_1 = _make_offset(T, W, 1)
+    off_1 = _make_offset(T, Val{W}(), Val{1}())
     two_pi_fr = SIMD.Vec{W,T}(two_pi * freq_ratio)
     init_1 = two_pi * (off_1 * freq_ratio + phase0)
 
