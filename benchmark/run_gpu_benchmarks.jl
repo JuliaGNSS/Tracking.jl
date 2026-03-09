@@ -11,11 +11,14 @@ results = run(suite; verbose=true, seconds=5)
 
 configs = sort(collect(results), by=first)
 
-# Find all GPU backends present
+# Find all GPU backends present (exclude CPU and CPU-Threaded)
 gpu_backends = String[]
+has_threaded = false
 for (_, backends) in configs
     for (name, _) in backends
-        if name != "CPU" && name ∉ gpu_backends
+        if name == "CPU-Threaded"
+            has_threaded = true
+        elseif name != "CPU" && name ∉ gpu_backends
             push!(gpu_backends, name)
         end
     end
@@ -27,17 +30,33 @@ function to_us(t_ns)
 end
 
 println("\n## Benchmark Results (GPU vs CPU)\n")
+println("Julia threads: $(Threads.nthreads())\n")
 
 for gpu in gpu_backends
-    println("| Config | GPU (μs) | CPU (μs) | GPU/CPU |")
-    println("|--------|--------:|--------:|--------:|")
+    if has_threaded
+        println("| Config | $gpu (μs) | CPU-Threaded (μs) | CPU (μs) | vs CPU | vs Threaded |")
+        println("|--------|--------:|--------:|--------:|--------:|--------:|")
+    else
+        println("| Config | $gpu (μs) | CPU (μs) | vs CPU |")
+        println("|--------|--------:|--------:|--------:|")
+    end
     for (config, backends) in configs
         haskey(backends, "CPU") || continue
         haskey(backends, gpu) || continue
         cpu_us = to_us(median(backends["CPU"]).time)
         gpu_us = to_us(median(backends[gpu]).time)
-        ratio = round(gpu_us / cpu_us, digits=2)
-        println("| $config | $gpu_us | $cpu_us | $(ratio)x |")
+        vs_cpu = round(cpu_us / gpu_us, digits=2)
+        if has_threaded
+            if haskey(backends, "CPU-Threaded")
+                thr_us = to_us(median(backends["CPU-Threaded"]).time)
+                vs_thr = round(thr_us / gpu_us, digits=2)
+                println("| $config | $gpu_us | $thr_us | $cpu_us | $(vs_cpu)x | $(vs_thr)x |")
+            else
+                println("| $config | $gpu_us | — | $cpu_us | $(vs_cpu)x | — |")
+            end
+        else
+            println("| $config | $gpu_us | $cpu_us | $(vs_cpu)x |")
+        end
     end
     println()
 end

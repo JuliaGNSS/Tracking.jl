@@ -8,8 +8,6 @@ using Unitful: Hz
 using Tracking
 using Tracking:
     CPUDownconvertAndCorrelator,
-    CPUThreadedDownconvertAndCorrelator,
-    KADownconvertAndCorrelator,
     SystemSatsState,
     SatState,
     TrackState,
@@ -84,26 +82,28 @@ function gpu_suite()
             $(0.0Hz),
         )
 
-        # CPU threaded
-        cpu_threaded_dc = CPUThreadedDownconvertAndCorrelator(
-            systems,
-            Val(sfreq);
-            max_sats = max(total_sats, 4),
-            max_num_samples = nsamp,
-        )
-        suite[label]["CPU-Threaded"] = @benchmarkable downconvert_and_correlate(
-            $cpu_threaded_dc,
-            $signal_cpu,
-            $ts,
-            1,
-            $sfreq,
-            $(0.0Hz),
-        )
+        # CPU threaded (only available on branches with the threaded correlator)
+        if isdefined(Tracking, :CPUThreadedDownconvertAndCorrelator)
+            cpu_threaded_dc = Tracking.CPUThreadedDownconvertAndCorrelator(
+                systems,
+                Val(sfreq);
+                max_sats = max(total_sats, 4),
+                max_num_samples = nsamp,
+            )
+            suite[label]["CPU-Threaded"] = @benchmarkable downconvert_and_correlate(
+                $cpu_threaded_dc,
+                $signal_cpu,
+                $ts,
+                1,
+                $sfreq,
+                $(0.0Hz),
+            )
+        end
 
         # KA + CUDA
-        if HAS_CUDA
+        if HAS_CUDA && isdefined(Tracking, :KADownconvertAndCorrelator)
             signal_cu = cu(signal_cpu)
-            ka = KADownconvertAndCorrelator(systems, CuArray; max_sats = max(total_sats, 4))
+            ka = Tracking.KADownconvertAndCorrelator(systems, CuArray; max_sats = max(total_sats, 4))
             suite[label]["KA-CUDA"] = @benchmarkable downconvert_and_correlate(
                 $ka,
                 $signal_cu,
@@ -115,10 +115,10 @@ function gpu_suite()
         end
 
         # KA + AMDGPU (skip heavy configs on low-CU GPUs)
-        if HAS_AMDGPU && cfg_idx <= max_gpu_configs
+        if HAS_AMDGPU && isdefined(Tracking, :KADownconvertAndCorrelator) && cfg_idx <= max_gpu_configs
             signal_roc = ROCArray(signal_cpu)
             ka =
-                KADownconvertAndCorrelator(systems, ROCArray; max_sats = max(total_sats, 4))
+                Tracking.KADownconvertAndCorrelator(systems, ROCArray; max_sats = max(total_sats, 4))
             suite[label]["KA-AMD"] = @benchmarkable downconvert_and_correlate(
                 $ka,
                 $signal_roc,
