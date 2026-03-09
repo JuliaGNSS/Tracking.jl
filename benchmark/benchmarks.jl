@@ -123,10 +123,10 @@ SUITE["track"]["Float32"] = bench_track()
 
 # Fused kernel microbenchmarks (only available on branches with the fused kernel)
 if isdefined(Tracking, :downconvert_and_correlate_fused!)
-    SUITE["fused kernel"]["1-ant static"]  = bench_fused_kernel(; shifts = :static)
-    SUITE["fused kernel"]["1-ant dynamic"] = bench_fused_kernel(; shifts = :dynamic)
-    SUITE["fused kernel"]["4-ant static"]  = bench_fused_kernel(; num_ants = 4, shifts = :static)
-    SUITE["fused kernel"]["4-ant dynamic"] = bench_fused_kernel(; num_ants = 4, shifts = :dynamic)
+    SUITE["fused kernel"]["1-ant static taps"]  = bench_fused_kernel(; shifts = :static)
+    SUITE["fused kernel"]["1-ant dynamic taps"] = bench_fused_kernel(; shifts = :dynamic)
+    SUITE["fused kernel"]["4-ant static taps"]  = bench_fused_kernel(; num_ants = 4, shifts = :static)
+    SUITE["fused kernel"]["4-ant dynamic taps"] = bench_fused_kernel(; num_ants = 4, shifts = :dynamic)
 end
 
 # ── Multi-satellite benchmarks (threaded if available, CPU fallback) ──────
