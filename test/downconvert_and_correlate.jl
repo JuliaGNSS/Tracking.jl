@@ -396,6 +396,18 @@ end
     )
 
     @test real.(get_correlator(next_track_state, 2).accumulators) ≈ [2919, 4947, 2915] rtol=1e-3
+
+    # Test early return when signal_start_sample is past the signal end
+    sat_past_end = SatState(
+        SatState(gpsl1, 1, code_phase, 1000.0Hz);
+        signal_start_sample = num_samples_signal + 1,
+    )
+    sss_skip = SystemSatsState(gpsl1, [sat_past_end])
+    ts_skip = TrackState((sss_skip,))
+    result_skip = downconvert_and_correlate(
+        downconvert_and_correlator, signal, ts_skip, 1, sampling_frequency, intermediate_frequency,
+    )
+    @test get_correlator(result_skip, 1).accumulators == sat_past_end.correlator.accumulators
 end
 
 end
