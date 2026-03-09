@@ -231,6 +231,38 @@ end
     for k in 1:NC
         @test collect(get_accumulators(fused_static)[k]) ≈ collect(get_accumulators(fused_dynamic)[k]) rtol = 1e-4
     end
+
+    # Dynamic path with non-SIMD-aligned signal length (covers scalar remainder loop)
+    num_samples_odd = 5003  # not a multiple of SIMD width
+    signal_odd_ant1 =
+        gen_code(
+            num_samples_odd, gpsl1, prn, sampling_frequency,
+            code_frequency, code_phase,
+        ) .* cis.(2π * (0:(num_samples_odd - 1)) * carrier_doppler / sampling_frequency)
+    signal_odd = hcat(signal_odd_ant1, signal_odd_ant1 .* cis(0.3))
+    code_replica_odd = Vector{get_code_type(gpsl1)}(undef, num_samples_odd + maximum(sample_shifts) - minimum(sample_shifts))
+    Tracking.gen_code_replica!(
+        code_replica_odd, gpsl1, code_frequency, sampling_frequency,
+        code_phase, 1, num_samples_odd, sample_shifts, prn,
+        Val(sampling_frequency),
+    )
+    ref_odd = [zeros(ComplexF64, num_ants) for _ in 1:NC]
+    for i in 1:num_samples_odd
+        carrier = cis(-carrier_step * (i - 1))
+        for j in 1:num_ants
+            dc_sample = signal_odd[i, j] * carrier
+            for tap in 1:NC
+                ref_odd[tap][j] += dc_sample * code_replica_odd[i + sample_shifts[tap] - min_shift]
+            end
+        end
+    end
+    fused_odd = Tracking.downconvert_and_correlate_fused!(
+        correlator, signal_odd, code_replica_odd, dynamic_shifts,
+        carrier_frequency, sampling_frequency, 0.0, 1, num_samples_odd,
+    )
+    for tap in 1:NC
+        @test collect(get_accumulators(fused_odd)[tap]) ≈ ref_odd[tap] rtol = 1e-4
+    end
 end
 
 @testset "Fused downconvert and correlate with Vector accumulators" begin
