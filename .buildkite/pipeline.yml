@@ -7,8 +7,8 @@ steps:
       - JuliaCI/julia#v1:
           version: "1.10"
     commands:
-      - julia --project -e 'using Pkg; Pkg.instantiate(); Pkg.add("CUDA")'
-      - julia --project test/ka_gpu_tests.jl
+      - julia --project=ext/TrackingCUDAExt/test -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
+      - julia --project=ext/TrackingCUDAExt/test ext/TrackingCUDAExt/test/runtests.jl
     agents:
       queue: "juliagpu"
       cuda: "*"
