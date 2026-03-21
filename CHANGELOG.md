@@ -1,5 +1,31 @@
 # Changelog
 
+# [1.1.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v1.0.1...v1.1.0) (2026-03-21)
+
+
+### Bug Fixes
+
+* compute SIMD width at [@generated](https://github.com/generated) time, not runtime ([2caba06](https://github.com/JuliaGNSS/Tracking.jl/commit/2caba0611e89cd39f406ceaa9535d53e38a1d26a))
+* use extension test path for v1.10 Buildkite step ([827e608](https://github.com/JuliaGNSS/Tracking.jl/commit/827e6085e0c6b80d4dd3266517e75ed52f5b6181))
+
+
+### Features
+
+* add fused downconvert + correlate SIMD kernel ([960e472](https://github.com/JuliaGNSS/Tracking.jl/commit/960e4727fe5f6a90daab29ea46a3318aebe6a5b8))
+* fused carrier gen + downconvert with [@generated](https://github.com/generated) NumAnts unrolling ([9866a33](https://github.com/JuliaGNSS/Tracking.jl/commit/9866a33b50872d5a4236475ee61f6c2ea272f9f4))
+* restore VectorizationBase for optimal SIMD width detection ([23ff237](https://github.com/JuliaGNSS/Tracking.jl/commit/23ff2377136c1265f02e829ef7e6e65df161efd8))
+
+
+### Performance Improvements
+
+* fix AVX-512 heap allocations in SIMD helpers ([2bf3ceb](https://github.com/JuliaGNSS/Tracking.jl/commit/2bf3ceb0e87821027409955e1883c12814663036))
+* optimize fused downconvert+correlate kernel ([a6a6213](https://github.com/JuliaGNSS/Tracking.jl/commit/a6a6213555ac0cfcd06b3b7bc0c8528127180bf9))
+
+
+### Reverts
+
+* remove .codecov.yml, coverage fixed in test instead ([481047c](https://github.com/JuliaGNSS/Tracking.jl/commit/481047c939ec43a6520be60fbb9d5c71bc4585b1))
+
 ## [1.0.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v1.0.0...v1.0.1) (2026-02-25)
 
 
