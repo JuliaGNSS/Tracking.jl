@@ -28,7 +28,6 @@ are pre-allocated. Each slot gets its own code replica buffer.
 struct CPUThreadedDownconvertAndCorrelator{MESF,CT<:Tuple} <: AbstractDownconvertAndCorrelator
     max_sats::Int
     max_samples::Int
-    system_code_types::Dict{UInt64,Int}  # objectid(system) => index into code_replica_buffers tuple
     code_replica_buffers::CT             # Tuple of Vector{Vector{CodeType}} per system
 end
 
@@ -42,10 +41,6 @@ function CPUThreadedDownconvertAndCorrelator(
     max_samples = max_num_samples
     code_len = max_samples + 2 * max_sample_shift
 
-    system_code_types = Dict{UInt64,Int}(
-        objectid(sys) => i for (i, sys) in enumerate(systems)
-    )
-
     code_replica_buffers = Tuple(
         [Vector{get_code_type(sys)}(undef, code_len) for _ in 1:max_sats]
         for sys in systems
@@ -54,7 +49,6 @@ function CPUThreadedDownconvertAndCorrelator(
     CPUThreadedDownconvertAndCorrelator{MESF,typeof(code_replica_buffers)}(
         max_sats,
         max_samples,
-        system_code_types,
         code_replica_buffers,
     )
 end
@@ -158,9 +152,8 @@ function downconvert_and_correlate(
 
     buf_offset = 0
     new_multiple_system_sats_state =
-        map(track_state.multiple_system_sats_state) do system_sats_state
+        map(track_state.multiple_system_sats_state, dc.code_replica_buffers) do system_sats_state, sys_buffers
             system = system_sats_state.system
-            sys_idx = dc.system_code_types[objectid(system)]
             states = system_sats_state.states
             n = length(states)
             new_vals = Vector{valtype(states)}(undef, n)
@@ -195,7 +188,7 @@ function downconvert_and_correlate(
                     code_frequency,
                 )
 
-                code_replica = dc.code_replica_buffers[sys_idx][buf_idx]
+                code_replica = sys_buffers[buf_idx]
                 gen_code_replica!(
                     code_replica,
                     system,
