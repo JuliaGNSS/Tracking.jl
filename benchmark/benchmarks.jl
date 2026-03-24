@@ -5,7 +5,7 @@ using Unitful: Hz
 using Tracking
 using Tracking: EarlyPromptLateCorrelator, get_correlator_sample_shifts, get_code_type,
     NumAnts, gen_code_replica!, SystemSatsState, SatState, TrackState,
-    downconvert_and_correlate, BitBuffer, ConventionalPLLAndDLL
+    downconvert_and_correlate, BitBuffer
 using StaticArrays
 
 const SUITE = BenchmarkGroup()
@@ -170,9 +170,6 @@ function bench_track_steady_state(;
 )
     ts, signal, total_sats =
         _make_multi_sat_state(; systems, nsats_list, nsamp, prn_max, code_dop)
-    # Use ConventionalPLLAndDLL (non-assisted) to match GNSSReceiver's default
-    doppler_estimator = ConventionalPLLAndDLL(ts.multiple_system_sats_state)
-    ts = TrackState(ts.multiple_system_sats_state, doppler_estimator)
     dc = CPUDownconvertAndCorrelator(Val(sfreq))
     # Warm up tracking loop to get into a proper state
     for _ in 1:10
