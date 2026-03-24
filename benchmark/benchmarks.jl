@@ -5,7 +5,7 @@ using Unitful: Hz
 using Tracking
 using Tracking: EarlyPromptLateCorrelator, get_correlator_sample_shifts, get_code_type,
     NumAnts, gen_code_replica!, SystemSatsState, SatState, TrackState,
-    downconvert_and_correlate
+    downconvert_and_correlate, BitBuffer
 using StaticArrays
 
 const SUITE = BenchmarkGroup()
@@ -156,6 +156,41 @@ function bench_multi_sat(; systems, nsats_list, sfreq, nsamp, prn_max=32, code_d
     end
     @benchmarkable downconvert_and_correlate($dc, $signal, $ts, 1, $sfreq, $(0.0Hz))
 end
+
+# ── Full track loop with multiple satellites in steady-state ──────────────
+# Exercises estimate_dopplers_and_filter_prompt with bit_buffer.found == true
+
+function bench_track_steady_state(;
+    systems,
+    nsats_list,
+    sfreq,
+    nsamp,
+    prn_max = 32,
+    code_dop = 1000.0,
+)
+    ts, signal, total_sats =
+        _make_multi_sat_state(; systems, nsats_list, nsamp, prn_max, code_dop)
+    dc = CPUDownconvertAndCorrelator(Val(sfreq))
+    # Warm up tracking loop to get into a proper state
+    for _ in 1:10
+        ts = track(signal, ts, sfreq; downconvert_and_correlator = dc)
+    end
+    # Set bit_buffer.found = true to simulate steady-state tracking
+    # (random signal data never triggers bit detection on its own)
+    found_bb = BitBuffer(UInt128(0), 20, true, UInt128(0), 0, complex(0.0, 0.0), 0)
+    new_mss = map(ts.multiple_system_sats_state) do sss
+        new_sats = map(sss.states) do ss
+            SatState(ss; bit_buffer = found_bb)
+        end
+        SystemSatsState(sss, new_sats)
+    end
+    ts = TrackState(ts; multiple_system_sats_state = new_mss)
+    @benchmarkable track($signal, $ts, $sfreq; downconvert_and_correlator = $dc)
+end
+
+SUITE["track steady-state"]["L1 8sat/5K"] = bench_track_steady_state(;
+    systems = (GPSL1(),), nsats_list = [8], sfreq = 5e6Hz, nsamp = 5000,
+)
 
 let gpsl1 = GPSL1(), gal = GalileoE1B()
     SUITE["multi-sat"]["L1 8sat/5K"] =
