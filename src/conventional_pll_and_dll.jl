@@ -1,4 +1,26 @@
 """
+    map_unzip(f, d1::Dictionary, d2::Dictionary) -> (Dictionary, Dictionary)
+
+Like `map(f, d1, d2)` but `f` returns a `Tuple{A,B}`, and the result is
+split into two Dictionaries sharing the same keys. Avoids creating an
+intermediate Dictionary of tuples.
+"""
+function map_unzip(f, d1::Dictionary{K}, d2::Dictionary{K}) where {K}
+    n = length(d1)
+    a1, b1 = f(d1.values[1], d2.values[1])
+    avec = Vector{typeof(a1)}(undef, n)
+    bvec = Vector{typeof(b1)}(undef, n)
+    avec[1] = a1
+    bvec[1] = b1
+    for i in 2:n
+        a, b = f(d1.values[i], d2.values[i])
+        avec[i] = a
+        bvec[i] = b
+    end
+    Dictionary(keys(d1), avec), Dictionary(keys(d1), bvec)
+end
+
+"""
 Per-satellite state for the conventional PLL and DLL Doppler estimator.
 Holds initial Doppler values and loop filter states.
 """
@@ -223,12 +245,12 @@ function estimate_dopplers_and_filter_prompt(
         track_state.multiple_system_sats_state,
         track_state.doppler_estimator.states,
     ) do system_sats_state, pll_and_dll_states
-        new_states = map(
+        new_estimators, new_sat_states = map_unzip(
             system_sats_state.states,
             pll_and_dll_states,
         ) do sat_state, pll_and_dll_state
             if !sat_state.is_integration_completed || sat_state.integrated_samples == 0
-                return (estimator = pll_and_dll_state, state = sat_state)
+                return pll_and_dll_state, sat_state
             end
             integrated_code_blocks = calc_num_code_blocks_to_integrate(
                 system_sats_state.system,
@@ -283,27 +305,24 @@ function estimate_dopplers_and_filter_prompt(
                 carrier_loop_filter,
                 code_loop_filter,
             )
-            return (
-                estimator = doppler_estimator,
-                state = SatState(
-                    sat_state;
-                    carrier_doppler,
-                    code_doppler,
-                    integrated_samples = 0,
-                    is_integration_completed = false,
-                    last_fully_integrated_filtered_prompt = prompt,
-                    bit_buffer,
-                    cn0_estimator,
-                    post_corr_filter,
-                    correlator = zero(sat_state.correlator),
-                    last_fully_integrated_correlator = sat_state.correlator,
-                ),
+            return doppler_estimator, SatState(
+                sat_state;
+                carrier_doppler,
+                code_doppler,
+                integrated_samples = 0,
+                is_integration_completed = false,
+                last_fully_integrated_filtered_prompt = prompt,
+                bit_buffer,
+                cn0_estimator,
+                post_corr_filter,
+                correlator = zero(sat_state.correlator),
+                last_fully_integrated_correlator = sat_state.correlator,
             )
         end
 
         return (
-            estimators = map(x -> x.estimator, new_states),
-            states = SystemSatsState(system_sats_state, map(x -> x.state, new_states)),
+            estimators = new_estimators,
+            states = SystemSatsState(system_sats_state, new_sat_states),
         )
     end
     new_doppler_estimators = map(x -> x.estimators, new_multiple_system_states)
