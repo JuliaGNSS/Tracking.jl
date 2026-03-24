@@ -10,6 +10,7 @@ using Dictionaries
 using Accessors
 using ConstructionBase
 using Bumper
+using Polyester
 
 using Acquisition: AcquisitionResults
 using Unitful: upreferred, Hz, dBHz, ms
