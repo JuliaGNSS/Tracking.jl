@@ -32,50 +32,9 @@ function buffer(system::AbstractGNSS, bit_buffer, integrated_code_blocks, prompt
     )
 
     if (bit_buffer.found == false)
-        if (integrated_code_blocks != 1)
-            error(
-                "The number code blocks must be equal to 1 if bit or secondary code hasn't been found yet.",
-            )
-        end
-        code_block_buffer = bit_buffer.code_block_buffer << 1 + UInt64(real(prompt) > 0)
-        code_block_buffer_lengh = bit_buffer.code_block_buffer_lengh + 1
-        bit_found = is_upcoming_integration_new_bit(
-            system,
-            code_block_buffer,
-            code_block_buffer_lengh,
-        )
-        if (bit_found == false)
-            return BitBuffer(
-                code_block_buffer,
-                code_block_buffer_lengh,
-                false,
-                0,
-                0,
-                complex(0.0, 0.0),
-                0,
-            )
-        end
-        num_bits = min(
-            div(code_block_buffer_lengh, num_code_blocks_that_form_a_bit),
-            div(sizeof(code_block_buffer) * 8, num_code_blocks_that_form_a_bit),
-        )
-        bits = reduce(num_bits:-1:1; init = UInt128(0)) do bits, bit_index
-            integrated_code_blocks =
-                sum(0:num_code_blocks_that_form_a_bit-1) do code_block_index
-                    buffer_code_block_index =
-                        (bit_index - 1) * num_code_blocks_that_form_a_bit + code_block_index
-                    ((code_block_buffer & (1 << buffer_code_block_index)) > 0) * 2 - 1
-                end
-            bits << 1 + (integrated_code_blocks > 0)
-        end
-        return BitBuffer(
-            code_block_buffer,
-            code_block_buffer_lengh,
-            true,
-            bits,
-            num_bits,
-            complex(0, 0),
-            0,
+        return _buffer_find_bit(
+            system, bit_buffer, num_code_blocks_that_form_a_bit,
+            integrated_code_blocks, prompt,
         )
     end
 
@@ -105,6 +64,55 @@ function buffer(system::AbstractGNSS, bit_buffer, integrated_code_blocks, prompt
             prompt_accumulator_integrated_code_blocks,
         )
     end
+end
+
+function _buffer_find_bit(system, bit_buffer, num_code_blocks_that_form_a_bit,
+                          integrated_code_blocks, prompt)
+    if (integrated_code_blocks != 1)
+        error(
+            "The number code blocks must be equal to 1 if bit or secondary code hasn't been found yet.",
+        )
+    end
+    code_block_buffer = bit_buffer.code_block_buffer << 1 + UInt64(real(prompt) > 0)
+    code_block_buffer_lengh = bit_buffer.code_block_buffer_lengh + 1
+    bit_found = is_upcoming_integration_new_bit(
+        system,
+        code_block_buffer,
+        code_block_buffer_lengh,
+    )
+    if (bit_found == false)
+        return BitBuffer(
+            code_block_buffer,
+            code_block_buffer_lengh,
+            false,
+            0,
+            0,
+            complex(0.0, 0.0),
+            0,
+        )
+    end
+    num_bits = min(
+        div(code_block_buffer_lengh, num_code_blocks_that_form_a_bit),
+        div(sizeof(code_block_buffer) * 8, num_code_blocks_that_form_a_bit),
+    )
+    bits = reduce(num_bits:-1:1; init = UInt128(0)) do bits, bit_index
+        integrated_code_blocks =
+            sum(0:num_code_blocks_that_form_a_bit-1) do code_block_index
+                buffer_code_block_index =
+                    (bit_index - 1) * num_code_blocks_that_form_a_bit + code_block_index
+                ((code_block_buffer & (1 << buffer_code_block_index)) > 0) * 2 - 1
+            end
+        bits << 1 + (integrated_code_blocks > 0)
+    end
+    return BitBuffer(
+        code_block_buffer,
+        code_block_buffer_lengh,
+        true,
+        bits,
+        num_bits,
+        complex(0, 0),
+        0,
+    )
 end
 
 function reset(bit_buffer::BitBuffer)

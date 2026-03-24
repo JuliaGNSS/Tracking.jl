@@ -301,9 +301,12 @@ function estimate_dopplers_and_filter_prompt(
             )
         end
 
+        # Extract estimators and states without creating intermediate Dictionaries
+        estimator_vals = map(x -> x.estimator, new_states.values)
+        state_vals = map(x -> x.state, new_states.values)
         return (
-            estimators = map(x -> x.estimator, new_states),
-            states = SystemSatsState(system_sats_state, map(x -> x.state, new_states)),
+            estimators = Dictionary(keys(new_states), estimator_vals),
+            states = SystemSatsState(system_sats_state, Dictionary(keys(new_states), state_vals)),
         )
     end
     new_doppler_estimators = map(x -> x.estimators, new_multiple_system_states)
