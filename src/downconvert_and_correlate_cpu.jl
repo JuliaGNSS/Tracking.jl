@@ -158,7 +158,7 @@ function downconvert_and_correlate(
             n = length(states)
             new_vals = Vector{valtype(states)}(undef, n)
 
-            Threads.@threads for i in 1:n
+            @batch for i in 1:n
                 buf_idx = buf_offset + i
                 sat_state = states.values[i]
 
