@@ -171,10 +171,6 @@ function bench_track_steady_state(;
     ts, signal, total_sats =
         _make_multi_sat_state(; systems, nsats_list, nsamp, prn_max, code_dop)
     dc = CPUDownconvertAndCorrelator(Val(sfreq))
-    # Warm up tracking loop to get into a proper state
-    for _ in 1:10
-        ts = track(signal, ts, sfreq; downconvert_and_correlator = dc)
-    end
     # Set bit_buffer.found = true to simulate steady-state tracking
     # (random signal data never triggers bit detection on its own)
     found_bb = BitBuffer(UInt128(0), 20, true, UInt128(0), 0, complex(0.0, 0.0), 0)
