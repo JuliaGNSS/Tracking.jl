@@ -1,5 +1,23 @@
 # Changelog
 
+# [1.2.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v1.1.1...v1.2.0) (2026-03-25)
+
+
+### Bug Fixes
+
+* remove objectid-based system lookup in CPUThreadedDownconvertAndCorrelator ([e4fa722](https://github.com/JuliaGNSS/Tracking.jl/commit/e4fa722487cd7e750c65dde1cc4ec1207e7975ee))
+
+
+### Features
+
+* add CPUThreadedDownconvertAndCorrelator struct and constructor ([0b6ca67](https://github.com/JuliaGNSS/Tracking.jl/commit/0b6ca676ec0e74aaaa831255d1eb20a79db21387))
+* default to CPUThreadedDownconvertAndCorrelator in track() ([bd66b92](https://github.com/JuliaGNSS/Tracking.jl/commit/bd66b9242f3acd90591fd574a4634a573934e0cc))
+
+
+### Performance Improvements
+
+* use Polyester [@batch](https://github.com/batch) instead of Threads.[@threads](https://github.com/threads) and update benchmarks ([01e190f](https://github.com/JuliaGNSS/Tracking.jl/commit/01e190f307b3bf371402f33d79ef952ab538ba59))
+
 ## [1.1.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v1.1.0...v1.1.1) (2026-03-25)
 
 
