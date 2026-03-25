@@ -210,15 +210,10 @@ function bench_multi_sat(
     prn_max = 32,
     code_dop = 1000.0,
 )
-    ts, signal, total_sats =
+    ts, signal, _ =
         _make_multi_sat_state(; systems, nsats_list, nsamp, prn_max, code_dop)
     if threaded && isdefined(Tracking, :CPUThreadedDownconvertAndCorrelator)
-        dc = Tracking.CPUThreadedDownconvertAndCorrelator(
-            systems,
-            Val(sfreq);
-            max_sats = max(total_sats, 4),
-            max_num_samples = nsamp,
-        )
+        dc = Tracking.CPUThreadedDownconvertAndCorrelator(Val(sfreq))
     else
         dc = CPUDownconvertAndCorrelator(Val(sfreq))
     end

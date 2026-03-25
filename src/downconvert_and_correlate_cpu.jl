@@ -18,39 +18,20 @@ end
 """
 $(SIGNATURES)
 
-Multi-threaded CPU downconvert and correlate. Takes systems at construction to
-pre-allocate correctly-typed code replica buffers per satellite slot. Spawns
-one `Threads.@spawn` task per satellite. Does not use Bumper.
-
-The `max_sats` parameter controls how many satellite slots (and buffer sets)
-are pre-allocated. Each slot gets its own code replica buffer.
+Multi-threaded CPU downconvert and correlate using Bumper.jl for temporary
+code-replica allocation. One `SlabBuffer` is pre-allocated per thread so that
+concurrent `@batch` iterations never share a buffer.
 """
-struct CPUThreadedDownconvertAndCorrelator{MESF,CT<:Tuple} <: AbstractDownconvertAndCorrelator
-    max_sats::Int
-    max_samples::Int
-    code_replica_buffers::CT             # Tuple of Vector{Vector{CodeType}} per system
+struct CPUThreadedDownconvertAndCorrelator{MESF} <: AbstractDownconvertAndCorrelator
+    buffers::Vector{SlabBuffer}
 end
 
 function CPUThreadedDownconvertAndCorrelator(
-    systems,
     ::Val{MESF};
-    max_sats::Int = 32,
-    max_sample_shift::Int = 20,
-    max_num_samples::Int = ceil(Int, upreferred(MESF / Hz) * 1e-3),
+    nthreads::Int = Threads.nthreads(),
 ) where {MESF}
-    max_samples = max_num_samples
-    code_len = max_samples + 2 * max_sample_shift
-
-    code_replica_buffers = Tuple(
-        [Vector{get_code_type(sys)}(undef, code_len) for _ in 1:max_sats]
-        for sys in systems
-    )
-
-    CPUThreadedDownconvertAndCorrelator{MESF,typeof(code_replica_buffers)}(
-        max_sats,
-        max_samples,
-        code_replica_buffers,
-    )
+    buffers = [SlabBuffer() for _ = 1:nthreads]
+    CPUThreadedDownconvertAndCorrelator{MESF}(buffers)
 end
 
 """
@@ -150,16 +131,14 @@ function downconvert_and_correlate(
 ) where {MESF}
     num_samples_signal = get_num_samples(signal)
 
-    buf_offset = 0
     new_multiple_system_sats_state =
-        map(track_state.multiple_system_sats_state, dc.code_replica_buffers) do system_sats_state, sys_buffers
+        map(track_state.multiple_system_sats_state) do system_sats_state
             system = system_sats_state.system
             states = system_sats_state.states
             n = length(states)
             new_vals = Vector{valtype(states)}(undef, n)
 
-            @batch for i in 1:n
-                buf_idx = buf_offset + i
+            @batch for i = 1:n
                 sat_state = states.values[i]
 
                 signal_samples_to_integrate, is_integration_completed =
@@ -188,51 +167,54 @@ function downconvert_and_correlate(
                     code_frequency,
                 )
 
-                code_replica = sys_buffers[buf_idx]
-                gen_code_replica!(
-                    code_replica,
-                    system,
-                    code_frequency,
-                    sampling_frequency,
-                    sat_state.code_phase,
-                    sat_state.signal_start_sample,
-                    signal_samples_to_integrate,
-                    sample_shifts,
-                    sat_state.prn,
-                    Val{MESF}(),
-                )
+                buf = dc.buffers[Threads.threadid()]
+                @no_escape buf begin
+                    code_replica = @alloc(
+                        get_code_type(system),
+                        num_samples_signal + maximum(sample_shifts) -
+                        minimum(sample_shifts)
+                    )
+                    gen_code_replica!(
+                        code_replica,
+                        system,
+                        code_frequency,
+                        sampling_frequency,
+                        sat_state.code_phase,
+                        sat_state.signal_start_sample,
+                        signal_samples_to_integrate,
+                        sample_shifts,
+                        sat_state.prn,
+                        Val{MESF}(),
+                    )
 
-                new_correlator = downconvert_and_correlate_fused!(
-                    sat_state.correlator,
-                    signal,
-                    code_replica,
-                    sample_shifts,
-                    carrier_frequency,
-                    sampling_frequency,
-                    sat_state.carrier_phase,
-                    sat_state.signal_start_sample,
-                    signal_samples_to_integrate,
-                )::typeof(sat_state.correlator)
+                    new_correlator = downconvert_and_correlate_fused!(
+                        sat_state.correlator,
+                        signal,
+                        code_replica,
+                        sample_shifts,
+                        carrier_frequency,
+                        sampling_frequency,
+                        sat_state.carrier_phase,
+                        sat_state.signal_start_sample,
+                        signal_samples_to_integrate,
+                    )::typeof(sat_state.correlator)
 
-                new_vals[i] = update(
-                    system,
-                    sat_state,
-                    signal_samples_to_integrate,
-                    intermediate_frequency,
-                    sampling_frequency,
-                    new_correlator,
-                    is_integration_completed,
-                )
+                    new_vals[i] = update(
+                        system,
+                        sat_state,
+                        signal_samples_to_integrate,
+                        intermediate_frequency,
+                        sampling_frequency,
+                        new_correlator,
+                        is_integration_completed,
+                    )
+                end
             end
 
-            buf_offset += n
             new_sat_states = Dictionary(keys(states), new_vals)
             SystemSatsState(system_sats_state, new_sat_states)
         end
-    TrackState(
-        track_state;
-        multiple_system_sats_state = new_multiple_system_sats_state,
-    )
+    TrackState(track_state; multiple_system_sats_state = new_multiple_system_sats_state)
 end
 
 """

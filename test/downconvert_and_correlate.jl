@@ -349,7 +349,7 @@ end
     multiple_system_sats_state = (system_sats_state,)
 
     downconvert_and_correlator =
-        CPUThreadedDownconvertAndCorrelator((gpsl1,), Val(sampling_frequency))
+        CPUThreadedDownconvertAndCorrelator(Val(sampling_frequency))
 
     track_state = TrackState(multiple_system_sats_state)
 
