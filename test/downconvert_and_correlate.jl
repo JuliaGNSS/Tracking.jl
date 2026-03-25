@@ -25,7 +25,10 @@ using Tracking:
     @test downconvert_and_correlator.buffer isa SlabBuffer
 end
 
-@testset "Downconvert and correlate with CPU" begin
+@testset "Downconvert and correlate with $DC" for DC in [
+    CPUDownconvertAndCorrelator,
+    CPUThreadedDownconvertAndCorrelator,
+]
     gpsl1 = GPSL1()
     sampling_frequency = 5e6Hz
     code_phase = 10.5
@@ -38,10 +41,7 @@ end
     )
     multiple_system_sats_state = (system_sats_state,)
 
-    maximum_expected_sampling_frequency = Val(sampling_frequency)
-
-    downconvert_and_correlator =
-        CPUDownconvertAndCorrelator(maximum_expected_sampling_frequency)
+    downconvert_and_correlator = DC(Val(sampling_frequency))
 
     track_state = TrackState(multiple_system_sats_state)
 
@@ -88,6 +88,30 @@ end
     )
 
     @test real.(get_correlator(next_track_state, 2).accumulators) ≈ [2919, 4947, 2915] rtol=1e-3
+end
+
+@testset "Early return when signal_start_sample past end with $DC" for DC in [
+    CPUDownconvertAndCorrelator,
+    CPUThreadedDownconvertAndCorrelator,
+]
+    gpsl1 = GPSL1()
+    sampling_frequency = 5e6Hz
+    code_phase = 10.5
+    num_samples_signal = 5000
+    intermediate_frequency = 0.0Hz
+
+    signal = ones(ComplexF64, num_samples_signal)
+    sat_past_end = SatState(
+        SatState(gpsl1, 1, code_phase, 1000.0Hz);
+        signal_start_sample = num_samples_signal + 1,
+    )
+    sss_skip = SystemSatsState(gpsl1, [sat_past_end])
+    ts_skip = TrackState((sss_skip,))
+    downconvert_and_correlator = DC(Val(sampling_frequency))
+    result_skip = downconvert_and_correlate(
+        downconvert_and_correlator, signal, ts_skip, 1, sampling_frequency, intermediate_frequency,
+    )
+    @test get_correlator(result_skip, 1).accumulators == sat_past_end.correlator.accumulators
 end
 
 @testset "Fused downconvert and correlate" begin
@@ -333,81 +357,6 @@ end
     )
 
     @test get_accumulators(fused_dynamic) ≈ ref_accumulators rtol = 1e-4
-end
-
-@testset "Downconvert and correlate with CPUThreaded" begin
-    gpsl1 = GPSL1()
-    sampling_frequency = 5e6Hz
-    code_phase = 10.5
-    num_samples_signal = 5000
-    intermediate_frequency = 0.0Hz
-
-    system_sats_state = SystemSatsState(
-        gpsl1,
-        [SatState(gpsl1, 1, code_phase, 1000.0Hz), SatState(gpsl1, 2, 11.0, 500.0Hz)];
-    )
-    multiple_system_sats_state = (system_sats_state,)
-
-    downconvert_and_correlator =
-        CPUThreadedDownconvertAndCorrelator(Val(sampling_frequency))
-
-    track_state = TrackState(multiple_system_sats_state)
-
-    preferred_num_code_blocks_to_integrate = 1
-
-    signal =
-        gen_code(
-            num_samples_signal,
-            gpsl1,
-            1,
-            sampling_frequency,
-            get_code_frequency(gpsl1) + 1000Hz * get_code_center_frequency_ratio(gpsl1),
-            code_phase,
-        ) .* cis.(2π * (0:(num_samples_signal-1)) * 1000.0Hz / sampling_frequency)
-
-    next_track_state = downconvert_and_correlate(
-        downconvert_and_correlator,
-        signal,
-        track_state,
-        preferred_num_code_blocks_to_integrate,
-        sampling_frequency,
-        intermediate_frequency,
-    )
-
-    @test real.(get_correlator(next_track_state, 1).accumulators) ≈ [2921, 4949, 2917] rtol=1e-3
-
-    signal =
-        gen_code(
-            num_samples_signal,
-            gpsl1,
-            2,
-            sampling_frequency,
-            get_code_frequency(gpsl1) + 500Hz * get_code_center_frequency_ratio(gpsl1),
-            11.0,
-        ) .* cis.(2π * (0:(num_samples_signal-1)) * 500.0Hz / sampling_frequency)
-
-    next_track_state = downconvert_and_correlate(
-        downconvert_and_correlator,
-        signal,
-        track_state,
-        preferred_num_code_blocks_to_integrate,
-        sampling_frequency,
-        intermediate_frequency,
-    )
-
-    @test real.(get_correlator(next_track_state, 2).accumulators) ≈ [2919, 4947, 2915] rtol=1e-3
-
-    # Test early return when signal_start_sample is past the signal end
-    sat_past_end = SatState(
-        SatState(gpsl1, 1, code_phase, 1000.0Hz);
-        signal_start_sample = num_samples_signal + 1,
-    )
-    sss_skip = SystemSatsState(gpsl1, [sat_past_end])
-    ts_skip = TrackState((sss_skip,))
-    result_skip = downconvert_and_correlate(
-        downconvert_and_correlator, signal, ts_skip, 1, sampling_frequency, intermediate_frequency,
-    )
-    @test get_correlator(result_skip, 1).accumulators == sat_past_end.correlator.accumulators
 end
 
 end
