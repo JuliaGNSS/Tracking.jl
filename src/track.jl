@@ -10,7 +10,7 @@ function track(
     signal::AbstractVecOrMat,
     track_state::TS,
     sampling_frequency;
-    downconvert_and_correlator::AbstractDownconvertAndCorrelator = CPUDownconvertAndCorrelator(
+    downconvert_and_correlator::AbstractDownconvertAndCorrelator = CPUThreadedDownconvertAndCorrelator(
         Val(sampling_frequency),
     ),
     intermediate_frequency = 0.0Hz,
