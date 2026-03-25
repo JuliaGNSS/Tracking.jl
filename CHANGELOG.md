@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v1.2.0...v1.2.1) (2026-03-25)
+
+
+### Bug Fixes
+
+* use Threads.maxthreadid() instead of Threads.nthreads() ([1f7d104](https://github.com/JuliaGNSS/Tracking.jl/commit/1f7d104f706439c17757ab7b8e14f1b9059249ff))
+
 # [1.2.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v1.1.1...v1.2.0) (2026-03-25)
 
 
