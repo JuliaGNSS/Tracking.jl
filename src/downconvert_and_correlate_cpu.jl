@@ -28,7 +28,7 @@ end
 
 function CPUThreadedDownconvertAndCorrelator(
     ::Val{MESF};
-    nthreads::Int = Threads.nthreads(),
+    nthreads::Int = Threads.maxthreadid(),
 ) where {MESF}
     buffers = [SlabBuffer() for _ = 1:nthreads]
     CPUThreadedDownconvertAndCorrelator{MESF}(buffers)
