@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.1.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v1.1.0...v1.1.1) (2026-03-25)
+
+
+### Bug Fixes
+
+* drop conventional_pll_and_dll.jl change (no alloc reduction) ([6c84e3b](https://github.com/JuliaGNSS/Tracking.jl/commit/6c84e3bf91d761f1f97e7df7557506340b2dd339))
+
+
+### Performance Improvements
+
+* reduce allocations in estimate_dopplers_and_filter_prompt ([894f3db](https://github.com/JuliaGNSS/Tracking.jl/commit/894f3db7357da705ec9db1e3f8675f4bf5c27560))
+* use map_unzip to avoid intermediate Dictionary in estimate_dopplers ([7137bd7](https://github.com/JuliaGNSS/Tracking.jl/commit/7137bd7c9414a8a84d811d39b1dfaf7a91c72278))
+
 # [1.1.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v1.0.1...v1.1.0) (2026-03-21)
 
 
