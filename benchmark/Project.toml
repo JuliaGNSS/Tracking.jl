@@ -1,0 +1,6 @@
+[deps]
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+GNSSSignals = "52c80523-2a4e-5c38-8979-05588f836870"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+Tracking = "10b2438b-ffd4-5096-aa58-44041d5c8f3b"
+Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
