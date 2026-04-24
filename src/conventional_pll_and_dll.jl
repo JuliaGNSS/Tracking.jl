@@ -29,18 +29,24 @@ Holds initial Doppler values and loop filter states.
     init_code_doppler::typeof(1.0Hz)
     carrier_loop_filter::CA = ThirdOrderBilinearLF()
     code_loop_filter::CO = SecondOrderBilinearLF()
+    carrier_loop_filter_bandwidth::typeof(1.0Hz) = 18.0Hz
+    code_loop_filter_bandwidth::typeof(1.0Hz) = 1.0Hz
 end
 
 function SatConventionalPLLAndDLL(
     sat_state::SatState,
     carrier_loop_filter::CA,
-    code_loop_filter::CO,
+    code_loop_filter::CO;
+    carrier_loop_filter_bandwidth::typeof(1.0Hz) = 18.0Hz,
+    code_loop_filter_bandwidth::typeof(1.0Hz) = 1.0Hz,
 ) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     SatConventionalPLLAndDLL(
         sat_state.carrier_doppler,
         sat_state.code_doppler,
         carrier_loop_filter,
         code_loop_filter,
+        carrier_loop_filter_bandwidth,
+        code_loop_filter_bandwidth,
     )
 end
 
@@ -48,6 +54,8 @@ function SatConventionalPLLAndDLL(
     sat_conventional_pll_and_dll::SatConventionalPLLAndDLL{CA,CO};
     carrier_loop_filter::Maybe{CA} = nothing,
     code_loop_filter::Maybe{CO} = nothing,
+    carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
+    code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
 ) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     SatConventionalPLLAndDLL{CA,CO}(
         sat_conventional_pll_and_dll.init_carrier_doppler,
@@ -56,6 +64,12 @@ function SatConventionalPLLAndDLL(
         carrier_loop_filter,
         isnothing(code_loop_filter) ? sat_conventional_pll_and_dll.code_loop_filter :
         code_loop_filter,
+        isnothing(carrier_loop_filter_bandwidth) ?
+        sat_conventional_pll_and_dll.carrier_loop_filter_bandwidth :
+        carrier_loop_filter_bandwidth,
+        isnothing(code_loop_filter_bandwidth) ?
+        sat_conventional_pll_and_dll.code_loop_filter_bandwidth :
+        code_loop_filter_bandwidth,
     )
 end
 
@@ -115,7 +129,10 @@ function ConventionalPLLAndDLL(
 ) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     states = map(multiple_system_sats_state) do system_sats_state
         map(system_sats_state.states) do sat_state
-            SatConventionalPLLAndDLL(sat_state, CA(), CO())
+            SatConventionalPLLAndDLL(
+                sat_state, CA(), CO();
+                carrier_loop_filter_bandwidth, code_loop_filter_bandwidth,
+            )
         end
     end
     ConventionalPLLAndDLL(states; carrier_loop_filter_bandwidth, code_loop_filter_bandwidth)
@@ -185,6 +202,8 @@ function merge_sats(
             sat_state.code_doppler,
             constructorof(CA)(),
             constructorof(CO)(),
+            pll_and_dll.carrier_loop_filter_bandwidth,
+            pll_and_dll.code_loop_filter_bandwidth,
         )
     end
     @set pll_and_dll.states[system_idx] =
@@ -282,7 +301,7 @@ function estimate_dopplers_and_filter_prompt(
                     filtered_correlator,
                     get_last_fully_integrated_filtered_prompt(sat_state),
                     integration_time,
-                    track_state.doppler_estimator.carrier_loop_filter_bandwidth,
+                    pll_and_dll_state.carrier_loop_filter_bandwidth,
                 )
             code_freq_update, code_loop_filter = calculate_code_frequency_update(
                 system_sats_state.system,
@@ -291,7 +310,7 @@ function estimate_dopplers_and_filter_prompt(
                 sat_state.code_doppler,
                 sampling_frequency,
                 integration_time,
-                track_state.doppler_estimator.code_loop_filter_bandwidth,
+                pll_and_dll_state.code_loop_filter_bandwidth,
             )
             carrier_doppler, code_doppler = aid_dopplers(
                 system_sats_state.system,
