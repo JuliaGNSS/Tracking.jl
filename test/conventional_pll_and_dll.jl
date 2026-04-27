@@ -17,6 +17,8 @@ using Tracking:
     get_carrier_doppler,
     get_code_doppler,
     get_last_fully_integrated_filtered_prompt,
+    get_filtered_prompts,
+    get_sat_state,
     update_accumulator,
     get_default_correlator
 
@@ -89,6 +91,8 @@ end
     @test get_code_doppler(new_track_state) ==
           get_code_center_frequency_ratio(gpsl1) * carrier_doppler
     @test get_last_fully_integrated_filtered_prompt(new_track_state) == 0.0
+    # No integration completed -> no filtered prompt recorded
+    @test isempty(get_filtered_prompts(get_sat_state(new_track_state, prn)))
 
     # This time it is large enough to produce new dopplers and phases
     num_samples = 5000
@@ -112,6 +116,14 @@ end
     @test get_last_fully_integrated_filtered_prompt(
         new_track_state_after_full_integration,
     ) == 0.4 + 0.004im
+    # One integration completed -> one filtered prompt recorded, equal to the
+    # last_fully_integrated_filtered_prompt value.
+    let prompts = get_filtered_prompts(
+            get_sat_state(new_track_state_after_full_integration, prn),
+        )
+        @test length(prompts) == 1
+        @test prompts[1] == 0.4 + 0.004im
+    end
 end
 
 end

@@ -266,6 +266,7 @@ function estimate_dopplers_and_filter_prompt(
             )
             filtered_correlator = apply(post_corr_filter, normalized_correlator)
             prompt = get_prompt(filtered_correlator)
+            push!(sat_state.filtered_prompts, prompt)
             cn0_estimator = update(get_cn0_estimator(sat_state), prompt)
             bit_buffer = buffer(
                 system_sats_state.system,

@@ -26,6 +26,8 @@ using Tracking:
     estimate_cn0,
     get_signal_start_sample,
     get_last_fully_integrated_filtered_prompt,
+    get_filtered_prompts,
+    get_sat_state,
     get_code_length,
     NumAnts,
     get_num_ants,
@@ -550,6 +552,85 @@ end
     #    figure("Prompt")
     #    plot(real.(tracked_prompts))
     #    plot(imag.(tracked_prompts))
+end
+
+@testset "Collect filtered prompts per track call" begin
+    gpsl1 = GPSL1()
+    carrier_doppler = 200Hz
+    start_code_phase = 100.0
+    code_frequency =
+        carrier_doppler * get_code_center_frequency_ratio(gpsl1) + get_code_frequency(gpsl1)
+    sampling_frequency = 4e6Hz
+    prn = 1
+    samples_per_code = 4000  # one GPS L1 code period at 4 MHz
+
+    # Generates a signal of `num_codes` full code periods of noise-free GPS L1.
+    function make_signal(num_codes, start_carrier_phase, start_code_phase)
+        n = samples_per_code * num_codes
+        signal = zeros(ComplexF64, n)
+        for code_idx = 0:(num_codes-1)
+            carrier_phase =
+                mod2pi(
+                    2π * carrier_doppler * samples_per_code * code_idx / sampling_frequency +
+                    start_carrier_phase + π,
+                ) - π
+            code_phase = mod(
+                code_frequency * samples_per_code * code_idx / sampling_frequency +
+                start_code_phase,
+                1023,
+            )
+            r = (code_idx * samples_per_code):((code_idx + 1) * samples_per_code - 1)
+            local_range = 0:(samples_per_code - 1)
+            signal[(code_idx * samples_per_code + 1):((code_idx + 1) * samples_per_code)] .=
+                cis.(
+                    2π .* carrier_doppler .* local_range ./ sampling_frequency .+
+                    carrier_phase,
+                ) .* gen_code(
+                    samples_per_code,
+                    gpsl1,
+                    prn,
+                    sampling_frequency,
+                    code_frequency,
+                    code_phase,
+                )
+        end
+        signal
+    end
+
+    track_state = TrackState(
+        gpsl1,
+        [SatState(gpsl1, prn, start_code_phase, carrier_doppler)],
+    )
+
+    # First call: 10 code periods -> expect 10 filtered prompts
+    signal1 = make_signal(10, π / 2, start_code_phase)
+    track_state = track(signal1, track_state, sampling_frequency)
+    sat = get_sat_state(track_state, prn)
+    prompts1 = get_filtered_prompts(sat)
+    @test prompts1 isa Vector{ComplexF64}
+    @test length(prompts1) == 10
+    # Last entry is exposed by the existing scalar accessor
+    @test prompts1[end] == get_last_fully_integrated_filtered_prompt(track_state)
+    # Save the buffer reference to verify it is reused, not reallocated.
+    buffer_ref = prompts1
+
+    # Second call: 5 code periods -> buffer is reset, so length is 5, not 15.
+    signal2 = make_signal(5, π / 2, start_code_phase)
+    track_state = track(signal2, track_state, sampling_frequency)
+    sat = get_sat_state(track_state, prn)
+    prompts2 = get_filtered_prompts(sat)
+    @test length(prompts2) == 5
+    @test prompts2[end] == get_last_fully_integrated_filtered_prompt(track_state)
+    # Same underlying Vector object across calls -> capacity is retained and
+    # no reallocation happens on a call that fits in the existing buffer.
+    @test prompts2 === buffer_ref
+
+    # Third call with 0 completed integrations: buffer empties.
+    signal3 = zeros(ComplexF64, samples_per_code ÷ 4)  # less than one code period
+    track_state = track(signal3, track_state, sampling_frequency)
+    prompts3 = get_filtered_prompts(get_sat_state(track_state, prn))
+    @test isempty(prompts3)
+    @test prompts3 === buffer_ref
 end
 
 end

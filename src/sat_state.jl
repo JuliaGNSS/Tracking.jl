@@ -19,6 +19,7 @@ struct SatState{C<:AbstractCorrelator,PCF<:AbstractPostCorrFilter}
     cn0_estimator::MomentsCN0Estimator
     bit_buffer::BitBuffer
     post_corr_filter::PCF
+    filtered_prompts::Vector{ComplexF64}
 end
 
 """
@@ -92,6 +93,16 @@ Get the filtered prompt value from the last fully completed integration period.
 """
 get_last_fully_integrated_filtered_prompt(s::SatState) =
     s.last_fully_integrated_filtered_prompt
+
+"""
+$(SIGNATURES)
+
+Get all filtered prompt correlation results that were produced during the most
+recent `track` call. The vector is reset at the start of each `track` call and
+appended to for every completed integration, so its length equals the number of
+correlations that completed within that call.
+"""
+get_filtered_prompts(s::SatState) = s.filtered_prompts
 get_post_corr_filter(s::SatState) = s.post_corr_filter
 get_cn0_estimator(s::SatState) = s.cn0_estimator
 
@@ -151,6 +162,7 @@ function SatState(
         MomentsCN0Estimator(num_prompts_for_cn0_estimation),
         BitBuffer(),
         post_corr_filter,
+        ComplexF64[],
     )
 end
 
@@ -170,6 +182,7 @@ function SatState(
     cn0_estimator = nothing,
     bit_buffer = nothing,
     post_corr_filter::Maybe{PCF} = nothing,
+    filtered_prompts::Maybe{Vector{ComplexF64}} = nothing,
 ) where {C<:AbstractCorrelator,PCF<:AbstractPostCorrFilter}
     SatState{C,PCF}(
         isnothing(prn) ? sat_state.prn : prn,
@@ -191,10 +204,12 @@ function SatState(
         isnothing(cn0_estimator) ? sat_state.cn0_estimator : cn0_estimator,
         isnothing(bit_buffer) ? sat_state.bit_buffer : bit_buffer,
         isnothing(post_corr_filter) ? sat_state.post_corr_filter : post_corr_filter,
+        isnothing(filtered_prompts) ? sat_state.filtered_prompts : filtered_prompts,
     )
 end
 
 function reset_start_sample_and_bit_buffer(sat_state)
+    empty!(sat_state.filtered_prompts)
     SatState(sat_state; signal_start_sample = 1, bit_buffer = reset(sat_state.bit_buffer))
 end
 
