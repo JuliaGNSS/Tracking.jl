@@ -154,10 +154,6 @@ function SatState(
     )
 end
 
-function SatState(acq::AcquisitionResults; args...)
-    SatState(acq.system, acq.prn, acq.code_phase, acq.carrier_doppler; args...)
-end
-
 function SatState(
     sat_state::SatState{C,PCF};
     prn = nothing,

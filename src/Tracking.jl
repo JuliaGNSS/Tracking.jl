@@ -12,7 +12,6 @@ using ConstructionBase
 using Bumper
 using Polyester
 
-using Acquisition: AcquisitionResults
 using Unitful: upreferred, Hz, dBHz, ms
 import Base.zero, Base.length, Base.resize!, LinearAlgebra.dot
 
