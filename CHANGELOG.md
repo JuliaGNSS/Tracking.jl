@@ -1,5 +1,12 @@
 # Changelog
 
+# [1.5.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v1.4.0...v1.5.0) (2026-04-30)
+
+
+### Features
+
+* **deps:** support Acquisition v2 ([f58ee8e](https://github.com/JuliaGNSS/Tracking.jl/commit/f58ee8eae23f420dda224a88a96eea1eacdef4c3))
+
 # [1.4.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v1.3.0...v1.4.0) (2026-04-27)
 
 
