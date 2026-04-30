@@ -3,7 +3,7 @@ module SatStateTest
 using Test: @test, @testset, @inferred
 using Unitful: Hz
 using GNSSSignals: GPSL1, get_code_center_frequency_ratio
-using Acquisition: AcquisitionResults
+using Acquisition: Acquisition, AcquisitionResults
 using Tracking:
     SatState,
     get_prn,
@@ -34,7 +34,7 @@ using Tracking:
     @test has_bit_or_secondary_code_been_found(sat_state) == false
     @test length(get_bit_buffer(sat_state)) == 0
 
-    acq = AcquisitionResults(
+    acq_args = (
         gpsl1,
         5,
         5e6Hz,
@@ -47,6 +47,9 @@ using Tracking:
         randn(100, 100),
         -500:100.0:500,
     )
+    acq = pkgversion(Acquisition) >= v"2" ?
+        AcquisitionResults(acq_args..., 1, length(-500:100.0:500)) :
+        AcquisitionResults(acq_args...)
     sat_state = @inferred SatState(acq)
     @test get_prn(sat_state) == 5
     @test get_code_phase(sat_state) == 524.6
