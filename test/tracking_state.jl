@@ -24,7 +24,8 @@ using Tracking:
     DefaultPostCorrFilter,
     MomentsCN0Estimator,
     BitBuffer,
-    NumAnts
+    NumAnts,
+    ConventionalAssistedPLLAndDLL
 
 @testset "Tracking state" begin
     sampling_frequency = 5e6Hz
@@ -45,24 +46,20 @@ using Tracking:
     @test get_cn0_estimator(track_state, 1) isa MomentsCN0Estimator
     @test get_bit_buffer(track_state, 1) isa BitBuffer
 
-    @test track_state.doppler_estimator.states[1][1].init_carrier_doppler == 10.0Hz
-    @test track_state.doppler_estimator.states[1][2].init_carrier_doppler == 20.0Hz
+    @test get_sat_states(track_state)[1].estimator_state.init_carrier_doppler == 10.0Hz
+    @test get_sat_states(track_state)[2].estimator_state.init_carrier_doppler == 20.0Hz
 
-    system_sats_states = (
-        SystemSatsState(
-            gpsl1,
-            [SatState(gpsl1, 1, 10.5, 10.0Hz), SatState(gpsl1, 2, 11.5, 20.0Hz)],
-        ),
+    track_state2 = @inferred TrackState(
+        gpsl1,
+        [SatState(gpsl1, 1, 10.5, 10.0Hz), SatState(gpsl1, 2, 11.5, 20.0Hz)],
     )
 
-    track_state = @inferred TrackState(system_sats_states)
+    @test @inferred(get_system(track_state2)) isa GPSL1
+    @test @inferred(get_sat_state(track_state2, 1)).prn == 1
+    @test @inferred(get_sat_state(track_state2, 2)).prn == 2
 
-    @test @inferred(get_system(track_state)) isa GPSL1
-    @test @inferred(get_sat_state(track_state, 1)).prn == 1
-    @test @inferred(get_sat_state(track_state, 2)).prn == 2
-
-    @test track_state.doppler_estimator.states[1][1].init_carrier_doppler == 10.0Hz
-    @test track_state.doppler_estimator.states[1][2].init_carrier_doppler == 20.0Hz
+    @test get_sat_states(track_state2)[1].estimator_state.init_carrier_doppler == 10.0Hz
+    @test get_sat_states(track_state2)[2].estimator_state.init_carrier_doppler == 20.0Hz
 
     sat_states_num_ants2 = [
         SatState(gpsl1, 1, 10.5, 10.0Hz; num_ants = NumAnts(2)),
@@ -111,12 +108,15 @@ end
     gpsl1 = GPSL1()
     galileo_e1b = GalileoE1B()
 
+    estimator = ConventionalAssistedPLLAndDLL()
     system_sats_states = (
         gps = SystemSatsState(
+            estimator,
             gpsl1,
             [SatState(gpsl1, 1, 10.5, 10.0Hz), SatState(gpsl1, 2, 11.5, 20.0Hz)],
         ),
         gal = SystemSatsState(
+            estimator,
             galileo_e1b,
             [
                 SatState(galileo_e1b, 2, 10.5, 10.0Hz),
@@ -125,7 +125,7 @@ end
         ),
     )
 
-    track_state = @inferred TrackState(system_sats_states)
+    track_state = @inferred TrackState(system_sats_states; doppler_estimator = estimator)
 
     new_track_state = @inferred merge_sats(track_state, 1, SatState(gpsl1, 3, 5.5, 80.0Hz))
 

@@ -208,7 +208,7 @@ function SatState(
     )
 end
 
-function reset_start_sample_and_bit_buffer(sat_state)
+function reset_start_sample_and_bit_buffer(sat_state::SatState)
     empty!(sat_state.filtered_prompts)
     SatState(sat_state; signal_start_sample = 1, bit_buffer = reset(sat_state.bit_buffer))
 end
@@ -216,35 +216,75 @@ end
 """
 $(SIGNATURES)
 
-Holds the state of multiple satellites for a single GNSS system. Contains the
-system definition and a dictionary of satellite states indexed by identifier.
+Wrapper holding a [`SatState`](@ref) together with the per-satellite state used
+by the active doppler estimator. Per-satellite estimator state lives here
+rather than in a parallel dictionary on the estimator, so the two are always
+updated together and traversed in a single `map`.
+
+`E` is the estimator-specific per-satellite state type. Each
+[`AbstractDopplerEstimator`](@ref) provides an
+[`init_estimator_state`](@ref) method that produces an `E` value for a given
+[`SatState`](@ref); the wrapper is built once per satellite at the
+acquisition→tracking handoff and updated in lockstep thereafter.
 """
-struct SystemSatsState{S<:AbstractGNSS,SS<:SatState,I}
+struct TrackedSat{S<:SatState,E}
+    sat_state::S
+    estimator_state::E
+end
+
+get_sat_state(t::TrackedSat) = t.sat_state
+get_estimator_state(t::TrackedSat) = t.estimator_state
+
+function reset_start_sample_and_bit_buffer(t::TrackedSat)
+    TrackedSat(reset_start_sample_and_bit_buffer(t.sat_state), t.estimator_state)
+end
+
+"""
+$(SIGNATURES)
+
+Build the per-satellite state used by `estimator` for `sat_state`. Called once
+per satellite when a new sat enters the track set (see [`merge_sats`](@ref)).
+
+A custom doppler estimator must define this method for its
+[`AbstractDopplerEstimator`](@ref) subtype.
+"""
+function init_estimator_state end
+
+"""
+$(SIGNATURES)
+
+Holds the state of multiple satellites for a single GNSS system. Contains the
+system definition and a dictionary of [`TrackedSat`](@ref) entries indexed by
+identifier.
+"""
+struct SystemSatsState{S<:AbstractGNSS,T<:TrackedSat,I}
     system::S
-    states::Dictionary{I,SS}
+    states::Dictionary{I,T}
 end
 
 """
 Type alias for a tuple or named tuple of `SystemSatsState` objects, representing
 tracking state across multiple GNSS systems.
 """
-const MultipleSystemSatsState{N,I,S,SS} =
-    TupleLike{<:NTuple{N,SystemSatsState{<:S,<:SS,<:I}}}
+const MultipleSystemSatsState{N,I,S,T} =
+    TupleLike{<:NTuple{N,SystemSatsState{<:S,<:T,<:I}}}
 
 """
 $(SIGNATURES)
 
-Merge new satellite states into the existing tracking state. Adds or updates
-satellites in the specified system.
+Merge already-wrapped tracked satellites into the existing tracking state.
+Used internally by [`TrackState`](@ref)'s `merge_sats` after wrapping incoming
+`SatState`s with their estimator state — external callers should prefer the
+`TrackState`-level method.
 """
 function merge_sats(
     multiple_system_sats_state::MultipleSystemSatsState,
     system_idx,
-    new_sat_states::Dictionary,
+    new_tracked_sats::Dictionary{<:Any,<:TrackedSat},
 )
     system_sats_state = get_system_sats_state(multiple_system_sats_state, system_idx)
     @set multiple_system_sats_state[system_idx].states =
-        merge(system_sats_state.states, new_sat_states)
+        merge(system_sats_state.states, new_tracked_sats)
 end
 
 """
@@ -276,6 +316,25 @@ function reset_start_sample_and_bit_buffer(
     end
 end
 
+# In-place variants: walk Vector{TrackedSat} slots and overwrite each entry
+# with the reset value. The vector itself, the Dictionary, and the
+# SystemSatsState/MultipleSystemSatsState wrappers are all reused.
+function reset_start_sample_and_bit_buffer!(t::TrackedSat)
+    TrackedSat(reset_start_sample_and_bit_buffer(t.sat_state), t.estimator_state)
+end
+
+function reset_start_sample_and_bit_buffer!(
+    multiple_system_sats_state::MultipleSystemSatsState,
+)
+    for system_sats_state in multiple_system_sats_state
+        vals = system_sats_state.states.values
+        @inbounds for i in eachindex(vals)
+            vals[i] = reset_start_sample_and_bit_buffer!(vals[i])
+        end
+    end
+    return multiple_system_sats_state
+end
+
 function to_dictionary(sat_states::Dictionary{I,<:SatState}) where {I}
     sat_states
 end
@@ -288,15 +347,74 @@ function to_dictionary(sat_state::SatState)
     dictionary((get_prn(sat_state) => sat_state,))
 end
 
-function SystemSatsState(system::AbstractGNSS, states;)
-    SystemSatsState(system, to_dictionary(states))
+function to_dictionary(tracked_sats::Dictionary{I,<:TrackedSat}) where {I}
+    tracked_sats
+end
+
+function to_dictionary(tracked_sats::Vector{<:TrackedSat})
+    Dictionary(map(t -> get_prn(t.sat_state), tracked_sats), tracked_sats)
+end
+
+function to_dictionary(t::TrackedSat)
+    dictionary((get_prn(t.sat_state) => t,))
+end
+
+"""
+$(SIGNATURES)
+
+Wrap each `SatState` in a [`TrackedSat`](@ref) by pairing it with the
+per-satellite estimator state produced by [`init_estimator_state`](@ref).
+"""
+function wrap_sats(estimator, sat_states::Dictionary{I,<:SatState}) where {I}
+    map(s -> TrackedSat(s, init_estimator_state(estimator, s)), sat_states)
+end
+
+function wrap_sats(estimator, sat_states::Vector{<:SatState})
+    wrap_sats(estimator, to_dictionary(sat_states))
+end
+
+function wrap_sats(estimator, sat_state::SatState)
+    wrap_sats(estimator, to_dictionary(sat_state))
+end
+
+"""
+$(SIGNATURES)
+
+Build a `SystemSatsState` from already-wrapped tracked sats. Accepts a
+`Vector{TrackedSat}`, a `Dictionary{I,TrackedSat}`, or a single `TrackedSat`.
+
+To build from raw [`SatState`](@ref) input, supply the doppler estimator —
+the convenience method [`SystemSatsState`](@ref)`(estimator, system, sats)`
+wraps each sat via [`init_estimator_state`](@ref).
+"""
+function SystemSatsState(
+    system::AbstractGNSS,
+    tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}},
+)
+    SystemSatsState(system, to_dictionary(tracked_sats))
 end
 
 function SystemSatsState(
     system_sats_state::SystemSatsState,
-    states::Dictionary{I,<:SatState};
+    states::Dictionary{I,<:TrackedSat},
 ) where {I}
     SystemSatsState(system_sats_state.system, states)
+end
+
+"""
+$(SIGNATURES)
+
+Convenience constructor that wraps each `SatState` with its initial estimator
+state via [`init_estimator_state`](@ref) before building the
+`SystemSatsState`. Useful when assembling multi-system tracking state by
+hand.
+"""
+function SystemSatsState(
+    estimator::AbstractDopplerEstimator,
+    system::AbstractGNSS,
+    sat_states::Union{SatState,Vector{<:SatState},Dictionary{<:Any,<:SatState}},
+)
+    SystemSatsState(system, wrap_sats(estimator, sat_states))
 end
 
 """
@@ -310,10 +428,20 @@ get_states(sss::SystemSatsState) = sss.states
 """
 $(SIGNATURES)
 
-Get the satellite state for a specific satellite identifier.
+Get the satellite state for a specific satellite identifier. Unwraps the
+internal [`TrackedSat`](@ref) — callers see the [`SatState`](@ref) directly.
 """
-get_sat_state(sss::SystemSatsState, identifier) = sss.states[identifier]
-get_sat_state(sss::SystemSatsState) = only(sss.states)
+get_sat_state(sss::SystemSatsState, identifier) = sss.states[identifier].sat_state
+get_sat_state(sss::SystemSatsState) = only(sss.states).sat_state
+
+"""
+$(SIGNATURES)
+
+Get the per-satellite estimator state for a specific satellite identifier.
+"""
+get_estimator_state(sss::SystemSatsState, identifier) =
+    sss.states[identifier].estimator_state
+get_estimator_state(sss::SystemSatsState) = only(sss.states).estimator_state
 
 function estimate_cn0(sss::SystemSatsState, id...)
     estimate_cn0(sss.system, get_sat_state(sss, id...))

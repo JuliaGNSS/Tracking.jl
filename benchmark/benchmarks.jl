@@ -82,11 +82,10 @@ function bench_downconvert_and_correlate(;
     num_ants = 1,
 )
     downconvert_and_correlator = CPUDownconvertAndCorrelator(Val(sampling_frequency))
-    system_sats_state = SystemSatsState(
+    track_state = TrackState(
         system,
         [SatState(system, 1, 10.5, 1000.0Hz; num_ants = NumAnts(num_ants))],
     )
-    track_state = TrackState((system_sats_state,))
     signal =
         num_ants == 1 ? rand(Complex{signal_type}, num_samples) :
         rand(Complex{signal_type}, num_samples, num_ants)
@@ -169,6 +168,30 @@ function bench_track(;
 end
 SUITE["track"]["Float32"] = bench_track()
 
+# In-place track! (only on branches that define it). Mirrors bench_track so
+# the comparison report shows them side by side.
+function bench_track_inplace(;
+    signal_type = Float32,
+    num_samples = 2000,
+    sampling_frequency = 5e6Hz,
+)
+    system = GPSL1()
+    downconvert_and_correlator = CPUDownconvertAndCorrelator(Val(sampling_frequency))
+    track_state = TrackState(system, [SatState(system, 1, 0.0, 1000Hz)])
+    # Pre-grow filtered_prompts so steady-state push! is allocation-free.
+    isdefined(Tracking, :prewarm!) && Tracking.prewarm!(track_state, 8)
+    signal = rand(Complex{signal_type}, num_samples)
+    @benchmarkable Tracking.track!(
+        $signal,
+        $track_state,
+        $sampling_frequency;
+        downconvert_and_correlator = $downconvert_and_correlator,
+    )
+end
+if isdefined(Tracking, :track!)
+    SUITE["track!"]["Float32"] = bench_track_inplace()
+end
+
 # Fused kernel microbenchmarks (only available on branches with the fused kernel)
 if isdefined(Tracking, :downconvert_and_correlate_fused!)
     SUITE["fused kernel"]["1-ant static taps"] = bench_fused_kernel(; shifts = :static)
@@ -180,6 +203,25 @@ if isdefined(Tracking, :downconvert_and_correlate_fused!)
 end
 
 # ── Multi-satellite benchmarks (threaded if available, CPU fallback) ──────
+
+# Branch-portable SystemSatsState construction. Master accepts a raw
+# Vector{SatState}; the wrapper branch needs an estimator to wrap each sat
+# into a TrackedSat first.
+function _build_system_sats_state(sys, sats::Vector{<:SatState})
+    if isdefined(Tracking, :TrackedSat)
+        return SystemSatsState(Tracking.ConventionalAssistedPLLAndDLL(), sys, sats)
+    else
+        return SystemSatsState(sys, sats)
+    end
+end
+
+# Branch-portable "set bit_buffer.found = true" on whatever the dict holds.
+# Master holds SatState directly; the wrapper branch holds TrackedSat.
+_with_found_bit_buffer(s::SatState, bb) = SatState(s; bit_buffer = bb)
+if isdefined(Tracking, :TrackedSat)
+    _with_found_bit_buffer(t::Tracking.TrackedSat, bb) =
+        Tracking.TrackedSat(SatState(t.sat_state; bit_buffer = bb), t.estimator_state)
+end
 
 function _make_multi_sat_state(;
     systems,
@@ -195,7 +237,7 @@ function _make_multi_sat_state(;
         pm = sys isa GPSL1 ? 32 : prn_max
         cd = sys isa GPSL1 ? 1000.0 : code_dop
         sats = [SatState(sys, mod1(i, pm), 10.5 + i * 0.1, (cd + i * 10) * Hz) for i = 1:ns]
-        push!(all_sss, SystemSatsState(sys, sats))
+        push!(all_sss, _build_system_sats_state(sys, sats))
         total_sats += ns
     end
     TrackState(Tuple(all_sss)), rand(ComplexF32, nsamp), total_sats
@@ -238,9 +280,7 @@ function bench_track_steady_state(;
     # (random signal data never triggers bit detection on its own)
     found_bb = BitBuffer(UInt128(0), 20, true, UInt128(0), 0, complex(0.0, 0.0), 0)
     new_mss = map(ts.multiple_system_sats_state) do sss
-        new_sats = map(sss.states) do ss
-            SatState(ss; bit_buffer = found_bb)
-        end
+        new_sats = map(s -> _with_found_bit_buffer(s, found_bb), sss.states)
         SystemSatsState(sss, new_sats)
     end
     ts = TrackState(ts; multiple_system_sats_state = new_mss)
@@ -250,6 +290,39 @@ end
 SUITE["track steady-state"]["L1 8sat/5K"] = bench_track_steady_state(;
     systems = (GPSL1(),), nsats_list = [8], sfreq = 5e6Hz, nsamp = 5000,
 )
+
+# In-place track! steady-state (only on branches that define it). Reuses the
+# steady-state preparation done by `bench_track_steady_state`'s setup
+# (BitBuffer.found = true) by simply re-running the same setup pipeline,
+# except it returns a `track!` benchmarkable instead of `track`.
+function bench_track_inplace_steady_state(;
+    systems,
+    nsats_list,
+    sfreq,
+    nsamp,
+    prn_max = 32,
+    code_dop = 1000.0,
+)
+    ts, signal, _ =
+        _make_multi_sat_state(; systems, nsats_list, nsamp, prn_max, code_dop)
+    dc = CPUDownconvertAndCorrelator(Val(sfreq))
+    found_bb = BitBuffer(UInt128(0), 20, true, UInt128(0), 0, complex(0.0, 0.0), 0)
+    new_mss = map(ts.multiple_system_sats_state) do sss
+        new_sats = map(s -> _with_found_bit_buffer(s, found_bb), sss.states)
+        SystemSatsState(sss, new_sats)
+    end
+    ts = TrackState(ts; multiple_system_sats_state = new_mss)
+    isdefined(Tracking, :prewarm!) && Tracking.prewarm!(ts, 8)
+    @benchmarkable Tracking.track!(
+        $signal, $ts, $sfreq; downconvert_and_correlator = $dc,
+    )
+end
+
+if isdefined(Tracking, :track!)
+    SUITE["track! steady-state"]["L1 8sat/5K"] = bench_track_inplace_steady_state(;
+        systems = (GPSL1(),), nsats_list = [8], sfreq = 5e6Hz, nsamp = 5000,
+    )
+end
 
 let gpsl1 = GPSL1(), gal = GalileoE1B()
     SUITE["multi-sat"]["L1 8sat/5K"] = bench_multi_sat(

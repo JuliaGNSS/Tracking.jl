@@ -35,15 +35,9 @@ end
     num_samples_signal = 5000
     intermediate_frequency = 0.0Hz
 
-    system_sats_state = SystemSatsState(
-        gpsl1,
-        [SatState(gpsl1, 1, code_phase, 1000.0Hz), SatState(gpsl1, 2, 11.0, 500.0Hz)];
-    )
-    multiple_system_sats_state = (system_sats_state,)
-
+    sats = [SatState(gpsl1, 1, code_phase, 1000.0Hz), SatState(gpsl1, 2, 11.0, 500.0Hz)]
     downconvert_and_correlator = DC(Val(sampling_frequency))
-
-    track_state = TrackState(multiple_system_sats_state)
+    track_state = TrackState(gpsl1, sats)
 
     preferred_num_code_blocks_to_integrate = 1
 
@@ -105,8 +99,7 @@ end
         SatState(gpsl1, 1, code_phase, 1000.0Hz);
         signal_start_sample = num_samples_signal + 1,
     )
-    sss_skip = SystemSatsState(gpsl1, [sat_past_end])
-    ts_skip = TrackState((sss_skip,))
+    ts_skip = TrackState(gpsl1, [sat_past_end])
     downconvert_and_correlator = DC(Val(sampling_frequency))
     result_skip = downconvert_and_correlate(
         downconvert_and_correlator, signal, ts_skip, 1, sampling_frequency, intermediate_frequency,
