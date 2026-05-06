@@ -1,26 +1,4 @@
 """
-    map_unzip(f, d1::Dictionary, d2::Dictionary) -> (Dictionary, Dictionary)
-
-Like `map(f, d1, d2)` but `f` returns a `Tuple{A,B}`, and the result is
-split into two Dictionaries sharing the same keys. Avoids creating an
-intermediate Dictionary of tuples.
-"""
-function map_unzip(f, d1::Dictionary{K}, d2::Dictionary{K}) where {K}
-    n = length(d1)
-    a1, b1 = f(d1.values[1], d2.values[1])
-    avec = Vector{typeof(a1)}(undef, n)
-    bvec = Vector{typeof(b1)}(undef, n)
-    avec[1] = a1
-    bvec[1] = b1
-    for i in 2:n
-        a, b = f(d1.values[i], d2.values[i])
-        avec[i] = a
-        bvec[i] = b
-    end
-    Dictionary(keys(d1), avec), Dictionary(keys(d1), bvec)
-end
-
-"""
 Per-satellite state for the conventional PLL and DLL Doppler estimator.
 Holds initial Doppler values and loop filter states.
 """
@@ -76,76 +54,29 @@ end
 """
 $(SIGNATURES)
 
-Conventional Phase-Locked Loop (PLL) and Delay-Locked Loop (DLL) Doppler estimator.
-Uses configurable loop filters for carrier and code tracking with adjustable
-bandwidths.
+Conventional Phase-Locked Loop (PLL) and Delay-Locked Loop (DLL) Doppler
+estimator. Configuration-only — per-satellite state lives in each
+[`TrackedSat`](@ref) wrapper, produced via [`init_estimator_state`](@ref).
+
+Type parameters `CA` and `CO` select the carrier and code loop filter types;
+the bandwidth fields configure the default loop bandwidths used when seeding
+new satellites.
 """
-struct ConventionalPLLAndDLL{N,I,CA<:AbstractLoopFilter,CO<:AbstractLoopFilter} <:
-       AbstractDopplerEstimator{N,I}
-    states::TupleLike{<:NTuple{N,Dictionary{I,SatConventionalPLLAndDLL{CA,CO}}}}
+struct ConventionalPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter} <:
+       AbstractDopplerEstimator
     carrier_loop_filter_bandwidth::typeof(1.0Hz)
     code_loop_filter_bandwidth::typeof(1.0Hz)
-
-    # Inner constructor that properly binds type parameters
-    function ConventionalPLLAndDLL{N,I,CA,CO}(
-        states::TupleLike{<:NTuple{N,Dictionary{I,SatConventionalPLLAndDLL{CA,CO}}}},
-        carrier_loop_filter_bandwidth::typeof(1.0Hz),
-        code_loop_filter_bandwidth::typeof(1.0Hz),
-    ) where {N,I,CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
-        new{N,I,CA,CO}(states, carrier_loop_filter_bandwidth, code_loop_filter_bandwidth)
-    end
-end
-
-# Outer constructor for ConstructionBase.setproperties compatibility (used by @set macro)
-# This uses length(states) to determine N instead of exposing it in the where clause
-function ConventionalPLLAndDLL(
-    states::TupleLike{T},
-    carrier_loop_filter_bandwidth::typeof(1.0Hz),
-    code_loop_filter_bandwidth::typeof(1.0Hz),
-) where {I,CA<:AbstractLoopFilter,CO<:AbstractLoopFilter,T<:Tuple{Dictionary{I,SatConventionalPLLAndDLL{CA,CO}},Vararg{Dictionary{I,SatConventionalPLLAndDLL{CA,CO}}}}}
-    N = length(states)
-    ConventionalPLLAndDLL{N,I,CA,CO}(
-        states, carrier_loop_filter_bandwidth, code_loop_filter_bandwidth
-    )
 end
 
 function ConventionalPLLAndDLL(
-    states::TupleLike{<:Tuple{Dictionary{I,SatConventionalPLLAndDLL{CA,CO}},Vararg{Dictionary{I,SatConventionalPLLAndDLL{CA,CO}}}}};
-    carrier_loop_filter_bandwidth::typeof(1.0Hz) = 18.0Hz,
-    code_loop_filter_bandwidth::typeof(1.0Hz) = 1.0Hz,
-) where {I,CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
-    N = length(states)
-    ConventionalPLLAndDLL{N,I,CA,CO}(
-        states, carrier_loop_filter_bandwidth, code_loop_filter_bandwidth
-    )
-end
-
-function ConventionalPLLAndDLL(
-    multiple_system_sats_state::TupleLike{<:Tuple{SystemSatsState,Vararg{SystemSatsState}}},
     ::Type{CA} = ThirdOrderBilinearLF,
     ::Type{CO} = SecondOrderBilinearLF;
     carrier_loop_filter_bandwidth::typeof(1.0Hz) = 18.0Hz,
     code_loop_filter_bandwidth::typeof(1.0Hz) = 1.0Hz,
 ) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
-    states = map(multiple_system_sats_state) do system_sats_state
-        map(system_sats_state.states) do sat_state
-            SatConventionalPLLAndDLL(
-                sat_state, CA(), CO();
-                carrier_loop_filter_bandwidth, code_loop_filter_bandwidth,
-            )
-        end
-    end
-    ConventionalPLLAndDLL(states; carrier_loop_filter_bandwidth, code_loop_filter_bandwidth)
-end
-
-function ConventionalPLLAndDLL(
-    conventional_pll_and_dll::ConventionalPLLAndDLL{N,I,CA,CO},
-    states::MultipleSystemSatType{N,I,SatConventionalPLLAndDLL{CA,CO}},
-) where {N,I,CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
-    ConventionalPLLAndDLL{N,I,CA,CO}(
-        states,
-        conventional_pll_and_dll.carrier_loop_filter_bandwidth,
-        conventional_pll_and_dll.code_loop_filter_bandwidth,
+    ConventionalPLLAndDLL{CA,CO}(
+        carrier_loop_filter_bandwidth,
+        code_loop_filter_bandwidth,
     )
 end
 
@@ -158,13 +89,11 @@ for the carrier loop filter which combines PLL and FLL discriminators for
 improved tracking under high dynamics.
 """
 function ConventionalAssistedPLLAndDLL(
-    multiple_system_sats_state::MultipleSystemSatsState,
     ::Type{CO} = SecondOrderBilinearLF;
     carrier_loop_filter_bandwidth::typeof(1.0Hz) = 18.0Hz,
     code_loop_filter_bandwidth::typeof(1.0Hz) = 1.0Hz,
 ) where {CO<:AbstractLoopFilter}
     ConventionalPLLAndDLL(
-        multiple_system_sats_state,
         ThirdOrderAssistedBilinearLF,
         CO;
         carrier_loop_filter_bandwidth,
@@ -172,54 +101,40 @@ function ConventionalAssistedPLLAndDLL(
     )
 end
 
-# Be careful when calling this.
-# It might lead to types that are inferred at runtime?!
-# Tested with 1.11.6
+# Kwarg-update constructor for tweaking bandwidths in place.
 function ConventionalPLLAndDLL(
-    conventional_pll_and_dll::ConventionalPLLAndDLL{N,I,CA,CO};
-    states::Maybe{MultipleSystemSatType{N,I,SatConventionalPLLAndDLL{CA,CO}}} = nothing,
+    pll_and_dll::ConventionalPLLAndDLL{CA,CO};
     carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
     code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
-) where {N,I,CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
-    ConventionalPLLAndDLL{N,I,CA,CO}(
-        isnothing(states) ? conventional_pll_and_dll.states : states,
+) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
+    ConventionalPLLAndDLL{CA,CO}(
         isnothing(carrier_loop_filter_bandwidth) ?
-        conventional_pll_and_dll.carrier_loop_filter_bandwidth :
-        carrier_loop_filter_bandwidth,
+        pll_and_dll.carrier_loop_filter_bandwidth : carrier_loop_filter_bandwidth,
         isnothing(code_loop_filter_bandwidth) ?
-        conventional_pll_and_dll.code_loop_filter_bandwidth : code_loop_filter_bandwidth,
+        pll_and_dll.code_loop_filter_bandwidth : code_loop_filter_bandwidth,
     )
 end
 
-function merge_sats(
-    pll_and_dll::ConventionalPLLAndDLL{N,I,CA,CO},
-    system_idx,
-    sats_state::Dictionary{I,<:SatState},
-) where {N,I,CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
-    new_sats_state = map(sats_state) do sat_state
-        SatConventionalPLLAndDLL{CA,CO}(
-            sat_state.carrier_doppler,
-            sat_state.code_doppler,
-            constructorof(CA)(),
-            constructorof(CO)(),
-            pll_and_dll.carrier_loop_filter_bandwidth,
-            pll_and_dll.code_loop_filter_bandwidth,
-        )
-    end
-    @set pll_and_dll.states[system_idx] =
-        merge(pll_and_dll.states[system_idx], new_sats_state)
-end
+"""
+$(SIGNATURES)
 
-function filter_out_sats(
-    pll_and_dll::ConventionalPLLAndDLL{N,I,CA,CO},
-    system_idx::Union{Symbol,Integer},
-    identifiers,
-) where {N,I,CA,CO}
-    filtered_pll_and_dlls = map(
-        last,
-        filter(((id,),) -> !in(id, identifiers), pairs(pll_and_dll.states[system_idx])),
+Build the per-satellite estimator state stored in a [`TrackedSat`](@ref) for a
+satellite tracked under [`ConventionalPLLAndDLL`](@ref).
+"""
+function init_estimator_state(
+    estimator::ConventionalPLLAndDLL{CA,CO},
+    sat_state::SatState,
+) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
+    carrier_loop_filter = constructorof(CA)()
+    code_loop_filter = constructorof(CO)()
+    SatConventionalPLLAndDLL(
+        sat_state.carrier_doppler,
+        sat_state.code_doppler,
+        carrier_loop_filter,
+        code_loop_filter,
+        estimator.carrier_loop_filter_bandwidth,
+        estimator.code_loop_filter_bandwidth,
     )
-    @set pll_and_dll.states[system_idx] = filtered_pll_and_dlls
 end
 
 """
@@ -241,6 +156,83 @@ function aid_dopplers(
     init_carrier_doppler + carrier_doppler, init_code_doppler + code_doppler
 end
 
+# Per-sat update for the conventional PLL/DLL estimator. Pure: takes a
+# TrackedSat and returns the updated TrackedSat. Shared by the immutable
+# `estimate_dopplers_and_filter_prompt` and the in-place
+# `estimate_dopplers_and_filter_prompt!` so the two cannot drift.
+function _update_tracked_sat_doppler(
+    tracked_sat::TrackedSat,
+    system,
+    preferred_num_code_blocks_to_integrate,
+    sampling_frequency,
+)
+    sat_state = tracked_sat.sat_state
+    pll_and_dll_state = tracked_sat.estimator_state
+    if !sat_state.is_integration_completed || sat_state.integrated_samples == 0
+        return tracked_sat
+    end
+    integrated_code_blocks = calc_num_code_blocks_to_integrate(
+        system,
+        preferred_num_code_blocks_to_integrate,
+        has_bit_or_secondary_code_been_found(sat_state.bit_buffer),
+    )
+
+    normalized_correlator = normalize(sat_state.correlator, sat_state.integrated_samples)
+    post_corr_filter =
+        update(sat_state.post_corr_filter, get_prompt(normalized_correlator))
+    filtered_correlator = apply(post_corr_filter, normalized_correlator)
+    prompt = get_prompt(filtered_correlator)
+    push!(sat_state.filtered_prompts, prompt)
+    cn0_estimator = update(get_cn0_estimator(sat_state), prompt)
+    bit_buffer =
+        buffer(system, sat_state.bit_buffer, integrated_code_blocks, prompt)
+    integration_time = sat_state.integrated_samples / sampling_frequency
+
+    carrier_freq_update, carrier_loop_filter = calculate_carrier_frequency_update(
+        system,
+        pll_and_dll_state.carrier_loop_filter,
+        filtered_correlator,
+        get_last_fully_integrated_filtered_prompt(sat_state),
+        integration_time,
+        pll_and_dll_state.carrier_loop_filter_bandwidth,
+    )
+    code_freq_update, code_loop_filter = calculate_code_frequency_update(
+        system,
+        pll_and_dll_state.code_loop_filter,
+        filtered_correlator,
+        sat_state.code_doppler,
+        sampling_frequency,
+        integration_time,
+        pll_and_dll_state.code_loop_filter_bandwidth,
+    )
+    carrier_doppler, code_doppler = aid_dopplers(
+        system,
+        pll_and_dll_state.init_carrier_doppler,
+        pll_and_dll_state.init_code_doppler,
+        carrier_freq_update,
+        code_freq_update,
+    )
+    new_estimator_state = SatConventionalPLLAndDLL(
+        pll_and_dll_state;
+        carrier_loop_filter,
+        code_loop_filter,
+    )
+    new_sat_state = SatState(
+        sat_state;
+        carrier_doppler,
+        code_doppler,
+        integrated_samples = 0,
+        is_integration_completed = false,
+        last_fully_integrated_filtered_prompt = prompt,
+        bit_buffer,
+        cn0_estimator,
+        post_corr_filter,
+        correlator = zero(sat_state.correlator),
+        last_fully_integrated_correlator = sat_state.correlator,
+    )
+    TrackedSat(new_sat_state, new_estimator_state)
+end
+
 """
 $(SIGNATURES)
 
@@ -249,7 +241,7 @@ the end of the code or multiples of that. This function uses the
 conventional PLL and DLL implementation to estimate Dopplers for
 carrier and code. Those Doppler estimations will be used to create the next
 replicas to downconvert and decode the incoming signal. In addition to the
-Doppler estimation it will also filter the prompt with the configured 
+Doppler estimation it will also filter the prompt with the configured
 post correlation filter.
 In the case that the that the correlation hasn't reached the end, e.g. in the case
 the incoming signal did not provide enough samples, it will return struct with
@@ -260,96 +252,50 @@ function estimate_dopplers_and_filter_prompt(
     preferred_num_code_blocks_to_integrate,
     sampling_frequency,
 )
-    new_multiple_system_states = map(
-        track_state.multiple_system_sats_state,
-        track_state.doppler_estimator.states,
-    ) do system_sats_state, pll_and_dll_states
-        new_estimators, new_sat_states = map_unzip(
-            system_sats_state.states,
-            pll_and_dll_states,
-        ) do sat_state, pll_and_dll_state
-            if !sat_state.is_integration_completed || sat_state.integrated_samples == 0
-                return pll_and_dll_state, sat_state
-            end
-            integrated_code_blocks = calc_num_code_blocks_to_integrate(
-                system_sats_state.system,
-                preferred_num_code_blocks_to_integrate,
-                has_bit_or_secondary_code_been_found(sat_state.bit_buffer),
-            )
-
-            normalized_correlator =
-                normalize(sat_state.correlator, sat_state.integrated_samples)
-            post_corr_filter = update(
-                sat_state.post_corr_filter,
-                get_prompt(normalized_correlator),
-            )
-            filtered_correlator = apply(post_corr_filter, normalized_correlator)
-            prompt = get_prompt(filtered_correlator)
-            push!(sat_state.filtered_prompts, prompt)
-            cn0_estimator = update(get_cn0_estimator(sat_state), prompt)
-            bit_buffer = buffer(
-                system_sats_state.system,
-                sat_state.bit_buffer,
-                integrated_code_blocks,
-                prompt,
-            )
-            integration_time = sat_state.integrated_samples / sampling_frequency
-
-            carrier_freq_update, carrier_loop_filter =
-                calculate_carrier_frequency_update(
+    new_multiple_system_sats_state =
+        map(track_state.multiple_system_sats_state) do system_sats_state
+            new_tracked_sats = map(system_sats_state.states) do tracked_sat
+                _update_tracked_sat_doppler(
+                    tracked_sat,
                     system_sats_state.system,
-                    pll_and_dll_state.carrier_loop_filter,
-                    filtered_correlator,
-                    get_last_fully_integrated_filtered_prompt(sat_state),
-                    integration_time,
-                    pll_and_dll_state.carrier_loop_filter_bandwidth,
+                    preferred_num_code_blocks_to_integrate,
+                    sampling_frequency,
                 )
-            code_freq_update, code_loop_filter = calculate_code_frequency_update(
-                system_sats_state.system,
-                pll_and_dll_state.code_loop_filter,
-                filtered_correlator,
-                sat_state.code_doppler,
+            end
+            SystemSatsState(system_sats_state, new_tracked_sats)
+        end
+    return TrackState(
+        track_state;
+        multiple_system_sats_state = new_multiple_system_sats_state,
+    )
+end
+
+"""
+$(SIGNATURES)
+
+In-place version of [`estimate_dopplers_and_filter_prompt`](@ref). Walks each
+system's `Vector{TrackedSat}` backing storage and overwrites slots with the
+new immutable `TrackedSat` value. Returns the same `track_state` object —
+allocation-free in steady state when [`track!`](@ref)'s preconditions are met.
+"""
+function estimate_dopplers_and_filter_prompt!(
+    track_state::TrackState{<:MultipleSystemSatsState,<:ConventionalPLLAndDLL},
+    preferred_num_code_blocks_to_integrate,
+    sampling_frequency,
+)
+    for system_sats_state in track_state.multiple_system_sats_state
+        system = system_sats_state.system
+        vals = system_sats_state.states.values
+        @inbounds for i in eachindex(vals)
+            vals[i] = _update_tracked_sat_doppler(
+                vals[i],
+                system,
+                preferred_num_code_blocks_to_integrate,
                 sampling_frequency,
-                integration_time,
-                pll_and_dll_state.code_loop_filter_bandwidth,
-            )
-            carrier_doppler, code_doppler = aid_dopplers(
-                system_sats_state.system,
-                pll_and_dll_state.init_carrier_doppler,
-                pll_and_dll_state.init_code_doppler,
-                carrier_freq_update,
-                code_freq_update,
-            )
-            doppler_estimator = SatConventionalPLLAndDLL(
-                pll_and_dll_state;
-                carrier_loop_filter,
-                code_loop_filter,
-            )
-            return doppler_estimator, SatState(
-                sat_state;
-                carrier_doppler,
-                code_doppler,
-                integrated_samples = 0,
-                is_integration_completed = false,
-                last_fully_integrated_filtered_prompt = prompt,
-                bit_buffer,
-                cn0_estimator,
-                post_corr_filter,
-                correlator = zero(sat_state.correlator),
-                last_fully_integrated_correlator = sat_state.correlator,
             )
         end
-
-        return (
-            estimators = new_estimators,
-            states = SystemSatsState(system_sats_state, new_sat_states),
-        )
     end
-    new_doppler_estimators = map(x -> x.estimators, new_multiple_system_states)
-    new_doppler_estimator =
-        ConventionalPLLAndDLL(track_state.doppler_estimator, new_doppler_estimators)
-    new_multiple_system_sats_state = map(x -> x.states, new_multiple_system_states)
-    return TrackState(track_state, new_multiple_system_sats_state, new_doppler_estimator)
+    return track_state
 end
 
 function calculate_carrier_frequency_update(

@@ -11,6 +11,8 @@ using Tracking:
     SatConventionalPLLAndDLL,
     EarlyPromptLateCorrelator,
     SatState,
+    TrackedSat,
+    init_estimator_state,
     SystemSatsState,
     ConventionalPLLAndDLL,
     TrackState,
@@ -20,9 +22,10 @@ using Tracking:
     get_last_fully_integrated_filtered_prompt,
     get_filtered_prompts,
     get_sat_state,
+    get_sat_states,
     update_accumulator,
     get_default_correlator,
-    get_sat_state,
+    merge_sats,
     merge_sats
 
 @testset "Doppler aiding" begin
@@ -95,9 +98,7 @@ end
 
     sat_state = SatState(gpsl1, prn, code_phase, carrier_doppler)
 
-    system_sats_state = (SystemSatsState(gpsl1, sat_state),)
-
-    doppler_estimator = ConventionalPLLAndDLL(system_sats_state)
+    doppler_estimator = ConventionalPLLAndDLL()
 
     # Number of samples too small to generate a new estimate for phases and dopplers
     num_samples = 2000
@@ -184,28 +185,24 @@ end
         integrated_samples = num_samples,
         correlator,
     )
-    system_sats_state = (SystemSatsState(gpsl1, [sat1, sat2]),)
-
-    # Build a doppler estimator, then bump sat2's bandwidths via the
-    # update-from-existing constructor.
-    base_estimator = ConventionalPLLAndDLL(system_sats_state)
-    per_sat_states = only(base_estimator.states)
-    sat2_state_wide = SatConventionalPLLAndDLL(
-        per_sat_states[2];
+    # Build the doppler estimator (config only) and wrap each sat with its
+    # initial estimator state. Bump sat2's bandwidths by replacing its
+    # estimator state with a custom-configured SatConventionalPLLAndDLL.
+    doppler_estimator = ConventionalPLLAndDLL()
+    sat1_de = init_estimator_state(doppler_estimator, sat1)
+    sat2_de = SatConventionalPLLAndDLL(
+        init_estimator_state(doppler_estimator, sat2);
         carrier_loop_filter_bandwidth = 36.0Hz,
         code_loop_filter_bandwidth = 2.0Hz,
     )
-    new_sat_states = (Dictionary(
-        [1, 2], [per_sat_states[1], sat2_state_wide],
-    ),)
-    doppler_estimator = ConventionalPLLAndDLL(base_estimator, new_sat_states)
+    tracked = [TrackedSat(sat1, sat1_de), TrackedSat(sat2, sat2_de)]
 
-    @test doppler_estimator.states[1][1].carrier_loop_filter_bandwidth == 18.0Hz
-    @test doppler_estimator.states[1][2].carrier_loop_filter_bandwidth == 36.0Hz
-    @test doppler_estimator.states[1][2].code_loop_filter_bandwidth == 2.0Hz
+    @test sat1_de.carrier_loop_filter_bandwidth == 18.0Hz
+    @test sat2_de.carrier_loop_filter_bandwidth == 36.0Hz
+    @test sat2_de.code_loop_filter_bandwidth == 2.0Hz
 
     track_state = TrackState(
-        gpsl1, [sat1, sat2]; doppler_estimator,
+        SystemSatsState(gpsl1, tracked); doppler_estimator,
     )
     new_track_state = @inferred estimate_dopplers_and_filter_prompt(
         track_state,
@@ -225,35 +222,33 @@ end
 @testset "Bandwidths propagate through ConventionalPLLAndDLL constructor" begin
     gpsl1 = GPSL1()
     sat_state = SatState(gpsl1, 1, 0.5, 100.0Hz)
-    system_sats_state = (SystemSatsState(gpsl1, sat_state),)
-
-    estimator = ConventionalPLLAndDLL(
-        system_sats_state;
+    estimator = ConventionalPLLAndDLL(;
         carrier_loop_filter_bandwidth = 22.0Hz,
         code_loop_filter_bandwidth = 1.5Hz,
     )
     @test estimator.carrier_loop_filter_bandwidth == 22.0Hz
     @test estimator.code_loop_filter_bandwidth == 1.5Hz
-    # Per-sat entries inherit the estimator-level bandwidths.
-    @test only(estimator.states[1]).carrier_loop_filter_bandwidth == 22.0Hz
-    @test only(estimator.states[1]).code_loop_filter_bandwidth == 1.5Hz
+    # init_estimator_state seeds each sat with the configured bandwidths.
+    de_state = init_estimator_state(estimator, sat_state)
+    @test de_state.carrier_loop_filter_bandwidth == 22.0Hz
+    @test de_state.code_loop_filter_bandwidth == 1.5Hz
 end
 
-@testset "merge_sats propagates bandwidths to new sats" begin
+@testset "merge_sats propagates bandwidths to new sats via init_estimator_state" begin
     gpsl1 = GPSL1()
     sat1 = SatState(gpsl1, 1, 0.5, 100.0Hz)
-    system_sats_state = (SystemSatsState(gpsl1, sat1),)
-    estimator = ConventionalPLLAndDLL(
-        system_sats_state;
+    estimator = ConventionalPLLAndDLL(;
         carrier_loop_filter_bandwidth = 22.0Hz,
         code_loop_filter_bandwidth = 1.5Hz,
     )
+    track_state = TrackState(gpsl1, sat1; doppler_estimator = estimator)
 
     sat2 = SatState(gpsl1, 2, 0.25, 200.0Hz)
-    merged = merge_sats(estimator, 1, Dictionary([2], [sat2]))
+    merged = merge_sats(track_state, sat2)
 
-    @test merged.states[1][2].carrier_loop_filter_bandwidth == 22.0Hz
-    @test merged.states[1][2].code_loop_filter_bandwidth == 1.5Hz
+    de_state = get_sat_states(merged)[2].estimator_state
+    @test de_state.carrier_loop_filter_bandwidth == 22.0Hz
+    @test de_state.code_loop_filter_bandwidth == 1.5Hz
 end
 
 end

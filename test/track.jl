@@ -145,13 +145,9 @@ end
 
     function test_convergence(carrier_error, use_assisted)
         sat_states = [SatState(gpsl1, 1, start_code_phase, carrier_doppler + carrier_error)]
-        system_sats_state = (SystemSatsState(gpsl1, sat_states),)
-        doppler_estimator = if use_assisted
-            ConventionalAssistedPLLAndDLL(system_sats_state)
-        else
-            ConventionalPLLAndDLL(system_sats_state)
-        end
-        track_state = TrackState(system_sats_state; doppler_estimator)
+        doppler_estimator = use_assisted ? ConventionalAssistedPLLAndDLL() :
+                                           ConventionalPLLAndDLL()
+        track_state = TrackState(gpsl1, sat_states; doppler_estimator)
 
         # Initial tracking step
         signal =
@@ -211,16 +207,22 @@ end
     range = 0:3999
     start_carrier_phase = π / 2
 
-    track_state = @inferred TrackState((
-        gps = SystemSatsState(
-            gpsl1,
-            [SatState(gpsl1, prn, start_code_phase, carrier_doppler_gps)],
-        ),
-        gal = SystemSatsState(
-            galileo_e1b,
-            [SatState(galileo_e1b, prn, start_code_phase, carrier_doppler_gal)],
-        ),
-    );)
+    estimator = ConventionalAssistedPLLAndDLL()
+    track_state = @inferred TrackState(
+        (
+            gps = SystemSatsState(
+                estimator,
+                gpsl1,
+                [SatState(gpsl1, prn, start_code_phase, carrier_doppler_gps)],
+            ),
+            gal = SystemSatsState(
+                estimator,
+                galileo_e1b,
+                [SatState(galileo_e1b, prn, start_code_phase, carrier_doppler_gal)],
+            ),
+        );
+        doppler_estimator = estimator,
+    )
 
     signal_temp =
         cis.(

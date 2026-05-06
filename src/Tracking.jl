@@ -38,6 +38,8 @@ export get_early,
     get_num_ants,
     has_bit_or_secondary_code_been_found,
     track,
+    track!,
+    prewarm!,
     NumAnts,
     NumAccumulators,
     MomentsCN0Estimator,
@@ -46,6 +48,10 @@ export get_early,
     VeryEarlyPromptLateCorrelator,
     AbstractPostCorrFilter,
     SatState,
+    TrackedSat,
+    init_estimator_state,
+    get_estimator_state,
+    wrap_sats,
     SystemSatsState,
     CPUDownconvertAndCorrelator,
     CPUThreadedDownconvertAndCorrelator,
@@ -99,7 +105,15 @@ NumAccumulators(x) = NumAccumulators{x}()
 
 TupleLike{T<:Tuple} = Union{T,NamedTuple{<:Any,T}}
 
-abstract type AbstractDopplerEstimator{N,I} end
+"""
+$(SIGNATURES)
+
+Abstract supertype for doppler estimators. Concrete subtypes carry estimator
+configuration (and any cross-satellite or cross-system shared state). The
+per-satellite state used by the estimator lives in each [`TrackedSat`](@ref)
+wrapper — see [`init_estimator_state`](@ref) for the extension point.
+"""
+abstract type AbstractDopplerEstimator end
 
 """
 $(SIGNATURES)
