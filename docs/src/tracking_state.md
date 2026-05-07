@@ -37,6 +37,18 @@ get_num_bits
 has_bit_or_secondary_code_been_found
 ```
 
+## TrackedSat
+
+Per-satellite wrapper that holds a [`SatState`](@ref) together with the
+estimator-specific per-satellite state. The `Vector{TrackedSat}` backing
+storage of [`SystemSatsState`](@ref) is what [`track!`](@ref) mutates
+in place — the `TrackedSat` values themselves remain immutable.
+
+```@docs
+TrackedSat
+get_estimator_state
+```
+
 ## SystemSatsState
 
 Container for multiple satellites of the same GNSS system.

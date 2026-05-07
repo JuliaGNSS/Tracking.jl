@@ -138,11 +138,13 @@ julia> gps_sat = SatState(GPSL1(), 1, 50.0, 1000.0Hz);
 
 julia> galileo_sat = SatState(GalileoE1B(), 11, 200.0, -300.0Hz);
 
-julia> gps_system_state = SystemSatsState(GPSL1(), gps_sat);
+julia> estimator = ConventionalAssistedPLLAndDLL();
 
-julia> galileo_system_state = SystemSatsState(GalileoE1B(), galileo_sat);
+julia> gps_system_state = SystemSatsState(estimator, GPSL1(), gps_sat);
 
-julia> track_state = TrackState((gps_system_state, galileo_system_state));
+julia> galileo_system_state = SystemSatsState(estimator, GalileoE1B(), galileo_sat);
+
+julia> track_state = TrackState((gps_system_state, galileo_system_state); doppler_estimator = estimator);
 
 julia> get_carrier_doppler(track_state, 1, 1)  # system 1, PRN 1
 1000.0 Hz
@@ -161,11 +163,13 @@ julia> gps_sat = SatState(GPSL1(), 1, 50.0, 1000.0Hz);
 
 julia> galileo_sat = SatState(GalileoE1B(), 11, 200.0, -300.0Hz);
 
-julia> gps_system_state = SystemSatsState(GPSL1(), gps_sat);
+julia> estimator = ConventionalAssistedPLLAndDLL();
 
-julia> galileo_system_state = SystemSatsState(GalileoE1B(), galileo_sat);
+julia> gps_system_state = SystemSatsState(estimator, GPSL1(), gps_sat);
 
-julia> track_state = TrackState((gps = gps_system_state, galileo = galileo_system_state));
+julia> galileo_system_state = SystemSatsState(estimator, GalileoE1B(), galileo_sat);
+
+julia> track_state = TrackState((gps = gps_system_state, galileo = galileo_system_state); doppler_estimator = estimator);
 
 julia> get_carrier_doppler(track_state, :gps, 1)
 1000.0 Hz

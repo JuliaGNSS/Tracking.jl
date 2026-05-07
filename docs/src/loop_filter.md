@@ -39,18 +39,15 @@ julia> system = GPSL1();
 
 julia> sat_state = SatState(system, 1, 50.0, 1000.0Hz);
 
-julia> system_sats_state = SystemSatsState(system, sat_state);
-
 julia> # Use non-assisted PLL with custom loop filter types
        doppler_estimator = ConventionalPLLAndDLL(
-           (system_sats_state,),
            ThirdOrderBilinearLF,      # carrier loop filter type
            SecondOrderBilinearLF;     # code loop filter type
            carrier_loop_filter_bandwidth = 15.0Hz,
            code_loop_filter_bandwidth = 0.5Hz
        );
 
-julia> track_state = TrackState((system_sats_state,); doppler_estimator);
+julia> track_state = TrackState(system, sat_state; doppler_estimator);
 ```
 
 ## Custom Loop Filters
@@ -58,3 +55,9 @@ julia> track_state = TrackState((system_sats_state,); doppler_estimator);
 You can implement a custom loop filter `MyLoopFilter <: AbstractLoopFilter`. In this
 case, a specialized `filter_loop` function is needed. For more information
 refer to [TrackingLoopFilters.jl](https://github.com/JuliaGNSS/TrackingLoopFilters.jl).
+
+## Custom Doppler Estimator
+
+To replace the loop-filter-based estimator with a different algorithm
+(Kalman filter, joint-channel estimator, …), see the dedicated guide
+in [`custom_doppler_estimator.md`](custom_doppler_estimator.md).
