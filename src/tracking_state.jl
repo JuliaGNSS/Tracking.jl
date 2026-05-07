@@ -186,10 +186,13 @@ function merge_sats(
     system_idx::Union{Symbol,Integer},
     sat_states::Union{SatState,Vector{<:SatState},Dictionary{<:Any,<:SatState}},
 ) where {S<:MultipleSystemSatsState,DE<:AbstractDopplerEstimator}
-    wrapped = wrap_sats(track_state.doppler_estimator, to_dictionary(sat_states))
+    new_sats_dict = to_dictionary(sat_states)
+    wrapped = wrap_sats(track_state.doppler_estimator, new_sats_dict)
+    new_estimator =
+        update_estimator_on_handoff(track_state.doppler_estimator, new_sats_dict)
     TrackState{S,DE}(
         merge_sats(track_state.multiple_system_sats_state, system_idx, wrapped),
-        track_state.doppler_estimator,
+        new_estimator,
     )
 end
 

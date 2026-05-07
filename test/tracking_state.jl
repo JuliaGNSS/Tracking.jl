@@ -234,4 +234,64 @@ end
     end
 end
 
+@testset "merge_sats invokes update_estimator_on_handoff" begin
+    import Tracking
+    using Tracking: AbstractDopplerEstimator
+
+    # Immutable estimator with growing shared state held in a resizable
+    # Vector. update_estimator_on_handoff mutates the vectors in place
+    # and returns the same `est` object — concrete type is preserved, no
+    # new heap-allocated wrapper per call.
+    struct CountingEstimator <: AbstractDopplerEstimator
+        sats_added::Vector{Int}
+        last_batch_prns::Vector{Int}
+    end
+    CountingEstimator() = CountingEstimator(Int[0], Int[])
+
+    struct SatCountingEstimator end
+
+    Tracking.init_estimator_state(::CountingEstimator, ::SatState) = SatCountingEstimator()
+
+    function Tracking.update_estimator_on_handoff(est::CountingEstimator, new_sats)
+        est.sats_added[1] += length(new_sats)
+        empty!(est.last_batch_prns)
+        for s in new_sats
+            push!(est.last_batch_prns, s.prn)
+        end
+        return est
+    end
+
+    gpsl1 = GPSL1()
+    estimator = CountingEstimator()
+    track_state = TrackState(
+        gpsl1,
+        [SatState(gpsl1, 1, 10.5, 10.0Hz)];
+        doppler_estimator = estimator,
+    )
+    @test track_state.doppler_estimator.sats_added[1] == 0
+
+    track_state2 = merge_sats(track_state, 1, SatState(gpsl1, 2, 11.5, 20.0Hz))
+    @test track_state2.doppler_estimator === estimator  # same object, mutated in place
+    @test track_state2.doppler_estimator.sats_added[1] == 1
+    @test track_state2.doppler_estimator.last_batch_prns == [2]
+
+    track_state3 = merge_sats(
+        track_state2,
+        [SatState(gpsl1, 3, 5.5, 80.0Hz), SatState(gpsl1, 4, 6.5, 90.0Hz)],
+    )
+    @test track_state3.doppler_estimator.sats_added[1] == 3
+    @test sort(track_state3.doppler_estimator.last_batch_prns) == [3, 4]
+
+    # Default fallback: estimators that don't override the hook keep the
+    # estimator object unchanged through merge_sats.
+    default_estimator = ConventionalAssistedPLLAndDLL()
+    default_track_state = TrackState(
+        gpsl1,
+        [SatState(gpsl1, 1, 10.5, 10.0Hz)];
+        doppler_estimator = default_estimator,
+    )
+    merged_default = merge_sats(default_track_state, 1, SatState(gpsl1, 2, 11.5, 20.0Hz))
+    @test merged_default.doppler_estimator === default_estimator
+end
+
 end

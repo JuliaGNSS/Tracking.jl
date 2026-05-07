@@ -36,7 +36,30 @@ state unchanged.
    Tracking.init_estimator_state(::MyEstimator, sat_state::SatState) = MyPerSatState(...)
    ```
 
-4. **An `estimate_dopplers_and_filter_prompt` method** dispatched on
+4. **(Optional) An [`update_estimator_on_handoff`](@ref) method**, if
+   your estimator carries cross-satellite or cross-system shared state
+   that has to change when sats join the track set (joint-channel
+   covariance, per-batch normalization terms, …):
+
+   ```julia
+   Tracking.update_estimator_on_handoff(est::MyEstimator, new_sats) = ...
+   ```
+
+   It is called once per [`merge_sats`](@ref) call with the dictionary
+   of incoming `SatState`s and runs *after* per-sat seeding, so
+   `init_estimator_state` sees the pre-update shared state. The default
+   returns `est` unchanged, so estimators with no shared state need not
+   implement it.
+
+   **Type constraint:** the returned estimator must have the same
+   concrete type as the input. [`TrackState`](@ref) is parameterized on
+   the estimator type, and changing it would break inference. Keep the
+   estimator an immutable `struct` and put any growing shared state in
+   resizable containers (e.g. `Vector`, `Matrix`) you `push!`/`resize!`
+   in place; if scalar fields need replacing, rebuild the estimator
+   with `Setfield.@set` or a copying constructor.
+
+5. **An `estimate_dopplers_and_filter_prompt` method** dispatched on
    `TrackState{<:..., <:MyEstimator}`. This is where the actual update
    logic runs, once per integration completion. It walks each system's
    `Dictionary{Int, TrackedSat}` and produces new `TrackedSat`s with
@@ -54,12 +77,14 @@ state unchanged.
 ```julia
 using Tracking
 using Tracking: AbstractDopplerEstimator, TrackedSat, SatState, TrackState
-using Tracking: init_estimator_state, estimate_dopplers_and_filter_prompt
+using Tracking: init_estimator_state, update_estimator_on_handoff,
+    estimate_dopplers_and_filter_prompt
 
 # 1. Estimator type — config + any shared state
 struct MyEstimator <: AbstractDopplerEstimator
     bandwidth_hz::Float64
-    # ... shared state (Kalman covariance, etc.) ...
+    # ... shared state held in resizable containers, e.g. Vector{Float64}
+    # for a growing joint-state vector — mutated in place on handoff ...
 end
 
 # 2. Per-sat state struct
@@ -73,7 +98,18 @@ function Tracking.init_estimator_state(est::MyEstimator, sat::SatState)
     SatMyEstimator(0.0)
 end
 
-# 4. The update step (immutable form)
+# 4. (Optional) update shared state when sats join the track set
+function Tracking.update_estimator_on_handoff(est::MyEstimator, new_sats)
+    # `new_sats` is a `Dictionary{I, SatState}` of just the incoming sats.
+    # Grow the shared joint-state container in place (immutable estimator,
+    # resizable field) and return the same `est`.
+    for _ in 1:length(new_sats)
+        push!(est.joint_state, 0.0)
+    end
+    return est
+end
+
+# 5. The update step (immutable form)
 function Tracking.estimate_dopplers_and_filter_prompt(
     track_state::TrackState{<:Any, <:MyEstimator},
     preferred_num_code_blocks_to_integrate,
@@ -133,4 +169,5 @@ whatever estimator the `TrackState` was built with.
 ```@docs
 AbstractDopplerEstimator
 init_estimator_state
+update_estimator_on_handoff
 ```
