@@ -101,10 +101,19 @@ end
     )
     ts_skip = TrackState(gpsl1, [sat_past_end])
     downconvert_and_correlator = DC(Val(sampling_frequency))
+
+    # Immutable form
     result_skip = downconvert_and_correlate(
         downconvert_and_correlator, signal, ts_skip, 1, sampling_frequency, intermediate_frequency,
     )
     @test get_correlator(result_skip, 1).accumulators == sat_past_end.correlator.accumulators
+
+    # In-place form takes the same `signal_samples_to_integrate == 0` early
+    # return per sat. The TrackedSat is reassigned to itself unchanged.
+    Tracking.downconvert_and_correlate!(
+        downconvert_and_correlator, signal, ts_skip, 1, sampling_frequency, intermediate_frequency,
+    )
+    @test get_correlator(ts_skip, 1).accumulators == sat_past_end.correlator.accumulators
 end
 
 @testset "Fused downconvert and correlate" begin
