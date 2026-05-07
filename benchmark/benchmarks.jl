@@ -45,7 +45,7 @@ function setup_benchmark(;
         undef,
         num_samples + maximum(static_shifts) - minimum(static_shifts),
     )
-    gen_code_replica!(
+    _gen_code_replica!(
         code_replica,
         system,
         code_frequency,
@@ -71,6 +71,39 @@ function setup_benchmark(;
     )
 end
 
+# ── Branch-portable constructors ──────────────────────────────────────────
+# Tracking ≥ 2.0 dropped the `Val{MESF}` arg from `CPUDownconvertAndCorrelator`,
+# `CPUThreadedDownconvertAndCorrelator`, and `gen_code_replica!`. Detect at
+# load time and dispatch.
+
+const _NEEDS_VAL = !applicable(Tracking.CPUDownconvertAndCorrelator)
+
+_make_cpu_dc(sampling_frequency) =
+    _NEEDS_VAL ? Tracking.CPUDownconvertAndCorrelator(Val(sampling_frequency)) :
+    Tracking.CPUDownconvertAndCorrelator()
+
+_make_cpu_threaded_dc(sampling_frequency) =
+    _NEEDS_VAL ? Tracking.CPUThreadedDownconvertAndCorrelator(Val(sampling_frequency)) :
+    Tracking.CPUThreadedDownconvertAndCorrelator()
+
+function _gen_code_replica!(
+    code_replica, system, code_frequency, sampling_frequency,
+    code_phase, start_sample, num_samples, sample_shifts, prn,
+)
+    if _NEEDS_VAL
+        gen_code_replica!(
+            code_replica, system, code_frequency, sampling_frequency,
+            code_phase, start_sample, num_samples, sample_shifts, prn,
+            Val(sampling_frequency),
+        )
+    else
+        gen_code_replica!(
+            code_replica, system, code_frequency, sampling_frequency,
+            code_phase, start_sample, num_samples, sample_shifts, prn,
+        )
+    end
+end
+
 # ── High-level downconvert_and_correlate (full pipeline) ───────────────────
 
 function bench_downconvert_and_correlate(;
@@ -80,7 +113,7 @@ function bench_downconvert_and_correlate(;
     system = GPSL1(),
     num_ants = 1,
 )
-    downconvert_and_correlator = CPUDownconvertAndCorrelator()
+    downconvert_and_correlator = _make_cpu_dc(sampling_frequency)
     track_state = TrackState(
         system,
         [SatState(system, 1, 10.5, 1000.0Hz; num_ants = NumAnts(num_ants))],
@@ -155,7 +188,7 @@ function bench_track(;
     sampling_frequency = 5e6Hz,
 )
     system = GPSL1()
-    downconvert_and_correlator = CPUDownconvertAndCorrelator()
+    downconvert_and_correlator = _make_cpu_dc(sampling_frequency)
     track_state = TrackState(system, [SatState(system, 1, 0.0, 1000Hz)])
     signal = rand(Complex{signal_type}, num_samples)
     @benchmarkable track(
@@ -175,7 +208,7 @@ function bench_track_inplace(;
     sampling_frequency = 5e6Hz,
 )
     system = GPSL1()
-    downconvert_and_correlator = CPUDownconvertAndCorrelator()
+    downconvert_and_correlator = _make_cpu_dc(sampling_frequency)
     track_state = TrackState(system, [SatState(system, 1, 0.0, 1000Hz)])
     # Pre-grow filtered_prompts so steady-state push! is allocation-free.
     isdefined(Tracking, :prewarm!) && Tracking.prewarm!(track_state, 8)
@@ -254,9 +287,9 @@ function bench_multi_sat(
     ts, signal, _ =
         _make_multi_sat_state(; systems, nsats_list, nsamp, prn_max, code_dop)
     if threaded && isdefined(Tracking, :CPUThreadedDownconvertAndCorrelator)
-        dc = Tracking.CPUThreadedDownconvertAndCorrelator()
+        dc = _make_cpu_threaded_dc(sfreq)
     else
-        dc = CPUDownconvertAndCorrelator()
+        dc = _make_cpu_dc(sfreq)
     end
     @benchmarkable downconvert_and_correlate($dc, $signal, $ts, 1, $sfreq, $(0.0Hz))
 end
@@ -274,7 +307,7 @@ function bench_track_steady_state(;
 )
     ts, signal, total_sats =
         _make_multi_sat_state(; systems, nsats_list, nsamp, prn_max, code_dop)
-    dc = CPUDownconvertAndCorrelator()
+    dc = _make_cpu_dc(sfreq)
     # Set bit_buffer.found = true to simulate steady-state tracking
     # (random signal data never triggers bit detection on its own)
     found_bb = BitBuffer(UInt128(0), 20, true, UInt128(0), 0, complex(0.0, 0.0), 0)
@@ -304,7 +337,7 @@ function bench_track_inplace_steady_state(;
 )
     ts, signal, _ =
         _make_multi_sat_state(; systems, nsats_list, nsamp, prn_max, code_dop)
-    dc = CPUDownconvertAndCorrelator()
+    dc = _make_cpu_dc(sfreq)
     found_bb = BitBuffer(UInt128(0), 20, true, UInt128(0), 0, complex(0.0, 0.0), 0)
     new_mss = map(ts.multiple_system_sats_state) do sss
         new_sats = map(s -> _with_found_bit_buffer(s, found_bb), sss.states)
