@@ -43,16 +43,12 @@ end
     num_samples_signal = 5000
     intermediate_frequency = 0.0Hz
 
-    system_sats_state = SystemSatsState(
-        gpsl1,
-        [SatState(gpsl1, 1, code_phase, 1000.0Hz), SatState(gpsl1, 2, 11.0, 500.0Hz)];
-    )
-    multiple_system_sats_state = (system_sats_state,)
+    sats = [SatState(gpsl1, 1, code_phase, 1000.0Hz), SatState(gpsl1, 2, 11.0, 500.0Hz)]
+    track_state = TrackState(gpsl1, sats)
+    multiple_system_sats_state = track_state.multiple_system_sats_state
 
     downconvert_and_correlator =
         GPUDownconvertAndCorrelator(multiple_system_sats_state, num_samples_signal)
-
-    track_state = TrackState(multiple_system_sats_state)
 
     preferred_num_code_blocks_to_integrate = 1
 
@@ -137,13 +133,11 @@ end
     sat_states =
         [SatState(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz; num_ants, correlator)]
 
-    system_sats_state = SystemSatsState(gpsl1, sat_states)
+    track_state = @inferred TrackState(gpsl1, sat_states)
 
     # TODO: Why doesn't @inferred work here?
     downconvert_and_correlator =
-        GPUDownconvertAndCorrelator((system_sats_state,), num_samples)
-
-    track_state = @inferred TrackState(system_sats_state)
+        GPUDownconvertAndCorrelator(track_state.multiple_system_sats_state, num_samples)
 
     signal =
         cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase) .*

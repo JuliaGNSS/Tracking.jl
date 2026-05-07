@@ -143,8 +143,9 @@ function downconvert_and_correlate(
         track_state.multiple_system_sats_state,
         downconvert_and_correlator.buffers,
     ) do system_sats_state, system_buffers
-        new_sat_states =
-            map(system_sats_state.states, system_buffers.buffers) do sat_state, buffer
+        new_tracked_sats =
+            map(system_sats_state.states, system_buffers.buffers) do tracked_sat, buffer
+                sat_state = tracked_sat.sat_state
                 signal_samples_to_integrate, is_integration_completed =
                     calc_signal_samples_to_integrate(
                         system_sats_state.system,
@@ -157,7 +158,7 @@ function downconvert_and_correlate(
                         num_samples_signal,
                     )
                 if signal_samples_to_integrate == 0
-                    return sat_state
+                    return tracked_sat
                 end
                 carrier_frequency = sat_state.carrier_doppler + intermediate_frequency
                 code_frequency =
@@ -167,7 +168,7 @@ function downconvert_and_correlate(
                     sampling_frequency,
                     code_frequency,
                 )
-                new_correlator = downconvert_and_correlate!(
+                new_correlator = launch_gpu_downconvert_and_correlate!(
                     system_buffers.textured_system,
                     signal,
                     sat_state.correlator,
@@ -182,7 +183,7 @@ function downconvert_and_correlate(
                     sat_state.prn,
                     buffer.downconverted_and_decoded_signal,
                 )::typeof(sat_state.correlator)
-                return update(
+                new_sat_state = update(
                     system_sats_state.system,
                     sat_state,
                     signal_samples_to_integrate,
@@ -191,8 +192,9 @@ function downconvert_and_correlate(
                     new_correlator,
                     is_integration_completed,
                 )
+                return TrackedSat(new_sat_state, tracked_sat.estimator_state)
             end
-        return SystemSatsState(system_sats_state, new_sat_states)
+        return SystemSatsState(system_sats_state, new_tracked_sats)
     end
     return TrackState(
         track_state;
@@ -287,9 +289,14 @@ end
 """
 $(SIGNATURES)
 
-Downconvert and correlator all available satellites on the GPU.
+Internal GPU kernel-launch helper. Renamed to avoid clashing with the
+CPU's 13-argument single-satellite [`downconvert_and_correlate!`](@ref) —
+the dispatch tables would have an identical signature
+`(::Any, ::Any, ::AbstractCorrelator{M}, ::Any, ::Any, ::Any, ::Any,
+::Any, ::Any, ::Any, ::Any, ::Any, ::Any) where {M}` and Julia 1.10+
+treats the resulting method overwrite as a fatal precompile error.
 """
-function downconvert_and_correlate!(
+function launch_gpu_downconvert_and_correlate!(
     code_buffer,
     signal,
     correlator::AbstractCorrelator{M},
