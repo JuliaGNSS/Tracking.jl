@@ -55,7 +55,6 @@ function setup_benchmark(;
         num_samples,
         static_shifts,
         1,
-        Val(sampling_frequency),
     )
 
     return (;
@@ -81,7 +80,7 @@ function bench_downconvert_and_correlate(;
     system = GPSL1(),
     num_ants = 1,
 )
-    downconvert_and_correlator = CPUDownconvertAndCorrelator(Val(sampling_frequency))
+    downconvert_and_correlator = CPUDownconvertAndCorrelator()
     track_state = TrackState(
         system,
         [SatState(system, 1, 10.5, 1000.0Hz; num_ants = NumAnts(num_ants))],
@@ -156,7 +155,7 @@ function bench_track(;
     sampling_frequency = 5e6Hz,
 )
     system = GPSL1()
-    downconvert_and_correlator = CPUDownconvertAndCorrelator(Val(sampling_frequency))
+    downconvert_and_correlator = CPUDownconvertAndCorrelator()
     track_state = TrackState(system, [SatState(system, 1, 0.0, 1000Hz)])
     signal = rand(Complex{signal_type}, num_samples)
     @benchmarkable track(
@@ -176,7 +175,7 @@ function bench_track_inplace(;
     sampling_frequency = 5e6Hz,
 )
     system = GPSL1()
-    downconvert_and_correlator = CPUDownconvertAndCorrelator(Val(sampling_frequency))
+    downconvert_and_correlator = CPUDownconvertAndCorrelator()
     track_state = TrackState(system, [SatState(system, 1, 0.0, 1000Hz)])
     # Pre-grow filtered_prompts so steady-state push! is allocation-free.
     isdefined(Tracking, :prewarm!) && Tracking.prewarm!(track_state, 8)
@@ -255,9 +254,9 @@ function bench_multi_sat(
     ts, signal, _ =
         _make_multi_sat_state(; systems, nsats_list, nsamp, prn_max, code_dop)
     if threaded && isdefined(Tracking, :CPUThreadedDownconvertAndCorrelator)
-        dc = Tracking.CPUThreadedDownconvertAndCorrelator(Val(sfreq))
+        dc = Tracking.CPUThreadedDownconvertAndCorrelator()
     else
-        dc = CPUDownconvertAndCorrelator(Val(sfreq))
+        dc = CPUDownconvertAndCorrelator()
     end
     @benchmarkable downconvert_and_correlate($dc, $signal, $ts, 1, $sfreq, $(0.0Hz))
 end
@@ -275,7 +274,7 @@ function bench_track_steady_state(;
 )
     ts, signal, total_sats =
         _make_multi_sat_state(; systems, nsats_list, nsamp, prn_max, code_dop)
-    dc = CPUDownconvertAndCorrelator(Val(sfreq))
+    dc = CPUDownconvertAndCorrelator()
     # Set bit_buffer.found = true to simulate steady-state tracking
     # (random signal data never triggers bit detection on its own)
     found_bb = BitBuffer(UInt128(0), 20, true, UInt128(0), 0, complex(0.0, 0.0), 0)
@@ -305,7 +304,7 @@ function bench_track_inplace_steady_state(;
 )
     ts, signal, _ =
         _make_multi_sat_state(; systems, nsats_list, nsamp, prn_max, code_dop)
-    dc = CPUDownconvertAndCorrelator(Val(sfreq))
+    dc = CPUDownconvertAndCorrelator()
     found_bb = BitBuffer(UInt128(0), 20, true, UInt128(0), 0, complex(0.0, 0.0), 0)
     new_mss = map(ts.multiple_system_sats_state) do sss
         new_sats = map(s -> _with_found_bit_buffer(s, found_bb), sss.states)

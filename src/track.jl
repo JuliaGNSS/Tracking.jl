@@ -10,9 +10,7 @@ function track(
     signal::AbstractVecOrMat,
     track_state::TS,
     sampling_frequency;
-    downconvert_and_correlator::AbstractDownconvertAndCorrelator = CPUThreadedDownconvertAndCorrelator(
-        Val(sampling_frequency),
-    ),
+    downconvert_and_correlator::AbstractDownconvertAndCorrelator = CPUThreadedDownconvertAndCorrelator(),
     intermediate_frequency = 0.0Hz,
     preferred_num_code_blocks_to_integrate = 1,
 ) where {TS<:TrackState}
@@ -61,9 +59,7 @@ function track!(
     signal::AbstractVecOrMat,
     track_state::TrackState,
     sampling_frequency;
-    downconvert_and_correlator::AbstractDownconvertAndCorrelator = CPUThreadedDownconvertAndCorrelator(
-        Val(sampling_frequency),
-    ),
+    downconvert_and_correlator::AbstractDownconvertAndCorrelator = CPUThreadedDownconvertAndCorrelator(),
     intermediate_frequency = 0.0Hz,
     preferred_num_code_blocks_to_integrate = 1,
 )
