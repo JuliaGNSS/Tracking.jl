@@ -52,8 +52,10 @@ function GPUDownconvertAndCorrelator(
     num_samples::Int,
 )
     buffers = map(multiple_system_sats_state) do system_sats_state
-        buffers = map(system_sats_state.states) do sat_state
-            GPUSatDownconvertAndCorrelator(Float32, sat_state.correlator, num_samples)
+        buffers = map(system_sats_state.states) do tracked_sat
+            GPUSatDownconvertAndCorrelator(
+                Float32, tracked_sat.sat_state.correlator, num_samples,
+            )
         end
         GPUSystemDownconvertAndCorrelator(
             buffers,
