@@ -84,53 +84,74 @@ end
     @test returned === track_state
 end
 
-# The per-stage allocation guarantees rely on Bumper.jl's `@no_escape` /
-# `@alloc` being elided into stack-only allocation. That elision works on
-# Julia >= 1.11 but not on 1.10, where the slab buffer pages still
-# heap-allocate ~10 KB on first use. Skip on 1.10 — the perf claims in
-# the README and PR target Julia 1.11+, which is what real-time SDR users
-# will be running.
-if VERSION >= v"1.11"
-    @testset "track! per-stage is allocation-free in steady state ($DC)" for DC in (
-        CPUDownconvertAndCorrelator,
-        CPUThreadedDownconvertAndCorrelator,
-    )
-        sampling_frequency = 4e6Hz
-        signal, gpsl1, carrier_doppler, start_code_phase = make_signal(sampling_frequency)
+# Per-stage allocation measurement. `@allocated` in module scope will
+# pick up boxing overhead from non-typed local lookups, so the work is
+# done inside typed helper functions — that matches what `track!` looks
+# like when called from real user code (a function with concrete
+# argument types) and what BenchmarkTools' `@benchmark $signal $ts ...`
+# measures.
+#
+# Each helper does a few warmup calls first so Bumper.jl's slab buffer
+# is paged in and `push!` to `filtered_prompts` has its capacity settled.
 
-        track_state = TrackState(
-            gpsl1,
-            [SatState(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)],
-        )
-        dc = DC(Val(sampling_frequency))
+function measure_reset!(track_state)
+    for _ in 1:8
+        reset_start_sample_and_bit_buffer!(track_state)
+    end
+    @allocated reset_start_sample_and_bit_buffer!(track_state)
+end
 
-        # 4 ms / 1 ms code period → up to 4 prompts per call
-        prewarm!(track_state, 8)
-
-        # Warmup: compile + push! storage doubling should settle after a few
-        # calls.
-        for _ in 1:8
-            track!(signal, track_state, sampling_frequency; downconvert_and_correlator = dc)
-        end
-
-        # Reset is strictly allocation-free.
-        @test (@allocated reset_start_sample_and_bit_buffer!(track_state)) == 0
-
-        # Downconvert and the doppler estimator each have a small residual
-        # allocation footprint (a few hundred bytes for threaded `@batch`
-        # scheduling and the `bit_buffer` find-bit closures). These are
-        # short-lived young-generation allocations and do not trigger GC
-        # pauses. The cap below catches any regression that would introduce
-        # genuine per-sat allocations.
-        dc_alloc = @allocated downconvert_and_correlate!(
+function measure_dc!(dc, signal, track_state, sampling_frequency)
+    for _ in 1:8
+        downconvert_and_correlate!(
             dc, signal, track_state, 1, sampling_frequency, 0.0Hz,
         )
-        @test dc_alloc <= 1024
-        est_alloc = @allocated estimate_dopplers_and_filter_prompt!(
-            track_state, 1, sampling_frequency,
-        )
-        @test est_alloc <= 1024
     end
+    @allocated downconvert_and_correlate!(
+        dc, signal, track_state, 1, sampling_frequency, 0.0Hz,
+    )
+end
+
+function measure_est!(track_state, sampling_frequency)
+    for _ in 1:8
+        estimate_dopplers_and_filter_prompt!(track_state, 1, sampling_frequency)
+    end
+    @allocated estimate_dopplers_and_filter_prompt!(
+        track_state, 1, sampling_frequency,
+    )
+end
+
+@testset "track! per-stage is allocation-free in steady state ($DC)" for DC in (
+    CPUDownconvertAndCorrelator,
+    CPUThreadedDownconvertAndCorrelator,
+)
+    sampling_frequency = 4e6Hz
+    signal, gpsl1, carrier_doppler, start_code_phase = make_signal(sampling_frequency)
+
+    track_state = TrackState(
+        gpsl1,
+        [SatState(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)],
+    )
+    dc = DC(Val(sampling_frequency))
+
+    # 4 ms / 1 ms code period → up to 4 prompts per call
+    prewarm!(track_state, 8)
+
+    # Run the full track! once so all stages compile and the bit buffer
+    # is in its steady-state shape.
+    for _ in 1:8
+        track!(signal, track_state, sampling_frequency; downconvert_and_correlator = dc)
+    end
+
+    @test measure_reset!(track_state) == 0
+    # Downconvert and the doppler estimator each have a small residual
+    # allocation footprint (a few hundred bytes for threaded `@batch`
+    # scheduling and the `bit_buffer` find-bit closures). These are
+    # short-lived young-generation allocations and do not trigger GC
+    # pauses. The cap catches any regression that would introduce
+    # genuine per-sat allocations.
+    @test measure_dc!(dc, signal, track_state, sampling_frequency) <= 1024
+    @test measure_est!(track_state, sampling_frequency) <= 1024
 end
 
 end
