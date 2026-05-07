@@ -13,6 +13,7 @@ makedocs(
         "track.md",
         "tracking_state.md",
         "loop_filter.md",
+        "custom_doppler_estimator.md",
         "correlator.md",
         "cn0_estimator.md"
     ]
