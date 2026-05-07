@@ -232,6 +232,17 @@ end
     de_state = init_estimator_state(estimator, sat_state)
     @test de_state.carrier_loop_filter_bandwidth == 22.0Hz
     @test de_state.code_loop_filter_bandwidth == 1.5Hz
+
+    # Kwarg-update constructor returns a new estimator with overridden
+    # bandwidths and preserves the carrier/code filter type parameters.
+    bumped = ConventionalPLLAndDLL(estimator;
+        carrier_loop_filter_bandwidth = 30.0Hz,
+    )
+    @test bumped.carrier_loop_filter_bandwidth == 30.0Hz
+    @test bumped.code_loop_filter_bandwidth == 1.5Hz  # unchanged
+    preserved = ConventionalPLLAndDLL(estimator)
+    @test preserved.carrier_loop_filter_bandwidth == 22.0Hz
+    @test preserved.code_loop_filter_bandwidth == 1.5Hz
 end
 
 @testset "merge_sats propagates bandwidths to new sats via init_estimator_state" begin

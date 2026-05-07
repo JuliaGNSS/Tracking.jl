@@ -3,6 +3,7 @@ module TrackingStateTest
 using Test: @test, @testset, @inferred
 using Unitful: Hz
 using GNSSSignals: GPSL1, GalileoE1B
+using Dictionaries: dictionary
 using Tracking:
     SatState,
     TrackState,
@@ -181,6 +182,56 @@ end
     @test length(get_sat_states(filtered_new_new_new_track_state, :gal)) == 2
     @test get_prn(filtered_new_new_new_track_state, :gps, 3) == 3
     @test get_prn(filtered_new_new_new_track_state, :gps, 8) == 8
+end
+
+@testset "TrackedSat / SystemSatsState helpers" begin
+    using Tracking:
+        TrackedSat,
+        get_estimator_state,
+        wrap_sats,
+        reset_start_sample_and_bit_buffer!,
+        SatConventionalPLLAndDLL,
+        init_estimator_state
+
+    gpsl1 = GPSL1()
+    estimator = ConventionalAssistedPLLAndDLL()
+
+    # wrap_sats has three overloads (Vector, Dictionary, single SatState).
+    # Hit each one, plus the corresponding to_dictionary entry.
+    sat = SatState(gpsl1, 1, 10.5, 10.0Hz)
+    sat2 = SatState(gpsl1, 2, 11.5, 20.0Hz)
+
+    wrapped_one = wrap_sats(estimator, sat)
+    @test only(wrapped_one) isa TrackedSat
+    wrapped_vec = wrap_sats(estimator, [sat, sat2])
+    @test length(wrapped_vec) == 2
+    @test wrapped_vec[1] isa TrackedSat
+    wrapped_dict = wrap_sats(estimator, dictionary([1 => sat, 2 => sat2]))
+    @test length(wrapped_dict) == 2
+
+    # SystemSatsState constructors over already-wrapped TrackedSats.
+    sss_from_vec = SystemSatsState(gpsl1, collect(wrapped_vec))
+    @test length(sss_from_vec.states) == 2
+    sss_from_one = SystemSatsState(gpsl1, only(wrapped_one))
+    @test length(sss_from_one.states) == 1
+
+    # Direct accessors on TrackedSat
+    t = only(wrapped_one)
+    @test get_sat_state(t).prn == 1
+    @test get_estimator_state(t) isa SatConventionalPLLAndDLL
+
+    # SystemSatsState-level get_estimator_state
+    @test get_estimator_state(sss_from_one) isa SatConventionalPLLAndDLL
+    @test get_estimator_state(sss_from_vec, 2) isa SatConventionalPLLAndDLL
+
+    # In-place reset on a single TrackedSat (the `!` overload).
+    track_state = TrackState(gpsl1, [sat, sat2]; doppler_estimator = estimator)
+    track_state2 = reset_start_sample_and_bit_buffer!(track_state)
+    @test track_state2 === track_state
+    # Each TrackedSat in the dict has signal_start_sample reset to 1.
+    for tsat in get_sat_states(track_state).values
+        @test tsat.sat_state.signal_start_sample == 1
+    end
 end
 
 end
