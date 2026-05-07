@@ -8,7 +8,7 @@ using Tracking: gen_code_replica!, update_code_phase
 @testset "Code replica" begin
     code = zeros(Int16, 2502)
     gpsl1 = GPSL1()
-    gen_code_replica!(code, gpsl1, 1023e3Hz, 2.5e6Hz, 2.0, 11, 2480, -1:1, 1, Val(2.5e6Hz))
+    gen_code_replica!(code, gpsl1, 1023e3Hz, 2.5e6Hz, 2.0, 11, 2480, -1:1, 1)
 
     # TODO: The new code generation `gen_code!` seems to be off in the first two samples
     #@test code[11:2492] == get_code.(gpsl1, (-1:2480) * 1023e3 / 2.5e6 .+ 2.0, 1)
@@ -26,7 +26,6 @@ using Tracking: gen_code_replica!, update_code_phase
             6480,
             -1:1,
             1,
-            Val(2.5e6Hz),
         )
 
         # TODO: The new code generation `gen_code!` seems to be off in the first two samples
@@ -47,7 +46,6 @@ using Tracking: gen_code_replica!, update_code_phase
             2480,
             -1:1,
             1,
-            Val(7.5e6Hz),
         )
 
         # TODO: The new code generation `gen_code!` seems to be off in the first two samples

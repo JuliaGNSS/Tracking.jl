@@ -1,19 +1,13 @@
 """
 $(SIGNATURES)
 
-CPU-based implementation of downconversion and correlation. The MESF type
-parameter specifies the maximum expected sampling frequency.
+CPU-based implementation of downconversion and correlation.
 """
-struct CPUDownconvertAndCorrelator{MESF,B} <: AbstractDownconvertAndCorrelator
+struct CPUDownconvertAndCorrelator{B} <: AbstractDownconvertAndCorrelator
     buffer::B
 end
 
-function CPUDownconvertAndCorrelator(
-    maximum_expected_sampling_frequency::Val{MESF},
-    buffer::B = default_buffer(),
-) where {MESF,B}
-    CPUDownconvertAndCorrelator{MESF,B}(buffer)
-end
+CPUDownconvertAndCorrelator() = CPUDownconvertAndCorrelator(default_buffer())
 
 """
 $(SIGNATURES)
@@ -22,16 +16,15 @@ Multi-threaded CPU downconvert and correlate using Bumper.jl for temporary
 code-replica allocation. One `SlabBuffer` is pre-allocated per thread so that
 concurrent `@batch` iterations never share a buffer.
 """
-struct CPUThreadedDownconvertAndCorrelator{MESF} <: AbstractDownconvertAndCorrelator
+struct CPUThreadedDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator
     buffers::Vector{SlabBuffer}
 end
 
-function CPUThreadedDownconvertAndCorrelator(
-    ::Val{MESF};
+function CPUThreadedDownconvertAndCorrelator(;
     nthreads::Int = Threads.maxthreadid(),
-) where {MESF}
+)
     buffers = [SlabBuffer() for _ = 1:nthreads]
-    CPUThreadedDownconvertAndCorrelator{MESF}(buffers)
+    CPUThreadedDownconvertAndCorrelator(buffers)
 end
 
 # Per-sat downconvert+correlate for the single-threaded CPU backend. Pure:
@@ -39,14 +32,14 @@ end
 # `downconvert_and_correlate!` for `CPUDownconvertAndCorrelator`.
 function _update_tracked_sat_correlator(
     tracked_sat::TrackedSat,
-    dc::CPUDownconvertAndCorrelator{MESF},
+    dc::CPUDownconvertAndCorrelator,
     signal,
     system,
     num_samples_signal,
     preferred_num_code_blocks_to_integrate,
     sampling_frequency,
     intermediate_frequency,
-) where {MESF}
+)
     sat_state = tracked_sat.sat_state
     signal_samples_to_integrate, is_integration_completed =
         calc_signal_samples_to_integrate(
@@ -87,7 +80,6 @@ function _update_tracked_sat_correlator(
             sat_state.signal_start_sample,
             signal_samples_to_integrate,
             sat_state.prn,
-            Val{MESF}(),
         )::typeof(sat_state.correlator)
     end
     new_sat_state = update(
@@ -178,14 +170,14 @@ end
 # its thread's buffer slot independently. Pure: returns the new TrackedSat.
 function _update_tracked_sat_correlator_threaded(
     tracked_sat::TrackedSat,
-    dc::CPUThreadedDownconvertAndCorrelator{MESF},
+    dc::CPUThreadedDownconvertAndCorrelator,
     signal,
     system,
     num_samples_signal,
     preferred_num_code_blocks_to_integrate,
     sampling_frequency,
     intermediate_frequency,
-) where {MESF}
+)
     sat_state = tracked_sat.sat_state
     signal_samples_to_integrate, is_integration_completed =
         calc_signal_samples_to_integrate(
@@ -224,7 +216,6 @@ function _update_tracked_sat_correlator_threaded(
             signal_samples_to_integrate,
             sample_shifts,
             sat_state.prn,
-            Val{MESF}(),
         )
         new_correlator = downconvert_and_correlate_fused!(
             sat_state.correlator,
@@ -346,7 +337,6 @@ function downconvert_and_correlate!(
     signal_start_sample,
     num_samples_left,
     prn,
-    maximum_expected_sampling_frequency,
 ) where {M}
     sample_shifts =
         get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
@@ -360,7 +350,6 @@ function downconvert_and_correlate!(
         num_samples_left,
         sample_shifts,
         prn,
-        maximum_expected_sampling_frequency,
     )
     downconvert_and_correlate_fused!(
         correlator,

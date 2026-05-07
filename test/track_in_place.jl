@@ -56,7 +56,7 @@ end
     ts_immutable = TrackState(gpsl1, [sat_immutable])
     ts_mutable   = TrackState(gpsl1, [sat_mutable])
 
-    dc = DC(Val(sampling_frequency))
+    dc = DC()
 
     ts_immutable = track(signal, ts_immutable, sampling_frequency;
         downconvert_and_correlator = dc)
@@ -132,7 +132,7 @@ end
         gpsl1,
         [SatState(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)],
     )
-    dc = DC(Val(sampling_frequency))
+    dc = DC()
 
     # 4 ms / 1 ms code period → up to 4 prompts per call
     prewarm!(track_state, 8)

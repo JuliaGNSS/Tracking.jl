@@ -21,7 +21,7 @@ using Tracking:
     update_accumulator
 
 @testset "Downconvert and Correlator" begin
-    downconvert_and_correlator = CPUDownconvertAndCorrelator(Val(5e6Hz))
+    downconvert_and_correlator = CPUDownconvertAndCorrelator()
     @test downconvert_and_correlator.buffer isa SlabBuffer
 end
 
@@ -36,7 +36,7 @@ end
     intermediate_frequency = 0.0Hz
 
     sats = [SatState(gpsl1, 1, code_phase, 1000.0Hz), SatState(gpsl1, 2, 11.0, 500.0Hz)]
-    downconvert_and_correlator = DC(Val(sampling_frequency))
+    downconvert_and_correlator = DC()
     track_state = TrackState(gpsl1, sats)
 
     preferred_num_code_blocks_to_integrate = 1
@@ -100,7 +100,7 @@ end
         signal_start_sample = num_samples_signal + 1,
     )
     ts_skip = TrackState(gpsl1, [sat_past_end])
-    downconvert_and_correlator = DC(Val(sampling_frequency))
+    downconvert_and_correlator = DC()
 
     # Immutable form
     result_skip = downconvert_and_correlate(
@@ -146,7 +146,6 @@ end
     Tracking.gen_code_replica!(
         code_replica, gpsl1, code_frequency, sampling_frequency,
         code_phase, 1, num_samples_signal, sample_shifts, prn,
-        Val(sampling_frequency),
     )
 
     # Scalar reference: plain Julia loop, no SIMD, no tricks
@@ -216,7 +215,6 @@ end
     Tracking.gen_code_replica!(
         code_replica, gpsl1, code_frequency, sampling_frequency,
         code_phase, 1, num_samples_signal, sample_shifts, prn,
-        Val(sampling_frequency),
     )
 
     # Scalar reference for multi-antenna
@@ -271,7 +269,6 @@ end
     Tracking.gen_code_replica!(
         code_replica_odd, gpsl1, code_frequency, sampling_frequency,
         code_phase, 1, num_samples_odd, sample_shifts, prn,
-        Val(sampling_frequency),
     )
     ref_odd = [zeros(ComplexF64, num_ants) for _ in 1:NC]
     for i in 1:num_samples_odd
@@ -335,7 +332,6 @@ end
     Tracking.gen_code_replica!(
         code_replica, gpsl1, code_frequency, sampling_frequency,
         code_phase, 1, num_samples_signal, static_shifts, prn,
-        Val(sampling_frequency),
     )
 
     # Scalar reference
