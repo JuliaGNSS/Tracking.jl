@@ -253,6 +253,27 @@ function init_estimator_state end
 """
 $(SIGNATURES)
 
+Optionally update an estimator's cross-satellite or cross-system shared state
+when new satellites enter the track set. Called once per [`merge_sats`](@ref)
+call with the dictionary of incoming `SatState`s, *after* per-sat seeding via
+[`init_estimator_state`](@ref).
+
+The default returns `estimator` unchanged, so estimators with no shared state
+need not implement it.
+
+The returned estimator must have the same concrete type as the input —
+[`TrackState`](@ref) is parameterized on the estimator type, and changing it
+would break inference. For growing shared state, hold the storage in a
+resizable container (e.g. `Vector`, `Matrix`) on an otherwise immutable
+estimator and `push!`/`resize!` it in place; rebuild the estimator with
+[`Setfield.@set`](https://jw3126.github.io/Setfield.jl/stable/) or a copying
+constructor when fields need replacing.
+"""
+update_estimator_on_handoff(estimator::AbstractDopplerEstimator, _new_sats) = estimator
+
+"""
+$(SIGNATURES)
+
 Holds the state of multiple satellites for a single GNSS system. Contains the
 system definition and a dictionary of [`TrackedSat`](@ref) entries indexed by
 identifier.
