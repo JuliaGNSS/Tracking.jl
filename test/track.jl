@@ -16,7 +16,7 @@ using GNSSSignals:
 using Tracking:
     SatState,
     TrackState,
-    SystemSatsState,
+    TrackedSystem,
     track,
     get_code_phase,
     get_carrier_phase,
@@ -210,12 +210,12 @@ end
     estimator = ConventionalAssistedPLLAndDLL()
     track_state = @inferred TrackState(
         (
-            gps = SystemSatsState(
+            gps = TrackedSystem(
                 estimator,
                 gpsl1,
                 [SatState(gpsl1, prn, start_code_phase, carrier_doppler_gps)],
             ),
-            gal = SystemSatsState(
+            gal = TrackedSystem(
                 estimator,
                 galileo_e1b,
                 [SatState(galileo_e1b, prn, start_code_phase, carrier_doppler_gal)],

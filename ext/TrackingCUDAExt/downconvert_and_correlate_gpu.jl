@@ -44,22 +44,22 @@ end
 
 struct GPUDownconvertAndCorrelator{N,I,T<:GPUSystemDownconvertAndCorrelator{I}} <:
        AbstractDownconvertAndCorrelator
-    buffers::MultipleSystemType{N,T}
+    buffers::Tracking.TupleLike{<:NTuple{N,T}}
 end
 
 function GPUDownconvertAndCorrelator(
-    multiple_system_sats_state::MultipleSystemSatsState,
+    tracked_systems::TrackedSystems,
     num_samples::Int,
 )
-    buffers = map(multiple_system_sats_state) do system_sats_state
-        buffers = map(system_sats_state.states) do tracked_sat
+    buffers = map(tracked_systems) do tracked_system
+        buffers = map(tracked_system.states) do tracked_sat
             GPUSatDownconvertAndCorrelator(
                 Float32, tracked_sat.sat_state.correlator, num_samples,
             )
         end
         GPUSystemDownconvertAndCorrelator(
             buffers,
-            convert_code_to_texture_memory(system_sats_state.system),
+            convert_code_to_texture_memory(tracked_system.system),
         )
     end
     GPUDownconvertAndCorrelator(buffers)
@@ -71,11 +71,11 @@ function merge_sats(
     sats_state::Dictionary{I,<:SatState},
     num_samples::Int,
 ) where {N,I,T,G<:GPUSystemDownconvertAndCorrelator{I,T}}
-    system_sats_state = get_system_sats_state(multiple_system_sats_state, system_idx)
+    tracked_system = get_tracked_system(tracked_systems, system_idx)
     new_buffers = map(sats_state) do sat_state
         GPUSatDownconvertAndCorrelator{T}(
             T,
-            system_sats_state.system,
+            tracked_system.system,
             sat_state.correlator,
             num_samples,
         )
@@ -141,16 +141,16 @@ function downconvert_and_correlate(
     intermediate_frequency,
 )
     num_samples_signal = get_num_samples(signal)
-    new_multiple_system_sats_state = map(
-        track_state.multiple_system_sats_state,
+    new_tracked_systems = map(
+        track_state.tracked_systems,
         downconvert_and_correlator.buffers,
-    ) do system_sats_state, system_buffers
+    ) do tracked_system, system_buffers
         new_tracked_sats =
-            map(system_sats_state.states, system_buffers.buffers) do tracked_sat, buffer
+            map(tracked_system.states, system_buffers.buffers) do tracked_sat, buffer
                 sat_state = tracked_sat.sat_state
                 signal_samples_to_integrate, is_integration_completed =
                     calc_signal_samples_to_integrate(
-                        system_sats_state.system,
+                        tracked_system.system,
                         sat_state.signal_start_sample,
                         sampling_frequency,
                         sat_state.code_doppler,
@@ -164,7 +164,7 @@ function downconvert_and_correlate(
                 end
                 carrier_frequency = sat_state.carrier_doppler + intermediate_frequency
                 code_frequency =
-                    sat_state.code_doppler + get_code_frequency(system_sats_state.system)
+                    sat_state.code_doppler + get_code_frequency(tracked_system.system)
                 sample_shifts = get_correlator_sample_shifts(
                     sat_state.correlator,
                     sampling_frequency,
@@ -186,7 +186,7 @@ function downconvert_and_correlate(
                     buffer.downconverted_and_decoded_signal,
                 )::typeof(sat_state.correlator)
                 new_sat_state = update(
-                    system_sats_state.system,
+                    tracked_system.system,
                     sat_state,
                     signal_samples_to_integrate,
                     intermediate_frequency,
@@ -196,11 +196,11 @@ function downconvert_and_correlate(
                 )
                 return TrackedSat(new_sat_state, tracked_sat.estimator_state)
             end
-        return SystemSatsState(system_sats_state, new_tracked_sats)
+        return TrackedSystem(tracked_system, new_tracked_sats)
     end
     return TrackState(
         track_state;
-        multiple_system_sats_state = new_multiple_system_sats_state,
+        tracked_systems = new_tracked_systems,
     )
 end
 

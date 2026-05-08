@@ -13,7 +13,7 @@ using Tracking:
     SatState,
     TrackedSat,
     init_estimator_state,
-    SystemSatsState,
+    TrackedSystem,
     ConventionalPLLAndDLL,
     TrackState,
     estimate_dopplers_and_filter_prompt,
@@ -201,7 +201,7 @@ end
     @test sat2_de.code_loop_filter_bandwidth == 2.0Hz
 
     track_state = TrackState(
-        SystemSatsState(gpsl1, tracked); doppler_estimator,
+        TrackedSystem(gpsl1, tracked); doppler_estimator,
     )
     new_track_state = @inferred estimate_dopplers_and_filter_prompt(
         track_state,

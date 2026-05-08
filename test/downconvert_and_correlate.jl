@@ -10,7 +10,7 @@ using Tracking:
     CPUThreadedDownconvertAndCorrelator,
     EarlyPromptLateCorrelator,
     NumAnts,
-    SystemSatsState,
+    TrackedSystem,
     SatState,
     TrackState,
     downconvert_and_correlate,

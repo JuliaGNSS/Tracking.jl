@@ -9,12 +9,27 @@ using Tracking:
     get_code_type,
     NumAnts,
     gen_code_replica!,
-    SystemSatsState,
     SatState,
     TrackState,
     downconvert_and_correlate,
     BitBuffer
 using StaticArrays
+
+# Branch-portable alias for the per-system tracking container. On
+# Tracking 2.0+ this is `TrackedSystem`; on master it was
+# `SystemSatsState`. The benchmark script runs against both via
+# AirspeedVelocity's `--bench-on=$HEAD_SHA`, so detect at load time.
+const _TrackedSystem = isdefined(Tracking, :TrackedSystem) ?
+    Tracking.TrackedSystem : Tracking.SystemSatsState
+
+# Field name on `TrackState` for the per-system tuple. Master named it
+# `multiple_system_sats_state`; on the new branch it's `tracked_systems`.
+const _SYSTEMS_FIELD = isdefined(Tracking, :TrackedSystem) ?
+    :tracked_systems : :multiple_system_sats_state
+
+@inline _get_systems(track_state) = getfield(track_state, _SYSTEMS_FIELD)
+@inline _track_state_with_systems(track_state, systems) =
+    TrackState(track_state; NamedTuple{(_SYSTEMS_FIELD,)}((systems,))...)
 
 const SUITE = BenchmarkGroup()
 
@@ -271,14 +286,15 @@ end
 # the script also loads cleanly against master (which has neither
 # `track!` nor `CPUThreadedDownconvertAndCorrelator()` zero-arg form).
 
-# Branch-portable SystemSatsState construction. Master accepts a raw
-# Vector{SatState}; the wrapper branch needs an estimator to wrap each sat
-# into a TrackedSat first.
-function _build_system_sats_state(sys, sats::Vector{<:SatState})
+# Branch-portable per-system container construction. Master accepts a
+# raw Vector{SatState} via `SystemSatsState(sys, sats)`; the wrapper
+# branch needs an estimator to wrap each sat into a TrackedSat first
+# via `TrackedSystem(estimator, sys, sats)`.
+function _build_tracked_system(sys, sats::Vector{<:SatState})
     if isdefined(Tracking, :TrackedSat)
-        return SystemSatsState(Tracking.ConventionalAssistedPLLAndDLL(), sys, sats)
+        return _TrackedSystem(Tracking.ConventionalAssistedPLLAndDLL(), sys, sats)
     else
-        return SystemSatsState(sys, sats)
+        return _TrackedSystem(sys, sats)
     end
 end
 
@@ -304,7 +320,7 @@ function _make_multi_sat_state(;
         pm = sys isa GPSL1 ? 32 : prn_max
         cd = sys isa GPSL1 ? 1000.0 : code_dop
         sats = [SatState(sys, mod1(i, pm), 10.5 + i * 0.1, (cd + i * 10) * Hz) for i = 1:ns]
-        push!(all_sss, _build_system_sats_state(sys, sats))
+        push!(all_sss, _build_tracked_system(sys, sats))
         total_sats += ns
     end
     TrackState(Tuple(all_sss)), rand(ComplexF32, nsamp), total_sats
@@ -317,11 +333,11 @@ function _make_steady_state_track_state(; systems, nsats_list, nsamp, prn_max, c
     ts, signal, _ =
         _make_multi_sat_state(; systems, nsats_list, nsamp, prn_max, code_dop)
     found_bb = BitBuffer(UInt128(0), 20, true, UInt128(0), 0, complex(0.0, 0.0), 0)
-    new_mss = map(ts.multiple_system_sats_state) do sss
+    new_mss = map(_get_systems(ts)) do sss
         new_sats = map(s -> _with_found_bit_buffer(s, found_bb), sss.states)
-        SystemSatsState(sss, new_sats)
+        _TrackedSystem(sss, new_sats)
     end
-    TrackState(ts; multiple_system_sats_state = new_mss), signal
+    _track_state_with_systems(ts, new_mss), signal
 end
 
 function bench_track_steady_state(

@@ -4,31 +4,31 @@ function TrackState(
     doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
 )
     wrapped = wrap_sats(doppler_estimator, sat_states)
-    multiple_system_sats_state = (SystemSatsState(system, wrapped),)
-    TrackState(multiple_system_sats_state, doppler_estimator)
+    tracked_systems = (TrackedSystem(system, wrapped),)
+    TrackState(tracked_systems, doppler_estimator)
 end
 
 function TrackState(
-    system_sat_states::SystemSatsState;
+    tracked_system::TrackedSystem;
     doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
 )
-    multiple_system_sats_state = (system_sat_states,)
-    TrackState(multiple_system_sats_state, doppler_estimator)
+    tracked_systems = (tracked_system,)
+    TrackState(tracked_systems, doppler_estimator)
 end
 
 function TrackState(
-    multiple_system_sats_state::MultipleSystemSatsState;
+    tracked_systems::TrackedSystems;
     doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
 )
-    TrackState(multiple_system_sats_state, doppler_estimator)
+    TrackState(tracked_systems, doppler_estimator)
 end
 
 function TrackState(
     track_state::TrackState{S,DE},
-    multiple_system_sats_state::S,
+    tracked_systems::S,
     doppler_estimator::DE,
-) where {S<:MultipleSystemSatsState,DE<:AbstractDopplerEstimator}
-    TrackState{S,DE}(multiple_system_sats_state, doppler_estimator)
+) where {S<:TrackedSystems,DE<:AbstractDopplerEstimator}
+    TrackState{S,DE}(tracked_systems, doppler_estimator)
 end
 
 # Be careful when calling this.
@@ -36,12 +36,12 @@ end
 # Tested with 1.11.6
 function TrackState(
     track_state::TrackState{S,DE};
-    multiple_system_sats_state::Maybe{S} = nothing,
+    tracked_systems::Maybe{S} = nothing,
     doppler_estimator::Maybe{DE} = nothing,
-) where {S<:MultipleSystemSatsState,DE<:AbstractDopplerEstimator}
+) where {S<:TrackedSystems,DE<:AbstractDopplerEstimator}
     TrackState{S,DE}(
-        isnothing(multiple_system_sats_state) ? track_state.multiple_system_sats_state :
-        multiple_system_sats_state,
+        isnothing(tracked_systems) ? track_state.tracked_systems :
+        tracked_systems,
         isnothing(doppler_estimator) ? track_state.doppler_estimator : doppler_estimator,
     )
 end
@@ -49,14 +49,14 @@ end
 function reset_start_sample_and_bit_buffer(track_state::TrackState)
     TrackState(
         track_state;
-        multiple_system_sats_state = reset_start_sample_and_bit_buffer(
-            track_state.multiple_system_sats_state,
+        tracked_systems = reset_start_sample_and_bit_buffer(
+            track_state.tracked_systems,
         ),
     )
 end
 
 function reset_start_sample_and_bit_buffer!(track_state::TrackState)
-    reset_start_sample_and_bit_buffer!(track_state.multiple_system_sats_state)
+    reset_start_sample_and_bit_buffer!(track_state.tracked_systems)
     return track_state
 end
 
@@ -67,7 +67,7 @@ function has_integration_reached_signal_end_for_all_satellites(
     target = num_samples + 1
     # NamedTuple unwraps to its underlying Tuple via Tuple(...) — concrete and
     # cheap.
-    _all_sats_at(Tuple(track_state.multiple_system_sats_state), target)
+    _all_sats_at(Tuple(track_state.tracked_systems), target)
 end
 
 # Recursive tuple-walk: each step has fully concrete types, no closure boxes,
@@ -84,28 +84,28 @@ end
 """
 $(SIGNATURES)
 
-Get the SystemSatsState for a specific GNSS system from a TrackState or
-MultipleSystemSatsState by index or symbol.
+Get the TrackedSystem for a specific GNSS system from a TrackState or
+TrackedSystems by index or symbol.
 """
-function get_system_sats_state(
-    track_state::TrackState{<:MultipleSystemSatsState{N}},
+function get_tracked_system(
+    track_state::TrackState{<:TrackedSystems{N}},
     system_idx,
 ) where {N}
-    get_system_sats_state(track_state.multiple_system_sats_state, system_idx)
+    get_tracked_system(track_state.tracked_systems, system_idx)
 end
 
-function get_system_sats_state(
-    multiple_system_sats_state::MultipleSystemSatsState{N},
+function get_tracked_system(
+    tracked_systems::TrackedSystems{N},
     system_idx::Union{Symbol,Integer},
 ) where {N}
-    multiple_system_sats_state[system_idx]
+    tracked_systems[system_idx]
 end
 
-function get_system_sats_state(
-    multiple_system_sats_state::MultipleSystemSatsState{N},
+function get_tracked_system(
+    tracked_systems::TrackedSystems{N},
     system_idx::Val{M},
 ) where {N,M}
-    multiple_system_sats_state[M]
+    tracked_systems[M]
 end
 
 """
@@ -114,90 +114,90 @@ $(SIGNATURES)
 Get the dictionary of satellite states for a specific GNSS system.
 """
 function get_sat_states(
-    multiple_system_sats_state::MultipleSystemSatsState{N},
+    tracked_systems::TrackedSystems{N},
     system_idx::Union{Symbol,Integer,Val},
 ) where {N}
-    get_system_sats_state(multiple_system_sats_state, system_idx).states
+    get_tracked_system(tracked_systems, system_idx).states
 end
 
-function get_sat_states(multiple_system_sats_state::MultipleSystemSatsState{1})
-    get_sat_states(multiple_system_sats_state, 1)
+function get_sat_states(tracked_systems::TrackedSystems{1})
+    get_sat_states(tracked_systems, 1)
 end
 
 function get_sat_states(
-    track_state::TrackState{<:MultipleSystemSatsState{N}},
+    track_state::TrackState{<:TrackedSystems{N}},
     system_idx::Union{Symbol,Integer,Val},
 ) where {N}
-    get_sat_states(track_state.multiple_system_sats_state, system_idx)
+    get_sat_states(track_state.tracked_systems, system_idx)
 end
 
-function get_sat_states(track_state::TrackState{<:MultipleSystemSatsState{1}})
-    get_sat_states(track_state.multiple_system_sats_state)
+function get_sat_states(track_state::TrackState{<:TrackedSystems{1}})
+    get_sat_states(track_state.tracked_systems)
 end
 
 function get_system(
-    track_state::TrackState{<:MultipleSystemSatsState{N}},
+    track_state::TrackState{<:TrackedSystems{N}},
     system_idx::Union{Symbol,Integer,Val},
 ) where {N}
-    get_system_sats_state(track_state, system_idx).system
+    get_tracked_system(track_state, system_idx).system
 end
 
-function get_system(track_state::TrackState{<:MultipleSystemSatsState{1}})
+function get_system(track_state::TrackState{<:TrackedSystems{1}})
     get_system(track_state, 1)
 end
 
 function get_sat_state(
-    track_state::TrackState{<:MultipleSystemSatsState{N}},
+    track_state::TrackState{<:TrackedSystems{N}},
     system_idx::Union{Symbol,Integer,Val},
     sat_identifier,
 ) where {N}
-    get_sat_state(get_system_sats_state(track_state, system_idx), sat_identifier)
+    get_sat_state(get_tracked_system(track_state, system_idx), sat_identifier)
 end
 
 function get_sat_state(
-    track_state::TrackState{<:MultipleSystemSatsState{1}},
+    track_state::TrackState{<:TrackedSystems{1}},
     sat_identifier,
 )
     get_sat_state(track_state, 1, sat_identifier)
 end
 
-function get_sat_state(track_state::TrackState{<:MultipleSystemSatsState{1}})
+function get_sat_state(track_state::TrackState{<:TrackedSystems{1}})
     only(get_sat_states(track_state, 1)).sat_state
 end
 
 function estimate_cn0(
-    track_state::TrackState{<:MultipleSystemSatsState},
+    track_state::TrackState{<:TrackedSystems},
     system_idx::Union{Symbol,Integer,Val},
     sat_identifier,
 )
-    estimate_cn0(get_system_sats_state(track_state, system_idx), sat_identifier)
+    estimate_cn0(get_tracked_system(track_state, system_idx), sat_identifier)
 end
 
-function estimate_cn0(track_state::TrackState{<:MultipleSystemSatsState{1}}, sat_identifier)
+function estimate_cn0(track_state::TrackState{<:TrackedSystems{1}}, sat_identifier)
     estimate_cn0(track_state, 1, sat_identifier)
 end
 
-function estimate_cn0(track_state::TrackState{<:MultipleSystemSatsState{1}})
-    estimate_cn0(get_system_sats_state(track_state, 1))
+function estimate_cn0(track_state::TrackState{<:TrackedSystems{1}})
+    estimate_cn0(get_tracked_system(track_state, 1))
 end
 
 function merge_sats(
     track_state::TrackState{S,DE},
     system_idx::Union{Symbol,Integer},
     sat_states::Union{SatState,Vector{<:SatState},Dictionary{<:Any,<:SatState}},
-) where {S<:MultipleSystemSatsState,DE<:AbstractDopplerEstimator}
+) where {S<:TrackedSystems,DE<:AbstractDopplerEstimator}
     new_sats_dict = to_dictionary(sat_states)
     wrapped = wrap_sats(track_state.doppler_estimator, new_sats_dict)
     new_estimator =
         update_estimator_on_handoff(track_state.doppler_estimator, new_sats_dict)
     TrackState{S,DE}(
-        merge_sats(track_state.multiple_system_sats_state, system_idx, wrapped),
+        merge_sats(track_state.tracked_systems, system_idx, wrapped),
         new_estimator,
     )
 end
 
 function merge_sats(
-    track_state::TrackState{<:MultipleSystemSatsState{1}},
+    track_state::TrackState{<:TrackedSystems{1}},
     sat_states::Union{SatState,Vector{<:SatState},Dictionary{Any,<:SatState}},
 )
     merge_sats(track_state, 1, sat_states)
@@ -207,14 +207,14 @@ function filter_out_sats(
     track_state::TrackState{S,DE},
     system_idx::Union{Symbol,Integer},
     identifiers,
-) where {S<:MultipleSystemSatsState,DE<:AbstractDopplerEstimator}
+) where {S<:TrackedSystems,DE<:AbstractDopplerEstimator}
     TrackState{S,DE}(
-        filter_out_sats(track_state.multiple_system_sats_state, system_idx, identifiers),
+        filter_out_sats(track_state.tracked_systems, system_idx, identifiers),
         track_state.doppler_estimator,
     )
 end
 
-function filter_out_sats(track_state::TrackState{<:MultipleSystemSatsState{1}}, identifiers)
+function filter_out_sats(track_state::TrackState{<:TrackedSystems{1}}, identifiers)
     filter_out_sats(track_state, 1, identifiers)
 end
 

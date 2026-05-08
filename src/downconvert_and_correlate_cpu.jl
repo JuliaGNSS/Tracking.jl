@@ -325,8 +325,8 @@ function downconvert_and_correlate(
 )
     new_track_state = TrackState(
         track_state;
-        multiple_system_sats_state =
-            _copy_slot_vectors(track_state.multiple_system_sats_state),
+        tracked_systems =
+            _copy_slot_vectors(track_state.tracked_systems),
     )
     downconvert_and_correlate!(
         dc, signal, new_track_state,
@@ -343,11 +343,11 @@ slots in place. Returns the same `track_state`. Allocation-free in steady
 state — see [`track!`](@ref).
 """
 # Per-system body for the single-threaded backend. Pulled out so
-# `_foreach_system!` can call it on each `SystemSatsState` in the
-# (possibly heterogeneous) `multiple_system_sats_state` tuple without
+# `_foreach_system!` can call it on each `TrackedSystem` in the
+# (possibly heterogeneous) `tracked_systems` tuple without
 # dynamic dispatch / boxing.
 @inline function _dc_one_system!(
-    sss::SystemSatsState, dc::CPUDownconvertAndCorrelator,
+    sss::TrackedSystem, dc::CPUDownconvertAndCorrelator,
     signal, num_samples_signal, preferred_num_code_blocks_to_integrate,
     sampling_frequency, intermediate_frequency,
 )
@@ -378,7 +378,7 @@ function downconvert_and_correlate!(
 )
     num_samples_signal = get_num_samples(signal)
     _foreach_system!(
-        _dc_one_system!, track_state.multiple_system_sats_state,
+        _dc_one_system!, track_state.tracked_systems,
         dc, signal, num_samples_signal, preferred_num_code_blocks_to_integrate,
         sampling_frequency, intermediate_frequency,
     )
@@ -404,8 +404,8 @@ function downconvert_and_correlate(
 )
     new_track_state = TrackState(
         track_state;
-        multiple_system_sats_state =
-            _copy_slot_vectors(track_state.multiple_system_sats_state),
+        tracked_systems =
+            _copy_slot_vectors(track_state.tracked_systems),
     )
     downconvert_and_correlate!(
         dc, signal, new_track_state,
@@ -427,7 +427,7 @@ write to disjoint slots, so no synchronization is needed. Returns the same
 # `_foreach_system!` can call it without boxing on heterogeneous
 # system tuples.
 @inline function _dc_one_system_threaded!(
-    sss::SystemSatsState, dc::CPUThreadedDownconvertAndCorrelator,
+    sss::TrackedSystem, dc::CPUThreadedDownconvertAndCorrelator,
     signal, num_samples_signal, preferred_num_code_blocks_to_integrate,
     sampling_frequency, intermediate_frequency,
 )
@@ -459,7 +459,7 @@ function downconvert_and_correlate!(
 )
     num_samples_signal = get_num_samples(signal)
     _foreach_system!(
-        _dc_one_system_threaded!, track_state.multiple_system_sats_state,
+        _dc_one_system_threaded!, track_state.tracked_systems,
         dc, signal, num_samples_signal, preferred_num_code_blocks_to_integrate,
         sampling_frequency, intermediate_frequency,
     )
