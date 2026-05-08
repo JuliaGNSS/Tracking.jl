@@ -25,7 +25,6 @@ using Tracking:
     get_sat_states,
     update_accumulator,
     get_default_correlator,
-    merge_sats,
     merge_sats
 
 @testset "Doppler aiding" begin
