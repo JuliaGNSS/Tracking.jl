@@ -10,7 +10,6 @@ using Tracking:
     TrackState,
     track,
     track!,
-    prewarm!,
     reset_start_sample_and_bit_buffer!,
     downconvert_and_correlate!,
     estimate_dopplers_and_filter_prompt!,
@@ -134,11 +133,9 @@ end
     )
     dc = DC()
 
-    # 4 ms / 1 ms code period → up to 4 prompts per call
-    prewarm!(track_state, 8)
-
-    # Run the full track! once so all stages compile and the bit buffer
-    # is in its steady-state shape.
+    # Run the full track! several times so all stages compile, the bit
+    # buffer is in its steady-state shape, and `filtered_prompts`'
+    # capacity is settled (the first call grows it via `push!`).
     for _ in 1:8
         track!(signal, track_state, sampling_frequency; downconvert_and_correlator = dc)
     end

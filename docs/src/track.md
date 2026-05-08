@@ -4,16 +4,15 @@ The `track` function is the main entry point for processing GNSS signals. It tak
 
 For hard real-time SDR loops where GC pauses must be avoided, an in-place
 counterpart [`track!`](@ref) is provided that mutates `TrackState` instead
-of rebuilding new immutable wrappers. After a one-time call to
-[`prewarm!`](@ref), each individual stage of `track!` is allocation-free in
-steady state.
+of rebuilding new immutable wrappers. After one warmup call (to seat the
+`filtered_prompts` buffer's capacity), `track!` runs with only a small
+per-call residual that does not trigger GC pauses.
 
 ## Function Reference
 
 ```@docs
 track
 track!
-prewarm!
 ```
 
 ## Optional Parameters
@@ -30,7 +29,6 @@ sat set is steady. A typical setup looks like:
 
 ```julia
 track_state = TrackState(system, initial_sats)
-prewarm!(track_state, max_prompts_per_track_call)  # one-time
 
 while got_signal_chunk(rx)
     chunk = read_chunk!(rx)
@@ -40,10 +38,10 @@ while got_signal_chunk(rx)
 end
 ```
 
-`prewarm!` calls `sizehint!` on each satellite's `filtered_prompts` buffer
-so the geometric `push!` reallocations don't fire during the hot loop.
-`max_prompts_per_track_call` is the upper bound on how many integrations
-can complete in one `track!` call (a few for short chunks).
+The first `track!` call may grow each satellite's `filtered_prompts` buffer
+via `push!` reallocations; from the second call onwards the capacity is
+settled and the loop allocates only the small `bit_buffer` find-bit closure
+residual.
 
 ## Downconversion and Correlation
 
