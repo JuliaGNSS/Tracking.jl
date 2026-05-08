@@ -1,40 +1,118 @@
+# Three independent scratch buffer roles. The code-replica path uses
+# `_SCRATCH_CODE_REPLICA`; the fused kernel's fallback uses `_SCRATCH_TILE_RE`
+# and `_SCRATCH_TILE_IM` concurrently. Holding separate buffers per role
+# (instead of bump-arena offset math on one) keeps the call sites simple.
+const _SCRATCH_CODE_REPLICA = 1
+const _SCRATCH_TILE_RE      = 2
+const _SCRATCH_TILE_IM      = 3
+const _NUM_SCRATCH_BUFFERS  = 3
+
+# Bitstype pointer-and-length view over a `Vector{UInt8}` slot, used as
+# the typed handle the kernels accept. Implements just enough of the
+# `AbstractArray` interface for the call sites: linear indexing,
+# `length`/`size`, and `pointer` (so SIMD `vstore` works). The struct is
+# fully isbits, so building one in `_with_scratch_buffer` is free.
+struct ScratchView{T} <: DenseVector{T}
+    ptr::Ptr{T}
+    len::Int
+end
+@inline Base.size(v::ScratchView) = (v.len,)
+@inline Base.IndexStyle(::Type{<:ScratchView}) = IndexLinear()
+Base.@propagate_inbounds function Base.getindex(v::ScratchView, i::Int)
+    @boundscheck checkbounds(v, i)
+    unsafe_load(v.ptr, i)
+end
+Base.@propagate_inbounds function Base.setindex!(v::ScratchView, x, i::Int)
+    @boundscheck checkbounds(v, i)
+    unsafe_store!(v.ptr, x, i)
+    v
+end
+Base.unsafe_convert(::Type{Ptr{T}}, v::ScratchView{T}) where {T} = v.ptr
+Base.pointer(v::ScratchView) = v.ptr
+Base.elsize(::Type{ScratchView{T}}) where {T} = sizeof(T)
+
 """
 $(SIGNATURES)
 
-CPU-based implementation of downconversion and correlation.
+CPU-based implementation of downconversion and correlation. Holds three
+long-lived `Vector{UInt8}` byte buffers — one per scratch role (code
+replica + the fused kernel's two tile halves). Buffers grow lazily on
+first use and are reused thereafter, so a hoisted instance has zero
+allocations per `track!` call in steady state.
+
+For real-time loops, construct the correlator **once outside** the
+`track!` loop and pass it via the `downconvert_and_correlator` keyword
+argument — the default value rebuilds the buffer vector on every call.
 """
-struct CPUDownconvertAndCorrelator{B} <: AbstractDownconvertAndCorrelator
-    buffer::B
+struct CPUDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator
+    buffers::Vector{Vector{UInt8}}
 end
 
-CPUDownconvertAndCorrelator() = CPUDownconvertAndCorrelator(default_buffer())
+CPUDownconvertAndCorrelator() = CPUDownconvertAndCorrelator(
+    [UInt8[] for _ in 1:_NUM_SCRATCH_BUFFERS],
+)
 
 """
 $(SIGNATURES)
 
-Multi-threaded CPU downconvert and correlate using Bumper.jl for temporary
-code-replica allocation. One `SlabBuffer` is pre-allocated per thread so that
-concurrent `@batch` iterations never share a buffer.
+Multi-threaded CPU downconvert and correlate. Holds three long-lived
+`Vector{UInt8}` byte buffers per thread (one per scratch role), indexed
+by `Threads.threadid()` inside `@batch` (which pins each iteration to a
+fixed thread). Buffers grow lazily on first use and are reused
+thereafter, so a hoisted instance has near-zero allocations per `track!`
+call in steady state (Polyester's `@batch` keeps a small irreducible
+per-call closure allocation).
+
+For real-time loops, construct the correlator **once outside** the
+`track!` loop and pass it via the `downconvert_and_correlator` keyword
+argument — the default value rebuilds the buffer matrix on every call.
 """
 struct CPUThreadedDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator
-    buffers::Vector{SlabBuffer}
+    buffers::Matrix{Vector{UInt8}}
 end
 
-function CPUThreadedDownconvertAndCorrelator(;
-    nthreads::Int = Threads.maxthreadid(),
+CPUThreadedDownconvertAndCorrelator() = CPUThreadedDownconvertAndCorrelator(
+    [UInt8[] for _ in 1:Threads.maxthreadid(), _ in 1:_NUM_SCRATCH_BUFFERS],
 )
-    buffers = [SlabBuffer() for _ = 1:nthreads]
-    CPUThreadedDownconvertAndCorrelator(buffers)
+
+# Look up the active scratch buffer for the given role. Single-threaded
+# backend has one buffer per role; threaded backend has one per thread per
+# role and uses `Threads.threadid()` (stable under Polyester `@batch`).
+@inline _scratch_slot(dc::CPUDownconvertAndCorrelator, role::Int) =
+    @inbounds dc.buffers[role]
+@inline _scratch_slot(dc::CPUThreadedDownconvertAndCorrelator, role::Int) =
+    @inbounds dc.buffers[Threads.threadid(), role]
+
+# Grow the role's buffer to fit `n` elements of `T` and hand a typed
+# `ScratchView` of exactly that size to `f`. The view is bitstype, so
+# constructing it is free; the underlying `Vector{UInt8}` is reused across
+# calls — once the buffer has reached its working size every subsequent
+# call is allocation-free. `GC.@preserve` keeps the byte vector rooted
+# while `f` runs (the view holds a raw `Ptr`, untracked by GC).
+@inline function _with_scratch_buffer(
+    f,
+    dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
+    role::Int,
+    ::Type{T},
+    n::Int,
+) where {T}
+    buf = _scratch_slot(dc, role)
+    nbytes = n * sizeof(T)
+    length(buf) < nbytes && resize!(buf, nbytes)
+    GC.@preserve buf begin
+        f(ScratchView{T}(Ptr{T}(pointer(buf)), n))
+    end
 end
 
-# Per-backend buffer selection. Polyester's `@batch` pins each iteration to a
-# fixed thread for the duration of its body, so `Threads.threadid()` is a
-# stable index here — but only under `@batch`. If the threaded backend is
-# ever called from `@threads :dynamic` or `Threads.@spawn`, two tasks could
-# clobber the same `SlabBuffer`. Keep the threaded path inside `@batch`.
-@inline _slab_buffer(dc::CPUDownconvertAndCorrelator) = dc.buffer
-@inline _slab_buffer(dc::CPUThreadedDownconvertAndCorrelator) =
-    dc.buffers[Threads.threadid()]
+# Convenience wrapper for the per-sat correlator path (code-replica role).
+@inline function _with_code_replica_buffer(
+    f,
+    dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
+    ::Type{T},
+    n::Int,
+) where {T}
+    _with_scratch_buffer(f, dc, _SCRATCH_CODE_REPLICA, T, n)
+end
 
 # Per-backend correlation kernel. Single-threaded backend uses the split
 # downconvert→correlate kernel; threaded backend pre-generates the code
@@ -141,11 +219,11 @@ function _update_tracked_sat_correlator(
         sampling_frequency,
         code_frequency,
     )
-    new_correlator = @no_escape _slab_buffer(dc) begin
-        code_replica = @alloc(
-            get_code_type(system),
-            num_samples_signal + maximum(sample_shifts) - minimum(sample_shifts)
-        )
+    code_replica_size =
+        num_samples_signal + maximum(sample_shifts) - minimum(sample_shifts)
+    new_correlator = _with_code_replica_buffer(
+        dc, get_code_type(system), code_replica_size,
+    ) do code_replica
         _correlate_with_buffer!(
             dc,
             code_replica,

@@ -3,7 +3,6 @@ module DownconvertAndCorrelateTest
 using Test: @test, @testset, @inferred
 using Unitful: Hz
 using GNSSSignals: GPSL1, gen_code, get_code_frequency, get_code_center_frequency_ratio, get_code_type
-using Bumper: SlabBuffer
 import Tracking
 using Tracking:
     AbstractCorrelator,
@@ -21,8 +20,11 @@ using Tracking:
     update_accumulator
 
 @testset "Downconvert and Correlator" begin
-    downconvert_and_correlator = CPUDownconvertAndCorrelator()
-    @test downconvert_and_correlator.buffer isa SlabBuffer
+    # Both backends are now empty structs — buffer ownership moved to a
+    # per-call `PtrArrays.malloc` inside the correlate body, so default
+    # construction is allocation-free and there is no field to inspect.
+    @test CPUDownconvertAndCorrelator() isa CPUDownconvertAndCorrelator
+    @test CPUThreadedDownconvertAndCorrelator() isa CPUThreadedDownconvertAndCorrelator
 end
 
 @testset "Downconvert and correlate with $DC" for DC in [

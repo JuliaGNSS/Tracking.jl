@@ -9,7 +9,6 @@ using TrackingLoopFilters
 using Dictionaries
 using Accessors
 using ConstructionBase
-using Bumper
 using Polyester
 
 using Unitful: upreferred, Hz, dBHz, ms
