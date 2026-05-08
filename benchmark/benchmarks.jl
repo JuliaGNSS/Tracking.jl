@@ -256,7 +256,20 @@ if isdefined(Tracking, :downconvert_and_correlate_fused!)
         bench_fused_kernel(; num_ants = 4, shifts = :dynamic)
 end
 
-# ── Multi-satellite benchmarks (threaded if available, CPU fallback) ──────
+# ── Per-system multi-satellite track / track! benchmarks ─────────────────
+#
+# These exercise the full tracking pipeline (downconvert + correlate +
+# doppler estimator) on realistic per-system workloads, with
+# `bit_buffer.found = true` so the doppler estimator's post-bit-edge
+# code path is hit. Four variants are registered per system: the
+# {immutable, in-place} × {single-threaded, threaded} cross product.
+# The same setup pipeline feeds all four; the only differences between
+# entries are the `Tracking.track` vs `Tracking.track!` call and the
+# choice of CPU backend.
+#
+# The `track!` variants are gated on `isdefined(Tracking, :track!)` so
+# the script also loads cleanly against master (which has neither
+# `track!` nor `CPUThreadedDownconvertAndCorrelator()` zero-arg form).
 
 # Branch-portable SystemSatsState construction. Master accepts a raw
 # Vector{SatState}; the wrapper branch needs an estimator to wrap each sat
@@ -297,150 +310,64 @@ function _make_multi_sat_state(;
     TrackState(Tuple(all_sss)), rand(ComplexF32, nsamp), total_sats
 end
 
-function bench_multi_sat(
-    threaded::Bool;
-    systems,
-    nsats_list,
-    sfreq,
-    nsamp,
-    prn_max = 32,
-    code_dop = 1000.0,
-)
+# Build a `TrackState` for the given system mix with `bit_buffer.found = true`
+# on every sat, ready to feed `track` / `track!` for steady-state-style
+# benchmarks.
+function _make_steady_state_track_state(; systems, nsats_list, nsamp, prn_max, code_dop)
     ts, signal, _ =
         _make_multi_sat_state(; systems, nsats_list, nsamp, prn_max, code_dop)
-    if threaded && isdefined(Tracking, :CPUThreadedDownconvertAndCorrelator)
-        dc = _make_cpu_threaded_dc(sfreq)
-    else
-        dc = _make_cpu_dc(sfreq)
-    end
-    @benchmarkable downconvert_and_correlate($dc, $signal, $ts, 1, $sfreq, $(0.0Hz))
-end
-
-# ── Full track loop with multiple satellites in steady-state ──────────────
-# Exercises estimate_dopplers_and_filter_prompt with bit_buffer.found == true
-
-function bench_track_steady_state(;
-    systems,
-    nsats_list,
-    sfreq,
-    nsamp,
-    prn_max = 32,
-    code_dop = 1000.0,
-)
-    ts, signal, total_sats =
-        _make_multi_sat_state(; systems, nsats_list, nsamp, prn_max, code_dop)
-    dc = _make_cpu_dc(sfreq)
-    # Set bit_buffer.found = true to simulate steady-state tracking
-    # (random signal data never triggers bit detection on its own)
     found_bb = BitBuffer(UInt128(0), 20, true, UInt128(0), 0, complex(0.0, 0.0), 0)
     new_mss = map(ts.multiple_system_sats_state) do sss
         new_sats = map(s -> _with_found_bit_buffer(s, found_bb), sss.states)
         SystemSatsState(sss, new_sats)
     end
-    ts = TrackState(ts; multiple_system_sats_state = new_mss)
-    @benchmarkable track($signal, $ts, $sfreq; downconvert_and_correlator = $dc)
+    TrackState(ts; multiple_system_sats_state = new_mss), signal
 end
 
-SUITE["track steady-state"]["L1 8sat/5K"] = bench_track_steady_state(;
-    systems = (GPSL1(),), nsats_list = [8], sfreq = 5e6Hz, nsamp = 5000,
+function bench_track_steady_state(
+    inplace::Bool, threaded::Bool;
+    systems, nsats_list, sfreq, nsamp, prn_max = 32, code_dop = 1000.0,
 )
-
-# In-place track! steady-state (only on branches that define it). Reuses the
-# steady-state preparation done by `bench_track_steady_state`'s setup
-# (BitBuffer.found = true) by simply re-running the same setup pipeline,
-# except it returns a `track!` benchmarkable instead of `track`.
-#
-# Pass `threaded = true` for the threaded backend variant.
-function bench_track_inplace_steady_state(
-    threaded::Bool = false;
-    systems,
-    nsats_list,
-    sfreq,
-    nsamp,
-    prn_max = 32,
-    code_dop = 1000.0,
-)
-    ts, signal, _ =
-        _make_multi_sat_state(; systems, nsats_list, nsamp, prn_max, code_dop)
+    ts, signal = _make_steady_state_track_state(;
+        systems, nsats_list, nsamp, prn_max, code_dop,
+    )
     dc = if threaded && isdefined(Tracking, :CPUThreadedDownconvertAndCorrelator)
         _make_cpu_threaded_dc(sfreq)
     else
         _make_cpu_dc(sfreq)
     end
-    found_bb = BitBuffer(UInt128(0), 20, true, UInt128(0), 0, complex(0.0, 0.0), 0)
-    new_mss = map(ts.multiple_system_sats_state) do sss
-        new_sats = map(s -> _with_found_bit_buffer(s, found_bb), sss.states)
-        SystemSatsState(sss, new_sats)
-    end
-    ts = TrackState(ts; multiple_system_sats_state = new_mss)
-    @benchmarkable Tracking.track!(
-        $signal, $ts, $sfreq; downconvert_and_correlator = $dc,
-    )
-end
-
-if isdefined(Tracking, :track!)
-    SUITE["track! steady-state"]["L1 8sat/5K"] = bench_track_inplace_steady_state(
-        false;
-        systems = (GPSL1(),), nsats_list = [8], sfreq = 5e6Hz, nsamp = 5000,
-    )
-    if isdefined(Tracking, :CPUThreadedDownconvertAndCorrelator)
-        SUITE["track! steady-state"]["L1 8sat/5K threaded"] =
-            bench_track_inplace_steady_state(
-                true;
-                systems = (GPSL1(),), nsats_list = [8], sfreq = 5e6Hz, nsamp = 5000,
-            )
+    if inplace
+        @benchmarkable Tracking.track!(
+            $signal, $ts, $sfreq; downconvert_and_correlator = $dc,
+        )
+    else
+        @benchmarkable Tracking.track(
+            $signal, $ts, $sfreq; downconvert_and_correlator = $dc,
+        )
     end
 end
 
-let gpsl1 = GPSL1(), gal = GalileoE1B()
-    SUITE["multi-sat"]["L1 8sat/5K"] = bench_multi_sat(
-        false;
-        systems = (gpsl1,),
-        nsats_list = [8],
-        sfreq = 5e6Hz,
-        nsamp = 5000,
-    )
-    SUITE["multi-sat"]["E1B 4sat/25K"] = bench_multi_sat(
-        false;
-        systems = (gal,),
-        nsats_list = [4],
-        sfreq = 25e6Hz,
-        nsamp = 25000,
-        prn_max = 50,
-        code_dop = 100.0,
-    )
-    SUITE["multi-sat"]["8L1+8E1B/25K"] = bench_multi_sat(
-        false;
-        systems = (gpsl1, gal),
-        nsats_list = [8, 8],
-        sfreq = 25e6Hz,
-        nsamp = 25000,
-        prn_max = 50,
-        code_dop = 100.0,
-    )
-    SUITE["multi-sat-threaded"]["L1 8sat/5K"] = bench_multi_sat(
-        true;
-        systems = (gpsl1,),
-        nsats_list = [8],
-        sfreq = 5e6Hz,
-        nsamp = 5000,
-    )
-    SUITE["multi-sat-threaded"]["E1B 4sat/25K"] = bench_multi_sat(
-        true;
-        systems = (gal,),
-        nsats_list = [4],
-        sfreq = 25e6Hz,
-        nsamp = 25000,
-        prn_max = 50,
-        code_dop = 100.0,
-    )
-    SUITE["multi-sat-threaded"]["8L1+8E1B/25K"] = bench_multi_sat(
-        true;
-        systems = (gpsl1, gal),
-        nsats_list = [8, 8],
-        sfreq = 25e6Hz,
-        nsamp = 25000,
-        prn_max = 50,
-        code_dop = 100.0,
-    )
+# Three per-system workloads exercised across four entry-point variants
+# (immutable / in-place × single-threaded / threaded). Naming convention:
+#
+#   track[!][-threaded] / <system> <Nsats>sat/<Nsamp>
+#
+# Master only registers the immutable variants (no `track!`); the
+# threaded suffix is also master-compatible since the underlying
+# `CPUThreadedDownconvertAndCorrelator` exists in both.
+const _TRACK_BENCH_CASES = let gpsl1 = GPSL1(), gal = GalileoE1B()
+    [
+        ("L1 8sat/5K",       (systems = (gpsl1,),     nsats_list = [8],    sfreq = 5e6Hz,  nsamp = 5000)),
+        ("E1B 4sat/25K",     (systems = (gal,),       nsats_list = [4],    sfreq = 25e6Hz, nsamp = 25000, prn_max = 50, code_dop = 100.0)),
+        ("8L1+8E1B/25K",     (systems = (gpsl1, gal), nsats_list = [8, 8], sfreq = 25e6Hz, nsamp = 25000, prn_max = 50, code_dop = 100.0)),
+    ]
+end
+
+for (key, kw) in _TRACK_BENCH_CASES
+    SUITE["track"][key] = bench_track_steady_state(false, false; kw...)
+    SUITE["track-threaded"][key] = bench_track_steady_state(false, true; kw...)
+    if isdefined(Tracking, :track!)
+        SUITE["track!"][key] = bench_track_steady_state(true, false; kw...)
+        SUITE["track!-threaded"][key] = bench_track_steady_state(true, true; kw...)
+    end
 end
