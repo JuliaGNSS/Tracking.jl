@@ -8,6 +8,13 @@ of rebuilding new immutable wrappers. After one warmup call (to seat the
 `filtered_prompts` buffer's capacity), `track!` runs with only a small
 per-call residual that does not trigger GC pauses.
 
+> **Allocation-free hot loop:** the
+> [`CPUDownconvertAndCorrelator`](@ref) and [`CPUThreadedDownconvertAndCorrelator`](@ref)
+> structs hold long-lived per-thread scratch buffers that grow on
+> first use. **Construct the correlator once outside the `track!`
+> loop** and pass it via `downconvert_and_correlator =` — the default
+> kwarg value rebuilds the buffer matrix on every call.
+
 ## Function Reference
 
 ```@docs
@@ -29,6 +36,7 @@ sat set is steady. A typical setup looks like:
 
 ```julia
 track_state = TrackState(system, initial_sats)
+dc = CPUThreadedDownconvertAndCorrelator()  # hoist outside the loop
 
 while got_signal_chunk(rx)
     chunk = read_chunk!(rx)
@@ -38,15 +46,21 @@ while got_signal_chunk(rx)
 end
 ```
 
-The first `track!` call may grow each satellite's `filtered_prompts` buffer
-via `push!` reallocations; from the second call onwards the capacity is
-settled and the loop allocates only the small `bit_buffer` find-bit closure
-residual.
+Hoisting `dc` is what makes the loop allocation-free: each correlator holds
+long-lived per-thread scratch buffers that grow on first use and are reused
+thereafter. Calling `track!` without the kwarg works, but rebuilds the
+buffer matrix on every call.
+
+The first `track!` call may also grow each satellite's `filtered_prompts`
+buffer via `push!` reallocations; from the second call onwards the capacity
+is settled and the loop allocates only the small `bit_buffer` find-bit
+closure residual.
 
 ## Downconversion and Correlation
 
 ```@docs
 CPUDownconvertAndCorrelator
+CPUThreadedDownconvertAndCorrelator
 AbstractDownconvertAndCorrelator
 ```
 

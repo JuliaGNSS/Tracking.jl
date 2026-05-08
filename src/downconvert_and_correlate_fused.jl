@@ -248,9 +248,14 @@ end
 
 
 # ── Fallback for dynamic-length sample_shifts (AbstractVector) ────────
-# Fused downconvert + correlate using stack-allocated SoA tile buffers
-# (via @no_escape) and @simd for the tap accumulation loop.
-# No dependency on @avx / LoopVectorization.
+# Fused downconvert + correlate. Rare path — only fires when the caller
+# passes a runtime-sized `AbstractVector` of shifts (the common
+# EPL/VEPL correlators use `SVector{NC}` and dispatch to the
+# `@generated` overload above, which has no tile buffers). Allocates
+# `tile_re`/`tile_im` as plain `Vector{T}`, accepting the per-call GC
+# allocation; the alternative would be to plumb the calling
+# correlator's scratch buffers through, which doesn't pay off for a
+# rarely-hit path.
 function downconvert_and_correlate_fused!(
     correlator::AbstractCorrelator{M},
     signal::AbstractArray{Complex{ST}},
@@ -283,65 +288,63 @@ function downconvert_and_correlate_fused!(
 
     last = start_sample + num_samples - 1
 
-    @no_escape begin
-        # Flat buffer: M antennas × num_samples, SoA layout
-        tile_re = @alloc(T, num_samples * M)
-        tile_im = @alloc(T, num_samples * M)
+    # Flat buffers: M antennas × num_samples, SoA layout
+    tile_re = Vector{T}(undef, num_samples * M)
+    tile_im = Vector{T}(undef, num_samples * M)
 
-        # Downconvert each antenna into its tile slice
-        i = start_sample
-        idx = 1
-        @inbounds while i + W - 1 <= last
-            base_phase = SIMD.Vec{W,T}(T(i - start_sample))
-            phase = muladd(base_phase, two_pi_fr, init_1)
-            ci, cr = fast_sincos_u100k(phase)
-            row_byte_off = (i - 1) * 2 * sizeof_ST
-            for j in 1:M
-                sr, si = _deinterleave_load(
-                    SIMD.Vec{W,T}, p_sig,
-                    (j - 1) * sig_col_bytes + row_byte_off,
-                )
-                dre = sr * cr + si * ci
-                dim = si * cr - sr * ci
-                off = ((j - 1) * num_samples + idx - 1) * sizeof(T)
-                vstore(dre, pointer(tile_re) + off)
-                vstore(dim, pointer(tile_im) + off)
-            end
-            i += W
-            idx += W
+    # Downconvert each antenna into its tile slice
+    i = start_sample
+    idx = 1
+    @inbounds while i + W - 1 <= last
+        base_phase = SIMD.Vec{W,T}(T(i - start_sample))
+        phase = muladd(base_phase, two_pi_fr, init_1)
+        ci, cr = fast_sincos_u100k(phase)
+        row_byte_off = (i - 1) * 2 * sizeof_ST
+        for j in 1:M
+            sr, si = _deinterleave_load(
+                SIMD.Vec{W,T}, p_sig,
+                (j - 1) * sig_col_bytes + row_byte_off,
+            )
+            dre = sr * cr + si * ci
+            dim = si * cr - sr * ci
+            off = ((j - 1) * num_samples + idx - 1) * sizeof(T)
+            vstore(dre, pointer(tile_re) + off)
+            vstore(dim, pointer(tile_im) + off)
         end
-        @inbounds while i <= last
-            ph = two_pi * (T(i - start_sample) * freq_ratio + phase0)
-            c_im_s, c_re_s = sincos(ph)
-            for j in 1:M
-                sig = signal[i, j]
-                tile_re[(j-1)*num_samples + idx] = T(real(sig)) * c_re_s + T(imag(sig)) * c_im_s
-                tile_im[(j-1)*num_samples + idx] = T(imag(sig)) * c_re_s - T(real(sig)) * c_im_s
-            end
-            i += 1
-            idx += 1
-        end
-
-        # Correlate: tap-outer, antenna-inner with @simd
-        prev = get_accumulators(correlator)
-        new_acc = _mutable_copy(prev)
-        @inbounds for k in 1:num_taps
-            shift_offset = sample_shifts[k] - min_shift
-            for j in 1:M
-                acc_r = zero(T)
-                acc_i = zero(T)
-                ant_off = (j - 1) * num_samples
-                @simd for n in 1:num_samples
-                    c = code_replica[n + shift_offset]
-                    acc_r += tile_re[ant_off + n] * c
-                    acc_i += tile_im[ant_off + n] * c
-                end
-                corr_val = complex(Float64(acc_r), Float64(acc_i))
-                new_acc[k] = _add_antenna(new_acc[k], prev[k], j, corr_val)
-            end
-        end
-
-        update_accumulator(correlator, _to_immutable(new_acc))
+        i += W
+        idx += W
     end
+    @inbounds while i <= last
+        ph = two_pi * (T(i - start_sample) * freq_ratio + phase0)
+        c_im_s, c_re_s = sincos(ph)
+        for j in 1:M
+            sig = signal[i, j]
+            tile_re[(j-1)*num_samples + idx] = T(real(sig)) * c_re_s + T(imag(sig)) * c_im_s
+            tile_im[(j-1)*num_samples + idx] = T(imag(sig)) * c_re_s - T(real(sig)) * c_im_s
+        end
+        i += 1
+        idx += 1
+    end
+
+    # Correlate: tap-outer, antenna-inner with @simd
+    prev = get_accumulators(correlator)
+    new_acc = _mutable_copy(prev)
+    @inbounds for k in 1:num_taps
+        shift_offset = sample_shifts[k] - min_shift
+        for j in 1:M
+            acc_r = zero(T)
+            acc_i = zero(T)
+            ant_off = (j - 1) * num_samples
+            @simd for n in 1:num_samples
+                c = code_replica[n + shift_offset]
+                acc_r += tile_re[ant_off + n] * c
+                acc_i += tile_im[ant_off + n] * c
+            end
+            corr_val = complex(Float64(acc_r), Float64(acc_i))
+            new_acc[k] = _add_antenna(new_acc[k], prev[k], j, corr_val)
+        end
+    end
+
+    update_accumulator(correlator, _to_immutable(new_acc))
 end
 
