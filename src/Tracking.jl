@@ -33,7 +33,7 @@ export get_early,
     get_num_bits,
     get_accumulators,
     get_early_late_sample_spacing,
-    get_system_sats_state,
+    get_tracked_system,
     get_num_ants,
     has_bit_or_secondary_code_been_found,
     track,
@@ -51,7 +51,7 @@ export get_early,
     init_estimator_state,
     update_estimator_on_handoff,
     get_estimator_state,
-    SystemSatsState,
+    TrackedSystem,
     CPUDownconvertAndCorrelator,
     CPUThreadedDownconvertAndCorrelator,
     ConventionalPLLAndDLL,
@@ -67,8 +67,7 @@ export get_early,
     get_default_correlator,
     AbstractCorrelator,
     AbstractDownconvertAndCorrelator,
-    MultipleSystemType,
-    MultipleSystemSatsState,
+    TrackedSystems,
     get_num_accumulators,
     get_correlator_sample_shifts,
     calc_signal_samples_to_integrate,
@@ -151,12 +150,6 @@ include("gpsl5.jl")
 include("galileo_e1b.jl")
 include("sat_state.jl")
 
-"""
-Type alias for a tuple or named tuple of N elements of type T, used to represent
-multiple GNSS systems.
-"""
-const MultipleSystemType{N,T} = TupleLike{<:NTuple{N,T}}
-const MultipleSystemSatType{N,I,T} = MultipleSystemType{N,Dictionary{I,T}}
 
 """
 $(SIGNATURES)
@@ -165,8 +158,8 @@ Main tracking state container holding satellite states for multiple GNSS systems
 and the Doppler estimator (e.g., PLL/DLL). This is the primary struct used for
 tracking operations.
 """
-struct TrackState{S<:MultipleSystemSatsState,DE<:AbstractDopplerEstimator}
-    multiple_system_sats_state::S
+struct TrackState{S<:TrackedSystems,DE<:AbstractDopplerEstimator}
+    tracked_systems::S
     doppler_estimator::DE
 end
 

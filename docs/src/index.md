@@ -140,9 +140,9 @@ julia> galileo_sat = SatState(GalileoE1B(), 11, 200.0, -300.0Hz);
 
 julia> estimator = ConventionalAssistedPLLAndDLL();
 
-julia> gps_system_state = SystemSatsState(estimator, GPSL1(), gps_sat);
+julia> gps_system_state = TrackedSystem(estimator, GPSL1(), gps_sat);
 
-julia> galileo_system_state = SystemSatsState(estimator, GalileoE1B(), galileo_sat);
+julia> galileo_system_state = TrackedSystem(estimator, GalileoE1B(), galileo_sat);
 
 julia> track_state = TrackState((gps_system_state, galileo_system_state); doppler_estimator = estimator);
 
@@ -165,9 +165,9 @@ julia> galileo_sat = SatState(GalileoE1B(), 11, 200.0, -300.0Hz);
 
 julia> estimator = ConventionalAssistedPLLAndDLL();
 
-julia> gps_system_state = SystemSatsState(estimator, GPSL1(), gps_sat);
+julia> gps_system_state = TrackedSystem(estimator, GPSL1(), gps_sat);
 
-julia> galileo_system_state = SystemSatsState(estimator, GalileoE1B(), galileo_sat);
+julia> galileo_system_state = TrackedSystem(estimator, GalileoE1B(), galileo_sat);
 
 julia> track_state = TrackState((gps = gps_system_state, galileo = galileo_system_state); doppler_estimator = estimator);
 

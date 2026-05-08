@@ -7,7 +7,7 @@ using Dictionaries: dictionary
 using Tracking:
     SatState,
     TrackState,
-    SystemSatsState,
+    TrackedSystem,
     get_system,
     get_prn,
     get_num_ants,
@@ -110,13 +110,13 @@ end
     galileo_e1b = GalileoE1B()
 
     estimator = ConventionalAssistedPLLAndDLL()
-    system_sats_states = (
-        gps = SystemSatsState(
+    tracked_systems = (
+        gps = TrackedSystem(
             estimator,
             gpsl1,
             [SatState(gpsl1, 1, 10.5, 10.0Hz), SatState(gpsl1, 2, 11.5, 20.0Hz)],
         ),
-        gal = SystemSatsState(
+        gal = TrackedSystem(
             estimator,
             galileo_e1b,
             [
@@ -126,7 +126,7 @@ end
         ),
     )
 
-    track_state = @inferred TrackState(system_sats_states; doppler_estimator = estimator)
+    track_state = @inferred TrackState(tracked_systems; doppler_estimator = estimator)
 
     new_track_state = @inferred merge_sats(track_state, 1, SatState(gpsl1, 3, 5.5, 80.0Hz))
 
@@ -184,7 +184,7 @@ end
     @test get_prn(filtered_new_new_new_track_state, :gps, 8) == 8
 end
 
-@testset "TrackedSat / SystemSatsState helpers" begin
+@testset "TrackedSat / TrackedSystem helpers" begin
     using Tracking:
         TrackedSat,
         get_estimator_state,
@@ -209,10 +209,10 @@ end
     wrapped_dict = wrap_sats(estimator, dictionary([1 => sat, 2 => sat2]))
     @test length(wrapped_dict) == 2
 
-    # SystemSatsState constructors over already-wrapped TrackedSats.
-    sss_from_vec = SystemSatsState(gpsl1, collect(wrapped_vec))
+    # TrackedSystem constructors over already-wrapped TrackedSats.
+    sss_from_vec = TrackedSystem(gpsl1, collect(wrapped_vec))
     @test length(sss_from_vec.states) == 2
-    sss_from_one = SystemSatsState(gpsl1, only(wrapped_one))
+    sss_from_one = TrackedSystem(gpsl1, only(wrapped_one))
     @test length(sss_from_one.states) == 1
 
     # Direct accessors on TrackedSat
@@ -220,7 +220,7 @@ end
     @test get_sat_state(t).prn == 1
     @test get_estimator_state(t) isa SatConventionalPLLAndDLL
 
-    # SystemSatsState-level get_estimator_state
+    # TrackedSystem-level get_estimator_state
     @test get_estimator_state(sss_from_one) isa SatConventionalPLLAndDLL
     @test get_estimator_state(sss_from_vec, 2) isa SatConventionalPLLAndDLL
 

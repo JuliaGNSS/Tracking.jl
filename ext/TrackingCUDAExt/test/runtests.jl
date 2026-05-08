@@ -10,7 +10,7 @@ using Pkg
 using Bumper: SlabBuffer
 using Tracking:
     CPUDownconvertAndCorrelator,
-    SystemSatsState,
+    TrackedSystem,
     SatState,
     TrackState,
     downconvert_and_correlate,
@@ -45,10 +45,10 @@ end
 
     sats = [SatState(gpsl1, 1, code_phase, 1000.0Hz), SatState(gpsl1, 2, 11.0, 500.0Hz)]
     track_state = TrackState(gpsl1, sats)
-    multiple_system_sats_state = track_state.multiple_system_sats_state
+    tracked_systems = track_state.tracked_systems
 
     downconvert_and_correlator =
-        GPUDownconvertAndCorrelator(multiple_system_sats_state, num_samples_signal)
+        GPUDownconvertAndCorrelator(tracked_systems, num_samples_signal)
 
     preferred_num_code_blocks_to_integrate = 1
 
@@ -137,7 +137,7 @@ end
 
     # TODO: Why doesn't @inferred work here?
     downconvert_and_correlator =
-        GPUDownconvertAndCorrelator(track_state.multiple_system_sats_state, num_samples)
+        GPUDownconvertAndCorrelator(track_state.tracked_systems, num_samples)
 
     signal =
         cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase) .*

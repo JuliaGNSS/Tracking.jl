@@ -278,17 +278,17 @@ Holds the state of multiple satellites for a single GNSS system. Contains the
 system definition and a dictionary of [`TrackedSat`](@ref) entries indexed by
 identifier.
 """
-struct SystemSatsState{S<:AbstractGNSS,T<:TrackedSat,I}
+struct TrackedSystem{S<:AbstractGNSS,T<:TrackedSat,I}
     system::S
     states::Dictionary{I,T}
 end
 
 """
-Type alias for a tuple or named tuple of `SystemSatsState` objects, representing
+Type alias for a tuple or named tuple of `TrackedSystem` objects, representing
 tracking state across multiple GNSS systems.
 """
-const MultipleSystemSatsState{N,I,S,T} =
-    TupleLike{<:NTuple{N,SystemSatsState{<:S,<:T,<:I}}}
+const TrackedSystems{N,I,S,T} =
+    TupleLike{<:NTuple{N,TrackedSystem{<:S,<:T,<:I}}}
 
 """
 $(SIGNATURES)
@@ -299,13 +299,13 @@ Used internally by [`TrackState`](@ref)'s `merge_sats` after wrapping incoming
 `TrackState`-level method.
 """
 function merge_sats(
-    multiple_system_sats_state::MultipleSystemSatsState,
+    tracked_systems::TrackedSystems,
     system_idx,
     new_tracked_sats::Dictionary{<:Any,<:TrackedSat},
 )
-    system_sats_state = get_system_sats_state(multiple_system_sats_state, system_idx)
-    @set multiple_system_sats_state[system_idx].states =
-        merge(system_sats_state.states, new_tracked_sats)
+    tracked_system = get_tracked_system(tracked_systems, system_idx)
+    @set tracked_systems[system_idx].states =
+        merge(tracked_system.states, new_tracked_sats)
 end
 
 """
@@ -314,7 +314,7 @@ $(SIGNATURES)
 Remove satellites with the specified identifiers from the tracking state.
 """
 function filter_out_sats(
-    multiple_system_sats_state::MultipleSystemSatsState,
+    tracked_systems::TrackedSystems,
     system_idx::Union{Symbol,Integer},
     identifiers,
 )
@@ -322,36 +322,36 @@ function filter_out_sats(
         last,
         filter(
             ((id,),) -> !in(id, identifiers),
-            pairs(multiple_system_sats_state[system_idx].states),
+            pairs(tracked_systems[system_idx].states),
         ),
     )
-    @set multiple_system_sats_state[system_idx].states = filtered_sat_states
+    @set tracked_systems[system_idx].states = filtered_sat_states
 end
 
-# Build a `SystemSatsState` whose `states` Dictionary shares its keys with
+# Build a `TrackedSystem` whose `states` Dictionary shares its keys with
 # the original but holds a freshly-copied `values::Vector{TrackedSat}`.
 # Used by the immutable variants of `downconvert_and_correlate` /
 # `estimate_dopplers_and_filter_prompt` /
 # `reset_start_sample_and_bit_buffer` to detach the slot vector before
 # delegating to the in-place form — preserves `track`'s "input is not
 # mutated" contract while reusing the in-place implementation.
-@inline function _copy_slot_vector(sss::SystemSatsState)
-    SystemSatsState(
+@inline function _copy_slot_vector(sss::TrackedSystem)
+    TrackedSystem(
         sss.system,
         Dictionary(keys(sss.states), copy(sss.states.values)),
     )
 end
 
 @inline function _copy_slot_vectors(
-    multiple_system_sats_state::MultipleSystemSatsState,
+    tracked_systems::TrackedSystems,
 )
-    map(_copy_slot_vector, multiple_system_sats_state)
+    map(_copy_slot_vector, tracked_systems)
 end
 
-# Recursive tuple walker: applies `f(system_sats_state, args...)` to each
-# `SystemSatsState` in the (named-)tuple. Each step has fully concrete
+# Recursive tuple walker: applies `f(tracked_system, args...)` to each
+# `TrackedSystem` in the (named-)tuple. Each step has fully concrete
 # types, so no runtime dispatch even when systems differ
-# (heterogeneous `Tuple{SystemSatsState{GPSL1,…}, SystemSatsState{GalileoE1B,…}}`
+# (heterogeneous `Tuple{TrackedSystem{GPSL1,…}, TrackedSystem{GalileoE1B,…}}`
 # would otherwise box each element when iterated with `for s in tuple`).
 @inline _foreach_system!(f::F, ::Tuple{}, args::Vararg{Any,N}) where {F,N} = nothing
 @inline function _foreach_system!(f::F, t::Tuple, args::Vararg{Any,N}) where {F,N}
@@ -364,10 +364,10 @@ end
 
 # In-place variant: walks each system's `Vector{TrackedSat}` slot storage and
 # overwrites each entry with a freshly reset value. The vector itself, the
-# Dictionary, and the SystemSatsState/MultipleSystemSatsState wrappers are
+# Dictionary, and the TrackedSystem/TrackedSystems wrappers are
 # all reused. `TrackedSat` itself is immutable, so the slot is reassigned
 # rather than mutated; we still call the non-`!` per-`TrackedSat` form.
-@inline function _reset_one_system!(sss::SystemSatsState)
+@inline function _reset_one_system!(sss::TrackedSystem)
     vals = sss.states.values
     @inbounds for i in eachindex(vals)
         vals[i] = reset_start_sample_and_bit_buffer(vals[i])
@@ -376,18 +376,18 @@ end
 end
 
 function reset_start_sample_and_bit_buffer!(
-    multiple_system_sats_state::MultipleSystemSatsState,
+    tracked_systems::TrackedSystems,
 )
-    _foreach_system!(_reset_one_system!, multiple_system_sats_state)
-    return multiple_system_sats_state
+    _foreach_system!(_reset_one_system!, tracked_systems)
+    return tracked_systems
 end
 
 # Immutable variant: copies the slot vectors first, then delegates to the
 # in-place form. Same per-sat work, only the storage ownership differs.
 function reset_start_sample_and_bit_buffer(
-    multiple_system_sats_state::MultipleSystemSatsState,
+    tracked_systems::TrackedSystems,
 )
-    reset_start_sample_and_bit_buffer!(_copy_slot_vectors(multiple_system_sats_state))
+    reset_start_sample_and_bit_buffer!(_copy_slot_vectors(tracked_systems))
 end
 
 function to_dictionary(sat_states::Dictionary{I,<:SatState}) where {I}
@@ -435,25 +435,25 @@ end
 """
 $(SIGNATURES)
 
-Build a `SystemSatsState` from already-wrapped tracked sats. Accepts a
+Build a `TrackedSystem` from already-wrapped tracked sats. Accepts a
 `Vector{TrackedSat}`, a `Dictionary{I,TrackedSat}`, or a single `TrackedSat`.
 
 To build from raw [`SatState`](@ref) input, supply the doppler estimator —
-the convenience method [`SystemSatsState`](@ref)`(estimator, system, sats)`
+the convenience method [`TrackedSystem`](@ref)`(estimator, system, sats)`
 wraps each sat via [`init_estimator_state`](@ref).
 """
-function SystemSatsState(
+function TrackedSystem(
     system::AbstractGNSS,
     tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}},
 )
-    SystemSatsState(system, to_dictionary(tracked_sats))
+    TrackedSystem(system, to_dictionary(tracked_sats))
 end
 
-function SystemSatsState(
-    system_sats_state::SystemSatsState,
+function TrackedSystem(
+    tracked_system::TrackedSystem,
     states::Dictionary{I,<:TrackedSat},
 ) where {I}
-    SystemSatsState(system_sats_state.system, states)
+    TrackedSystem(tracked_system.system, states)
 end
 
 """
@@ -461,24 +461,24 @@ $(SIGNATURES)
 
 Convenience constructor that wraps each `SatState` with its initial estimator
 state via [`init_estimator_state`](@ref) before building the
-`SystemSatsState`. Useful when assembling multi-system tracking state by
+`TrackedSystem`. Useful when assembling multi-system tracking state by
 hand.
 """
-function SystemSatsState(
+function TrackedSystem(
     estimator::AbstractDopplerEstimator,
     system::AbstractGNSS,
     sat_states::Union{SatState,Vector{<:SatState},Dictionary{<:Any,<:SatState}},
 )
-    SystemSatsState(system, wrap_sats(estimator, sat_states))
+    TrackedSystem(system, wrap_sats(estimator, sat_states))
 end
 
 """
 $(SIGNATURES)
 
-Get the GNSS system definition from a SystemSatsState.
+Get the GNSS system definition from a TrackedSystem.
 """
-get_system(sss::SystemSatsState) = sss.system
-get_states(sss::SystemSatsState) = sss.states
+get_system(sss::TrackedSystem) = sss.system
+get_states(sss::TrackedSystem) = sss.states
 
 """
 $(SIGNATURES)
@@ -486,19 +486,19 @@ $(SIGNATURES)
 Get the satellite state for a specific satellite identifier. Unwraps the
 internal [`TrackedSat`](@ref) — callers see the [`SatState`](@ref) directly.
 """
-get_sat_state(sss::SystemSatsState, identifier) = sss.states[identifier].sat_state
-get_sat_state(sss::SystemSatsState) = only(sss.states).sat_state
+get_sat_state(sss::TrackedSystem, identifier) = sss.states[identifier].sat_state
+get_sat_state(sss::TrackedSystem) = only(sss.states).sat_state
 
 """
 $(SIGNATURES)
 
 Get the per-satellite estimator state for a specific satellite identifier.
 """
-get_estimator_state(sss::SystemSatsState, identifier) =
+get_estimator_state(sss::TrackedSystem, identifier) =
     sss.states[identifier].estimator_state
-get_estimator_state(sss::SystemSatsState) = only(sss.states).estimator_state
+get_estimator_state(sss::TrackedSystem) = only(sss.states).estimator_state
 
-function estimate_cn0(sss::SystemSatsState, id...)
+function estimate_cn0(sss::TrackedSystem, id...)
     estimate_cn0(sss.system, get_sat_state(sss, id...))
 end
 

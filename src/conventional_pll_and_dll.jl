@@ -248,7 +248,7 @@ the incoming signal did not provide enough samples, it will return struct with
 zeroed values.
 """
 function estimate_dopplers_and_filter_prompt(
-    track_state::TrackState{<:MultipleSystemSatsState,<:ConventionalPLLAndDLL},
+    track_state::TrackState{<:TrackedSystems,<:ConventionalPLLAndDLL},
     preferred_num_code_blocks_to_integrate,
     sampling_frequency,
 )
@@ -257,8 +257,8 @@ function estimate_dopplers_and_filter_prompt(
     # only the storage ownership differs.
     new_track_state = TrackState(
         track_state;
-        multiple_system_sats_state =
-            _copy_slot_vectors(track_state.multiple_system_sats_state),
+        tracked_systems =
+            _copy_slot_vectors(track_state.tracked_systems),
     )
     estimate_dopplers_and_filter_prompt!(
         new_track_state, preferred_num_code_blocks_to_integrate, sampling_frequency,
@@ -277,7 +277,7 @@ allocation-free in steady state when [`track!`](@ref)'s preconditions are met.
 # `_foreach_system!` can call it without boxing when the system tuple
 # is heterogeneous (e.g. GPS L1 + Galileo E1B).
 @inline function _est_one_system!(
-    sss::SystemSatsState, preferred_num_code_blocks_to_integrate, sampling_frequency,
+    sss::TrackedSystem, preferred_num_code_blocks_to_integrate, sampling_frequency,
 )
     system = sss.system
     vals = sss.states.values
@@ -293,12 +293,12 @@ allocation-free in steady state when [`track!`](@ref)'s preconditions are met.
 end
 
 function estimate_dopplers_and_filter_prompt!(
-    track_state::TrackState{<:MultipleSystemSatsState,<:ConventionalPLLAndDLL},
+    track_state::TrackState{<:TrackedSystems,<:ConventionalPLLAndDLL},
     preferred_num_code_blocks_to_integrate,
     sampling_frequency,
 )
     _foreach_system!(
-        _est_one_system!, track_state.multiple_system_sats_state,
+        _est_one_system!, track_state.tracked_systems,
         preferred_num_code_blocks_to_integrate, sampling_frequency,
     )
     return track_state

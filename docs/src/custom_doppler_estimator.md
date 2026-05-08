@@ -69,7 +69,7 @@ state unchanged.
    The matching mutating method
    `estimate_dopplers_and_filter_prompt!(track_state, ...)` is what
    [`track!`](@ref) calls. To support real-time loops, define both — the
-   mutating version walks `system_sats_state.states.values` and
+   mutating version walks `tracked_system.states.values` and
    reassigns slots in place.
 
 ## Skeleton
@@ -115,7 +115,7 @@ function Tracking.estimate_dopplers_and_filter_prompt(
     preferred_num_code_blocks_to_integrate,
     sampling_frequency,
 )
-    new_mss = map(track_state.multiple_system_sats_state) do sss
+    new_mss = map(track_state.tracked_systems) do sss
         new_sats = map(sss.states) do tracked_sat
             sat = tracked_sat.sat_state
             est = tracked_sat.estimator_state
@@ -124,9 +124,9 @@ function Tracking.estimate_dopplers_and_filter_prompt(
             new_est = SatMyEstimator(est.integrator + ...)
             TrackedSat(new_sat, new_est)
         end
-        Tracking.SystemSatsState(sss, new_sats)
+        Tracking.TrackedSystem(sss, new_sats)
     end
-    return TrackState(track_state; multiple_system_sats_state = new_mss)
+    return TrackState(track_state; tracked_systems = new_mss)
 end
 ```
 
@@ -140,7 +140,7 @@ function Tracking.estimate_dopplers_and_filter_prompt!(
     preferred_num_code_blocks_to_integrate,
     sampling_frequency,
 )
-    for sss in track_state.multiple_system_sats_state
+    for sss in track_state.tracked_systems
         vals = sss.states.values
         @inbounds for i in eachindex(vals)
             vals[i] = my_per_sat_update(vals[i], sss.system, ...)
