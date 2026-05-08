@@ -348,20 +348,37 @@ end
     map(_copy_slot_vector, multiple_system_sats_state)
 end
 
+# Recursive tuple walker: applies `f(system_sats_state, args...)` to each
+# `SystemSatsState` in the (named-)tuple. Each step has fully concrete
+# types, so no runtime dispatch even when systems differ
+# (heterogeneous `Tuple{SystemSatsState{GPSL1,…}, SystemSatsState{GalileoE1B,…}}`
+# would otherwise box each element when iterated with `for s in tuple`).
+@inline _foreach_system!(f::F, ::Tuple{}, args::Vararg{Any,N}) where {F,N} = nothing
+@inline function _foreach_system!(f::F, t::Tuple, args::Vararg{Any,N}) where {F,N}
+    f(first(t), args...)
+    _foreach_system!(f, Base.tail(t), args...)
+end
+# NamedTuple unwraps to its underlying Tuple — concrete and cheap.
+@inline _foreach_system!(f::F, nt::NamedTuple, args::Vararg{Any,N}) where {F,N} =
+    _foreach_system!(f, Tuple(nt), args...)
+
 # In-place variant: walks each system's `Vector{TrackedSat}` slot storage and
 # overwrites each entry with a freshly reset value. The vector itself, the
 # Dictionary, and the SystemSatsState/MultipleSystemSatsState wrappers are
 # all reused. `TrackedSat` itself is immutable, so the slot is reassigned
 # rather than mutated; we still call the non-`!` per-`TrackedSat` form.
+@inline function _reset_one_system!(sss::SystemSatsState)
+    vals = sss.states.values
+    @inbounds for i in eachindex(vals)
+        vals[i] = reset_start_sample_and_bit_buffer(vals[i])
+    end
+    return nothing
+end
+
 function reset_start_sample_and_bit_buffer!(
     multiple_system_sats_state::MultipleSystemSatsState,
 )
-    for system_sats_state in multiple_system_sats_state
-        vals = system_sats_state.states.values
-        @inbounds for i in eachindex(vals)
-            vals[i] = reset_start_sample_and_bit_buffer(vals[i])
-        end
-    end
+    _foreach_system!(_reset_one_system!, multiple_system_sats_state)
     return multiple_system_sats_state
 end
 
