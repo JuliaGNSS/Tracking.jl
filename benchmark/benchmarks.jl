@@ -325,7 +325,10 @@ SUITE["track steady-state"]["L1 8sat/5K"] = bench_track_steady_state(;
 # steady-state preparation done by `bench_track_steady_state`'s setup
 # (BitBuffer.found = true) by simply re-running the same setup pipeline,
 # except it returns a `track!` benchmarkable instead of `track`.
-function bench_track_inplace_steady_state(;
+#
+# Pass `threaded = true` for the threaded backend variant.
+function bench_track_inplace_steady_state(
+    threaded::Bool = false;
     systems,
     nsats_list,
     sfreq,
@@ -335,7 +338,11 @@ function bench_track_inplace_steady_state(;
 )
     ts, signal, _ =
         _make_multi_sat_state(; systems, nsats_list, nsamp, prn_max, code_dop)
-    dc = _make_cpu_dc(sfreq)
+    dc = if threaded && isdefined(Tracking, :CPUThreadedDownconvertAndCorrelator)
+        _make_cpu_threaded_dc(sfreq)
+    else
+        _make_cpu_dc(sfreq)
+    end
     found_bb = BitBuffer(UInt128(0), 20, true, UInt128(0), 0, complex(0.0, 0.0), 0)
     new_mss = map(ts.multiple_system_sats_state) do sss
         new_sats = map(s -> _with_found_bit_buffer(s, found_bb), sss.states)
@@ -348,9 +355,17 @@ function bench_track_inplace_steady_state(;
 end
 
 if isdefined(Tracking, :track!)
-    SUITE["track! steady-state"]["L1 8sat/5K"] = bench_track_inplace_steady_state(;
+    SUITE["track! steady-state"]["L1 8sat/5K"] = bench_track_inplace_steady_state(
+        false;
         systems = (GPSL1(),), nsats_list = [8], sfreq = 5e6Hz, nsamp = 5000,
     )
+    if isdefined(Tracking, :CPUThreadedDownconvertAndCorrelator)
+        SUITE["track! steady-state"]["L1 8sat/5K threaded"] =
+            bench_track_inplace_steady_state(
+                true;
+                systems = (GPSL1(),), nsats_list = [8], sfreq = 5e6Hz, nsamp = 5000,
+            )
+    end
 end
 
 let gpsl1 = GPSL1(), gal = GalileoE1B()
