@@ -210,8 +210,6 @@ function bench_track_inplace(;
     system = GPSL1()
     downconvert_and_correlator = _make_cpu_dc(sampling_frequency)
     track_state = TrackState(system, [SatState(system, 1, 0.0, 1000Hz)])
-    # Pre-grow filtered_prompts so steady-state push! is allocation-free.
-    isdefined(Tracking, :prewarm!) && Tracking.prewarm!(track_state, 8)
     signal = rand(Complex{signal_type}, num_samples)
     @benchmarkable Tracking.track!(
         $signal,
@@ -344,7 +342,6 @@ function bench_track_inplace_steady_state(;
         SystemSatsState(sss, new_sats)
     end
     ts = TrackState(ts; multiple_system_sats_state = new_mss)
-    isdefined(Tracking, :prewarm!) && Tracking.prewarm!(ts, 8)
     @benchmarkable Tracking.track!(
         $signal, $ts, $sfreq; downconvert_and_correlator = $dc,
     )
