@@ -41,7 +41,7 @@ Base.elsize(::Type{ScratchView{T}}) where {T} = sizeof(T)
 $(SIGNATURES)
 
 CPU-based implementation of downconversion and correlation. Holds one
-[`ScratchBuffers`](@ref) — three long-lived `Vector{UInt8}` byte
+`ScratchBuffers` — three long-lived `Vector{UInt8}` byte
 buffers, one per scratch role (code replica + the fused kernel's two
 tile halves). Buffers grow lazily on first use and are reused
 thereafter, so a hoisted instance has zero allocations per `track!`
@@ -61,7 +61,7 @@ CPUDownconvertAndCorrelator() = CPUDownconvertAndCorrelator(ScratchBuffers())
 $(SIGNATURES)
 
 Multi-threaded CPU downconvert and correlate. Holds one
-[`ScratchBuffers`](@ref) per thread, indexed by `Threads.threadid()`
+`ScratchBuffers` per thread, indexed by `Threads.threadid()`
 inside `@batch` (which pins each iteration to a fixed thread). Buffers
 grow lazily on first use and are reused thereafter, so a hoisted
 instance has near-zero allocations per `track!` call in steady state
