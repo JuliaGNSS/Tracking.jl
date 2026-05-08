@@ -249,13 +249,15 @@ end
 
 # ── Fallback for dynamic-length sample_shifts (AbstractVector) ────────
 # Fused downconvert + correlate. Rare path — only fires when the caller
-# passes a runtime-sized `AbstractVector` of shifts (the common
+# passes a runtime-sized `AbstractVector` of shifts; the common
 # EPL/VEPL correlators use `SVector{NC}` and dispatch to the
-# `@generated` overload above, which has no tile buffers). Allocates
-# `tile_re`/`tile_im` as plain `Vector{T}`, accepting the per-call GC
-# allocation; the alternative would be to plumb the calling
-# correlator's scratch buffers through, which doesn't pay off for a
-# rarely-hit path.
+# `@generated` overload above (which has no tile buffers). The actual
+# work is in `_downconvert_and_correlate_fused_with_tiles!`, which
+# takes the SoA tile buffers as arguments so callers that hold scratch
+# (the per-thread `ScratchBuffers` on each correlator backend) can
+# avoid per-call allocation. The public method here keeps API
+# compatibility for direct callers (kernel micro-benchmarks, tests) by
+# allocating `Vector{Float32}` tiles per call.
 function downconvert_and_correlate_fused!(
     correlator::AbstractCorrelator{M},
     signal::AbstractArray{Complex{ST}},
@@ -266,6 +268,33 @@ function downconvert_and_correlate_fused!(
     carrier_phase,
     start_sample::Integer,
     num_samples::Integer,
+) where {M,ST}
+    T = Float32
+    tile_re = Vector{T}(undef, num_samples * M)
+    tile_im = Vector{T}(undef, num_samples * M)
+    _downconvert_and_correlate_fused_with_tiles!(
+        correlator, signal, code_replica, sample_shifts,
+        carrier_frequency, sampling_frequency, carrier_phase,
+        start_sample, num_samples, tile_re, tile_im,
+    )
+end
+
+# Internal: caller-supplied SoA tile buffers (`tile_re`, `tile_im`) of
+# length `num_samples * M`. They must be valid `T = Float32` arrays
+# compatible with `pointer()` and `vstore` (e.g. `Vector{Float32}` or
+# `ScratchView{Float32}`).
+function _downconvert_and_correlate_fused_with_tiles!(
+    correlator::AbstractCorrelator{M},
+    signal::AbstractArray{Complex{ST}},
+    code_replica,
+    sample_shifts::AbstractVector,
+    carrier_frequency,
+    sampling_frequency,
+    carrier_phase,
+    start_sample::Integer,
+    num_samples::Integer,
+    tile_re,
+    tile_im,
 ) where {M,ST}
     T = Float32
     sizeof_ST = sizeof(ST)
@@ -287,10 +316,6 @@ function downconvert_and_correlate_fused!(
     init_1 = two_pi * (off_1 * freq_ratio + phase0)
 
     last = start_sample + num_samples - 1
-
-    # Flat buffers: M antennas × num_samples, SoA layout
-    tile_re = Vector{T}(undef, num_samples * M)
-    tile_im = Vector{T}(undef, num_samples * M)
 
     # Downconvert each antenna into its tile slice
     i = start_sample

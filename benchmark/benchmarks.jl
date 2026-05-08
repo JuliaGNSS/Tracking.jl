@@ -142,6 +142,27 @@ function bench_fused_kernel(;
 )
     s = setup_benchmark(; signal_type, num_samples, num_ants)
     sample_shifts = shifts == :static ? s.static_shifts : s.dynamic_shifts
+    # The dynamic-shifts fallback needs SoA tile buffers (`tile_re`/
+    # `tile_im`); on master those came from a Bumper `@no_escape` block
+    # inside the kernel, here they're caller-supplied so a hoisted
+    # benchmark stays allocation-free. Static-shifts dispatch to the
+    # `@generated` overload that ignores tiles, so this branching only
+    # affects which entry point we call.
+    if shifts == :dynamic && isdefined(Tracking, :_downconvert_and_correlate_fused_with_tiles!)
+        tile_re = Vector{Float32}(undef, num_samples * num_ants)
+        tile_im = Vector{Float32}(undef, num_samples * num_ants)
+        # Warmup to trigger compilation
+        Tracking._downconvert_and_correlate_fused_with_tiles!(
+            s.correlator, s.signal, s.code_replica, sample_shifts,
+            s.carrier_doppler, s.sampling_frequency, 0.0,
+            1, s.num_samples, tile_re, tile_im,
+        )
+        return @benchmarkable Tracking._downconvert_and_correlate_fused_with_tiles!(
+            $(s.correlator), $(s.signal), $(s.code_replica), $sample_shifts,
+            $(s.carrier_doppler), $(s.sampling_frequency), 0.0,
+            1, $(s.num_samples), $tile_re, $tile_im,
+        )
+    end
     # Warmup to trigger compilation
     Tracking.downconvert_and_correlate_fused!(
         s.correlator,
