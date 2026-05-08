@@ -141,14 +141,17 @@ end
     end
 
     @test measure_reset!(track_state) == 0
-    # Downconvert and the doppler estimator each have a small residual
-    # allocation footprint (a few hundred bytes for threaded `@batch`
-    # scheduling and the `bit_buffer` find-bit closures). These are
-    # short-lived young-generation allocations and do not trigger GC
-    # pauses. The cap catches any regression that would introduce
-    # genuine per-sat allocations.
-    @test measure_dc!(dc, signal, track_state, sampling_frequency) <= 1024
-    @test measure_est!(track_state, sampling_frequency) <= 1024
+    # Single-threaded backend: every per-stage call is now genuinely
+    # allocation-free. The threaded backend still pays a small residual
+    # for `@batch`'s ManualMemory.Reference + Bumper SlabCheckpoints
+    # that don't elide through Polyester's task closure. Cap loosely so
+    # a regression to genuine per-sat allocations would still fire.
+    @test measure_est!(track_state, sampling_frequency) == 0
+    if DC === CPUDownconvertAndCorrelator
+        @test measure_dc!(dc, signal, track_state, sampling_frequency) == 0
+    else
+        @test measure_dc!(dc, signal, track_state, sampling_frequency) <= 1024
+    end
 end
 
 end

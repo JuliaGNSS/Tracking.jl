@@ -96,13 +96,17 @@ function _buffer_find_bit(system, bit_buffer, num_code_blocks_that_form_a_bit,
         div(sizeof(code_block_buffer) * 8, num_code_blocks_that_form_a_bit),
     )
     bits = reduce(num_bits:-1:1; init = UInt128(0)) do bits, bit_index
-        integrated_code_blocks =
-            sum(0:num_code_blocks_that_form_a_bit-1) do code_block_index
-                buffer_code_block_index =
-                    (bit_index - 1) * num_code_blocks_that_form_a_bit + code_block_index
-                ((code_block_buffer & (1 << buffer_code_block_index)) > 0) * 2 - 1
-            end
-        bits << 1 + (integrated_code_blocks > 0)
+        # Don't shadow the outer `integrated_code_blocks` argument here:
+        # because this closure reassigns its own local of the same name,
+        # Julia conservatively boxes the outer parameter even though this
+        # closure path does not always run, leading to a per-call
+        # Core.Box allocation.
+        bit_sum = sum(0:num_code_blocks_that_form_a_bit-1) do code_block_index
+            buffer_code_block_index =
+                (bit_index - 1) * num_code_blocks_that_form_a_bit + code_block_index
+            ((code_block_buffer & (1 << buffer_code_block_index)) > 0) * 2 - 1
+        end
+        bits << 1 + (bit_sum > 0)
     end
     return BitBuffer(
         code_block_buffer,
