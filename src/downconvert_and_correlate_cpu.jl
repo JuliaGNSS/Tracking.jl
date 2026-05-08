@@ -342,6 +342,32 @@ In-place version: walks each system's `Vector{TrackedSat}` and overwrites
 slots in place. Returns the same `track_state`. Allocation-free in steady
 state — see [`track!`](@ref).
 """
+# Per-system body for the single-threaded backend. Pulled out so
+# `_foreach_system!` can call it on each `SystemSatsState` in the
+# (possibly heterogeneous) `multiple_system_sats_state` tuple without
+# dynamic dispatch / boxing.
+@inline function _dc_one_system!(
+    sss::SystemSatsState, dc::CPUDownconvertAndCorrelator,
+    signal, num_samples_signal, preferred_num_code_blocks_to_integrate,
+    sampling_frequency, intermediate_frequency,
+)
+    system = sss.system
+    vals = sss.states.values
+    @inbounds for i in eachindex(vals)
+        vals[i] = _update_tracked_sat_correlator(
+            vals[i],
+            dc,
+            signal,
+            system,
+            num_samples_signal,
+            preferred_num_code_blocks_to_integrate,
+            sampling_frequency,
+            intermediate_frequency,
+        )
+    end
+    return nothing
+end
+
 function downconvert_and_correlate!(
     dc::CPUDownconvertAndCorrelator,
     signal,
@@ -351,22 +377,11 @@ function downconvert_and_correlate!(
     intermediate_frequency,
 )
     num_samples_signal = get_num_samples(signal)
-    for system_sats_state in track_state.multiple_system_sats_state
-        system = system_sats_state.system
-        vals = system_sats_state.states.values
-        @inbounds for i in eachindex(vals)
-            vals[i] = _update_tracked_sat_correlator(
-                vals[i],
-                dc,
-                signal,
-                system,
-                num_samples_signal,
-                preferred_num_code_blocks_to_integrate,
-                sampling_frequency,
-                intermediate_frequency,
-            )
-        end
-    end
+    _foreach_system!(
+        _dc_one_system!, track_state.multiple_system_sats_state,
+        dc, signal, num_samples_signal, preferred_num_code_blocks_to_integrate,
+        sampling_frequency, intermediate_frequency,
+    )
     return track_state
 end
 
@@ -407,6 +422,33 @@ existing `Vector{TrackedSat}` backing storage. Different `@batch` iterations
 write to disjoint slots, so no synchronization is needed. Returns the same
 `track_state`. Allocation-free in steady state — see [`track!`](@ref).
 """
+# Per-system body for the threaded backend. Each `@batch` writes to
+# disjoint slots in this system's `Vector{TrackedSat}`. Pulled out so
+# `_foreach_system!` can call it without boxing on heterogeneous
+# system tuples.
+@inline function _dc_one_system_threaded!(
+    sss::SystemSatsState, dc::CPUThreadedDownconvertAndCorrelator,
+    signal, num_samples_signal, preferred_num_code_blocks_to_integrate,
+    sampling_frequency, intermediate_frequency,
+)
+    system = sss.system
+    vals = sss.states.values
+    n = length(vals)
+    @batch for i = 1:n
+        @inbounds vals[i] = _update_tracked_sat_correlator(
+            vals[i],
+            dc,
+            signal,
+            system,
+            num_samples_signal,
+            preferred_num_code_blocks_to_integrate,
+            sampling_frequency,
+            intermediate_frequency,
+        )
+    end
+    return nothing
+end
+
 function downconvert_and_correlate!(
     dc::CPUThreadedDownconvertAndCorrelator,
     signal,
@@ -416,23 +458,11 @@ function downconvert_and_correlate!(
     intermediate_frequency,
 )
     num_samples_signal = get_num_samples(signal)
-    for system_sats_state in track_state.multiple_system_sats_state
-        system = system_sats_state.system
-        vals = system_sats_state.states.values
-        n = length(vals)
-        @batch for i = 1:n
-            @inbounds vals[i] = _update_tracked_sat_correlator(
-                vals[i],
-                dc,
-                signal,
-                system,
-                num_samples_signal,
-                preferred_num_code_blocks_to_integrate,
-                sampling_frequency,
-                intermediate_frequency,
-            )
-        end
-    end
+    _foreach_system!(
+        _dc_one_system_threaded!, track_state.multiple_system_sats_state,
+        dc, signal, num_samples_signal, preferred_num_code_blocks_to_integrate,
+        sampling_frequency, intermediate_frequency,
+    )
     return track_state
 end
 

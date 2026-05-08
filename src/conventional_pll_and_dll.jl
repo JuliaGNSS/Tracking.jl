@@ -273,23 +273,34 @@ system's `Vector{TrackedSat}` backing storage and overwrites slots with the
 new immutable `TrackedSat` value. Returns the same `track_state` object —
 allocation-free in steady state when [`track!`](@ref)'s preconditions are met.
 """
+# Per-system body for the doppler estimator. Pulled out so
+# `_foreach_system!` can call it without boxing when the system tuple
+# is heterogeneous (e.g. GPS L1 + Galileo E1B).
+@inline function _est_one_system!(
+    sss::SystemSatsState, preferred_num_code_blocks_to_integrate, sampling_frequency,
+)
+    system = sss.system
+    vals = sss.states.values
+    @inbounds for i in eachindex(vals)
+        vals[i] = _update_tracked_sat_doppler(
+            vals[i],
+            system,
+            preferred_num_code_blocks_to_integrate,
+            sampling_frequency,
+        )
+    end
+    return nothing
+end
+
 function estimate_dopplers_and_filter_prompt!(
     track_state::TrackState{<:MultipleSystemSatsState,<:ConventionalPLLAndDLL},
     preferred_num_code_blocks_to_integrate,
     sampling_frequency,
 )
-    for system_sats_state in track_state.multiple_system_sats_state
-        system = system_sats_state.system
-        vals = system_sats_state.states.values
-        @inbounds for i in eachindex(vals)
-            vals[i] = _update_tracked_sat_doppler(
-                vals[i],
-                system,
-                preferred_num_code_blocks_to_integrate,
-                sampling_frequency,
-            )
-        end
-    end
+    _foreach_system!(
+        _est_one_system!, track_state.multiple_system_sats_state,
+        preferred_num_code_blocks_to_integrate, sampling_frequency,
+    )
     return track_state
 end
 
