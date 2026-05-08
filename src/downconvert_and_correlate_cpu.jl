@@ -147,7 +147,7 @@ end
 end
 
 @inline function _correlate_with_buffer!(
-    ::CPUThreadedDownconvertAndCorrelator,
+    dc::CPUThreadedDownconvertAndCorrelator,
     code_replica,
     system,
     sat_state,
@@ -169,7 +169,8 @@ end
         sample_shifts,
         sat_state.prn,
     )
-    downconvert_and_correlate_fused!(
+    _fused_with_tile_scratch!(
+        dc,
         sat_state.correlator,
         signal,
         code_replica,
@@ -180,6 +181,61 @@ end
         sat_state.signal_start_sample,
         signal_samples_to_integrate,
     )::typeof(sat_state.correlator)
+end
+
+# Dispatch helper for the fused kernel that hands SoA tile buffers from
+# the calling correlator's `ScratchBuffers` to the kernel — when the
+# kernel actually needs them. The `@generated` overload of
+# `downconvert_and_correlate_fused!` (for `SVector{NC}` shifts) ignores
+# tiles entirely; only the `AbstractVector`-shifts fallback uses them.
+# Picking the right path here keeps the fused kernel's existing
+# dispatch shape and lets the SoA-tile path be allocation-free.
+@inline function _fused_with_tile_scratch!(
+    dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
+    correlator::AbstractCorrelator{M},
+    signal,
+    code_replica,
+    sample_shifts::SVector,
+    carrier_frequency,
+    sampling_frequency,
+    carrier_phase,
+    start_sample,
+    num_samples,
+) where {M}
+    # Static-shifts overload: no tile buffers needed.
+    downconvert_and_correlate_fused!(
+        correlator, signal, code_replica, sample_shifts,
+        carrier_frequency, sampling_frequency, carrier_phase,
+        start_sample, num_samples,
+    )::typeof(correlator)
+end
+
+@inline function _fused_with_tile_scratch!(
+    dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
+    correlator::AbstractCorrelator{M},
+    signal,
+    code_replica,
+    sample_shifts::AbstractVector,
+    carrier_frequency,
+    sampling_frequency,
+    carrier_phase,
+    start_sample,
+    num_samples,
+) where {M}
+    # Dynamic-shifts fallback: pull SoA tile buffers from the calling
+    # correlator's per-thread `ScratchBuffers` (one re-half + one
+    # im-half) so the fused kernel doesn't allocate them per call.
+    bufs = _scratch_buffers(dc)
+    n = num_samples * M
+    _with_scratch_view(bufs.tile_re, Float32, n) do tile_re
+        _with_scratch_view(bufs.tile_im, Float32, n) do tile_im
+            _downconvert_and_correlate_fused_with_tiles!(
+                correlator, signal, code_replica, sample_shifts,
+                carrier_frequency, sampling_frequency, carrier_phase,
+                start_sample, num_samples, tile_re, tile_im,
+            )::typeof(correlator)
+        end
+    end
 end
 
 # Per-sat downconvert+correlate. Pure: returns the updated TrackedSat. Shared
