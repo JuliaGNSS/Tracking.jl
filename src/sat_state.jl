@@ -328,13 +328,24 @@ function filter_out_sats(
     @set multiple_system_sats_state[system_idx].states = filtered_sat_states
 end
 
-function reset_start_sample_and_bit_buffer(
+# Build a `SystemSatsState` whose `states` Dictionary shares its keys with
+# the original but holds a freshly-copied `values::Vector{TrackedSat}`.
+# Used by the immutable variants of `downconvert_and_correlate` /
+# `estimate_dopplers_and_filter_prompt` /
+# `reset_start_sample_and_bit_buffer` to detach the slot vector before
+# delegating to the in-place form — preserves `track`'s "input is not
+# mutated" contract while reusing the in-place implementation.
+@inline function _copy_slot_vector(sss::SystemSatsState)
+    SystemSatsState(
+        sss.system,
+        Dictionary(keys(sss.states), copy(sss.states.values)),
+    )
+end
+
+@inline function _copy_slot_vectors(
     multiple_system_sats_state::MultipleSystemSatsState,
 )
-    map(multiple_system_sats_state) do system_sats_state
-        new_sat_states = map(reset_start_sample_and_bit_buffer, system_sats_state.states)
-        SystemSatsState(system_sats_state, new_sat_states)
-    end
+    map(_copy_slot_vector, multiple_system_sats_state)
 end
 
 # In-place variant: walks each system's `Vector{TrackedSat}` slot storage and
@@ -352,6 +363,14 @@ function reset_start_sample_and_bit_buffer!(
         end
     end
     return multiple_system_sats_state
+end
+
+# Immutable variant: copies the slot vectors first, then delegates to the
+# in-place form. Same per-sat work, only the storage ownership differs.
+function reset_start_sample_and_bit_buffer(
+    multiple_system_sats_state::MultipleSystemSatsState,
+)
+    reset_start_sample_and_bit_buffer!(_copy_slot_vectors(multiple_system_sats_state))
 end
 
 function to_dictionary(sat_states::Dictionary{I,<:SatState}) where {I}

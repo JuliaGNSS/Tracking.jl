@@ -247,43 +247,18 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
 end
 
 
-# ── Fallback for dynamic-length sample_shifts (AbstractVector) ────────
-# Fused downconvert + correlate. Rare path — only fires when the caller
-# passes a runtime-sized `AbstractVector` of shifts; the common
-# EPL/VEPL correlators use `SVector{NC}` and dispatch to the
-# `@generated` overload above (which has no tile buffers). The actual
-# work is in `_downconvert_and_correlate_fused_with_tiles!`, which
-# takes the SoA tile buffers as arguments so callers that hold scratch
-# (the per-thread `ScratchBuffers` on each correlator backend) can
-# avoid per-call allocation. The public method here keeps API
-# compatibility for direct callers (kernel micro-benchmarks, tests) by
-# allocating `Vector{Float32}` tiles per call.
+# ── Overload for dynamic-length sample_shifts (AbstractVector) ────────
+# Fired when the caller passes a runtime-sized `AbstractVector` of
+# shifts; the common EPL/VEPL correlators use `SVector{NC}` and
+# dispatch to the `@generated` overload above (which has no tile
+# buffers). This overload requires the caller to supply SoA tile
+# buffers (`tile_re`, `tile_im`) of length `num_samples * M` and
+# element type `Float32` — typically pulled from a long-lived per-
+# thread scratch pool so the kernel itself stays allocation-free. Any
+# `AbstractVector{Float32}` compatible with `pointer()` and `vstore`
+# works (`Vector{Float32}` for direct callers, `ScratchView{Float32}`
+# for the threaded `track!` hot path).
 function downconvert_and_correlate_fused!(
-    correlator::AbstractCorrelator{M},
-    signal::AbstractArray{Complex{ST}},
-    code_replica,
-    sample_shifts::AbstractVector,
-    carrier_frequency,
-    sampling_frequency,
-    carrier_phase,
-    start_sample::Integer,
-    num_samples::Integer,
-) where {M,ST}
-    T = Float32
-    tile_re = Vector{T}(undef, num_samples * M)
-    tile_im = Vector{T}(undef, num_samples * M)
-    _downconvert_and_correlate_fused_with_tiles!(
-        correlator, signal, code_replica, sample_shifts,
-        carrier_frequency, sampling_frequency, carrier_phase,
-        start_sample, num_samples, tile_re, tile_im,
-    )
-end
-
-# Internal: caller-supplied SoA tile buffers (`tile_re`, `tile_im`) of
-# length `num_samples * M`. They must be valid `T = Float32` arrays
-# compatible with `pointer()` and `vstore` (e.g. `Vector{Float32}` or
-# `ScratchView{Float32}`).
-function _downconvert_and_correlate_fused_with_tiles!(
     correlator::AbstractCorrelator{M},
     signal::AbstractArray{Complex{ST}},
     code_replica,

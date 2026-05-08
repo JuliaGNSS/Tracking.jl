@@ -252,21 +252,16 @@ function estimate_dopplers_and_filter_prompt(
     preferred_num_code_blocks_to_integrate,
     sampling_frequency,
 )
-    new_multiple_system_sats_state =
-        map(track_state.multiple_system_sats_state) do system_sats_state
-            new_tracked_sats = map(system_sats_state.states) do tracked_sat
-                _update_tracked_sat_doppler(
-                    tracked_sat,
-                    system_sats_state.system,
-                    preferred_num_code_blocks_to_integrate,
-                    sampling_frequency,
-                )
-            end
-            SystemSatsState(system_sats_state, new_tracked_sats)
-        end
-    return TrackState(
+    # Detach slot vectors from the input, then delegate to the in-place
+    # form. The per-sat doppler update is identical between the two —
+    # only the storage ownership differs.
+    new_track_state = TrackState(
         track_state;
-        multiple_system_sats_state = new_multiple_system_sats_state,
+        multiple_system_sats_state =
+            _copy_slot_vectors(track_state.multiple_system_sats_state),
+    )
+    estimate_dopplers_and_filter_prompt!(
+        new_track_state, preferred_num_code_blocks_to_integrate, sampling_frequency,
     )
 end
 
