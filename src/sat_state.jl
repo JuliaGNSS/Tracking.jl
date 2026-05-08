@@ -337,20 +337,18 @@ function reset_start_sample_and_bit_buffer(
     end
 end
 
-# In-place variants: walk Vector{TrackedSat} slots and overwrite each entry
-# with the reset value. The vector itself, the Dictionary, and the
-# SystemSatsState/MultipleSystemSatsState wrappers are all reused.
-function reset_start_sample_and_bit_buffer!(t::TrackedSat)
-    TrackedSat(reset_start_sample_and_bit_buffer(t.sat_state), t.estimator_state)
-end
-
+# In-place variant: walks each system's `Vector{TrackedSat}` slot storage and
+# overwrites each entry with a freshly reset value. The vector itself, the
+# Dictionary, and the SystemSatsState/MultipleSystemSatsState wrappers are
+# all reused. `TrackedSat` itself is immutable, so the slot is reassigned
+# rather than mutated; we still call the non-`!` per-`TrackedSat` form.
 function reset_start_sample_and_bit_buffer!(
     multiple_system_sats_state::MultipleSystemSatsState,
 )
     for system_sats_state in multiple_system_sats_state
         vals = system_sats_state.states.values
         @inbounds for i in eachindex(vals)
-            vals[i] = reset_start_sample_and_bit_buffer!(vals[i])
+            vals[i] = reset_start_sample_and_bit_buffer(vals[i])
         end
     end
     return multiple_system_sats_state
