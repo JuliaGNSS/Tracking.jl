@@ -229,7 +229,7 @@ end
     n = num_samples * M
     _with_scratch_view(bufs.tile_re, Float32, n) do tile_re
         _with_scratch_view(bufs.tile_im, Float32, n) do tile_im
-            _downconvert_and_correlate_fused_with_tiles!(
+            downconvert_and_correlate_fused!(
                 correlator, signal, code_replica, sample_shifts,
                 carrier_frequency, sampling_frequency, carrier_phase,
                 start_sample, num_samples, tile_re, tile_im,
@@ -308,6 +308,12 @@ end
 $(SIGNATURES)
 
 Downconvert and correlate all available satellites on the CPU.
+Returns a new `TrackState` whose slot vectors are detached from the
+input — the input `track_state` is left untouched, satisfying
+`track`'s immutability contract. Per-call code-replica scratch comes
+from the correlator's `ScratchBuffers` so the kernel itself stays
+allocation-free; the only per-call allocation is the slot-vector
+copy needed for immutability.
 """
 function downconvert_and_correlate(
     dc::CPUDownconvertAndCorrelator,
@@ -317,26 +323,15 @@ function downconvert_and_correlate(
     sampling_frequency,
     intermediate_frequency,
 )
-    num_samples_signal = get_num_samples(signal)
-    new_multiple_system_sats_state =
-        map(track_state.multiple_system_sats_state) do system_sats_state
-            new_tracked_sats = map(system_sats_state.states) do tracked_sat
-                _update_tracked_sat_correlator(
-                    tracked_sat,
-                    dc,
-                    signal,
-                    system_sats_state.system,
-                    num_samples_signal,
-                    preferred_num_code_blocks_to_integrate,
-                    sampling_frequency,
-                    intermediate_frequency,
-                )
-            end
-            return SystemSatsState(system_sats_state, new_tracked_sats)
-        end
-    return TrackState(
+    new_track_state = TrackState(
         track_state;
-        multiple_system_sats_state = new_multiple_system_sats_state,
+        multiple_system_sats_state =
+            _copy_slot_vectors(track_state.multiple_system_sats_state),
+    )
+    downconvert_and_correlate!(
+        dc, signal, new_track_state,
+        preferred_num_code_blocks_to_integrate, sampling_frequency,
+        intermediate_frequency,
     )
 end
 
@@ -378,9 +373,11 @@ end
 """
 $(SIGNATURES)
 
-Multi-threaded downconvert and correlate. Spawns one task per satellite across
-all systems, using pre-allocated per-satellite code replica buffers and the
-fused downconvert+correlate kernel.
+Multi-threaded downconvert and correlate. Returns a new `TrackState`
+whose slot vectors are detached from the input — the input
+`track_state` is left untouched. Per-call scratch comes from the
+correlator's per-thread `ScratchBuffers`; the only per-call
+allocation is the slot-vector copy needed for immutability.
 """
 function downconvert_and_correlate(
     dc::CPUThreadedDownconvertAndCorrelator,
@@ -390,29 +387,16 @@ function downconvert_and_correlate(
     sampling_frequency,
     intermediate_frequency,
 )
-    num_samples_signal = get_num_samples(signal)
-    new_multiple_system_sats_state =
-        map(track_state.multiple_system_sats_state) do system_sats_state
-            system = system_sats_state.system
-            states = system_sats_state.states
-            n = length(states)
-            new_vals = Vector{valtype(states)}(undef, n)
-            @batch for i = 1:n
-                @inbounds new_vals[i] = _update_tracked_sat_correlator(
-                    states.values[i],
-                    dc,
-                    signal,
-                    system,
-                    num_samples_signal,
-                    preferred_num_code_blocks_to_integrate,
-                    sampling_frequency,
-                    intermediate_frequency,
-                )
-            end
-            new_sat_states = Dictionary(keys(states), new_vals)
-            SystemSatsState(system_sats_state, new_sat_states)
-        end
-    TrackState(track_state; multiple_system_sats_state = new_multiple_system_sats_state)
+    new_track_state = TrackState(
+        track_state;
+        multiple_system_sats_state =
+            _copy_slot_vectors(track_state.multiple_system_sats_state),
+    )
+    downconvert_and_correlate!(
+        dc, signal, new_track_state,
+        preferred_num_code_blocks_to_integrate, sampling_frequency,
+        intermediate_frequency,
+    )
 end
 
 """

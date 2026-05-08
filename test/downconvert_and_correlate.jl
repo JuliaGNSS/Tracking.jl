@@ -174,9 +174,12 @@ end
 
     # Dynamic (AbstractVector) path
     dynamic_shifts = collect(sample_shifts)
+    tile_re = Vector{Float32}(undef, num_samples_signal)
+    tile_im = Vector{Float32}(undef, num_samples_signal)
     fused_dynamic = Tracking.downconvert_and_correlate_fused!(
         correlator, signal, code_replica, dynamic_shifts,
         carrier_frequency, sampling_frequency, 0.0, 1, num_samples_signal,
+        tile_re, tile_im,
     )
 
     @test get_accumulators(fused_dynamic) ≈ ref_accumulators rtol = 1e-4
@@ -246,9 +249,12 @@ end
 
     # Dynamic (AbstractVector) path
     dynamic_shifts = collect(sample_shifts)
+    tile_re = Vector{Float32}(undef, num_samples_signal * num_ants)
+    tile_im = Vector{Float32}(undef, num_samples_signal * num_ants)
     fused_dynamic = Tracking.downconvert_and_correlate_fused!(
         correlator, signal, code_replica, dynamic_shifts,
         carrier_frequency, sampling_frequency, 0.0, 1, num_samples_signal,
+        tile_re, tile_im,
     )
     for tap in 1:NC
         @test collect(get_accumulators(fused_dynamic)[tap]) ≈ ref_accumulators[tap] rtol = 1e-4
@@ -282,9 +288,12 @@ end
             end
         end
     end
+    tile_re_odd = Vector{Float32}(undef, num_samples_odd * num_ants)
+    tile_im_odd = Vector{Float32}(undef, num_samples_odd * num_ants)
     fused_odd = Tracking.downconvert_and_correlate_fused!(
         correlator, signal_odd, code_replica_odd, dynamic_shifts,
         carrier_frequency, sampling_frequency, 0.0, 1, num_samples_odd,
+        tile_re_odd, tile_im_odd,
     )
     for tap in 1:NC
         @test collect(get_accumulators(fused_odd)[tap]) ≈ ref_odd[tap] rtol = 1e-4
@@ -351,9 +360,12 @@ end
     end
 
     # Test: use the dynamic Vector accumulator path
+    tile_re = Vector{Float32}(undef, num_samples_signal)
+    tile_im = Vector{Float32}(undef, num_samples_signal)
     fused_dynamic = Tracking.downconvert_and_correlate_fused!(
         dynamic_correlator, signal, code_replica, dynamic_shifts,
         carrier_frequency, sampling_frequency, 0.0, 1, num_samples_signal,
+        tile_re, tile_im,
     )
 
     @test get_accumulators(fused_dynamic) ≈ ref_accumulators rtol = 1e-4
