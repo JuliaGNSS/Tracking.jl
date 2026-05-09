@@ -5,15 +5,21 @@ The `track` function is the main entry point for processing GNSS signals. It tak
 For hard real-time SDR loops where GC pauses must be avoided, an in-place
 counterpart [`track!`](@ref) is provided that mutates `TrackState` instead
 of rebuilding new immutable wrappers. After one warmup call (to seat the
-`filtered_prompts` buffer's capacity), `track!` runs with only a small
-per-call residual that does not trigger GC pauses.
+`filtered_prompts` buffer's capacity), the single-threaded `track!` path
+is **fully allocation-free**; the threaded path keeps a small irreducible
+per-call residual from Polyester's `@batch` closure capture (160 B per
+GNSS system).
 
-> **Allocation-free hot loop:** the
-> [`CPUDownconvertAndCorrelator`](@ref) and [`CPUThreadedDownconvertAndCorrelator`](@ref)
-> structs hold long-lived per-thread scratch buffers that grow on
-> first use. **Construct the correlator once outside the `track!`
-> loop** and pass it via `downconvert_and_correlator =` — the default
-> kwarg value rebuilds the buffer matrix on every call.
+!!! tip "Hoist the correlator outside the hot loop"
+    Both [`CPUDownconvertAndCorrelator`](@ref) and
+    [`CPUThreadedDownconvertAndCorrelator`](@ref) hold long-lived per-thread
+    scratch buffers that grow on first use and are reused thereafter.
+    **Construct the correlator once outside the `track`/`track!` loop**
+    and pass it via the `downconvert_and_correlator =` keyword argument —
+    relying on the default kwarg value rebuilds the scratch buffers on
+    every call, which defeats the allocation-free design. This applies
+    to both `track` (immutable) and `track!` (in-place); both default to
+    `CPUThreadedDownconvertAndCorrelator()`.
 
 ## Function Reference
 
@@ -24,7 +30,7 @@ track!
 
 ## Optional Parameters
 
-- `downconvert_and_correlator`: The downconversion and correlation implementation to use. Defaults to `CPUDownconvertAndCorrelator`.
+- `downconvert_and_correlator`: The downconversion and correlation implementation to use. Defaults to `CPUThreadedDownconvertAndCorrelator()`. **For real-time loops, hoist this outside the loop** (see the tip above).
 - `intermediate_frequency`: The intermediate frequency of the signal. Defaults to `0.0Hz`.
 - `preferred_num_code_blocks_to_integrate`: The preferred number of code blocks to integrate. Defaults to `1`. Will only integrate more than one block once bit synchronization has been achieved.
 
@@ -49,12 +55,11 @@ end
 Hoisting `dc` is what makes the loop allocation-free: each correlator holds
 long-lived per-thread scratch buffers that grow on first use and are reused
 thereafter. Calling `track!` without the kwarg works, but rebuilds the
-buffer matrix on every call.
+buffers on every call.
 
 The first `track!` call may also grow each satellite's `filtered_prompts`
 buffer via `push!` reallocations; from the second call onwards the capacity
-is settled and the loop allocates only the small `bit_buffer` find-bit
-closure residual.
+is settled.
 
 ## Downconversion and Correlation
 
