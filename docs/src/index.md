@@ -99,6 +99,26 @@ Note: `estimate_cn0(track_state)` returns the CN0 estimate in dB-Hz. With a nois
 test signal, this will be `Inf dB-Hz`. With real signals containing noise, you'll get
 finite values typically in the range of 30-50 dB-Hz.
 
+!!! tip "Real-time loops: hoist the correlator"
+    For loops that process many signal chunks in sequence (e.g. an SDR
+    capture stream), construct
+    [`CPUThreadedDownconvertAndCorrelator`](@ref) (or
+    [`CPUDownconvertAndCorrelator`](@ref)) **once outside** the loop and
+    pass it via `downconvert_and_correlator =`:
+
+    ```julia
+    dc = CPUThreadedDownconvertAndCorrelator()
+    while got_chunk(rx)
+        chunk = read_chunk!(rx)
+        track_state = track(chunk, track_state, sampling_frequency;
+                            downconvert_and_correlator = dc)
+    end
+    ```
+
+    The correlator holds long-lived per-thread scratch buffers; relying on
+    the default kwarg value rebuilds them on every call. See also
+    [`track!`](@ref) for the in-place variant.
+
 ### Multiple Satellite Tracking
 
 To track multiple satellites of the same system:
