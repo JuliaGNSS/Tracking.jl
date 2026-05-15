@@ -27,7 +27,7 @@ using Tracking:
     init_estimator_state
 
 @testset "TrackState(; signals = ...) — single-capability shortcut" begin
-    track_state = TrackState(; signals = (GPSL1CA(),))
+    track_state = TrackState(; signal = GPSL1CA())
     # Implicit `:default` capability.
     @test isempty(get_sat_states(track_state, :default))
 end
@@ -44,7 +44,7 @@ end
 end
 
 @testset "add_satellite! — single-capability shortcut (no `capability=`)" begin
-    track_state = TrackState(; signals = (GPSL1CA(),))
+    track_state = TrackState(; signal = GPSL1CA())
     add_satellite!(track_state;
         prn = 11,
         code_phase = 10.5,
@@ -78,7 +78,7 @@ end
 end
 
 @testset "add_satellite! — overwrites on duplicate PRN" begin
-    track_state = TrackState(; signals = (GPSL1CA(),))
+    track_state = TrackState(; signal = GPSL1CA())
     add_satellite!(track_state;
         prn = 7, carrier_doppler = 100.0Hz,
     )
@@ -90,7 +90,7 @@ end
 end
 
 @testset "add_satellite — immutable variant" begin
-    track_state = TrackState(; signals = (GPSL1CA(),))
+    track_state = TrackState(; signal = GPSL1CA())
     new_track_state = add_satellite(track_state;
         prn = 3, carrier_doppler = 50.0Hz,
     )
@@ -102,7 +102,7 @@ end
 end
 
 @testset "add_satellite!(track_state, capability, sat) — escape hatch" begin
-    track_state = TrackState(; signals = (GPSL1CA(),))
+    track_state = TrackState(; signal = GPSL1CA())
     sat = TrackedSat(GPSL1CA(), 9, 5.0, 300.0Hz;
         doppler_estimator = ConventionalAssistedPLLAndDLL())
     add_satellite!(track_state, :default, sat)
@@ -115,7 +115,7 @@ end
         carrier_loop_filter_bandwidth = 22.0Hz,
         code_loop_filter_bandwidth = 1.5Hz,
     )
-    track_state = TrackState(; signals = (GPSL1CA(),), doppler_estimator = custom)
+    track_state = TrackState(; signal = GPSL1CA(), doppler_estimator = custom)
     add_satellite!(track_state;
         prn = 4, carrier_doppler = 0.0Hz,
     )

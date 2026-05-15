@@ -74,7 +74,7 @@ Each named entry is a *capability* — a group of satellites all tracked on the 
 Single-signal-set shortcut:
 
 ```julia
-track_state = TrackState(; signals = (GPSL1CA(),))
+track_state = TrackState(; signal = GPSL1CA())
 # desugars internally to (default = (GPSL1CA(),),)
 ```
 

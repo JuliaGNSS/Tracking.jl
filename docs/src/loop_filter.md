@@ -43,7 +43,7 @@ julia> # Use non-assisted PLL with custom loop filter types
            code_loop_filter_bandwidth = 0.5Hz
        );
 
-julia> track_state = TrackState(; signals = (GPSL1CA(),), doppler_estimator);
+julia> track_state = TrackState(; signal = GPSL1CA(), doppler_estimator);
 
 julia> add_satellite!(track_state; prn = 1, code_phase = 50.0, carrier_doppler = 1000.0Hz);
 ```
