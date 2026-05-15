@@ -386,26 +386,6 @@ function merge_sats(
     @set satellites[system_idx] = merge(sats_dict, new_tracked_sats)
 end
 
-"""
-$(SIGNATURES)
-
-Remove satellites with the specified identifiers from the tracking state.
-"""
-function filter_out_sats(
-    satellites::SatelliteDicts,
-    system_idx::Union{Symbol,Integer},
-    identifiers,
-)
-    filtered = map(
-        last,
-        filter(
-            ((id,),) -> !in(id, identifiers),
-            pairs(satellites[system_idx]),
-        ),
-    )
-    @set satellites[system_idx] = filtered
-end
-
 # Build a `Dictionary` that shares its keys with the original but holds a
 # freshly-copied `values::Vector{TrackedSat}`. Used by the immutable variants
 # of `downconvert_and_correlate` / `estimate_dopplers_and_filter_prompt` /

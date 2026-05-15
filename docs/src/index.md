@@ -205,7 +205,7 @@ julia> add_satellite!(track_state; prn = 1,  code_phase = 50.0,  carrier_doppler
 
 julia> add_satellite!(track_state; prn = 23, code_phase = 500.0, carrier_doppler = 1500.0Hz);
 
-julia> track_state = filter_out_sats(track_state, :default, [1]);
+julia> remove_satellite!(track_state; prn = 1);
 
 julia> haskey(get_sat_states(track_state, :default), 23)
 true
