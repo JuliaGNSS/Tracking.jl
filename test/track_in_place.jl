@@ -6,7 +6,7 @@ using GNSSSignals:
     GPSL1CA, gen_code, get_code_center_frequency_ratio, get_code_frequency
 
 using Tracking:
-    SatState,
+    TrackedSat,
     TrackState,
     track,
     track!,
@@ -49,8 +49,8 @@ end
     sampling_frequency = 4e6Hz
     signal, gpsl1, carrier_doppler, start_code_phase = make_signal(sampling_frequency)
 
-    sat_immutable = SatState(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)
-    sat_mutable   = SatState(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)
+    sat_immutable = TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)
+    sat_mutable   = TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)
 
     ts_immutable = TrackState(gpsl1, [sat_immutable])
     ts_mutable   = TrackState(gpsl1, [sat_mutable])
@@ -77,7 +77,7 @@ end
     signal, gpsl1, carrier_doppler, start_code_phase = make_signal(sampling_frequency)
     track_state = TrackState(
         gpsl1,
-        [SatState(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)],
+        [TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)],
     )
     returned = track!(signal, track_state, sampling_frequency)
     @test returned === track_state
@@ -129,7 +129,7 @@ end
 
     track_state = TrackState(
         gpsl1,
-        [SatState(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)],
+        [TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)],
     )
     dc = DC()
 

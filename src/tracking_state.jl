@@ -1,19 +1,24 @@
 function TrackState(
     system::AbstractGNSSSignal,
-    sat_states;
+    tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}};
     doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
 )
-    wrapped = wrap_sats(doppler_estimator, sat_states)
-    tracked_systems = (TrackedSystem(system, wrapped),)
+    # `system` is implied by each sat's `signals[1].signal` in the new
+    # design; the positional argument is kept for backward-compatible
+    # construction but is otherwise unused.
+    sats_dict = to_dictionary(tracked_sats)
+    reseeded = map(sat -> _reseed_doppler_estimator_state(sat, doppler_estimator), sats_dict)
+    tracked_systems = (reseeded,)
     TrackState(tracked_systems, doppler_estimator)
 end
 
 function TrackState(
-    tracked_system::TrackedSystem;
+    tracked_sats::Dictionary{<:Any,<:TrackedSat};
     doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
 )
-    tracked_systems = (tracked_system,)
-    TrackState(tracked_systems, doppler_estimator)
+    reseeded =
+        map(sat -> _reseed_doppler_estimator_state(sat, doppler_estimator), tracked_sats)
+    TrackState((reseeded,), doppler_estimator)
 end
 
 function TrackState(
@@ -74,9 +79,9 @@ end
 # no allocation. Base case is an empty tuple.
 @inline _all_sats_at(::Tuple{}, target::Int) = true
 @inline function _all_sats_at(t::Tuple, target::Int)
-    sss = first(t)
-    @inbounds for tracked_sat in sss.states.values
-        tracked_sat.sat_state.signal_start_sample == target || return false
+    sats = first(t)
+    @inbounds for sat in sats.values
+        sat.signal_start_sample == target || return false
     end
     _all_sats_at(Base.tail(t), target)
 end
@@ -84,41 +89,17 @@ end
 """
 $(SIGNATURES)
 
-Get the TrackedSystem for a specific GNSS system from a TrackState or
-TrackedSystems by index or symbol.
-"""
-function get_tracked_system(
-    track_state::TrackState{<:TrackedSystems{N}},
-    system_idx,
-) where {N}
-    get_tracked_system(track_state.tracked_systems, system_idx)
-end
-
-function get_tracked_system(
-    tracked_systems::TrackedSystems{N},
-    system_idx::Union{Symbol,Integer},
-) where {N}
-    tracked_systems[system_idx]
-end
-
-function get_tracked_system(
-    tracked_systems::TrackedSystems{N},
-    system_idx::Val{M},
-) where {N,M}
-    tracked_systems[M]
-end
-
-"""
-$(SIGNATURES)
-
-Get the dictionary of satellite states for a specific GNSS system.
+Get the per-system satellite dictionary for a specific GNSS system index.
 """
 function get_sat_states(
     tracked_systems::TrackedSystems{N},
     system_idx::Union{Symbol,Integer,Val},
 ) where {N}
-    get_tracked_system(tracked_systems, system_idx).states
+    _index_system(tracked_systems, system_idx)
 end
+
+@inline _index_system(t::TrackedSystems, i::Union{Symbol,Integer}) = t[i]
+@inline _index_system(t::TrackedSystems, ::Val{M}) where {M} = t[M]
 
 function get_sat_states(tracked_systems::TrackedSystems{1})
     get_sat_states(tracked_systems, 1)
@@ -135,11 +116,15 @@ function get_sat_states(track_state::TrackState{<:TrackedSystems{1}})
     get_sat_states(track_state.tracked_systems)
 end
 
+# Pull the signal type for system `system_idx` out of any sat in its
+# dictionary. The dictionary's value type carries the signal type, so this
+# resolves at compile time when `system_idx` is a literal Symbol/Int.
 function get_system(
     track_state::TrackState{<:TrackedSystems{N}},
     system_idx::Union{Symbol,Integer,Val},
 ) where {N}
-    get_tracked_system(track_state, system_idx).system
+    sats = get_sat_states(track_state, system_idx)
+    get_signal(first(sats.values))
 end
 
 function get_system(track_state::TrackState{<:TrackedSystems{1}})
@@ -151,7 +136,7 @@ function get_sat_state(
     system_idx::Union{Symbol,Integer,Val},
     sat_identifier,
 ) where {N}
-    get_sat_state(get_tracked_system(track_state, system_idx), sat_identifier)
+    get_sat_state(get_sat_states(track_state, system_idx), sat_identifier)
 end
 
 function get_sat_state(
@@ -162,7 +147,7 @@ function get_sat_state(
 end
 
 function get_sat_state(track_state::TrackState{<:TrackedSystems{1}})
-    only(get_sat_states(track_state, 1)).sat_state
+    only(get_sat_states(track_state, 1))
 end
 
 function estimate_cn0(
@@ -170,7 +155,7 @@ function estimate_cn0(
     system_idx::Union{Symbol,Integer,Val},
     sat_identifier,
 )
-    estimate_cn0(get_tracked_system(track_state, system_idx), sat_identifier)
+    estimate_cn0(get_sat_state(track_state, system_idx, sat_identifier))
 end
 
 function estimate_cn0(track_state::TrackState{<:TrackedSystems{1}}, sat_identifier)
@@ -178,29 +163,35 @@ function estimate_cn0(track_state::TrackState{<:TrackedSystems{1}}, sat_identifi
 end
 
 function estimate_cn0(track_state::TrackState{<:TrackedSystems{1}})
-    estimate_cn0(get_tracked_system(track_state, 1))
+    estimate_cn0(get_sat_state(track_state))
 end
 
 function merge_sats(
     track_state::TrackState{S,DE},
     system_idx::Union{Symbol,Integer},
-    sat_states::Union{SatState,Vector{<:SatState},Dictionary{<:Any,<:SatState}},
+    tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}},
 ) where {S<:TrackedSystems,DE<:AbstractDopplerEstimator}
-    new_sats_dict = to_dictionary(sat_states)
-    wrapped = wrap_sats(track_state.doppler_estimator, new_sats_dict)
+    new_sats_dict = to_dictionary(tracked_sats)
+    # Re-seed each incoming sat's per-sat estimator state with the
+    # track_state's estimator config — the sat may have been constructed
+    # with a different (often default) estimator, but its slot in the
+    # tracking dictionary must hold state of the right concrete type.
+    reseeded = map(new_sats_dict) do sat
+        _reseed_doppler_estimator_state(sat, track_state.doppler_estimator)
+    end
     new_estimator =
-        update_estimator_on_handoff(track_state.doppler_estimator, new_sats_dict)
+        update_estimator_on_handoff(track_state.doppler_estimator, reseeded)
     TrackState{S,DE}(
-        merge_sats(track_state.tracked_systems, system_idx, wrapped),
+        merge_sats(track_state.tracked_systems, system_idx, reseeded),
         new_estimator,
     )
 end
 
 function merge_sats(
     track_state::TrackState{<:TrackedSystems{1}},
-    sat_states::Union{SatState,Vector{<:SatState},Dictionary{Any,<:SatState}},
+    tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}},
 )
-    merge_sats(track_state, 1, sat_states)
+    merge_sats(track_state, 1, tracked_sats)
 end
 
 function filter_out_sats(

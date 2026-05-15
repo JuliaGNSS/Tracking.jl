@@ -15,7 +15,7 @@ using Tracking:
     get_prompt,
     get_correlator_sample_shifts,
     estimate_cn0,
-    SatState,
+    TrackedSat,
     TrackState,
     track
 
@@ -106,7 +106,7 @@ end
 
     track_state = @inferred TrackState(
         gpsl1,
-        [SatState(gpsl1, prn, start_code_phase, carrier_doppler)];
+        [TrackedSat(gpsl1, prn, start_code_phase, carrier_doppler)];
     )
 
     for i = 1:100
