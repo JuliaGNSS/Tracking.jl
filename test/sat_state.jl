@@ -5,7 +5,7 @@ using Unitful: Hz
 using GNSSSignals: GPSL1CA, get_code_center_frequency_ratio
 using Acquisition: Acquisition, AcquisitionResults
 using Tracking:
-    SatState,
+    TrackedSat,
     get_prn,
     get_code_phase,
     get_code_doppler,
@@ -21,7 +21,7 @@ using Tracking:
 
 @testset "Satellite state" begin
     gpsl1 = GPSL1CA()
-    sat_state = @inferred SatState(gpsl1, 1, 10.0, 500.0Hz)
+    sat_state = @inferred TrackedSat(gpsl1, 1, 10.0, 500.0Hz)
     @test get_prn(sat_state) == 1
     @test get_code_phase(sat_state) == 10.0
     @test get_code_doppler(sat_state) == 500.0Hz * get_code_center_frequency_ratio(gpsl1)
@@ -50,7 +50,7 @@ using Tracking:
     acq = pkgversion(Acquisition) >= v"2" ?
         AcquisitionResults(acq_args..., 1, length(-500:100.0:500)) :
         AcquisitionResults(acq_args...)
-    sat_state = @inferred SatState(acq)
+    sat_state = @inferred TrackedSat(acq)
     @test get_prn(sat_state) == 5
     @test get_code_phase(sat_state) == 524.6
     @test get_code_doppler(sat_state) == 100.0Hz * get_code_center_frequency_ratio(gpsl1)

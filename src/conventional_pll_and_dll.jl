@@ -12,15 +12,15 @@ Holds initial Doppler values and loop filter states.
 end
 
 function SatConventionalPLLAndDLL(
-    sat_state::SatState,
+    sat::TrackedSat,
     carrier_loop_filter::CA,
     code_loop_filter::CO;
     carrier_loop_filter_bandwidth::typeof(1.0Hz) = 18.0Hz,
     code_loop_filter_bandwidth::typeof(1.0Hz) = 1.0Hz,
 ) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     SatConventionalPLLAndDLL(
-        sat_state.carrier_doppler,
-        sat_state.code_doppler,
+        sat.carrier_doppler,
+        sat.code_doppler,
         carrier_loop_filter,
         code_loop_filter,
         carrier_loop_filter_bandwidth,
@@ -123,13 +123,13 @@ satellite tracked under [`ConventionalPLLAndDLL`](@ref).
 """
 function init_estimator_state(
     estimator::ConventionalPLLAndDLL{CA,CO},
-    sat_state::SatState,
+    sat::TrackedSat,
 ) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     carrier_loop_filter = constructorof(CA)()
     code_loop_filter = constructorof(CO)()
     SatConventionalPLLAndDLL(
-        sat_state.carrier_doppler,
-        sat_state.code_doppler,
+        sat.carrier_doppler,
+        sat.code_doppler,
         carrier_loop_filter,
         code_loop_filter,
         estimator.carrier_loop_filter_bandwidth,
@@ -161,38 +161,36 @@ end
 # `estimate_dopplers_and_filter_prompt` and the in-place
 # `estimate_dopplers_and_filter_prompt!` so the two cannot drift.
 function _update_tracked_sat_doppler(
-    tracked_sat::TrackedSat,
+    sat::TrackedSat,
     system,
     preferred_num_code_blocks_to_integrate,
     sampling_frequency,
 )
-    sat_state = tracked_sat.sat_state
-    pll_and_dll_state = tracked_sat.estimator_state
-    if !sat_state.is_integration_completed || sat_state.integrated_samples == 0
-        return tracked_sat
+    pll_and_dll_state = sat.doppler_estimator_state
+    signal = only(sat.signals)
+    if !signal.is_integration_completed || signal.integrated_samples == 0
+        return sat
     end
     integrated_code_blocks = calc_num_code_blocks_to_integrate(
         system,
         preferred_num_code_blocks_to_integrate,
-        has_bit_or_secondary_code_been_found(sat_state.bit_buffer),
+        has_bit_or_secondary_code_been_found(signal.bit_buffer),
     )
 
-    normalized_correlator = normalize(sat_state.correlator, sat_state.integrated_samples)
-    post_corr_filter =
-        update(sat_state.post_corr_filter, get_prompt(normalized_correlator))
+    normalized_correlator = normalize(signal.correlator, signal.integrated_samples)
+    post_corr_filter = update(signal.post_corr_filter, get_prompt(normalized_correlator))
     filtered_correlator = apply(post_corr_filter, normalized_correlator)
     prompt = get_prompt(filtered_correlator)
-    push!(sat_state.filtered_prompts, prompt)
-    cn0_estimator = update(get_cn0_estimator(sat_state), prompt)
-    bit_buffer =
-        buffer(system, sat_state.bit_buffer, integrated_code_blocks, prompt)
-    integration_time = sat_state.integrated_samples / sampling_frequency
+    push!(signal.filtered_prompts, prompt)
+    cn0_estimator = update(get_cn0_estimator(signal), prompt)
+    bit_buffer = buffer(system, signal.bit_buffer, integrated_code_blocks, prompt)
+    integration_time = signal.integrated_samples / sampling_frequency
 
     carrier_freq_update, carrier_loop_filter = calculate_carrier_frequency_update(
         system,
         pll_and_dll_state.carrier_loop_filter,
         filtered_correlator,
-        get_last_fully_integrated_filtered_prompt(sat_state),
+        get_last_fully_integrated_filtered_prompt(signal),
         integration_time,
         pll_and_dll_state.carrier_loop_filter_bandwidth,
     )
@@ -200,7 +198,7 @@ function _update_tracked_sat_doppler(
         system,
         pll_and_dll_state.code_loop_filter,
         filtered_correlator,
-        sat_state.code_doppler,
+        sat.code_doppler,
         sampling_frequency,
         integration_time,
         pll_and_dll_state.code_loop_filter_bandwidth,
@@ -212,25 +210,29 @@ function _update_tracked_sat_doppler(
         carrier_freq_update,
         code_freq_update,
     )
-    new_estimator_state = SatConventionalPLLAndDLL(
+    new_doppler_estimator_state = SatConventionalPLLAndDLL(
         pll_and_dll_state;
         carrier_loop_filter,
         code_loop_filter,
     )
-    new_sat_state = SatState(
-        sat_state;
-        carrier_doppler,
-        code_doppler,
+    new_signal = TrackedSignal(
+        signal;
         integrated_samples = 0,
         is_integration_completed = false,
         last_fully_integrated_filtered_prompt = prompt,
         bit_buffer,
         cn0_estimator,
         post_corr_filter,
-        correlator = zero(sat_state.correlator),
-        last_fully_integrated_correlator = sat_state.correlator,
+        correlator = zero(signal.correlator),
+        last_fully_integrated_correlator = signal.correlator,
     )
-    TrackedSat(new_sat_state, new_estimator_state)
+    TrackedSat(
+        sat;
+        carrier_doppler,
+        code_doppler,
+        signals = (new_signal,),
+        doppler_estimator_state = new_doppler_estimator_state,
+    )
 end
 
 """
@@ -275,12 +277,18 @@ allocation-free in steady state when [`track!`](@ref)'s preconditions are met.
 """
 # Per-system body for the doppler estimator. Pulled out so
 # `_foreach_system!` can call it without boxing when the system tuple
-# is heterogeneous (e.g. GPS L1 + Galileo E1B).
+# is heterogeneous (e.g. GPS L1 + Galileo E1B). The signal type is taken
+# from any sat's `signals[1]` — the dictionary's value type guarantees all
+# sats in this system share the same signal type, so the lookup is
+# resolved at compile time.
 @inline function _est_one_system!(
-    sss::TrackedSystem, preferred_num_code_blocks_to_integrate, sampling_frequency,
+    sats::Dictionary{<:Any,<:TrackedSat},
+    preferred_num_code_blocks_to_integrate,
+    sampling_frequency,
 )
-    system = sss.system
-    vals = sss.states.values
+    vals = sats.values
+    isempty(vals) && return nothing
+    system = get_signal(first(vals))
     @inbounds for i in eachindex(vals)
         vals[i] = _update_tracked_sat_doppler(
             vals[i],

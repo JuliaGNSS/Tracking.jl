@@ -122,7 +122,7 @@ end
     ::CPUDownconvertAndCorrelator,
     code_replica,
     system,
-    sat_state,
+    sat::TrackedSat,
     signal,
     sample_shifts,
     code_frequency,
@@ -130,27 +130,28 @@ end
     sampling_frequency,
     signal_samples_to_integrate,
 )
+    correlator = only(sat.signals).correlator
     downconvert_and_correlate!(
         system,
         signal,
-        sat_state.correlator,
+        correlator,
         code_replica,
-        sat_state.code_phase,
-        sat_state.carrier_phase,
+        sat.code_phase,
+        sat.carrier_phase,
         code_frequency,
         carrier_frequency,
         sampling_frequency,
-        sat_state.signal_start_sample,
+        sat.signal_start_sample,
         signal_samples_to_integrate,
-        sat_state.prn,
-    )::typeof(sat_state.correlator)
+        sat.prn,
+    )::typeof(correlator)
 end
 
 @inline function _correlate_with_buffer!(
     dc::CPUThreadedDownconvertAndCorrelator,
     code_replica,
     system,
-    sat_state,
+    sat::TrackedSat,
     signal,
     sample_shifts,
     code_frequency,
@@ -158,29 +159,30 @@ end
     sampling_frequency,
     signal_samples_to_integrate,
 )
+    correlator = only(sat.signals).correlator
     gen_code_replica!(
         code_replica,
         system,
         code_frequency,
         sampling_frequency,
-        sat_state.code_phase,
-        sat_state.signal_start_sample,
+        sat.code_phase,
+        sat.signal_start_sample,
         signal_samples_to_integrate,
         sample_shifts,
-        sat_state.prn,
+        sat.prn,
     )
     _fused_with_tile_scratch!(
         dc,
-        sat_state.correlator,
+        correlator,
         signal,
         code_replica,
         sample_shifts,
         carrier_frequency,
         sampling_frequency,
-        sat_state.carrier_phase,
-        sat_state.signal_start_sample,
+        sat.carrier_phase,
+        sat.signal_start_sample,
         signal_samples_to_integrate,
-    )::typeof(sat_state.correlator)
+    )::typeof(correlator)
 end
 
 # Dispatch helper for the fused kernel that hands SoA tile buffers from
@@ -243,7 +245,7 @@ end
 # CPU backends; the per-backend differences (slab buffer source, kernel
 # choice) are dispatched via `_slab_buffer` and `_correlate_with_buffer!`.
 function _update_tracked_sat_correlator(
-    tracked_sat::TrackedSat,
+    sat::TrackedSat,
     dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
     signal,
     system,
@@ -252,25 +254,25 @@ function _update_tracked_sat_correlator(
     sampling_frequency,
     intermediate_frequency,
 )
-    sat_state = tracked_sat.sat_state
+    tracked_signal = only(sat.signals)
     signal_samples_to_integrate, is_integration_completed =
         calc_signal_samples_to_integrate(
             system,
-            sat_state.signal_start_sample,
+            sat.signal_start_sample,
             sampling_frequency,
-            sat_state.code_doppler,
-            sat_state.code_phase,
+            sat.code_doppler,
+            sat.code_phase,
             preferred_num_code_blocks_to_integrate,
-            has_bit_or_secondary_code_been_found(sat_state),
+            has_bit_or_secondary_code_been_found(tracked_signal),
             num_samples_signal,
         )
     if signal_samples_to_integrate == 0
-        return tracked_sat
+        return sat
     end
-    carrier_frequency = sat_state.carrier_doppler + intermediate_frequency
-    code_frequency = sat_state.code_doppler + get_code_frequency(system)
+    carrier_frequency = sat.carrier_doppler + intermediate_frequency
+    code_frequency = sat.code_doppler + get_code_frequency(system)
     sample_shifts = get_correlator_sample_shifts(
-        sat_state.correlator,
+        tracked_signal.correlator,
         sampling_frequency,
         code_frequency,
     )
@@ -283,7 +285,7 @@ function _update_tracked_sat_correlator(
             dc,
             code_replica,
             system,
-            sat_state,
+            sat,
             signal,
             sample_shifts,
             code_frequency,
@@ -292,16 +294,15 @@ function _update_tracked_sat_correlator(
             signal_samples_to_integrate,
         )
     end
-    new_sat_state = update(
+    update(
         system,
-        sat_state,
+        sat,
         signal_samples_to_integrate,
         intermediate_frequency,
         sampling_frequency,
         new_correlator,
         is_integration_completed,
     )
-    TrackedSat(new_sat_state, tracked_sat.estimator_state)
 end
 
 """
@@ -343,16 +344,17 @@ slots in place. Returns the same `track_state`. Allocation-free in steady
 state — see [`track!`](@ref).
 """
 # Per-system body for the single-threaded backend. Pulled out so
-# `_foreach_system!` can call it on each `TrackedSystem` in the
-# (possibly heterogeneous) `tracked_systems` tuple without
-# dynamic dispatch / boxing.
+# `_foreach_system!` can call it on each per-system satellite dictionary in
+# the (possibly heterogeneous) `tracked_systems` tuple without dynamic
+# dispatch / boxing.
 @inline function _dc_one_system!(
-    sss::TrackedSystem, dc::CPUDownconvertAndCorrelator,
+    sats::Dictionary{<:Any,<:TrackedSat}, dc::CPUDownconvertAndCorrelator,
     signal, num_samples_signal, preferred_num_code_blocks_to_integrate,
     sampling_frequency, intermediate_frequency,
 )
-    system = sss.system
-    vals = sss.states.values
+    vals = sats.values
+    isempty(vals) && return nothing
+    system = get_signal(first(vals))
     @inbounds for i in eachindex(vals)
         vals[i] = _update_tracked_sat_correlator(
             vals[i],
@@ -427,13 +429,14 @@ write to disjoint slots, so no synchronization is needed. Returns the same
 # `_foreach_system!` can call it without boxing on heterogeneous
 # system tuples.
 @inline function _dc_one_system_threaded!(
-    sss::TrackedSystem, dc::CPUThreadedDownconvertAndCorrelator,
+    sats::Dictionary{<:Any,<:TrackedSat}, dc::CPUThreadedDownconvertAndCorrelator,
     signal, num_samples_signal, preferred_num_code_blocks_to_integrate,
     sampling_frequency, intermediate_frequency,
 )
-    system = sss.system
-    vals = sss.states.values
+    vals = sats.values
     n = length(vals)
+    n == 0 && return nothing
+    system = get_signal(first(vals))
     @batch for i = 1:n
         @inbounds vals[i] = _update_tracked_sat_correlator(
             vals[i],

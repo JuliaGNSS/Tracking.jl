@@ -4,7 +4,7 @@ using Test: @test, @testset
 using Unitful: Hz
 using GNSSSignals: GPSL1CA, gen_code, get_code_frequency
 using Tracking:
-    SatState,
+    TrackedSat,
     TrackState,
     track,
     get_sat_state,
@@ -20,7 +20,7 @@ using Tracking:
     code_frequency = get_code_frequency(system)
     carrier_doppler = 0.0Hz
 
-    track_state = TrackState(system, [SatState(system, 1, 0, carrier_doppler)];)
+    track_state = TrackState(system, [TrackedSat(system, 1, 0, carrier_doppler)];)
 
     bits = vcat(ones(20), zeros(20), ones(1))
     foreach(enumerate(bits)) do (index, bit)

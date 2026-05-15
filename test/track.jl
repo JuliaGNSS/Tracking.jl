@@ -4,6 +4,7 @@ using Test: @test, @testset, @inferred
 using Random: Random
 using Unitful: Hz, kHz, MHz
 using Statistics: mean
+using Dictionaries: dictionary
 using GNSSSignals:
     GPSL1CA,
     GPSL5I,
@@ -14,9 +15,8 @@ using GNSSSignals:
     get_code
 
 using Tracking:
-    SatState,
+    TrackedSat,
     TrackState,
-    TrackedSystem,
     track,
     get_code_phase,
     get_carrier_phase,
@@ -48,7 +48,7 @@ using Tracking:
 
     track_state = @inferred TrackState(
         gpsl1,
-        [SatState(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)],
+        [TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)],
     )
 
     signal_temp =
@@ -144,7 +144,7 @@ end
     tolerance = 1.0  # Hz, tight tolerance since no noise
 
     function test_convergence(carrier_error, use_assisted)
-        sat_states = [SatState(gpsl1, 1, start_code_phase, carrier_doppler + carrier_error)]
+        sat_states = [TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler + carrier_error)]
         doppler_estimator = use_assisted ? ConventionalAssistedPLLAndDLL() :
                                            ConventionalPLLAndDLL()
         track_state = TrackState(gpsl1, sat_states; doppler_estimator)
@@ -208,18 +208,14 @@ end
     start_carrier_phase = π / 2
 
     estimator = ConventionalAssistedPLLAndDLL()
+    gps_sat = TrackedSat(gpsl1, prn, start_code_phase, carrier_doppler_gps;
+                         doppler_estimator = estimator)
+    gal_sat = TrackedSat(galileo_e1b, prn, start_code_phase, carrier_doppler_gal;
+                         doppler_estimator = estimator)
     track_state = @inferred TrackState(
         (
-            gps = TrackedSystem(
-                estimator,
-                gpsl1,
-                [SatState(gpsl1, prn, start_code_phase, carrier_doppler_gps)],
-            ),
-            gal = TrackedSystem(
-                estimator,
-                galileo_e1b,
-                [SatState(galileo_e1b, prn, start_code_phase, carrier_doppler_gal)],
-            ),
+            gps = dictionary([prn => gps_sat]),
+            gal = dictionary([prn => gal_sat]),
         );
         doppler_estimator = estimator,
     )
@@ -357,7 +353,7 @@ end
 
     track_state = @inferred TrackState(
         gpsl1,
-        [SatState(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)];
+        [TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)];
     )
 
     signal =
@@ -462,7 +458,7 @@ end
     track_state = @inferred TrackState(
         gpsl1,
         [
-            SatState(
+            TrackedSat(
                 gpsl1,
                 1,
                 start_code_phase,
@@ -601,7 +597,7 @@ end
 
     track_state = TrackState(
         gpsl1,
-        [SatState(gpsl1, prn, start_code_phase, carrier_doppler)],
+        [TrackedSat(gpsl1, prn, start_code_phase, carrier_doppler)],
     )
 
     # First call: 10 code periods -> expect 10 filtered prompts

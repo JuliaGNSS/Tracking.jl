@@ -2,6 +2,7 @@ using BenchmarkTools
 using GNSSSignals
 using GNSSSignals: GalileoE1B
 using Unitful: Hz
+using Dictionaries: Dictionary
 using Tracking
 using Tracking:
     EarlyPromptLateCorrelator,
@@ -9,22 +10,30 @@ using Tracking:
     get_code_type,
     NumAnts,
     gen_code_replica!,
-    SatState,
     TrackState,
     downconvert_and_correlate,
     BitBuffer
 using StaticArrays
 
-# Branch-portable alias for the per-system tracking container. On
-# Tracking 2.0+ this is `TrackedSystem`; on master it was
-# `SystemSatsState`. The benchmark script runs against both via
-# AirspeedVelocity's `--bench-on=$HEAD_SHA`, so detect at load time.
-const _TrackedSystem = isdefined(Tracking, :TrackedSystem) ?
-    Tracking.TrackedSystem : Tracking.SystemSatsState
+# Branch-portable per-system storage construction. Three flavours coexist:
+#   * Master:           `SystemSatsState(sys, ::Vector{SatState})`
+#   * Wrapper branch:   `TrackedSystem(estimator, sys, ::Vector{SatState})`
+#   * Multi-signal:     plain `Dictionary{Int, TrackedSat}` (no per-system
+#                       container struct at all)
+# Detect at load time so the script runs unchanged across all three via
+# AirspeedVelocity's `--bench-on=$HEAD_SHA`.
+const _HAS_TRACKED_SIGNAL = isdefined(Tracking, :TrackedSignal)
+const _HAS_TRACKED_SAT    = isdefined(Tracking, :TrackedSat)
+const _HAS_SAT_STATE      = isdefined(Tracking, :SatState)
 
-# Field name on `TrackState` for the per-system tuple. Master named it
-# `multiple_system_sats_state`; on the new branch it's `tracked_systems`.
-const _SYSTEMS_FIELD = isdefined(Tracking, :TrackedSystem) ?
+if !_HAS_TRACKED_SIGNAL
+    const _TrackedSystem = isdefined(Tracking, :TrackedSystem) ?
+        Tracking.TrackedSystem : Tracking.SystemSatsState
+end
+
+# Field name on `TrackState` for the per-system tuple.
+const _SYSTEMS_FIELD = isdefined(Tracking, :TrackedSystem) ||
+                       isdefined(Tracking, :TrackedSignal) ?
     :tracked_systems : :multiple_system_sats_state
 
 @inline _get_systems(track_state) = getfield(track_state, _SYSTEMS_FIELD)
@@ -286,12 +295,31 @@ end
 # the script also loads cleanly against master (which has neither
 # `track!` nor `CPUThreadedDownconvertAndCorrelator()` zero-arg form).
 
-# Branch-portable per-system container construction. Master accepts a
-# raw Vector{SatState} via `SystemSatsState(sys, sats)`; the wrapper
-# branch needs an estimator to wrap each sat into a TrackedSat first
-# via `TrackedSystem(estimator, sys, sats)`.
-function _build_tracked_system(sys, sats::Vector{<:SatState})
-    if isdefined(Tracking, :TrackedSat)
+# Branch-portable per-sat construction. Returns an object suitable for
+# whatever the loaded Tracking expects in its per-system storage:
+#   * Master / wrapper branch: a `SatState`.
+#   * Multi-signal branch: a `TrackedSat` (with one TrackedSignal inside,
+#     and the doppler_estimator_state already seeded).
+function _make_initial_sat(sys, prn, code_phase, carrier_doppler)
+    if _HAS_TRACKED_SIGNAL
+        return Tracking.TrackedSat(
+            sys, prn, code_phase, carrier_doppler;
+            doppler_estimator = Tracking.ConventionalAssistedPLLAndDLL(),
+        )
+    else
+        return Tracking.SatState(sys, prn, code_phase, carrier_doppler)
+    end
+end
+
+# Branch-portable per-system container construction. Master accepts a raw
+# `Vector{SatState}` via `SystemSatsState(sys, sats)`; the wrapper branch
+# needs an estimator to wrap each sat into a `TrackedSat` first via
+# `TrackedSystem(estimator, sys, sats)`; the multi-signal branch stores a
+# plain `Dictionary{Int, TrackedSat}` directly.
+function _build_tracked_system(sys, sats)
+    if _HAS_TRACKED_SIGNAL
+        return Dictionary(map(s -> s.prn, sats), sats)
+    elseif _HAS_TRACKED_SAT
         return _TrackedSystem(Tracking.ConventionalAssistedPLLAndDLL(), sys, sats)
     else
         return _TrackedSystem(sys, sats)
@@ -299,11 +327,34 @@ function _build_tracked_system(sys, sats::Vector{<:SatState})
 end
 
 # Branch-portable "set bit_buffer.found = true" on whatever the dict holds.
-# Master holds SatState directly; the wrapper branch holds TrackedSat.
-_with_found_bit_buffer(s::SatState, bb) = SatState(s; bit_buffer = bb)
-if isdefined(Tracking, :TrackedSat)
-    _with_found_bit_buffer(t::Tracking.TrackedSat, bb) =
-        Tracking.TrackedSat(SatState(t.sat_state; bit_buffer = bb), t.estimator_state)
+# Master holds SatState directly; the wrapper branch holds TrackedSat that
+# itself holds SatState; the multi-signal branch holds flat TrackedSat with
+# the bit_buffer on `signals[1]`.
+if _HAS_TRACKED_SIGNAL
+    function _with_found_bit_buffer(t, bb)
+        sig = only(t.signals)
+        new_sig = Tracking.TrackedSignal(sig; bit_buffer = bb)
+        Tracking.TrackedSat(
+            t.prn, t.code_phase, t.code_doppler,
+            t.carrier_phase, t.carrier_doppler,
+            t.signal_start_sample, (new_sig,), t.doppler_estimator_state,
+        )
+    end
+elseif _HAS_TRACKED_SAT
+    _with_found_bit_buffer(t, bb) = Tracking.TrackedSat(
+        Tracking.SatState(t.sat_state; bit_buffer = bb), t.estimator_state,
+    )
+else
+    _with_found_bit_buffer(s, bb) = Tracking.SatState(s; bit_buffer = bb)
+end
+
+# Branch-portable "map a function over the per-sat storage".
+if _HAS_TRACKED_SIGNAL
+    _map_sats(f, sats_storage) = map(f, sats_storage)
+    _rebuild_system_storage(_sss, new_sats) = new_sats
+else
+    _map_sats(f, sss) = map(f, sss.states)
+    _rebuild_system_storage(sss, new_sats) = _TrackedSystem(sss, new_sats)
 end
 
 function _make_multi_sat_state(;
@@ -319,7 +370,10 @@ function _make_multi_sat_state(;
         ns = nsats_list[min(si, length(nsats_list))]
         pm = sys isa GPSL1CA ? 32 : prn_max
         cd = sys isa GPSL1CA ? 1000.0 : code_dop
-        sats = [SatState(sys, mod1(i, pm), 10.5 + i * 0.1, (cd + i * 10) * Hz) for i = 1:ns]
+        sats = [
+            _make_initial_sat(sys, mod1(i, pm), 10.5 + i * 0.1, (cd + i * 10) * Hz)
+            for i = 1:ns
+        ]
         push!(all_sss, _build_tracked_system(sys, sats))
         total_sats += ns
     end
@@ -334,8 +388,8 @@ function _make_steady_state_track_state(; systems, nsats_list, nsamp, prn_max, c
         _make_multi_sat_state(; systems, nsats_list, nsamp, prn_max, code_dop)
     found_bb = BitBuffer(UInt128(0), 20, true, UInt128(0), 0, complex(0.0, 0.0), 0)
     new_mss = map(_get_systems(ts)) do sss
-        new_sats = map(s -> _with_found_bit_buffer(s, found_bb), sss.states)
-        _TrackedSystem(sss, new_sats)
+        new_sats = _map_sats(s -> _with_found_bit_buffer(s, found_bb), sss)
+        _rebuild_system_storage(sss, new_sats)
     end
     _track_state_with_systems(ts, new_mss), signal
 end

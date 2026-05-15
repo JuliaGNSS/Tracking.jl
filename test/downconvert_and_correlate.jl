@@ -10,8 +10,7 @@ using Tracking:
     CPUThreadedDownconvertAndCorrelator,
     EarlyPromptLateCorrelator,
     NumAnts,
-    TrackedSystem,
-    SatState,
+    TrackedSat,
     TrackState,
     downconvert_and_correlate,
     get_accumulators,
@@ -37,7 +36,7 @@ end
     num_samples_signal = 5000
     intermediate_frequency = 0.0Hz
 
-    sats = [SatState(gpsl1, 1, code_phase, 1000.0Hz), SatState(gpsl1, 2, 11.0, 500.0Hz)]
+    sats = [TrackedSat(gpsl1, 1, code_phase, 1000.0Hz), TrackedSat(gpsl1, 2, 11.0, 500.0Hz)]
     downconvert_and_correlator = DC()
     track_state = TrackState(gpsl1, sats)
 
@@ -97,8 +96,8 @@ end
     intermediate_frequency = 0.0Hz
 
     signal = ones(ComplexF64, num_samples_signal)
-    sat_past_end = SatState(
-        SatState(gpsl1, 1, code_phase, 1000.0Hz);
+    sat_past_end = TrackedSat(
+        TrackedSat(gpsl1, 1, code_phase, 1000.0Hz);
         signal_start_sample = num_samples_signal + 1,
     )
     ts_skip = TrackState(gpsl1, [sat_past_end])
@@ -108,14 +107,14 @@ end
     result_skip = downconvert_and_correlate(
         downconvert_and_correlator, signal, ts_skip, 1, sampling_frequency, intermediate_frequency,
     )
-    @test get_correlator(result_skip, 1).accumulators == sat_past_end.correlator.accumulators
+    @test get_correlator(result_skip, 1).accumulators == get_correlator(sat_past_end).accumulators
 
     # In-place form takes the same `signal_samples_to_integrate == 0` early
     # return per sat. The TrackedSat is reassigned to itself unchanged.
     Tracking.downconvert_and_correlate!(
         downconvert_and_correlator, signal, ts_skip, 1, sampling_frequency, intermediate_frequency,
     )
-    @test get_correlator(ts_skip, 1).accumulators == sat_past_end.correlator.accumulators
+    @test get_correlator(ts_skip, 1).accumulators == get_correlator(sat_past_end).accumulators
 end
 
 @testset "Fused downconvert and correlate" begin
