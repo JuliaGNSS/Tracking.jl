@@ -261,3 +261,20 @@ Each `!` commit carries a `BREAKING CHANGE:` footer in conventional-commit forma
 ## Open questions
 
 None at design-time. Step 3's measurements confirmed that the original "shared-downconvert + per-signal correlate" design is correct, with a refinement: the shared part is the existing dynamic-shifts kernel's tile path, and the dispatch is by compile-time `length(sat.signals)`.
+
+### Post-step-4 investigation: option C (no tile, all in registers)
+
+A natural follow-up question: could a fully in-register multi-signal kernel (no tile materialization, downconverted samples never leave SIMD registers, accumulated into N×NC named-variable accumulators) beat option B's tile-share approach?
+
+A probe in `claude_scratch/option_c_inregister_probe.jl` measured the *lower bound* on option C — it cheats by skipping the tile-write pass entirely (correlating against a stale tile, so results are wrong, but the timing is real). Against option B (production):
+
+| N | Option B | Option C lower-bound | Headroom |
+|---|---|---|---|
+| 1 | 3.88 µs | 3.70 µs | 4.6% |
+| 2 | 4.79 µs | 4.64 µs | 3.2% |
+| 3 | 5.65 µs | 5.45 µs | 3.5% |
+| 4 | 7.02 µs | 6.18 µs | 12.0% |
+
+The available improvement at N=2-3 is ≤5% even in the best case — a real option C kernel would only get a fraction of that after paying the extra register-pressure cost of N×NC simultaneously-live accumulators. The tile in option B lives entirely in L1 cache (~40 KB for 5000 ComplexF32 samples), so its round-trip cost is small.
+
+**Conclusion: option C is not worth implementing.** Option B is the right design.
