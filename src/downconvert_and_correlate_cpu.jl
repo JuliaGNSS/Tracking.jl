@@ -1,17 +1,20 @@
-# Three independent scratch byte buffers — one per role. The code-replica
-# path uses `code_replica`; the fused kernel's `AbstractVector`-shifts
-# fallback uses `tile_re` / `tile_im` concurrently. Holding separate
-# buffers per role (instead of bump-arena offset math on one) keeps the
-# call sites simple. Both CPU backends share this struct: the
-# single-threaded one holds a single `ScratchBuffers`, the threaded one
-# holds a `Vector{ScratchBuffers}` (one per thread).
-struct ScratchBuffers
+# Per-thread scratch byte buffers. The code-replica path uses
+# `code_replica` for the first signal of a sat; multi-signal sats grow
+# `extra_code_replicas` lazily to add slots 2..N. The fused kernel's
+# `AbstractVector`-shifts fallback uses `tile_re` / `tile_im`
+# concurrently; the multi-signal tile-share kernel shares them too.
+# Holding separate buffers per role (instead of bump-arena offset math
+# on one) keeps the call sites simple. Both CPU backends share this
+# struct: the single-threaded one holds a single `ScratchBuffers`, the
+# threaded one holds a `Vector{ScratchBuffers}` (one per thread).
+mutable struct ScratchBuffers
     code_replica::Vector{UInt8}
+    extra_code_replicas::Vector{Vector{UInt8}}
     tile_re::Vector{UInt8}
     tile_im::Vector{UInt8}
 end
 
-ScratchBuffers() = ScratchBuffers(UInt8[], UInt8[], UInt8[])
+ScratchBuffers() = ScratchBuffers(UInt8[], Vector{UInt8}[], UInt8[], UInt8[])
 
 # Bitstype pointer-and-length view over a `Vector{UInt8}` slot, used as
 # the typed handle the kernels accept. Implements just enough of the
@@ -111,6 +114,37 @@ end
     n::Int,
 ) where {T}
     _with_scratch_view(f, _scratch_buffers(dc).code_replica, T, n)
+end
+
+# Grow `extra_code_replicas` to hold at least `n_extra` byte vectors.
+@inline function _ensure_extra_code_replicas!(bufs::ScratchBuffers, n_extra::Int)
+    while length(bufs.extra_code_replicas) < n_extra
+        push!(bufs.extra_code_replicas, UInt8[])
+    end
+end
+
+# Pick the `i`-th code-replica byte buffer for this thread: slot 1 is the
+# primary `code_replica`; slots 2..N are extra slots, grown lazily.
+@inline function _code_replica_slot(bufs::ScratchBuffers, i::Int)
+    i == 1 && return bufs.code_replica
+    _ensure_extra_code_replicas!(bufs, i - 1)
+    bufs.extra_code_replicas[i - 1]
+end
+
+# Multi-signal tile-share scratch handle: yields ScratchViews over the
+# shared `tile_re` / `tile_im` SoA buffers, sized for `num_samples`
+# Float32s each.
+@inline function _with_tile_buffers(
+    f,
+    dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
+    num_samples::Int,
+)
+    bufs = _scratch_buffers(dc)
+    _with_scratch_view(bufs.tile_re, Float32, num_samples) do tile_re
+        _with_scratch_view(bufs.tile_im, Float32, num_samples) do tile_im
+            f(tile_re, tile_im)
+        end
+    end
 end
 
 # Per-backend per-signal correlation kernel. Single-threaded backend uses
@@ -288,7 +322,7 @@ function _update_tracked_sat_correlator(
         return sat
     end
     carrier_frequency = sat.carrier_doppler + intermediate_frequency
-    new_signals_data = _correlate_all_signals(
+    new_signals_data = _correlate_signals(
         sat.signals,
         per_signal_completed,
         dc,
@@ -378,11 +412,14 @@ end
 @inline _flag_completed(t::Tuple, chosen) =
     (first(t) == chosen, _flag_completed(Base.tail(t), chosen)...)
 
-# For each signal, gen its code replica and run the fused kernel. Returns
-# a tuple of `(new_correlator, is_integration_completed)` pairs.
-@inline function _correlate_all_signals(
-    signals::Tuple,
-    per_signal_completed::Tuple,
+# Single-signal path: gen one code replica + run the in-register fused
+# kernel. Returns a one-tuple of `(new_correlator, is_integration_completed)`.
+# This is the hot path for N=1 — the fused kernel keeps downconverted
+# samples in registers and is ~24% faster than the tile-share kernel
+# below at N=1.
+@inline function _correlate_signals(
+    signals::Tuple{TrackedSignal},
+    per_signal_completed::Tuple{Bool},
     dc,
     signal,
     code_doppler,
@@ -395,14 +432,12 @@ end
     prn,
     num_samples_signal,
 )
-    head = first(signals)
+    head = signals[1]
     s = head.signal
     correlator = head.correlator
     code_frequency = code_doppler + get_code_frequency(s)
     sample_shifts =
         get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
-    # Buffer sized for the full signal because the kernel indexes from
-    # `signal_start_sample` rather than from sample 1.
     code_replica_size =
         num_samples_signal + maximum(sample_shifts) - minimum(sample_shifts)
     per_signal_phase = mod(code_phase, get_code_length(s))
@@ -426,15 +461,113 @@ end
             prn,
         )
     end
-    head_pair = (new_corr, first(per_signal_completed))
-    (head_pair, _correlate_all_signals(
-        Base.tail(signals),
-        Base.tail(per_signal_completed),
-        dc, signal, code_doppler, code_phase, carrier_frequency, carrier_phase,
-        sampling_frequency, signal_start_sample, samples_to_integrate, prn,
-        num_samples_signal,
-    )...)
+    ((new_corr, per_signal_completed[1]),)
 end
+
+# Multi-signal path (N >= 2): gen N code replicas, then call the tile-
+# share fused kernel that does one downconvert + a sample-outer fused
+# correlate over all N×NC accumulators. Beats fused-N-times by ~40% at
+# N=2 and ~53% at N=3 — see the design doc.
+@inline function _correlate_signals(
+    signals::Tuple{TrackedSignal, TrackedSignal, Vararg{TrackedSignal}},
+    per_signal_completed::Tuple,
+    dc,
+    signal,
+    code_doppler,
+    code_phase,
+    carrier_frequency,
+    carrier_phase,
+    sampling_frequency,
+    signal_start_sample,
+    samples_to_integrate,
+    prn,
+    num_samples_signal,
+)
+    # Generate each signal's code replica into its per-thread slot, then
+    # call the tuple kernel with N replicas + the shared tile buffers.
+    code_replicas =
+        _gen_all_code_replicas(
+            signals, dc, code_doppler, code_phase, sampling_frequency,
+            signal_start_sample, samples_to_integrate, prn, num_samples_signal,
+        )
+    correlators = _signal_correlators(signals)
+    sample_shifts_tuple = _signal_sample_shifts(
+        signals, code_doppler, sampling_frequency,
+    )
+    new_correlators = _with_tile_buffers(dc, num_samples_signal) do tile_re, tile_im
+        downconvert_and_correlate_fused_tuple!(
+            correlators,
+            signal,
+            code_replicas,
+            sample_shifts_tuple,
+            carrier_frequency,
+            sampling_frequency,
+            carrier_phase,
+            signal_start_sample,
+            samples_to_integrate,
+            tile_re,
+            tile_im,
+        )
+    end
+    _zip_correlators_with_completed(new_correlators, per_signal_completed)
+end
+
+# Generate code replicas for each signal into the per-thread scratch
+# slots. Returns a tuple of `ScratchView`s suitable for passing to
+# `downconvert_and_correlate_fused_tuple!`. The buffer for signal `i`
+# comes from `_code_replica_slot(_, i)`.
+#
+# Implemented via an enumerated `map` over the heterogeneous signals
+# tuple — this stays type-stable and inlines across tuple lengths,
+# whereas recursive splatting bails out of the small-N inline path
+# around N=3 and introduces per-call boxing.
+@inline function _gen_all_code_replicas(
+    signals::Tuple,
+    dc,
+    code_doppler,
+    code_phase,
+    sampling_frequency,
+    signal_start_sample,
+    samples_to_integrate,
+    prn,
+    num_samples_signal,
+)
+    bufs = _scratch_buffers(dc)
+    idx_tuple = ntuple(identity, length(signals))
+    map(signals, idx_tuple) do head, i
+        s = head.signal
+        code_frequency = code_doppler + get_code_frequency(s)
+        sample_shifts = get_correlator_sample_shifts(
+            head.correlator, sampling_frequency, code_frequency,
+        )
+        code_replica_size =
+            num_samples_signal + maximum(sample_shifts) - minimum(sample_shifts)
+        per_signal_phase = mod(code_phase, get_code_length(s))
+        slot = _code_replica_slot(bufs, i)
+        CT = get_code_type(s)
+        nbytes = code_replica_size * sizeof(CT)
+        length(slot) < nbytes && resize!(slot, nbytes)
+        view = GC.@preserve slot ScratchView{CT}(Ptr{CT}(pointer(slot)), code_replica_size)
+        gen_code_replica!(
+            view, s, code_frequency, sampling_frequency, per_signal_phase,
+            signal_start_sample, samples_to_integrate, sample_shifts, prn,
+        )
+        view
+    end
+end
+
+@inline _signal_correlators(signals::Tuple) = map(s -> s.correlator, signals)
+
+@inline _signal_sample_shifts(
+    signals::Tuple, code_doppler, sampling_frequency,
+) = map(signals) do head
+    s = head.signal
+    code_frequency = code_doppler + get_code_frequency(s)
+    get_correlator_sample_shifts(head.correlator, sampling_frequency, code_frequency)
+end
+
+@inline _zip_correlators_with_completed(corrs::Tuple, completed::Tuple) =
+    map(tuple, corrs, completed)
 
 @inline _correlate_all_signals(
     ::Tuple{}, ::Tuple{},
