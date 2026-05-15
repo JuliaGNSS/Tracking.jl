@@ -496,5 +496,14 @@ if _HAS_TRACKED_SIGNAL
         SUITE["track"]["multi-signal N=$n_signals/5K"] = @benchmarkable Tracking.track(
             $signal, $ts, $(5e6Hz); downconvert_and_correlator = $dc,
         )
+        if isdefined(Tracking, :track!)
+            ts_ip, signal_ip = _make_multi_signal_track_state(;
+                n_signals, nsamp = 5000, sfreq = 5e6Hz,
+            )
+            dc_ip = _make_cpu_dc(5e6Hz)
+            SUITE["track!"]["multi-signal N=$n_signals/5K"] = @benchmarkable Tracking.track!(
+                $signal_ip, $ts_ip, $(5e6Hz); downconvert_and_correlator = $dc_ip,
+            )
+        end
     end
 end

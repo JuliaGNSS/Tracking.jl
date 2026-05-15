@@ -348,3 +348,150 @@ function downconvert_and_correlate_fused!(
     update_accumulator(correlator, _to_immutable(new_acc))
 end
 
+# ── Tuple-of-correlators tile-share fused kernel ──────────────────────
+# For multi-signal-per-satellite tracking: one downconvert into the
+# `tile_re` / `tile_im` SoA tile, followed by a single sample-outer
+# correlate pass that accumulates into N correlators (each with its own
+# code replica and `sample_shifts`).
+#
+# At N=2 this beats fused-N-times by ~37%; at N=3 by ~51% — see the
+# probes in `claude_scratch/` and the design doc. The single-signal path
+# (N=1) is intentionally NOT routed here — it still uses the in-register
+# static-shifts kernel above, which is ~24% faster at N=1 because the
+# downconverted samples never leave registers.
+#
+# The downconvert phase mirrors the dynamic-shifts kernel above. The
+# correlate phase is `@generated`-unrolled over all (signal i, tap k)
+# pairs so every accumulator stays in a named local; one tile-streaming
+# pass touches them all per sample.
+@generated function downconvert_and_correlate_fused_tuple!(
+    correlators::Tuple{Vararg{AbstractCorrelator{1}, N}},
+    signal::AbstractArray{Complex{ST}},
+    code_replicas::Tuple{Vararg{Any, N}},
+    all_sample_shifts::Tuple{Vararg{SVector, N}},
+    carrier_frequency,
+    sampling_frequency,
+    carrier_phase,
+    start_sample::Integer,
+    num_samples::Integer,
+    tile_re,
+    tile_im,
+) where {ST, N}
+    # Per-signal NC from each SVector's `length` (a compile-time constant
+    # available on the type itself, via the StaticArray Size interface).
+    NC_per_signal = Int[length(all_sample_shifts.parameters[i]) for i in 1:N]
+
+    # Accumulator init: ar_i_k, ai_i_k for each (signal i, tap k).
+    acc_init = Expr(:block)
+    for i in 1:N, k in 1:NC_per_signal[i]
+        push!(acc_init.args, :($(Symbol("ar_$(i)_$(k)")) = zero(Float32)))
+        push!(acc_init.args, :($(Symbol("ai_$(i)_$(k)")) = zero(Float32)))
+    end
+
+    # Per-signal locals: code_replica reference + per-tap shift offset.
+    locals_init = Expr(:block)
+    for i in 1:N
+        push!(locals_init.args, :($(Symbol("cr_$(i)")) = code_replicas[$i]))
+        push!(locals_init.args, :($(Symbol("ms_$(i)")) = minimum(all_sample_shifts[$i])))
+        for k in 1:NC_per_signal[i]
+            push!(locals_init.args, :(
+                $(Symbol("sh_$(i)_$(k)")) = all_sample_shifts[$i][$k] - $(Symbol("ms_$(i)"))
+            ))
+        end
+    end
+
+    # Inner per-sample body: load tile sample, accumulate into every (i,k).
+    sample_body = Expr(:block)
+    push!(sample_body.args, :(tr = tile_re[n]))
+    push!(sample_body.args, :(ti = tile_im[n]))
+    for i in 1:N
+        cr = Symbol("cr_$(i)")
+        for k in 1:NC_per_signal[i]
+            ar = Symbol("ar_$(i)_$(k)")
+            ai = Symbol("ai_$(i)_$(k)")
+            sh = Symbol("sh_$(i)_$(k)")
+            push!(sample_body.args, :(c = Float32($cr[n + $sh])))
+            push!(sample_body.args, :($ar = muladd(tr, c, $ar)))
+            push!(sample_body.args, :($ai = muladd(ti, c, $ai)))
+        end
+    end
+
+    # Finalize: write each accumulator back into its correlator.
+    finalize = Expr(:block)
+    push!(finalize.args, :(updated = ()))
+    for i in 1:N
+        # Build the tap-vector for this signal's correlator: SVector{NC_i}(...)
+        nc = NC_per_signal[i]
+        tap_complexes = [
+            quote
+                complex(Float64($(Symbol("ar_$(i)_$(k)"))), Float64($(Symbol("ai_$(i)_$(k)"))))
+            end
+            for k in 1:nc
+        ]
+        push!(finalize.args, :(corr_i = correlators[$i]))
+        push!(finalize.args, :(prev_i = get_accumulators(corr_i)))
+        push!(finalize.args, :(new_accs_i = SVector{$nc}(($(tap_complexes...),))))
+        push!(finalize.args, :(new_corr_i = update_accumulator(corr_i, prev_i .+ new_accs_i)))
+        push!(finalize.args, :(updated = (updated..., new_corr_i)))
+    end
+
+    quote
+        T = Float32
+        sizeof_ST = sizeof(ST)
+        W = $(_simd_width(Float32))
+
+        carrier_freq = T(upreferred(carrier_frequency / Hz))
+        phase0 = T(carrier_phase)
+        two_pi = T(2π)
+        freq_ratio = carrier_freq / T(upreferred(sampling_frequency / Hz))
+
+        num_samples_signal = size(signal, 1)
+        p_sig = Ptr{ST}(pointer(signal))
+        sig_col_bytes = num_samples_signal * 2 * sizeof_ST
+
+        off_1 = _make_offset(T, Val{W}(), Val{1}())
+        two_pi_fr = SIMD.Vec{W,T}(two_pi * freq_ratio)
+        init_1 = two_pi * (off_1 * freq_ratio + phase0)
+
+        last = start_sample + num_samples - 1
+
+        # ── Phase 1: downconvert into the shared tile (1 antenna). ───
+        i = start_sample
+        idx = 1
+        @inbounds while i + W - 1 <= last
+            base_phase = SIMD.Vec{W,T}(T(i - start_sample))
+            phase = muladd(base_phase, two_pi_fr, init_1)
+            ci, cr = fast_sincos_u100k(phase)
+            row_byte_off = (i - 1) * 2 * sizeof_ST
+            sr, si = _deinterleave_load(SIMD.Vec{W,T}, p_sig, row_byte_off)
+            dre = sr * cr + si * ci
+            dim = si * cr - sr * ci
+            off = (idx - 1) * sizeof(T)
+            vstore(dre, pointer(tile_re) + off)
+            vstore(dim, pointer(tile_im) + off)
+            i += W
+            idx += W
+        end
+        @inbounds while i <= last
+            ph = two_pi * (T(i - start_sample) * freq_ratio + phase0)
+            c_im_s, c_re_s = sincos(ph)
+            sig = signal[i, 1]
+            tile_re[idx] = T(real(sig)) * c_re_s + T(imag(sig)) * c_im_s
+            tile_im[idx] = T(imag(sig)) * c_re_s - T(real(sig)) * c_im_s
+            i += 1
+            idx += 1
+        end
+
+        # ── Phase 2: sample-outer fused correlate over N×NC accumulators. ──
+        $acc_init
+        $locals_init
+        @inbounds @simd for n in 1:num_samples
+            $sample_body
+        end
+
+        # ── Finalize: rebuild N updated correlators. ──
+        $finalize
+        return updated
+    end
+end
+
