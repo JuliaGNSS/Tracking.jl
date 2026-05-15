@@ -256,22 +256,6 @@ By default the track function will use the first antenna channel as the referenc
 drive the discriminators. However, an appropriate beamforming algorithm will probably
 suit better. For that, you can pass a custom `post_corr_filter` to the `SatState`.
 
-## GPU Support
-
-To use GPU acceleration features, you need to explicitly load CUDA:
-
-```julia
-using Tracking
-using CUDA  # Activates GPU functionality
-
-# Access GPU types via the extension
-ext = Base.get_extension(Tracking, :TrackingCUDAExt)
-gpu_correlator = ext.GPUDownconvertAndCorrelator(...)
-```
-
-Note: The GPU implementation is available for reference but is not yet as optimized as the
-CPU implementation which uses SIMD vectorization via LoopVectorization.jl.
-
 ## Q/A
 
 - Why are the correlator values zero?
