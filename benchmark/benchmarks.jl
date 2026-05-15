@@ -2,7 +2,6 @@ using BenchmarkTools
 using GNSSSignals
 using GNSSSignals: GalileoE1B
 using Unitful: Hz
-using Dictionaries: Dictionary
 using Tracking
 using Tracking:
     EarlyPromptLateCorrelator,
@@ -39,6 +38,26 @@ const _SYSTEMS_FIELD = isdefined(Tracking, :TrackedSystem) ||
 @inline _get_systems(track_state) = getfield(track_state, _SYSTEMS_FIELD)
 @inline _track_state_with_systems(track_state, systems) =
     TrackState(track_state; NamedTuple{(_SYSTEMS_FIELD,)}((systems,))...)
+
+# Branch-portable per-sat construction. Returns an object suitable for
+# whatever the loaded Tracking expects in its per-system storage:
+#   * Master / wrapper branch: a `SatState`.
+#   * Multi-signal branch: a `TrackedSat` (with one TrackedSignal inside,
+#     and the doppler_estimator_state already seeded).
+function _make_initial_sat(sys, prn, code_phase, carrier_doppler; num_ants = NumAnts(1))
+    if _HAS_TRACKED_SIGNAL
+        return Tracking.TrackedSat(
+            sys, prn, code_phase, carrier_doppler;
+            doppler_estimator = Tracking.ConventionalAssistedPLLAndDLL(),
+            num_ants,
+        )
+    else
+        return Tracking.SatState(sys, prn, code_phase, carrier_doppler; num_ants)
+    end
+end
+
+_make_initial_sat_with_num_ants(sys, prn, code_phase, carrier_doppler, num_ants) =
+    _make_initial_sat(sys, prn, code_phase, carrier_doppler; num_ants)
 
 const SUITE = BenchmarkGroup()
 
@@ -140,7 +159,7 @@ function bench_downconvert_and_correlate(;
     downconvert_and_correlator = _make_cpu_dc(sampling_frequency)
     track_state = TrackState(
         system,
-        [SatState(system, 1, 10.5, 1000.0Hz; num_ants = NumAnts(num_ants))],
+        [_make_initial_sat_with_num_ants(system, 1, 10.5, 1000.0Hz, NumAnts(num_ants))],
     )
     signal =
         num_ants == 1 ? rand(Complex{signal_type}, num_samples) :
@@ -237,7 +256,7 @@ function bench_track(;
 )
     system = GPSL1CA()
     downconvert_and_correlator = _make_cpu_dc(sampling_frequency)
-    track_state = TrackState(system, [SatState(system, 1, 0.0, 1000Hz)])
+    track_state = TrackState(system, [_make_initial_sat(system, 1, 0.0, 1000Hz)])
     signal = rand(Complex{signal_type}, num_samples)
     @benchmarkable track(
         $signal,
@@ -257,7 +276,7 @@ function bench_track_inplace(;
 )
     system = GPSL1CA()
     downconvert_and_correlator = _make_cpu_dc(sampling_frequency)
-    track_state = TrackState(system, [SatState(system, 1, 0.0, 1000Hz)])
+    track_state = TrackState(system, [_make_initial_sat(system, 1, 0.0, 1000Hz)])
     signal = rand(Complex{signal_type}, num_samples)
     @benchmarkable Tracking.track!(
         $signal,
@@ -295,22 +314,6 @@ end
 # the script also loads cleanly against master (which has neither
 # `track!` nor `CPUThreadedDownconvertAndCorrelator()` zero-arg form).
 
-# Branch-portable per-sat construction. Returns an object suitable for
-# whatever the loaded Tracking expects in its per-system storage:
-#   * Master / wrapper branch: a `SatState`.
-#   * Multi-signal branch: a `TrackedSat` (with one TrackedSignal inside,
-#     and the doppler_estimator_state already seeded).
-function _make_initial_sat(sys, prn, code_phase, carrier_doppler)
-    if _HAS_TRACKED_SIGNAL
-        return Tracking.TrackedSat(
-            sys, prn, code_phase, carrier_doppler;
-            doppler_estimator = Tracking.ConventionalAssistedPLLAndDLL(),
-        )
-    else
-        return Tracking.SatState(sys, prn, code_phase, carrier_doppler)
-    end
-end
-
 # Branch-portable per-system container construction. Master accepts a raw
 # `Vector{SatState}` via `SystemSatsState(sys, sats)`; the wrapper branch
 # needs an estimator to wrap each sat into a `TrackedSat` first via
@@ -318,7 +321,7 @@ end
 # plain `Dictionary{Int, TrackedSat}` directly.
 function _build_tracked_system(sys, sats)
     if _HAS_TRACKED_SIGNAL
-        return Dictionary(map(s -> s.prn, sats), sats)
+        return Tracking.to_dictionary(sats)
     elseif _HAS_TRACKED_SAT
         return _TrackedSystem(Tracking.ConventionalAssistedPLLAndDLL(), sys, sats)
     else
@@ -439,5 +442,59 @@ for (key, kw) in _TRACK_BENCH_CASES
     if isdefined(Tracking, :track!)
         SUITE["track!"][key] = bench_track_steady_state(true, false; kw...)
         SUITE["track!-threaded"][key] = bench_track_steady_state(true, true; kw...)
+    end
+end
+
+# ── Multi-signal-per-sat track benchmark ─────────────────────────────────
+# Measures track cost as N signals stack on a single satellite (the new
+# multi-signal hot path). Only registered when TrackedSignal is available.
+#
+# Step 3 ships the fused-N-times baseline: one independent
+# `downconvert_and_correlate_fused!` call per signal in the sat's
+# `signals` tuple. Linear scaling with N. Step 4 will add a tile-share
+# kernel that does one downconvert + N correlate-from-tile passes,
+# expected to save ~20% at N=2 and ~38% at N=3 — see the design doc and
+# the microbenchmark probes in `claude_scratch/`.
+#
+# Stacking N copies of GPSL1CA on one sat is not a real-world scenario
+# (a real sat carries one signal of each kind), but it isolates the
+# tuple-walk cost on identical N for a clean per-signal-cost comparison.
+if _HAS_TRACKED_SIGNAL
+    function _make_multi_signal_track_state(; n_signals, nsamp, sfreq)
+        gpsl1 = GPSL1CA()
+        estimator = Tracking.ConventionalAssistedPLLAndDLL()
+        signals = ntuple(
+            _ -> Tracking.TrackedSignal(
+                gpsl1;
+                num_ants = NumAnts(1),
+                correlator = Tracking.EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
+                post_corr_filter = Tracking.DefaultPostCorrFilter(),
+            ),
+            n_signals,
+        )
+        carrier_doppler = 1000.0Hz
+        code_doppler =
+            carrier_doppler * GNSSSignals.get_code_center_frequency_ratio(gpsl1)
+        bare = Tracking.TrackedSat(
+            1, 10.5, code_doppler, 0.0, carrier_doppler, 1, signals, nothing,
+        )
+        de_state = Tracking.init_estimator_state(estimator, bare)
+        sat = Tracking.TrackedSat(
+            bare.prn, bare.code_phase, bare.code_doppler,
+            bare.carrier_phase, bare.carrier_doppler,
+            bare.signal_start_sample, bare.signals, de_state,
+        )
+        ts = TrackState(gpsl1, sat; doppler_estimator = estimator)
+        signal = rand(Complex{Float32}, nsamp)
+        ts, signal
+    end
+
+    for n_signals = 1:3
+        ts, signal =
+            _make_multi_signal_track_state(; n_signals, nsamp = 5000, sfreq = 5e6Hz)
+        dc = _make_cpu_dc(5e6Hz)
+        SUITE["track"]["multi-signal N=$n_signals/5K"] = @benchmarkable Tracking.track(
+            $signal, $ts, $(5e6Hz); downconvert_and_correlator = $dc,
+        )
     end
 end

@@ -162,15 +162,57 @@ end
 # `estimate_dopplers_and_filter_prompt!` so the two cannot drift.
 function _update_tracked_sat_doppler(
     sat::TrackedSat,
-    system,
     preferred_num_code_blocks_to_integrate,
     sampling_frequency,
 )
+    # Walk all signals. For each one whose integration completed this
+    # iteration, normalize/filter its prompt, advance CN0 and bit buffer,
+    # and move its correlator to `last_fully_integrated_*`. Additionally,
+    # for `signals[1]` (the Doppler source), run PLL/DLL and update the
+    # sat-shared carrier/code Doppler.
     pll_and_dll_state = sat.doppler_estimator_state
-    signal = only(sat.signals)
+    head = first(sat.signals)
+    tail_signals = Base.tail(sat.signals)
+
+    new_head, new_doppler_estimator_state, new_carrier_doppler, new_code_doppler =
+        _process_doppler_source_signal(
+            head,
+            sat,
+            pll_and_dll_state,
+            preferred_num_code_blocks_to_integrate,
+            sampling_frequency,
+        )
+
+    new_tail = _process_passenger_signals(
+        tail_signals,
+        preferred_num_code_blocks_to_integrate,
+        sampling_frequency,
+    )
+
+    TrackedSat(
+        sat;
+        carrier_doppler = new_carrier_doppler,
+        code_doppler = new_code_doppler,
+        signals = (new_head, new_tail...),
+        doppler_estimator_state = new_doppler_estimator_state,
+    )
+end
+
+# Process the Doppler-source signal: if its integration completed, run the
+# PLL/DLL plus prompt filter / CN0 / bit-buffer update and return new
+# values for carrier_doppler, code_doppler, and doppler_estimator_state.
+# Otherwise return unchanged values.
+@inline function _process_doppler_source_signal(
+    signal::TrackedSignal,
+    sat::TrackedSat,
+    pll_and_dll_state::SatConventionalPLLAndDLL,
+    preferred_num_code_blocks_to_integrate,
+    sampling_frequency,
+)
     if !signal.is_integration_completed || signal.integrated_samples == 0
-        return sat
+        return signal, pll_and_dll_state, sat.carrier_doppler, sat.code_doppler
     end
+    system = signal.signal
     integrated_code_blocks = calc_num_code_blocks_to_integrate(
         system,
         preferred_num_code_blocks_to_integrate,
@@ -226,12 +268,64 @@ function _update_tracked_sat_doppler(
         correlator = zero(signal.correlator),
         last_fully_integrated_correlator = signal.correlator,
     )
-    TrackedSat(
-        sat;
-        carrier_doppler,
-        code_doppler,
-        signals = (new_signal,),
-        doppler_estimator_state = new_doppler_estimator_state,
+    return new_signal, new_doppler_estimator_state, carrier_doppler, code_doppler
+end
+
+# Process the non-Doppler-source signals: per-signal prompt filter, CN0
+# update, bit-buffer advance, correlator hand-off. No loop-filter work.
+# Walks the tuple recursively to keep type-stability and avoid boxing.
+@inline _process_passenger_signals(
+    ::Tuple{}, _, _,
+) = ()
+@inline function _process_passenger_signals(
+    signals::Tuple,
+    preferred_num_code_blocks_to_integrate,
+    sampling_frequency,
+)
+    head = first(signals)
+    new_head = _process_one_passenger_signal(
+        head,
+        preferred_num_code_blocks_to_integrate,
+        sampling_frequency,
+    )
+    (new_head, _process_passenger_signals(
+        Base.tail(signals),
+        preferred_num_code_blocks_to_integrate,
+        sampling_frequency,
+    )...)
+end
+
+@inline function _process_one_passenger_signal(
+    signal::TrackedSignal,
+    preferred_num_code_blocks_to_integrate,
+    sampling_frequency,
+)
+    if !signal.is_integration_completed || signal.integrated_samples == 0
+        return signal
+    end
+    system = signal.signal
+    integrated_code_blocks = calc_num_code_blocks_to_integrate(
+        system,
+        preferred_num_code_blocks_to_integrate,
+        has_bit_or_secondary_code_been_found(signal.bit_buffer),
+    )
+    normalized_correlator = normalize(signal.correlator, signal.integrated_samples)
+    post_corr_filter = update(signal.post_corr_filter, get_prompt(normalized_correlator))
+    filtered_correlator = apply(post_corr_filter, normalized_correlator)
+    prompt = get_prompt(filtered_correlator)
+    push!(signal.filtered_prompts, prompt)
+    cn0_estimator = update(get_cn0_estimator(signal), prompt)
+    bit_buffer = buffer(system, signal.bit_buffer, integrated_code_blocks, prompt)
+    TrackedSignal(
+        signal;
+        integrated_samples = 0,
+        is_integration_completed = false,
+        last_fully_integrated_filtered_prompt = prompt,
+        bit_buffer,
+        cn0_estimator,
+        post_corr_filter,
+        correlator = zero(signal.correlator),
+        last_fully_integrated_correlator = signal.correlator,
     )
 end
 
@@ -277,10 +371,8 @@ allocation-free in steady state when [`track!`](@ref)'s preconditions are met.
 """
 # Per-system body for the doppler estimator. Pulled out so
 # `_foreach_system!` can call it without boxing when the system tuple
-# is heterogeneous (e.g. GPS L1 + Galileo E1B). The signal type is taken
-# from any sat's `signals[1]` — the dictionary's value type guarantees all
-# sats in this system share the same signal type, so the lookup is
-# resolved at compile time.
+# is heterogeneous (e.g. GPS L1 + Galileo E1B). The per-signal system
+# type is recovered from each signal inside `_update_tracked_sat_doppler`.
 @inline function _est_one_system!(
     sats::Dictionary{<:Any,<:TrackedSat},
     preferred_num_code_blocks_to_integrate,
@@ -288,11 +380,9 @@ allocation-free in steady state when [`track!`](@ref)'s preconditions are met.
 )
     vals = sats.values
     isempty(vals) && return nothing
-    system = get_signal(first(vals))
     @inbounds for i in eachindex(vals)
         vals[i] = _update_tracked_sat_doppler(
             vals[i],
-            system,
             preferred_num_code_blocks_to_integrate,
             sampling_frequency,
         )

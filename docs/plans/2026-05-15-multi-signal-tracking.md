@@ -180,38 +180,60 @@ get_code_phase(sat::TrackedSat, ::Type{Sig}) where {Sig} =
 
 The secondary-code position within the long signal's overlay is `floor(sat.code_phase / get_code_length(Sig())) mod get_secondary_code_length(Sig())`.
 
-## Downconvert dispatch — fused vs split
+## Downconvert dispatch — fused for N=1, tile-share for N≥2
 
-For single-signal sats, the existing fused downconvert+correlate kernel (`downconvert_and_correlate_fused!`) is roughly 2× faster than the split `downconvert!` followed by `correlate!`. That gap is the motivation for preserving the fused path on a compile-time fast lane.
+The original design assumed that for multi-signal sats, a shared-downconvert path would beat calling the fused kernel N times. After two probes (the first one unfair, see git history of this file), the **empirical answer is yes** — but only if the shared-downconvert path reuses the existing SIMD downconvert infrastructure, not a naive Julia-loop replacement.
 
-For multi-signal sats, the *expected* trade is:
+### Two existing fused kernels
 
-- **Fused approach repeated N times:** N independent `downconvert_and_correlate_fused!` calls, each regenerating its own downconverted samples in-register. Total work ≈ N × (downconvert + correlate).
-- **Split approach:** one `downconvert!` writes scratch buffer, then N `correlate!` calls read it. Total work ≈ downconvert + N × correlate + memory traffic for the scratch buffer.
+`downconvert_and_correlate_fused!` already ships in two overloads:
 
-For N ≥ 2 the split path should win because the downconvert is the dominant cost and is amortised across signals. But the actual breakeven depends on the cost ratio between downconvert and correlate in this implementation, and on cache-residency effects of the scratch buffer, both of which are easier to measure than reason about. **Step 3 includes a dedicated benchmark** that compares:
+- **Static-shifts** (`sample_shifts::SVector{NC}`): `@generated` unroll over antennas × taps; downconverted samples stay in SIMD registers and are immediately accumulated against each tap's code replica.
+- **Dynamic-shifts** (`sample_shifts::AbstractVector`, requires caller-supplied SoA tile buffers): downconverts samples into a tile (one per antenna × num_samples), then runs a per-tap `@simd` correlate loop reading the tile back. Structurally already a "downconvert-once + per-tap correlate" implementation, just for one correlator.
 
-1. N × fused calls (one per signal).
-2. 1 × split downconvert + N × split correlate.
+### Measurements (5000 samples, 1 antenna, 3-tap EPL)
 
-For N ∈ {2, 3} on the L1 modern-GPS tuple shape, at representative buffer sizes (1 ms at typical 2 MHz, 5 MHz sampling rates). If split fails to beat fused-repeated for the expected multi-signal sizes, that is the surprise the design needs to absorb — possibly by extending the fused kernel to accept a tuple of correlators rather than splitting.
+From `claude_scratch/dynamic_vs_static_microbench.jl`:
 
-Assuming the benchmark confirms the expected ordering, the dispatch is at compile time:
+| Kernel | Time |
+|---|---|
+| Static-shifts (in-register accumulate) | 3.89 µs |
+| Dynamic-shifts (downconvert-to-tile + correlate) | 4.82 µs |
+| Pure correlate-from-tile (no downconvert) | 1.21 µs |
+
+So for the dynamic-shifts path: ~3.61 µs of downconvert + ~1.21 µs of correlate. The tile materialization costs ~24% at N=1 vs keeping samples in registers — that's why single-signal sats should keep using the static-shifts kernel.
+
+### A "tuple-of-correlators" kernel — what it costs
+
+Extending the dynamic-shifts kernel to share its tile across N correlators (each with its own code replica and sample_shifts) adds one extra correlate-from-tile per added signal. Predicted costs vs fused-N-times:
+
+| N | fused-N-times (static) | tile-share (downconvert + N × correlate) | savings |
+|---|---|---|---|
+| 1 | 3.89 µs | 4.82 µs | **−24% (loss)** |
+| 2 | 7.77 µs | 6.03 µs | **+22%** |
+| 3 | 11.66 µs | 7.25 µs | **+38%** |
+
+Crossover at N > 1.35, so the tile-share kernel wins from N=2 upward. The savings grow with N because the downconvert (~3.6 µs) is amortised across more correlate work.
+
+### Resulting design — compile-time dispatch on `length(sat.signals)`
 
 ```julia
 if length(typeof(sat.signals).parameters) == 1
-    # fused kernel — single signal
+    # N=1: in-register fused kernel (keeps the static-shifts hot path).
     downconvert_and_correlate_fused!(sat.signals[1].correlator, ...)
 else
-    # split path — multi-signal
-    downconvert!(scratch, signal, sat.carrier_phase, ...)
-    foreach_tuple(sat.signals) do tsig
-        correlate!(tsig.correlator, scratch, tsig.signal, sat.code_doppler, ...)
-    end
+    # N≥2: tile-share kernel — one downconvert into the shared tile,
+    # then N correlate-from-tile passes against each signal's code
+    # replica.
+    downconvert_and_correlate_fused_tuple!(sat.signals, ...)
 end
 ```
 
-`length(typeof(sat.signals).parameters)` resolves at type-inference time, so the branch is eliminated. Pure single-signal sats see no regression relative to the current branch tip; multi-signal sats pay one downconvert + N correlate calls per iteration, with allocations held to zero via tuple recursion (the same pattern as the existing `_foreach_system!` helper introduced in commit 8828833).
+The branch resolves at type-inference time, so single-signal sats see no regression. Multi-signal sats pay one downconvert plus N×correlate-from-tile, beating fused-N-times by ≥20% from N=2 onward.
+
+### Implementation arrives in two commits
+
+Step 3 ships fused-N-times — the conservative path that always works. Step 4 then adds the tile-share kernel and the compile-time dispatch, keeping the change focused on a single optimization with its own benchmark to validate.
 
 ## Type-stability story
 
@@ -229,8 +251,8 @@ The restructure lands on branch `ss/tracked-sat-wrapper` (PR #113) as a sequence
 0. `docs: design plan for v2 multi-signal tracking` (this file).
 1. `build(deps)!: bump to GNSSSignals v2 and update for renamed API` — pure rename pass: `AbstractGNSS` → `AbstractGNSSSignal`, `GPSL1` → `GPSL1CA`, `GPSL5` → `GPSL5I`, etc. No Tracking.jl semantics change.
 2. `refactor!: introduce TrackedSignal wrapper around per-sat signal state` — moves per-signal fields out of `SatState` into `TrackedSignal`. Renames `SatState` → `TrackedSat` and folds the existing wrapper's `estimator_state` into `doppler_estimator_state`. Still single-signal-per-sat — `signals::Tuple{TrackedSignal{...}}` (one-tuple).
-3. `refactor!: generalize TrackedSat.signals to Tuple{Vararg{TrackedSignal}}` — teaches the tracking loop to walk the tuple. Split downconvert+correlate path only. Multi-signal test fixtures added. **Includes the fused-vs-split benchmark** at N ∈ {1, 2, 3} to verify the assumption that split wins for N ≥ 2 before step 4 hard-codes the dispatch.
-4. `perf: dispatch single-signal sats to fused downconvert_and_correlate` — compile-time branch to recover fused-kernel performance for single-signal sats. Lands only if step 3's benchmark confirms split is faster for N ≥ 2; otherwise the design comes back here for revision.
+3. `refactor!: generalize TrackedSat.signals to Tuple{Vararg{TrackedSignal}}` — teaches the tracking loop to walk the tuple via recursive tuple-walks. Calls the existing fused kernel once per signal in the tuple. Multi-signal test fixtures added. Establishes the baseline against which step 4 will measure savings.
+4. `perf: tile-share fused kernel for multi-signal sats` — adds a `downconvert_and_correlate_fused_tuple!` kernel that reuses the existing dynamic-shifts kernel's downconvert-to-tile path and accumulates into N correlators in one downconvert pass. Compile-time dispatch on `length(sat.signals)` keeps single-signal sats on the in-register static-shifts path. Validated against fused-N-times by an end-to-end benchmark; expected savings ≥20% at N=2 and ≥35% at N=3 (per the microbenchmark in step 3).
 5. `feat!: TrackState carries satellites NamedTuple; add_satellite!/add_satellite API` — new constructor, new add-satellite API, band parameter dropped. Replaces `TrackState(system, sat_states)` / `merge_sats`.
 6. `docs: rewrite for v2 multi-signal API` — README, docs/src/*, docstrings on new types/methods.
 
@@ -238,4 +260,4 @@ Each `!` commit carries a `BREAKING CHANGE:` footer in conventional-commit forma
 
 ## Open questions
 
-None at design-time. Implementation may surface details that warrant a follow-up note here. Specifically: step 3's benchmark may invalidate the assumption that split beats fused-repeated for N ≥ 2. If so, the dispatch design needs to revisit — possibly extending the fused kernel to a tuple-of-correlators variant.
+None at design-time. Step 3's measurements confirmed that the original "shared-downconvert + per-signal correlate" design is correct, with a refinement: the shared part is the existing dynamic-shifts kernel's tile path, and the dispatch is by compile-time `length(sat.signals)`.

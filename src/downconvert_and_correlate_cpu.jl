@@ -113,63 +113,74 @@ end
     _with_scratch_view(f, _scratch_buffers(dc).code_replica, T, n)
 end
 
-# Per-backend correlation kernel. Single-threaded backend uses the split
-# downconvert→correlate kernel; threaded backend pre-generates the code
-# replica and uses the fused kernel. Both write into the supplied
-# `code_replica` buffer (allocated from the slab) and return a value of
-# the same correlator type as `sat_state.correlator`.
-@inline function _correlate_with_buffer!(
+# Per-backend per-signal correlation kernel. Single-threaded backend uses
+# `downconvert_and_correlate!` (which internally gen-code-replicas then
+# runs the fused kernel); threaded backend pre-generates the code replica
+# and feeds the fused kernel directly. Both write into the supplied
+# `code_replica` buffer (from the calling correlator's `ScratchBuffers`)
+# and return a value of the same correlator type as `correlator`.
+#
+# Args are per-signal scalars: the caller is responsible for picking the
+# right `signal_type`, `correlator`, `code_phase` (modded into the signal's
+# primary period), `code_frequency`, and `sample_shifts` for this signal.
+@inline function _correlate_one_signal!(
     ::CPUDownconvertAndCorrelator,
     code_replica,
-    system,
-    sat::TrackedSat,
+    signal_type,
+    correlator,
     signal,
     sample_shifts,
+    code_phase,
+    carrier_phase,
     code_frequency,
     carrier_frequency,
     sampling_frequency,
+    signal_start_sample,
     signal_samples_to_integrate,
+    prn,
 )
-    correlator = only(sat.signals).correlator
     downconvert_and_correlate!(
-        system,
+        signal_type,
         signal,
         correlator,
         code_replica,
-        sat.code_phase,
-        sat.carrier_phase,
+        code_phase,
+        carrier_phase,
         code_frequency,
         carrier_frequency,
         sampling_frequency,
-        sat.signal_start_sample,
+        signal_start_sample,
         signal_samples_to_integrate,
-        sat.prn,
+        prn,
     )::typeof(correlator)
 end
 
-@inline function _correlate_with_buffer!(
+@inline function _correlate_one_signal!(
     dc::CPUThreadedDownconvertAndCorrelator,
     code_replica,
-    system,
-    sat::TrackedSat,
+    signal_type,
+    correlator,
     signal,
     sample_shifts,
+    code_phase,
+    carrier_phase,
     code_frequency,
     carrier_frequency,
     sampling_frequency,
+    signal_start_sample,
     signal_samples_to_integrate,
+    prn,
 )
-    correlator = only(sat.signals).correlator
     gen_code_replica!(
         code_replica,
-        system,
+        signal_type,
         code_frequency,
         sampling_frequency,
-        sat.code_phase,
-        sat.signal_start_sample,
+        code_phase,
+        signal_start_sample,
         signal_samples_to_integrate,
         sample_shifts,
-        sat.prn,
+        prn,
     )
     _fused_with_tile_scratch!(
         dc,
@@ -179,8 +190,8 @@ end
         sample_shifts,
         carrier_frequency,
         sampling_frequency,
-        sat.carrier_phase,
-        sat.signal_start_sample,
+        carrier_phase,
+        signal_start_sample,
         signal_samples_to_integrate,
     )::typeof(correlator)
 end
@@ -242,68 +253,193 @@ end
 
 # Per-sat downconvert+correlate. Pure: returns the updated TrackedSat. Shared
 # by `downconvert_and_correlate` and `downconvert_and_correlate!` across both
-# CPU backends; the per-backend differences (slab buffer source, kernel
-# choice) are dispatched via `_slab_buffer` and `_correlate_with_buffer!`.
+# CPU backends; the per-backend differences (kernel choice) are dispatched
+# via `_correlate_one_signal!`.
+#
+# For multi-signal sats, the iteration window is the MIN samples-to-next-
+# boundary across all signals (or buffer end, whichever is sooner). Each
+# signal in `sat.signals` then runs its own (gen_code_replica +
+# fused-kernel) call over that shared window — the carrier/code Doppler
+# and start sample are sat-shared; the signal type, correlator, code
+# replica buffer, and per-signal code phase differ.
 function _update_tracked_sat_correlator(
     sat::TrackedSat,
     dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
     signal,
-    system,
     num_samples_signal,
     preferred_num_code_blocks_to_integrate,
     sampling_frequency,
     intermediate_frequency,
 )
-    tracked_signal = only(sat.signals)
-    signal_samples_to_integrate, is_integration_completed =
-        calc_signal_samples_to_integrate(
-            system,
-            sat.signal_start_sample,
-            sampling_frequency,
-            sat.code_doppler,
-            sat.code_phase,
-            preferred_num_code_blocks_to_integrate,
-            has_bit_or_secondary_code_been_found(tracked_signal),
-            num_samples_signal,
-        )
-    if signal_samples_to_integrate == 0
+    # MIN samples-to-next-boundary across all signals on this sat, clamped
+    # to remaining buffer. The signal-level boundary calc reads each
+    # signal's primary-code-length-relative phase via mod(sat.code_phase,
+    # get_code_length(signal)).
+    samples_to_integrate, per_signal_completed = _calc_min_samples_and_completed(
+        sat.signals,
+        sat.signal_start_sample,
+        sampling_frequency,
+        sat.code_doppler,
+        sat.code_phase,
+        preferred_num_code_blocks_to_integrate,
+        num_samples_signal,
+    )
+    if samples_to_integrate == 0
         return sat
     end
     carrier_frequency = sat.carrier_doppler + intermediate_frequency
-    code_frequency = sat.code_doppler + get_code_frequency(system)
-    sample_shifts = get_correlator_sample_shifts(
-        tracked_signal.correlator,
+    new_signals_data = _correlate_all_signals(
+        sat.signals,
+        per_signal_completed,
+        dc,
+        signal,
+        sat.code_doppler,
+        sat.code_phase,
+        carrier_frequency,
+        sat.carrier_phase,
         sampling_frequency,
-        code_frequency,
+        sat.signal_start_sample,
+        samples_to_integrate,
+        sat.prn,
+        num_samples_signal,
     )
+    update(
+        sat,
+        samples_to_integrate,
+        intermediate_frequency,
+        sampling_frequency,
+        new_signals_data,
+    )
+end
+
+# Compute (samples_to_integrate, per_signal_completed_tuple) via tuple
+# recursion. Returns the MIN across all signals' samples-to-next-boundary,
+# clamped to remaining buffer samples. Per-signal `completed` flags are
+# derived after the MIN is known.
+@inline function _calc_min_samples_and_completed(
+    signals::Tuple,
+    signal_start_sample,
+    sampling_frequency,
+    code_doppler,
+    code_phase,
+    preferred_num_code_blocks_to_integrate,
+    num_samples_signal,
+)
+    per_signal_to_boundary = _per_signal_samples_to_boundary(
+        signals, signal_start_sample, sampling_frequency, code_doppler, code_phase,
+        preferred_num_code_blocks_to_integrate, num_samples_signal,
+    )
+    samples_to_integrate = _min_of_tuple(per_signal_to_boundary)
+    signal_samples_left = num_samples_signal - signal_start_sample + 1
+    samples_to_integrate = min(samples_to_integrate, signal_samples_left)
+    per_signal_completed = _flag_completed(per_signal_to_boundary, samples_to_integrate)
+    return samples_to_integrate, per_signal_completed
+end
+
+# For each signal, return its samples-to-next-primary-code-boundary using
+# the signal-specific primary-code-relative phase. Tuple recursion keeps
+# the heterogeneous walk inline / inference-friendly.
+@inline _per_signal_samples_to_boundary(
+    ::Tuple{}, _, _, _, _, _, _,
+) = ()
+@inline function _per_signal_samples_to_boundary(
+    signals::Tuple,
+    signal_start_sample,
+    sampling_frequency,
+    code_doppler,
+    code_phase,
+    preferred_num_code_blocks_to_integrate,
+    num_samples_signal,
+)
+    s = first(signals).signal
+    n_blocks = calc_num_code_blocks_to_integrate(
+        s,
+        preferred_num_code_blocks_to_integrate,
+        has_bit_or_secondary_code_been_found(first(signals)),
+    )
+    # The signal's chips-to-next-boundary uses its own primary code length;
+    # `mod(code_phase, get_code_length(s))` gives the signal's replica-
+    # relative phase.
+    per_signal_phase = mod(code_phase, get_code_length(s))
+    n = calc_num_samples_left_to_integrate(
+        s, n_blocks, sampling_frequency, code_doppler, per_signal_phase,
+    )
+    (n, _per_signal_samples_to_boundary(
+        Base.tail(signals), signal_start_sample, sampling_frequency, code_doppler,
+        code_phase, preferred_num_code_blocks_to_integrate, num_samples_signal,
+    )...)
+end
+
+@inline _min_of_tuple(t::Tuple{Any}) = first(t)
+@inline _min_of_tuple(t::Tuple) = min(first(t), _min_of_tuple(Base.tail(t)))
+
+# For each signal, `is_completed = (chosen_samples == samples_to_boundary)`.
+@inline _flag_completed(::Tuple{}, _) = ()
+@inline _flag_completed(t::Tuple, chosen) =
+    (first(t) == chosen, _flag_completed(Base.tail(t), chosen)...)
+
+# For each signal, gen its code replica and run the fused kernel. Returns
+# a tuple of `(new_correlator, is_integration_completed)` pairs.
+@inline function _correlate_all_signals(
+    signals::Tuple,
+    per_signal_completed::Tuple,
+    dc,
+    signal,
+    code_doppler,
+    code_phase,
+    carrier_frequency,
+    carrier_phase,
+    sampling_frequency,
+    signal_start_sample,
+    samples_to_integrate,
+    prn,
+    num_samples_signal,
+)
+    head = first(signals)
+    s = head.signal
+    correlator = head.correlator
+    code_frequency = code_doppler + get_code_frequency(s)
+    sample_shifts =
+        get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
+    # Buffer sized for the full signal because the kernel indexes from
+    # `signal_start_sample` rather than from sample 1.
     code_replica_size =
         num_samples_signal + maximum(sample_shifts) - minimum(sample_shifts)
-    new_correlator = _with_code_replica_buffer(
-        dc, get_code_type(system), code_replica_size,
+    per_signal_phase = mod(code_phase, get_code_length(s))
+    new_corr = _with_code_replica_buffer(
+        dc, get_code_type(s), code_replica_size,
     ) do code_replica
-        _correlate_with_buffer!(
+        _correlate_one_signal!(
             dc,
             code_replica,
-            system,
-            sat,
+            s,
+            correlator,
             signal,
             sample_shifts,
+            per_signal_phase,
+            carrier_phase,
             code_frequency,
             carrier_frequency,
             sampling_frequency,
-            signal_samples_to_integrate,
+            signal_start_sample,
+            samples_to_integrate,
+            prn,
         )
     end
-    update(
-        system,
-        sat,
-        signal_samples_to_integrate,
-        intermediate_frequency,
-        sampling_frequency,
-        new_correlator,
-        is_integration_completed,
-    )
+    head_pair = (new_corr, first(per_signal_completed))
+    (head_pair, _correlate_all_signals(
+        Base.tail(signals),
+        Base.tail(per_signal_completed),
+        dc, signal, code_doppler, code_phase, carrier_frequency, carrier_phase,
+        sampling_frequency, signal_start_sample, samples_to_integrate, prn,
+        num_samples_signal,
+    )...)
 end
+
+@inline _correlate_all_signals(
+    ::Tuple{}, ::Tuple{},
+    _, _, _, _, _, _, _, _, _, _, _,
+) = ()
 
 """
 $(SIGNATURES)
@@ -354,13 +490,11 @@ state — see [`track!`](@ref).
 )
     vals = sats.values
     isempty(vals) && return nothing
-    system = get_signal(first(vals))
     @inbounds for i in eachindex(vals)
         vals[i] = _update_tracked_sat_correlator(
             vals[i],
             dc,
             signal,
-            system,
             num_samples_signal,
             preferred_num_code_blocks_to_integrate,
             sampling_frequency,
@@ -436,13 +570,11 @@ write to disjoint slots, so no synchronization is needed. Returns the same
     vals = sats.values
     n = length(vals)
     n == 0 && return nothing
-    system = get_signal(first(vals))
     @batch for i = 1:n
         @inbounds vals[i] = _update_tracked_sat_correlator(
             vals[i],
             dc,
             signal,
-            system,
             num_samples_signal,
             preferred_num_code_blocks_to_integrate,
             sampling_frequency,
