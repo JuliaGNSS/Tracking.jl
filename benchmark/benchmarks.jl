@@ -14,6 +14,16 @@ using Tracking:
     BitBuffer
 using StaticArrays
 
+# GNSSSignals v1 → v2 signal-name shims. AirspeedVelocity uses HEAD's
+# `benchmark/benchmarks.jl` to bench *every* rev (via `--bench-on`), so
+# this file must work against both v1 (loaded for master's Tracking
+# 1.5.0) and v2 (loaded for HEAD's Tracking 2.0.0). Alias the v2 names
+# to v1's symbols when v2 isn't loaded.
+const GPSL1CA = isdefined(GNSSSignals, :GPSL1CA) ?
+    getfield(GNSSSignals, :GPSL1CA) : getfield(GNSSSignals, :GPSL1)
+const GPSL5I = isdefined(GNSSSignals, :GPSL5I) ?
+    getfield(GNSSSignals, :GPSL5I) : getfield(GNSSSignals, :GPSL5)
+
 # Branch-portable per-system storage construction. Three flavours coexist:
 #   * Master:           `SystemSatsState(sys, ::Vector{SatState})`
 #   * Wrapper branch:   `TrackedSystem(estimator, sys, ::Vector{SatState})`
