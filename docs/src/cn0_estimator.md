@@ -1,6 +1,6 @@
 # CN0 Estimator
 
-The CN0 (Carrier-to-Noise density ratio) estimator provides a measure of signal quality in dB-Hz.
+The CN0 (Carrier-to-Noise density ratio) estimator provides a measure of signal quality in dB-Hz. Each [`TrackedSignal`](@ref) on a [`TrackedSat`](@ref) holds its own CN0 estimator, so a multi-signal satellite produces one CN0 value per signal.
 
 ## Default Estimator
 
@@ -9,12 +9,14 @@ The default CN0 estimator is the [Moment Method](https://ieeexplore.ieee.org/sta
 ```@docs
 MomentsCN0Estimator
 ```
-You can adjust the buffer size for the MomentsCN0Estimator when creating a `SatState`:
+
+You can adjust the buffer size for the `MomentsCN0Estimator` by constructing the `TrackedSat` yourself and handing it to `add_satellite!`'s escape-hatch overload:
+
 ```julia
-sat_state = SatState(
-    system, prn, code_phase, carrier_doppler,
-    num_prompts_for_cn0_estimation = 100  # Buffer size for MomentsCN0Estimator
-)
+sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
+                 num_prompts_for_cn0_estimation = 200,
+                 doppler_estimator = ConventionalAssistedPLLAndDLL())
+add_satellite!(track_state, :default, sat)
 ```
 
 ## Estimating CN0
@@ -26,18 +28,16 @@ julia> using Tracking, GNSSSignals
 
 julia> using Tracking: Hz
 
-julia> system = GPSL1();
+julia> track_state = TrackState(; signals = (GPSL1CA(),));
 
-julia> sat_state1 = SatState(system, 1, 50.0, 1000.0Hz);
+julia> add_satellite!(track_state; prn = 1, code_phase = 50.0,  carrier_doppler = 1000.0Hz);
 
-julia> sat_state2 = SatState(system, 5, 120.0, -500.0Hz);
+julia> add_satellite!(track_state; prn = 5, code_phase = 120.0, carrier_doppler = -500.0Hz);
 
-julia> track_state = TrackState(system, [sat_state1, sat_state2]);
-
-julia> estimate_cn0(track_state, 1)  # Access by PRN
+julia> estimate_cn0(track_state, :default, 1)  # Access by capability + PRN
 0.0 dB-Hz
 
-julia> estimate_cn0(track_state, 5)  # Access by PRN
+julia> estimate_cn0(track_state, :default, 5)
 0.0 dB-Hz
 ```
 
@@ -55,27 +55,4 @@ and implementing the following functions:
 - `update(cn0_estimator::MyCN0Estimator, prompt)`: Update the estimator with a new prompt value
 - `estimate_cn0(cn0_estimator::MyCN0Estimator, integration_time)`: Return the CN0 estimate
 
-Pass your custom estimator when creating a `SatState`:
-
-```jldoctest cn0_example
-julia> prn = 1;
-
-julia> code_phase = 50.0;
-
-julia> carrier_doppler = 1000.0Hz;
-
-julia> num_prompts = 100;  # Buffer size for MomentsCN0Estimator
-
-julia> sat_state = SatState(
-           system, prn, code_phase, carrier_doppler,
-           num_prompts_for_cn0_estimation = num_prompts
-       );
-```
-
-Pass your custom estimator to a `SatState`:
-```julia
-sat_state = SatState(
-    sat_state;
-    cn0_estimator = MyCN0Estimator()
-)
-```
+To plug your custom estimator into a satellite, build a [`TrackedSignal`](@ref) with the custom `cn0_estimator` (via the kwarg-update constructor on an existing `TrackedSignal`), splice it into a fresh [`TrackedSat`](@ref), and add via the escape-hatch overload — see the [`TrackedSat`](@ref) docstring for the full constructor surface.
