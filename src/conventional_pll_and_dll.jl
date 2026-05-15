@@ -144,7 +144,7 @@ Aid dopplers. That is velocity aiding for the carrier doppler and carrier aiding
 for the code doppler.
 """
 function aid_dopplers(
-    system::AbstractGNSS,
+    system::AbstractGNSSSignal,
     init_carrier_doppler,
     init_code_doppler,
     carrier_freq_update,
@@ -305,7 +305,7 @@ function estimate_dopplers_and_filter_prompt!(
 end
 
 function calculate_carrier_frequency_update(
-    system::AbstractGNSS,
+    system::AbstractGNSSSignal,
     carrier_loop_filter::ThirdOrderAssistedBilinearLF,
     correlator::AbstractCorrelator,
     previous_prompt::Complex,
@@ -323,7 +323,7 @@ function calculate_carrier_frequency_update(
 end
 
 function calculate_carrier_frequency_update(
-    system::AbstractGNSS,
+    system::AbstractGNSSSignal,
     carrier_loop_filter::AbstractLoopFilter,
     correlator::AbstractCorrelator,
     previous_prompt::Complex,
@@ -335,7 +335,7 @@ function calculate_carrier_frequency_update(
 end
 
 function calculate_code_frequency_update(
-    system::AbstractGNSS,
+    system::AbstractGNSSSignal,
     code_loop_filter::AbstractLoopFilter,
     correlator::AbstractCorrelator,
     code_doppler,

@@ -2,7 +2,7 @@ module TrackingStateTest
 
 using Test: @test, @testset, @inferred
 using Unitful: Hz
-using GNSSSignals: GPSL1, GalileoE1B
+using GNSSSignals: GPSL1CA, GalileoE1B
 using Dictionaries: dictionary
 using Tracking:
     SatState,
@@ -30,12 +30,12 @@ using Tracking:
 
 @testset "Tracking state" begin
     sampling_frequency = 5e6Hz
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     sat_states = [SatState(gpsl1, 1, 10.5, 10.0Hz), SatState(gpsl1, 2, 11.5, 20.0Hz)]
 
     track_state = @inferred TrackState(gpsl1, sat_states)
 
-    @test get_system(track_state) isa GPSL1
+    @test get_system(track_state) isa GPSL1CA
     @test get_prn(track_state, 1) == 1
     @test get_prn(track_state, 2) == 2
     @test get_num_ants(track_state, 1) == 1
@@ -55,7 +55,7 @@ using Tracking:
         [SatState(gpsl1, 1, 10.5, 10.0Hz), SatState(gpsl1, 2, 11.5, 20.0Hz)],
     )
 
-    @test @inferred(get_system(track_state2)) isa GPSL1
+    @test @inferred(get_system(track_state2)) isa GPSL1CA
     @test @inferred(get_sat_state(track_state2, 1)).prn == 1
     @test @inferred(get_sat_state(track_state2, 2)).prn == 2
 
@@ -70,7 +70,7 @@ end
 
 @testset "Add and remove satellite state to and from track state" begin
     sampling_frequency = 5e6Hz
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     sat_states = [SatState(gpsl1, 1, 10.5, 10.0Hz), SatState(gpsl1, 2, 11.5, 20.0Hz)]
 
     track_state = @inferred TrackState(gpsl1, sat_states)
@@ -106,7 +106,7 @@ end
 
 @testset "Add and remove satellite state to track state with multiple systems" begin
     sampling_frequency = 5e6Hz
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     galileo_e1b = GalileoE1B()
 
     estimator = ConventionalAssistedPLLAndDLL()
@@ -193,7 +193,7 @@ end
         SatConventionalPLLAndDLL,
         init_estimator_state
 
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     estimator = ConventionalAssistedPLLAndDLL()
 
     # wrap_sats has three overloads (Vector, Dictionary, single SatState).
@@ -261,7 +261,7 @@ end
         return est
     end
 
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     estimator = CountingEstimator()
     track_state = TrackState(
         gpsl1,

@@ -26,7 +26,7 @@ $(SIGNATURES)
 
 Buffer data bits based on the prompt accumulation and the current prompt value.
 """
-function buffer(system::AbstractGNSS, bit_buffer, integrated_code_blocks, prompt)
+function buffer(system::AbstractGNSSSignal, bit_buffer, integrated_code_blocks, prompt)
     num_code_blocks_that_form_a_bit = Int(
         get_code_frequency(system) / (get_code_length(system) * get_data_frequency(system)),
     )

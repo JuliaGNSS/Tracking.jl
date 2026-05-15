@@ -1,7 +1,7 @@
 module DiscriminatorsTest
 
 using Test: @test, @testset, @inferred
-using GNSSSignals: GPSL1, get_code_frequency
+using GNSSSignals: GPSL1CA, get_code_frequency
 using StaticArrays: SVector
 using Unitful: Hz, ms
 using Tracking:
@@ -23,7 +23,7 @@ using Tracking:
         SVector(0.5 + sqrt(3) / 2im, 1 + sqrt(3) * 1im, 0.5 + sqrt(3) / 2im),
         0.5,
     )
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     @test @inferred(pll_disc(gpsl1, correlator_minus60off)) == -π / 3  #-60°
     @test @inferred(pll_disc(gpsl1, correlator_0off)) == 0
     @test @inferred(pll_disc(gpsl1, correlator_plus60off)) == π / 3  #+60°
@@ -43,7 +43,7 @@ end
     correlator_plus90off =
         EarlyPromptLateCorrelator(SVector(0.0 + 0.5im, 0.0 + 1.0im, 0.0 + 0.5im), 0.5)
     correlator_empty = EarlyPromptLateCorrelator()
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     @test @inferred(
         fll_disc(gpsl1, correlator_0off, get_prompt(correlator_minus60off), 1ms)
     ) == (166 + 2 / 3) * 1Hz
@@ -61,7 +61,7 @@ end
 end
 
 @testset "DLL discriminator" begin
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     sampling_frequency = get_code_frequency(gpsl1) * 4
 
     very_early_correlator =

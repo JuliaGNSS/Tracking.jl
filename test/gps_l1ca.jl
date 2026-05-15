@@ -1,8 +1,8 @@
-module GPSL1Test
+module GPSL1CATest
 
 using Test: @test, @testset, @inferred
 using Unitful: Hz
-using GNSSSignals: GPSL1
+using GNSSSignals: GPSL1CA
 using Tracking:
     is_upcoming_integration_new_bit,
     get_default_correlator,
@@ -10,7 +10,7 @@ using Tracking:
     NumAnts
 
 @testset "GPS L1" begin
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     @test @inferred(is_upcoming_integration_new_bit(gpsl1, 0xfffff00000, 50)) == true
 
     @test @inferred(is_upcoming_integration_new_bit(gpsl1, 0xfffff, 10)) == false

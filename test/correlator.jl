@@ -2,7 +2,7 @@ module CorrelatorTest
 
 using Test: @test, @testset, @inferred
 using Unitful: Hz
-using GNSSSignals: GPSL1, GalileoE1B, get_code, get_code_frequency
+using GNSSSignals: GPSL1CA, GalileoE1B, get_code, get_code_frequency
 using StaticArrays: SVector
 using Tracking:
     EarlyPromptLateCorrelator,
@@ -35,7 +35,7 @@ using Tracking:
     end
 
     @testset "Correlator constructor" begin
-        gpsl1 = GPSL1()
+        gpsl1 = GPSL1CA()
         sampling_frequency = 5e6Hz
         correlator = @inferred EarlyPromptLateCorrelator()
 
@@ -82,7 +82,7 @@ using Tracking:
     end
 
     @testset "Calculate sample shift" begin
-        gpsl1 = GPSL1()
+        gpsl1 = GPSL1CA()
         code_frequency = get_code_frequency(gpsl1)
         sampling_frequency = code_frequency * 4
         correlator = EarlyPromptLateCorrelator()
@@ -153,7 +153,7 @@ using Tracking:
               EarlyPromptLateCorrelator(SVector(2.0 + 0.0im, 2.0 + 0.0im, 2.0 + 0.0im), 0.5)
     end
     @testset "Early late sample spacing" begin
-        gpsl1 = GPSL1()
+        gpsl1 = GPSL1CA()
         code_frequency = get_code_frequency(gpsl1)
         correlator = @inferred EarlyPromptLateCorrelator(
             SVector(

@@ -2,7 +2,7 @@ module SatStateTest
 
 using Test: @test, @testset, @inferred
 using Unitful: Hz
-using GNSSSignals: GPSL1, get_code_center_frequency_ratio
+using GNSSSignals: GPSL1CA, get_code_center_frequency_ratio
 using Acquisition: Acquisition, AcquisitionResults
 using Tracking:
     SatState,
@@ -20,7 +20,7 @@ using Tracking:
     get_bit_buffer
 
 @testset "Satellite state" begin
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     sat_state = @inferred SatState(gpsl1, 1, 10.0, 500.0Hz)
     @test get_prn(sat_state) == 1
     @test get_code_phase(sat_state) == 10.0

@@ -4,7 +4,7 @@ using Test: @test, @testset, @inferred
 using Random: Random
 using Unitful: kHz, MHz, Hz, ms, dBHz
 using StaticArrays: SVector
-using GNSSSignals: GPSL1, get_code
+using GNSSSignals: GPSL1CA, get_code
 import Tracking
 using Tracking:
     MomentsCN0Estimator,
@@ -53,7 +53,7 @@ end
     cn0_estimator = MomentsCN0Estimator(100)
     start_sample = 1
     num_samples = 4000
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
 
     for i = 1:100
         signal =
@@ -102,7 +102,7 @@ end
     start_carrier_phase = π / 2
     cn0_estimator = MomentsCN0Estimator(100)
     start_sample = 1
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
 
     track_state = @inferred TrackState(
         gpsl1,
