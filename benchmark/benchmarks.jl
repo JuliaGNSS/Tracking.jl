@@ -33,7 +33,7 @@ end
 # Field name on `TrackState` for the per-system tuple.
 const _SYSTEMS_FIELD = isdefined(Tracking, :TrackedSystem) ||
                        isdefined(Tracking, :TrackedSignal) ?
-    :tracked_systems : :multiple_system_sats_state
+    :satellites : :multiple_system_sats_state
 
 @inline _get_systems(track_state) = getfield(track_state, _SYSTEMS_FIELD)
 @inline _track_state_with_systems(track_state, systems) =
