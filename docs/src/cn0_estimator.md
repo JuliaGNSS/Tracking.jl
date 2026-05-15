@@ -28,7 +28,7 @@ julia> using Tracking, GNSSSignals
 
 julia> using Tracking: Hz
 
-julia> track_state = TrackState(; signals = (GPSL1CA(),));
+julia> track_state = TrackState(; signal = GPSL1CA());
 
 julia> add_satellite!(track_state; prn = 1, code_phase = 50.0,  carrier_doppler = 1000.0Hz);
 

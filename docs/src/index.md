@@ -44,10 +44,10 @@ julia> using Tracking, GNSSSignals
 
 julia> using Tracking: Hz
 
-julia> track_state = TrackState(; signals = (GPSL1CA(),));
+julia> track_state = TrackState(; signal = GPSL1CA());
 ```
 
-The single-capability shortcut `signals = (GPSL1CA(),)` desugars internally to `signals = (default = (GPSL1CA(),),)` so the rest of the API can stay uniform. With one capability, [`add_satellite!`](@ref) may omit the `capability=` keyword.
+The singular `signal = GPSL1CA()` keyword is the shortcut for the common one-capability, one-signal case. It desugars internally to `signals = (default = (GPSL1CA(),),)` so the rest of the API can stay uniform. With one capability, [`add_satellite!`](@ref) may omit the `capability=` keyword. Use the plural `signals = (...)` keyword for multi-signal or multi-capability tracking — see below.
 
 ### Adding satellites
 
@@ -130,7 +130,7 @@ julia> using Tracking, GNSSSignals
 
 julia> using Tracking: Hz
 
-julia> track_state = TrackState(; signals = (GPSL1CA(),));
+julia> track_state = TrackState(; signal = GPSL1CA());
 
 julia> add_satellite!(track_state; prn = 1,  code_phase = 50.0,  carrier_doppler = 1000.0Hz);
 
@@ -199,7 +199,7 @@ julia> using Tracking, GNSSSignals
 
 julia> using Tracking: Hz
 
-julia> track_state = TrackState(; signals = (GPSL1CA(),));
+julia> track_state = TrackState(; signal = GPSL1CA());
 
 julia> add_satellite!(track_state; prn = 1,  code_phase = 50.0,  carrier_doppler = 1000.0Hz);
 
@@ -228,7 +228,7 @@ julia> using Tracking, GNSSSignals
 julia> using Tracking: Hz
 
 julia> track_state = TrackState(;
-           signals = (GPSL1CA(),),
+           signal = GPSL1CA(),
            num_ants = NumAnts(4),
        );
 

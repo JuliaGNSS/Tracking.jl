@@ -17,9 +17,15 @@ track_state = TrackState(;
 )
 ```
 
-The simplified single-capability form `signals = (GPSL1CA(),)` desugars
-to a capability called `:default`. `add_satellite!` may then omit the
-`capability=` keyword.
+For the common case of one capability tracking one signal, use the
+singular `signal` keyword instead:
+
+```julia
+track_state = TrackState(; signal = GPSL1CA())
+```
+
+This is equivalent to `TrackState(; signals = (default = (GPSL1CA(),),))`.
+`add_satellite!` may then omit the `capability=` keyword.
 
 `TrackState` is parameterized on the per-capability `TrackedSat` value
 type, which captures the correlator type, post-corr-filter type, and
@@ -31,13 +37,26 @@ hand them to the `add_satellite!(track_state, capability, sat)`
 overload.
 """
 function TrackState(;
-    signals,
+    signal::Maybe{AbstractGNSSSignal} = nothing,
+    signals = nothing,
     doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
     num_ants::NumAnts = NumAnts(1),
 )
-    # Normalize the input: a bare signal tuple gets wrapped under the
-    # `:default` capability key.
-    signal_groups = _normalize_signal_groups(signals)
+    if isnothing(signal) && isnothing(signals)
+        throw(ArgumentError(
+            "TrackState requires either `signal = <AbstractGNSSSignal>` or " *
+            "`signals = (...)`. See the docstring for examples.",
+        ))
+    end
+    if !isnothing(signal) && !isnothing(signals)
+        throw(ArgumentError(
+            "Pass either `signal` (singular, one AbstractGNSSSignal) or " *
+            "`signals` (plural, a NamedTuple of signal tuples) — not both.",
+        ))
+    end
+    signal_groups = isnothing(signal) ?
+        _normalize_signal_groups(signals) :
+        (default = (signal,),)
     # For each capability, build a template TrackedSat to capture the
     # concrete dict value type, then create an empty dict of that type.
     sat_dicts = map(signal_groups) do sig_tuple

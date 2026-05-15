@@ -41,7 +41,7 @@ per-capability dictionary, so the tracking loop can run without producing
 GC pressure once the sat set is steady. A typical setup looks like:
 
 ```julia
-track_state = TrackState(; signals = (GPSL1CA(),))
+track_state = TrackState(; signal = GPSL1CA())
 add_satellite!(track_state; prn = 1, code_phase = 0.0, carrier_doppler = 1000.0Hz)
 # ... more sats ...
 
