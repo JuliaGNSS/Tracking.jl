@@ -1,8 +1,8 @@
-module GPSL5Test
+module GPSL5ITest
 
 using Test: @test, @testset, @inferred
 using Unitful: Hz
-using GNSSSignals: GPSL5
+using GNSSSignals: GPSL5I
 using Tracking:
     is_upcoming_integration_new_bit,
     get_default_correlator,
@@ -10,7 +10,7 @@ using Tracking:
     NumAnts
 
 @testset "GPS L5" begin
-    gpsl5 = GPSL5()
+    gpsl5 = GPSL5I()
     @test @inferred(is_upcoming_integration_new_bit(gpsl5, 0x35, 50)) == true
 
     @test @inferred(is_upcoming_integration_new_bit(gpsl5, 0x35, 5)) == false

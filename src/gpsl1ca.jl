@@ -1,9 +1,9 @@
 """
 $(SIGNATURES)
 
-Checks if upcoming integration is a new bit for GPSL1.
+Checks if upcoming integration is a new bit for GPSL1CA.
 """
-function is_upcoming_integration_new_bit(gpsl1::GPSL1, code_block_bits, num_code_blocks)
+function is_upcoming_integration_new_bit(gpsl1::GPSL1CA, code_block_bits, num_code_blocks)
     num_code_blocks < 40 && return false
     masked_bit_synchronizer = code_block_bits & 0xffffffffff # First 40 bits
     # Upcoming integration will be a new bit if masked_bit_synchronizer contains
@@ -18,6 +18,6 @@ Get the default correlator for the given GNSS system. Returns an
 EarlyPromptLateCorrelator for GPS L1 or a VeryEarlyPromptLateCorrelator
 for systems like Galileo E1B that use BOC modulation.
 """
-function get_default_correlator(gpsl1::GPSL1, num_ants::NumAnts = NumAnts(1))
+function get_default_correlator(gpsl1::GPSL1CA, num_ants::NumAnts = NumAnts(1))
     EarlyPromptLateCorrelator(; num_ants)
 end

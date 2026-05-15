@@ -136,7 +136,7 @@ has_bit_or_secondary_code_been_found(s::SatState) =
     has_bit_or_secondary_code_been_found(get_bit_buffer(s))
 
 function SatState(
-    system::AbstractGNSS,
+    system::AbstractGNSSSignal,
     prn::Int,
     code_phase,
     carrier_doppler;
@@ -278,7 +278,7 @@ Holds the state of multiple satellites for a single GNSS system. Contains the
 system definition and a dictionary of [`TrackedSat`](@ref) entries indexed by
 identifier.
 """
-struct TrackedSystem{S<:AbstractGNSS,T<:TrackedSat,I}
+struct TrackedSystem{S<:AbstractGNSSSignal,T<:TrackedSat,I}
     system::S
     states::Dictionary{I,T}
 end
@@ -351,7 +351,7 @@ end
 # Recursive tuple walker: applies `f(tracked_system, args...)` to each
 # `TrackedSystem` in the (named-)tuple. Each step has fully concrete
 # types, so no runtime dispatch even when systems differ
-# (heterogeneous `Tuple{TrackedSystem{GPSL1,…}, TrackedSystem{GalileoE1B,…}}`
+# (heterogeneous `Tuple{TrackedSystem{GPSL1CA,…}, TrackedSystem{GalileoE1B,…}}`
 # would otherwise box each element when iterated with `for s in tuple`).
 @inline _foreach_system!(f::F, ::Tuple{}, args::Vararg{Any,N}) where {F,N} = nothing
 @inline function _foreach_system!(f::F, t::Tuple, args::Vararg{Any,N}) where {F,N}
@@ -443,7 +443,7 @@ the convenience method [`TrackedSystem`](@ref)`(estimator, system, sats)`
 wraps each sat via [`init_estimator_state`](@ref).
 """
 function TrackedSystem(
-    system::AbstractGNSS,
+    system::AbstractGNSSSignal,
     tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}},
 )
     TrackedSystem(system, to_dictionary(tracked_sats))
@@ -466,7 +466,7 @@ hand.
 """
 function TrackedSystem(
     estimator::AbstractDopplerEstimator,
-    system::AbstractGNSS,
+    system::AbstractGNSSSignal,
     sat_states::Union{SatState,Vector{<:SatState},Dictionary{<:Any,<:SatState}},
 )
     TrackedSystem(system, wrap_sats(estimator, sat_states))
@@ -502,7 +502,7 @@ function estimate_cn0(sss::TrackedSystem, id...)
     estimate_cn0(sss.system, get_sat_state(sss, id...))
 end
 
-function estimate_cn0(system::AbstractGNSS, sat_state::SatState)
+function estimate_cn0(system::AbstractGNSSSignal, sat_state::SatState)
     estimate_cn0(
         get_cn0_estimator(sat_state),
         get_code_length(system) / get_code_frequency(system),

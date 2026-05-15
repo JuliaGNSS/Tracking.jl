@@ -2,7 +2,7 @@ module ConventionalPLLAndDLLTest
 
 using Test: @test, @testset, @inferred
 using Unitful: Hz
-using GNSSSignals: GPSL1, get_code_center_frequency_ratio
+using GNSSSignals: GPSL1CA, get_code_center_frequency_ratio
 using TrackingLoopFilters: ThirdOrderBilinearLF, SecondOrderBilinearLF
 using StaticArrays: SVector
 using Dictionaries: Dictionary
@@ -28,7 +28,7 @@ using Tracking:
     merge_sats
 
 @testset "Doppler aiding" begin
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     init_carrier_doppler = 10Hz
     init_code_doppler = 1Hz
     carrier_freq_update = 2Hz
@@ -59,7 +59,7 @@ end
     @test pll_and_dll.carrier_loop_filter_bandwidth == 18.0Hz
     @test pll_and_dll.code_loop_filter_bandwidth == 1.0Hz
 
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     sat_state = SatState(gpsl1, 1, 0.5, 100.0Hz)
     from_sat_state = @inferred SatConventionalPLLAndDLL(
         sat_state,
@@ -88,7 +88,7 @@ end
 @testset "Conventional PLL and DLL" begin
     sampling_frequency = 5e6Hz
 
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
 
     carrier_doppler = 100.0Hz
     prn = 1
@@ -158,7 +158,7 @@ end
 
 @testset "Per-satellite bandwidths drive the loop filters" begin
     sampling_frequency = 5e6Hz
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     carrier_doppler = 100.0Hz
     code_phase = 0.5
     preferred_num_code_blocks_to_integrate = 1
@@ -219,7 +219,7 @@ end
 end
 
 @testset "Bandwidths propagate through ConventionalPLLAndDLL constructor" begin
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     sat_state = SatState(gpsl1, 1, 0.5, 100.0Hz)
     estimator = ConventionalPLLAndDLL(;
         carrier_loop_filter_bandwidth = 22.0Hz,
@@ -245,7 +245,7 @@ end
 end
 
 @testset "merge_sats propagates bandwidths to new sats via init_estimator_state" begin
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     sat1 = SatState(gpsl1, 1, 0.5, 100.0Hz)
     estimator = ConventionalPLLAndDLL(;
         carrier_loop_filter_bandwidth = 22.0Hz,

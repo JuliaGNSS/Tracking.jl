@@ -12,7 +12,7 @@ index start_sample.
 """
 function gen_code_replica!(
     code_replica,
-    system::AbstractGNSS,
+    system::AbstractGNSSSignal,
     code_frequency,
     sampling_frequency,
     start_code_phase::AbstractFloat,
@@ -42,7 +42,7 @@ $(SIGNATURES)
 Updates the code phase.
 """
 function update_code_phase(
-    system::AbstractGNSS,
+    system::AbstractGNSSSignal,
     num_samples,
     code_frequency,
     sampling_frequency,
@@ -72,6 +72,6 @@ $(SIGNATURES)
 
 Calculates the current code frequency.
 """
-function get_current_code_frequency(system::AbstractGNSS, code_doppler)
+function get_current_code_frequency(system::AbstractGNSSSignal, code_doppler)
     code_doppler + get_code_frequency(system)
 end

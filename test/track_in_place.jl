@@ -3,7 +3,7 @@ module TrackInPlaceTest
 using Test: @test, @testset
 using Unitful: Hz
 using GNSSSignals:
-    GPSL1, gen_code, get_code_center_frequency_ratio, get_code_frequency
+    GPSL1CA, gen_code, get_code_center_frequency_ratio, get_code_frequency
 
 using Tracking:
     SatState,
@@ -28,7 +28,7 @@ using Tracking:
 
 # Build a simple 4 ms GPS-L1 PRN-1 signal with known carrier doppler & code phase.
 function make_signal(sampling_frequency)
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     carrier_doppler = 200.0Hz
     start_code_phase = 100.0
     code_frequency =

@@ -6,7 +6,7 @@ code block when the secondary code or bit isn't found. The maximum number of cod
 blocks to integrate is limited by the bit shift.
 """
 function calc_num_code_blocks_to_integrate(
-    system::AbstractGNSS,
+    system::AbstractGNSSSignal,
     preferred_num_code_blocks::Int,
     secondary_code_or_bit_found::Bool,
 )
@@ -29,7 +29,7 @@ $(SIGNATURES)
 Calculates the number of chips to integrate.
 """
 function calc_num_chips_to_integrate(
-    system::AbstractGNSS,
+    system::AbstractGNSSSignal,
     num_code_blocks::Int,
     current_code_phase,
 )
@@ -44,7 +44,7 @@ $(SIGNATURES)
 Calculates the number of samples to integrate.
 """
 function calc_num_samples_left_to_integrate(
-    system::AbstractGNSS,
+    system::AbstractGNSSSignal,
     num_code_blocks::Int,
     sampling_frequency,
     current_code_doppler,
@@ -65,7 +65,7 @@ is_integration_completed). Takes into account available signal samples and
 code block boundaries.
 """
 function calc_signal_samples_to_integrate(
-    system::AbstractGNSS,
+    system::AbstractGNSSSignal,
     signal_start_sample::Int,
     sampling_frequency,
     code_doppler,

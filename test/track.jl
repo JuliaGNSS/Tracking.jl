@@ -5,8 +5,8 @@ using Random: Random
 using Unitful: Hz, kHz, MHz
 using Statistics: mean
 using GNSSSignals:
-    GPSL1,
-    GPSL5,
+    GPSL1CA,
+    GPSL5I,
     GalileoE1B,
     gen_code,
     get_code_center_frequency_ratio,
@@ -36,7 +36,7 @@ using Tracking:
 
 @testset "Tracking with signal of type $type" for type in
                                                   (Int16, Int32, Int64, Float32, Float64)
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     carrier_doppler = 200Hz
     start_code_phase = 100
     code_frequency =
@@ -131,7 +131,7 @@ using Tracking:
 end
 
 @testset "Tracking with large initial Doppler offset" begin
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     carrier_doppler = 200Hz
     start_code_phase = 100.0
     code_frequency =
@@ -191,7 +191,7 @@ end
 
 @testset "Track multiple systems of type $type" for type in
                                                     (Int16, Int32, Int64, Float32, Float64)
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     galileo_e1b = GalileoE1B()
     carrier_doppler_gps = 200Hz
     carrier_doppler_gal = 1200Hz
@@ -346,7 +346,7 @@ end
     -30000.0Hz,
     30000.0Hz,
 )
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     carrier_doppler = 200Hz
     start_code_phase = 100
     code_frequency = carrier_doppler / 1540 + get_code_frequency(gpsl1)
@@ -450,7 +450,7 @@ end
     Float32,
     Float64,
 )
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     carrier_doppler = 200Hz
     start_code_phase = 100
     code_frequency = carrier_doppler / 1540 + get_code_frequency(gpsl1)
@@ -557,7 +557,7 @@ end
 end
 
 @testset "Collect filtered prompts per track call" begin
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     carrier_doppler = 200Hz
     start_code_phase = 100.0
     code_frequency =

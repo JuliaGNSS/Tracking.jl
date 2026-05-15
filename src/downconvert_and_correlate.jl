@@ -1,5 +1,5 @@
 function update(
-    system::AbstractGNSS,
+    system::AbstractGNSSSignal,
     sat_state::SatState,
     integrated_samples::Int,
     intermediate_frequency,

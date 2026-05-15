@@ -1,5 +1,5 @@
 function TrackState(
-    system::AbstractGNSS,
+    system::AbstractGNSSSignal,
     sat_states;
     doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
 )

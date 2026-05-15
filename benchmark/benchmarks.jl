@@ -39,7 +39,7 @@ function setup_benchmark(;
     signal_type = Float32,
     num_samples = 2000,
     sampling_frequency = 5e6Hz,
-    system = GPSL1(),
+    system = GPSL1CA(),
     num_ants = 1,
 )
     code_phase = 10.5
@@ -125,7 +125,7 @@ function bench_downconvert_and_correlate(;
     signal_type = Float32,
     num_samples = 2000,
     sampling_frequency = 5e6Hz,
-    system = GPSL1(),
+    system = GPSL1CA(),
     num_ants = 1,
 )
     downconvert_and_correlator = _make_cpu_dc(sampling_frequency)
@@ -226,7 +226,7 @@ function bench_track(;
     num_samples = 2000,
     sampling_frequency = 5e6Hz,
 )
-    system = GPSL1()
+    system = GPSL1CA()
     downconvert_and_correlator = _make_cpu_dc(sampling_frequency)
     track_state = TrackState(system, [SatState(system, 1, 0.0, 1000Hz)])
     signal = rand(Complex{signal_type}, num_samples)
@@ -246,7 +246,7 @@ function bench_track_inplace(;
     num_samples = 2000,
     sampling_frequency = 5e6Hz,
 )
-    system = GPSL1()
+    system = GPSL1CA()
     downconvert_and_correlator = _make_cpu_dc(sampling_frequency)
     track_state = TrackState(system, [SatState(system, 1, 0.0, 1000Hz)])
     signal = rand(Complex{signal_type}, num_samples)
@@ -317,8 +317,8 @@ function _make_multi_sat_state(;
     total_sats = 0
     for (si, sys) in enumerate(systems)
         ns = nsats_list[min(si, length(nsats_list))]
-        pm = sys isa GPSL1 ? 32 : prn_max
-        cd = sys isa GPSL1 ? 1000.0 : code_dop
+        pm = sys isa GPSL1CA ? 32 : prn_max
+        cd = sys isa GPSL1CA ? 1000.0 : code_dop
         sats = [SatState(sys, mod1(i, pm), 10.5 + i * 0.1, (cd + i * 10) * Hz) for i = 1:ns]
         push!(all_sss, _build_tracked_system(sys, sats))
         total_sats += ns
@@ -371,7 +371,7 @@ end
 # Master only registers the immutable variants (no `track!`); the
 # threaded suffix is also master-compatible since the underlying
 # `CPUThreadedDownconvertAndCorrelator` exists in both.
-const _TRACK_BENCH_CASES = let gpsl1 = GPSL1(), gal = GalileoE1B()
+const _TRACK_BENCH_CASES = let gpsl1 = GPSL1CA(), gal = GalileoE1B()
     [
         ("L1 8sat/5K",       (systems = (gpsl1,),     nsats_list = [8],    sfreq = 5e6Hz,  nsamp = 5000)),
         ("E1B 4sat/25K",     (systems = (gal,),       nsats_list = [4],    sfreq = 25e6Hz, nsamp = 25000, prn_max = 50, code_dop = 100.0)),

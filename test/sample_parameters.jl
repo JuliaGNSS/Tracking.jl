@@ -2,7 +2,7 @@ module SampleParametersTest
 
 using Test: @test, @testset, @inferred
 using Unitful: MHz, Hz
-using GNSSSignals: GPSL1
+using GNSSSignals: GPSL1CA
 using Tracking:
     calc_num_code_blocks_to_integrate,
     calc_num_chips_to_integrate,
@@ -10,7 +10,7 @@ using Tracking:
     calc_signal_samples_to_integrate
 
 @testset "Calculate number of code blocks / chips to integrate" begin
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
 
     @test @inferred(calc_num_code_blocks_to_integrate(gpsl1, 1, false)) == 1
     @test @inferred(calc_num_code_blocks_to_integrate(gpsl1, 2, false)) == 1
@@ -24,7 +24,7 @@ using Tracking:
 end
 
 @testset "Calculate number of samples to integrate" begin
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     signal_start_sample = 1
     sampling_frequency = 4MHz
     code_doppler = -0.00022901219179036268Hz

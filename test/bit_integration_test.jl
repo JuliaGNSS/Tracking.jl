@@ -2,7 +2,7 @@ module BitDetectionIntegrationTest
 
 using Test: @test, @testset
 using Unitful: Hz
-using GNSSSignals: GPSL1, gen_code, get_code_frequency
+using GNSSSignals: GPSL1CA, gen_code, get_code_frequency
 using Tracking:
     SatState,
     TrackState,
@@ -14,7 +14,7 @@ using Tracking:
     has_bit_or_secondary_code_been_found
 
 @testset "Bit detection integration test" begin
-    system = GPSL1()
+    system = GPSL1CA()
     sampling_frequency = 5e6Hz
     num_samples = 5000
     code_frequency = get_code_frequency(system)

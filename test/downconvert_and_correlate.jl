@@ -2,7 +2,7 @@ module DownconvertAndCorrelateTest
 
 using Test: @test, @testset, @inferred
 using Unitful: Hz
-using GNSSSignals: GPSL1, gen_code, get_code_frequency, get_code_center_frequency_ratio, get_code_type
+using GNSSSignals: GPSL1CA, gen_code, get_code_frequency, get_code_center_frequency_ratio, get_code_type
 import Tracking
 using Tracking:
     AbstractCorrelator,
@@ -31,7 +31,7 @@ end
     CPUDownconvertAndCorrelator,
     CPUThreadedDownconvertAndCorrelator,
 ]
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     code_phase = 10.5
     num_samples_signal = 5000
@@ -90,7 +90,7 @@ end
     CPUDownconvertAndCorrelator,
     CPUThreadedDownconvertAndCorrelator,
 ]
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     code_phase = 10.5
     num_samples_signal = 5000
@@ -119,7 +119,7 @@ end
 end
 
 @testset "Fused downconvert and correlate" begin
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     code_phase = 10.5
     num_samples_signal = 5000
@@ -191,7 +191,7 @@ end
 @testset "Fused downconvert and correlate multi-antenna" begin
     using StaticArrays: SVector
 
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     code_phase = 10.5
     num_samples_signal = 5000
@@ -310,7 +310,7 @@ end
     Tracking.update_accumulator(c::DynamicCorrelator, acc) =
         DynamicCorrelator(collect(acc), c.shifts)
 
-    gpsl1 = GPSL1()
+    gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     code_phase = 10.5
     num_samples_signal = 5000
