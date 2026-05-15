@@ -59,6 +59,8 @@ export get_early,
     ConventionalAssistedPLLAndDLL,
     DefaultPostCorrFilter,
     TrackState,
+    add_satellite!,
+    add_satellite,
     merge_sats,
     filter_out_sats,
     get_sat_states,
@@ -68,7 +70,7 @@ export get_early,
     get_default_correlator,
     AbstractCorrelator,
     AbstractDownconvertAndCorrelator,
-    TrackedSystems,
+    SatelliteDicts,
     get_num_accumulators,
     get_correlator_sample_shifts,
     calc_signal_samples_to_integrate,
@@ -158,9 +160,17 @@ $(SIGNATURES)
 Main tracking state container holding satellite states for multiple GNSS systems
 and the Doppler estimator (e.g., PLL/DLL). This is the primary struct used for
 tracking operations.
+
+`signal_groups` is a NamedTuple that mirrors the keys of `satellites` and
+holds the per-capability signal-instance tuple. `add_satellite!` reads it
+to build new sats with the right signal shape (signal instances can't be
+reconstructed from the `TrackedSat` value type alone — concrete signal
+subtypes like `GPSL1CA{Matrix{Int16}}` carry the code-matrix instance as
+a field, so re-instantiation requires the original instance).
 """
-struct TrackState{S<:TrackedSystems,DE<:AbstractDopplerEstimator}
-    tracked_systems::S
+struct TrackState{S<:SatelliteDicts,SG<:TupleLike,DE<:AbstractDopplerEstimator}
+    satellites::S
+    signal_groups::SG
     doppler_estimator::DE
 end
 

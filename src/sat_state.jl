@@ -364,7 +364,7 @@ identifiers (PRNs) and the values are the per-sat tracking state. The signal
 type for each system lives in the dictionary value type, accessed via
 `only(sat.signals).signal` at use sites.
 """
-const TrackedSystems{N} = TupleLike{<:NTuple{N,Dictionary{<:Any,<:TrackedSat}}}
+const SatelliteDicts{N} = TupleLike{<:NTuple{N,Dictionary{<:Any,<:TrackedSat}}}
 
 """
 $(SIGNATURES)
@@ -374,12 +374,12 @@ Used internally by [`TrackState`](@ref)'s `merge_sats` — external callers
 should prefer the `TrackState`-level method.
 """
 function merge_sats(
-    tracked_systems::TrackedSystems,
+    satellites::SatelliteDicts,
     system_idx,
     new_tracked_sats::Dictionary{<:Any,<:TrackedSat},
 )
-    sats_dict = tracked_systems[system_idx]
-    @set tracked_systems[system_idx] = merge(sats_dict, new_tracked_sats)
+    sats_dict = satellites[system_idx]
+    @set satellites[system_idx] = merge(sats_dict, new_tracked_sats)
 end
 
 """
@@ -388,7 +388,7 @@ $(SIGNATURES)
 Remove satellites with the specified identifiers from the tracking state.
 """
 function filter_out_sats(
-    tracked_systems::TrackedSystems,
+    satellites::SatelliteDicts,
     system_idx::Union{Symbol,Integer},
     identifiers,
 )
@@ -396,10 +396,10 @@ function filter_out_sats(
         last,
         filter(
             ((id,),) -> !in(id, identifiers),
-            pairs(tracked_systems[system_idx]),
+            pairs(satellites[system_idx]),
         ),
     )
-    @set tracked_systems[system_idx] = filtered
+    @set satellites[system_idx] = filtered
 end
 
 # Build a `Dictionary` that shares its keys with the original but holds a
@@ -413,9 +413,9 @@ end
 end
 
 @inline function _copy_slot_vectors(
-    tracked_systems::TrackedSystems,
+    satellites::SatelliteDicts,
 )
-    map(_copy_slot_vector, tracked_systems)
+    map(_copy_slot_vector, satellites)
 end
 
 # Recursive tuple walker: applies `f(sats_dict, args...)` to each per-system
@@ -446,18 +446,18 @@ end
 end
 
 function reset_start_sample_and_bit_buffer!(
-    tracked_systems::TrackedSystems,
+    satellites::SatelliteDicts,
 )
-    _foreach_system!(_reset_one_system!, tracked_systems)
-    return tracked_systems
+    _foreach_system!(_reset_one_system!, satellites)
+    return satellites
 end
 
 # Immutable variant: copies the slot vectors first, then delegates to the
 # in-place form. Same per-sat work, only the storage ownership differs.
 function reset_start_sample_and_bit_buffer(
-    tracked_systems::TrackedSystems,
+    satellites::SatelliteDicts,
 )
-    reset_start_sample_and_bit_buffer!(_copy_slot_vectors(tracked_systems))
+    reset_start_sample_and_bit_buffer!(_copy_slot_vectors(satellites))
 end
 
 # Reseed `sat`'s per-sat doppler-estimator state via `init_estimator_state`

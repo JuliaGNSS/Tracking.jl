@@ -117,9 +117,9 @@ end
         2 => TrackedSat(galileo_e1b, 2, 10.5, 10.0Hz; doppler_estimator = estimator),
         3 => TrackedSat(galileo_e1b, 3, 11.5, 20.0Hz; doppler_estimator = estimator),
     ])
-    tracked_systems = (gps = gps_sats, gal = gal_sats)
+    satellites = (gps = gps_sats, gal = gal_sats)
 
-    track_state = @inferred TrackState(tracked_systems; doppler_estimator = estimator)
+    track_state = @inferred TrackState(satellites; doppler_estimator = estimator)
 
     new_track_state = @inferred merge_sats(track_state, 1, TrackedSat(gpsl1, 3, 5.5, 80.0Hz))
 

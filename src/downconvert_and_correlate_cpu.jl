@@ -595,8 +595,8 @@ function downconvert_and_correlate(
 )
     new_track_state = TrackState(
         track_state;
-        tracked_systems =
-            _copy_slot_vectors(track_state.tracked_systems),
+        satellites =
+            _copy_slot_vectors(track_state.satellites),
     )
     downconvert_and_correlate!(
         dc, signal, new_track_state,
@@ -614,7 +614,7 @@ state — see [`track!`](@ref).
 """
 # Per-system body for the single-threaded backend. Pulled out so
 # `_foreach_system!` can call it on each per-system satellite dictionary in
-# the (possibly heterogeneous) `tracked_systems` tuple without dynamic
+# the (possibly heterogeneous) `satellites` tuple without dynamic
 # dispatch / boxing.
 @inline function _dc_one_system!(
     sats::Dictionary{<:Any,<:TrackedSat}, dc::CPUDownconvertAndCorrelator,
@@ -647,7 +647,7 @@ function downconvert_and_correlate!(
 )
     num_samples_signal = get_num_samples(signal)
     _foreach_system!(
-        _dc_one_system!, track_state.tracked_systems,
+        _dc_one_system!, track_state.satellites,
         dc, signal, num_samples_signal, preferred_num_code_blocks_to_integrate,
         sampling_frequency, intermediate_frequency,
     )
@@ -673,8 +673,8 @@ function downconvert_and_correlate(
 )
     new_track_state = TrackState(
         track_state;
-        tracked_systems =
-            _copy_slot_vectors(track_state.tracked_systems),
+        satellites =
+            _copy_slot_vectors(track_state.satellites),
     )
     downconvert_and_correlate!(
         dc, signal, new_track_state,
@@ -727,7 +727,7 @@ function downconvert_and_correlate!(
 )
     num_samples_signal = get_num_samples(signal)
     _foreach_system!(
-        _dc_one_system_threaded!, track_state.tracked_systems,
+        _dc_one_system_threaded!, track_state.satellites,
         dc, signal, num_samples_signal, preferred_num_code_blocks_to_integrate,
         sampling_frequency, intermediate_frequency,
     )
