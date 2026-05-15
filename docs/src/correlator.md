@@ -1,11 +1,11 @@
 # Correlator
 
-The correlator computes the correlation between the incoming signal and the locally generated replica code at multiple code phase offsets (early, prompt, late, etc.).
+The correlator computes the correlation between the incoming signal and the locally generated replica code at multiple code phase offsets (early, prompt, late, etc.). Each [`TrackedSignal`](@ref) on a [`TrackedSat`](@ref) holds its own correlator, so a multi-signal satellite carries one correlator per signal.
 
 ## Default Correlators
 
-The default correlator depends on the GNSS system and is returned by `get_default_correlator`:
-- `EarlyPromptLateCorrelator` for GPS L1, GPS L5 (BPSK modulation)
+The default correlator depends on the GNSS signal type and is returned by `get_default_correlator`:
+- `EarlyPromptLateCorrelator` for GPS L1 C/A, GPS L1C-D, GPS L1C-P, GPS L5I (BPSK / TMBOC modulation)
 - `VeryEarlyPromptLateCorrelator` for Galileo E1B (BOC modulation)
 
 ```@docs

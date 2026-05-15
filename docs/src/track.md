@@ -37,18 +37,21 @@ track!
 ## Real-time use
 
 `track!` writes back into the existing `Vector{TrackedSat}` slots of each
-system, so the tracking loop can run without producing GC pressure once the
-sat set is steady. A typical setup looks like:
+per-capability dictionary, so the tracking loop can run without producing
+GC pressure once the sat set is steady. A typical setup looks like:
 
 ```julia
-track_state = TrackState(system, initial_sats)
+track_state = TrackState(; signals = (GPSL1CA(),))
+add_satellite!(track_state; prn = 1, code_phase = 0.0, carrier_doppler = 1000.0Hz)
+# ... more sats ...
+
 dc = CPUThreadedDownconvertAndCorrelator()  # hoist outside the loop
 
 while got_signal_chunk(rx)
     chunk = read_chunk!(rx)
     track!(chunk, track_state, sampling_freq;
         downconvert_and_correlator = dc)
-    # ... use track_state.sat_states ...
+    # ... use track_state.satellites ...
 end
 ```
 
@@ -57,7 +60,7 @@ long-lived per-thread scratch buffers that grow on first use and are reused
 thereafter. Calling `track!` without the kwarg works, but rebuilds the
 buffers on every call.
 
-The first `track!` call may also grow each satellite's `filtered_prompts`
+The first `track!` call may also grow each signal's `filtered_prompts`
 buffer via `push!` reallocations; from the second call onwards the capacity
 is settled.
 

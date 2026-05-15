@@ -237,9 +237,17 @@ function get_sat_states(track_state::TrackState{<:SatelliteDicts{1}})
     get_sat_states(track_state.satellites)
 end
 
-# Pull the signal type for system `system_idx` out of any sat in its
-# dictionary. The dictionary's value type carries the signal type, so this
-# resolves at compile time when `system_idx` is a literal Symbol/Int.
+"""
+$(SIGNATURES)
+
+Return the first signal of the given capability — useful when the caller
+needs the signal instance (for `gen_code`, frequency lookups, …) but
+doesn't already have a sat in hand. The dictionary's value type carries
+the signal type, so this resolves at compile time when `system_idx` is a
+literal `Symbol` / `Integer`.
+
+For a single-capability `TrackState` the index can be omitted.
+"""
 function get_system(
     track_state::TrackState{<:SatelliteDicts{N}},
     system_idx::Union{Symbol,Integer,Val},
@@ -449,6 +457,19 @@ end
 @inline _dict_for_capability(track_state::TrackState, capability::Symbol) =
     track_state.satellites[capability]
 
+# Recover the number of antennas (`M` in `AbstractCorrelator{M}`) from
+# the capability's slot type. Inspects the first TrackedSignal's
+# correlator type. Resolves at compile time.
+@inline function _num_ants_for_capability(track_state::TrackState, capability::Symbol)
+    dict = track_state.satellites[capability]
+    SatT = eltype(dict)                       # TrackedSat{Tuple{TrackedSignal{...}, ...}, D}
+    SignalsT = SatT.parameters[1]             # Tuple{TrackedSignal{...}, ...}
+    FirstSignalT = SignalsT.parameters[1]     # TrackedSignal{Sig, C, PCF}
+    CorrelatorT = FirstSignalT.parameters[2]  # AbstractCorrelator{M}
+    M = CorrelatorT.parameters[1]
+    NumAnts{M}()
+end
+
 # Build a default-correlator, default-PCF TrackedSat whose
 # signal-tuple shape matches the capability's slot in `track_state`.
 # Reads the signal-instance tuple from `track_state.signal_groups`.
@@ -466,10 +487,14 @@ function _make_default_tracked_sat_for_capability(
     cd = isnothing(code_doppler) ?
         carrier_doppler * get_code_center_frequency_ratio(first_signal) :
         code_doppler
+    # Recover num_ants from the dictionary's value type so the new sat's
+    # correlator matches the slot it'll be inserted into.
+    num_ants = _num_ants_for_capability(track_state, capability)
     tracked_signals = map(sig_tuple) do sig
         TrackedSignal(
             sig;
-            correlator = get_default_correlator(sig, NumAnts(1)),
+            num_ants,
+            correlator = get_default_correlator(sig, num_ants),
         )
     end
     bare = TrackedSat(

@@ -35,10 +35,6 @@ julia> using Tracking, GNSSSignals, TrackingLoopFilters
 
 julia> using Tracking: Hz
 
-julia> system = GPSL1();
-
-julia> sat_state = SatState(system, 1, 50.0, 1000.0Hz);
-
 julia> # Use non-assisted PLL with custom loop filter types
        doppler_estimator = ConventionalPLLAndDLL(
            ThirdOrderBilinearLF,      # carrier loop filter type
@@ -47,7 +43,9 @@ julia> # Use non-assisted PLL with custom loop filter types
            code_loop_filter_bandwidth = 0.5Hz
        );
 
-julia> track_state = TrackState(system, sat_state; doppler_estimator);
+julia> track_state = TrackState(; signals = (GPSL1CA(),), doppler_estimator);
+
+julia> add_satellite!(track_state; prn = 1, code_phase = 50.0, carrier_doppler = 1000.0Hz);
 ```
 
 ## Custom Loop Filters

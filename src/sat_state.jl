@@ -133,20 +133,24 @@ struct TrackedSat{Signals<:Tuple{Vararg{TrackedSignal}},D}
     doppler_estimator_state::D
 end
 
-"""
-$(SIGNATURES)
-
-Compile-time max-code-length helper. Walks `signals` recursively so the
-heterogeneous tuple unrolls at type-inference time; the result is folded to
-a literal in the calling site for any concrete `signals` tuple type. The
-returned length is in chips and includes the secondary-code length so that
-the shared `sat.code_phase` wraps at the longest overall code period.
-"""
 @inline _max_code_length(::Tuple{}) = 0
 @inline _max_code_length(t::Tuple) = max(
     get_code_length(first(t).signal) * get_secondary_code_length(first(t).signal),
     _max_code_length(Base.tail(t)),
 )
+
+"""
+$(SIGNATURES)
+
+The longest code period (in chips, including secondary code) across all
+signals in `signals`. Returns the constant the shared `sat.code_phase`
+wraps at — for a sat tracking only GPS L1 C/A (1023 chips × 1) this is
+1023; for one tracking L1C-P (10230 × 1800 ≈ 18.4 M) it is 18 414 000.
+
+Implemented via tuple recursion (not `@generated`) so the heterogeneous
+walk unrolls at type-inference time; the result folds to a literal in
+the calling site for any concrete `signals` tuple type.
+"""
 @inline max_code_length(signals::Tuple{Vararg{TrackedSignal}}) = _max_code_length(signals)
 
 """

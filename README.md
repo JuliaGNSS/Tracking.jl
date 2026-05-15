@@ -13,20 +13,21 @@ Tracking.jl primarily consists of two main blocks:
 2. Code and carrier estimation to generate replicas and close the loop
 
 Tracking.jl provides defaults for both blocks, but it provides mechanisms to hook in your own implementation (by using multiple dispatch).
-For signal down-conversion and correlation Tracking.jl provides a highly optimized CPU implementation using SIMD vectorization via LoopVectorization.jl.
+For signal down-conversion and correlation Tracking.jl provides a highly optimized CPU implementation using hand-tuned SIMD intrinsics.
 With respect to the second block Tracking.jl provides conventional DLLs and PLLs with FLL-assisted carrier tracking as the default.
-Down-conversion and correlation is done in full code blocks meaning from code start to code end or multiples of that (e.g. in GPS L1 from 0 to `N`*1023). The factor `N` can be specified, but will be `1` as long as the bit start is unknown in order to find the bit start. Once that is done for every tracked satellite the result will be handed over to the code and carrier estimation block.
+Down-conversion and correlation is done in full code blocks meaning from code start to code end or multiples of that (e.g. in GPS L1 C/A from 0 to `N`*1023). The factor `N` can be specified, but will be `1` as long as the bit start is unknown in order to find the bit start. Once that is done for every tracked satellite the result will be handed over to the code and carrier estimation block.
 Moreover, Tracking.jl allows tracking of signals from phased antenna arrays meaning that they are down-converted and correlated by the very same replica to conserve phase relationships.
+Multi-signal tracking is supported: a single satellite can be tracked on several signals at once (e.g. GPS L1 C/A together with L1C-D and L1C-P) sharing one carrier downconvert per outer iteration, with a per-signal correlator each.
 
 ## Features
 
-* Supports GPS L1 / L5 and Galileo E1B
+* Supports GPS L1 C/A, GPS L1C-D, GPS L1C-P, GPS L5I, and Galileo E1B
+* Multi-signal tracking on a single satellite (e.g. L1 C/A + L1C-D + L1C-P together) with a single shared downconvert
 * CN0 estimation
 * Secondary code detection
 * Bit detection
 * Phased array tracking
 * Multi-satellite and multi-system tracking
-* GPU acceleration (requires `using CUDA`)
 
 ## Installation
 
