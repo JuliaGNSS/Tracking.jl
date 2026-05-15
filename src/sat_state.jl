@@ -444,30 +444,6 @@ function reset_start_sample_and_bit_buffer(
     reset_start_sample_and_bit_buffer!(_copy_slot_vectors(satellites))
 end
 
-# Reseed `sat`'s per-sat doppler-estimator state via `init_estimator_state`
-# *iff* the sat's current state has a different concrete type than what
-# `estimator` would produce. Used by TrackState / merge_sats to align sats
-# built with the library default with the actual configured estimator,
-# while preserving sats that the caller has deliberately customized (e.g.
-# bumped bandwidths on a per-sat basis).
-@inline function _reseed_doppler_estimator_state(
-    sat::TrackedSat,
-    estimator::AbstractDopplerEstimator,
-)
-    new_state = init_estimator_state(estimator, sat)
-    typeof(new_state) === typeof(sat.doppler_estimator_state) && return sat
-    TrackedSat(
-        sat.prn,
-        sat.code_phase,
-        sat.code_doppler,
-        sat.carrier_phase,
-        sat.carrier_doppler,
-        sat.signal_start_sample,
-        sat.signals,
-        new_state,
-    )
-end
-
 function to_dictionary(tracked_sats::Dictionary{I,<:TrackedSat}) where {I}
     tracked_sats
 end

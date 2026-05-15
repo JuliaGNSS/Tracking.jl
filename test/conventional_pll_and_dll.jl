@@ -1,6 +1,6 @@
 module ConventionalPLLAndDLLTest
 
-using Test: @test, @testset, @inferred
+using Test: @test, @testset, @inferred, @test_throws
 using Unitful: Hz
 using GNSSSignals: GPSL1CA, get_code_center_frequency_ratio
 using TrackingLoopFilters: ThirdOrderBilinearLF, SecondOrderBilinearLF
@@ -94,9 +94,9 @@ end
     code_phase = 0.5
     preferred_num_code_blocks_to_integrate = 1
 
-    sat_state = TrackedSat(gpsl1, prn, code_phase, carrier_doppler)
-
     doppler_estimator = ConventionalPLLAndDLL()
+
+    sat_state = TrackedSat(gpsl1, prn, code_phase, carrier_doppler; doppler_estimator)
 
     # Number of samples too small to generate a new estimate for phases and dopplers
     num_samples = 2000
@@ -144,7 +144,7 @@ end
             ),
         ),
     )
-    track_state = TrackState(gpsl1, sat_state_after_full_integration)
+    track_state = TrackState(gpsl1, sat_state_after_full_integration; doppler_estimator)
 
     new_track_state_after_full_integration = @inferred estimate_dopplers_and_filter_prompt(
         track_state,
@@ -273,21 +273,38 @@ end
     @test preserved.code_loop_filter_bandwidth == 1.5Hz
 end
 
-@testset "merge_sats propagates bandwidths to new sats via init_estimator_state" begin
+@testset "merge_sats with matching estimator carries through bandwidths" begin
     gpsl1 = GPSL1CA()
-    sat1 = TrackedSat(gpsl1, 1, 0.5, 100.0Hz)
     estimator = ConventionalPLLAndDLL(;
         carrier_loop_filter_bandwidth = 22.0Hz,
         code_loop_filter_bandwidth = 1.5Hz,
     )
+    sat1 = TrackedSat(gpsl1, 1, 0.5, 100.0Hz; doppler_estimator = estimator)
     track_state = TrackState(gpsl1, sat1; doppler_estimator = estimator)
 
-    sat2 = TrackedSat(gpsl1, 2, 0.25, 200.0Hz)
+    # The incoming sat must be constructed with the same estimator
+    # (TrackState's slot type pins the doppler_estimator_state type).
+    sat2 = TrackedSat(gpsl1, 2, 0.25, 200.0Hz; doppler_estimator = estimator)
     merged = merge_sats(track_state, sat2)
 
     de_state = get_sat_states(merged)[2].doppler_estimator_state
     @test de_state.carrier_loop_filter_bandwidth == 22.0Hz
     @test de_state.code_loop_filter_bandwidth == 1.5Hz
+end
+
+@testset "merge_sats errors on mismatched doppler estimator type" begin
+    gpsl1 = GPSL1CA()
+    estimator = ConventionalPLLAndDLL(;
+        carrier_loop_filter_bandwidth = 22.0Hz,
+        code_loop_filter_bandwidth = 1.5Hz,
+    )
+    sat1 = TrackedSat(gpsl1, 1, 0.5, 100.0Hz; doppler_estimator = estimator)
+    track_state = TrackState(gpsl1, sat1; doppler_estimator = estimator)
+
+    # Default estimator is ConventionalAssistedPLLAndDLL — produces a
+    # different concrete state type than the TrackState's estimator.
+    bad_sat = TrackedSat(gpsl1, 2, 0.25, 200.0Hz)
+    @test_throws ArgumentError merge_sats(track_state, bad_sat)
 end
 
 end
