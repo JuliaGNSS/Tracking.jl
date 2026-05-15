@@ -266,15 +266,24 @@ None at design-time. Step 3's measurements confirmed that the original "shared-d
 
 A natural follow-up question: could a fully in-register multi-signal kernel (no tile materialization, downconverted samples never leave SIMD registers, accumulated into N×NC named-variable accumulators) beat option B's tile-share approach?
 
-A probe in `claude_scratch/option_c_inregister_probe.jl` measured the *lower bound* on option C — it cheats by skipping the tile-write pass entirely (correlating against a stale tile, so results are wrong, but the timing is real). Against option B (production):
+Two probes addressed this:
 
-| N | Option B | Option C lower-bound | Headroom |
-|---|---|---|---|
-| 1 | 3.88 µs | 3.70 µs | 4.6% |
-| 2 | 4.79 µs | 4.64 µs | 3.2% |
-| 3 | 5.65 µs | 5.45 µs | 3.5% |
-| 4 | 7.02 µs | 6.18 µs | 12.0% |
+1. **Lower-bound probe** (`claude_scratch/option_c_inregister_probe.jl`): a cheating measurement that reuses a stale tile and skips the tile-write pass. Showed ≤5% headroom at N=2-3.
 
-The available improvement at N=2-3 is ≤5% even in the best case — a real option C kernel would only get a fraction of that after paying the extra register-pressure cost of N×NC simultaneously-live accumulators. The tile in option B lives entirely in L1 cache (~40 KB for 5000 ComplexF32 samples), so its round-trip cost is small.
+2. **Hand-coded SIMD prototype** (`claude_scratch/option_c_real_kernel_probe.jl`): an actual fused in-register kernel for N=2 with the same SIMD-intrinsic style as the production static-shifts fused kernel (fast `_to_vec` Int16→Float32 convert, `vload` SIMD loads, all 12 SIMD accumulators in named locals).
 
-**Conclusion: option C is not worth implementing.** Option B is the right design.
+Against option B at N=2:
+
+| Variant | Time |
+|---|---|
+| Option B (production) | 5.32 µs |
+| Option C hand-coded SIMD prototype | 5.75 µs |
+| Δ | **−8%** (option C is slower) |
+
+**Option C is actually slower in practice.** The two-pass structure of option B has hidden advantages:
+
+1. **Better pipelining.** Each of option B's passes has a shorter dependency chain, letting the CPU's out-of-order execution overlap multiple sample iterations in flight. Option C's longer per-iteration body (sincos → downconvert → N×NC code loads → 2N×NC muladds) limits ILP.
+2. **Lower register pressure.** Option B's pass 1 only needs carrier-generation registers; pass 2 only needs the N×NC accumulators. Option C needs both live across the entire loop, pushing toward the AVX-2 16-register limit and risking spills.
+3. **Better cache prefetching.** Option B's pass-2 tile reads are pure linear streams that the hardware prefetcher loves. Option C's per-iteration scattered code-replica loads interleaved with carrier generation don't prefetch as cleanly.
+
+**Conclusion: option C is not worth implementing.** Option B is the right design — and not just by a small margin.
