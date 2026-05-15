@@ -80,6 +80,7 @@ get_system
 ```@docs
 add_satellite!
 add_satellite
+remove_satellite!
+remove_satellite
 merge_sats
-filter_out_sats
 ```

@@ -103,7 +103,9 @@ function TrackState(
     # construction but is otherwise unused.
     sats_dict = to_dictionary(tracked_sats)
     reseeded = map(sat -> _reseed_doppler_estimator_state(sat, doppler_estimator), sats_dict)
-    satellites = (reseeded,)
+    # Wrap in a `(default = …,)` NamedTuple so `add_satellite!` and
+    # `remove_satellite!` can address the sole capability by name.
+    satellites = (default = reseeded,)
     signal_groups = _signal_groups_from_satellites(satellites)
     TrackState(satellites, signal_groups, doppler_estimator)
 end
@@ -114,7 +116,7 @@ function TrackState(
 )
     reseeded =
         map(sat -> _reseed_doppler_estimator_state(sat, doppler_estimator), tracked_sats)
-    satellites = (reseeded,)
+    satellites = (default = reseeded,)
     signal_groups = _signal_groups_from_satellites(satellites)
     TrackState(satellites, signal_groups, doppler_estimator)
 end
@@ -449,6 +451,53 @@ function add_satellite(
     TrackState(new_satellites, track_state.signal_groups, new_estimator)
 end
 
+"""
+$(SIGNATURES)
+
+Remove a satellite from `track_state` in place. Errors if no satellite
+with the given `prn` exists in the named capability (matches
+Dictionaries.jl's `delete!` semantics).
+
+```julia
+remove_satellite!(track_state; prn = 11, capability = :modern_gps)
+```
+
+`capability` defaults to `:default` for single-capability TrackStates.
+Returns `track_state` unchanged (the dictionary is mutated in place).
+"""
+function remove_satellite!(
+    track_state::TrackState;
+    prn::Int,
+    capability::Symbol = :default,
+)
+    delete!(_dict_for_capability(track_state, capability), prn)
+    track_state
+end
+
+"""
+$(SIGNATURES)
+
+Immutable variant of [`remove_satellite!`](@ref). Returns a new
+[`TrackState`](@ref) with the satellite removed; the input is left
+unchanged. Errors if no satellite with the given `prn` exists.
+"""
+function remove_satellite(
+    track_state::TrackState{S,SG,DE};
+    prn::Int,
+    capability::Symbol = :default,
+) where {S<:SatelliteDicts,SG<:TupleLike,DE<:AbstractDopplerEstimator}
+    dict = _dict_for_capability(track_state, capability)
+    haskey(dict, prn) ||
+        throw(KeyError("Dictionary does not contain index: $prn"))
+    # Copy-then-delete preserves the dict's concrete value type, which the
+    # `map`/`filter` round-trip would otherwise leave under-specified to
+    # `Dictionary{<:Any,<:TrackedSat}` from the type system's perspective.
+    new_dict = copy(dict)
+    delete!(new_dict, prn)
+    new_satellites = Base.setindex(track_state.satellites, new_dict, capability)
+    TrackState{S,SG,DE}(new_satellites, track_state.signal_groups, track_state.doppler_estimator)
+end
+
 # Compile-time dispatch helper: hand back the dictionary slot for the
 # given capability key. Bounds and existence are checked at TrackState
 # construction time (the NamedTuple only contains declared keys), so an
@@ -513,22 +562,6 @@ function _make_default_tracked_sat_for_capability(
         bare.carrier_phase, bare.carrier_doppler,
         bare.signal_start_sample, bare.signals, de_state,
     )
-end
-
-function filter_out_sats(
-    track_state::TrackState{S,SG,DE},
-    system_idx::Union{Symbol,Integer},
-    identifiers,
-) where {S<:SatelliteDicts,SG<:TupleLike,DE<:AbstractDopplerEstimator}
-    TrackState{S,SG,DE}(
-        filter_out_sats(track_state.satellites, system_idx, identifiers),
-        track_state.signal_groups,
-        track_state.doppler_estimator,
-    )
-end
-
-function filter_out_sats(track_state::TrackState{<:SatelliteDicts{1}}, identifiers)
-    filter_out_sats(track_state, 1, identifiers)
 end
 
 # Convenient methods
