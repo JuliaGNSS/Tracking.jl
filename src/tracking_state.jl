@@ -121,10 +121,10 @@ function TrackState(
     # design; the positional argument is kept for backward-compatible
     # construction but is otherwise unused.
     sats_dict = to_dictionary(tracked_sats)
-    reseeded = map(sat -> _reseed_doppler_estimator_state(sat, doppler_estimator), sats_dict)
+    _assert_doppler_estimator_types_match(sats_dict, doppler_estimator)
     # Wrap in a `(default = …,)` NamedTuple so `add_satellite!` and
     # `remove_satellite!` can address the sole capability by name.
-    satellites = (default = reseeded,)
+    satellites = (default = sats_dict,)
     signal_groups = _signal_groups_from_satellites(satellites)
     TrackState(satellites, signal_groups, doppler_estimator)
 end
@@ -133,11 +133,36 @@ function TrackState(
     tracked_sats::Dictionary{<:Any,<:TrackedSat};
     doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
 )
-    reseeded =
-        map(sat -> _reseed_doppler_estimator_state(sat, doppler_estimator), tracked_sats)
-    satellites = (default = reseeded,)
+    _assert_doppler_estimator_types_match(tracked_sats, doppler_estimator)
+    satellites = (default = tracked_sats,)
     signal_groups = _signal_groups_from_satellites(satellites)
     TrackState(satellites, signal_groups, doppler_estimator)
+end
+
+# Verify every sat in `dict` has a `doppler_estimator_state` matching
+# what `estimator` would produce. The check is type-only so it has no
+# runtime cost in the typed-correct case. Throws an ArgumentError that
+# names the mismatched concrete types if the user built sats with a
+# different estimator than the one configured on the TrackState.
+@inline function _assert_doppler_estimator_types_match(
+    dict::Dictionary{<:Any,<:TrackedSat},
+    estimator::AbstractDopplerEstimator,
+)
+    isempty(dict) && return nothing
+    sat = first(dict.values)
+    expected_state_type = typeof(init_estimator_state(estimator, sat))
+    actual_state_type = typeof(sat.doppler_estimator_state)
+    expected_state_type === actual_state_type && return nothing
+    throw(ArgumentError(string(
+        "TrackedSat has doppler_estimator_state of type ",
+        actual_state_type,
+        ", but the configured doppler_estimator (",
+        typeof(estimator),
+        ") would produce ",
+        expected_state_type,
+        ". Construct each TrackedSat with `doppler_estimator = <same instance>` ",
+        "as the one passed here.",
+    )))
 end
 
 function TrackState(
@@ -322,17 +347,11 @@ function merge_sats(
     tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}},
 ) where {S<:SatelliteDicts,SG<:TupleLike,DE<:AbstractDopplerEstimator}
     new_sats_dict = to_dictionary(tracked_sats)
-    # Re-seed each incoming sat's per-sat estimator state with the
-    # track_state's estimator config — the sat may have been constructed
-    # with a different (often default) estimator, but its slot in the
-    # tracking dictionary must hold state of the right concrete type.
-    reseeded = map(new_sats_dict) do sat
-        _reseed_doppler_estimator_state(sat, track_state.doppler_estimator)
-    end
+    _assert_doppler_estimator_types_match(new_sats_dict, track_state.doppler_estimator)
     new_estimator =
-        update_estimator_on_handoff(track_state.doppler_estimator, reseeded)
+        update_estimator_on_handoff(track_state.doppler_estimator, new_sats_dict)
     TrackState{S,SG,DE}(
-        merge_sats(track_state.satellites, system_idx, reseeded),
+        merge_sats(track_state.satellites, system_idx, new_sats_dict),
         track_state.signal_groups,
         new_estimator,
     )
@@ -408,13 +427,8 @@ function add_satellite!(
     capability::Symbol,
     sat::TrackedSat,
 )
-    # `_reseed_doppler_estimator_state` upgrades sats built with the
-    # library-default estimator to whatever the TrackState was actually
-    # configured with, when the per-sat estimator-state type doesn't
-    # match what `init_estimator_state(track_state.doppler_estimator, sat)`
-    # would produce.
-    reseeded = _reseed_doppler_estimator_state(sat, track_state.doppler_estimator)
-    insert_or_set!(_dict_for_capability(track_state, capability), reseeded.prn, reseeded)
+    _assert_sat_matches_slot_type(track_state, capability, sat)
+    insert_or_set!(_dict_for_capability(track_state, capability), sat.prn, sat)
     # `update_estimator_on_handoff` is called for its side effect on
     # estimators with cross-sat shared state (the default returns the
     # estimator unchanged). The return value must have the same concrete
@@ -422,9 +436,29 @@ function add_satellite!(
     # estimator type and `track_state.doppler_estimator` is immutable.
     update_estimator_on_handoff(
         track_state.doppler_estimator,
-        dictionary((reseeded.prn => reseeded,)),
+        dictionary((sat.prn => sat,)),
     )
     track_state
+end
+
+# Verify that `sat` has exactly the concrete type the capability's
+# dictionary slot expects. Throws a clear ArgumentError that names the
+# mismatching types if not; called from the escape-hatch overloads so
+# the user gets a useful message before Dictionaries.jl's `set!` raises
+# a deep MethodError about `convert`.
+@inline function _assert_sat_matches_slot_type(
+    track_state::TrackState, capability::Symbol, sat::TrackedSat,
+)
+    SlotT = eltype(track_state.satellites[capability])
+    typeof(sat) === SlotT && return nothing
+    throw(ArgumentError(string(
+        "TrackedSat type does not match the `:", capability, "` capability's slot. ",
+        "Got: ", typeof(sat),
+        ". Expected: ", SlotT,
+        ". The slot type is fixed at TrackState construction; rebuild the ",
+        "sat with the matching correlator, post_corr_filter, and ",
+        "doppler_estimator types.",
+    )))
 end
 
 # Dictionaries.jl: `insert!` errors on existing key; `set!` overwrites.
@@ -459,13 +493,13 @@ function add_satellite(
     capability::Symbol,
     sat::TrackedSat,
 )
-    reseeded = _reseed_doppler_estimator_state(sat, track_state.doppler_estimator)
+    _assert_sat_matches_slot_type(track_state, capability, sat)
     new_estimator = update_estimator_on_handoff(
         track_state.doppler_estimator,
-        dictionary((reseeded.prn => reseeded,)),
+        dictionary((sat.prn => sat,)),
     )
     new_dict = _dict_for_capability(track_state, capability)
-    new_dict = merge(new_dict, dictionary((reseeded.prn => reseeded,)))
+    new_dict = merge(new_dict, dictionary((sat.prn => sat,)))
     new_satellites = Base.setindex(track_state.satellites, new_dict, capability)
     TrackState(new_satellites, track_state.signal_groups, new_estimator)
 end

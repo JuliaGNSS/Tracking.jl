@@ -144,9 +144,12 @@ end
     tolerance = 1.0  # Hz, tight tolerance since no noise
 
     function test_convergence(carrier_error, use_assisted)
-        sat_states = [TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler + carrier_error)]
         doppler_estimator = use_assisted ? ConventionalAssistedPLLAndDLL() :
                                            ConventionalPLLAndDLL()
+        sat_states = [TrackedSat(
+            gpsl1, 1, start_code_phase, carrier_doppler + carrier_error;
+            doppler_estimator,
+        )]
         track_state = TrackState(gpsl1, sat_states; doppler_estimator)
 
         # Initial tracking step
