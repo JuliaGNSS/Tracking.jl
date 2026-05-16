@@ -178,14 +178,27 @@ function bench_downconvert_and_correlate(;
         num_ants == 1 ? rand(Complex{signal_type}, num_samples) :
         rand(Complex{signal_type}, num_samples, num_ants)
 
-    @benchmarkable Tracking.downconvert_and_correlate(
-        $downconvert_and_correlator,
-        $signal,
-        $track_state,
-        1,
-        $sampling_frequency,
-        $(0.0Hz),
-    )
+    # Multi-band branch uses `Measurement(samples, fs, if)` + a 4-arg
+    # `downconvert_and_correlate(dc, measurements, ts, prefer)` call.
+    # Master / wrapper branches use the legacy 6-arg form.
+    @static if isdefined(Tracking, :Measurement)
+        measurements = (l1 = Tracking.Measurement(signal, sampling_frequency, 0.0Hz),)
+        @benchmarkable Tracking.downconvert_and_correlate(
+            $downconvert_and_correlator,
+            $measurements,
+            $track_state,
+            1,
+        )
+    else
+        @benchmarkable Tracking.downconvert_and_correlate(
+            $downconvert_and_correlator,
+            $signal,
+            $track_state,
+            1,
+            $sampling_frequency,
+            $(0.0Hz),
+        )
+    end
 end
 
 # ── Fused kernel microbenchmarks ───────────────────────────────────────────
