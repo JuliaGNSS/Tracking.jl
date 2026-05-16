@@ -344,7 +344,7 @@ the incoming signal did not provide enough samples, it will return struct with
 zeroed values.
 """
 function estimate_dopplers_and_filter_prompt(
-    track_state::TrackState{<:SatelliteDicts,<:TupleLike,<:ConventionalPLLAndDLL},
+    track_state::TrackState{<:SignalGroups,<:ConventionalPLLAndDLL},
     preferred_num_code_blocks_to_integrate,
     sampling_frequency,
 )
@@ -391,7 +391,7 @@ allocation-free in steady state when [`track!`](@ref)'s preconditions are met.
 end
 
 function estimate_dopplers_and_filter_prompt!(
-    track_state::TrackState{<:SatelliteDicts,<:TupleLike,<:ConventionalPLLAndDLL},
+    track_state::TrackState{<:SignalGroups,<:ConventionalPLLAndDLL},
     preferred_num_code_blocks_to_integrate,
     sampling_frequency,
 )

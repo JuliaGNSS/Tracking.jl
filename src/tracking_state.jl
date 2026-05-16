@@ -54,16 +54,19 @@ function TrackState(;
             "`signals` (plural, a NamedTuple of signal tuples) — not both.",
         ))
     end
-    signal_groups = isnothing(signal) ?
+    sig_groups_nt = isnothing(signal) ?
         _normalize_signal_groups(signals) :
         (default = (signal,),)
-    # For each capability, build a template TrackedSat to capture the
-    # concrete dict value type, then create an empty dict of that type.
-    sat_dicts = map(signal_groups) do sig_tuple
+    # For each capability, build a template TrackedSat to capture the concrete
+    # dict value type, build an empty dict of that type, then wrap with the
+    # signal-tuple, band, and antenna count into a SignalGroup.
+    groups = map(sig_groups_nt) do sig_tuple
         template = _make_template_tracked_sat(sig_tuple, doppler_estimator, num_ants)
-        Dictionary{Int, typeof(template)}(Int[], typeof(template)[])
+        sats = Dictionary{Int, typeof(template)}(Int[], typeof(template)[])
+        band = get_band(first(sig_tuple))
+        SignalGroup(band, sats, sig_tuple, num_ants)
     end
-    TrackState(sat_dicts, signal_groups, doppler_estimator)
+    TrackState(groups, doppler_estimator)
 end
 
 # Bare tuple of AbstractGNSSSignal → single :default capability NamedTuple.
@@ -122,11 +125,8 @@ function TrackState(
     # construction but is otherwise unused.
     sats_dict = to_dictionary(tracked_sats)
     _assert_doppler_estimator_types_match(sats_dict, doppler_estimator)
-    # Wrap in a `(default = …,)` NamedTuple so `add_satellite!` and
-    # `remove_satellite!` can address the sole capability by name.
-    satellites = (default = sats_dict,)
-    signal_groups = _signal_groups_from_satellites(satellites)
-    TrackState(satellites, signal_groups, doppler_estimator)
+    groups = (default = _signal_group_from_dict(sats_dict),)
+    TrackState(groups, doppler_estimator)
 end
 
 function TrackState(
@@ -134,9 +134,8 @@ function TrackState(
     doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
 )
     _assert_doppler_estimator_types_match(tracked_sats, doppler_estimator)
-    satellites = (default = tracked_sats,)
-    signal_groups = _signal_groups_from_satellites(satellites)
-    TrackState(satellites, signal_groups, doppler_estimator)
+    groups = (default = _signal_group_from_dict(tracked_sats),)
+    TrackState(groups, doppler_estimator)
 end
 
 # Verify every sat in `dict` has a `doppler_estimator_state` matching
@@ -169,53 +168,59 @@ function TrackState(
     satellites::SatelliteDicts;
     doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
 )
-    signal_groups = _signal_groups_from_satellites(satellites)
-    TrackState(satellites, signal_groups, doppler_estimator)
+    groups = map(_signal_group_from_dict, satellites)
+    TrackState(groups, doppler_estimator)
 end
 
+# Internal copy-constructor used by the immutable downconvert/estimator path
+# to swap in a fresh `satellites` NamedTuple (slot-vector-detached). Rebuilds
+# each group around the new per-group dictionary while preserving band,
+# signals, and num_ants.
 function TrackState(
-    track_state::TrackState{S,SG,DE},
-    satellites::S,
+    track_state::TrackState{G,DE},
+    satellites::NamedTuple,
     doppler_estimator::DE,
-) where {S<:SatelliteDicts,SG<:TupleLike,DE<:AbstractDopplerEstimator}
-    TrackState{S,SG,DE}(satellites, track_state.signal_groups, doppler_estimator)
+) where {G<:SignalGroups,DE<:AbstractDopplerEstimator}
+    new_groups = map(track_state.groups, satellites) do g, sats
+        SignalGroup(g; satellites = sats)
+    end
+    TrackState{G,DE}(new_groups, doppler_estimator)
 end
 
 # Be careful when calling this.
 # It might lead to types that are inferred at runtime?!
 # Tested with 1.11.6
 function TrackState(
-    track_state::TrackState{S,SG,DE};
-    satellites::Maybe{S} = nothing,
+    track_state::TrackState{G,DE};
+    satellites::Maybe{NamedTuple} = nothing,
     doppler_estimator::Maybe{DE} = nothing,
-) where {S<:SatelliteDicts,SG<:TupleLike,DE<:AbstractDopplerEstimator}
-    TrackState{S,SG,DE}(
-        isnothing(satellites) ? track_state.satellites :
-        satellites,
-        track_state.signal_groups,
+) where {G<:SignalGroups,DE<:AbstractDopplerEstimator}
+    new_groups = isnothing(satellites) ? track_state.groups :
+        map(track_state.groups, satellites) do g, sats
+            SignalGroup(g; satellites = sats)
+        end
+    TrackState{G,DE}(
+        new_groups,
         isnothing(doppler_estimator) ? track_state.doppler_estimator : doppler_estimator,
     )
 end
 
-# Recover the per-capability signal-instance tuple from a non-empty
-# satellites NamedTuple by pulling `signals[1].signal` (and friends) out
-# of any sat in each dictionary. Used by the legacy
-# `TrackState(system, sats)` constructor — empty-dict capabilities can't
-# be recovered this way (no sats to inspect), so this path requires at
-# least one sat per capability.
-@inline _signal_groups_from_satellites(satellites::Tuple) =
-    map(_signals_in_dict, satellites)
-@inline _signal_groups_from_satellites(satellites::NamedTuple) =
-    map(_signals_in_dict, satellites)
-
-@inline function _signals_in_dict(dict::Dictionary{<:Any,<:TrackedSat})
+# Build a SignalGroup from a non-empty satellites dictionary by recovering
+# the signal-instance tuple, band, and antenna count from any sat. Used by
+# the legacy `TrackState(system, sats)` / `TrackState(satellites)`
+# constructors. Empty dicts can't be recovered this way (no sats to inspect)
+# — requires at least one sat in the dict.
+@inline function _signal_group_from_dict(dict::Dictionary{<:Any,<:TrackedSat})
     isempty(dict) && throw(ArgumentError(
         "Cannot recover the signal-instance tuple from an empty " *
         "satellites dictionary. Use the `TrackState(; signals = ...)` " *
         "constructor to declare signal groups before populating sats.",
     ))
     sat = first(dict.values)
-    map(s -> s.signal, sat.signals)
+    sig_tuple = map(s -> s.signal, sat.signals)
+    band = get_band(first(sig_tuple))
+    num_ants = NumAnts(get_num_ants(sat))
+    SignalGroup(band, dict, sig_tuple, num_ants)
 end
 
 function reset_start_sample_and_bit_buffer(track_state::TrackState)
@@ -273,13 +278,13 @@ function get_sat_states(satellites::SatelliteDicts{1})
 end
 
 function get_sat_states(
-    track_state::TrackState{<:SatelliteDicts{N}},
+    track_state::TrackState{<:SignalGroups{N}},
     system_idx::Union{Symbol,Integer,Val},
 ) where {N}
     get_sat_states(track_state.satellites, system_idx)
 end
 
-function get_sat_states(track_state::TrackState{<:SatelliteDicts{1}})
+function get_sat_states(track_state::TrackState{<:SignalGroups{1}})
     get_sat_states(track_state.satellites)
 end
 
@@ -295,19 +300,19 @@ literal `Symbol` / `Integer`.
 For a single-capability `TrackState` the index can be omitted.
 """
 function get_system(
-    track_state::TrackState{<:SatelliteDicts{N}},
+    track_state::TrackState{<:SignalGroups{N}},
     system_idx::Union{Symbol,Integer,Val},
 ) where {N}
     sats = get_sat_states(track_state, system_idx)
     get_signal(first(sats.values))
 end
 
-function get_system(track_state::TrackState{<:SatelliteDicts{1}})
+function get_system(track_state::TrackState{<:SignalGroups{1}})
     get_system(track_state, 1)
 end
 
 function get_sat_state(
-    track_state::TrackState{<:SatelliteDicts{N}},
+    track_state::TrackState{<:SignalGroups{N}},
     system_idx::Union{Symbol,Integer,Val},
     sat_identifier,
 ) where {N}
@@ -315,50 +320,50 @@ function get_sat_state(
 end
 
 function get_sat_state(
-    track_state::TrackState{<:SatelliteDicts{1}},
+    track_state::TrackState{<:SignalGroups{1}},
     sat_identifier,
 )
     get_sat_state(track_state, 1, sat_identifier)
 end
 
-function get_sat_state(track_state::TrackState{<:SatelliteDicts{1}})
+function get_sat_state(track_state::TrackState{<:SignalGroups{1}})
     only(get_sat_states(track_state, 1))
 end
 
 function estimate_cn0(
-    track_state::TrackState{<:SatelliteDicts},
+    track_state::TrackState{<:SignalGroups},
     system_idx::Union{Symbol,Integer,Val},
     sat_identifier,
 )
     estimate_cn0(get_sat_state(track_state, system_idx, sat_identifier))
 end
 
-function estimate_cn0(track_state::TrackState{<:SatelliteDicts{1}}, sat_identifier)
+function estimate_cn0(track_state::TrackState{<:SignalGroups{1}}, sat_identifier)
     estimate_cn0(track_state, 1, sat_identifier)
 end
 
-function estimate_cn0(track_state::TrackState{<:SatelliteDicts{1}})
+function estimate_cn0(track_state::TrackState{<:SignalGroups{1}})
     estimate_cn0(get_sat_state(track_state))
 end
 
 function merge_sats(
-    track_state::TrackState{S,SG,DE},
+    track_state::TrackState{G,DE},
     system_idx::Union{Symbol,Integer},
     tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}},
-) where {S<:SatelliteDicts,SG<:TupleLike,DE<:AbstractDopplerEstimator}
+) where {G<:SignalGroups,DE<:AbstractDopplerEstimator}
     new_sats_dict = to_dictionary(tracked_sats)
     _assert_doppler_estimator_types_match(new_sats_dict, track_state.doppler_estimator)
     new_estimator =
         update_estimator_on_handoff(track_state.doppler_estimator, new_sats_dict)
-    TrackState{S,SG,DE}(
-        merge_sats(track_state.satellites, system_idx, new_sats_dict),
-        track_state.signal_groups,
-        new_estimator,
-    )
+    groups = track_state.groups
+    g = groups[system_idx]
+    new_group = SignalGroup(g; satellites = merge(g.satellites, new_sats_dict))
+    new_groups = @set groups[system_idx] = new_group
+    TrackState{G,DE}(new_groups, new_estimator)
 end
 
 function merge_sats(
-    track_state::TrackState{<:SatelliteDicts{1}},
+    track_state::TrackState{<:SignalGroups{1}},
     tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}},
 )
     merge_sats(track_state, 1, tracked_sats)
@@ -489,19 +494,21 @@ function add_satellite(
 end
 
 function add_satellite(
-    track_state::TrackState,
+    track_state::TrackState{G,DE},
     capability::Symbol,
     sat::TrackedSat,
-)
+) where {G<:SignalGroups,DE<:AbstractDopplerEstimator}
     _assert_sat_matches_slot_type(track_state, capability, sat)
     new_estimator = update_estimator_on_handoff(
         track_state.doppler_estimator,
         dictionary((sat.prn => sat,)),
     )
-    new_dict = _dict_for_capability(track_state, capability)
-    new_dict = merge(new_dict, dictionary((sat.prn => sat,)))
-    new_satellites = Base.setindex(track_state.satellites, new_dict, capability)
-    TrackState(new_satellites, track_state.signal_groups, new_estimator)
+    groups = track_state.groups
+    g = groups[capability]
+    new_dict = merge(g.satellites, dictionary((sat.prn => sat,)))
+    new_group = SignalGroup(g; satellites = new_dict)
+    new_groups = @set groups[capability] = new_group
+    TrackState{G,DE}(new_groups, new_estimator)
 end
 
 """
@@ -535,10 +542,10 @@ Immutable variant of [`remove_satellite!`](@ref). Returns a new
 unchanged. Errors if no satellite with the given `prn` exists.
 """
 function remove_satellite(
-    track_state::TrackState{S,SG,DE};
+    track_state::TrackState{G,DE};
     prn::Int,
     capability::Symbol = :default,
-) where {S<:SatelliteDicts,SG<:TupleLike,DE<:AbstractDopplerEstimator}
+) where {G<:SignalGroups,DE<:AbstractDopplerEstimator}
     dict = _dict_for_capability(track_state, capability)
     haskey(dict, prn) ||
         throw(KeyError("Dictionary does not contain index: $prn"))
@@ -547,8 +554,11 @@ function remove_satellite(
     # `Dictionary{<:Any,<:TrackedSat}` from the type system's perspective.
     new_dict = copy(dict)
     delete!(new_dict, prn)
-    new_satellites = Base.setindex(track_state.satellites, new_dict, capability)
-    TrackState{S,SG,DE}(new_satellites, track_state.signal_groups, track_state.doppler_estimator)
+    groups = track_state.groups
+    g = groups[capability]
+    new_group = SignalGroup(g; satellites = new_dict)
+    new_groups = @set groups[capability] = new_group
+    TrackState{G,DE}(new_groups, track_state.doppler_estimator)
 end
 
 # Compile-time dispatch helper: hand back the dictionary slot for the
