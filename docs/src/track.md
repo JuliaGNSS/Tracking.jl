@@ -37,7 +37,7 @@ track!
 ## Real-time use
 
 `track!` writes back into the existing `Vector{TrackedSat}` slots of each
-per-capability dictionary, so the tracking loop can run without producing
+per-group dictionary, so the tracking loop can run without producing
 GC pressure once the sat set is steady. A typical setup looks like:
 
 ```julia
