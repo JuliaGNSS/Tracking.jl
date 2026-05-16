@@ -612,16 +612,16 @@ In-place version: walks each system's `Vector{TrackedSat}` and overwrites
 slots in place. Returns the same `track_state`. Allocation-free in steady
 state — see [`track!`](@ref).
 """
-# Per-system body for the single-threaded backend. Pulled out so
-# `_foreach_system!` can call it on each per-system satellite dictionary in
-# the (possibly heterogeneous) `satellites` tuple without dynamic
-# dispatch / boxing.
+# Per-group body for the single-threaded backend. Pulled out so
+# `_foreach_system!` can call it on each `SignalGroup` in the
+# (possibly heterogeneous) `groups` tuple without dynamic dispatch /
+# boxing.
 @inline function _dc_one_system!(
-    sats::Dictionary{<:Any,<:TrackedSat}, dc::CPUDownconvertAndCorrelator,
+    g::SignalGroup, dc::CPUDownconvertAndCorrelator,
     signal, num_samples_signal, preferred_num_code_blocks_to_integrate,
     sampling_frequency, intermediate_frequency,
 )
-    vals = sats.values
+    vals = g.satellites.values
     isempty(vals) && return nothing
     @inbounds for i in eachindex(vals)
         vals[i] = _update_tracked_sat_correlator(
@@ -647,7 +647,7 @@ function downconvert_and_correlate!(
 )
     num_samples_signal = get_num_samples(signal)
     _foreach_system!(
-        _dc_one_system!, track_state.satellites,
+        _dc_one_system!, track_state.groups,
         dc, signal, num_samples_signal, preferred_num_code_blocks_to_integrate,
         sampling_frequency, intermediate_frequency,
     )
@@ -691,16 +691,16 @@ existing `Vector{TrackedSat}` backing storage. Different `@batch` iterations
 write to disjoint slots, so no synchronization is needed. Returns the same
 `track_state`. Allocation-free in steady state — see [`track!`](@ref).
 """
-# Per-system body for the threaded backend. Each `@batch` writes to
-# disjoint slots in this system's `Vector{TrackedSat}`. Pulled out so
+# Per-group body for the threaded backend. Each `@batch` writes to
+# disjoint slots in this group's `Vector{TrackedSat}`. Pulled out so
 # `_foreach_system!` can call it without boxing on heterogeneous
-# system tuples.
+# group tuples.
 @inline function _dc_one_system_threaded!(
-    sats::Dictionary{<:Any,<:TrackedSat}, dc::CPUThreadedDownconvertAndCorrelator,
+    g::SignalGroup, dc::CPUThreadedDownconvertAndCorrelator,
     signal, num_samples_signal, preferred_num_code_blocks_to_integrate,
     sampling_frequency, intermediate_frequency,
 )
-    vals = sats.values
+    vals = g.satellites.values
     n = length(vals)
     n == 0 && return nothing
     @batch for i = 1:n
@@ -727,7 +727,7 @@ function downconvert_and_correlate!(
 )
     num_samples_signal = get_num_samples(signal)
     _foreach_system!(
-        _dc_one_system_threaded!, track_state.satellites,
+        _dc_one_system_threaded!, track_state.groups,
         dc, signal, num_samples_signal, preferred_num_code_blocks_to_integrate,
         sampling_frequency, intermediate_frequency,
     )

@@ -235,7 +235,7 @@ function reset_start_sample_and_bit_buffer(track_state::TrackState)
 end
 
 function reset_start_sample_and_bit_buffer!(track_state::TrackState)
-    reset_start_sample_and_bit_buffer!(track_state.satellites)
+    reset_start_sample_and_bit_buffer!(track_state.groups)
     return track_state
 end
 
@@ -246,15 +246,15 @@ function has_integration_reached_signal_end_for_all_satellites(
     target = num_samples + 1
     # NamedTuple unwraps to its underlying Tuple via Tuple(...) — concrete and
     # cheap.
-    _all_sats_at(Tuple(track_state.satellites), target)
+    _all_sats_at(Tuple(track_state.groups), target)
 end
 
-# Recursive tuple-walk: each step has fully concrete types, no closure boxes,
-# no allocation. Base case is an empty tuple.
+# Recursive tuple-walk over `SignalGroup`s: each step has fully concrete
+# types, no closure boxes, no allocation. Base case is an empty tuple.
 @inline _all_sats_at(::Tuple{}, target::Int) = true
 @inline function _all_sats_at(t::Tuple, target::Int)
-    sats = first(t)
-    @inbounds for sat in sats.values
+    g = first(t)
+    @inbounds for sat in g.satellites.values
         sat.signal_start_sample == target || return false
     end
     _all_sats_at(Base.tail(t), target)

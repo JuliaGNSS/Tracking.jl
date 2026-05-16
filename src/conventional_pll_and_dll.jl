@@ -369,16 +369,16 @@ system's `Vector{TrackedSat}` backing storage and overwrites slots with the
 new immutable `TrackedSat` value. Returns the same `track_state` object —
 allocation-free in steady state when [`track!`](@ref)'s preconditions are met.
 """
-# Per-system body for the doppler estimator. Pulled out so
-# `_foreach_system!` can call it without boxing when the system tuple
+# Per-group body for the doppler estimator. Pulled out so
+# `_foreach_system!` can call it without boxing when the groups tuple
 # is heterogeneous (e.g. GPS L1 + Galileo E1B). The per-signal system
 # type is recovered from each signal inside `_update_tracked_sat_doppler`.
 @inline function _est_one_system!(
-    sats::Dictionary{<:Any,<:TrackedSat},
+    g::SignalGroup,
     preferred_num_code_blocks_to_integrate,
     sampling_frequency,
 )
-    vals = sats.values
+    vals = g.satellites.values
     isempty(vals) && return nothing
     @inbounds for i in eachindex(vals)
         vals[i] = _update_tracked_sat_doppler(
@@ -396,7 +396,7 @@ function estimate_dopplers_and_filter_prompt!(
     sampling_frequency,
 )
     _foreach_system!(
-        _est_one_system!, track_state.satellites,
+        _est_one_system!, track_state.groups,
         preferred_num_code_blocks_to_integrate, sampling_frequency,
     )
     return track_state
