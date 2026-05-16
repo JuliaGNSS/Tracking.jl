@@ -64,7 +64,7 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
 5. **An `estimate_dopplers_and_filter_prompt` method** dispatched on
    `TrackState{<:..., <:..., <:MyEstimator}`. This is where the actual
    update logic runs, once per integration completion. It walks each
-   capability's `Dictionary{Int, TrackedSat}` and produces new
+   group's `Dictionary{Int, TrackedSat}` and produces new
    `TrackedSat`s with updated `carrier_doppler`/`code_doppler` and
    updated per-sat estimator state.
 
@@ -111,7 +111,7 @@ function Tracking.update_estimator_on_handoff(est::MyEstimator, new_sats)
     return est
 end
 
-# 5. The update step (immutable form). Walks each capability's dict and
+# 5. The update step (immutable form). Walks each group's dict and
 # produces new TrackedSats. The signals tuple is rebuilt per sat with
 # updated per-signal state (cleared correlator, advanced bit buffer, etc.).
 function Tracking.estimate_dopplers_and_filter_prompt(

@@ -2,10 +2,13 @@
 $(SIGNATURES)
 
 Construct a fresh `TrackState` from a declaration of which signals each
-capability (signal-set) tracks. Each entry in `signals` is a tuple of
-`AbstractGNSSSignal` instances; the first signal is the Doppler source
-(its correlator drives the PLL/DLL). The capability key (`:modern_gps`,
-`:legacy_gps`, …) is what `add_satellite!` later refers to.
+group tracks. A *group* is a set of satellites that share the same
+signal-tuple shape (and therefore the same concrete `TrackedSat` type,
+which is what gives the hot loop type stability). Each entry in `signals`
+is a tuple of `AbstractGNSSSignal` instances; the first signal is the
+Doppler source (its correlator drives the PLL/DLL). The group key
+(`:modern_gps`, `:legacy_gps`, …) is what `add_satellite!` later refers
+to.
 
 ```julia
 track_state = TrackState(;
@@ -17,24 +20,23 @@ track_state = TrackState(;
 )
 ```
 
-For the common case of one capability tracking one signal, use the
-singular `signal` keyword instead:
+For the common case of one group tracking one signal, use the singular
+`signal` keyword instead:
 
 ```julia
 track_state = TrackState(; signal = GPSL1CA())
 ```
 
 This is equivalent to `TrackState(; signals = (default = (GPSL1CA(),),))`.
-`add_satellite!` may then omit the `capability=` keyword.
+`add_satellite!` may then omit the `group=` keyword.
 
-`TrackState` is parameterized on the per-capability `TrackedSat` value
-type, which captures the correlator type, post-corr-filter type, and
+`TrackState` is parameterized on the per-group `TrackedSat` value type,
+which captures the correlator type, post-corr-filter type, and
 doppler-estimator-state type — these are frozen at construction.
 `add_satellite!` cannot change these types; it can only fill in
 satellites of the already-fixed shape. Power users who need non-default
 correlator or PCF *types* should construct `TrackedSat`s themselves and
-hand them to the `add_satellite!(track_state, capability, sat)`
-overload.
+hand them to the `add_satellite!(track_state, group, sat)` overload.
 """
 function TrackState(;
     signal::Maybe{AbstractGNSSSignal} = nothing,
@@ -373,18 +375,18 @@ end
 $(SIGNATURES)
 
 Add (or replace) a satellite in `track_state` in place. Builds a
-multi-signal [`TrackedSat`](@ref) for the requested capability using
-the library default correlator and post-corr filter, with the supplied
+multi-signal [`TrackedSat`](@ref) for the requested group using the
+library default correlator and post-corr filter, with the supplied
 acquisition-handoff values (`prn`, `code_phase`, `code_doppler`,
 `carrier_phase`, `carrier_doppler`) wired into each `TrackedSignal`.
 The per-satellite doppler-estimator state is initialized via
 [`init_estimator_state`](@ref) against the `TrackState`'s configured
 estimator.
 
-`capability` defaults to `:default` (matching the single-capability
-construction shortcut). For multi-capability `TrackState`s, pass the
-capability key explicitly. If a satellite with the same `prn` already
-exists in that capability's dictionary, it is overwritten.
+`group` defaults to `:default` (matching the single-group construction
+shortcut). For multi-group `TrackState`s, pass the group key explicitly.
+If a satellite with the same `prn` already exists in that group's
+dictionary, it is overwritten.
 
 Returns `track_state` unchanged (the dictionary is mutated in place).
 
@@ -392,7 +394,7 @@ Returns `track_state` unchanged (the dictionary is mutated in place).
 track_state = TrackState(; signals = (modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),))
 add_satellite!(track_state;
     prn = 11,
-    capability = :modern_gps,
+    group = :modern_gps,
     code_phase = 0.0,
     carrier_doppler = 1234.0Hz,
 )
@@ -400,22 +402,22 @@ add_satellite!(track_state;
 
 To use a non-default correlator or post-corr-filter *type*, construct
 the [`TrackedSat`](@ref) yourself and call the
-`add_satellite!(track_state, capability, sat)` overload — see below.
+`add_satellite!(track_state, group, sat)` overload — see below.
 """
 function add_satellite!(
     track_state::TrackState;
     prn::Int,
-    capability::Symbol = :default,
+    group::Symbol = :default,
     code_phase = 0.0,
     code_doppler::Maybe{typeof(1.0Hz)} = nothing,
     carrier_phase = 0.0,
     carrier_doppler = 0.0Hz,
 )
-    sat = _make_default_tracked_sat_for_capability(
-        track_state, capability;
+    sat = _make_default_tracked_sat_for_group(
+        track_state, group;
         prn, code_phase, code_doppler, carrier_phase, carrier_doppler,
     )
-    add_satellite!(track_state, capability, sat)
+    add_satellite!(track_state, group, sat)
 end
 
 """
@@ -423,17 +425,17 @@ $(SIGNATURES)
 
 In-place add (or replace) with a pre-built [`TrackedSat`](@ref) — the
 escape hatch for power users who need non-default correlator or
-post-corr-filter types. The sat's type must match the capability's
-slot type already fixed at [`TrackState`](@ref) construction; passing a
-sat of the wrong type errors at dispatch time.
+post-corr-filter types. The sat's type must match the group's slot type
+already fixed at [`TrackState`](@ref) construction; passing a sat of the
+wrong type errors at dispatch time.
 """
 function add_satellite!(
     track_state::TrackState,
-    capability::Symbol,
+    group::Symbol,
     sat::TrackedSat,
 )
-    _assert_sat_matches_slot_type(track_state, capability, sat)
-    insert_or_set!(_dict_for_capability(track_state, capability), sat.prn, sat)
+    _assert_sat_matches_slot_type(track_state, group, sat)
+    insert_or_set!(_dict_for_group(track_state, group), sat.prn, sat)
     # `update_estimator_on_handoff` is called for its side effect on
     # estimators with cross-sat shared state (the default returns the
     # estimator unchanged). The return value must have the same concrete
@@ -452,12 +454,12 @@ end
 # the user gets a useful message before Dictionaries.jl's `set!` raises
 # a deep MethodError about `convert`.
 @inline function _assert_sat_matches_slot_type(
-    track_state::TrackState, capability::Symbol, sat::TrackedSat,
+    track_state::TrackState, group::Symbol, sat::TrackedSat,
 )
-    SlotT = eltype(track_state.satellites[capability])
+    SlotT = eltype(track_state.groups[group].satellites)
     typeof(sat) === SlotT && return nothing
     throw(ArgumentError(string(
-        "TrackedSat type does not match the `:", capability, "` capability's slot. ",
+        "TrackedSat type does not match the `:", group, "` group's slot. ",
         "Got: ", typeof(sat),
         ". Expected: ", SlotT,
         ". The slot type is fixed at TrackState construction; rebuild the ",
@@ -480,34 +482,34 @@ unchanged.
 function add_satellite(
     track_state::TrackState;
     prn::Int,
-    capability::Symbol = :default,
+    group::Symbol = :default,
     code_phase = 0.0,
     code_doppler::Maybe{typeof(1.0Hz)} = nothing,
     carrier_phase = 0.0,
     carrier_doppler = 0.0Hz,
 )
-    sat = _make_default_tracked_sat_for_capability(
-        track_state, capability;
+    sat = _make_default_tracked_sat_for_group(
+        track_state, group;
         prn, code_phase, code_doppler, carrier_phase, carrier_doppler,
     )
-    add_satellite(track_state, capability, sat)
+    add_satellite(track_state, group, sat)
 end
 
 function add_satellite(
     track_state::TrackState{G,DE},
-    capability::Symbol,
+    group::Symbol,
     sat::TrackedSat,
 ) where {G<:SignalGroups,DE<:AbstractDopplerEstimator}
-    _assert_sat_matches_slot_type(track_state, capability, sat)
+    _assert_sat_matches_slot_type(track_state, group, sat)
     new_estimator = update_estimator_on_handoff(
         track_state.doppler_estimator,
         dictionary((sat.prn => sat,)),
     )
     groups = track_state.groups
-    g = groups[capability]
+    g = groups[group]
     new_dict = merge(g.satellites, dictionary((sat.prn => sat,)))
     new_group = SignalGroup(g; satellites = new_dict)
-    new_groups = @set groups[capability] = new_group
+    new_groups = @set groups[group] = new_group
     TrackState{G,DE}(new_groups, new_estimator)
 end
 
@@ -515,22 +517,22 @@ end
 $(SIGNATURES)
 
 Remove a satellite from `track_state` in place. Errors if no satellite
-with the given `prn` exists in the named capability (matches
-Dictionaries.jl's `delete!` semantics).
+with the given `prn` exists in the named group (matches Dictionaries.jl's
+`delete!` semantics).
 
 ```julia
-remove_satellite!(track_state; prn = 11, capability = :modern_gps)
+remove_satellite!(track_state; prn = 11, group = :modern_gps)
 ```
 
-`capability` defaults to `:default` for single-capability TrackStates.
+`group` defaults to `:default` for single-group TrackStates.
 Returns `track_state` unchanged (the dictionary is mutated in place).
 """
 function remove_satellite!(
     track_state::TrackState;
     prn::Int,
-    capability::Symbol = :default,
+    group::Symbol = :default,
 )
-    delete!(_dict_for_capability(track_state, capability), prn)
+    delete!(_dict_for_group(track_state, group), prn)
     track_state
 end
 
@@ -544,9 +546,9 @@ unchanged. Errors if no satellite with the given `prn` exists.
 function remove_satellite(
     track_state::TrackState{G,DE};
     prn::Int,
-    capability::Symbol = :default,
+    group::Symbol = :default,
 ) where {G<:SignalGroups,DE<:AbstractDopplerEstimator}
-    dict = _dict_for_capability(track_state, capability)
+    dict = _dict_for_group(track_state, group)
     haskey(dict, prn) ||
         throw(KeyError("Dictionary does not contain index: $prn"))
     # Copy-then-delete preserves the dict's concrete value type, which the
@@ -555,53 +557,38 @@ function remove_satellite(
     new_dict = copy(dict)
     delete!(new_dict, prn)
     groups = track_state.groups
-    g = groups[capability]
+    g = groups[group]
     new_group = SignalGroup(g; satellites = new_dict)
-    new_groups = @set groups[capability] = new_group
+    new_groups = @set groups[group] = new_group
     TrackState{G,DE}(new_groups, track_state.doppler_estimator)
 end
 
 # Compile-time dispatch helper: hand back the dictionary slot for the
-# given capability key. Bounds and existence are checked at TrackState
+# given group key. Bounds and existence are checked at TrackState
 # construction time (the NamedTuple only contains declared keys), so an
-# unknown `capability` here triggers the standard NamedTuple
-# KeyErrors.
-@inline _dict_for_capability(track_state::TrackState, capability::Symbol) =
-    track_state.satellites[capability]
-
-# Recover the number of antennas (`M` in `AbstractCorrelator{M}`) from
-# the capability's slot type. Inspects the first TrackedSignal's
-# correlator type. Resolves at compile time.
-@inline function _num_ants_for_capability(track_state::TrackState, capability::Symbol)
-    dict = track_state.satellites[capability]
-    SatT = eltype(dict)                       # TrackedSat{Tuple{TrackedSignal{...}, ...}, D}
-    SignalsT = SatT.parameters[1]             # Tuple{TrackedSignal{...}, ...}
-    FirstSignalT = SignalsT.parameters[1]     # TrackedSignal{Sig, C, PCF}
-    CorrelatorT = FirstSignalT.parameters[2]  # AbstractCorrelator{M}
-    M = CorrelatorT.parameters[1]
-    NumAnts{M}()
-end
+# unknown `group` here triggers the standard NamedTuple KeyErrors.
+@inline _dict_for_group(track_state::TrackState, group::Symbol) =
+    track_state.groups[group].satellites
 
 # Build a default-correlator, default-PCF TrackedSat whose
-# signal-tuple shape matches the capability's slot in `track_state`.
-# Reads the signal-instance tuple from `track_state.signal_groups`.
-function _make_default_tracked_sat_for_capability(
+# signal-tuple shape matches the group's slot in `track_state`. Reads the
+# signal-instance tuple and antenna count straight off the SignalGroup.
+function _make_default_tracked_sat_for_group(
     track_state::TrackState,
-    capability::Symbol;
+    group::Symbol;
     prn::Int,
     code_phase,
     code_doppler,
     carrier_phase,
     carrier_doppler,
 )
-    sig_tuple = track_state.signal_groups[capability]
+    g = track_state.groups[group]
+    sig_tuple = g.signals
     first_signal = first(sig_tuple)
     cd = isnothing(code_doppler) ?
         carrier_doppler * get_code_center_frequency_ratio(first_signal) :
         code_doppler
-    # Recover num_ants from the dictionary's value type so the new sat's
-    # correlator matches the slot it'll be inserted into.
-    num_ants = _num_ants_for_capability(track_state, capability)
+    num_ants = g.num_ants
     tracked_signals = map(sig_tuple) do sig
         TrackedSignal(
             sig;

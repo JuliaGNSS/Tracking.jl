@@ -26,13 +26,13 @@ using Tracking:
     SatConventionalPLLAndDLL,
     init_estimator_state
 
-@testset "TrackState(; signals = ...) — single-capability shortcut" begin
+@testset "TrackState(; signals = ...) — single-group shortcut" begin
     track_state = TrackState(; signal = GPSL1CA())
-    # Implicit `:default` capability.
+    # Implicit `:default` group.
     @test isempty(get_sat_states(track_state, :default))
 end
 
-@testset "TrackState(; signals = ...) — multi-capability NamedTuple" begin
+@testset "TrackState(; signals = ...) — multi-group NamedTuple" begin
     track_state = TrackState(;
         signals = (
             legacy_gps = (GPSL1CA(),),
@@ -43,7 +43,7 @@ end
     @test isempty(get_sat_states(track_state, :galileo))
 end
 
-@testset "add_satellite! — single-capability shortcut (no `capability=`)" begin
+@testset "add_satellite! — single-group shortcut (no `group=`)" begin
     track_state = TrackState(; signal = GPSL1CA())
     add_satellite!(track_state;
         prn = 11,
@@ -58,7 +58,7 @@ end
         1234.0Hz * get_code_center_frequency_ratio(GPSL1CA())
 end
 
-@testset "add_satellite! — multi-capability with explicit `capability=`" begin
+@testset "add_satellite! — multi-group with explicit `group=`" begin
     track_state = TrackState(;
         signals = (
             legacy = (GPSL1CA(),),
@@ -66,10 +66,10 @@ end
         ),
     )
     add_satellite!(track_state;
-        prn = 5, capability = :legacy, carrier_doppler = 500.0Hz,
+        prn = 5, group = :legacy, carrier_doppler = 500.0Hz,
     )
     add_satellite!(track_state;
-        prn = 11, capability = :galileo, carrier_doppler = 2000.0Hz,
+        prn = 11, group = :galileo, carrier_doppler = 2000.0Hz,
     )
     @test length(get_sat_states(track_state, :legacy)) == 1
     @test length(get_sat_states(track_state, :galileo)) == 1
@@ -101,7 +101,7 @@ end
     @test get_carrier_doppler(new_track_state, :default, 3) == 50.0Hz
 end
 
-@testset "add_satellite!(track_state, capability, sat) — escape hatch" begin
+@testset "add_satellite!(track_state, group, sat) — escape hatch" begin
     track_state = TrackState(; signal = GPSL1CA())
     sat = TrackedSat(GPSL1CA(), 9, 5.0, 300.0Hz;
         doppler_estimator = ConventionalAssistedPLLAndDLL())

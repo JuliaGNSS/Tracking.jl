@@ -34,7 +34,7 @@ julia> add_satellite!(track_state; prn = 1, code_phase = 50.0,  carrier_doppler 
 
 julia> add_satellite!(track_state; prn = 5, code_phase = 120.0, carrier_doppler = -500.0Hz);
 
-julia> estimate_cn0(track_state, :default, 1)  # Access by capability + PRN
+julia> estimate_cn0(track_state, :default, 1)  # Access by group + PRN
 0.0 dB-Hz
 
 julia> estimate_cn0(track_state, :default, 5)

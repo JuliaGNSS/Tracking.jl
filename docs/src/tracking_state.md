@@ -1,13 +1,13 @@
 # Tracking State
 
-Tracking.jl uses a small hierarchy of state types to manage tracking across multiple satellites, multiple signals per satellite, and multiple capability groups.
+Tracking.jl uses a small hierarchy of state types to manage tracking across multiple satellites, multiple signals per satellite, and multiple signal groups.
 
 ## TrackState
 
 The main container for all tracking state. It holds:
 
-- `satellites` — a `NamedTuple` of `Dictionary{Int, TrackedSat}`, one per capability group.
-- `signal_groups` — the per-capability signal-instance tuple, used by [`add_satellite!`](@ref) to build new sats.
+- `satellites` — a `NamedTuple` of `Dictionary{Int, TrackedSat}`, one per signal group.
+- `signal_groups` — the per-group signal-instance tuple, used by [`add_satellite!`](@ref) to build new sats.
 - `doppler_estimator` — the Doppler estimator configuration (e.g. PLL/DLL bandwidths).
 
 ```@docs
@@ -24,7 +24,7 @@ TrackedSat
 
 ### TrackedSat accessor functions
 
-These return per-satellite state. When invoked on a `TrackState` with `(track_state, capability, prn)` arguments, they look up the sat first.
+These return per-satellite state. When invoked on a `TrackState` with `(track_state, group, prn)` arguments, they look up the sat first.
 
 - `get_prn(sat)` — the PRN number.
 - `get_code_phase(sat)` — the shared code phase (wraps at [`max_code_length`](@ref)).

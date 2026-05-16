@@ -33,11 +33,11 @@ pkg> add Tracking
 
 ## Usage
 
-Tracking.jl can track one or multiple satellites simultaneously, each potentially on multiple signals. The tracking state is held in a [`TrackState`](@ref). Satellites are organized into **capabilities** — named groups that share the same signal-tuple shape.
+Tracking.jl can track one or multiple satellites simultaneously, each potentially on multiple signals. The tracking state is held in a [`TrackState`](@ref). Satellites are organized into **signal groups** — named groups of sats that share the same signal-tuple shape (and therefore the same concrete `TrackedSat` type, which is what gives the hot loop type stability).
 
 ### Constructing a `TrackState`
 
-Declare which signals each capability tracks. Each entry is a tuple of `AbstractGNSSSignal` instances; the first signal in the tuple is the Doppler source (its correlator drives the PLL/DLL).
+Declare which signals each group tracks. Each entry is a tuple of `AbstractGNSSSignal` instances; the first signal in the tuple is the Doppler source (its correlator drives the PLL/DLL).
 
 ```jldoctest single_signal
 julia> using Tracking, GNSSSignals
@@ -47,7 +47,7 @@ julia> using Tracking: Hz
 julia> track_state = TrackState(; signal = GPSL1CA());
 ```
 
-The singular `signal = GPSL1CA()` keyword is the shortcut for the common one-capability, one-signal case. It desugars internally to `signals = (default = (GPSL1CA(),),)` so the rest of the API can stay uniform. With one capability, [`add_satellite!`](@ref) may omit the `capability=` keyword. Use the plural `signals = (...)` keyword for multi-signal or multi-capability tracking — see below.
+The singular `signal = GPSL1CA()` keyword is the shortcut for the common one-group, one-signal case. It desugars internally to `signals = (default = (GPSL1CA(),),)` so the rest of the API can stay uniform. With one group, [`add_satellite!`](@ref) may omit the `group=` keyword. Use the plural `signals = (...)` keyword for multi-signal or multi-group tracking — see below.
 
 ### Adding satellites
 
@@ -99,7 +99,7 @@ julia> get_code_phase(track_state, :default, 1)
 50.00064935064897
 ```
 
-`estimate_cn0(track_state, capability, prn)` returns the CN0 estimate in dB-Hz. With a noise-free test signal, this will be `Inf dB-Hz`. With real signals containing noise, you'll get finite values typically in the range of 30-50 dB-Hz.
+`estimate_cn0(track_state, group, prn)` returns the CN0 estimate in dB-Hz. With a noise-free test signal, this will be `Inf dB-Hz`. With real signals containing noise, you'll get finite values typically in the range of 30-50 dB-Hz.
 
 !!! tip "Real-time loops: hoist the correlator"
     For loops that process many signal chunks in sequence (e.g. an SDR
@@ -147,7 +147,7 @@ julia> get_code_phase(track_state, :default, 17)
 
 ### Multi-system tracking (different signals on different sats)
 
-When different satellites carry different signal types, use multiple named capabilities. Each capability has its own concrete `TrackedSat` value type, so type inference stays sharp across the heterogeneous mix.
+When different satellites carry different signal types, use multiple named groups. Each group has its own concrete `TrackedSat` value type, so type inference stays sharp across the heterogeneous mix.
 
 ```jldoctest multi_system
 julia> using Tracking, GNSSSignals
@@ -161,9 +161,9 @@ julia> track_state = TrackState(;
            ),
        );
 
-julia> add_satellite!(track_state; prn = 1,  capability = :gps,     code_phase = 50.0,  carrier_doppler = 1000.0Hz);
+julia> add_satellite!(track_state; prn = 1,  group = :gps,     code_phase = 50.0,  carrier_doppler = 1000.0Hz);
 
-julia> add_satellite!(track_state; prn = 11, capability = :galileo, code_phase = 200.0, carrier_doppler = -300.0Hz);
+julia> add_satellite!(track_state; prn = 11, group = :galileo, code_phase = 200.0, carrier_doppler = -300.0Hz);
 
 julia> get_carrier_doppler(track_state, :gps, 1)
 1000.0 Hz
@@ -183,12 +183,12 @@ track_state = TrackState(;
     ),
 )
 add_satellite!(track_state;
-    prn = 11, capability = :modern_gps,
+    prn = 11, group = :modern_gps,
     code_phase = 0.0, carrier_doppler = 1234.0Hz,
 )
 ```
 
-The first signal in each capability's tuple is the **Doppler source** — its correlator is what the PLL/DLL discriminator runs on. Putting a pilot signal first (e.g. `GPSL1C_P()`) is encouraged when one is available: pilot signals carry no data-bit modulation, which lets the PLL run longer coherent integrations and reach lower phase-noise floors. The data-bearing signals (L1C-D, L1 C/A) still recover their navigation bits independently — each [`TrackedSignal`](@ref) carries its own `bit_buffer` regardless of which signal drives the loop filter.
+The first signal in each group's tuple is the **Doppler source** — its correlator is what the PLL/DLL discriminator runs on. Putting a pilot signal first (e.g. `GPSL1C_P()`) is encouraged when one is available: pilot signals carry no data-bit modulation, which lets the PLL run longer coherent integrations and reach lower phase-noise floors. The data-bearing signals (L1C-D, L1 C/A) still recover their navigation bits independently — each [`TrackedSignal`](@ref) carries its own `bit_buffer` regardless of which signal drives the loop filter.
 
 When a satellite tracks signals with different primary-code lengths (e.g. L1 C/A at 1 ms vs L1C-P at 10 ms), each outer iteration integrates to the **shortest** signal's next primary-code boundary. The shorter signal's correlator completes every iteration; the longer signal's correlator accumulates across multiple iterations and only marks `is_integration_completed = true` on its own boundary. Doppler updates therefore happen at the shortest signal's cadence (1 ms in this example), and longer signals see their integration windows spanned by piecewise Doppler updates — the natural per-iteration-Doppler-correction behaviour of a real receiver.
 
