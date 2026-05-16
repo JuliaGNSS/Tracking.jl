@@ -15,6 +15,7 @@ using Tracking:
     init_estimator_state,
     ConventionalPLLAndDLL,
     TrackState,
+    Measurement,
     estimate_dopplers_and_filter_prompt,
     get_carrier_doppler,
     get_code_doppler,
@@ -25,6 +26,12 @@ using Tracking:
     update_accumulator,
     get_default_correlator,
     merge_sats
+
+# Build a stub `(l1 = Measurement(...),)` NamedTuple to pass to the
+# estimator. Samples are unused by `estimate_dopplers_and_filter_prompt`
+# (it only reads `sampling_frequency` per group), so an empty buffer
+# suffices.
+_meas_l1(fs) = (l1 = Measurement(ComplexF64[], fs),)
 
 @testset "Doppler aiding" begin
     gpsl1 = GPSL1CA()
@@ -119,8 +126,8 @@ end
 
     new_track_state = @inferred estimate_dopplers_and_filter_prompt(
         track_state,
+        _meas_l1(sampling_frequency),
         preferred_num_code_blocks_to_integrate,
-        sampling_frequency,
     )
 
     # Since number of samples is too small the state doesn't change
@@ -148,8 +155,8 @@ end
 
     new_track_state_after_full_integration = @inferred estimate_dopplers_and_filter_prompt(
         track_state,
+        _meas_l1(sampling_frequency),
         preferred_num_code_blocks_to_integrate,
-        sampling_frequency,
     )
 
     @test get_carrier_doppler(new_track_state_after_full_integration) ==
@@ -234,8 +241,8 @@ end
     track_state = TrackState(gpsl1, tracked; doppler_estimator)
     new_track_state = @inferred estimate_dopplers_and_filter_prompt(
         track_state,
+        _meas_l1(sampling_frequency),
         preferred_num_code_blocks_to_integrate,
-        sampling_frequency,
     )
 
     # Sat 1 matches the baseline result from the previous testset.

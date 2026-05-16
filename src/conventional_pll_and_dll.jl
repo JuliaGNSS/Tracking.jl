@@ -345,8 +345,8 @@ zeroed values.
 """
 function estimate_dopplers_and_filter_prompt(
     track_state::TrackState{<:SignalGroups,<:ConventionalPLLAndDLL},
+    measurements::Measurements,
     preferred_num_code_blocks_to_integrate,
-    sampling_frequency,
 )
     # Detach slot vectors from the input, then delegate to the in-place
     # form. The per-sat doppler update is identical between the two —
@@ -357,7 +357,7 @@ function estimate_dopplers_and_filter_prompt(
             _copy_slot_vectors(track_state.satellites),
     )
     estimate_dopplers_and_filter_prompt!(
-        new_track_state, preferred_num_code_blocks_to_integrate, sampling_frequency,
+        new_track_state, measurements, preferred_num_code_blocks_to_integrate,
     )
 end
 
@@ -373,13 +373,15 @@ allocation-free in steady state when [`track!`](@ref)'s preconditions are met.
 # `_foreach_system!` can call it without boxing when the groups tuple
 # is heterogeneous (e.g. GPS L1 + Galileo E1B). The per-signal system
 # type is recovered from each signal inside `_update_tracked_sat_doppler`.
+# Routes to this group's band's `Measurement` for sampling frequency.
 @inline function _est_one_system!(
     g::SignalGroup,
+    measurements::Measurements,
     preferred_num_code_blocks_to_integrate,
-    sampling_frequency,
 )
     vals = g.satellites.values
     isempty(vals) && return nothing
+    sampling_frequency = measurements[band_key(g.band)].sampling_frequency
     @inbounds for i in eachindex(vals)
         vals[i] = _update_tracked_sat_doppler(
             vals[i],
@@ -392,12 +394,12 @@ end
 
 function estimate_dopplers_and_filter_prompt!(
     track_state::TrackState{<:SignalGroups,<:ConventionalPLLAndDLL},
+    measurements::Measurements,
     preferred_num_code_blocks_to_integrate,
-    sampling_frequency,
 )
     _foreach_system!(
         _est_one_system!, track_state.groups,
-        preferred_num_code_blocks_to_integrate, sampling_frequency,
+        measurements, preferred_num_code_blocks_to_integrate,
     )
     return track_state
 end

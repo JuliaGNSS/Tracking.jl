@@ -12,6 +12,7 @@ using Tracking:
     NumAnts,
     TrackedSat,
     TrackState,
+    Measurement,
     downconvert_and_correlate,
     get_accumulators,
     get_correlator,
@@ -52,13 +53,12 @@ end
             code_phase,
         ) .* cis.(2π * (0:(num_samples_signal-1)) * 1000.0Hz / sampling_frequency)
 
+    measurements = (l1 = Measurement(signal, sampling_frequency, intermediate_frequency),)
     next_track_state = @inferred downconvert_and_correlate(
         downconvert_and_correlator,
-        signal,
+        measurements,
         track_state,
         preferred_num_code_blocks_to_integrate,
-        sampling_frequency,
-        intermediate_frequency,
     )
 
     @test real.(get_correlator(next_track_state, 1).accumulators) ≈ [2921, 4949, 2917] rtol=1e-3
@@ -73,13 +73,12 @@ end
             11.0,
         ) .* cis.(2π * (0:(num_samples_signal-1)) * 500.0Hz / sampling_frequency)
 
+    measurements = (l1 = Measurement(signal, sampling_frequency, intermediate_frequency),)
     next_track_state = @inferred downconvert_and_correlate(
         downconvert_and_correlator,
-        signal,
+        measurements,
         track_state,
         preferred_num_code_blocks_to_integrate,
-        sampling_frequency,
-        intermediate_frequency,
     )
 
     @test real.(get_correlator(next_track_state, 2).accumulators) ≈ [2919, 4947, 2915] rtol=1e-3
@@ -103,16 +102,18 @@ end
     ts_skip = TrackState(gpsl1, [sat_past_end])
     downconvert_and_correlator = DC()
 
+    measurements = (l1 = Measurement(signal, sampling_frequency, intermediate_frequency),)
+
     # Immutable form
     result_skip = downconvert_and_correlate(
-        downconvert_and_correlator, signal, ts_skip, 1, sampling_frequency, intermediate_frequency,
+        downconvert_and_correlator, measurements, ts_skip, 1,
     )
     @test get_correlator(result_skip, 1).accumulators == get_correlator(sat_past_end).accumulators
 
     # In-place form takes the same `signal_samples_to_integrate == 0` early
     # return per sat. The TrackedSat is reassigned to itself unchanged.
     Tracking.downconvert_and_correlate!(
-        downconvert_and_correlator, signal, ts_skip, 1, sampling_frequency, intermediate_frequency,
+        downconvert_and_correlator, measurements, ts_skip, 1,
     )
     @test get_correlator(ts_skip, 1).accumulators == get_correlator(sat_past_end).accumulators
 end
