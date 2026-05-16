@@ -1,17 +1,38 @@
 # Tracking State
 
-Tracking.jl uses a small hierarchy of state types to manage tracking across multiple satellites, multiple signals per satellite, and multiple signal groups.
+Tracking.jl uses a small hierarchy of state types to manage tracking across multiple satellites, multiple signals per satellite, multiple signal groups, and multiple RF bands.
 
 ## TrackState
 
 The main container for all tracking state. It holds:
 
-- `satellites` — a `NamedTuple` of `Dictionary{Int, TrackedSat}`, one per signal group.
-- `signal_groups` — the per-group signal-instance tuple, used by [`add_satellite!`](@ref) to build new sats.
+- `groups` — a `NamedTuple` of [`SignalGroup`](@ref)s. Each group bundles its satellites dictionary, signal-instance tuple, band, and antenna count.
 - `doppler_estimator` — the Doppler estimator configuration (e.g. PLL/DLL bandwidths).
+
+Two compatibility property views over `groups` are also available: `track_state.satellites` (a `NamedTuple` of `Dictionary{Int, TrackedSat}`, one per group) and `track_state.signal_groups` (a `NamedTuple` of signal-instance tuples). Both fold to compile-time constants when the groups type is known.
 
 ```@docs
 TrackState
+```
+
+## SignalGroup
+
+A group of satellites that all track the same tuple of GNSS signal types, on the same RF band, observed by the same antenna array. Groups are the unit of type stability — every `TrackedSat` inside a `SignalGroup` shares the same concrete signal-tuple shape, so the satellites dictionary has a concrete value type and the hot loop sees no dynamic dispatch.
+
+Two groups may share a band: e.g. a `:legacy_gps` group tracking `(GPSL1CA(),)` and a `:galileo` group tracking `(GalileoE1B(),)` both report `band = L1()`. The grouping is by signal-tuple shape, not by band — `band` is metadata each group carries so `track` can route the right measurement to it.
+
+```@docs
+SignalGroup
+SignalGroups
+```
+
+## Band routing
+
+The mapping between GNSSSignals `Band` instances and the `Symbol` keys used in multi-band measurement collections (see [`Measurement`](@ref)).
+
+```@docs
+band_key
+band_keys
 ```
 
 ## TrackedSat
@@ -66,7 +87,7 @@ The shared `TrackedSat.code_phase` wraps at the longest code period across all s
 max_code_length
 ```
 
-## Capability accessors
+## Group accessors
 
 ```@docs
 SatelliteDicts

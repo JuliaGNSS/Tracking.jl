@@ -192,6 +192,68 @@ The first signal in each group's tuple is the **Doppler source** — its correla
 
 When a satellite tracks signals with different primary-code lengths (e.g. L1 C/A at 1 ms vs L1C-P at 10 ms), each outer iteration integrates to the **shortest** signal's next primary-code boundary. The shorter signal's correlator completes every iteration; the longer signal's correlator accumulates across multiple iterations and only marks `is_integration_completed = true` on its own boundary. Doppler updates therefore happen at the shortest signal's cadence (1 ms in this example), and longer signals see their integration windows spanned by piecewise Doppler updates — the natural per-iteration-Doppler-correction behaviour of a real receiver.
 
+### Multi-band tracking (different RF carriers)
+
+A satellite often broadcasts on more than one RF band — GPS broadcasts on L1 (1575.42 MHz) and L5 (1176.45 MHz); Galileo broadcasts on E1 (L1) and E5a (L5). In a multi-band receiver these arrive from separate front-ends, generally at different sample rates, and need to be downconverted and correlated against their own carrier replicas. Tracking.jl exposes this as a multi-band `TrackState` where each group declares which RF band it sits on.
+
+**Why this matters.** A single physical satellite tracked on two bands gives the receiver two near-independent observations of the same path. The classic uses:
+
+- **Ionospheric correction** via dual-frequency (iono-free) pseudorange combinations.
+- **Wider effective bandwidth** for code-phase observations (L5 carries far more chip-rate bandwidth than L1 C/A).
+- **Cross-band-aided tracking**: the carrier Doppler ratio between L1 and L5 is exactly the ratio of their RF carrier frequencies. A joint estimator can fuse the two bands' discriminators and produce a more accurate Doppler estimate than either band alone — particularly valuable at low CN0 where the wider data-aided integration on L5 helps the noisier L1 C/A.
+
+This release ships the **structural enablers** for multi-band: per-band groups, per-band measurement routing, an estimation barrier that sees every band's correlator outputs at once. The cross-band joint-tracking *algorithm* (e.g. linking PRN-X-on-L1 with PRN-X-on-L5 in one estimator step) is a follow-up — see [docs/plans/2026-05-15-multi-band-tracking-design.md](https://github.com/JuliaGNSS/Tracking.jl/blob/master/docs/plans/2026-05-15-multi-band-tracking-design.md) for the design and the open mechanism question.
+
+#### Declaring bands
+
+The `band` field of each [`SignalGroup`](@ref) is inferred from `get_band(signals[1])`, so you don't normally type it. Mix signals from different bands in the same `signals = (...)` keyword and the bands fall out:
+
+```julia
+track_state = TrackState(;
+    signals = (
+        legacy_gps_l1 = (GPSL1CA(),),
+        modern_gps_l1 = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),
+        galileo       = (GalileoE1B(),),
+        gps_l5        = (GPSL5I(),),
+    ),
+)
+```
+
+Four groups, two distinct bands — the first three groups all sit on L1 (GPS L1 and Galileo E1 share the 1575.42 MHz carrier), the fourth sits on L5. Two groups sharing a band is fine; the grouping partitions satellites by *signal-tuple shape* (the type-stability axis), not by band.
+
+#### Tracking against multiple measurements
+
+For multi-band tracking, build one [`Measurement`](@ref) per band — bundling sample buffer and front-end metadata — and pass them as a NamedTuple keyed by [`band_key`](@ref):
+
+```julia
+add_satellite!(track_state; prn = 1, group = :legacy_gps_l1, carrier_doppler = 200Hz)
+add_satellite!(track_state; prn = 1, group = :gps_l5,        carrier_doppler = -150Hz)
+
+track!((l1 = Measurement(buf_l1, 4e6Hz),
+        l5 = Measurement(buf_l5, 25e6Hz)), track_state)
+```
+
+The keys (`:l1`, `:l5`) come from `band_key(L1())` and `band_key(L5())`. All measurements must cover the **exact same observation duration** — `num_samples / sampling_frequency` must compare equal across bands. An L1 chunk of 4000 samples at 4 MHz and an L5 chunk of 25000 samples at 25 MHz both cover 1 ms, so they're compatible; an L5 chunk of 25001 samples is rejected.
+
+#### Per-band antenna counts
+
+Different bands often come from different front-ends with different antenna arrangements. To declare per-band antenna counts, pass [`SignalGroup`](@ref) instances directly as the entries — the bare-tuple shortcut uses the constructor's single `num_ants` kwarg for all groups, but the `SignalGroup` form lets each group set its own:
+
+```julia
+track_state = TrackState(;
+    signals = (
+        legacy_gps_l1 = SignalGroup((GPSL1CA(),); num_ants = NumAnts(2)),
+        gps_l5        = SignalGroup((GPSL5I(),);  num_ants = NumAnts(1)),
+    ),
+)
+```
+
+Two groups on the same band must declare the same `num_ants` — they share a physical front-end. The constructor errors at TrackState construction if they disagree.
+
+#### Bare-buffer compatibility
+
+A single-band receiver doesn't need to type any of this. The bare-buffer call `track!(buf, state, fs)` keeps working for any `TrackState` that spans exactly one band — internally it wraps the buffer into a one-entry NamedTuple keyed by the lone band. Pass `intermediate_frequency` via the same kwarg as before, or move it onto a [`Measurement`](@ref) when you migrate to multi-band.
+
 ### Removing satellites
 
 ```jldoctest remove_sats
