@@ -239,26 +239,9 @@ function reset_start_sample_and_bit_buffer!(track_state::TrackState)
     return track_state
 end
 
-function has_integration_reached_signal_end_for_all_satellites(
-    track_state::TrackState,
-    num_samples::Int,
-)
-    target = num_samples + 1
-    # NamedTuple unwraps to its underlying Tuple via Tuple(...) — concrete and
-    # cheap.
-    _all_sats_at(Tuple(track_state.groups), target)
-end
-
-# Recursive tuple-walk over `SignalGroup`s: each step has fully concrete
-# types, no closure boxes, no allocation. Base case is an empty tuple.
-@inline _all_sats_at(::Tuple{}, target::Int) = true
-@inline function _all_sats_at(t::Tuple, target::Int)
-    g = first(t)
-    @inbounds for sat in g.satellites.values
-        sat.signal_start_sample == target || return false
-    end
-    _all_sats_at(Base.tail(t), target)
-end
+# Loop-termination helper for `track`/`track!` lives in `track.jl` as
+# `_all_groups_reached_end` — it iterates the per-band measurement
+# lengths so each group can terminate against its own band's chunk.
 
 """
 $(SIGNATURES)
@@ -409,7 +392,7 @@ function add_satellite!(
     prn::Int,
     group::Symbol = :default,
     code_phase = 0.0,
-    code_doppler::Maybe{typeof(1.0Hz)} = nothing,
+    code_doppler = nothing,
     carrier_phase = 0.0,
     carrier_doppler = 0.0Hz,
 )
@@ -484,7 +467,7 @@ function add_satellite(
     prn::Int,
     group::Symbol = :default,
     code_phase = 0.0,
-    code_doppler::Maybe{typeof(1.0Hz)} = nothing,
+    code_doppler = nothing,
     carrier_phase = 0.0,
     carrier_doppler = 0.0Hz,
 )
@@ -585,9 +568,13 @@ function _make_default_tracked_sat_for_group(
     g = track_state.groups[group]
     sig_tuple = g.signals
     first_signal = first(sig_tuple)
+    # Float-ize the carrier first so its product with the code/center ratio
+    # is float-typed too; that way users may pass `200Hz` (Int) without
+    # the struct constructor's `typeof(1.0Hz)` field type rejecting it.
+    cdop = float(carrier_doppler)
     cd = isnothing(code_doppler) ?
-        carrier_doppler * get_code_center_frequency_ratio(first_signal) :
-        code_doppler
+        cdop * get_code_center_frequency_ratio(first_signal) :
+        float(code_doppler)
     num_ants = g.num_ants
     tracked_signals = map(sig_tuple) do sig
         TrackedSignal(
@@ -601,7 +588,7 @@ function _make_default_tracked_sat_for_group(
         float(code_phase),
         cd,
         float(carrier_phase) / 2π,
-        carrier_doppler,
+        cdop,
         1,
         tracked_signals,
         nothing,
@@ -637,3 +624,112 @@ get_bits(s::TrackState, id...) = get_bits(get_sat_state(s, id...))
 get_num_bits(s::TrackState, id...) = get_num_bits(get_sat_state(s, id...))
 has_bit_or_secondary_code_been_found(s::TrackState, id...) =
     has_bit_or_secondary_code_been_found(get_sat_state(s, id...))
+
+# Recursive tuple walk that folds the set of distinct `band_key`s across
+# a `groups` tuple. Returns an `NTuple{N,Symbol}` of unique keys, in
+# first-encounter order. Concrete-typed input → fully unrolled at compile
+# time, no allocation.
+@inline _band_keys_in_groups(::Tuple{}, acc::Tuple{Vararg{Symbol}}) = acc
+@inline function _band_keys_in_groups(t::Tuple, acc::Tuple{Vararg{Symbol}})
+    k = band_key(first(t).band)
+    new_acc = k in acc ? acc : (acc..., k)
+    _band_keys_in_groups(Base.tail(t), new_acc)
+end
+
+"""
+$(SIGNATURES)
+
+The set of distinct band keys used across all groups in `track_state`,
+returned as a tuple of Symbols in first-encounter order. Resolves at
+compile time when the groups type is known.
+
+```julia
+ts = TrackState(; signals = (legacy_gps = (GPSL1CA(),), gps_l5 = (GPSL5I(),)))
+band_keys(ts) == (:l1, :l5)
+```
+"""
+@inline band_keys(track_state::TrackState) =
+    _band_keys_in_groups(Tuple(track_state.groups), ())
+
+# Single-band shortcut helper: returns the unique band instance shared by
+# all groups when there is exactly one distinct band. Errors otherwise —
+# this is what gates whether the bare-buffer `track(buf, state, fs)`
+# entry point can route the measurement to a single auto-keyed
+# `Measurements` NamedTuple.
+@inline function _single_band(track_state::TrackState)
+    keys_tuple = band_keys(track_state)
+    if length(keys_tuple) != 1
+        throw(ArgumentError(string(
+            "Bare-buffer `track`/`track!` requires a single-band TrackState, ",
+            "but this TrackState spans bands ", keys_tuple,
+            ". Pass a NamedTuple of `Measurement`s instead, ",
+            "one per band.",
+        )))
+    end
+    # All groups share one band — pull it off the first group.
+    first(track_state.groups).band
+end
+
+# Validate a multi-band measurements NamedTuple against the TrackState's
+# groups: keys must match exactly, antenna shape per band must match,
+# and all observation durations must be identical (no tolerance). Called
+# once at the top of `track` / `track!` — O(num_bands), irrelevant next
+# to the inner loop.
+@inline function _validate_measurements(
+    track_state::TrackState, measurements::Measurements,
+)
+    expected_keys = band_keys(track_state)
+    got_keys = keys(measurements)
+    # Equal as sets, but order may differ — sort for the comparison.
+    if Set(expected_keys) != Set(got_keys)
+        throw(ArgumentError(string(
+            "Measurement keys do not match the TrackState's band set. ",
+            "Expected: ", expected_keys,
+            ". Got: ", got_keys, ".",
+        )))
+    end
+    _validate_antenna_shapes(track_state, measurements)
+    _validate_equal_durations(measurements)
+    return nothing
+end
+
+# For each group, check the measurement at its band has the antenna
+# shape the group declares. Vector → 1 antenna; Matrix → cols = num_ants.
+@inline function _validate_antenna_shapes(
+    track_state::TrackState, measurements::Measurements,
+)
+    for g in track_state.groups
+        m = measurements[band_key(g.band)]
+        _assert_antenna_shape(g, m)
+    end
+    return nothing
+end
+
+@inline function _assert_antenna_shape(g::SignalGroup{B,S,Sigs,NumAnts{M}}, m::Measurement) where {B,S,Sigs,M}
+    cols = m.samples isa AbstractMatrix ? size(m.samples, 2) : 1
+    cols == M && return nothing
+    throw(ArgumentError(string(
+        "Antenna shape mismatch for band `:", band_key(g.band),
+        "`. Group declares NumAnts(", M, ") but the measurement's ",
+        "`samples` has ", cols, " column(s).",
+    )))
+end
+
+# Exact-equality duration check across all measurements. `num_samples /
+# sampling_frequency` must compare equal across every band — no tolerance.
+@inline function _validate_equal_durations(measurements::Measurements)
+    ms = Tuple(measurements)
+    isempty(ms) && return nothing
+    first_m = first(ms)
+    ref_duration = get_num_samples(first_m) / first_m.sampling_frequency
+    for m in Base.tail(ms)
+        d = get_num_samples(m) / m.sampling_frequency
+        d == ref_duration && continue
+        throw(ArgumentError(string(
+            "Measurement durations must be exactly equal across bands. ",
+            "Got ", d, " and ", ref_duration, ". ",
+            "Check `num_samples / sampling_frequency` for each band.",
+        )))
+    end
+    return nothing
+end

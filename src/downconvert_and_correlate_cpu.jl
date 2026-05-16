@@ -587,11 +587,9 @@ copy needed for immutability.
 """
 function downconvert_and_correlate(
     dc::CPUDownconvertAndCorrelator,
-    signal,
+    measurements::Measurements,
     track_state::TrackState,
     preferred_num_code_blocks_to_integrate::Int,
-    sampling_frequency,
-    intermediate_frequency,
 )
     new_track_state = TrackState(
         track_state;
@@ -599,9 +597,8 @@ function downconvert_and_correlate(
             _copy_slot_vectors(track_state.satellites),
     )
     downconvert_and_correlate!(
-        dc, signal, new_track_state,
-        preferred_num_code_blocks_to_integrate, sampling_frequency,
-        intermediate_frequency,
+        dc, measurements, new_track_state,
+        preferred_num_code_blocks_to_integrate,
     )
 end
 
@@ -615,14 +612,19 @@ state — see [`track!`](@ref).
 # Per-group body for the single-threaded backend. Pulled out so
 # `_foreach_system!` can call it on each `SignalGroup` in the
 # (possibly heterogeneous) `groups` tuple without dynamic dispatch /
-# boxing.
+# boxing. Routes to this group's band's `Measurement` for the signal
+# buffer and front-end metadata.
 @inline function _dc_one_system!(
     g::SignalGroup, dc::CPUDownconvertAndCorrelator,
-    signal, num_samples_signal, preferred_num_code_blocks_to_integrate,
-    sampling_frequency, intermediate_frequency,
+    measurements::Measurements, preferred_num_code_blocks_to_integrate,
 )
     vals = g.satellites.values
     isempty(vals) && return nothing
+    m = measurements[band_key(g.band)]
+    signal = m.samples
+    num_samples_signal = get_num_samples(m)
+    sampling_frequency = m.sampling_frequency
+    intermediate_frequency = m.intermediate_frequency
     @inbounds for i in eachindex(vals)
         vals[i] = _update_tracked_sat_correlator(
             vals[i],
@@ -639,17 +641,13 @@ end
 
 function downconvert_and_correlate!(
     dc::CPUDownconvertAndCorrelator,
-    signal,
+    measurements::Measurements,
     track_state::TrackState,
     preferred_num_code_blocks_to_integrate::Int,
-    sampling_frequency,
-    intermediate_frequency,
 )
-    num_samples_signal = get_num_samples(signal)
     _foreach_system!(
         _dc_one_system!, track_state.groups,
-        dc, signal, num_samples_signal, preferred_num_code_blocks_to_integrate,
-        sampling_frequency, intermediate_frequency,
+        dc, measurements, preferred_num_code_blocks_to_integrate,
     )
     return track_state
 end
@@ -665,11 +663,9 @@ allocation is the slot-vector copy needed for immutability.
 """
 function downconvert_and_correlate(
     dc::CPUThreadedDownconvertAndCorrelator,
-    signal,
+    measurements::Measurements,
     track_state::TrackState,
     preferred_num_code_blocks_to_integrate::Int,
-    sampling_frequency,
-    intermediate_frequency,
 )
     new_track_state = TrackState(
         track_state;
@@ -677,9 +673,8 @@ function downconvert_and_correlate(
             _copy_slot_vectors(track_state.satellites),
     )
     downconvert_and_correlate!(
-        dc, signal, new_track_state,
-        preferred_num_code_blocks_to_integrate, sampling_frequency,
-        intermediate_frequency,
+        dc, measurements, new_track_state,
+        preferred_num_code_blocks_to_integrate,
     )
 end
 
@@ -694,15 +689,19 @@ write to disjoint slots, so no synchronization is needed. Returns the same
 # Per-group body for the threaded backend. Each `@batch` writes to
 # disjoint slots in this group's `Vector{TrackedSat}`. Pulled out so
 # `_foreach_system!` can call it without boxing on heterogeneous
-# group tuples.
+# group tuples. Routes to this group's band's `Measurement`.
 @inline function _dc_one_system_threaded!(
     g::SignalGroup, dc::CPUThreadedDownconvertAndCorrelator,
-    signal, num_samples_signal, preferred_num_code_blocks_to_integrate,
-    sampling_frequency, intermediate_frequency,
+    measurements::Measurements, preferred_num_code_blocks_to_integrate,
 )
     vals = g.satellites.values
     n = length(vals)
     n == 0 && return nothing
+    m = measurements[band_key(g.band)]
+    signal = m.samples
+    num_samples_signal = get_num_samples(m)
+    sampling_frequency = m.sampling_frequency
+    intermediate_frequency = m.intermediate_frequency
     @batch for i = 1:n
         @inbounds vals[i] = _update_tracked_sat_correlator(
             vals[i],
@@ -719,17 +718,13 @@ end
 
 function downconvert_and_correlate!(
     dc::CPUThreadedDownconvertAndCorrelator,
-    signal,
+    measurements::Measurements,
     track_state::TrackState,
     preferred_num_code_blocks_to_integrate::Int,
-    sampling_frequency,
-    intermediate_frequency,
 )
-    num_samples_signal = get_num_samples(signal)
     _foreach_system!(
         _dc_one_system_threaded!, track_state.groups,
-        dc, signal, num_samples_signal, preferred_num_code_blocks_to_integrate,
-        sampling_frequency, intermediate_frequency,
+        dc, measurements, preferred_num_code_blocks_to_integrate,
     )
     return track_state
 end
