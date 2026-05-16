@@ -3,14 +3,14 @@ module MultiBandTest
 using Test: @test, @testset, @inferred, @test_throws
 using Unitful: Hz
 using GNSSSignals:
-    GPSL1CA, GPSL5I, L1, L5,
+    GPSL1CA, GPSL5I, GalileoE1B, L1, L5,
     gen_code, get_code_frequency, get_code_center_frequency_ratio
 
 using Tracking:
-    TrackState, Measurement, NumAnts,
+    TrackState, Measurement, NumAnts, SignalGroup,
     track!, add_satellite!,
     band_key, band_keys,
-    get_carrier_doppler, get_code_doppler
+    get_carrier_doppler, get_code_doppler, get_num_ants
 
 # Build a synthetic complex sample buffer for one PRN at one band, with a
 # given Doppler offset and starting code phase.
@@ -148,6 +148,37 @@ end
     # 2-antenna group expects a Matrix with 2 columns; pass a Vector.
     m = Measurement(zeros(ComplexF64, 4000), 4e6Hz)
     @test_throws ArgumentError track!((l1 = m,), ts)
+end
+
+@testset "Per-band antenna counts via SignalGroup entries" begin
+    # L1 group with 2 antennas, L5 group with 1. Constructed by passing
+    # `SignalGroup` instances as `signals` entries.
+    ts = TrackState(; signals = (
+        legacy_gps_l1 = SignalGroup((GPSL1CA(),); num_ants = NumAnts(2)),
+        gps_l5        = SignalGroup((GPSL5I(),);  num_ants = NumAnts(1)),
+    ))
+    add_satellite!(ts; prn = 1, group = :legacy_gps_l1, carrier_doppler = 0Hz)
+    add_satellite!(ts; prn = 1, group = :gps_l5,        carrier_doppler = 0Hz)
+
+    @test get_num_ants(ts, :legacy_gps_l1, 1) == 2
+    @test get_num_ants(ts, :gps_l5, 1) == 1
+end
+
+@testset "Same band, mismatched NumAnts is rejected" begin
+    # Two groups both on L1 (GPSL1CA + GalileoE1B share L1) but declaring
+    # different antenna counts. Must error at TrackState construction.
+    @test_throws ArgumentError TrackState(; signals = (
+        gps     = SignalGroup((GPSL1CA(),);    num_ants = NumAnts(2)),
+        galileo = SignalGroup((GalileoE1B(),); num_ants = NumAnts(1)),
+    ))
+end
+
+@testset "Two groups on the same band with matching NumAnts is fine" begin
+    ts = TrackState(; signals = (
+        gps     = SignalGroup((GPSL1CA(),);    num_ants = NumAnts(2)),
+        galileo = SignalGroup((GalileoE1B(),); num_ants = NumAnts(2)),
+    ))
+    @test band_keys(ts) == (:l1,)
 end
 
 end # module
