@@ -423,6 +423,39 @@ function SignalGroup(
 end
 
 """
+$(SIGNATURES)
+
+User-facing outer constructor: build a fresh `SignalGroup` from a signal
+tuple with band and antenna count as kwargs. `band` defaults to
+`get_band(first(signals))` (so users only override for the rare case of
+naming a band differently); `num_ants` defaults to `NumAnts(1)`.
+
+The `satellites` dictionary is left empty — populate it via
+[`add_satellite!`](@ref) after the enclosing [`TrackState`](@ref) is
+built. The signal-tuple shape determines the dict's concrete value type,
+so the slot is type-stable.
+
+```julia
+SignalGroup((GPSL1CA(),))                              # band L1(), 1 antenna
+SignalGroup((GPSL5I(),); num_ants = NumAnts(2))        # 2-antenna L5
+```
+"""
+function SignalGroup(
+    signals::Tuple{Vararg{AbstractGNSSSignal}};
+    band = get_band(first(signals)),
+    num_ants::NumAnts = NumAnts(1),
+    doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
+)
+    # Build a template TrackedSat so the dict's value type is concrete.
+    # Reuses the existing helper from tracking_state.jl, which is fine
+    # because doppler_estimator only affects per-sat state type, not the
+    # storage's outer shape.
+    template = _make_template_tracked_sat(signals, doppler_estimator, num_ants)
+    sats = Dictionary{Int, typeof(template)}(Int[], typeof(template)[])
+    SignalGroup(band, sats, signals, num_ants)
+end
+
+"""
 Type alias: NamedTuple of `SignalGroup`s — the storage shape inside
 [`TrackState`](@ref). The `N` parameter is the number of groups.
 """

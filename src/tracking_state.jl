@@ -59,23 +59,91 @@ function TrackState(;
     sig_groups_nt = isnothing(signal) ?
         _normalize_signal_groups(signals) :
         (default = (signal,),)
-    # For each capability, build a template TrackedSat to capture the concrete
-    # dict value type, build an empty dict of that type, then wrap with the
-    # signal-tuple, band, and antenna count into a SignalGroup.
-    groups = map(sig_groups_nt) do sig_tuple
-        template = _make_template_tracked_sat(sig_tuple, doppler_estimator, num_ants)
-        sats = Dictionary{Int, typeof(template)}(Int[], typeof(template)[])
-        band = get_band(first(sig_tuple))
-        SignalGroup(band, sats, sig_tuple, num_ants)
+    # Each entry of `sig_groups_nt` is either:
+    #   - a bare `Tuple{Vararg{AbstractGNSSSignal}}` (the common case,
+    #     uses the constructor's `num_ants` kwarg); or
+    #   - a pre-built `SignalGroup` instance (carries its own band /
+    #     num_ants — used when the user wants per-band overrides).
+    groups = map(sig_groups_nt) do entry
+        _normalize_group_entry(entry, doppler_estimator, num_ants)
     end
+    _validate_same_band_num_ants(groups)
     TrackState(groups, doppler_estimator)
 end
 
 # Bare tuple of AbstractGNSSSignal → single :default capability NamedTuple.
 @inline _normalize_signal_groups(signals::Tuple{Vararg{AbstractGNSSSignal}}) =
     (default = signals,)
-# NamedTuple of signal tuples → pass through unchanged.
+# NamedTuple of signal tuples / SignalGroups → pass through unchanged.
 @inline _normalize_signal_groups(signals::NamedTuple) = signals
+
+# Build a freshly-templated SignalGroup from a bare signal tuple.
+@inline function _normalize_group_entry(
+    sig_tuple::Tuple{Vararg{AbstractGNSSSignal}},
+    doppler_estimator::AbstractDopplerEstimator,
+    num_ants::NumAnts,
+)
+    template = _make_template_tracked_sat(sig_tuple, doppler_estimator, num_ants)
+    sats = Dictionary{Int, typeof(template)}(Int[], typeof(template)[])
+    band = get_band(first(sig_tuple))
+    SignalGroup(band, sats, sig_tuple, num_ants)
+end
+
+# Pre-built SignalGroup → pass through, but if its `satellites` dict
+# value type doesn't match the estimator the user passed to TrackState,
+# rebuild the template so the slot type lines up. The common case where
+# the user built the SignalGroup with `SignalGroup((sigs,); num_ants =
+# ..., doppler_estimator = same)` then it just passes through.
+@inline function _normalize_group_entry(
+    g::SignalGroup,
+    doppler_estimator::AbstractDopplerEstimator,
+    _num_ants::NumAnts,
+)
+    # If the existing slot type already matches the estimator, keep it.
+    # Otherwise rebuild the empty dict with a fresh template that uses
+    # the TrackState's estimator. The user's `num_ants` on the
+    # SignalGroup wins — the TrackState's `num_ants` kwarg is only the
+    # default for bare-tuple entries.
+    sats = g.satellites
+    if !isempty(sats)
+        # Pre-populated SignalGroup — assume the user knew what they
+        # were doing and leave the slot type alone.
+        return g
+    end
+    template = _make_template_tracked_sat(g.signals, doppler_estimator, g.num_ants)
+    if typeof(template) === eltype(sats)
+        return g
+    end
+    new_sats = Dictionary{Int, typeof(template)}(Int[], typeof(template)[])
+    SignalGroup(g.band, new_sats, g.signals, g.num_ants)
+end
+
+# Same-band groups must declare identical `num_ants`. Two groups on the
+# same physical band can't be sampled by front-ends with different
+# antenna counts. Walked over the concrete-typed groups tuple at
+# construction; O(num_groups²) but folded at compile time when the
+# groups type is known.
+@inline function _validate_same_band_num_ants(groups::NamedTuple)
+    _check_same_band_num_ants(Tuple(groups), ())
+end
+
+@inline _check_same_band_num_ants(::Tuple{}, ::Tuple) = nothing
+@inline function _check_same_band_num_ants(t::Tuple, seen::Tuple)
+    g = first(t)
+    bk = band_key(g.band)
+    for (sk, sna) in seen
+        if sk === bk && sna !== g.num_ants
+            throw(ArgumentError(string(
+                "Two groups on band `:", bk,
+                "` declare different antenna counts (",
+                sna, " vs ", g.num_ants,
+                "). Groups sharing a band must share NumAnts ",
+                "— they're sampled by the same front-end.",
+            )))
+        end
+    end
+    _check_same_band_num_ants(Base.tail(t), (seen..., (bk, g.num_ants)))
+end
 
 """
 $(SIGNATURES)
