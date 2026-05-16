@@ -291,7 +291,7 @@ function bench_track(;
         downconvert_and_correlator = $downconvert_and_correlator,
     )
 end
-SUITE["track"]["Float32"] = bench_track()
+SUITE["track"]["1. Float32/2K – track"] = bench_track()
 
 # In-place track! (only on branches that define it). Mirrors bench_track so
 # the comparison report shows them side by side.
@@ -312,7 +312,7 @@ function bench_track_inplace(;
     )
 end
 if isdefined(Tracking, :track!)
-    SUITE["track!"]["Float32"] = bench_track_inplace()
+    SUITE["track"]["1. Float32/2K – track!"] = bench_track_inplace()
 end
 
 # Fused kernel microbenchmarks (only available on branches with the fused kernel)
@@ -468,20 +468,25 @@ end
 # Master only registers the immutable variants (no `track!`); the
 # threaded suffix is also master-compatible since the underlying
 # `CPUThreadedDownconvertAndCorrelator` exists in both.
+# Flat keys with numeric prefixes so AirspeedVelocity's alphabetical sort
+# clusters all four {track, track!, track-threaded, track!-threaded} variants
+# of each case together in the PR comparison table. All entries live under a
+# single top-level "track" group; the variant is part of the case name so the
+# case prefix dominates the sort order.
 const _TRACK_BENCH_CASES = let gpsl1 = GPSL1CA(), gal = GalileoE1B()
     [
-        ("L1 8sat/5K",       (systems = (gpsl1,),     nsats_list = [8],    sfreq = 5e6Hz,  nsamp = 5000)),
-        ("E1B 4sat/25K",     (systems = (gal,),       nsats_list = [4],    sfreq = 25e6Hz, nsamp = 25000, prn_max = 50, code_dop = 100.0)),
-        ("8L1+8E1B/25K",     (systems = (gpsl1, gal), nsats_list = [8, 8], sfreq = 25e6Hz, nsamp = 25000, prn_max = 50, code_dop = 100.0)),
+        ("2. L1 8sat/5K",   (systems = (gpsl1,),     nsats_list = [8],    sfreq = 5e6Hz,  nsamp = 5000)),
+        ("3. E1B 4sat/25K", (systems = (gal,),       nsats_list = [4],    sfreq = 25e6Hz, nsamp = 25000, prn_max = 50, code_dop = 100.0)),
+        ("4. 8L1+8E1B/25K", (systems = (gpsl1, gal), nsats_list = [8, 8], sfreq = 25e6Hz, nsamp = 25000, prn_max = 50, code_dop = 100.0)),
     ]
 end
 
 for (key, kw) in _TRACK_BENCH_CASES
-    SUITE["track"][key] = bench_track_steady_state(false, false; kw...)
-    SUITE["track-threaded"][key] = bench_track_steady_state(false, true; kw...)
+    SUITE["track"]["$key – track"] = bench_track_steady_state(false, false; kw...)
+    SUITE["track"]["$key – track-threaded"] = bench_track_steady_state(false, true; kw...)
     if isdefined(Tracking, :track!)
-        SUITE["track!"][key] = bench_track_steady_state(true, false; kw...)
-        SUITE["track!-threaded"][key] = bench_track_steady_state(true, true; kw...)
+        SUITE["track"]["$key – track!"] = bench_track_steady_state(true, false; kw...)
+        SUITE["track"]["$key – track!-threaded"] = bench_track_steady_state(true, true; kw...)
     end
 end
 
@@ -530,10 +535,11 @@ if _HAS_TRACKED_SIGNAL
     end
 
     for n_signals = 1:3
+        prefix = "$(4 + n_signals). multi-signal N=$n_signals/5K"
         ts, signal =
             _make_multi_signal_track_state(; n_signals, nsamp = 5000, sfreq = 5e6Hz)
         dc = _make_cpu_dc(5e6Hz)
-        SUITE["track"]["multi-signal N=$n_signals/5K"] = @benchmarkable Tracking.track(
+        SUITE["track"]["$prefix – track"] = @benchmarkable Tracking.track(
             $signal, $ts, $(5e6Hz); downconvert_and_correlator = $dc,
         )
         if isdefined(Tracking, :track!)
@@ -541,7 +547,7 @@ if _HAS_TRACKED_SIGNAL
                 n_signals, nsamp = 5000, sfreq = 5e6Hz,
             )
             dc_ip = _make_cpu_dc(5e6Hz)
-            SUITE["track!"]["multi-signal N=$n_signals/5K"] = @benchmarkable Tracking.track!(
+            SUITE["track"]["$prefix – track!"] = @benchmarkable Tracking.track!(
                 $signal_ip, $ts_ip, $(5e6Hz); downconvert_and_correlator = $dc_ip,
             )
         end
