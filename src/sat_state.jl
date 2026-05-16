@@ -373,6 +373,64 @@ const SatelliteDicts{N} = TupleLike{<:NTuple{N,Dictionary{<:Any,<:TrackedSat}}}
 """
 $(SIGNATURES)
 
+A group of satellites that all track the same tuple of GNSS signal types,
+on the same RF band, observed by the same antenna array.
+
+Groups are the unit of type stability: every `TrackedSat` inside a
+`SignalGroup` shares the same concrete `Tuple{Vararg{TrackedSignal}}`
+shape, so the dictionary's value type is concrete and the hot loop sees
+no dynamic dispatch.
+
+Two groups may share a band (e.g. `:legacy_gps` tracking `(GPSL1CA(),)` and
+`:galileo` tracking `(GalileoE1B(),)` both on `L1()`). The grouping is by
+signal-tuple shape, not by band — band is metadata each group carries so
+the right measurement is routed to it during `track`.
+
+Fields:
+- `band`: an `AbstractGNSSSignal` `Band` instance (`L1()`, `L5()`, …)
+- `satellites`: `Dictionary{Int, <:TrackedSat}` keyed by PRN
+- `signals`: the signal-instance tuple (e.g. `(GPSL1C_P(), GPSL1C_D(), GPSL1CA())`)
+- `num_ants`: the antenna count for this group's band
+"""
+struct SignalGroup{
+    B,                                             # GNSSSignals Band instance
+    S<:Dictionary{<:Any,<:TrackedSat},
+    Sigs<:Tuple{Vararg{AbstractGNSSSignal}},
+    NA<:NumAnts,
+}
+    band::B
+    satellites::S
+    signals::Sigs
+    num_ants::NA
+end
+
+# Kwarg-update constructor — produces a new SignalGroup sharing concrete types
+# with `g`. The `satellites` field uses `Maybe{S}` so `nothing` stays
+# distinguishable from a real dict.
+function SignalGroup(
+    g::SignalGroup{B,S,Sigs,NA};
+    band::Maybe{B} = nothing,
+    satellites::Maybe{S} = nothing,
+    signals::Maybe{Sigs} = nothing,
+    num_ants::Maybe{NA} = nothing,
+) where {B,S<:Dictionary{<:Any,<:TrackedSat},Sigs<:Tuple{Vararg{AbstractGNSSSignal}},NA<:NumAnts}
+    SignalGroup{B,S,Sigs,NA}(
+        isnothing(band) ? g.band : band,
+        isnothing(satellites) ? g.satellites : satellites,
+        isnothing(signals) ? g.signals : signals,
+        isnothing(num_ants) ? g.num_ants : num_ants,
+    )
+end
+
+"""
+Type alias: NamedTuple of `SignalGroup`s — the storage shape inside
+[`TrackState`](@ref). The `N` parameter is the number of groups.
+"""
+const SignalGroups{N} = NamedTuple{<:Any,<:NTuple{N,SignalGroup}}
+
+"""
+$(SIGNATURES)
+
 Merge already-built tracked satellites into the existing tracking state.
 Used internally by [`TrackState`](@ref)'s `merge_sats` — external callers
 should prefer the `TrackState`-level method.
