@@ -40,12 +40,15 @@ if !_HAS_TRACKED_SIGNAL
         Tracking.TrackedSystem : Tracking.SystemSatsState
 end
 
-# Field name on `TrackState` for the per-system tuple.
+# Field / property name on `TrackState` for the per-system tuple.
+# On the multi-band branch this is a `getproperty`-only view over the
+# actual `groups` field, so we use `getproperty` (not `getfield`) — that
+# works equivalently for the real fields on master and the wrapper branch.
 const _SYSTEMS_FIELD = isdefined(Tracking, :TrackedSystem) ||
                        isdefined(Tracking, :TrackedSignal) ?
     :satellites : :multiple_system_sats_state
 
-@inline _get_systems(track_state) = getfield(track_state, _SYSTEMS_FIELD)
+@inline _get_systems(track_state) = getproperty(track_state, _SYSTEMS_FIELD)
 @inline _track_state_with_systems(track_state, systems) =
     TrackState(track_state; NamedTuple{(_SYSTEMS_FIELD,)}((systems,))...)
 
@@ -390,7 +393,21 @@ function _make_multi_sat_state(;
         push!(all_sss, _build_tracked_system(sys, sats))
         total_sats += ns
     end
-    TrackState(Tuple(all_sss)), rand(ComplexF32, nsamp), total_sats
+    _make_track_state(all_sss), rand(ComplexF32, nsamp), total_sats
+end
+
+# Branch-portable `TrackState(...)` from a list of per-system / per-group
+# storage entries. The multi-band branch's `SignalGroups` type parameter
+# requires a `NamedTuple` (not a plain `Tuple`), so build one with
+# auto-generated keys. Master / wrapper branches accept either.
+if _HAS_TRACKED_SIGNAL
+    @inline function _make_track_state(all_sss)
+        n = length(all_sss)
+        names = ntuple(i -> Symbol("sys", i), n)
+        TrackState(NamedTuple{names}(Tuple(all_sss)))
+    end
+else
+    @inline _make_track_state(all_sss) = TrackState(Tuple(all_sss))
 end
 
 # Build a `TrackState` for the given system mix with `bit_buffer.found = true`
