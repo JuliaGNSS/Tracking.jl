@@ -474,13 +474,14 @@ end
 @inline _foreach_system!(f::F, nt::NamedTuple, args::Vararg{Any,N}) where {F,N} =
     _foreach_system!(f, Tuple(nt), args...)
 
-# In-place variant: walks each per-system dictionary's `Vector{TrackedSat}`
-# slot storage and overwrites each entry with a freshly reset value. The
-# vector itself, the Dictionary, and the enclosing tuple are all reused.
-# `TrackedSat` itself is immutable, so the slot is reassigned rather than
-# mutated; we still call the non-`!` per-`TrackedSat` form.
-@inline function _reset_one_system!(sats::Dictionary{<:Any,<:TrackedSat})
-    vals = sats.values
+# In-place variant: walks each group's `Vector{TrackedSat}` slot storage
+# and overwrites each entry with a freshly reset value. The vector
+# itself, the Dictionary, the SignalGroup, and the enclosing NamedTuple
+# are all reused. `TrackedSat` itself is immutable, so the slot is
+# reassigned rather than mutated; we still call the non-`!` per-
+# `TrackedSat` form.
+@inline function _reset_one_system!(g::SignalGroup)
+    vals = g.satellites.values
     @inbounds for i in eachindex(vals)
         vals[i] = reset_start_sample_and_bit_buffer(vals[i])
     end
@@ -488,18 +489,38 @@ end
 end
 
 function reset_start_sample_and_bit_buffer!(
-    satellites::SatelliteDicts,
+    groups::SignalGroups,
 )
-    _foreach_system!(_reset_one_system!, satellites)
-    return satellites
+    _foreach_system!(_reset_one_system!, groups)
+    return groups
 end
 
-# Immutable variant: copies the slot vectors first, then delegates to the
-# in-place form. Same per-sat work, only the storage ownership differs.
+# Immutable variant on a NamedTuple of per-group satellite dictionaries
+# (the property-shim shape, NOT the SignalGroups storage shape). Copies
+# the slot vectors first, then resets each. Returns the same NamedTuple
+# shape, which the `TrackState(track_state; satellites = ...)` immutable
+# copy-constructor zips back into fresh groups.
 function reset_start_sample_and_bit_buffer(
     satellites::SatelliteDicts,
 )
-    reset_start_sample_and_bit_buffer!(_copy_slot_vectors(satellites))
+    new_dicts = _copy_slot_vectors(satellites)
+    _foreach_dict_reset!(new_dicts)
+    return new_dicts
+end
+
+# Per-dict reset variant — kept for the immutable path, which works
+# off detached dictionaries (no SignalGroup wrapper yet).
+@inline function _reset_one_dict!(sats::Dictionary{<:Any,<:TrackedSat})
+    vals = sats.values
+    @inbounds for i in eachindex(vals)
+        vals[i] = reset_start_sample_and_bit_buffer(vals[i])
+    end
+    return nothing
+end
+
+@inline function _foreach_dict_reset!(dicts::SatelliteDicts)
+    _foreach_system!(_reset_one_dict!, dicts)
+    return dicts
 end
 
 function to_dictionary(tracked_sats::Dictionary{I,<:TrackedSat}) where {I}
