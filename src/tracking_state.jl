@@ -242,35 +242,16 @@ function TrackState(
     TrackState(groups, doppler_estimator)
 end
 
-# Internal copy-constructor used by the immutable downconvert/estimator path
-# to swap in a fresh `satellites` NamedTuple (slot-vector-detached). Rebuilds
-# each group around the new per-group dictionary while preserving band,
-# signals, and num_ants.
-function TrackState(
-    track_state::TrackState{G,DE},
-    satellites::NamedTuple,
-    doppler_estimator::DE,
-) where {G<:SignalGroups,DE<:AbstractDopplerEstimator}
-    new_groups = map(track_state.groups, satellites) do g, sats
-        SignalGroup(g; satellites = sats)
-    end
-    TrackState{G,DE}(new_groups, doppler_estimator)
-end
-
 # Be careful when calling this.
 # It might lead to types that are inferred at runtime?!
 # Tested with 1.11.6
 function TrackState(
     track_state::TrackState{G,DE};
-    satellites::Maybe{NamedTuple} = nothing,
+    groups::Maybe{G} = nothing,
     doppler_estimator::Maybe{DE} = nothing,
 ) where {G<:SignalGroups,DE<:AbstractDopplerEstimator}
-    new_groups = isnothing(satellites) ? track_state.groups :
-        map(track_state.groups, satellites) do g, sats
-            SignalGroup(g; satellites = sats)
-        end
     TrackState{G,DE}(
-        new_groups,
+        isnothing(groups) ? track_state.groups : groups,
         isnothing(doppler_estimator) ? track_state.doppler_estimator : doppler_estimator,
     )
 end
@@ -294,12 +275,9 @@ end
 end
 
 function reset_start_sample_and_bit_buffer(track_state::TrackState)
-    TrackState(
-        track_state;
-        satellites = reset_start_sample_and_bit_buffer(
-            track_state.satellites,
-        ),
-    )
+    new_groups = _copy_groups_slot_vectors(track_state.groups)
+    reset_start_sample_and_bit_buffer!(new_groups)
+    TrackState(track_state; groups = new_groups)
 end
 
 function reset_start_sample_and_bit_buffer!(track_state::TrackState)
@@ -334,11 +312,11 @@ function get_sat_states(
     track_state::TrackState{<:SignalGroups{N}},
     system_idx::Union{Symbol,Integer,Val},
 ) where {N}
-    get_sat_states(track_state.satellites, system_idx)
+    get_sat_states(map(g -> g.satellites, track_state.groups), system_idx)
 end
 
 function get_sat_states(track_state::TrackState{<:SignalGroups{1}})
-    get_sat_states(track_state.satellites)
+    get_sat_states(map(g -> g.satellites, track_state.groups))
 end
 
 """

@@ -593,8 +593,7 @@ function downconvert_and_correlate(
 )
     new_track_state = TrackState(
         track_state;
-        satellites =
-            _copy_slot_vectors(track_state.satellites),
+        groups = _copy_groups_slot_vectors(track_state.groups),
     )
     downconvert_and_correlate!(
         dc, measurements, new_track_state,
@@ -669,8 +668,7 @@ function downconvert_and_correlate(
 )
     new_track_state = TrackState(
         track_state;
-        satellites =
-            _copy_slot_vectors(track_state.satellites),
+        groups = _copy_groups_slot_vectors(track_state.groups),
     )
     downconvert_and_correlate!(
         dc, measurements, new_track_state,

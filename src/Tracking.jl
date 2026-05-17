@@ -8,7 +8,6 @@ using StaticArrays
 using TrackingLoopFilters
 using Dictionaries
 using Accessors
-using ConstructionBase
 using Polyester
 
 using Unitful: upreferred, Hz, dBHz, ms
@@ -174,56 +173,11 @@ struct used for tracking operations.
 
 `groups` is a NamedTuple of [`SignalGroup`](@ref)s. Each group bundles its
 per-capability `satellites` dictionary, signal-instance tuple, band, and
-antenna count. The two legacy property names `track_state.satellites`
-(NamedTuple of dicts) and `track_state.signal_groups` (NamedTuple of signal
-tuples) remain available as compile-time-cheap property forwards over
-`groups`, so existing internal walkers (`_foreach_system!`, etc.) keep
-working unchanged.
+antenna count.
 """
 struct TrackState{G<:SignalGroups,DE<:AbstractDopplerEstimator}
     groups::G
     doppler_estimator::DE
-end
-
-# Property-forward shims: keep `track_state.satellites` and
-# `track_state.signal_groups` working as NamedTuple views over `groups`,
-# so downstream walkers (`_foreach_system!`, downconvert/estimator code)
-# don't need to change. Both views fold to the underlying NamedTuple at
-# compile time when the field-tuple type is concrete.
-@inline function Base.getproperty(ts::TrackState, name::Symbol)
-    if name === :satellites
-        return map(g -> g.satellites, getfield(ts, :groups))
-    elseif name === :signal_groups
-        return map(g -> g.signals, getfield(ts, :groups))
-    else
-        return getfield(ts, name)
-    end
-end
-
-@inline Base.propertynames(::TrackState) =
-    (:groups, :doppler_estimator, :satellites, :signal_groups)
-
-# ConstructionBase contract: when Accessors/Setfield rebuild a TrackState
-# through its synthetic properties, only the *real* fields (groups,
-# doppler_estimator) are mutable here. The two property shims
-# (.satellites, .signal_groups) are read-only views derived from
-# `groups`; trying to set them is a user error.
-@inline function ConstructionBase.setproperties(
-    ts::TrackState, patch::NamedTuple,
-)
-    if !isempty(patch) && any(k -> !(k in (:groups, :doppler_estimator)), keys(patch))
-        bad = setdiff(keys(patch), (:groups, :doppler_estimator))
-        throw(ArgumentError(string(
-            "Cannot set property ", first(bad), " on TrackState. ",
-            "Only `groups` and `doppler_estimator` are writable fields; ",
-            "`satellites` and `signal_groups` are read-only views derived ",
-            "from `groups`.",
-        )))
-    end
-    new_groups = haskey(patch, :groups) ? patch.groups : getfield(ts, :groups)
-    new_est = haskey(patch, :doppler_estimator) ?
-        patch.doppler_estimator : getfield(ts, :doppler_estimator)
-    TrackState(new_groups, new_est)
 end
 
 include("sample_parameters.jl")

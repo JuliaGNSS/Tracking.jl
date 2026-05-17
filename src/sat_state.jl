@@ -493,6 +493,17 @@ end
     map(_copy_slot_vector, satellites)
 end
 
+# Groups-shape variant: produce a fresh `SignalGroups` where each `SignalGroup`
+# reuses the original's band / signals / num_ants but holds a Dictionary whose
+# `values` vector is freshly copied. Used by the immutable
+# downconvert/estimator/reset paths to detach storage from the input
+# `TrackState` before delegating to the in-place form.
+@inline _copy_group_slot_vectors(g::SignalGroup) =
+    SignalGroup(g; satellites = _copy_slot_vector(g.satellites))
+
+@inline _copy_groups_slot_vectors(groups::SignalGroups) =
+    map(_copy_group_slot_vectors, groups)
+
 # Recursive tuple walker: applies `f(sats_dict, args...)` to each per-system
 # satellite dictionary in the (named-)tuple. Each step has fully concrete
 # types, so no runtime dispatch even when systems differ (heterogeneous
@@ -526,34 +537,6 @@ function reset_start_sample_and_bit_buffer!(
 )
     _foreach_system!(_reset_one_system!, groups)
     return groups
-end
-
-# Immutable variant on a NamedTuple of per-group satellite dictionaries
-# (the property-shim shape, NOT the SignalGroups storage shape). Copies
-# the slot vectors first, then resets each. Returns the same NamedTuple
-# shape, which the `TrackState(track_state; satellites = ...)` immutable
-# copy-constructor zips back into fresh groups.
-function reset_start_sample_and_bit_buffer(
-    satellites::SatelliteDicts,
-)
-    new_dicts = _copy_slot_vectors(satellites)
-    _foreach_dict_reset!(new_dicts)
-    return new_dicts
-end
-
-# Per-dict reset variant — kept for the immutable path, which works
-# off detached dictionaries (no SignalGroup wrapper yet).
-@inline function _reset_one_dict!(sats::Dictionary{<:Any,<:TrackedSat})
-    vals = sats.values
-    @inbounds for i in eachindex(vals)
-        vals[i] = reset_start_sample_and_bit_buffer(vals[i])
-    end
-    return nothing
-end
-
-@inline function _foreach_dict_reset!(dicts::SatelliteDicts)
-    _foreach_system!(_reset_one_dict!, dicts)
-    return dicts
 end
 
 function to_dictionary(tracked_sats::Dictionary{I,<:TrackedSat}) where {I}

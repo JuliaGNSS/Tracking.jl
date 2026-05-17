@@ -353,8 +353,7 @@ function estimate_dopplers_and_filter_prompt(
     # only the storage ownership differs.
     new_track_state = TrackState(
         track_state;
-        satellites =
-            _copy_slot_vectors(track_state.satellites),
+        groups = _copy_groups_slot_vectors(track_state.groups),
     )
     estimate_dopplers_and_filter_prompt!(
         new_track_state, measurements, preferred_num_code_blocks_to_integrate,
