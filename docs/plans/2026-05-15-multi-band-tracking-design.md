@@ -37,7 +37,7 @@ linkage" below for the open mechanism question.
 - **Heterogeneous bit-sample formats across bands.** All measurements still
   use the same eltype family (`Complex{Int16/Int32/Float32/Float64}`).
 - **Run-time changing of the signal-group set.** The groups tuple is frozen
-  at TrackState construction (same as today's capability tuple). Adding a
+  at TrackState construction (same as today's group tuple). Adding a
   new signal group needs a new TrackState; adding a *sat* to an existing
   group stays runtime-cheap.
 
@@ -45,25 +45,25 @@ linkage" below for the open mechanism question.
 
 ### Single-band users write today's code
 
-The over-arching constraint: a user with one band, one capability, one signal
+The over-arching constraint: a user with one band, one group, one signal
 writes exactly the same code they write today. They never see `groups = (...)`,
 never see a NamedTuple of measurements, never type the word "band":
 
 ```julia
-# Single-band, single-capability, single-signal — unchanged from today
+# Single-band, single-group, single-signal — unchanged from today
 track_state = TrackState(; signal = GPSL1CA())
 add_satellite!(track_state; prn = 11, carrier_doppler = 1234.0Hz)
 track!(buf, track_state, 4e6Hz)
 ```
 
 ```julia
-# Single-band, multi-capability — also unchanged from today
+# Single-band, multi-group — also unchanged from today
 track_state = TrackState(; signals = (
     legacy_gps = (GPSL1CA(),),
     modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),
     galileo    = (GalileoE1B(),),
 ))
-add_satellite!(track_state; prn = 11, capability = :modern_gps)
+add_satellite!(track_state; prn = 11, group = :modern_gps)
 track!(buf, track_state, 4e6Hz)
 ```
 

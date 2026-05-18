@@ -166,7 +166,11 @@ function TrackedSat(
     prn::Int,
     code_phase,
     carrier_doppler;
-    doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
+    doppler_estimator::AbstractDopplerEstimator =
+        ConventionalAssistedPLLAndDLL(;
+            carrier_loop_filter_bandwidth = default_carrier_loop_filter_bandwidth(signal),
+            code_loop_filter_bandwidth = default_code_loop_filter_bandwidth(signal),
+        ),
     num_ants::NumAnts = NumAnts(1),
     correlator::AbstractCorrelator = get_default_correlator(signal, num_ants),
     carrier_phase = 0.0,
@@ -444,7 +448,13 @@ function SignalGroup(
     signals::Tuple{Vararg{AbstractGNSSSignal}};
     band = get_band(first(signals)),
     num_ants::NumAnts = NumAnts(1),
-    doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
+    doppler_estimator::AbstractDopplerEstimator =
+        ConventionalAssistedPLLAndDLL(;
+            carrier_loop_filter_bandwidth =
+                default_carrier_loop_filter_bandwidth(first(signals)),
+            code_loop_filter_bandwidth =
+                default_code_loop_filter_bandwidth(first(signals)),
+        ),
 )
     # Build a template TrackedSat so the dict's value type is concrete.
     # Reuses the existing helper from tracking_state.jl, which is fine

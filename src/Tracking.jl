@@ -10,7 +10,7 @@ using Dictionaries
 using Accessors
 using Polyester
 
-using Unitful: upreferred, Hz, dBHz, ms
+using Unitful: upreferred, uconvert, Hz, dBHz, ms
 import Base.zero, Base.length, Base.resize!, LinearAlgebra.dot
 
 export get_early,
@@ -68,6 +68,8 @@ export get_early,
     get_system,
     estimate_cn0,
     get_default_correlator,
+    default_carrier_loop_filter_bandwidth,
+    default_code_loop_filter_bandwidth,
     AbstractCorrelator,
     AbstractDownconvertAndCorrelator,
     SatelliteDicts,
@@ -159,6 +161,8 @@ include("correlators/very_early_prompt_late.jl")
 include("discriminators.jl")
 include("post_corr_filter.jl")
 include("gpsl1ca.jl")
+include("gpsl1c_d.jl")
+include("gpsl1c_p.jl")
 include("gpsl5i.jl")
 include("galileo_e1b.jl")
 include("sat_state.jl")

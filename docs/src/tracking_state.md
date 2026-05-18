@@ -9,7 +9,7 @@ The main container for all tracking state. It holds:
 - `groups` — a `NamedTuple` of [`SignalGroup`](@ref)s. Each group bundles its satellites dictionary, signal-instance tuple, band, and antenna count.
 - `doppler_estimator` — the Doppler estimator configuration (e.g. PLL/DLL bandwidths).
 
-Two compatibility property views over `groups` are also available: `track_state.satellites` (a `NamedTuple` of `Dictionary{Int, TrackedSat}`, one per group) and `track_state.signal_groups` (a `NamedTuple` of signal-instance tuples). Both fold to compile-time constants when the groups type is known.
+To reach per-group state, index `track_state.groups` by the group's key (e.g. `track_state.groups[:legacy_gps].satellites`). The high-level accessors below ([`get_sat_states`](@ref), [`get_sat_state`](@ref), …) take the group key as an argument and fold to compile-time constants when the groups type is known.
 
 ```@docs
 TrackState

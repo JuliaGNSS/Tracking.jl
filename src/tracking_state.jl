@@ -41,7 +41,8 @@ hand them to the `add_satellite!(track_state, group, sat)` overload.
 function TrackState(;
     signal::Maybe{AbstractGNSSSignal} = nothing,
     signals = nothing,
-    doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
+    doppler_estimator::AbstractDopplerEstimator =
+        _auto_default_doppler_estimator(signal, signals),
     num_ants::NumAnts = NumAnts(1),
 )
     if isnothing(signal) && isnothing(signals)
@@ -70,6 +71,35 @@ function TrackState(;
     _validate_same_band_num_ants(groups)
     TrackState(groups, doppler_estimator)
 end
+
+# Build the default `ConventionalAssistedPLLAndDLL` for a TrackState
+# declared via `signal=` or `signals=`. Sized for the *most constraining*
+# (longest-T) Doppler-source signal across all declared groups — "Doppler
+# source" = `signals[1]` of each group. Picking the minimum BL across
+# groups is the safe move: a BL chosen for a longer T is always stable at
+# a shorter T, just less responsive. The two-arg validation (exactly one
+# of `signal`/`signals` set) happens later in the constructor body; if
+# both are nothing here we fall back to the no-signal default (which the
+# subsequent argument check then errors on with the helpful message).
+@inline function _auto_default_doppler_estimator(
+    signal::Maybe{AbstractGNSSSignal}, signals,
+)
+    isnothing(signal) && isnothing(signals) &&
+        return ConventionalAssistedPLLAndDLL()
+    sig_groups_nt = isnothing(signal) ?
+        _normalize_signal_groups(signals) :
+        (default = (signal,),)
+    driver_signals = map(_doppler_source_signal, Tuple(sig_groups_nt))
+    carrier_bls = map(default_carrier_loop_filter_bandwidth, driver_signals)
+    code_bls = map(default_code_loop_filter_bandwidth, driver_signals)
+    ConventionalAssistedPLLAndDLL(;
+        carrier_loop_filter_bandwidth = minimum(carrier_bls),
+        code_loop_filter_bandwidth = minimum(code_bls),
+    )
+end
+
+@inline _doppler_source_signal(sigs::Tuple{Vararg{AbstractGNSSSignal}}) = first(sigs)
+@inline _doppler_source_signal(g::SignalGroup) = first(g.signals)
 
 # Bare tuple of AbstractGNSSSignal → single :default capability NamedTuple.
 @inline _normalize_signal_groups(signals::Tuple{Vararg{AbstractGNSSSignal}}) =
@@ -188,11 +218,16 @@ end
 function TrackState(
     system::AbstractGNSSSignal,
     tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}};
-    doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
+    doppler_estimator::AbstractDopplerEstimator =
+        ConventionalAssistedPLLAndDLL(;
+            carrier_loop_filter_bandwidth = default_carrier_loop_filter_bandwidth(system),
+            code_loop_filter_bandwidth = default_code_loop_filter_bandwidth(system),
+        ),
 )
     # `system` is implied by each sat's `signals[1].signal` in the new
     # design; the positional argument is kept for backward-compatible
-    # construction but is otherwise unused.
+    # construction but is otherwise unused — but it IS what sizes the
+    # default loop bandwidths in the kwarg default expression above.
     sats_dict = to_dictionary(tracked_sats)
     _assert_doppler_estimator_types_match(sats_dict, doppler_estimator)
     groups = (default = _signal_group_from_dict(sats_dict),)
@@ -201,11 +236,28 @@ end
 
 function TrackState(
     tracked_sats::Dictionary{<:Any,<:TrackedSat};
-    doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
+    doppler_estimator::AbstractDopplerEstimator =
+        _default_estimator_for_sats_dict(tracked_sats),
 )
     _assert_doppler_estimator_types_match(tracked_sats, doppler_estimator)
     groups = (default = _signal_group_from_dict(tracked_sats),)
     TrackState(groups, doppler_estimator)
+end
+
+# Default estimator inferred from the dictionary's first sat's driver
+# signal. Empty dicts can't pick a signal-aware default and fall back to
+# the historical 18 Hz / 1 Hz that worked for the L1CA-only era; the
+# `_assert_doppler_estimator_types_match` check on an empty dict is a
+# no-op so no harm there.
+@inline function _default_estimator_for_sats_dict(
+    tracked_sats::Dictionary{<:Any,<:TrackedSat},
+)
+    isempty(tracked_sats) && return ConventionalAssistedPLLAndDLL()
+    sig = first(first(tracked_sats.values).signals).signal
+    ConventionalAssistedPLLAndDLL(;
+        carrier_loop_filter_bandwidth = default_carrier_loop_filter_bandwidth(sig),
+        code_loop_filter_bandwidth = default_code_loop_filter_bandwidth(sig),
+    )
 end
 
 # Verify every sat in `dict` has a `doppler_estimator_state` matching
@@ -236,10 +288,28 @@ end
 
 function TrackState(
     satellites::SatelliteDicts;
-    doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
+    doppler_estimator::AbstractDopplerEstimator =
+        _default_estimator_for_satellite_dicts(satellites),
 )
     groups = map(_signal_group_from_dict, satellites)
     TrackState(groups, doppler_estimator)
+end
+
+# Picks the most-constraining (longest-T, lowest-BL) default across all
+# per-system dicts' driver signals. Each group has at least one sat by
+# the legacy constructor's precondition (_signal_group_from_dict errors
+# on empty dicts), so reading `signals[1]` of the first sat is safe.
+@inline function _default_estimator_for_satellite_dicts(satellites::SatelliteDicts)
+    driver_signals = map(
+        d -> first(first(d.values).signals).signal,
+        Tuple(satellites),
+    )
+    carrier_bls = map(default_carrier_loop_filter_bandwidth, driver_signals)
+    code_bls = map(default_code_loop_filter_bandwidth, driver_signals)
+    ConventionalAssistedPLLAndDLL(;
+        carrier_loop_filter_bandwidth = minimum(carrier_bls),
+        code_loop_filter_bandwidth = minimum(code_bls),
+    )
 end
 
 # Be careful when calling this.

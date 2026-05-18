@@ -6,6 +6,8 @@ using GNSSSignals: GPSL1CA
 using Tracking:
     is_upcoming_integration_new_bit,
     get_default_correlator,
+    default_carrier_loop_filter_bandwidth,
+    default_code_loop_filter_bandwidth,
     EarlyPromptLateCorrelator,
     NumAnts
 
@@ -23,6 +25,12 @@ using Tracking:
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
     @test @inferred(get_default_correlator(gpsl1, NumAnts(3))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(3))
+
+    # Per-signal default loop bandwidths: sized for the 1 ms primary code
+    # period at BL·T ≈ 0.018. Historically the package shipped 18 Hz / 1 Hz
+    # as the universal default — that value falls out of the formula here.
+    @test @inferred(default_carrier_loop_filter_bandwidth(gpsl1)) ≈ 18.0Hz
+    @test @inferred(default_code_loop_filter_bandwidth(gpsl1)) ≈ 1.0Hz
 end
 
 end
