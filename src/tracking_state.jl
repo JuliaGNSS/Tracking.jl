@@ -786,6 +786,15 @@ band_keys(ts) == (:l1, :l5)
     first(track_state.groups).band
 end
 
+# Two-way membership check on two short symbol tuples. Equivalent to
+# `Set(a) == Set(b)` but allocation-free: tuple `in` is unrolled and
+# the comparison runs in O(length(a)·length(b)) — fine for band tuples
+# which are 1..a few entries.
+@inline function _tuple_sets_equal(a::Tuple, b::Tuple)
+    length(a) == length(b) || return false
+    all(x -> x in b, a) && all(y -> y in a, b)
+end
+
 # Validate a multi-band measurements NamedTuple against the TrackState's
 # groups: keys must match exactly, antenna shape per band must match,
 # and all observation durations must be identical (no tolerance). Called
@@ -796,8 +805,7 @@ end
 )
     expected_keys = band_keys(track_state)
     got_keys = keys(measurements)
-    # Equal as sets, but order may differ — sort for the comparison.
-    if Set(expected_keys) != Set(got_keys)
+    if !_tuple_sets_equal(expected_keys, got_keys)
         throw(ArgumentError(string(
             "Measurement keys do not match the TrackState's band set. ",
             "Expected: ", expected_keys,
