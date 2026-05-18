@@ -41,16 +41,33 @@ if !_HAS_TRACKED_SIGNAL
 end
 
 # Field / property name on `TrackState` for the per-system tuple.
-# On the multi-band branch this is a `getproperty`-only view over the
-# actual `groups` field, so we use `getproperty` (not `getfield`) — that
-# works equivalently for the real fields on master and the wrapper branch.
-const _SYSTEMS_FIELD = isdefined(Tracking, :TrackedSystem) ||
-                       isdefined(Tracking, :TrackedSignal) ?
-    :satellites : :multiple_system_sats_state
+# Three flavours of branch coexist:
+#   * Master:                       real field `multiple_system_sats_state`
+#   * Wrapper branch:               real field `satellites`
+#   * Multi-band branch (current):  real field `groups`, where each entry is a
+#                                   `SignalGroup` bundling a `satellites` dict
+#                                   (plus band / signals / num_ants).
+# On the multi-band branch the bench needs a NamedTuple-of-dicts shape — derive
+# it inline from `groups` and rebuild via fresh `SignalGroup`s after the map.
+const _MULTIBAND = _HAS_TRACKED_SIGNAL
+const _SYSTEMS_FIELD = _MULTIBAND ? :groups :
+    isdefined(Tracking, :TrackedSystem) ? :satellites :
+    :multiple_system_sats_state
 
-@inline _get_systems(track_state) = getproperty(track_state, _SYSTEMS_FIELD)
-@inline _track_state_with_systems(track_state, systems) =
-    TrackState(track_state; NamedTuple{(_SYSTEMS_FIELD,)}((systems,))...)
+@inline _get_systems(track_state) =
+    _MULTIBAND ? map(g -> g.satellites, track_state.groups) :
+                 getproperty(track_state, _SYSTEMS_FIELD)
+
+@inline function _track_state_with_systems(track_state, systems)
+    if _MULTIBAND
+        new_groups = map(track_state.groups, systems) do g, sats
+            Tracking.SignalGroup(g; satellites = sats)
+        end
+        TrackState(track_state; groups = new_groups)
+    else
+        TrackState(track_state; NamedTuple{(_SYSTEMS_FIELD,)}((systems,))...)
+    end
+end
 
 # Branch-portable per-sat construction. Returns an object suitable for
 # whatever the loaded Tracking expects in its per-system storage:
