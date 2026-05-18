@@ -350,9 +350,10 @@ end
 
 # ── Tuple-of-correlators tile-share fused kernel ──────────────────────
 # For multi-signal-per-satellite tracking: one downconvert into the
-# `tile_re` / `tile_im` SoA tile, followed by a single sample-outer
-# correlate pass that accumulates into N correlators (each with its own
-# code replica and `sample_shifts`).
+# `tile_re` / `tile_im` SoA tile (one slice per antenna), followed by M
+# antenna-outer correlate passes that accumulate into N correlators
+# (each with its own code replica and `sample_shifts`). All N correlators
+# must agree on the antenna count M.
 #
 # At N=2 this beats fused-N-times by ~37%; at N=3 by ~51% — see the
 # probes in `claude_scratch/` and the design doc. The single-signal path
@@ -361,14 +362,16 @@ end
 # downconverted samples never leave registers.
 #
 # The downconvert phase mirrors the dynamic-shifts kernel above. The
-# correlate phase is `@generated`-unrolled over all (signal i, tap k)
-# pairs so every accumulator stays in a named local; one tile-streaming
-# pass touches them all per sample.
+# correlate phase is `@generated`-unrolled into M sample-outer passes,
+# one per antenna; each pass keeps only N·NC accumulators live so the
+# inner loop fits in 16 ymm registers (AVX2) without spilling. At M=1
+# this collapses to a single pass (same shape as before); at M=2..4 it
+# wins 15-31% over a single fused pass over M·N·NC accumulators.
 @generated function downconvert_and_correlate_fused_tuple!(
-    correlators::Tuple{Vararg{AbstractCorrelator{1}, N}},
+    correlators::Tuple{AbstractCorrelator{M}, Vararg{AbstractCorrelator{M}, NM1}},
     signal::AbstractArray{Complex{ST}},
-    code_replicas::Tuple{Vararg{Any, N}},
-    all_sample_shifts::Tuple{Vararg{SVector, N}},
+    code_replicas::Tuple{Any, Vararg{Any, NM1}},
+    all_sample_shifts::Tuple{SVector, Vararg{SVector, NM1}},
     carrier_frequency,
     sampling_frequency,
     carrier_phase,
@@ -376,43 +379,87 @@ end
     num_samples::Integer,
     tile_re,
     tile_im,
-) where {ST, N}
+) where {M, ST, NM1}
+    N = NM1 + 1
     # Per-signal NC from each SVector's `length` (a compile-time constant
     # available on the type itself, via the StaticArray Size interface).
     NC_per_signal = Int[length(all_sample_shifts.parameters[i]) for i in 1:N]
 
-    # Accumulator init: ar_i_k, ai_i_k for each (signal i, tap k).
-    acc_init = Expr(:block)
-    for i in 1:N, k in 1:NC_per_signal[i]
-        push!(acc_init.args, :($(Symbol("ar_$(i)_$(k)")) = zero(Float32)))
-        push!(acc_init.args, :($(Symbol("ai_$(i)_$(k)")) = zero(Float32)))
-    end
-
-    # Per-signal locals: code_replica reference + per-tap shift offset.
-    locals_init = Expr(:block)
-    for i in 1:N
-        push!(locals_init.args, :($(Symbol("cr_$(i)")) = code_replicas[$i]))
-        push!(locals_init.args, :($(Symbol("ms_$(i)")) = minimum(all_sample_shifts[$i])))
-        for k in 1:NC_per_signal[i]
-            push!(locals_init.args, :(
-                $(Symbol("sh_$(i)_$(k)")) = all_sample_shifts[$i][$k] - $(Symbol("ms_$(i)"))
-            ))
+    # Correlate phase: emit M independent passes over `n`, one per antenna.
+    # Each pass keeps only N·NC accumulators live (vs M·N·NC for a single
+    # fused pass), which avoids register spilling on 16-ymm AVX2 targets
+    # and gives 15-31% speedups at M=2..4 — see the variant comparison in
+    # `claude_scratch/probe_full_kernel_ant_outer.jl`.
+    # Each antenna's tile slice is streamed exactly once (same as the
+    # single-pass shape); the code replicas are re-read M times across
+    # passes, which costs nothing since each replica fits in L1.
+    correlate_passes = Expr(:block)
+    for j in 1:M
+        # Per-pass accumulator init: ar_j_i_k / ai_j_i_k for THIS antenna.
+        # We keep the global naming so `finalize` resolves to these locals.
+        pass_init = Expr(:block)
+        for i in 1:N, k in 1:NC_per_signal[i]
+            push!(pass_init.args, :($(Symbol("ar_$(j)_$(i)_$(k)")) = zero(Float32)))
+            push!(pass_init.args, :($(Symbol("ai_$(j)_$(i)_$(k)")) = zero(Float32)))
         end
+        # Per-pass locals: code_replica pointers + per-tap shift offsets.
+        pass_locals = Expr(:block)
+        for i in 1:N
+            push!(pass_locals.args, :($(Symbol("cr_$(i)")) = code_replicas[$i]))
+            push!(pass_locals.args,
+                :($(Symbol("ms_$(i)")) = minimum(all_sample_shifts[$i])))
+            for k in 1:NC_per_signal[i]
+                push!(pass_locals.args, :(
+                    $(Symbol("sh_$(i)_$(k)")) =
+                        all_sample_shifts[$i][$k] - $(Symbol("ms_$(i)"))
+                ))
+            end
+        end
+        # Inner per-sample body for antenna `j`: one tile load + N·NC FMAs.
+        pass_body = Expr(:block)
+        push!(pass_body.args, :(tr = tile_re[$(j - 1) * num_samples + n]))
+        push!(pass_body.args, :(ti = tile_im[$(j - 1) * num_samples + n]))
+        for i in 1:N
+            cr = Symbol("cr_$(i)")
+            for k in 1:NC_per_signal[i]
+                sh = Symbol("sh_$(i)_$(k)")
+                push!(pass_body.args, :(c = Float32($cr[n + $sh])))
+                push!(pass_body.args, :($(Symbol("ar_$(j)_$(i)_$(k)")) =
+                    muladd(tr, c, $(Symbol("ar_$(j)_$(i)_$(k)")))))
+                push!(pass_body.args, :($(Symbol("ai_$(j)_$(i)_$(k)")) =
+                    muladd(ti, c, $(Symbol("ai_$(j)_$(i)_$(k)")))))
+            end
+        end
+        push!(correlate_passes.args, quote
+            $pass_init
+            $pass_locals
+            @inbounds @simd for n in 1:num_samples
+                $pass_body
+            end
+        end)
     end
 
-    # Inner per-sample body: load tile sample, accumulate into every (i,k).
-    sample_body = Expr(:block)
-    push!(sample_body.args, :(tr = tile_re[n]))
-    push!(sample_body.args, :(ti = tile_im[n]))
-    for i in 1:N
-        cr = Symbol("cr_$(i)")
-        for k in 1:NC_per_signal[i]
-            ar = Symbol("ar_$(i)_$(k)")
-            ai = Symbol("ai_$(i)_$(k)")
-            sh = Symbol("sh_$(i)_$(k)")
-            push!(sample_body.args, :(c = Float32($cr[n + $sh])))
-            push!(sample_body.args, :($ar = muladd(tr, c, $ar)))
-            push!(sample_body.args, :($ai = muladd(ti, c, $ai)))
+    # Build the per-tap accumulator expression: scalar Complex for M==1,
+    # SVector{M, ComplexF64} for M>1.
+    function tap_accum_expr(i, k)
+        if M == 1
+            return quote
+                complex(
+                    Float64($(Symbol("ar_1_$(i)_$(k)"))),
+                    Float64($(Symbol("ai_1_$(i)_$(k)"))),
+                )
+            end
+        else
+            ant_exprs = [
+                quote
+                    complex(
+                        Float64($(Symbol("ar_$(j)_$(i)_$(k)"))),
+                        Float64($(Symbol("ai_$(j)_$(i)_$(k)"))),
+                    )
+                end
+                for j in 1:M
+            ]
+            return :(SVector{$M}(tuple($(ant_exprs...))))
         end
     end
 
@@ -420,17 +467,11 @@ end
     finalize = Expr(:block)
     push!(finalize.args, :(updated = ()))
     for i in 1:N
-        # Build the tap-vector for this signal's correlator: SVector{NC_i}(...)
         nc = NC_per_signal[i]
-        tap_complexes = [
-            quote
-                complex(Float64($(Symbol("ar_$(i)_$(k)"))), Float64($(Symbol("ai_$(i)_$(k)"))))
-            end
-            for k in 1:nc
-        ]
+        tap_exprs = [tap_accum_expr(i, k) for k in 1:nc]
         push!(finalize.args, :(corr_i = correlators[$i]))
         push!(finalize.args, :(prev_i = get_accumulators(corr_i)))
-        push!(finalize.args, :(new_accs_i = SVector{$nc}(($(tap_complexes...),))))
+        push!(finalize.args, :(new_accs_i = SVector{$nc}(($(tap_exprs...),))))
         push!(finalize.args, :(new_corr_i = update_accumulator(corr_i, prev_i .+ new_accs_i)))
         push!(finalize.args, :(updated = (updated..., new_corr_i)))
     end
@@ -455,7 +496,7 @@ end
 
         last = start_sample + num_samples - 1
 
-        # ── Phase 1: downconvert into the shared tile (1 antenna). ───
+        # ── Phase 1: downconvert into the shared tile (M antennas). ──
         i = start_sample
         idx = 1
         @inbounds while i + W - 1 <= last
@@ -463,31 +504,36 @@ end
             phase = muladd(base_phase, two_pi_fr, init_1)
             ci, cr = fast_sincos_u100k(phase)
             row_byte_off = (i - 1) * 2 * sizeof_ST
-            sr, si = _deinterleave_load(SIMD.Vec{W,T}, p_sig, row_byte_off)
-            dre = sr * cr + si * ci
-            dim = si * cr - sr * ci
-            off = (idx - 1) * sizeof(T)
-            vstore(dre, pointer(tile_re) + off)
-            vstore(dim, pointer(tile_im) + off)
+            Base.Cartesian.@nexprs $M j -> begin
+                sr_j, si_j = _deinterleave_load(
+                    SIMD.Vec{W,T}, p_sig,
+                    (j - 1) * sig_col_bytes + row_byte_off,
+                )
+                dre_j = sr_j * cr + si_j * ci
+                dim_j = si_j * cr - sr_j * ci
+                off_j = ((j - 1) * num_samples + idx - 1) * sizeof(T)
+                vstore(dre_j, pointer(tile_re) + off_j)
+                vstore(dim_j, pointer(tile_im) + off_j)
+            end
             i += W
             idx += W
         end
         @inbounds while i <= last
             ph = two_pi * (T(i - start_sample) * freq_ratio + phase0)
             c_im_s, c_re_s = sincos(ph)
-            sig = signal[i, 1]
-            tile_re[idx] = T(real(sig)) * c_re_s + T(imag(sig)) * c_im_s
-            tile_im[idx] = T(imag(sig)) * c_re_s - T(real(sig)) * c_im_s
+            Base.Cartesian.@nexprs $M j -> begin
+                sig_j = signal[i, j]
+                tile_re[(j - 1) * num_samples + idx] =
+                    T(real(sig_j)) * c_re_s + T(imag(sig_j)) * c_im_s
+                tile_im[(j - 1) * num_samples + idx] =
+                    T(imag(sig_j)) * c_re_s - T(real(sig_j)) * c_im_s
+            end
             i += 1
             idx += 1
         end
 
-        # ── Phase 2: sample-outer fused correlate over N×NC accumulators. ──
-        $acc_init
-        $locals_init
-        @inbounds @simd for n in 1:num_samples
-            $sample_body
-        end
+        # ── Phase 2: antenna-outer fused correlate, N·NC accumulators per pass. ──
+        $correlate_passes
 
         # ── Finalize: rebuild N updated correlators. ──
         $finalize

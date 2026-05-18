@@ -132,16 +132,18 @@ end
 end
 
 # Multi-signal tile-share scratch handle: yields ScratchViews over the
-# shared `tile_re` / `tile_im` SoA buffers, sized for `num_samples`
-# Float32s each.
+# shared `tile_re` / `tile_im` SoA buffers, sized for `M * num_samples`
+# Float32s each (M antennas laid out back-to-back).
 @inline function _with_tile_buffers(
     f,
     dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
     num_samples::Int,
+    num_ants::Int = 1,
 )
     bufs = _scratch_buffers(dc)
-    _with_scratch_view(bufs.tile_re, Float32, num_samples) do tile_re
-        _with_scratch_view(bufs.tile_im, Float32, num_samples) do tile_im
+    n = num_samples * num_ants
+    _with_scratch_view(bufs.tile_re, Float32, n) do tile_re
+        _with_scratch_view(bufs.tile_im, Float32, n) do tile_im
             f(tile_re, tile_im)
         end
     end
@@ -494,7 +496,10 @@ end
     sample_shifts_tuple = _signal_sample_shifts(
         signals, code_doppler, sampling_frequency,
     )
-    new_correlators = _with_tile_buffers(dc, num_samples_signal) do tile_re, tile_im
+    # All correlators in this sat agree on M (enforced by SignalGroup);
+    # read it from the first correlator's type.
+    num_ants = get_num_ants(correlators[1])
+    new_correlators = _with_tile_buffers(dc, num_samples_signal, num_ants) do tile_re, tile_im
         downconvert_and_correlate_fused_tuple!(
             correlators,
             signal,

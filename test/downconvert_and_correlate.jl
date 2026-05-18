@@ -371,4 +371,132 @@ end
     @test get_accumulators(fused_dynamic) ≈ ref_accumulators rtol = 1e-4
 end
 
+@testset "Fused downconvert and correlate tuple kernel" begin
+    using StaticArrays: SVector
+
+    gpsl1 = GPSL1CA()
+    sampling_frequency = 5e6Hz
+    code_phase = 10.5
+    num_samples_signal = 5000
+    carrier_doppler = 1000.0Hz
+    prn = 1
+
+    carrier_frequency = carrier_doppler + 0.0Hz
+    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
+    code_frequency = code_doppler + get_code_frequency(gpsl1)
+
+    @testset "Single-antenna, N=$N signals" for N = 2:3
+        correlators = ntuple(_ -> EarlyPromptLateCorrelator(), N)
+        sample_shifts_each =
+            get_correlator_sample_shifts(correlators[1], sampling_frequency, code_frequency)
+        all_sample_shifts = ntuple(_ -> sample_shifts_each, N)
+
+        signal =
+            gen_code(
+                num_samples_signal, gpsl1, prn, sampling_frequency,
+                code_frequency, code_phase,
+            ) .* cis.(2π * (0:(num_samples_signal - 1)) * carrier_doppler / sampling_frequency)
+
+        # Per-signal code replicas (same code in this scenario; just reuse).
+        code_replica_length =
+            num_samples_signal + maximum(sample_shifts_each) - minimum(sample_shifts_each)
+        code_replicas = ntuple(N) do _
+            cr = Vector{get_code_type(gpsl1)}(undef, code_replica_length)
+            Tracking.gen_code_replica!(
+                cr, gpsl1, code_frequency, sampling_frequency,
+                code_phase, 1, num_samples_signal, sample_shifts_each, prn,
+            )
+            cr
+        end
+
+        # Scalar reference (same for every signal, since they share code+replica).
+        NC = length(sample_shifts_each)
+        min_shift = minimum(sample_shifts_each)
+        ref_accumulators = zeros(ComplexF64, NC)
+        carrier_step = 2π * Float64(carrier_frequency / sampling_frequency)
+        for i in 1:num_samples_signal
+            carrier = cis(-carrier_step * (i - 1))
+            dc_sample = signal[i] * carrier
+            for tap in 1:NC
+                code_idx = i + sample_shifts_each[tap] - min_shift
+                ref_accumulators[tap] += dc_sample * code_replicas[1][code_idx]
+            end
+        end
+
+        tile_re = Vector{Float32}(undef, num_samples_signal)
+        tile_im = Vector{Float32}(undef, num_samples_signal)
+        new_correlators = Tracking.downconvert_and_correlate_fused_tuple!(
+            correlators, signal, code_replicas, all_sample_shifts,
+            carrier_frequency, sampling_frequency, 0.0,
+            1, num_samples_signal, tile_re, tile_im,
+        )
+
+        @test length(new_correlators) == N
+        for i in 1:N
+            @test get_accumulators(new_correlators[i]) ≈ ref_accumulators rtol = 1e-4
+        end
+    end
+
+    @testset "Multi-antenna ($num_ants ants), N=$N signals" for num_ants in (2, 4), N in 2:3
+        correlators =
+            ntuple(_ -> EarlyPromptLateCorrelator(; num_ants = NumAnts(num_ants)), N)
+        sample_shifts_each =
+            get_correlator_sample_shifts(correlators[1], sampling_frequency, code_frequency)
+        all_sample_shifts = ntuple(_ -> sample_shifts_each, N)
+
+        # Multi-antenna signal: each antenna gets a phase-shifted copy of the
+        # base signal so accumulator values per antenna differ in a known way.
+        signal_ant1 =
+            gen_code(
+                num_samples_signal, gpsl1, prn, sampling_frequency,
+                code_frequency, code_phase,
+            ) .* cis.(2π * (0:(num_samples_signal - 1)) * carrier_doppler / sampling_frequency)
+        ant_phase_offsets = collect(0.0:0.3:(0.3 * (num_ants - 1)))
+        signal = hcat([signal_ant1 .* cis(ϕ) for ϕ in ant_phase_offsets]...)
+
+        code_replica_length =
+            num_samples_signal + maximum(sample_shifts_each) - minimum(sample_shifts_each)
+        code_replicas = ntuple(N) do _
+            cr = Vector{get_code_type(gpsl1)}(undef, code_replica_length)
+            Tracking.gen_code_replica!(
+                cr, gpsl1, code_frequency, sampling_frequency,
+                code_phase, 1, num_samples_signal, sample_shifts_each, prn,
+            )
+            cr
+        end
+
+        # Scalar reference per antenna.
+        NC = length(sample_shifts_each)
+        min_shift = minimum(sample_shifts_each)
+        ref_accumulators = [zeros(ComplexF64, num_ants) for _ in 1:NC]
+        carrier_step = 2π * Float64(carrier_frequency / sampling_frequency)
+        for i in 1:num_samples_signal
+            carrier = cis(-carrier_step * (i - 1))
+            for j in 1:num_ants
+                dc_sample = signal[i, j] * carrier
+                for tap in 1:NC
+                    code_idx = i + sample_shifts_each[tap] - min_shift
+                    ref_accumulators[tap][j] += dc_sample * code_replicas[1][code_idx]
+                end
+            end
+        end
+
+        tile_re = Vector{Float32}(undef, num_samples_signal * num_ants)
+        tile_im = Vector{Float32}(undef, num_samples_signal * num_ants)
+        new_correlators = Tracking.downconvert_and_correlate_fused_tuple!(
+            correlators, signal, code_replicas, all_sample_shifts,
+            carrier_frequency, sampling_frequency, 0.0,
+            1, num_samples_signal, tile_re, tile_im,
+        )
+
+        @test length(new_correlators) == N
+        for i in 1:N
+            for tap in 1:NC
+                @test collect(get_accumulators(new_correlators[i])[tap]) ≈
+                      ref_accumulators[tap] rtol = 1e-4
+            end
+        end
+    end
+end
+
 end
