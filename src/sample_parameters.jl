@@ -4,22 +4,22 @@ $(SIGNATURES)
 Returns the appropiate number of code blocks to integrate. It will be just a single
 code block when the secondary code or bit isn't found. The maximum number of code
 blocks to integrate is limited by the bit shift.
+
+For pilot signals with `data_frequency == 0` (e.g. GPS L1C-P), longer coherent
+integration would be bounded by the secondary-code period instead, but secondary-
+code sync isn't wired up yet — clamp to one code block until it lands.
 """
 function calc_num_code_blocks_to_integrate(
     system::AbstractGNSSSignal,
     preferred_num_code_blocks::Int,
     secondary_code_or_bit_found::Bool,
 )
-    ifelse(
-        secondary_code_or_bit_found,
-        min(
-            Int(
-                get_code_frequency(system) /
-                (get_code_length(system) * get_data_frequency(system)),
-            ),
-            preferred_num_code_blocks,
-        ),
-        1,
+    secondary_code_or_bit_found || return 1
+    data_freq = get_data_frequency(system)
+    iszero(data_freq) && return 1
+    min(
+        Int(get_code_frequency(system) / (get_code_length(system) * data_freq)),
+        preferred_num_code_blocks,
     )
 end
 

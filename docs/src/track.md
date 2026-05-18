@@ -69,7 +69,7 @@ while got_signal_chunk(rx)
     chunk = read_chunk!(rx)
     track!(chunk, track_state, sampling_freq;
         downconvert_and_correlator = dc)
-    # ... use track_state.satellites ...
+    # ... read per-sat state e.g. via get_sat_state(track_state, group, prn) ...
 end
 ```
 

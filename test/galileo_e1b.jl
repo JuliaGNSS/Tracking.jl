@@ -6,6 +6,8 @@ using GNSSSignals: GalileoE1B
 using Tracking:
     is_upcoming_integration_new_bit,
     get_default_correlator,
+    default_carrier_loop_filter_bandwidth,
+    default_code_loop_filter_bandwidth,
     VeryEarlyPromptLateCorrelator,
     NumAnts
 
@@ -27,6 +29,11 @@ using Tracking:
           VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(1))
     @test @inferred(get_default_correlator(galileo_e1b, NumAnts(3))) ==
           VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(3))
+
+    # 4 ms primary period (4092 chips at 1.023 Mcps) → BL·T ≈ 0.018 gives
+    # 4.5 Hz carrier / 0.25 Hz code.
+    @test @inferred(default_carrier_loop_filter_bandwidth(galileo_e1b)) ≈ 4.5Hz
+    @test @inferred(default_code_loop_filter_bandwidth(galileo_e1b)) ≈ 0.25Hz
 end
 
 end

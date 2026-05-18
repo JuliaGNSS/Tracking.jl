@@ -1,0 +1,37 @@
+module GPSL1CDTest
+
+using Test: @test, @testset, @inferred
+using Unitful: Hz
+using GNSSSignals: GPSL1C_D
+using Tracking:
+    is_upcoming_integration_new_bit,
+    get_default_correlator,
+    default_carrier_loop_filter_bandwidth,
+    default_code_loop_filter_bandwidth,
+    EarlyPromptLateCorrelator,
+    NumAnts
+
+@testset "GPS L1C-D" begin
+    gpsl1c_d = GPSL1C_D()
+
+    # L1C-D primary code period = 10 ms, data rate = 50 Hz → 2 primary blocks
+    # per bit. Bit-sync needs a real preamble search (CNAV-2), not yet
+    # implemented. Until that lands `is_upcoming_integration_new_bit` returns
+    # `false` so `bit_buffer.found` stays `false` and the inner loop runs at
+    # 10 ms primary-code boundaries.
+    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_d, 0x0, 0)) == false
+    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_d, 0x1, 1)) == false
+    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_d, 0xffffffff, 32)) == false
+
+    @test @inferred(get_default_correlator(gpsl1c_d, NumAnts(1))) ==
+          EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
+    @test @inferred(get_default_correlator(gpsl1c_d, NumAnts(3))) ==
+          EarlyPromptLateCorrelator(; num_ants = NumAnts(3))
+
+    # 10 ms primary period at BL·T ≈ 0.018 → 1.8 Hz carrier / 0.1 Hz code.
+    # 10× tighter than the L1 C/A default; required for stable 10 ms tracking.
+    @test @inferred(default_carrier_loop_filter_bandwidth(gpsl1c_d)) ≈ 1.8Hz
+    @test @inferred(default_code_loop_filter_bandwidth(gpsl1c_d)) ≈ 0.1Hz
+end
+
+end

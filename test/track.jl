@@ -7,6 +7,8 @@ using Statistics: mean
 using Dictionaries: dictionary
 using GNSSSignals:
     GPSL1CA,
+    GPSL1C_D,
+    GPSL1C_P,
     GPSL5I,
     GalileoE1B,
     gen_code,
@@ -18,6 +20,8 @@ using Tracking:
     TrackedSat,
     TrackState,
     track,
+    track!,
+    add_satellite!,
     get_code_phase,
     get_carrier_phase,
     get_code_doppler,
@@ -632,6 +636,149 @@ end
     prompts3 = get_filtered_prompts(get_sat_state(track_state, prn))
     @test isempty(prompts3)
     @test prompts3 === buffer_ref
+end
+
+# Integration tests for L1C-D and L1C-P. Their 10-ms primary code period
+# (vs 1 ms for L1 C/A) means each `track` call needs enough samples to land
+# at least one primary-code boundary; the parameterized loop uses one full
+# 10-ms primary period per iteration so each call completes exactly one
+# integration. L1C-D has data bits (50 Hz), L1C-P is the pilot — both still
+# need a working signal-path with a closed PLL/DLL.
+#
+# These tests rely on the per-signal default loop bandwidths
+# (`default_carrier_loop_filter_bandwidth(::GPSL1C_D)` etc.) which size BL
+# at ~0.018/T (Hz). For L1C-D / L1C-P that gives ~1.8 Hz carrier / ~0.1 Hz
+# code — well inside the `BL * T < 0.4` stability bound for 10 ms integration.
+@testset "Tracking single signal $name with $type samples" for
+    (name, sig_type) in (("GPSL1C_D", GPSL1C_D), ("GPSL1C_P", GPSL1C_P)),
+    type in (Float32, Float64)
+
+    signal = sig_type()
+    carrier_doppler = 200Hz
+    start_code_phase = 100.0
+    code_frequency =
+        carrier_doppler * get_code_center_frequency_ratio(signal) +
+        get_code_frequency(signal)
+    # L1C-P's TMBOC modulation requires `fs > 2 × code_freq × subcarrier_factor`
+    # (~12.28 MHz minimum); use 15 MHz for both signals so the test fits the
+    # same loop. L1C-D BPSK has no such floor but happily accepts 15 MHz too.
+    sampling_frequency = 15e6Hz
+    prn = 1
+    primary_period_samples = 150000  # 10 ms at 15 MHz
+    range = 0:(primary_period_samples - 1)
+    start_carrier_phase = π / 2
+
+    track_state = @inferred TrackState(; signal)
+    add_satellite!(track_state;
+        prn,
+        code_phase = start_code_phase,
+        carrier_doppler = carrier_doppler - 5Hz,
+    )
+
+    function build_signal(carrier_phase, code_phase)
+        s = cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ carrier_phase) .*
+            gen_code(primary_period_samples, signal, prn, sampling_frequency,
+                     code_frequency, code_phase)
+        Complex{type}.(s)
+    end
+
+    # First iteration to seed the loop filters.
+    track!(build_signal(start_carrier_phase, start_code_phase),
+           track_state, sampling_frequency)
+
+    iterations = 100
+    primary_code_len = get_code_length(signal)
+    for i = 1:iterations
+        carrier_phase = mod2pi(
+            2π * carrier_doppler * primary_period_samples * i / sampling_frequency +
+            start_carrier_phase + π,
+        ) - π
+        code_phase = mod(
+            code_frequency * primary_period_samples * i / sampling_frequency +
+            start_code_phase,
+            primary_code_len,
+        )
+        track!(build_signal(carrier_phase, code_phase),
+               track_state, sampling_frequency)
+    end
+    # By now the PLL/DLL has had 100 × 10 ms = 1 s to converge on a clean
+    # signal seeded 5 Hz off — should be well inside 1 Hz.
+    final_doppler = get_carrier_doppler(track_state, :default, prn)
+    @test abs(final_doppler - carrier_doppler) < 1.0Hz
+end
+
+# Multi-signal integration test for the README's flagship use case: a single
+# satellite tracked on the modern GPS L1 signal trio (L1C_P pilot + L1C_D
+# data + L1 C/A legacy). Verifies all three signals' correlators run, and
+# that the PLL/DLL — driven by `signals[1]` = L1C_P (the pilot) — converges.
+@testset "Tracking multi-signal (L1C_P, L1C_D, L1CA) on one sat" begin
+    # L1C-P's TMBOC modulation requires fs > ~12.28 MHz; use 15 MHz.
+    sampling_frequency = 15e6Hz
+    n_samples = 150000  # 10 ms — one L1C-P/D primary period; ten L1CA periods
+    prn = 11
+    carrier_doppler = 1234.0Hz
+    init_offset = 5.0Hz
+
+    # Driver is signals[1] = L1C_P at 10 ms; the per-signal default loop
+    # bandwidth picks the right (~1.8 Hz) value automatically.
+    track_state = TrackState(;
+        signals = (modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),),
+    )
+    add_satellite!(track_state;
+        prn, group = :modern_gps,
+        code_phase = 0.0,
+        carrier_doppler = carrier_doppler - init_offset,
+    )
+
+    # Synthesize a signal that contains all three signals on the same carrier
+    # (modeling what a real GPS satellite broadcasts on L1).
+    range = 0:(n_samples - 1)
+    function build_signal(code_phase, carrier_phase)
+        carrier = cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ carrier_phase)
+        signal_cp = let s = GPSL1C_P()
+            cf = carrier_doppler * get_code_center_frequency_ratio(s) + get_code_frequency(s)
+            carrier .* gen_code(n_samples, s, prn, sampling_frequency, cf, code_phase)
+        end
+        signal_cd = let s = GPSL1C_D()
+            cf = carrier_doppler * get_code_center_frequency_ratio(s) + get_code_frequency(s)
+            carrier .* gen_code(n_samples, s, prn, sampling_frequency, cf, code_phase)
+        end
+        signal_ca = let s = GPSL1CA()
+            cf = carrier_doppler * get_code_center_frequency_ratio(s) + get_code_frequency(s)
+            # L1 C/A code phase wraps every 1023 chips; map the shared phase
+            # to its primary period.
+            carrier .* gen_code(n_samples, s, prn, sampling_frequency, cf,
+                                mod(code_phase, get_code_length(s)))
+        end
+        signal_cp .+ signal_cd .+ signal_ca
+    end
+
+    # Seed + 200 iterations of clean signal at 10 ms per call.
+    track!(build_signal(0.0, 0.0), track_state, sampling_frequency)
+
+    iterations = 200
+    cp_primary_len = get_code_length(GPSL1C_P())
+    for i = 1:iterations
+        carrier_phase =
+            mod2pi(2π * carrier_doppler * n_samples * i / sampling_frequency + π) - π
+        # Drive code_phase off the L1C_P/L1C_D primary length (10230 chips);
+        # L1CA mods inside build_signal.
+        cf_cp = carrier_doppler * get_code_center_frequency_ratio(GPSL1C_P()) +
+                get_code_frequency(GPSL1C_P())
+        code_phase = mod(cf_cp * n_samples * i / sampling_frequency, cp_primary_len)
+        track!(build_signal(code_phase, carrier_phase),
+               track_state, sampling_frequency)
+    end
+
+    # All three signals must have completed integrations.
+    sat = get_sat_state(track_state, :modern_gps, prn)
+    @test length(get_filtered_prompts(sat.signals[1])) > 0  # L1C_P
+    @test length(get_filtered_prompts(sat.signals[2])) > 0  # L1C_D
+    @test length(get_filtered_prompts(sat.signals[3])) > 0  # L1CA
+
+    # PLL/DLL has had ~2 s to converge on a clean superposition.
+    final_doppler = get_carrier_doppler(track_state, :modern_gps, prn)
+    @test abs(final_doppler - carrier_doppler) < 5.0Hz
 end
 
 end

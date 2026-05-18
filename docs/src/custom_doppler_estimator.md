@@ -62,23 +62,25 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
    with `Setfield.@set` or a copying constructor.
 
 5. **An `estimate_dopplers_and_filter_prompt` method** dispatched on
-   `TrackState{<:..., <:..., <:MyEstimator}`. This is where the actual
-   update logic runs, once per integration completion. It walks each
-   group's `Dictionary{Int, TrackedSat}` and produces new
-   `TrackedSat`s with updated `carrier_doppler`/`code_doppler` and
-   updated per-sat estimator state.
+   `TrackState{<:Any, <:MyEstimator}`. This is where the actual update
+   logic runs, once per integration completion. It walks each group in
+   `track_state.groups`, reads the band's `Measurement` from the
+   `measurements::Measurements` NamedTuple via `band_key(group.band)`,
+   and produces new `TrackedSat`s with updated
+   `carrier_doppler`/`code_doppler` and updated per-sat estimator state.
 
    The matching mutating method
-   `estimate_dopplers_and_filter_prompt!(track_state, ...)` is what
-   [`track!`](@ref) calls. To support real-time loops, define both — the
-   mutating version walks `sats_dict.values` and reassigns slots in
-   place.
+   `estimate_dopplers_and_filter_prompt!(track_state, measurements, prefer)`
+   is what [`track!`](@ref) calls. To support real-time loops, define
+   both — the mutating version walks each group's
+   `satellites.values::Vector{TrackedSat}` and reassigns slots in place.
 
 ## Skeleton
 
 ```julia
 using Tracking
-using Tracking: AbstractDopplerEstimator, TrackedSat, TrackedSignal, TrackState
+using Tracking: AbstractDopplerEstimator, TrackedSat, TrackedSignal, TrackState,
+    SignalGroup, Measurements, band_key
 using Tracking: init_estimator_state, update_estimator_on_handoff,
     estimate_dopplers_and_filter_prompt
 
@@ -111,46 +113,51 @@ function Tracking.update_estimator_on_handoff(est::MyEstimator, new_sats)
     return est
 end
 
-# 5. The update step (immutable form). Walks each group's dict and
+# 5. The update step (immutable form). Walks each group in
+# `track_state.groups`, looks up that group's band's `Measurement`, and
 # produces new TrackedSats. The signals tuple is rebuilt per sat with
 # updated per-signal state (cleared correlator, advanced bit buffer, etc.).
 function Tracking.estimate_dopplers_and_filter_prompt(
-    track_state::TrackState{<:Any, <:Any, <:MyEstimator},
+    track_state::TrackState{<:Any, <:MyEstimator},
+    measurements::Measurements,
     preferred_num_code_blocks_to_integrate,
-    sampling_frequency,
 )
-    new_sats = map(track_state.satellites) do sats_dict
-        map(sats_dict) do sat
+    new_groups = map(track_state.groups) do g
+        m = measurements[band_key(g.band)]
+        sampling_frequency = m.sampling_frequency
+        new_sats = map(g.satellites) do sat
             de_state = sat.doppler_estimator_state
             # ... compute new carrier_doppler, code_doppler, de_state ...
-            new_signals = my_update_signals(sat.signals, ...)
-            TrackedSat(
-                sat.prn,
-                sat.code_phase, sat.code_doppler,
-                sat.carrier_phase, sat.carrier_doppler,
-                sat.signal_start_sample, new_signals,
-                new_de_state,
+            new_signals = my_update_signals(sat.signals, sampling_frequency)
+            TrackedSat(sat;
+                carrier_doppler = new_carrier_doppler,
+                code_doppler = new_code_doppler,
+                signals = new_signals,
+                doppler_estimator_state = new_de_state,
             )
         end
+        SignalGroup(g; satellites = new_sats)
     end
-    return TrackState(track_state; satellites = new_sats)
+    return TrackState(track_state; groups = new_groups)
 end
 ```
 
 For full real-time support (zero-allocation steady state), additionally
-provide an in-place version that walks each `sats_dict.values::Vector{TrackedSat}`
-and reassigns slots:
+provide an in-place version that walks each group's
+`satellites.values::Vector{TrackedSat}` and reassigns slots. The
+sampling frequency for each group is read from its band's `Measurement`:
 
 ```julia
 function Tracking.estimate_dopplers_and_filter_prompt!(
-    track_state::TrackState{<:Any, <:Any, <:MyEstimator},
+    track_state::TrackState{<:Any, <:MyEstimator},
+    measurements::Measurements,
     preferred_num_code_blocks_to_integrate,
-    sampling_frequency,
 )
-    for sats_dict in track_state.satellites
-        vals = sats_dict.values
+    for g in track_state.groups
+        sampling_frequency = measurements[band_key(g.band)].sampling_frequency
+        vals = g.satellites.values
         @inbounds for i in eachindex(vals)
-            vals[i] = my_per_sat_update(vals[i], ...)
+            vals[i] = my_per_sat_update(vals[i], sampling_frequency)
         end
     end
     return track_state

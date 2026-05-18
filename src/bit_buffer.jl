@@ -21,15 +21,27 @@ end
 @inline length(bit_buffer::BitBuffer) = bit_buffer.length
 @inline has_bit_or_secondary_code_been_found(bit_buffer::BitBuffer) = bit_buffer.found
 
+# Number of primary-code blocks that form one navigation bit.
+# Returns 0 for pilot signals (`data_frequency = 0`), where the concept is
+# undefined; callers must guard for that case before using the result.
+@inline function _calc_num_code_blocks_that_form_a_bit(system::AbstractGNSSSignal)
+    data_freq = get_data_frequency(system)
+    iszero(data_freq) && return 0
+    Int(get_code_frequency(system) / (get_code_length(system) * data_freq))
+end
+
 """
 $(SIGNATURES)
 
 Buffer data bits based on the prompt accumulation and the current prompt value.
 """
 function buffer(system::AbstractGNSSSignal, bit_buffer, integrated_code_blocks, prompt)
-    num_code_blocks_that_form_a_bit = Int(
-        get_code_frequency(system) / (get_code_length(system) * get_data_frequency(system)),
-    )
+    # The divide is deferred to the helper — pilot signals
+    # (`get_data_frequency = 0`) would otherwise blow up here with `Int(Inf)`.
+    # Pilots take the `_buffer_find_bit` branch with `bit_buffer.found = false`
+    # forever (their per-signal `is_upcoming_integration_new_bit` returns
+    # false), so the value is unused for them.
+    num_code_blocks_that_form_a_bit = _calc_num_code_blocks_that_form_a_bit(system)
 
     if (bit_buffer.found == false)
         return _buffer_find_bit(

@@ -1,4 +1,50 @@
 """
+$(SIGNATURES)
+
+Recommended carrier-loop-filter bandwidth for `signal`'s primary integration
+period. Sized so that the PLL time-bandwidth product `BL * T` lands at
+about 0.018 (≈10× margin from the 0.18 stability edge of the bilinear
+third-order filter). Used by [`TrackState(; signal=…)`](@ref) when the
+user doesn't pass an explicit `doppler_estimator`.
+
+Override by defining a method for your signal type, or by constructing
+[`ConventionalAssistedPLLAndDLL`](@ref) yourself with explicit
+`carrier_loop_filter_bandwidth =` / `code_loop_filter_bandwidth =` kwargs.
+
+```julia
+T = get_code_length(signal) / get_code_frequency(signal)   # primary period
+BL = 0.018 / T                                              # this default
+```
+
+For L1 C/A (T = 1 ms) this returns 18 Hz — matching the historical
+hand-picked default. For L1C-D / L1C-P / L5I (T = 10 ms) it returns 1.8 Hz,
+which is the well-inside-stability value the multi-signal flagship use case
+needs.
+"""
+function default_carrier_loop_filter_bandwidth(signal::AbstractGNSSSignal)
+    # T = primary_code_period_seconds. The estimator's bandwidth fields are
+    # typed `typeof(1.0Hz)`, so explicitly land on Hz (otherwise `1/s`
+    # propagates and trips the typed field assignment).
+    primary_period = get_code_length(signal) / get_code_frequency(signal)
+    uconvert(Hz, 0.018 / primary_period)
+end
+
+"""
+$(SIGNATURES)
+
+Recommended code-loop-filter (DLL) bandwidth for `signal`'s primary
+integration period. Picks 1/18 of [`default_carrier_loop_filter_bandwidth`](@ref)
+— the historical 18:1 carrier:code-bandwidth ratio that gives the DLL good
+noise rejection without lagging the PLL.
+
+For L1 C/A this returns 1 Hz; for L1C-D / L1C-P / L5I it returns 0.1 Hz.
+Override by defining a method for your signal type.
+"""
+function default_code_loop_filter_bandwidth(signal::AbstractGNSSSignal)
+    default_carrier_loop_filter_bandwidth(signal) / 18
+end
+
+"""
 Per-satellite state for the conventional PLL and DLL Doppler estimator.
 Holds initial Doppler values and loop filter states.
 """
@@ -60,7 +106,12 @@ estimator. Configuration-only — per-satellite state lives in each
 
 Type parameters `CA` and `CO` select the carrier and code loop filter types;
 the bandwidth fields configure the default loop bandwidths used when seeding
-new satellites.
+new satellites. The literal defaults on this constructor are 18 Hz / 1 Hz,
+sized for GPS L1 C/A's 1 ms integration; when [`TrackState`](@ref) builds
+this estimator implicitly it picks per-signal bandwidths via
+[`default_carrier_loop_filter_bandwidth`](@ref) and
+[`default_code_loop_filter_bandwidth`](@ref) so longer-period signals
+(L1C-D, L1C-P, Galileo E1B) get appropriately tighter loops.
 """
 struct ConventionalPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter} <:
        AbstractDopplerEstimator
