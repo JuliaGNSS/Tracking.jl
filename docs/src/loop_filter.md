@@ -15,15 +15,34 @@ The default Doppler estimator is `ConventionalAssistedPLLAndDLL` which uses:
 - `ThirdOrderAssistedBilinearLF` for the carrier loop (FLL-assisted PLL for improved dynamics)
 - `SecondOrderBilinearLF` for the code loop
 
-The default bandwidths are:
-- Carrier loop: 18 Hz
-- Code loop: 1 Hz
+When [`TrackState`](@ref) builds the default estimator implicitly from a
+signal-tuple declaration, the loop bandwidths are sized **per signal** at
+`BL · T ≈ 0.018`, where `T` is the signal's primary code period — that's
+~10× margin from the `BL · T < 0.18` stability edge of the bilinear
+third-order filter. The values fall out to:
+
+| Signal     | Primary period | Carrier BL | Code BL  |
+|------------|----------------|-----------:|---------:|
+| GPSL1CA    | 1 ms           |    18 Hz   |   1 Hz   |
+| GPSL5I     | 1 ms           |    18 Hz   |   1 Hz   |
+| GalileoE1B | 4 ms           |   4.5 Hz   |  0.25 Hz |
+| GPSL1C\\_D | 10 ms          |   1.8 Hz   |  0.1 Hz  |
+| GPSL1C\\_P | 10 ms          |   1.8 Hz   |  0.1 Hz  |
+
+The 1-ms-primary-period signals (L1 C/A, L5I) keep the historical 18 Hz /
+1 Hz default; longer-period signals get appropriately tighter loops so the
+PLL stays stable. Override per signal by defining methods of
+[`default_carrier_loop_filter_bandwidth`](@ref) /
+[`default_code_loop_filter_bandwidth`](@ref), or override at construction
+time by passing your own `doppler_estimator =` to `TrackState`.
 
 ## Doppler Estimators
 
 ```@docs
 ConventionalPLLAndDLL
 ConventionalAssistedPLLAndDLL
+default_carrier_loop_filter_bandwidth
+default_code_loop_filter_bandwidth
 ```
 
 ## Custom Configuration
