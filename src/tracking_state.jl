@@ -819,14 +819,22 @@ end
 
 # For each group, check the measurement at its band has the antenna
 # shape the group declares. Vector → 1 antenna; Matrix → cols = num_ants.
+# A `for g in track_state.groups` loop boxes when `groups` is a
+# heterogeneous tuple (multi-band TrackStates), allocating 2 entries per
+# call. Walk via tuple recursion so each step has concrete types and
+# inlines cleanly.
 @inline function _validate_antenna_shapes(
     track_state::TrackState, measurements::Measurements,
 )
-    for g in track_state.groups
-        m = measurements[band_key(g.band)]
-        _assert_antenna_shape(g, m)
-    end
-    return nothing
+    _validate_antenna_shapes_walk(Tuple(track_state.groups), measurements)
+end
+
+@inline _validate_antenna_shapes_walk(::Tuple{}, ::Measurements) = nothing
+@inline function _validate_antenna_shapes_walk(groups::Tuple, measurements::Measurements)
+    g = first(groups)
+    m = measurements[band_key(g.band)]
+    _assert_antenna_shape(g, m)
+    _validate_antenna_shapes_walk(Base.tail(groups), measurements)
 end
 
 @inline function _assert_antenna_shape(g::SignalGroup{B,S,Sigs,NumAnts{M}}, m::Measurement) where {B,S,Sigs,M}
