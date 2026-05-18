@@ -342,6 +342,70 @@ if isdefined(Tracking, :downconvert_and_correlate_fused!)
         bench_fused_kernel(; num_ants = 4, shifts = :dynamic)
 end
 
+# ── Tuple-kernel microbenchmark (multi-signal tile-share path) ─────────
+# Exercises `downconvert_and_correlate_fused_tuple!` directly: one
+# downconvert into the SoA tile, one sample-outer correlate pass over
+# all N×NC accumulators. Covers single-antenna (the existing hot path
+# for multi-signal-per-sat) and multi-antenna (the extended path), so a
+# PR comparison surfaces regressions on either side.
+function bench_fused_tuple_kernel(;
+    signal_type = Float32,
+    num_samples = 2000,
+    sampling_frequency = 5e6Hz,
+    system = GPSL1CA(),
+    num_ants = 1,
+    n_signals = 2,
+)
+    code_phase = 10.5
+    carrier_doppler = 1000.0Hz
+    code_doppler = carrier_doppler * GNSSSignals.get_code_center_frequency_ratio(system)
+    code_frequency = code_doppler + get_code_frequency(system)
+
+    correlator_template = EarlyPromptLateCorrelator(; num_ants = NumAnts(num_ants))
+    sample_shifts =
+        get_correlator_sample_shifts(correlator_template, sampling_frequency, code_frequency)
+    code_replica_size =
+        num_samples + maximum(sample_shifts) - minimum(sample_shifts)
+
+    signal = num_ants == 1 ?
+        rand(Complex{signal_type}, num_samples) :
+        rand(Complex{signal_type}, num_samples, num_ants)
+
+    correlators = ntuple(
+        _ -> EarlyPromptLateCorrelator(; num_ants = NumAnts(num_ants)),
+        n_signals,
+    )
+    code_replicas = ntuple(n_signals) do _
+        cr = Vector{get_code_type(system)}(undef, code_replica_size)
+        _gen_code_replica!(
+            cr, system, code_frequency, sampling_frequency, code_phase,
+            1, num_samples, sample_shifts, 1,
+        )
+        cr
+    end
+    sample_shifts_tuple = ntuple(_ -> sample_shifts, n_signals)
+    tile_re = Vector{Float32}(undef, num_samples * num_ants)
+    tile_im = Vector{Float32}(undef, num_samples * num_ants)
+
+    @benchmarkable Tracking.downconvert_and_correlate_fused_tuple!(
+        $correlators, $signal, $code_replicas, $sample_shifts_tuple,
+        $(carrier_doppler + 0.0Hz), $sampling_frequency, 0.0,
+        1, $num_samples, $tile_re, $tile_im,
+    )
+end
+
+# Register only on branches with the tuple kernel (multi-signal branch).
+if isdefined(Tracking, :downconvert_and_correlate_fused_tuple!)
+    for n_signals in 2:3
+        SUITE["fused tuple kernel"]["1-ant N=$n_signals"] =
+            bench_fused_tuple_kernel(; num_ants = 1, n_signals)
+        SUITE["fused tuple kernel"]["2-ant N=$n_signals"] =
+            bench_fused_tuple_kernel(; num_ants = 2, n_signals)
+        SUITE["fused tuple kernel"]["4-ant N=$n_signals"] =
+            bench_fused_tuple_kernel(; num_ants = 4, n_signals)
+    end
+end
+
 # ── Per-system multi-satellite track / track! benchmarks ─────────────────
 #
 # These exercise the full tracking pipeline (downconvert + correlate +
