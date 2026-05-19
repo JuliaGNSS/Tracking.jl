@@ -12,12 +12,12 @@ See: Kaplan & Hegarty, "Understanding GPS: Principles and Applications", 2nd ed.
 Table 5.5; GNSS-SDR tracking_discriminators.cc.
 """
 function dll_disc(
-    system::AbstractGNSSSignal,
+    signal::AbstractGNSSSignal,
     correlator::EarlyPromptLateCorrelator,
     code_doppler,
     sampling_frequency,
 )
-    code_frequency = code_doppler + get_code_frequency(system)
+    code_frequency = code_doppler + get_code_frequency(signal)
     code_phase_delta = code_frequency / sampling_frequency
     E = abs(get_early(correlator))
     L = abs(get_late(correlator))
@@ -37,7 +37,7 @@ Implementation from:
 https://gnss-sdr.org/docs/sp-blocks/tracking/#implementation-galileo_e1_dll_pll_veml_tracking
 """
 function dll_disc(
-    system::AbstractGNSSSignal,
+    signal::AbstractGNSSSignal,
     correlator::VeryEarlyPromptLateCorrelator,
     code_doppler,
     sampling_frequency,
@@ -54,7 +54,7 @@ $(SIGNATURES)
 
 Calculates the carrier phase error in radians.
 """
-function pll_disc(system::AbstractGNSSSignal, correlator)
+function pll_disc(signal::AbstractGNSSSignal, correlator)
     p = get_prompt(correlator)
     atan(imag(p) / real(p))
 end
@@ -64,7 +64,7 @@ $(SIGNATURES)
 
 Calculates the carrier frequency error in Hz.
 """
-function fll_disc(system::AbstractGNSSSignal, correlator, previous_prompt, integration_time)
+function fll_disc(signal::AbstractGNSSSignal, correlator, previous_prompt, integration_time)
     if previous_prompt == 0
         # return 0 when there is no previous prompt
         return 0.0/integration_time

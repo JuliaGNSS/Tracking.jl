@@ -14,6 +14,8 @@ using Tracking:
     TrackState,
     TrackedSat,
     TrackedSignal,
+    SignalGroup,
+    NumAnts,
     add_satellite!,
     add_satellite,
     get_sat_state,
@@ -30,6 +32,54 @@ using Tracking:
     track_state = TrackState(; signal = GPSL1CA())
     # Implicit `:default` group.
     @test isempty(get_sat_states(track_state, :default))
+end
+
+@testset "TrackState constructor argument errors" begin
+    # Neither `signal` nor `signals` supplied.
+    @test_throws ArgumentError TrackState()
+    # Both supplied — must reject.
+    @test_throws ArgumentError TrackState(;
+        signal = GPSL1CA(),
+        signals = (default = (GPSL1CA(),),),
+    )
+end
+
+@testset "TrackState(; signals = (bare tuple,)) wraps to :default group" begin
+    # When `signals` is a bare `Tuple{Vararg{AbstractGNSSSignal}}`,
+    # `_normalize_signal_groups` wraps it as `(default = signals,)`.
+    ts = TrackState(; signals = (GPSL1CA(),))
+    @test isempty(get_sat_states(ts, :default))
+end
+
+@testset "TrackState rebuilds SignalGroup slot when estimator types differ" begin
+    # `_normalize_group_entry` for a pre-built `SignalGroup` rebuilds the
+    # empty dict when the template's estimator-state type doesn't match
+    # the TrackState's `doppler_estimator` kwarg.
+    custom = ConventionalPLLAndDLL(;
+        carrier_loop_filter_bandwidth = 22.0Hz,
+        code_loop_filter_bandwidth = 1.5Hz,
+    )
+    sg = SignalGroup((GPSL1CA(),); num_ants = NumAnts(1))  # default estimator
+    ts = TrackState(;
+        signals = (legacy = sg,),
+        doppler_estimator = custom,
+    )
+    add_satellite!(ts; prn = 1, group = :legacy, carrier_doppler = 0.0Hz)
+    de_state = get_sat_state(ts, :legacy, 1).doppler_estimator_state
+    @test de_state.carrier_loop_filter_bandwidth == 22.0Hz
+end
+
+@testset "TrackState passes through pre-populated SignalGroup unchanged" begin
+    # A SignalGroup whose dict is already populated is trusted as-is — the
+    # `!isempty(sats)` branch in `_normalize_group_entry`.
+    using Dictionaries: insert!
+    estimator = ConventionalAssistedPLLAndDLL()
+    sat = TrackedSat(GPSL1CA(), 1, 10.5, 10.0Hz; doppler_estimator = estimator)
+    sg_template = SignalGroup((GPSL1CA(),); num_ants = NumAnts(1),
+                              doppler_estimator = estimator)
+    insert!(sg_template.satellites, 1, sat)
+    ts = TrackState(; signals = (legacy = sg_template,), doppler_estimator = estimator)
+    @test length(get_sat_states(ts, :legacy)) == 1
 end
 
 @testset "TrackState(; signals = ...) — multi-group NamedTuple" begin
@@ -108,6 +158,14 @@ end
     add_satellite!(track_state, :default, sat)
     @test get_prn(track_state, :default, 9) == 9
     @test get_carrier_doppler(track_state, :default, 9) == 300.0Hz
+end
+
+@testset "Escape-hatch add_satellite! rejects sat of wrong slot type" begin
+    # `_assert_sat_matches_slot_type` should raise an ArgumentError when
+    # the sat's concrete type doesn't match the group's fixed slot type.
+    track_state = TrackState(; signal = GPSL1CA())
+    galileo_sat = TrackedSat(GalileoE1B(), 1, 10.5, 100.0Hz)
+    @test_throws ArgumentError add_satellite!(track_state, :default, galileo_sat)
 end
 
 @testset "Custom doppler estimator config seeds per-sat state correctly" begin

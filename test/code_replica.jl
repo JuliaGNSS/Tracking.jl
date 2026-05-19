@@ -3,7 +3,7 @@ module CodeReplicaTest
 using Test: @test, @testset, @inferred
 using Unitful: Hz
 using GNSSSignals: GPSL1CA, get_code
-using Tracking: gen_code_replica!, update_code_phase
+using Tracking: gen_code_replica!, update_code_phase, get_current_code_frequency
 
 @testset "Code replica" begin
     code = zeros(Int16, 2502)
@@ -71,6 +71,14 @@ end
         bit_found,
     )
     @test phase ≈ mod(10 + 0.1 * 2000, 1023)
+end
+
+@testset "Current code frequency" begin
+    gpsl1 = GPSL1CA()
+    @test @inferred(get_current_code_frequency(gpsl1, 0Hz)) ==
+          1023000Hz
+    @test @inferred(get_current_code_frequency(gpsl1, 200Hz)) ==
+          1023000Hz + 200Hz
 end
 
 end

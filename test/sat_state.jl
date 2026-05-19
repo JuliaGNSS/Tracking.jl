@@ -2,8 +2,10 @@ module SatStateTest
 
 using Test: @test, @testset, @inferred
 using Unitful: Hz
+using Dictionaries: dictionary
 using GNSSSignals: GPSL1CA, get_code_center_frequency_ratio
 using Acquisition: Acquisition, AcquisitionResults
+import Tracking
 using Tracking:
     TrackedSat,
     get_prn,
@@ -16,8 +18,12 @@ using Tracking:
     get_correlator,
     get_last_fully_integrated_correlator,
     get_last_fully_integrated_filtered_prompt,
+    get_signals,
+    get_sat_state,
     has_bit_or_secondary_code_been_found,
-    get_bit_buffer
+    get_bit_buffer,
+    to_dictionary,
+    max_code_length
 
 @testset "Satellite state" begin
     gpsl1 = GPSL1CA()
@@ -62,6 +68,31 @@ using Tracking:
     @test get_last_fully_integrated_filtered_prompt(sat_state) == complex(0.0, 0.0)
     @test has_bit_or_secondary_code_been_found(sat_state) == false
     @test length(get_bit_buffer(sat_state)) == 0
+end
+
+@testset "TrackedSat signal/dict helpers" begin
+    gpsl1 = GPSL1CA()
+    sat = TrackedSat(gpsl1, 11, 10.5, 100.0Hz)
+
+    # `get_signals` returns the per-signal tuple.
+    sigs = @inferred get_signals(sat)
+    @test length(sigs) == 1
+    @test sigs[1].signal isa GPSL1CA
+
+    # `to_dictionary` on an already-dictionary input is a no-op.
+    d = dictionary([11 => sat])
+    @test to_dictionary(d) === d
+
+    # `get_sat_state(::Dictionary)` (no identifier) returns the only sat.
+    @test get_sat_state(d).prn == 11
+
+    # `max_code_length` for L1 C/A: 1023 chips × 1 secondary = 1023.
+    @test @inferred(max_code_length(sat.signals)) == 1023
+
+    # `_max_code_length` recursion terminator on an empty tuple. Not
+    # reachable via TrackedSat itself (signals tuple is always non-empty),
+    # but exercised here so the base case counts as covered.
+    @test Tracking._max_code_length(()) == 0
 end
 
 end

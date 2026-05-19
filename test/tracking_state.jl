@@ -1,13 +1,15 @@
 module TrackingStateTest
 
-using Test: @test, @testset, @inferred
+using Test: @test, @testset, @inferred, @test_throws
 using Unitful: Hz
 using GNSSSignals: GPSL1CA, GalileoE1B
-using Dictionaries: dictionary
+using Dictionaries: Dictionary, dictionary
+import Tracking
 using Tracking:
     TrackedSat,
     TrackState,
-    get_system,
+    add_satellite!,
+    get_signal,
     get_prn,
     get_num_ants,
     get_integrated_samples,
@@ -26,7 +28,8 @@ using Tracking:
     MomentsCN0Estimator,
     BitBuffer,
     NumAnts,
-    ConventionalAssistedPLLAndDLL
+    ConventionalAssistedPLLAndDLL,
+    ConventionalPLLAndDLL
 
 @testset "Tracking state" begin
     sampling_frequency = 5e6Hz
@@ -35,7 +38,7 @@ using Tracking:
 
     track_state = @inferred TrackState(gpsl1, sat_states)
 
-    @test get_system(track_state) isa GPSL1CA
+    @test get_signal(track_state) isa GPSL1CA
     @test get_prn(track_state, 1) == 1
     @test get_prn(track_state, 2) == 2
     @test get_num_ants(track_state, 1) == 1
@@ -55,7 +58,7 @@ using Tracking:
         [TrackedSat(gpsl1, 1, 10.5, 10.0Hz), TrackedSat(gpsl1, 2, 11.5, 20.0Hz)],
     )
 
-    @test @inferred(get_system(track_state2)) isa GPSL1CA
+    @test @inferred(get_signal(track_state2)) isa GPSL1CA
     @test @inferred(get_sat_state(track_state2, 1)).prn == 1
     @test @inferred(get_sat_state(track_state2, 2)).prn == 2
 
@@ -66,6 +69,81 @@ using Tracking:
         TrackedSat(gpsl1, 1, 10.5, 10.0Hz; num_ants = NumAnts(2)),
         TrackedSat(gpsl1, 2, 11.5, 20.0Hz; num_ants = NumAnts(2)),
     ]
+end
+
+@testset "Legacy TrackState(satellites::SatelliteDicts) infers default estimator" begin
+    # `_default_estimator_for_satellite_dicts` picks the most-constraining
+    # default across all per-system driver signals when no estimator kwarg
+    # is supplied.
+    gpsl1 = GPSL1CA()
+    galileo = GalileoE1B()
+    estimator = ConventionalAssistedPLLAndDLL()
+    sats = (
+        gps = dictionary([
+            1 => TrackedSat(gpsl1, 1, 10.5, 10.0Hz; doppler_estimator = estimator),
+        ]),
+        gal = dictionary([
+            2 => TrackedSat(galileo, 2, 11.5, 20.0Hz; doppler_estimator = estimator),
+        ]),
+    )
+    ts = TrackState(sats)
+    @test length(get_sat_states(ts, :gps)) == 1
+    @test length(get_sat_states(ts, :gal)) == 1
+end
+
+@testset "Legacy TrackState(dict) default estimator inference" begin
+    # `_default_estimator_for_sats_dict` (non-empty path) sizes a default
+    # estimator from the dict's first sat's driver signal.
+    gpsl1 = GPSL1CA()
+    estimator = ConventionalAssistedPLLAndDLL()
+    sat = TrackedSat(gpsl1, 1, 10.5, 10.0Hz; doppler_estimator = estimator)
+    ts = TrackState(dictionary([1 => sat]))
+    @test length(get_sat_states(ts)) == 1
+end
+
+@testset "Legacy TrackState constructor rejects sats with a different estimator" begin
+    # `_assert_doppler_estimator_types_match` errors when sat-state and
+    # the configured estimator would produce different concrete types.
+    gpsl1 = GPSL1CA()
+    sat_default = TrackedSat(gpsl1, 1, 10.5, 10.0Hz)  # default estimator
+    different = ConventionalPLLAndDLL(;
+        carrier_loop_filter_bandwidth = 22.0Hz,
+        code_loop_filter_bandwidth = 1.5Hz,
+    )
+    @test_throws ArgumentError TrackState(gpsl1, [sat_default];
+                                          doppler_estimator = different)
+end
+
+@testset "Internal merge_sats(::SatelliteDicts, group_idx, ::Dictionary)" begin
+    # The sat-state-level helper that the legacy TrackState `merge_sats`
+    # delegates to. Exercise it directly so the recursion is recorded.
+    gpsl1 = GPSL1CA()
+    estimator = ConventionalAssistedPLLAndDLL()
+    a = TrackedSat(gpsl1, 1, 10.5, 10.0Hz; doppler_estimator = estimator)
+    b = TrackedSat(gpsl1, 2, 11.5, 20.0Hz; doppler_estimator = estimator)
+    sats = (gps = dictionary([1 => a]),)
+    new_sats = Tracking.merge_sats(sats, :gps, dictionary([2 => b]))
+    @test length(new_sats.gps) == 2
+    @test new_sats.gps[2].prn == 2
+
+    # `_copy_slot_vectors` walks a `SatelliteDicts` and copies each dict's
+    # values vector — the result should share keys but detach the slot
+    # vector.
+    copies = Tracking._copy_slot_vectors(sats)
+    @test length(copies.gps) == 1
+    @test copies.gps.values !== sats.gps.values
+end
+
+@testset "remove_satellite! kwarg form mutates in place" begin
+    ts = TrackState(; signal = GPSL1CA())
+    add_satellite!(ts; prn = 5, carrier_doppler = 100.0Hz)
+    add_satellite!(ts; prn = 6, carrier_doppler = 200.0Hz)
+    @test length(get_sat_states(ts, :default)) == 2
+
+    ret = remove_satellite!(ts; prn = 5)
+    @test ret === ts
+    @test length(get_sat_states(ts, :default)) == 1
+    @test get_prn(ts, :default, 6) == 6
 end
 
 @testset "Add and remove satellite state to and from track state" begin

@@ -93,7 +93,7 @@ max_code_length
 SatelliteDicts
 get_sat_states
 get_sat_state
-get_system
+get_signal
 ```
 
 ## Adding and removing satellites

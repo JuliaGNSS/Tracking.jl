@@ -19,9 +19,9 @@ using Tracking: BitBuffer, buffer, has_bit_or_secondary_code_been_found
     @testset "Throw error if bit hasn't been found yet and integrated code blocks is greater than 1" begin
         bit_buffer = @inferred BitBuffer()
 
-        system = GPSL1CA()
+        signal = GPSL1CA()
         next_bit_buffer = @test_throws "The number code blocks must be equal to 1" buffer(
-            system,
+            signal,
             bit_buffer,
             2,
             2 + 0im,
@@ -30,9 +30,9 @@ using Tracking: BitBuffer, buffer, has_bit_or_secondary_code_been_found
 
     @testset "Buffer" begin
         bit_buffer = BitBuffer()
-        system = GPSL1CA()
+        signal = GPSL1CA()
 
-        next_bit_buffer = @inferred buffer(system, bit_buffer, 1, 2 + 0im)
+        next_bit_buffer = @inferred buffer(signal, bit_buffer, 1, 2 + 0im)
         @test next_bit_buffer.length == 0
         @test next_bit_buffer.buffer == 0
         @test next_bit_buffer.code_block_buffer == 1
@@ -51,9 +51,9 @@ using Tracking: BitBuffer, buffer, has_bit_or_secondary_code_been_found
             complex(0, 0),
             0,
         )
-        system = GPSL1CA()
+        signal = GPSL1CA()
 
-        next_bit_buffer = @inferred buffer(system, bit_buffer, 1, -2 + 0im)
+        next_bit_buffer = @inferred buffer(signal, bit_buffer, 1, -2 + 0im)
         @test next_bit_buffer.found == true
         @test next_bit_buffer.length == 3
         @test next_bit_buffer.buffer == 6
@@ -73,9 +73,9 @@ using Tracking: BitBuffer, buffer, has_bit_or_secondary_code_been_found
             complex(-1, 0),
             1,
         )
-        system = GPSL1CA()
+        signal = GPSL1CA()
 
-        next_bit_buffer = @inferred buffer(system, bit_buffer, 1, -2 + 0im)
+        next_bit_buffer = @inferred buffer(signal, bit_buffer, 1, -2 + 0im)
         @test next_bit_buffer.buffer == 0
         @test next_bit_buffer.length == 0
         @test next_bit_buffer.prompt_accumulator == -3 + 0im
@@ -94,9 +94,9 @@ using Tracking: BitBuffer, buffer, has_bit_or_secondary_code_been_found
             complex(-10, 2),
             19,
         )
-        system = GPSL1CA()
+        signal = GPSL1CA()
 
-        next_bit_buffer = @inferred buffer(system, bit_buffer, 1, -2 + 0im)
+        next_bit_buffer = @inferred buffer(signal, bit_buffer, 1, -2 + 0im)
         @test next_bit_buffer.buffer == 2
         @test next_bit_buffer.length == 3
         @test next_bit_buffer.prompt_accumulator == 0 + 0im
@@ -115,9 +115,9 @@ using Tracking: BitBuffer, buffer, has_bit_or_secondary_code_been_found
             complex(10, 2),
             10,
         )
-        system = GPSL1CA()
+        signal = GPSL1CA()
 
-        next_bit_buffer = @inferred buffer(system, bit_buffer, 10, 10 + 1im)
+        next_bit_buffer = @inferred buffer(signal, bit_buffer, 10, 10 + 1im)
         @test next_bit_buffer.buffer == 7
         @test next_bit_buffer.length == 3
         @test next_bit_buffer.prompt_accumulator == 0 + 0im

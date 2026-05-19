@@ -195,7 +195,7 @@ Aid dopplers. That is velocity aiding for the carrier doppler and carrier aiding
 for the code doppler.
 """
 function aid_dopplers(
-    system::AbstractGNSSSignal,
+    signal::AbstractGNSSSignal,
     init_carrier_doppler,
     init_code_doppler,
     carrier_freq_update,
@@ -203,7 +203,7 @@ function aid_dopplers(
 )
     carrier_doppler = carrier_freq_update
     code_doppler =
-        code_freq_update + carrier_doppler * get_code_center_frequency_ratio(system)
+        code_freq_update + carrier_doppler * get_code_center_frequency_ratio(signal)
     init_carrier_doppler + carrier_doppler, init_code_doppler + code_doppler
 end
 
@@ -254,41 +254,41 @@ end
 # values for carrier_doppler, code_doppler, and doppler_estimator_state.
 # Otherwise return unchanged values.
 @inline function _process_doppler_source_signal(
-    signal::TrackedSignal,
+    tracked_signal::TrackedSignal,
     sat::TrackedSat,
     pll_and_dll_state::SatConventionalPLLAndDLL,
     preferred_num_code_blocks_to_integrate,
     sampling_frequency,
 )
-    if !signal.is_integration_completed || signal.integrated_samples == 0
-        return signal, pll_and_dll_state, sat.carrier_doppler, sat.code_doppler
+    if !tracked_signal.is_integration_completed || tracked_signal.integrated_samples == 0
+        return tracked_signal, pll_and_dll_state, sat.carrier_doppler, sat.code_doppler
     end
-    system = signal.signal
+    signal = tracked_signal.signal
     integrated_code_blocks = calc_num_code_blocks_to_integrate(
-        system,
+        signal,
         preferred_num_code_blocks_to_integrate,
-        has_bit_or_secondary_code_been_found(signal.bit_buffer),
+        has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
     )
 
-    normalized_correlator = normalize(signal.correlator, signal.integrated_samples)
-    post_corr_filter = update(signal.post_corr_filter, get_prompt(normalized_correlator))
+    normalized_correlator = normalize(tracked_signal.correlator, tracked_signal.integrated_samples)
+    post_corr_filter = update(tracked_signal.post_corr_filter, get_prompt(normalized_correlator))
     filtered_correlator = apply(post_corr_filter, normalized_correlator)
     prompt = get_prompt(filtered_correlator)
-    push!(signal.filtered_prompts, prompt)
-    cn0_estimator = update(get_cn0_estimator(signal), prompt)
-    bit_buffer = buffer(system, signal.bit_buffer, integrated_code_blocks, prompt)
-    integration_time = signal.integrated_samples / sampling_frequency
+    push!(tracked_signal.filtered_prompts, prompt)
+    cn0_estimator = update(get_cn0_estimator(tracked_signal), prompt)
+    bit_buffer = buffer(signal, tracked_signal.bit_buffer, integrated_code_blocks, prompt)
+    integration_time = tracked_signal.integrated_samples / sampling_frequency
 
     carrier_freq_update, carrier_loop_filter = calculate_carrier_frequency_update(
-        system,
+        signal,
         pll_and_dll_state.carrier_loop_filter,
         filtered_correlator,
-        get_last_fully_integrated_filtered_prompt(signal),
+        get_last_fully_integrated_filtered_prompt(tracked_signal),
         integration_time,
         pll_and_dll_state.carrier_loop_filter_bandwidth,
     )
     code_freq_update, code_loop_filter = calculate_code_frequency_update(
-        system,
+        signal,
         pll_and_dll_state.code_loop_filter,
         filtered_correlator,
         sat.code_doppler,
@@ -297,7 +297,7 @@ end
         pll_and_dll_state.code_loop_filter_bandwidth,
     )
     carrier_doppler, code_doppler = aid_dopplers(
-        system,
+        signal,
         pll_and_dll_state.init_carrier_doppler,
         pll_and_dll_state.init_code_doppler,
         carrier_freq_update,
@@ -309,15 +309,15 @@ end
         code_loop_filter,
     )
     new_signal = TrackedSignal(
-        signal;
+        tracked_signal;
         integrated_samples = 0,
         is_integration_completed = false,
         last_fully_integrated_filtered_prompt = prompt,
         bit_buffer,
         cn0_estimator,
         post_corr_filter,
-        correlator = zero(signal.correlator),
-        last_fully_integrated_correlator = signal.correlator,
+        correlator = zero(tracked_signal.correlator),
+        last_fully_integrated_correlator = tracked_signal.correlator,
     )
     return new_signal, new_doppler_estimator_state, carrier_doppler, code_doppler
 end
@@ -347,36 +347,36 @@ end
 end
 
 @inline function _process_one_passenger_signal(
-    signal::TrackedSignal,
+    tracked_signal::TrackedSignal,
     preferred_num_code_blocks_to_integrate,
     sampling_frequency,
 )
-    if !signal.is_integration_completed || signal.integrated_samples == 0
-        return signal
+    if !tracked_signal.is_integration_completed || tracked_signal.integrated_samples == 0
+        return tracked_signal
     end
-    system = signal.signal
+    signal = tracked_signal.signal
     integrated_code_blocks = calc_num_code_blocks_to_integrate(
-        system,
+        signal,
         preferred_num_code_blocks_to_integrate,
-        has_bit_or_secondary_code_been_found(signal.bit_buffer),
+        has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
     )
-    normalized_correlator = normalize(signal.correlator, signal.integrated_samples)
-    post_corr_filter = update(signal.post_corr_filter, get_prompt(normalized_correlator))
+    normalized_correlator = normalize(tracked_signal.correlator, tracked_signal.integrated_samples)
+    post_corr_filter = update(tracked_signal.post_corr_filter, get_prompt(normalized_correlator))
     filtered_correlator = apply(post_corr_filter, normalized_correlator)
     prompt = get_prompt(filtered_correlator)
-    push!(signal.filtered_prompts, prompt)
-    cn0_estimator = update(get_cn0_estimator(signal), prompt)
-    bit_buffer = buffer(system, signal.bit_buffer, integrated_code_blocks, prompt)
+    push!(tracked_signal.filtered_prompts, prompt)
+    cn0_estimator = update(get_cn0_estimator(tracked_signal), prompt)
+    bit_buffer = buffer(signal, tracked_signal.bit_buffer, integrated_code_blocks, prompt)
     TrackedSignal(
-        signal;
+        tracked_signal;
         integrated_samples = 0,
         is_integration_completed = false,
         last_fully_integrated_filtered_prompt = prompt,
         bit_buffer,
         cn0_estimator,
         post_corr_filter,
-        correlator = zero(signal.correlator),
-        last_fully_integrated_correlator = signal.correlator,
+        correlator = zero(tracked_signal.correlator),
+        last_fully_integrated_correlator = tracked_signal.correlator,
     )
 end
 
@@ -415,16 +415,16 @@ end
 $(SIGNATURES)
 
 In-place version of [`estimate_dopplers_and_filter_prompt`](@ref). Walks each
-system's `Vector{TrackedSat}` backing storage and overwrites slots with the
+group's `Vector{TrackedSat}` backing storage and overwrites slots with the
 new immutable `TrackedSat` value. Returns the same `track_state` object —
 allocation-free in steady state when [`track!`](@ref)'s preconditions are met.
 """
 # Per-group body for the doppler estimator. Pulled out so
-# `_foreach_system!` can call it without boxing when the groups tuple
-# is heterogeneous (e.g. GPS L1 + Galileo E1B). The per-signal system
-# type is recovered from each signal inside `_update_tracked_sat_doppler`.
+# `_foreach_group!` can call it without boxing when the groups tuple
+# is heterogeneous (e.g. GPS L1 + Galileo E1B). The per-signal type
+# is recovered from each signal inside `_update_tracked_sat_doppler`.
 # Routes to this group's band's `Measurement` for sampling frequency.
-@inline function _est_one_system!(
+@inline function _est_one_group!(
     g::SignalGroup,
     measurements::Measurements,
     preferred_num_code_blocks_to_integrate,
@@ -447,23 +447,23 @@ function estimate_dopplers_and_filter_prompt!(
     measurements::Measurements,
     preferred_num_code_blocks_to_integrate,
 )
-    _foreach_system!(
-        _est_one_system!, track_state.groups,
+    _foreach_group!(
+        _est_one_group!, track_state.groups,
         measurements, preferred_num_code_blocks_to_integrate,
     )
     return track_state
 end
 
 function calculate_carrier_frequency_update(
-    system::AbstractGNSSSignal,
+    signal::AbstractGNSSSignal,
     carrier_loop_filter::ThirdOrderAssistedBilinearLF,
     correlator::AbstractCorrelator,
     previous_prompt::Complex,
     integration_time,
     loop_bandwidth,
 )
-    pll_discriminator = pll_disc(system, correlator)
-    fll_discriminator = fll_disc(system, correlator, previous_prompt, integration_time)
+    pll_discriminator = pll_disc(signal, correlator)
+    fll_discriminator = fll_disc(signal, correlator, previous_prompt, integration_time)
     filter_loop(
         carrier_loop_filter,
         (pll_discriminator, fll_discriminator),
@@ -473,19 +473,19 @@ function calculate_carrier_frequency_update(
 end
 
 function calculate_carrier_frequency_update(
-    system::AbstractGNSSSignal,
+    signal::AbstractGNSSSignal,
     carrier_loop_filter::AbstractLoopFilter,
     correlator::AbstractCorrelator,
     previous_prompt::Complex,
     integration_time,
     loop_bandwidth,
 )
-    pll_discriminator = pll_disc(system, correlator)
+    pll_discriminator = pll_disc(signal, correlator)
     filter_loop(carrier_loop_filter, pll_discriminator, integration_time, loop_bandwidth)
 end
 
 function calculate_code_frequency_update(
-    system::AbstractGNSSSignal,
+    signal::AbstractGNSSSignal,
     code_loop_filter::AbstractLoopFilter,
     correlator::AbstractCorrelator,
     code_doppler,
@@ -493,6 +493,6 @@ function calculate_code_frequency_update(
     integration_time,
     loop_bandwidth,
 )
-    dll_discriminator = dll_disc(system, correlator, code_doppler, sampling_frequency)
+    dll_discriminator = dll_disc(signal, correlator, code_doppler, sampling_frequency)
     filter_loop(code_loop_filter, dll_discriminator, integration_time, loop_bandwidth)
 end

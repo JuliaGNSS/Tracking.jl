@@ -17,6 +17,7 @@ using Tracking:
     estimate_cn0,
     TrackedSat,
     TrackState,
+    add_satellite!,
     track
 
 @testset "Moments CN0 estimator" begin
@@ -122,6 +123,18 @@ end
     end
     cn0_estimate = @inferred estimate_cn0(track_state)
     @test cn0_estimate ≈ 45dBHz atol = 1.0dBHz
+end
+
+@testset "estimate_cn0 overloads on TrackState" begin
+    # Multi-group + sat-id and single-group + sat-id variants. The
+    # no-argument variant is already covered by the integration test
+    # above; these two specialize on the group key / sat identifier
+    # forwarding paths. With an unseeded CN0 estimator the value is
+    # 0 dB-Hz — we only assert the methods dispatch and run.
+    ts = TrackState(; signal = GPSL1CA())
+    add_satellite!(ts; prn = 1, carrier_doppler = 0Hz)
+    @test estimate_cn0(ts, :default, 1) == 0.0dBHz
+    @test estimate_cn0(ts, 1) == 0.0dBHz
 end
 
 end

@@ -21,7 +21,9 @@ using Tracking:
     apply,
     normalize,
     get_correlator_sample_shifts,
-    get_initial_accumulator
+    get_initial_accumulator,
+    get_num_accumulators
+import Tracking
 
 @testset "Correlator" begin
     @testset "Get initial accumulators" begin
@@ -101,6 +103,27 @@ using Tracking:
         @test @inferred(
             get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
         ) == [-5, -1, 0, 1, 5]
+    end
+
+    @testset "Get number of accumulators" begin
+        epl = EarlyPromptLateCorrelator()
+        @test @inferred(get_num_accumulators(epl)) == 3
+        vepl = VeryEarlyPromptLateCorrelator()
+        @test @inferred(get_num_accumulators(vepl)) == 5
+    end
+
+    @testset "is_zero correlator" begin
+        zero_corr = EarlyPromptLateCorrelator(
+            SVector(0.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im),
+            0.5,
+        )
+        @test Tracking.is_zero(zero_corr)
+
+        nonzero_corr = EarlyPromptLateCorrelator(
+            SVector(0.0 + 0.0im, 1.0 + 0.0im, 0.0 + 0.0im),
+            0.5,
+        )
+        @test !Tracking.is_zero(nonzero_corr)
     end
 
     @testset "Zeroing correlator" begin
