@@ -176,16 +176,24 @@ julia> get_carrier_doppler(track_state, :galileo, 11)
 
 A modern GPS satellite transmits L1 C/A, L1C-D, and L1C-P simultaneously on the same carrier. Tracking.jl can track all three together on one satellite, sharing a single carrier downconvert per outer iteration:
 
-```julia
-track_state = TrackState(;
-    signals = (
-        modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),
-    ),
-)
-add_satellite!(track_state;
-    prn = 11, group = :modern_gps,
-    code_phase = 0.0, carrier_doppler = 1234.0Hz,
-)
+```jldoctest modern_gps
+julia> using Tracking, GNSSSignals
+
+julia> using Tracking: Hz
+
+julia> track_state = TrackState(;
+           signals = (
+               modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),
+           ),
+       );
+
+julia> add_satellite!(track_state;
+           prn = 11, group = :modern_gps,
+           code_phase = 0.0, carrier_doppler = 1234.0Hz,
+       );
+
+julia> get_carrier_doppler(track_state, :modern_gps, 11)
+1234.0 Hz
 ```
 
 The first signal in each group's tuple is the **Doppler source** — its correlator is what the PLL/DLL discriminator runs on. Putting a pilot signal first (e.g. `GPSL1C_P()`) is encouraged when one is available: pilot signals carry no data-bit modulation, which lets the PLL run longer coherent integrations and reach lower phase-noise floors. The data-bearing signals (L1C-D, L1 C/A) still recover their navigation bits independently — each [`TrackedSignal`](@ref) carries its own `bit_buffer` regardless of which signal drives the loop filter.
@@ -208,15 +216,20 @@ This release ships the **structural enablers** for multi-band: per-band groups, 
 
 The `band` field of each [`SignalGroup`](@ref) is inferred from `get_band(signals[1])`, so you don't normally type it. Mix signals from different bands in the same `signals = (...)` keyword and the bands fall out:
 
-```julia
-track_state = TrackState(;
-    signals = (
-        legacy_gps_l1 = (GPSL1CA(),),
-        modern_gps_l1 = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),
-        galileo       = (GalileoE1B(),),
-        gps_l5        = (GPSL5I(),),
-    ),
-)
+```jldoctest multi_band_groups
+julia> using Tracking, GNSSSignals
+
+julia> track_state = TrackState(;
+           signals = (
+               legacy_gps_l1 = (GPSL1CA(),),
+               modern_gps_l1 = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),
+               galileo       = (GalileoE1B(),),
+               gps_l5        = (GPSL5I(),),
+           ),
+       );
+
+julia> keys(track_state.groups)
+(:legacy_gps_l1, :modern_gps_l1, :galileo, :gps_l5)
 ```
 
 Four groups, two distinct bands — the first three groups all sit on L1 (GPS L1 and Galileo E1 share the 1575.42 MHz carrier), the fourth sits on L5. Two groups sharing a band is fine; the grouping partitions satellites by *signal-tuple shape* (the type-stability axis), not by band.
@@ -225,12 +238,37 @@ Four groups, two distinct bands — the first three groups all sit on L1 (GPS L1
 
 For multi-band tracking, build one [`Measurement`](@ref) per band — bundling sample buffer and front-end metadata — and pass them as a NamedTuple keyed by [`band_key`](@ref):
 
-```julia
-add_satellite!(track_state; prn = 1, group = :legacy_gps_l1, carrier_doppler = 200Hz)
-add_satellite!(track_state; prn = 1, group = :gps_l5,        carrier_doppler = -150Hz)
+```jldoctest multi_band_track; filter = r"[0-9]+\.[0-9]+" => "***"
+julia> using Tracking, GNSSSignals
 
-track!((l1 = Measurement(buf_l1, 4e6Hz),
-        l5 = Measurement(buf_l5, 25e6Hz)), track_state)
+julia> using Tracking: Hz
+
+julia> using GNSSSignals: gen_code, get_code_frequency, get_code_center_frequency_ratio
+
+julia> function make_signal(sys, prn, carrier_doppler, num_samples, fs)
+           code_freq = carrier_doppler * get_code_center_frequency_ratio(sys) + get_code_frequency(sys)
+           range = 0:num_samples-1
+           cis.(2π .* carrier_doppler .* range ./ fs) .*
+               gen_code(num_samples, sys, prn, fs, code_freq, 0.0)
+       end;
+
+julia> track_state = TrackState(;
+           signals = (legacy_gps_l1 = (GPSL1CA(),), gps_l5 = (GPSL5I(),)),
+       );
+
+julia> add_satellite!(track_state; prn = 1, group = :legacy_gps_l1, code_phase = 0.0, carrier_doppler = 200Hz);
+
+julia> add_satellite!(track_state; prn = 1, group = :gps_l5, code_phase = 0.0, carrier_doppler = -150Hz);
+
+julia> buf_l1 = make_signal(GPSL1CA(),  1, 200Hz,  4000,  4e6Hz);  # 1 ms at 4 MHz
+
+julia> buf_l5 = make_signal(GPSL5I(),   1, -150Hz, 25000, 25e6Hz); # 1 ms at 25 MHz
+
+julia> track!((l1 = Measurement(buf_l1, 4e6Hz),
+               l5 = Measurement(buf_l5, 25e6Hz)), track_state);
+
+julia> get_carrier_doppler(track_state, :legacy_gps_l1, 1)
+200.00000359633913 Hz
 ```
 
 The keys (`:l1`, `:l5`) come from `band_key(L1())` and `band_key(L5())`. All measurements must cover the **exact same observation duration** — `num_samples / sampling_frequency` must compare equal across bands. An L1 chunk of 4000 samples at 4 MHz and an L5 chunk of 25000 samples at 25 MHz both cover 1 ms, so they're compatible; an L5 chunk of 25001 samples is rejected.
@@ -239,13 +277,23 @@ The keys (`:l1`, `:l5`) come from `band_key(L1())` and `band_key(L5())`. All mea
 
 Different bands often come from different front-ends with different antenna arrangements. To declare per-band antenna counts, pass [`SignalGroup`](@ref) instances directly as the entries — the bare-tuple shortcut uses the constructor's single `num_ants` kwarg for all groups, but the `SignalGroup` form lets each group set its own:
 
-```julia
-track_state = TrackState(;
-    signals = (
-        legacy_gps_l1 = SignalGroup((GPSL1CA(),); num_ants = NumAnts(2)),
-        gps_l5        = SignalGroup((GPSL5I(),);  num_ants = NumAnts(1)),
-    ),
-)
+```jldoctest per_band_ants
+julia> using Tracking, GNSSSignals
+
+julia> using Tracking: NumAnts
+
+julia> track_state = TrackState(;
+           signals = (
+               legacy_gps_l1 = SignalGroup((GPSL1CA(),); num_ants = NumAnts(2)),
+               gps_l5        = SignalGroup((GPSL5I(),);  num_ants = NumAnts(1)),
+           ),
+       );
+
+julia> track_state.groups[:legacy_gps_l1].num_ants
+NumAnts{2}()
+
+julia> track_state.groups[:gps_l5].num_ants
+NumAnts{1}()
 ```
 
 Two groups on the same band must declare the same `num_ants` — they share a physical front-end. The constructor errors at TrackState construction if they disagree.
