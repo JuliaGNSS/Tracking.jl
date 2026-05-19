@@ -10,15 +10,15 @@ integration would be bounded by the secondary-code period instead, but secondary
 code sync isn't wired up yet — clamp to one code block until it lands.
 """
 function calc_num_code_blocks_to_integrate(
-    system::AbstractGNSSSignal,
+    signal::AbstractGNSSSignal,
     preferred_num_code_blocks::Int,
     secondary_code_or_bit_found::Bool,
 )
     secondary_code_or_bit_found || return 1
-    data_freq = get_data_frequency(system)
+    data_freq = get_data_frequency(signal)
     iszero(data_freq) && return 1
     min(
-        Int(get_code_frequency(system) / (get_code_length(system) * data_freq)),
+        Int(get_code_frequency(signal) / (get_code_length(signal) * data_freq)),
         preferred_num_code_blocks,
     )
 end
@@ -29,11 +29,11 @@ $(SIGNATURES)
 Calculates the number of chips to integrate.
 """
 function calc_num_chips_to_integrate(
-    system::AbstractGNSSSignal,
+    signal::AbstractGNSSSignal,
     num_code_blocks::Int,
     current_code_phase,
 )
-    max_phase = num_code_blocks * get_code_length(system)
+    max_phase = num_code_blocks * get_code_length(signal)
     current_phase_mod_max_phase = mod(current_code_phase, max_phase)
     return max_phase - current_phase_mod_max_phase
 end
@@ -44,15 +44,15 @@ $(SIGNATURES)
 Calculates the number of samples to integrate.
 """
 function calc_num_samples_left_to_integrate(
-    system::AbstractGNSSSignal,
+    signal::AbstractGNSSSignal,
     num_code_blocks::Int,
     sampling_frequency,
     current_code_doppler,
     current_code_phase,
 )
     chips_to_integrate =
-        calc_num_chips_to_integrate(system, num_code_blocks, current_code_phase)
-    code_frequency = get_code_frequency(system) + current_code_doppler
+        calc_num_chips_to_integrate(signal, num_code_blocks, current_code_phase)
+    code_frequency = get_code_frequency(signal) + current_code_doppler
     ceil(Int, chips_to_integrate * sampling_frequency / code_frequency)
 end
 
@@ -65,7 +65,7 @@ is_integration_completed). Takes into account available signal samples and
 code block boundaries.
 """
 function calc_signal_samples_to_integrate(
-    system::AbstractGNSSSignal,
+    signal::AbstractGNSSSignal,
     signal_start_sample::Int,
     sampling_frequency,
     code_doppler,
@@ -75,12 +75,12 @@ function calc_signal_samples_to_integrate(
     num_samples_signal::Int,
 )
     num_code_blocks_to_integrate = calc_num_code_blocks_to_integrate(
-        system,
+        signal,
         preferred_num_code_blocks_to_integrate,
         secondary_code_or_bit_found,
     )
     samples_to_integrate_until_code_end = calc_num_samples_left_to_integrate(
-        system,
+        signal,
         num_code_blocks_to_integrate,
         sampling_frequency,
         code_doppler,

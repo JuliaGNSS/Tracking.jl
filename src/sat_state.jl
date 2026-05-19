@@ -31,7 +31,7 @@ end
 $(SIGNATURES)
 
 Construct a fresh [`TrackedSignal`](@ref) for `signal`. The correlator and
-post-corr filter default to the system's recommended values; pass
+post-corr filter default to the signal's recommended values; pass
 `correlator` and `post_corr_filter` explicitly to override.
 """
 function TrackedSignal(
@@ -366,10 +366,10 @@ constructor when fields need replacing.
 update_estimator_on_handoff(estimator::AbstractDopplerEstimator, _new_sats) = estimator
 
 """
-Type alias for a tuple or named tuple of per-system satellite dictionaries.
+Type alias for a tuple or named tuple of per-group satellite dictionaries.
 Each entry is `Dictionary{I, <:TrackedSat}` — the keys are satellite
 identifiers (PRNs) and the values are the per-sat tracking state. The signal
-type for each system lives in the dictionary value type, accessed via
+type for each group lives in the dictionary value type, accessed via
 `only(sat.signals).signal` at use sites.
 """
 const SatelliteDicts{N} = TupleLike{<:NTuple{N,Dictionary{<:Any,<:TrackedSat}}}
@@ -480,11 +480,11 @@ should prefer the `TrackState`-level method.
 """
 function merge_sats(
     satellites::SatelliteDicts,
-    system_idx,
+    group_idx,
     new_tracked_sats::Dictionary{<:Any,<:TrackedSat},
 )
-    sats_dict = satellites[system_idx]
-    @set satellites[system_idx] = merge(sats_dict, new_tracked_sats)
+    sats_dict = satellites[group_idx]
+    @set satellites[group_idx] = merge(sats_dict, new_tracked_sats)
 end
 
 # Build a `Dictionary` that shares its keys with the original but holds a
@@ -514,19 +514,19 @@ end
 @inline _copy_groups_slot_vectors(groups::SignalGroups) =
     map(_copy_group_slot_vectors, groups)
 
-# Recursive tuple walker: applies `f(sats_dict, args...)` to each per-system
+# Recursive tuple walker: applies `f(sats_dict, args...)` to each per-group
 # satellite dictionary in the (named-)tuple. Each step has fully concrete
-# types, so no runtime dispatch even when systems differ (heterogeneous
+# types, so no runtime dispatch even when groups differ (heterogeneous
 # `Tuple{Dictionary{Int, TrackedSat{Tuple{TrackedSignal{GPSL1CA,...}},...}}, Dictionary{Int, TrackedSat{Tuple{TrackedSignal{GalileoE1B,...}},...}}}`
 # would otherwise box each element when iterated with `for s in tuple`).
-@inline _foreach_system!(f::F, ::Tuple{}, args::Vararg{Any,N}) where {F,N} = nothing
-@inline function _foreach_system!(f::F, t::Tuple, args::Vararg{Any,N}) where {F,N}
+@inline _foreach_group!(f::F, ::Tuple{}, args::Vararg{Any,N}) where {F,N} = nothing
+@inline function _foreach_group!(f::F, t::Tuple, args::Vararg{Any,N}) where {F,N}
     f(first(t), args...)
-    _foreach_system!(f, Base.tail(t), args...)
+    _foreach_group!(f, Base.tail(t), args...)
 end
 # NamedTuple unwraps to its underlying Tuple — concrete and cheap.
-@inline _foreach_system!(f::F, nt::NamedTuple, args::Vararg{Any,N}) where {F,N} =
-    _foreach_system!(f, Tuple(nt), args...)
+@inline _foreach_group!(f::F, nt::NamedTuple, args::Vararg{Any,N}) where {F,N} =
+    _foreach_group!(f, Tuple(nt), args...)
 
 # In-place variant: walks each group's `Vector{TrackedSat}` slot storage
 # and overwrites each entry with a freshly reset value. The vector
@@ -534,7 +534,7 @@ end
 # are all reused. `TrackedSat` itself is immutable, so the slot is
 # reassigned rather than mutated; we still call the non-`!` per-
 # `TrackedSat` form.
-@inline function _reset_one_system!(g::SignalGroup)
+@inline function _reset_one_group!(g::SignalGroup)
     vals = g.satellites.values
     @inbounds for i in eachindex(vals)
         vals[i] = reset_start_sample_and_bit_buffer(vals[i])
@@ -545,7 +545,7 @@ end
 function reset_start_sample_and_bit_buffer!(
     groups::SignalGroups,
 )
-    _foreach_system!(_reset_one_system!, groups)
+    _foreach_group!(_reset_one_group!, groups)
     return groups
 end
 

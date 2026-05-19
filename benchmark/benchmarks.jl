@@ -97,13 +97,13 @@ function setup_benchmark(;
     signal_type = Float32,
     num_samples = 2000,
     sampling_frequency = 5e6Hz,
-    system = GPSL1CA(),
+    gnss_signal = GPSL1CA(),
     num_ants = 1,
 )
     code_phase = 10.5
     carrier_doppler = 1000.0Hz
-    code_doppler = carrier_doppler * GNSSSignals.get_code_center_frequency_ratio(system)
-    code_frequency = code_doppler + get_code_frequency(system)
+    code_doppler = carrier_doppler * GNSSSignals.get_code_center_frequency_ratio(gnss_signal)
+    code_frequency = code_doppler + get_code_frequency(gnss_signal)
 
     correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(num_ants))
     static_shifts =
@@ -114,13 +114,13 @@ function setup_benchmark(;
         num_ants == 1 ? rand(Complex{signal_type}, num_samples) :
         rand(Complex{signal_type}, num_samples, num_ants)
 
-    code_replica = Vector{get_code_type(system)}(
+    code_replica = Vector{get_code_type(gnss_signal)}(
         undef,
         num_samples + maximum(static_shifts) - minimum(static_shifts),
     )
     _gen_code_replica!(
         code_replica,
-        system,
+        gnss_signal,
         code_frequency,
         sampling_frequency,
         code_phase,
@@ -139,7 +139,7 @@ function setup_benchmark(;
         sampling_frequency,
         carrier_doppler,
         code_phase,
-        system,
+        gnss_signal,
         num_samples,
     )
 end
@@ -160,18 +160,18 @@ _make_cpu_threaded_dc(sampling_frequency) =
     Tracking.CPUThreadedDownconvertAndCorrelator()
 
 function _gen_code_replica!(
-    code_replica, system, code_frequency, sampling_frequency,
+    code_replica, gnss_signal, code_frequency, sampling_frequency,
     code_phase, start_sample, num_samples, sample_shifts, prn,
 )
     if _NEEDS_VAL
         gen_code_replica!(
-            code_replica, system, code_frequency, sampling_frequency,
+            code_replica, gnss_signal, code_frequency, sampling_frequency,
             code_phase, start_sample, num_samples, sample_shifts, prn,
             Val(sampling_frequency),
         )
     else
         gen_code_replica!(
-            code_replica, system, code_frequency, sampling_frequency,
+            code_replica, gnss_signal, code_frequency, sampling_frequency,
             code_phase, start_sample, num_samples, sample_shifts, prn,
         )
     end
@@ -183,13 +183,13 @@ function bench_downconvert_and_correlate(;
     signal_type = Float32,
     num_samples = 2000,
     sampling_frequency = 5e6Hz,
-    system = GPSL1CA(),
+    gnss_signal = GPSL1CA(),
     num_ants = 1,
 )
     downconvert_and_correlator = _make_cpu_dc(sampling_frequency)
     track_state = TrackState(
-        system,
-        [_make_initial_sat_with_num_ants(system, 1, 10.5, 1000.0Hz, NumAnts(num_ants))],
+        gnss_signal,
+        [_make_initial_sat_with_num_ants(gnss_signal, 1, 10.5, 1000.0Hz, NumAnts(num_ants))],
     )
     signal =
         num_ants == 1 ? rand(Complex{signal_type}, num_samples) :
@@ -297,9 +297,9 @@ function bench_track(;
     num_samples = 2000,
     sampling_frequency = 5e6Hz,
 )
-    system = GPSL1CA()
+    gnss_signal = GPSL1CA()
     downconvert_and_correlator = _make_cpu_dc(sampling_frequency)
-    track_state = TrackState(system, [_make_initial_sat(system, 1, 0.0, 1000Hz)])
+    track_state = TrackState(gnss_signal, [_make_initial_sat(gnss_signal, 1, 0.0, 1000Hz)])
     signal = rand(Complex{signal_type}, num_samples)
     @benchmarkable track(
         $signal,
@@ -317,9 +317,9 @@ function bench_track_inplace(;
     num_samples = 2000,
     sampling_frequency = 5e6Hz,
 )
-    system = GPSL1CA()
+    gnss_signal = GPSL1CA()
     downconvert_and_correlator = _make_cpu_dc(sampling_frequency)
-    track_state = TrackState(system, [_make_initial_sat(system, 1, 0.0, 1000Hz)])
+    track_state = TrackState(gnss_signal, [_make_initial_sat(gnss_signal, 1, 0.0, 1000Hz)])
     signal = rand(Complex{signal_type}, num_samples)
     @benchmarkable Tracking.track!(
         $signal,
@@ -352,14 +352,14 @@ function bench_fused_tuple_kernel(;
     signal_type = Float32,
     num_samples = 2000,
     sampling_frequency = 5e6Hz,
-    system = GPSL1CA(),
+    gnss_signal = GPSL1CA(),
     num_ants = 1,
     n_signals = 2,
 )
     code_phase = 10.5
     carrier_doppler = 1000.0Hz
-    code_doppler = carrier_doppler * GNSSSignals.get_code_center_frequency_ratio(system)
-    code_frequency = code_doppler + get_code_frequency(system)
+    code_doppler = carrier_doppler * GNSSSignals.get_code_center_frequency_ratio(gnss_signal)
+    code_frequency = code_doppler + get_code_frequency(gnss_signal)
 
     correlator_template = EarlyPromptLateCorrelator(; num_ants = NumAnts(num_ants))
     sample_shifts =
@@ -376,9 +376,9 @@ function bench_fused_tuple_kernel(;
         n_signals,
     )
     code_replicas = ntuple(n_signals) do _
-        cr = Vector{get_code_type(system)}(undef, code_replica_size)
+        cr = Vector{get_code_type(gnss_signal)}(undef, code_replica_size)
         _gen_code_replica!(
-            cr, system, code_frequency, sampling_frequency, code_phase,
+            cr, gnss_signal, code_frequency, sampling_frequency, code_phase,
             1, num_samples, sample_shifts, 1,
         )
         cr

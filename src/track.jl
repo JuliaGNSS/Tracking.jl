@@ -108,7 +108,7 @@ For real-time loops, **construct the correlator once outside the loop**
 and pass it via the `downconvert_and_correlator` keyword argument:
 
 ```julia
-track_state = TrackState(system, initial_sats)
+track_state = TrackState(signal, initial_sats)
 dc = CPUThreadedDownconvertAndCorrelator()      # hoist!
 
 while got_chunk(rx)

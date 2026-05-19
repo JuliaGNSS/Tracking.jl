@@ -8,8 +8,9 @@ using GNSSSignals:
 
 using Tracking:
     TrackState, Measurement, NumAnts, SignalGroup,
-    track!, add_satellite!,
+    track, track!, add_satellite!,
     band_key, band_keys,
+    get_samples, get_sampling_frequency, get_intermediate_frequency,
     get_carrier_doppler, get_code_doppler, get_num_ants
 
 # Build a synthetic complex sample buffer for one PRN at one band, with a
@@ -24,6 +25,56 @@ function _make_signal(
     range = 0:(num_samples - 1)
     cis.(2π .* carrier_doppler .* range ./ sampling_frequency) .*
         gen_code(num_samples, s, prn, sampling_frequency, code_freq, start_code_phase)
+end
+
+@testset "Measurement kwarg constructor and accessors" begin
+    buf = zeros(ComplexF64, 100)
+    m_kw = Measurement(buf; sampling_frequency = 4e6Hz, intermediate_frequency = 1.5e6Hz)
+    @test get_samples(m_kw) === buf
+    @test get_sampling_frequency(m_kw) == 4e6Hz
+    @test get_intermediate_frequency(m_kw) == 1.5e6Hz
+
+    # Kwarg form with default intermediate_frequency = zero(sampling_frequency).
+    m_kw_default = Measurement(buf; sampling_frequency = 4e6Hz)
+    @test get_intermediate_frequency(m_kw_default) == 0.0Hz
+end
+
+@testset "band_key for L1 and L5" begin
+    @test @inferred(band_key(L1())) === :l1
+    @test @inferred(band_key(L5())) === :l5
+end
+
+@testset "Single-Measurement track/track! shortcut on single-band TrackState" begin
+    fs = 4e6Hz
+    num_samples = 4000
+    prn = 1
+    carrier_doppler = 200Hz
+    start_code_phase = 100.0
+    buf = _make_signal(GPSL1CA, prn, carrier_doppler, start_code_phase, num_samples, fs)
+    measurement = Measurement(buf, fs)
+
+    # Immutable variant.
+    ts_imm = TrackState(; signal = GPSL1CA())
+    add_satellite!(ts_imm; prn, code_phase = start_code_phase,
+                   carrier_doppler = carrier_doppler - 20Hz)
+    new_ts = track(measurement, ts_imm)
+    @test abs(get_carrier_doppler(new_ts, :default, prn) - carrier_doppler) < 50Hz
+
+    # In-place variant.
+    ts_inp = TrackState(; signal = GPSL1CA())
+    add_satellite!(ts_inp; prn, code_phase = start_code_phase,
+                   carrier_doppler = carrier_doppler - 20Hz)
+    track!(measurement, ts_inp)
+    @test abs(get_carrier_doppler(ts_inp, :default, prn) - carrier_doppler) < 50Hz
+end
+
+@testset "Bare-buffer track! rejects multi-band TrackState" begin
+    ts = TrackState(; signals = (
+        gps_l1 = (GPSL1CA(),),
+        gps_l5 = (GPSL5I(),),
+    ))
+    # `_single_band` must error — no single band to auto-key the buffer to.
+    @test_throws ArgumentError track!(zeros(ComplexF64, 4000), ts, 4e6Hz)
 end
 
 @testset "band_keys for single-band TrackState" begin

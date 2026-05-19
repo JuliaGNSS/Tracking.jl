@@ -24,10 +24,10 @@ end
 # Number of primary-code blocks that form one navigation bit.
 # Returns 0 for pilot signals (`data_frequency = 0`), where the concept is
 # undefined; callers must guard for that case before using the result.
-@inline function _calc_num_code_blocks_that_form_a_bit(system::AbstractGNSSSignal)
-    data_freq = get_data_frequency(system)
+@inline function _calc_num_code_blocks_that_form_a_bit(signal::AbstractGNSSSignal)
+    data_freq = get_data_frequency(signal)
     iszero(data_freq) && return 0
-    Int(get_code_frequency(system) / (get_code_length(system) * data_freq))
+    Int(get_code_frequency(signal) / (get_code_length(signal) * data_freq))
 end
 
 """
@@ -35,17 +35,17 @@ $(SIGNATURES)
 
 Buffer data bits based on the prompt accumulation and the current prompt value.
 """
-function buffer(system::AbstractGNSSSignal, bit_buffer, integrated_code_blocks, prompt)
+function buffer(signal::AbstractGNSSSignal, bit_buffer, integrated_code_blocks, prompt)
     # The divide is deferred to the helper — pilot signals
     # (`get_data_frequency = 0`) would otherwise blow up here with `Int(Inf)`.
     # Pilots take the `_buffer_find_bit` branch with `bit_buffer.found = false`
     # forever (their per-signal `is_upcoming_integration_new_bit` returns
     # false), so the value is unused for them.
-    num_code_blocks_that_form_a_bit = _calc_num_code_blocks_that_form_a_bit(system)
+    num_code_blocks_that_form_a_bit = _calc_num_code_blocks_that_form_a_bit(signal)
 
     if (bit_buffer.found == false)
         return _buffer_find_bit(
-            system, bit_buffer, num_code_blocks_that_form_a_bit,
+            signal, bit_buffer, num_code_blocks_that_form_a_bit,
             integrated_code_blocks, prompt,
         )
     end
@@ -78,7 +78,7 @@ function buffer(system::AbstractGNSSSignal, bit_buffer, integrated_code_blocks, 
     end
 end
 
-function _buffer_find_bit(system, bit_buffer, num_code_blocks_that_form_a_bit,
+function _buffer_find_bit(signal, bit_buffer, num_code_blocks_that_form_a_bit,
                           integrated_code_blocks, prompt)
     if (integrated_code_blocks != 1)
         error(
@@ -88,7 +88,7 @@ function _buffer_find_bit(system, bit_buffer, num_code_blocks_that_form_a_bit,
     code_block_buffer = bit_buffer.code_block_buffer << 1 + UInt64(real(prompt) > 0)
     code_block_buffer_lengh = bit_buffer.code_block_buffer_lengh + 1
     bit_found = is_upcoming_integration_new_bit(
-        system,
+        signal,
         code_block_buffer,
         code_block_buffer_lengh,
     )

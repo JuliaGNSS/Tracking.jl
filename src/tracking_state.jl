@@ -216,15 +216,15 @@ function _make_template_tracked_sat(
 end
 
 function TrackState(
-    system::AbstractGNSSSignal,
+    signal::AbstractGNSSSignal,
     tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}};
     doppler_estimator::AbstractDopplerEstimator =
         ConventionalAssistedPLLAndDLL(;
-            carrier_loop_filter_bandwidth = default_carrier_loop_filter_bandwidth(system),
-            code_loop_filter_bandwidth = default_code_loop_filter_bandwidth(system),
+            carrier_loop_filter_bandwidth = default_carrier_loop_filter_bandwidth(signal),
+            code_loop_filter_bandwidth = default_code_loop_filter_bandwidth(signal),
         ),
 )
-    # `system` is implied by each sat's `signals[1].signal` in the new
+    # `signal` is implied by each sat's `signals[1].signal` in the new
     # design; the positional argument is kept for backward-compatible
     # construction but is otherwise unused — but it IS what sizes the
     # default loop bandwidths in the kwarg default expression above.
@@ -296,7 +296,7 @@ function TrackState(
 end
 
 # Picks the most-constraining (longest-T, lowest-BL) default across all
-# per-system dicts' driver signals. Each group has at least one sat by
+# per-group dicts' driver signals. Each group has at least one sat by
 # the legacy constructor's precondition (_signal_group_from_dict errors
 # on empty dicts), so reading `signals[1]` of the first sat is safe.
 @inline function _default_estimator_for_satellite_dicts(satellites::SatelliteDicts)
@@ -328,7 +328,7 @@ end
 
 # Build a SignalGroup from a non-empty satellites dictionary by recovering
 # the signal-instance tuple, band, and antenna count from any sat. Used by
-# the legacy `TrackState(system, sats)` / `TrackState(satellites)`
+# the legacy `TrackState(signal, sats)` / `TrackState(satellites)`
 # constructors. Empty dicts can't be recovered this way (no sats to inspect)
 # — requires at least one sat in the dict.
 @inline function _signal_group_from_dict(dict::Dictionary{<:Any,<:TrackedSat})
@@ -362,17 +362,17 @@ end
 """
 $(SIGNATURES)
 
-Get the per-system satellite dictionary for a specific GNSS system index.
+Get the per-group satellite dictionary for a specific signal-group index.
 """
 function get_sat_states(
     satellites::SatelliteDicts{N},
-    system_idx::Union{Symbol,Integer,Val},
+    group_idx::Union{Symbol,Integer,Val},
 ) where {N}
-    _index_system(satellites, system_idx)
+    _index_group(satellites, group_idx)
 end
 
-@inline _index_system(t::SatelliteDicts, i::Union{Symbol,Integer}) = t[i]
-@inline _index_system(t::SatelliteDicts, ::Val{M}) where {M} = t[M]
+@inline _index_group(t::SatelliteDicts, i::Union{Symbol,Integer}) = t[i]
+@inline _index_group(t::SatelliteDicts, ::Val{M}) where {M} = t[M]
 
 function get_sat_states(satellites::SatelliteDicts{1})
     get_sat_states(satellites, 1)
@@ -380,9 +380,9 @@ end
 
 function get_sat_states(
     track_state::TrackState{<:SignalGroups{N}},
-    system_idx::Union{Symbol,Integer,Val},
+    group_idx::Union{Symbol,Integer,Val},
 ) where {N}
-    get_sat_states(map(g -> g.satellites, track_state.groups), system_idx)
+    get_sat_states(map(g -> g.satellites, track_state.groups), group_idx)
 end
 
 function get_sat_states(track_state::TrackState{<:SignalGroups{1}})
@@ -395,29 +395,29 @@ $(SIGNATURES)
 Return the first signal of the given capability — useful when the caller
 needs the signal instance (for `gen_code`, frequency lookups, …) but
 doesn't already have a sat in hand. The dictionary's value type carries
-the signal type, so this resolves at compile time when `system_idx` is a
+the signal type, so this resolves at compile time when `group_idx` is a
 literal `Symbol` / `Integer`.
 
 For a single-capability `TrackState` the index can be omitted.
 """
-function get_system(
+function get_signal(
     track_state::TrackState{<:SignalGroups{N}},
-    system_idx::Union{Symbol,Integer,Val},
+    group_idx::Union{Symbol,Integer,Val},
 ) where {N}
-    sats = get_sat_states(track_state, system_idx)
+    sats = get_sat_states(track_state, group_idx)
     get_signal(first(sats.values))
 end
 
-function get_system(track_state::TrackState{<:SignalGroups{1}})
-    get_system(track_state, 1)
+function get_signal(track_state::TrackState{<:SignalGroups{1}})
+    get_signal(track_state, 1)
 end
 
 function get_sat_state(
     track_state::TrackState{<:SignalGroups{N}},
-    system_idx::Union{Symbol,Integer,Val},
+    group_idx::Union{Symbol,Integer,Val},
     sat_identifier,
 ) where {N}
-    get_sat_state(get_sat_states(track_state, system_idx), sat_identifier)
+    get_sat_state(get_sat_states(track_state, group_idx), sat_identifier)
 end
 
 function get_sat_state(
@@ -433,10 +433,10 @@ end
 
 function estimate_cn0(
     track_state::TrackState{<:SignalGroups},
-    system_idx::Union{Symbol,Integer,Val},
+    group_idx::Union{Symbol,Integer,Val},
     sat_identifier,
 )
-    estimate_cn0(get_sat_state(track_state, system_idx, sat_identifier))
+    estimate_cn0(get_sat_state(track_state, group_idx, sat_identifier))
 end
 
 function estimate_cn0(track_state::TrackState{<:SignalGroups{1}}, sat_identifier)
@@ -449,7 +449,7 @@ end
 
 function merge_sats(
     track_state::TrackState{G,DE},
-    system_idx::Union{Symbol,Integer},
+    group_idx::Union{Symbol,Integer},
     tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}},
 ) where {G<:SignalGroups,DE<:AbstractDopplerEstimator}
     new_sats_dict = to_dictionary(tracked_sats)
@@ -457,9 +457,9 @@ function merge_sats(
     new_estimator =
         update_estimator_on_handoff(track_state.doppler_estimator, new_sats_dict)
     groups = track_state.groups
-    g = groups[system_idx]
+    g = groups[group_idx]
     new_group = SignalGroup(g; satellites = merge(g.satellites, new_sats_dict))
-    new_groups = @set groups[system_idx] = new_group
+    new_groups = @set groups[group_idx] = new_group
     TrackState{G,DE}(new_groups, new_estimator)
 end
 

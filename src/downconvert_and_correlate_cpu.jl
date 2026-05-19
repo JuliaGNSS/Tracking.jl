@@ -609,16 +609,16 @@ end
 """
 $(SIGNATURES)
 
-In-place version: walks each system's `Vector{TrackedSat}` and overwrites
+In-place version: walks each group's `Vector{TrackedSat}` and overwrites
 slots in place. Returns the same `track_state`. Allocation-free in steady
 state — see [`track!`](@ref).
 """
 # Per-group body for the single-threaded backend. Pulled out so
-# `_foreach_system!` can call it on each `SignalGroup` in the
+# `_foreach_group!` can call it on each `SignalGroup` in the
 # (possibly heterogeneous) `groups` tuple without dynamic dispatch /
 # boxing. Routes to this group's band's `Measurement` for the signal
 # buffer and front-end metadata.
-@inline function _dc_one_system!(
+@inline function _dc_one_group!(
     g::SignalGroup, dc::CPUDownconvertAndCorrelator,
     measurements::Measurements, preferred_num_code_blocks_to_integrate,
 )
@@ -649,8 +649,8 @@ function downconvert_and_correlate!(
     track_state::TrackState,
     preferred_num_code_blocks_to_integrate::Int,
 )
-    _foreach_system!(
-        _dc_one_system!, track_state.groups,
+    _foreach_group!(
+        _dc_one_group!, track_state.groups,
         dc, measurements, preferred_num_code_blocks_to_integrate,
     )
     return track_state
@@ -684,16 +684,16 @@ end
 """
 $(SIGNATURES)
 
-In-place version: writes new `TrackedSat` values directly into each system's
+In-place version: writes new `TrackedSat` values directly into each group's
 existing `Vector{TrackedSat}` backing storage. Different `@batch` iterations
 write to disjoint slots, so no synchronization is needed. Returns the same
 `track_state`. Allocation-free in steady state — see [`track!`](@ref).
 """
 # Per-group body for the threaded backend. Each `@batch` writes to
 # disjoint slots in this group's `Vector{TrackedSat}`. Pulled out so
-# `_foreach_system!` can call it without boxing on heterogeneous
+# `_foreach_group!` can call it without boxing on heterogeneous
 # group tuples. Routes to this group's band's `Measurement`.
-@inline function _dc_one_system_threaded!(
+@inline function _dc_one_group_threaded!(
     g::SignalGroup, dc::CPUThreadedDownconvertAndCorrelator,
     measurements::Measurements, preferred_num_code_blocks_to_integrate,
 )
@@ -725,8 +725,8 @@ function downconvert_and_correlate!(
     track_state::TrackState,
     preferred_num_code_blocks_to_integrate::Int,
 )
-    _foreach_system!(
-        _dc_one_system_threaded!, track_state.groups,
+    _foreach_group!(
+        _dc_one_group_threaded!, track_state.groups,
         dc, measurements, preferred_num_code_blocks_to_integrate,
     )
     return track_state
@@ -738,7 +738,7 @@ $(SIGNATURES)
 Downconvert and correlate a single satellite on the CPU.
 """
 function downconvert_and_correlate!(
-    system,
+    signal_type,
     signal,
     correlator::AbstractCorrelator{M},
     code_replica,
@@ -755,7 +755,7 @@ function downconvert_and_correlate!(
         get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
     gen_code_replica!(
         code_replica,
-        system,
+        signal_type,
         code_frequency,
         sampling_frequency,
         code_phase,
