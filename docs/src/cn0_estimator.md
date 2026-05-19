@@ -12,11 +12,21 @@ MomentsCN0Estimator
 
 You can adjust the buffer size for the `MomentsCN0Estimator` by constructing the `TrackedSat` yourself and handing it to `add_satellite!`'s escape-hatch overload:
 
-```julia
-sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
-                 num_prompts_for_cn0_estimation = 200,
-                 doppler_estimator = ConventionalAssistedPLLAndDLL())
-add_satellite!(track_state, :default, sat)
+```jldoctest cn0_buffer
+julia> using Tracking, GNSSSignals
+
+julia> using Tracking: Hz
+
+julia> track_state = TrackState(; signal = GPSL1CA());
+
+julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
+                        num_prompts_for_cn0_estimation = 200,
+                        doppler_estimator = ConventionalAssistedPLLAndDLL());
+
+julia> add_satellite!(track_state, :default, sat);
+
+julia> get_prn(track_state, :default, 1)
+1
 ```
 
 ## Estimating CN0
