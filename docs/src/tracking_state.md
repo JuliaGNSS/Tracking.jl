@@ -2,6 +2,63 @@
 
 Tracking.jl uses a small hierarchy of state types to manage tracking across multiple satellites, multiple signals per satellite, multiple signal groups, and multiple RF bands.
 
+## Choosing a `TrackState` constructor
+
+`TrackState` has several constructors. The right choice depends on **when you know which satellites you'll track**.
+
+### One-shot scripts: acquire once, then track
+
+If you acquire once at the start of a script and hand the results straight to tracking, use the `AcquisitionResults`-aware constructors from the [Acquisition](https://github.com/JuliaGNSS/Acquisition.jl) extension. They derive everything (signal, default loop bandwidths, satellite parameters) from the acquisition results, so the whole acquire→track handoff is one line.
+
+```julia
+using Acquisition  # loads the extension; required for TrackState(acq...)
+
+# Single satellite
+acq = acquire(GPSL1CA(), data, sampling_frequency, 7)
+track_state = TrackState(acq)
+
+# Many satellites, one signal
+acqs = acquire(GPSL1CA(), data, sampling_frequency, 1:32)
+track_state = TrackState(filter(is_detected, acqs))
+
+# Many satellites, multiple signals
+acqs = vcat(
+    acquire(GPSL1CA(),    data, sampling_frequency, 1:32),
+    acquire(GalileoE1B(), data, sampling_frequency, 1:36),
+)
+track_state = TrackState(filter(is_detected, acqs);
+    signals = (gps = (GPSL1CA(),), gal = (GalileoE1B(),)),
+)
+```
+
+You can still call [`add_satellite!`](@ref) on a `TrackState` built this way later — but only for signals already declared by the acqs you handed to the constructor (the groups, and therefore the slot types, are frozen at construction). If you anticipate tracking a wider set of signals than the initial acquisition produced, use the empty-construct-then-populate pattern below instead.
+
+### Real-time / repeating loops: build empty, then populate
+
+If you re-acquire periodically (a typical receiver: re-search PRNs every few seconds, hand new detections off to tracking without rebuilding the whole `TrackState`), build an **empty** `TrackState` once with `TrackState(; signal = ...)` or `TrackState(; signals = (...))`, then add satellites later with [`add_satellite!`](@ref) (or remove them with [`remove_satellite!`](@ref)):
+
+```julia
+# Build once
+track_state = TrackState(;
+    signals = (gps = (GPSL1CA(),), gal = (GalileoE1B(),)),
+)
+
+# In your acquisition loop
+while running
+    acqs = acquire(GPSL1CA(), latest_chunk, sampling_frequency, candidate_prns)
+    for acq in filter(is_detected, acqs)
+        add_satellite!(track_state, acq)   # routes to the matching group
+    end
+    track_state = track(latest_chunk, track_state, sampling_frequency)
+end
+```
+
+This pattern keeps the `TrackState`'s concrete type fixed across the loop — the satellite-dict's slot type is frozen at construction, so the tracking hot path stays type-stable as sats come and go.
+
+### Power-user: pre-built `TrackedSat`s
+
+If you need to customize the correlator or post-correlation filter type (the slot type itself), build the `TrackedSat`s yourself and hand them to the legacy constructor `TrackState(signal, sats)` or the `add_satellite!(track_state, group, sat)` escape hatch. The kwarg-based constructors only let you customize the satellite's *values*, not its concrete type.
+
 ## TrackState
 
 The main container for all tracking state. It holds:
