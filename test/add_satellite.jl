@@ -9,7 +9,8 @@ module AddSatelliteTest
 using Test: @test, @testset, @test_throws, @inferred
 using Unitful: Hz
 using GNSSSignals:
-    GPSL1CA, GalileoE1B, get_code_center_frequency_ratio
+    GPSL1CA, GPSL1C_D, GPSL1C_P, GalileoE1B, get_code_center_frequency_ratio
+using Acquisition: Acquisition, AcquisitionResults
 using Tracking:
     TrackState,
     TrackedSat,
@@ -181,6 +182,152 @@ end
     @test de_state isa SatConventionalPLLAndDLL
     @test de_state.carrier_loop_filter_bandwidth == 22.0Hz
     @test de_state.code_loop_filter_bandwidth == 1.5Hz
+end
+
+# Acquisition v2 added num_blocks/block_size fields (FM-DBZP backend).
+# Keep both constructors supported as long as Project.toml's Acquisition
+# compat range does.
+function _make_acq(signal, prn, code_phase, carrier_doppler)
+    args = (
+        signal, prn, 5e6Hz, carrier_doppler, code_phase,
+        45.0, 1.0, 10.0, 1, randn(10, 10), -500:100.0:500,
+    )
+    pkgversion(Acquisition) >= v"2" ?
+        AcquisitionResults(args..., 1, length(-500:100.0:500)) :
+        AcquisitionResults(args...)
+end
+
+@testset "add_satellite!(ts, acq) — single-group shortcut" begin
+    ts = TrackState(; signal = GPSL1CA())
+    acq = _make_acq(GPSL1CA(), 7, 524.6, 100.0Hz)
+    ret = add_satellite!(ts, acq)
+    @test ret === ts
+    @test get_prn(ts, :default, 7) == 7
+    @test get_carrier_doppler(ts, :default, 7) == 100.0Hz
+    sat = get_sat_state(ts, :default, 7)
+    @test sat.code_phase == 524.6
+end
+
+@testset "add_satellite(ts, acq) immutable returns a new TrackState" begin
+    ts = TrackState(; signal = GPSL1CA())
+    acq = _make_acq(GPSL1CA(), 9, 12.5, -250.0Hz)
+    new_ts = add_satellite(ts, acq)
+    @test new_ts !== ts
+    @test isempty(get_sat_states(ts, :default))
+    @test get_prn(new_ts, :default, 9) == 9
+    @test get_carrier_doppler(new_ts, :default, 9) == -250.0Hz
+end
+
+@testset "add_satellite!(ts, acqs::Vector) batch form" begin
+    ts = TrackState(; signal = GPSL1CA())
+    acqs = [
+        _make_acq(GPSL1CA(), 1, 0.0, 100.0Hz),
+        _make_acq(GPSL1CA(), 2, 10.0, 200.0Hz),
+        _make_acq(GPSL1CA(), 3, 20.0, 300.0Hz),
+    ]
+    add_satellite!(ts, acqs)
+    @test length(get_sat_states(ts, :default)) == 3
+    @test get_carrier_doppler(ts, :default, 2) == 200.0Hz
+end
+
+@testset "add_satellite!(ts, acq; group) — multi-group requires `group=`" begin
+    ts = TrackState(; signals = (
+        gps = (GPSL1CA(),),
+        gal = (GalileoE1B(),),
+    ))
+    gps_acq = _make_acq(GPSL1CA(), 11, 1.5, 50.0Hz)
+    gal_acq = _make_acq(GalileoE1B(), 12, 2.5, 60.0Hz)
+    add_satellite!(ts, gps_acq; group = :gps)
+    add_satellite!(ts, gal_acq; group = :gal)
+    @test get_prn(ts, :gps, 11) == 11
+    @test get_prn(ts, :gal, 12) == 12
+end
+
+@testset "add_satellite!(ts, acq) rejects wrong-signal acq" begin
+    ts = TrackState(; signals = (gps = (GPSL1CA(),), gal = (GalileoE1B(),)))
+    # Galileo acq into the GPS group is the canonical footgun.
+    bad = _make_acq(GalileoE1B(), 5, 10.0, 100.0Hz)
+    @test_throws ArgumentError add_satellite!(ts, bad; group = :gps)
+end
+
+@testset "add_satellite!(ts, acq) requires longest-code signal in mixed group" begin
+    # Group containing GPS L1 C/A (1023 chips) + GPS L1C-P (10230 chips):
+    # the longest primary is L1C-P, so handing over an L1CA acquisition
+    # would alias its 1023-chip code-phase inside L1C-P's 10230-chip
+    # primary period. Reject.
+    ts = TrackState(; signal = GPSL1C_P())  # placeholder single-group reset
+    ts = TrackState(; signals = (mix = (GPSL1C_P(), GPSL1CA()),))
+    short_acq = _make_acq(GPSL1CA(), 7, 100.0, 50.0Hz)
+    @test_throws ArgumentError add_satellite!(ts, short_acq; group = :mix)
+    # An L1C-P acquisition is accepted.
+    long_acq = _make_acq(GPSL1C_P(), 7, 100.0, 50.0Hz)
+    add_satellite!(ts, long_acq; group = :mix)
+    @test get_prn(ts, :mix, 7) == 7
+end
+
+@testset "TrackState(acq) — single-acq convenience" begin
+    acq = _make_acq(GPSL1CA(), 7, 524.6, 100.0Hz)
+    ts = TrackState(acq)
+    @test length(get_sat_states(ts, :default)) == 1
+    @test get_prn(ts, :default, 7) == 7
+    @test get_carrier_doppler(ts, :default, 7) == 100.0Hz
+end
+
+@testset "TrackState(acqs::Vector) — batch single-signal convenience" begin
+    acqs = [
+        _make_acq(GPSL1CA(), 1, 0.0, 100.0Hz),
+        _make_acq(GPSL1CA(), 2, 10.0, 200.0Hz),
+        _make_acq(GPSL1CA(), 3, 20.0, 300.0Hz),
+    ]
+    ts = TrackState(acqs)
+    @test length(get_sat_states(ts, :default)) == 3
+    @test get_carrier_doppler(ts, :default, 2) == 200.0Hz
+end
+
+@testset "TrackState(empty acq vector) errors" begin
+    @test_throws ArgumentError TrackState(AcquisitionResults[])
+end
+
+@testset "TrackState(mixed acq vector) without `signals=` errors" begin
+    acqs = [
+        _make_acq(GPSL1CA(), 1, 0.0, 100.0Hz),
+        _make_acq(GalileoE1B(), 2, 10.0, 200.0Hz),
+    ]
+    @test_throws ArgumentError TrackState(acqs)
+end
+
+@testset "TrackState(acqs; signals = ...) — multi-group routing" begin
+    acqs = [
+        _make_acq(GPSL1CA(), 11, 1.5, 50.0Hz),
+        _make_acq(GalileoE1B(), 12, 2.5, 60.0Hz),
+        _make_acq(GPSL1CA(), 13, 3.5, 70.0Hz),
+    ]
+    ts = TrackState(acqs;
+        signals = (gps = (GPSL1CA(),), gal = (GalileoE1B(),)),
+    )
+    @test length(get_sat_states(ts, :gps)) == 2
+    @test length(get_sat_states(ts, :gal)) == 1
+    @test get_carrier_doppler(ts, :gps, 11) == 50.0Hz
+    @test get_carrier_doppler(ts, :gal, 12) == 60.0Hz
+end
+
+@testset "TrackState(acqs; signals = ...) errors on unmatched system" begin
+    acqs = [_make_acq(GalileoE1B(), 5, 10.0, 100.0Hz)]
+    @test_throws ArgumentError TrackState(acqs;
+        signals = (gps = (GPSL1CA(),),),
+    )
+end
+
+@testset "TrackState(acq; doppler_estimator) forwards kwargs" begin
+    custom = ConventionalPLLAndDLL(;
+        carrier_loop_filter_bandwidth = 22.0Hz,
+        code_loop_filter_bandwidth = 1.5Hz,
+    )
+    acq = _make_acq(GPSL1CA(), 9, 5.0, 80.0Hz)
+    ts = TrackState(acq; doppler_estimator = custom)
+    de_state = get_sat_state(ts, :default, 9).doppler_estimator_state
+    @test de_state isa SatConventionalPLLAndDLL
+    @test de_state.carrier_loop_filter_bandwidth == 22.0Hz
 end
 
 end
