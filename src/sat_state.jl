@@ -12,6 +12,7 @@ live on the enclosing [`TrackedSat`](@ref).
 """
 struct TrackedSignal{
     Sig<:AbstractGNSSSignal,
+    B<:Unsigned,
     C<:AbstractCorrelator,
     PCF<:AbstractPostCorrFilter,
 }
@@ -22,7 +23,7 @@ struct TrackedSignal{
     last_fully_integrated_correlator::C
     last_fully_integrated_filtered_prompt::ComplexF64
     cn0_estimator::MomentsCN0Estimator
-    bit_buffer::BitBuffer
+    bit_buffer::BitBuffer{B}
     post_corr_filter::PCF
     filtered_prompts::Vector{ComplexF64}
 end
@@ -61,7 +62,7 @@ end
 # value, since the user might legitimately want to set them to anything of
 # the same type.
 function TrackedSignal(
-    t::TrackedSignal{Sig,C,PCF};
+    t::TrackedSignal{Sig,B,C,PCF};
     signal = nothing,
     integrated_samples = nothing,
     is_integration_completed = nothing,
@@ -69,11 +70,11 @@ function TrackedSignal(
     last_fully_integrated_correlator::Maybe{C} = nothing,
     last_fully_integrated_filtered_prompt = nothing,
     cn0_estimator = nothing,
-    bit_buffer = nothing,
+    bit_buffer::Maybe{BitBuffer{B}} = nothing,
     post_corr_filter::Maybe{PCF} = nothing,
     filtered_prompts::Maybe{Vector{ComplexF64}} = nothing,
-) where {Sig<:AbstractGNSSSignal,C<:AbstractCorrelator,PCF<:AbstractPostCorrFilter}
-    TrackedSignal{Sig,C,PCF}(
+) where {Sig<:AbstractGNSSSignal,B<:Unsigned,C<:AbstractCorrelator,PCF<:AbstractPostCorrFilter}
+    TrackedSignal{Sig,B,C,PCF}(
         isnothing(signal) ? t.signal : signal,
         isnothing(integrated_samples) ? t.integrated_samples : integrated_samples,
         isnothing(is_integration_completed) ? t.is_integration_completed :
@@ -246,7 +247,7 @@ $(SIGNATURES)
 Get the PRN (Pseudo-Random Noise) number of the satellite.
 """
 get_prn(s::TrackedSat) = s.prn
-get_num_ants(s::TrackedSat{<:Tuple{TrackedSignal{<:Any,<:AbstractCorrelator{M}},Vararg}}) where {M} = M
+get_num_ants(s::TrackedSat{<:Tuple{TrackedSignal{<:Any,<:Any,<:AbstractCorrelator{M}},Vararg}}) where {M} = M
 
 """
 $(SIGNATURES)
