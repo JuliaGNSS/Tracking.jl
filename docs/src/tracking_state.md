@@ -196,6 +196,22 @@ The shared `TrackedSat.code_phase` wraps at the longest code period across all s
 max_code_length
 ```
 
+### Bit-sync and secondary-code-sync detection
+
+Each per-signal `BitBuffer` runs an `is_upcoming_integration_new_bit` detector against the running buffer of primary-code-block signs. The detector returns a `SyncResult` containing whether sync was found, the secondary-code phase (chips offset within the secondary code), and the locked polarity (±1). Per-signal contract:
+
+| Signal | Window | Template | Tolerance | Phase | Notes |
+|--------|--------|----------|-----------|-------|-------|
+| GPS L1 C/A | 40 blocks | bit-edge `0xfffff` (20+20) | 3 errors | 0 | 50 sps, 20 blocks per data bit |
+| Galileo E1B | 8 blocks | bit-edge `0x0f` (4+4) | 1 error | 0 | 250 sps, 1 block per symbol; trivially synced once 8 blocks buffer |
+| GPS L5I | 10 blocks | NH10 `0x035` shared | 2 errors | 0 | Secondary-code sync, 10 blocks per data bit |
+| GPS L1C-D | n/a | trivial (1 block per symbol) | n/a | 0 | 100 sps; downstream decoder resolves residual polarity |
+| GPS L1C-P | 1800 blocks | per-PRN overlay | 36 errors (2 %) | `0..1799` | Full 1800-phase shifted Hamming sweep, ~71 μs |
+
+The per-signal sync-search buffer width is picked by `get_code_block_buffer_type(signal)` and threads through `BitBuffer{B}` and `TrackedSignal{Sig, B, C, PCF}` as a type parameter. The L1C-P case uses an exact-width `UInt1800` (defined via `BitIntegers.@define_integers 1800`); the other signals use built-in `UInt8` / `UInt32` / `UInt64`.
+
+When a signal locks at a non-zero `secondary_phase`, that phase is used to seed `TrackedSat.code_phase` so subsequent wrap-mod-`max_code_length` arithmetic gives the absolute position in the longest secondary-code cycle. The seeding follows a fallback chain: the synced signal with the largest `(primary × secondary)` code length wins. Signals with `secondary_code_length == 1` (bit-edge only, e.g. GPS L1 C/A) don't contribute to the snap.
+
 ## Group accessors
 
 ```@docs
