@@ -21,4 +21,5 @@ makedocs(
 
 deploydocs(
     repo = "github.com/JuliaGNSS/Tracking.jl.git",
+    push_preview = true,
 )
