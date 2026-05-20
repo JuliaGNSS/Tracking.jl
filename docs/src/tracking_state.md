@@ -92,6 +92,74 @@ band_key
 band_keys
 ```
 
+## Addressing satellites and signals
+
+Tracking state nests as **TrackState → SignalGroup → TrackedSat → TrackedSignal**, and the accessor functions accept a matching ladder of arguments. The accessor's argument count tells the lookup where to stop:
+
+| Form | Meaning |
+|------|---------|
+| `f(track_state)` | Single-group, single-sat — folds via `only(...)` at each level. |
+| `f(track_state, prn)` | Single-group, multi-sat — picks the sat by PRN. |
+| `f(track_state, group, prn)` | Multi-group — picks the sat in the named group. |
+| `f(track_state, group, prn, sig)` | Per-signal — picks one [`TrackedSignal`](@ref) within a multi-signal sat. |
+
+The trailing `sig` selector is either:
+
+- an **`Integer`** index into the sat's `signals` tuple (`1` = first signal = Doppler source) — the canonical form, unambiguous even when the same signal type appears twice in the tuple, or
+- a **signal type** like `GPSL1CA` (the bare type, not `GPSL1CA()`) — readable sugar that errors if the type appears zero or more than once in the tuple.
+
+### What you can read
+
+**Sat-level — shared across all signals on the sat (no `sig` selector):**
+
+| Accessor | Returns |
+|----------|---------|
+| `get_prn` | PRN number. |
+| `get_num_ants` | Number of antenna elements. |
+| `get_code_phase` | Shared code phase (wraps at [`max_code_length`](@ref)). |
+| `get_code_doppler` | Shared code Doppler. |
+| `get_carrier_phase` | Shared carrier phase in radians. |
+| `get_carrier_doppler` | Shared carrier Doppler. |
+| `get_signal_start_sample` | Index of the next sample to integrate. |
+
+**Per-signal — pass `sig` (index or type) on multi-signal sats:**
+
+| Accessor | Returns |
+|----------|---------|
+| `get_correlator` | The working correlator (in-flight accumulator). |
+| `get_last_fully_integrated_correlator` | Correlator value from the last completed integration. |
+| `get_last_fully_integrated_filtered_prompt` | Filtered prompt value from the last completed integration. |
+| `get_post_corr_filter` | The post-correlation filter. |
+| `get_cn0_estimator` | The CN0 estimator. |
+| `estimate_cn0` | CN0 estimate in dB-Hz. |
+| `get_bit_buffer` / `get_bits` / `get_num_bits` | Bit buffer, decoded bits, bit count. |
+| `get_integrated_samples` | Number of samples accumulated into the current integration so far. |
+| `has_bit_or_secondary_code_been_found` | `true` once bit/secondary-code synchronization has been achieved. |
+
+The per-signal form always names the group explicitly, even on a single-group `TrackState`. Use `:default` as the group key in that case — `estimate_cn0(track_state, :default, 11, GPSL1C_P)`.
+
+```jldoctest addressing
+julia> using Tracking, GNSSSignals
+
+julia> using Tracking: Hz
+
+julia> track_state = TrackState(;
+           signals = (modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),),
+       );
+
+julia> add_satellite!(track_state; prn = 11, group = :modern_gps,
+                                   code_phase = 0.0, carrier_doppler = 1234.0Hz);
+
+julia> get_carrier_doppler(track_state, :modern_gps, 11)  # sat-level: same for all signals
+1234.0 Hz
+
+julia> get_bits(track_state, :modern_gps, 11, 1)  # per-signal by index (Doppler source)
+0x00000000000000000000000000000000
+
+julia> get_bits(track_state, :modern_gps, 11, GPSL1CA)  # per-signal by type
+0x00000000000000000000000000000000
+```
+
 ## TrackedSat
 
 Per-satellite tracking state. Carries the shared carrier and code Doppler and phase (one set of values per satellite, since all signals on a satellite share the same carrier), a tuple of per-signal [`TrackedSignal`](@ref) states, and the per-satellite Doppler-estimator state.
@@ -100,16 +168,8 @@ Per-satellite tracking state. Carries the shared carrier and code Doppler and ph
 TrackedSat
 ```
 
-### TrackedSat accessor functions
+In addition to the accessors listed under [Addressing satellites and signals](#Addressing-satellites-and-signals), a `TrackedSat` exposes:
 
-These return per-satellite state. When invoked on a `TrackState` with `(track_state, group, prn)` arguments, they look up the sat first.
-
-- `get_prn(sat)` — the PRN number.
-- `get_code_phase(sat)` — the shared code phase (wraps at [`max_code_length`](@ref)).
-- `get_code_doppler(sat)` — the shared code Doppler.
-- `get_carrier_phase(sat)` — the shared carrier phase in radians.
-- `get_carrier_doppler(sat)` — the shared carrier Doppler.
-- `get_signal_start_sample(sat)` — index of the next sample to integrate.
 - `get_signals(sat)` — the tuple of [`TrackedSignal`](@ref)s.
 - `get_doppler_estimator_state(sat)` — the per-satellite Doppler-estimator state (e.g. the loop-filter integrators for the conventional PLL/DLL).
 
@@ -123,18 +183,10 @@ The first signal in the tuple is the Doppler source — its correlator is what t
 TrackedSignal
 ```
 
-### TrackedSignal accessor functions
-
-When called on a single-signal `TrackedSat`, these accessors forward to the sole `TrackedSignal`. For multi-signal sats, address a specific signal explicitly via `sat.signals[i]` (or `get_signals(sat)[i]`).
+The per-signal accessors in the table under [Addressing satellites and signals](#Addressing-satellites-and-signals) all dispatch directly on a `TrackedSignal` too. Additionally:
 
 - `get_signal(tsig)` — the GNSS signal instance (e.g. `GPSL1CA()`).
-- `get_correlator(tsig)` — the working correlator (the in-flight accumulator for the current integration).
-- `get_last_fully_integrated_correlator(tsig)` — the correlator value from the last completed integration period.
-- `get_last_fully_integrated_filtered_prompt(tsig)` — the filtered prompt value from the last completed integration period.
 - `get_filtered_prompts(tsig)` — every filtered prompt produced during the most recent `track` call. The vector is reset at the start of each call and appended for every completed integration.
-- `get_bit_buffer(tsig)` / `get_bits(tsig)` / `get_num_bits(tsig)` — the bit buffer, decoded bits, and bit count.
-- `get_integrated_samples(tsig)` — number of samples accumulated into the current integration so far.
-- `has_bit_or_secondary_code_been_found(tsig)` — `true` once bit or secondary-code synchronization has been achieved.
 
 ### Code-phase wrap period
 

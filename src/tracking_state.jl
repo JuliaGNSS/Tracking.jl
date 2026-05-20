@@ -439,6 +439,16 @@ function estimate_cn0(
     estimate_cn0(get_sat_state(track_state, group_idx, sat_identifier))
 end
 
+# Per-signal selector — multi-group form.
+function estimate_cn0(
+    track_state::TrackState{<:SignalGroups},
+    group_idx::Union{Symbol,Integer,Val},
+    sat_identifier,
+    signal_sel::Union{Integer,Type{<:AbstractGNSSSignal}},
+)
+    estimate_cn0(get_sat_state(track_state, group_idx, sat_identifier), signal_sel)
+end
+
 function estimate_cn0(track_state::TrackState{<:SignalGroups{1}}, sat_identifier)
     estimate_cn0(track_state, 1, sat_identifier)
 end
@@ -717,29 +727,53 @@ function _make_default_tracked_sat_for_group(
     )
 end
 
-# Convenient methods
+# Sat-level accessors. These do not vary across signals on a sat (one PRN
+# per sat, one shared code/carrier Doppler/phase, one signal_start_sample).
 get_prn(s::TrackState, id...) = get_prn(get_sat_state(s, id...))
 get_num_ants(s::TrackState, id...) = get_num_ants(get_sat_state(s, id...))
 get_code_phase(s::TrackState, id...) = get_code_phase(get_sat_state(s, id...))
 get_code_doppler(s::TrackState, id...) = get_code_doppler(get_sat_state(s, id...))
 get_carrier_phase(s::TrackState, id...) = get_carrier_phase(get_sat_state(s, id...))
 get_carrier_doppler(s::TrackState, id...) = get_carrier_doppler(get_sat_state(s, id...))
-get_integrated_samples(s::TrackState, id...) =
-    get_integrated_samples(get_sat_state(s, id...))
 get_signal_start_sample(s::TrackState, id...) =
     get_signal_start_sample(get_sat_state(s, id...))
-get_correlator(s::TrackState, id...) = get_correlator(get_sat_state(s, id...))
-get_last_fully_integrated_correlator(s::TrackState, id...) =
-    get_last_fully_integrated_correlator(get_sat_state(s, id...))
-get_last_fully_integrated_filtered_prompt(s::TrackState, id...) =
-    get_last_fully_integrated_filtered_prompt(get_sat_state(s, id...))
-get_post_corr_filter(s::TrackState, id...) = get_post_corr_filter(get_sat_state(s, id...))
-get_cn0_estimator(s::TrackState, id...) = get_cn0_estimator(get_sat_state(s, id...))
-get_bit_buffer(s::TrackState, id...) = get_bit_buffer(get_sat_state(s, id...))
-get_bits(s::TrackState, id...) = get_bits(get_sat_state(s, id...))
-get_num_bits(s::TrackState, id...) = get_num_bits(get_sat_state(s, id...))
-has_bit_or_secondary_code_been_found(s::TrackState, id...) =
-    has_bit_or_secondary_code_been_found(get_sat_state(s, id...))
+
+# Per-signal accessors. Each takes a trailing signal selector
+# (`Integer` index or `Type{<:AbstractGNSSSignal}`) to disambiguate
+# between the signals tracked on a multi-signal sat. Without a selector
+# they fall back through `get_sat_state` → `only(sat.signals)` and so
+# are only valid on single-signal sats.
+#
+# Addressing forms (using `get_correlator` as the example — applies to
+# every accessor in this block):
+#   * `get_correlator(track_state)` — 1 group, 1 sat, 1 signal.
+#   * `get_correlator(track_state, prn)` — 1 group, 1 signal.
+#   * `get_correlator(track_state, group, prn)` — multi-group, 1 signal.
+#   * `get_correlator(track_state, group, prn, sig)` — per-signal.
+#
+# The per-signal form always names the group explicitly, even on a
+# single-group TrackState, to keep the API unambiguous. Use `:default`
+# (or `1`) as the group key in the single-group case.
+const _SignalSelector = Union{Integer,Type{<:AbstractGNSSSignal}}
+
+for fn in (
+    :get_integrated_samples, :get_correlator,
+    :get_last_fully_integrated_correlator, :get_last_fully_integrated_filtered_prompt,
+    :get_post_corr_filter, :get_cn0_estimator, :get_bit_buffer, :get_bits,
+    :get_num_bits, :has_bit_or_secondary_code_been_found,
+)
+    @eval begin
+        # No selector — forward all trailing args to `get_sat_state`.
+        $fn(s::TrackState, id...) = $fn(get_sat_state(s, id...))
+        # Per-signal — always `(group, prn, sig)`.
+        $fn(
+            s::TrackState{<:SignalGroups},
+            group::Union{Symbol,Integer,Val},
+            sat_id,
+            sig::_SignalSelector,
+        ) = $fn(get_sat_state(s, group, sat_id), sig)
+    end
+end
 
 # Recursive tuple walk that folds the set of distinct `band_key`s across
 # a `groups` tuple. Returns an `NTuple{N,Symbol}` of unique keys, in
