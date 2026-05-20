@@ -15,19 +15,30 @@ module MultiSignalTest
 # carrying L1 C/A + L1C-D + L1C-P with different primary periods) come
 # online with the full user-facing capabilities API in a later step.
 
-using Test: @test, @testset
-using Unitful: Hz
+using Test: @test, @testset, @test_throws
+using Unitful: Hz, dBHz
 using Dictionaries: dictionary
 using GNSSSignals: GPSL1CA, gen_code, get_code_frequency, get_code_center_frequency_ratio
 using Tracking:
     TrackedSat,
     TrackedSignal,
     TrackState,
+    add_satellite!,
     track,
+    estimate_cn0,
     get_filtered_prompts,
     get_sat_state,
+    get_signal,
     get_correlator,
     get_last_fully_integrated_correlator,
+    get_last_fully_integrated_filtered_prompt,
+    get_post_corr_filter,
+    get_cn0_estimator,
+    get_bit_buffer,
+    get_bits,
+    get_num_bits,
+    get_integrated_samples,
+    has_bit_or_secondary_code_been_found,
     ConventionalAssistedPLLAndDLL,
     EarlyPromptLateCorrelator,
     NumAnts,
@@ -35,6 +46,7 @@ using Tracking:
     MomentsCN0Estimator,
     BitBuffer,
     init_estimator_state
+using GNSSSignals: GPSL1C_P, GPSL1C_D, GalileoE1B
 
 @testset "Multi-signal track on a single sat" begin
     gpsl1 = GPSL1CA()
@@ -104,6 +116,92 @@ using Tracking:
 
     # Identical signals + identical correlator config => identical results.
     @test corr_1.accumulators ≈ corr_2.accumulators
+end
+
+@testset "Per-signal accessors on multi-signal TrackedSat / TrackState" begin
+    # Build a TrackState with one 3-signal sat (GPSL1C_P, GPSL1C_D, GPSL1CA).
+    # The signal types are distinct, so the type-based selector form has no
+    # collisions.
+    track_state = TrackState(;
+        signals = (modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),),
+    )
+    add_satellite!(track_state;
+        prn = 11, group = :modern_gps,
+        code_phase = 0.0, carrier_doppler = 1234.0Hz,
+    )
+    sat = get_sat_state(track_state, :modern_gps, 11)
+
+    @testset "TrackedSat: integer index" begin
+        @test get_signal(sat, 1) isa GPSL1C_P
+        @test get_signal(sat, 2) isa GPSL1C_D
+        @test get_signal(sat, 3) isa GPSL1CA
+        # Per-signal getters: the value happens to match the no-selector
+        # form for signal[1] (the `only`-equivalent slot when there's one
+        # signal), but here we exercise all three indices to prove the
+        # dispatch works on multi-signal sats.
+        @test get_num_bits(sat, 1) == 0
+        @test get_num_bits(sat, 2) == 0
+        @test get_num_bits(sat, 3) == 0
+        @test get_integrated_samples(sat, 1) == 0
+        @test has_bit_or_secondary_code_been_found(sat, 1) == false
+        @test get_cn0_estimator(sat, 1) isa MomentsCN0Estimator
+        @test get_bit_buffer(sat, 1) isa BitBuffer
+        @test get_post_corr_filter(sat, 1) isa DefaultPostCorrFilter
+    end
+
+    @testset "TrackedSat: signal type" begin
+        @test get_signal(sat, GPSL1C_P) isa GPSL1C_P
+        @test get_signal(sat, GPSL1C_D) isa GPSL1C_D
+        @test get_signal(sat, GPSL1CA)  isa GPSL1CA
+        @test get_num_bits(sat, GPSL1CA) == 0
+        @test get_cn0_estimator(sat, GPSL1C_P) isa MomentsCN0Estimator
+    end
+
+    @testset "TrackedSat: error on missing signal type" begin
+        @test_throws ArgumentError get_signal(sat, GalileoE1B)
+        @test_throws ArgumentError get_num_bits(sat, GalileoE1B)
+    end
+
+    @testset "TrackedSat: error on duplicate signal type" begin
+        # Build a sat that tracks GPSL1CA twice (different correlator slots).
+        # The type-based selector should refuse to disambiguate.
+        gpsl1 = GPSL1CA()
+        s_a = TrackedSignal(gpsl1; num_ants = NumAnts(1),
+            correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
+            post_corr_filter = DefaultPostCorrFilter())
+        s_b = TrackedSignal(gpsl1; num_ants = NumAnts(1),
+            correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
+            post_corr_filter = DefaultPostCorrFilter())
+        bare = TrackedSat(1, 0.0, 0.0Hz, 0.0, 0.0Hz, 1, (s_a, s_b), nothing)
+        est = ConventionalAssistedPLLAndDLL()
+        de  = init_estimator_state(est, bare)
+        dup_sat = TrackedSat(bare.prn, bare.code_phase, bare.code_doppler,
+            bare.carrier_phase, bare.carrier_doppler, bare.signal_start_sample,
+            bare.signals, de)
+        # Integer index still works.
+        @test get_signal(dup_sat, 1) isa GPSL1CA
+        @test get_signal(dup_sat, 2) isa GPSL1CA
+        # Type selector errors — pointing the user at integer indexing.
+        @test_throws ArgumentError get_signal(dup_sat, GPSL1CA)
+        @test_throws ArgumentError get_num_bits(dup_sat, GPSL1CA)
+    end
+
+    @testset "TrackState forwarding: (group, prn, sig)" begin
+        @test get_num_bits(track_state, :modern_gps, 11, 1) == 0
+        @test get_num_bits(track_state, :modern_gps, 11, GPSL1CA) == 0
+        @test get_cn0_estimator(track_state, :modern_gps, 11, 2) isa MomentsCN0Estimator
+        @test get_cn0_estimator(track_state, :modern_gps, 11, GPSL1C_D) isa MomentsCN0Estimator
+        @test get_bit_buffer(track_state, :modern_gps, 11, 3) isa BitBuffer
+        @test get_bits(track_state, :modern_gps, 11, GPSL1CA) == 0
+        @test estimate_cn0(track_state, :modern_gps, 11, 1) == 0.0dBHz
+        @test estimate_cn0(track_state, :modern_gps, 11, GPSL1CA) == 0.0dBHz
+    end
+
+    @testset "estimate_cn0(::TrackedSignal) direct dispatch" begin
+        # The per-signal entry point that didn't exist before.
+        sig = sat.signals[1]
+        @test estimate_cn0(sig) == 0.0dBHz
+    end
 end
 
 end
