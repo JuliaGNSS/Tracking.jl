@@ -145,6 +145,15 @@ julia> get_code_phase(track_state, 17)
 890.0
 ```
 
+If you're handing off from acquisition, the [Acquisition.jl](https://github.com/JuliaGNSS/Acquisition.jl) extension lets you skip the per-PRN loop — pass a vector of `AcquisitionResults` to `add_satellite!` (or build the `TrackState` directly from one). See [Choosing a `TrackState` constructor](tracking_state.md#Choosing-a-TrackState-constructor) for the full acquisition handoff patterns.
+
+```julia
+using Acquisition  # loads the extension
+
+acqs = acquire(GPSL1CA(), data, sampling_frequency, 1:32)
+add_satellite!(track_state, filter(is_detected, acqs))
+```
+
 ### Multi-system tracking (different signals on different sats)
 
 When different satellites carry different signal types, use multiple named groups. Each group has its own concrete `TrackedSat` value type, so type inference stays sharp across the heterogeneous mix.
