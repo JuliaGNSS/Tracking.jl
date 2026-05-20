@@ -56,13 +56,13 @@ Satellites are added to a `TrackState` via [`add_satellite!`](@ref). The acquisi
 ```jldoctest single_signal
 julia> add_satellite!(track_state; prn = 1, code_phase = 50.0, carrier_doppler = 1000.0Hz);
 
-julia> get_prn(track_state, :default, 1)
+julia> get_prn(track_state, 1)
 1
 
-julia> get_code_phase(track_state, :default, 1)
+julia> get_code_phase(track_state, 1)
 50.0
 
-julia> get_carrier_doppler(track_state, :default, 1)
+julia> get_carrier_doppler(track_state, 1)
 1000.0 Hz
 ```
 
@@ -92,10 +92,10 @@ julia> track_state = track(signal, track_state, sampling_frequency);
 After tracking, you can retrieve the updated tracking parameters and results:
 
 ```jldoctest single_signal; filter = r"[0-9]+\.[0-9]+" => "***"
-julia> get_carrier_doppler(track_state, :default, 1)
+julia> get_carrier_doppler(track_state, 1)
 999.9999883655299 Hz
 
-julia> get_code_phase(track_state, :default, 1)
+julia> get_code_phase(track_state, 1)
 50.00064935064897
 ```
 
@@ -138,10 +138,10 @@ julia> add_satellite!(track_state; prn = 5,  code_phase = 120.0, carrier_doppler
 
 julia> add_satellite!(track_state; prn = 17, code_phase = 890.0, carrier_doppler = 2000.0Hz);
 
-julia> get_carrier_doppler(track_state, :default, 5)
+julia> get_carrier_doppler(track_state, 5)
 -500.0 Hz
 
-julia> get_code_phase(track_state, :default, 17)
+julia> get_code_phase(track_state, 17)
 890.0
 ```
 
@@ -344,7 +344,7 @@ julia> track_state = TrackState(;
 
 julia> add_satellite!(track_state; prn = 1, code_phase = 50.0, carrier_doppler = 1000.0Hz);
 
-julia> get_num_ants(track_state, :default, 1)
+julia> get_num_ants(track_state, 1)
 4
 ```
 
