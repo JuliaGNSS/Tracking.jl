@@ -15,15 +15,15 @@ using Tracking:
 @testset "GPS L1C-P" begin
     gpsl1c_p = GPSL1C_P()
 
-    # L1C-P is the pilot: no navigation data (`data_frequency = 0`). The
-    # 1800-bit secondary-code overlay would need its own sync algorithm, not
-    # yet implemented. Until that lands, `is_upcoming_integration_new_bit`
-    # always returns `false` so `bit_buffer.found` stays `false` and the
-    # inner loop stays at 10 ms primary-code boundaries.
-    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_p, 0x0, 0)) == false
-    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_p, 0x1, 1)) == false
-    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_p, 0xffffffff, 32)) == false
-    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_p, typemax(UInt128), 128)) == false
+    # L1C-P is the pilot: no navigation data. Step 4 of the sync-detection
+    # redesign brings the 1800-chip overlay search backed by
+    # `BitIntegers.UInt1800`; until then the detector always reports
+    # `found = false` so the inner loop stays at 10 ms primary-code
+    # boundaries.
+    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_p, UInt64(0x0), 0)).found == false
+    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_p, UInt64(0x1), 1)).found == false
+    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_p, UInt64(0xffffffff), 32)).found == false
+    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_p, typemax(UInt64), 128)).found == false
 
     @test @inferred(get_default_correlator(gpsl1c_p, NumAnts(1))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))

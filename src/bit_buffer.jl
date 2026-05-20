@@ -1,4 +1,57 @@
 """
+    SyncResult
+
+Outcome of a per-signal bit-sync / secondary-code-sync detector call.
+
+Fields:
+
+- `found::Bool` — whether the detector locked on this update.
+- `phase::Int` — when `found = true`, the secondary-code chip offset of
+  the buffer's *first* sample, in `0:secondary_code_length-1`. Zero for
+  signals without a secondary code (the L1 C/A bit-edge case picks the
+  bit boundary inside the detector, not a chip offset).
+- `polarity::Int8` — `+1` or `-1`; which match orientation the detector
+  locked. Carries through to the post-sync prompt accumulator so that a
+  negative-polarity lock doesn't trip the downstream bit decoder.
+"""
+struct SyncResult
+    found::Bool
+    phase::Int
+    polarity::Int8
+end
+
+"""
+$(SIGNATURES)
+
+Hamming-tolerance template matcher used by every per-signal
+`is_upcoming_integration_new_bit` implementation.
+
+Compares `code_block_bits & mask` against `template` for the "positive
+polarity" hit and against `template ⊻ mask` for the "negative polarity"
+hit. The first orientation whose Hamming distance does not exceed
+`max_errors` wins; if neither fits within tolerance the result reports
+`found = false`. `phase` is hard-coded to 0 — callers that need a
+non-zero phase (L1C-P overlay search) compute it themselves and build
+their own `SyncResult`.
+
+Inlined so the per-signal template / mask / tolerance constants fold at
+the call site.
+"""
+@inline function _try_match(
+    code_block_bits::B,
+    template::B,
+    mask::B,
+    max_errors::Int,
+) where {B<:Unsigned}
+    masked = code_block_bits & mask
+    dist_pos = count_ones(masked ⊻ template)
+    dist_pos <= max_errors && return SyncResult(true, 0, Int8(+1))
+    dist_neg = count_ones(masked ⊻ (template ⊻ mask))
+    dist_neg <= max_errors && return SyncResult(true, 0, Int8(-1))
+    return SyncResult(false, 0, Int8(0))
+end
+
+"""
 $(SIGNATURES)
 
 BitBuffer to buffer bits.
@@ -151,12 +204,12 @@ function _buffer_find_bit(signal, bit_buffer::BitBuffer{B}, num_code_blocks_that
     end
     code_block_buffer = bit_buffer.code_block_buffer << 1 + B(real(prompt) > 0)
     code_block_buffer_lengh = bit_buffer.code_block_buffer_lengh + 1
-    bit_found = is_upcoming_integration_new_bit(
+    sync = is_upcoming_integration_new_bit(
         signal,
         code_block_buffer,
         code_block_buffer_lengh,
     )
-    if (bit_found == false)
+    if !sync.found
         return BitBuffer{B}(
             code_block_buffer,
             code_block_buffer_lengh,

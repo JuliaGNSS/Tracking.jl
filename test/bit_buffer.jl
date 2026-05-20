@@ -2,7 +2,46 @@ module BitBufferTest
 
 using Test: @test, @testset, @inferred, @test_throws
 using GNSSSignals: GPSL1CA
-using Tracking: BitBuffer, buffer, has_bit_or_secondary_code_been_found
+using Tracking: BitBuffer, buffer, has_bit_or_secondary_code_been_found, SyncResult, _try_match
+
+@testset "SyncResult" begin
+    r = @inferred SyncResult(false, 0, Int8(0))
+    @test r.found == false
+    @test r.phase == 0
+    @test r.polarity == 0
+end
+
+@testset "_try_match" begin
+    # Exact match at positive polarity.
+    res = @inferred _try_match(UInt8(0x0f), UInt8(0x0f), UInt8(0xff), 0)
+    @test res.found == true
+    @test res.polarity == +1
+    @test res.phase == 0
+
+    # Negative polarity = template XOR mask.
+    res = @inferred _try_match(UInt8(0xf0), UInt8(0x0f), UInt8(0xff), 0)
+    @test res.found == true
+    @test res.polarity == -1
+
+    # Single bit-flip at tolerance 0 — rejected.
+    res = @inferred _try_match(UInt8(0x0e), UInt8(0x0f), UInt8(0xff), 0)
+    @test res.found == false
+
+    # Same single bit-flip at tolerance 1 — accepted.
+    res = @inferred _try_match(UInt8(0x0e), UInt8(0x0f), UInt8(0xff), 1)
+    @test res.found == true
+    @test res.polarity == +1
+
+    # Out-of-band bits don't affect the match (the mask hides them).
+    res = @inferred _try_match(UInt32(0xdeadbe0f), UInt32(0x0f), UInt32(0xff), 0)
+    @test res.found == true
+    @test res.polarity == +1
+
+    # Width-generic: works on UInt128 buffers too.
+    res = @inferred _try_match(UInt128(0x0f), UInt128(0x0f), UInt128(0xff), 0)
+    @test res.found == true
+    @test res.polarity == +1
+end
 
 @testset "Bit buffer" begin
     @testset "Initialize" begin

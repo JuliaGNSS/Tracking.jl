@@ -15,14 +15,14 @@ using Tracking:
 @testset "GPS L1C-D" begin
     gpsl1c_d = GPSL1C_D()
 
-    # L1C-D primary code period = 10 ms, data rate = 50 Hz → 2 primary blocks
-    # per bit. Bit-sync needs a real preamble search (CNAV-2), not yet
-    # implemented. Until that lands `is_upcoming_integration_new_bit` returns
-    # `false` so `bit_buffer.found` stays `false` and the inner loop runs at
-    # 10 ms primary-code boundaries.
-    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_d, 0x0, 0)) == false
-    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_d, 0x1, 1)) == false
-    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_d, 0xffffffff, 32)) == false
+    # L1C-D broadcasts one channel symbol per primary code period (100 sps,
+    # 10 ms primary period). Step 5 of the sync-detection redesign will
+    # collapse `is_upcoming_integration_new_bit` to return
+    # `SyncResult(true, 0, +1)` unconditionally; for now it stays
+    # `found = false` and the inner loop runs at 10 ms boundaries.
+    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_d, UInt8(0x0), 0)).found == false
+    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_d, UInt8(0x1), 1)).found == false
+    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_d, UInt8(0xff), 32)).found == false
 
     @test @inferred(get_default_correlator(gpsl1c_d, NumAnts(1))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
