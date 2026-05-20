@@ -15,7 +15,9 @@ template `0xfffff00000` is searched in the same call via
     num_code_blocks::Integer,
 ) where {B<:Unsigned}
     num_code_blocks < 40 && return SyncResult(false, 0, Int8(0))
-    _try_match(code_block_bits, B(0xfffff), B(0xffffffffff), 0)
+    # Tolerance 3 ≈ 7.5 % per-block error. Comfortable at ~30 dB-Hz
+    # acquisition margin without enabling false locks.
+    _try_match(code_block_bits, B(0xfffff), B(0xffffffffff), 3)
 end
 
 """

@@ -15,7 +15,9 @@ searched in the same call via [`_try_match`](@ref). Returns
     num_code_blocks::Integer,
 ) where {B<:Unsigned}
     num_code_blocks < 10 && return SyncResult(false, 0, Int8(0))
-    _try_match(code_block_bits, B(0x035), B(0x3ff), 0)
+    # Tolerance 2 ≈ 10 % per-block error — matches L1 C/A's per-chip
+    # confidence (3/40 ≈ 7.5 %) within the shorter 10-block window.
+    _try_match(code_block_bits, B(0x035), B(0x3ff), 2)
 end
 
 function get_default_correlator(gpsl5::GPSL5I, num_ants::NumAnts = NumAnts(1))
