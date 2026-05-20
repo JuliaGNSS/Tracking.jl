@@ -33,3 +33,8 @@ end
 function get_default_correlator(gpsl1c_p::GPSL1C_P, num_ants::NumAnts = NumAnts(1))
     EarlyPromptLateCorrelator(; num_ants)
 end
+
+# Placeholder until step 4 of the sync-detection redesign brings
+# BitIntegers' `UInt1800`. Tracking still works with `bit_buffer.found =
+# false` forever — the 1800-chip overlay search is not yet wired.
+@inline get_code_block_buffer_type(::GPSL1C_P) = UInt64

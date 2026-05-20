@@ -6,6 +6,7 @@ using GNSSSignals: GPSL1C_D
 using Tracking:
     is_upcoming_integration_new_bit,
     get_default_correlator,
+    get_code_block_buffer_type,
     default_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     EarlyPromptLateCorrelator,
@@ -32,6 +33,10 @@ using Tracking:
     # 10× tighter than the L1 C/A default; required for stable 10 ms tracking.
     @test @inferred(default_carrier_loop_filter_bandwidth(gpsl1c_d)) ≈ 1.8Hz
     @test @inferred(default_code_loop_filter_bandwidth(gpsl1c_d)) ≈ 0.1Hz
+
+    # 1 symbol = 1 primary period; sync buffer is dead state, but a
+    # concrete type is still required.
+    @test @inferred(get_code_block_buffer_type(gpsl1c_d)) === UInt8
 end
 
 end

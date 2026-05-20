@@ -23,3 +23,10 @@ end
 function get_default_correlator(gpsl1c_d::GPSL1C_D, num_ants::NumAnts = NumAnts(1))
     EarlyPromptLateCorrelator(; num_ants)
 end
+
+# 1 channel symbol = 1 primary code period (100 sps, 10 ms primary
+# period). No sub-symbol boundary to search for — the sync-search buffer
+# is dead state at runtime; we still pick a concrete type to keep the
+# `BitBuffer{B}` parameter chain stable. UInt8 is the smallest legal
+# Unsigned.
+@inline get_code_block_buffer_type(::GPSL1C_D) = UInt8

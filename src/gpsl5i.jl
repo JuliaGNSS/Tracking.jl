@@ -14,3 +14,6 @@ end
 function get_default_correlator(gpsl5::GPSL5I, num_ants::NumAnts = NumAnts(1))
     EarlyPromptLateCorrelator(; num_ants)
 end
+
+# 20-block sync-search window (2 × NH10) needs at least 20 bits.
+@inline get_code_block_buffer_type(::GPSL5I) = UInt32

@@ -19,3 +19,6 @@ end
 function get_default_correlator(galileo_e1b::GalileoE1B, num_ants::NumAnts = NumAnts(1))
     VeryEarlyPromptLateCorrelator(; num_ants)
 end
+
+# 8-block sync-search window (2 × 4 blocks/symbol) needs at least 8 bits.
+@inline get_code_block_buffer_type(::GalileoE1B) = UInt8
