@@ -68,6 +68,8 @@ struct BitBuffer{B<:Unsigned}
     code_block_buffer::B
     code_block_buffer_lengh::Int
     found::Bool
+    secondary_phase::Int      # 0 until found; secondary-chip offset post-sync
+    polarity::Int8            # +1 or -1 once found; 0 before sync
     buffer::UInt128
     length::Int
     prompt_accumulator::ComplexF64
@@ -78,17 +80,17 @@ end
 # buffer. Once `get_code_block_buffer_type` lands (Step 2) the per-signal
 # `TrackedSignal` constructor picks the right width instead.
 function BitBuffer()
-    BitBuffer{UInt128}(zero(UInt128), 0, false, zero(UInt128), 0, complex(0.0, 0.0), 0)
+    BitBuffer{UInt128}(zero(UInt128), 0, false, 0, Int8(0), zero(UInt128), 0, complex(0.0, 0.0), 0)
 end
 
 # Typed empty constructor used by the per-signal `TrackedSignal` path.
 function BitBuffer{B}() where {B<:Unsigned}
-    BitBuffer{B}(zero(B), 0, false, zero(UInt128), 0, complex(0.0, 0.0), 0)
+    BitBuffer{B}(zero(B), 0, false, 0, Int8(0), zero(UInt128), 0, complex(0.0, 0.0), 0)
 end
 
-# Convenience outer constructor for the 7-arg form: pins `B` from the
-# first argument and converts the rest to the field types. Used by test
-# code that builds a `BitBuffer` from raw integer / Complex{Int} literals.
+# Convenience outer constructor matching the legacy 7-arg form (no phase /
+# polarity arguments — assumed zero). Used by test code that builds a
+# `BitBuffer` from raw integer / Complex{Int} literals.
 function BitBuffer(
     code_block_buffer::B,
     code_block_buffer_lengh::Integer,
@@ -102,6 +104,8 @@ function BitBuffer(
         code_block_buffer,
         Int(code_block_buffer_lengh),
         found,
+        0,
+        Int8(0),
         UInt128(buffer),
         Int(length),
         ComplexF64(prompt_accumulator),
@@ -152,7 +156,7 @@ $(SIGNATURES)
 
 Buffer data bits based on the prompt accumulation and the current prompt value.
 """
-function buffer(signal::AbstractGNSSSignal, bit_buffer::BitBuffer{B}, integrated_code_blocks, prompt) where {B<:Unsigned}
+function buffer(signal::AbstractGNSSSignal, prn::Integer, bit_buffer::BitBuffer{B}, integrated_code_blocks, prompt) where {B<:Unsigned}
     # The divide is deferred to the helper — pilot signals
     # (`get_data_frequency = 0`) would otherwise blow up here with `Int(Inf)`.
     # Pilots take the `_buffer_find_bit` branch with `bit_buffer.found = false`
@@ -162,7 +166,7 @@ function buffer(signal::AbstractGNSSSignal, bit_buffer::BitBuffer{B}, integrated
 
     if (bit_buffer.found == false)
         return _buffer_find_bit(
-            signal, bit_buffer, num_code_blocks_that_form_a_bit,
+            signal, prn, bit_buffer, num_code_blocks_that_form_a_bit,
             integrated_code_blocks, prompt,
         )
     end
@@ -172,11 +176,18 @@ function buffer(signal::AbstractGNSSSignal, bit_buffer::BitBuffer{B}, integrated
         bit_buffer.prompt_accumulator_integrated_code_blocks + integrated_code_blocks
 
     if prompt_accumulator_integrated_code_blocks == num_code_blocks_that_form_a_bit
-        bit = real(prompt_accumulator) > 0
+        # Flip the decoded bit if the detector locked at negative polarity:
+        # the prompt accumulator's real-part sign is then inverted relative
+        # to the data symbol's "0/1" convention.
+        bit_acc = bit_buffer.polarity < 0 ?
+                  -real(prompt_accumulator) : real(prompt_accumulator)
+        bit = bit_acc > 0
         return BitBuffer{B}(
             bit_buffer.code_block_buffer,
             bit_buffer.code_block_buffer_lengh,
             true,
+            bit_buffer.secondary_phase,
+            bit_buffer.polarity,
             get_bits(bit_buffer) << 1 + UInt64(bit),
             length(bit_buffer) + 1,
             zero(prompt_accumulator),
@@ -187,6 +198,8 @@ function buffer(signal::AbstractGNSSSignal, bit_buffer::BitBuffer{B}, integrated
             bit_buffer.code_block_buffer,
             bit_buffer.code_block_buffer_lengh,
             true,
+            bit_buffer.secondary_phase,
+            bit_buffer.polarity,
             bit_buffer.buffer,
             bit_buffer.length,
             prompt_accumulator,
@@ -195,7 +208,7 @@ function buffer(signal::AbstractGNSSSignal, bit_buffer::BitBuffer{B}, integrated
     end
 end
 
-function _buffer_find_bit(signal, bit_buffer::BitBuffer{B}, num_code_blocks_that_form_a_bit,
+function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_code_blocks_that_form_a_bit,
                           integrated_code_blocks, prompt) where {B<:Unsigned}
     if (integrated_code_blocks != 1)
         error(
@@ -206,6 +219,7 @@ function _buffer_find_bit(signal, bit_buffer::BitBuffer{B}, num_code_blocks_that
     code_block_buffer_lengh = bit_buffer.code_block_buffer_lengh + 1
     sync = is_upcoming_integration_new_bit(
         signal,
+        prn,
         code_block_buffer,
         code_block_buffer_lengh,
     )
@@ -214,6 +228,8 @@ function _buffer_find_bit(signal, bit_buffer::BitBuffer{B}, num_code_blocks_that
             code_block_buffer,
             code_block_buffer_lengh,
             false,
+            0,
+            Int8(0),
             zero(UInt128),
             0,
             complex(0.0, 0.0),
@@ -241,6 +257,8 @@ function _buffer_find_bit(signal, bit_buffer::BitBuffer{B}, num_code_blocks_that
         code_block_buffer,
         code_block_buffer_lengh,
         true,
+        sync.phase,
+        sync.polarity,
         bits,
         num_bits,
         complex(0, 0),
@@ -253,6 +271,8 @@ function reset(bit_buffer::BitBuffer{B}) where {B<:Unsigned}
         bit_buffer.code_block_buffer,
         bit_buffer.code_block_buffer_lengh,
         bit_buffer.found,
+        bit_buffer.secondary_phase,
+        bit_buffer.polarity,
         zero(UInt128),
         0,
         bit_buffer.prompt_accumulator,

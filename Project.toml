@@ -5,6 +5,7 @@ authors = ["Soeren Schoenbrod <soeren.schoenbrod@nav.rwth-aachen.de>", "Michael 
 
 [deps]
 Accessors = "7d9f7c33-5ae7-4f3b-8dc6-eff91059b697"
+BitIntegers = "c3b6d118-76ef-56ca-8cc7-ebb389d030a1"
 Dictionaries = "85a47980-9c8c-11e8-2b9f-f7ca1fa99fb4"
 DocStringExtensions = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
 FastSinCos = "eb71ef10-bbd6-487f-97cc-2efbd12ad3c4"
@@ -26,10 +27,11 @@ TrackingAcquisitionExt = ["Acquisition"]
 [compat]
 Accessors = "0.1"
 Acquisition = "0.1.1, 0.2, 0.3, 1, 2"
+BitIntegers = "0.3"
 Dictionaries = "0.4.1"
 DocStringExtensions = "0.6, 0.7, 0.8, 0.9"
 FastSinCos = "1"
-GNSSSignals = "2"
+GNSSSignals = "2.2.1"
 LinearAlgebra = "1"
 Polyester = "0.7.19"
 SIMD = "3"

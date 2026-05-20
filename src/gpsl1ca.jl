@@ -10,6 +10,7 @@ template `0xfffff00000` is searched in the same call via
 """
 @inline function is_upcoming_integration_new_bit(
     ::GPSL1CA,
+    ::Integer,           # PRN — ignored; same template for every PRN
     code_block_bits::B,
     num_code_blocks::Integer,
 ) where {B<:Unsigned}

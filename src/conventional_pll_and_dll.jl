@@ -236,15 +236,24 @@ function _update_tracked_sat_doppler(
 
     new_tail = _process_passenger_signals(
         tail_signals,
+        sat.prn,
         preferred_num_code_blocks_to_integrate,
         sampling_frequency,
     )
 
+    # Phase-snap fallback chain. Picks the synced signal with the
+    # longest `(primary × secondary)` code length, and uses its
+    # secondary-code phase to anchor `sat.code_phase` to the right
+    # secondary-chip window. No-op if no signal has secondary sync yet.
+    new_signals = (new_head, new_tail...)
+    snapped_code_phase = _snap_code_phase_from_synced_signal(new_signals, sat.code_phase)
+
     TrackedSat(
         sat;
+        code_phase = snapped_code_phase,
         carrier_doppler = new_carrier_doppler,
         code_doppler = new_code_doppler,
-        signals = (new_head, new_tail...),
+        signals = new_signals,
         doppler_estimator_state = new_doppler_estimator_state,
     )
 end
@@ -276,7 +285,7 @@ end
     prompt = get_prompt(filtered_correlator)
     push!(tracked_signal.filtered_prompts, prompt)
     cn0_estimator = update(get_cn0_estimator(tracked_signal), prompt)
-    bit_buffer = buffer(signal, tracked_signal.bit_buffer, integrated_code_blocks, prompt)
+    bit_buffer = buffer(signal, sat.prn, tracked_signal.bit_buffer, integrated_code_blocks, prompt)
     integration_time = tracked_signal.integrated_samples / sampling_frequency
 
     carrier_freq_update, carrier_loop_filter = calculate_carrier_frequency_update(
@@ -328,19 +337,25 @@ end
 @inline _process_passenger_signals(
     ::Tuple{}, _, _,
 ) = ()
+@inline _process_passenger_signals(
+    ::Tuple{}, prn::Integer, _, _,
+) = ()
 @inline function _process_passenger_signals(
     signals::Tuple,
+    prn::Integer,
     preferred_num_code_blocks_to_integrate,
     sampling_frequency,
 )
     head = first(signals)
     new_head = _process_one_passenger_signal(
         head,
+        prn,
         preferred_num_code_blocks_to_integrate,
         sampling_frequency,
     )
     (new_head, _process_passenger_signals(
         Base.tail(signals),
+        prn,
         preferred_num_code_blocks_to_integrate,
         sampling_frequency,
     )...)
@@ -348,6 +363,7 @@ end
 
 @inline function _process_one_passenger_signal(
     tracked_signal::TrackedSignal,
+    prn::Integer,
     preferred_num_code_blocks_to_integrate,
     sampling_frequency,
 )
@@ -366,7 +382,7 @@ end
     prompt = get_prompt(filtered_correlator)
     push!(tracked_signal.filtered_prompts, prompt)
     cn0_estimator = update(get_cn0_estimator(tracked_signal), prompt)
-    bit_buffer = buffer(signal, tracked_signal.bit_buffer, integrated_code_blocks, prompt)
+    bit_buffer = buffer(signal, prn, tracked_signal.bit_buffer, integrated_code_blocks, prompt)
     TrackedSignal(
         tracked_signal;
         integrated_samples = 0,

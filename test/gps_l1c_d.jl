@@ -20,9 +20,10 @@ using Tracking:
     # collapse `is_upcoming_integration_new_bit` to return
     # `SyncResult(true, 0, +1)` unconditionally; for now it stays
     # `found = false` and the inner loop runs at 10 ms boundaries.
-    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_d, UInt8(0x0), 0)).found == false
-    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_d, UInt8(0x1), 1)).found == false
-    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_d, UInt8(0xff), 32)).found == false
+    prn = 1
+    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_d, prn, UInt8(0x0), 0)).found == false
+    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_d, prn, UInt8(0x1), 1)).found == false
+    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_d, prn, UInt8(0xff), 32)).found == false
 
     @test @inferred(get_default_correlator(gpsl1c_d, NumAnts(1))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))

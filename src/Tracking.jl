@@ -1,5 +1,6 @@
 module Tracking
 
+using BitIntegers
 using DocStringExtensions
 using FastSinCos
 using GNSSSignals
@@ -9,6 +10,13 @@ using TrackingLoopFilters
 using Dictionaries
 using Accessors
 using Polyester
+
+# 1800-bit exact-width unsigned for the GPS L1C-P overlay-code search.
+# Defined once at module load; the benchmark in
+# claude_scratch/bench_bitintegers_1800_exact.jl shows ~71 μs for the
+# full 1800-phase Hamming-distance sweep, ~1.5× faster than the padded
+# UInt1856 variant because no mask is needed on shift/XOR.
+BitIntegers.@define_integers 1800
 
 using Unitful: upreferred, uconvert, Hz, dBHz, ms
 import Base.zero, Base.length, Base.resize!, LinearAlgebra.dot

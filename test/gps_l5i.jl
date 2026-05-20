@@ -14,16 +14,17 @@ using Tracking:
 
 @testset "GPS L5" begin
     gpsl5 = GPSL5I()
+    prn = 1
     # NH10 = 0x035 — matched at positive polarity.
-    res = @inferred(is_upcoming_integration_new_bit(gpsl5, UInt32(0x35), 50))
+    res = @inferred(is_upcoming_integration_new_bit(gpsl5, prn, UInt32(0x35), 50))
     @test res.found == true
     @test res.polarity == +1
 
     # Buffer not yet at 10 blocks.
-    @test @inferred(is_upcoming_integration_new_bit(gpsl5, UInt32(0x35), 5)).found == false
+    @test @inferred(is_upcoming_integration_new_bit(gpsl5, prn, UInt32(0x35), 5)).found == false
 
     # 0x3ca == 1111001010 is the negated NH10 (matches at negative polarity).
-    res = @inferred(is_upcoming_integration_new_bit(gpsl5, UInt32(0x3ca), 10))
+    res = @inferred(is_upcoming_integration_new_bit(gpsl5, prn, UInt32(0x3ca), 10))
     @test res.found == true
     @test res.polarity == -1
 

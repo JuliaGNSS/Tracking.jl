@@ -10,6 +10,7 @@ searched in the same call via [`_try_match`](@ref). Returns
 """
 @inline function is_upcoming_integration_new_bit(
     ::GPSL5I,
+    ::Integer,           # PRN — ignored; NH10 is shared across PRNs
     code_block_bits::B,
     num_code_blocks::Integer,
 ) where {B<:Unsigned}

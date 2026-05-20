@@ -158,6 +158,64 @@ the calling site for any concrete `signals` tuple type.
 """
 @inline max_code_length(signals::Tuple{Vararg{TrackedSignal}}) = _max_code_length(signals)
 
+# Phase-snap fallback chain: walk `signals` and pick the synced signal
+# whose `(primary × secondary)` code length is the largest. That signal's
+# `bit_buffer.secondary_phase` carries the secondary-chip offset for the
+# next primary-code period, which determines the absolute position in
+# `sat.code_phase`'s wrap window. If no signal is synced (or the synced
+# ones all have secondary code length 1 and so don't constrain the
+# wrap), return the input `code_phase` unchanged.
+#
+# Walks the tuple recursively; the heterogeneous signal types fold to a
+# compile-time-decided sequence of comparisons, so this is type-stable
+# and allocation-free.
+@inline function _snap_code_phase_from_synced_signal(
+    signals::Tuple{Vararg{TrackedSignal}},
+    code_phase::Float64,
+)
+    best_len, best_phase_chips = _find_best_secondary_anchor(signals, 0, 0)
+    if best_len == 0
+        return code_phase
+    end
+    # `code_phase` already wraps mod `max_code_length(signals)`. The
+    # best-anchored signal has wrap = best_len; align the low
+    # `best_len` chips of `code_phase` to `best_phase_chips`, leaving
+    # the higher-order wrap untouched.
+    base = floor(Int, code_phase / best_len) * best_len
+    Float64(base + best_phase_chips)
+end
+
+# Tuple walker — finds the synced signal with the largest
+# `(primary × secondary)` length and returns
+# `(length, secondary_phase_in_chips)` for it. `(0, 0)` if no signal is
+# synced.
+@inline _find_best_secondary_anchor(::Tuple{}, best_len::Int, best_chips::Int) =
+    (best_len, best_chips)
+@inline function _find_best_secondary_anchor(
+    t::Tuple,
+    best_len::Int,
+    best_chips::Int,
+)
+    head = first(t)
+    sig = head.signal
+    bb = head.bit_buffer
+    if bb.found
+        prim = get_code_length(sig)
+        sec  = get_secondary_code_length(sig)
+        total = prim * sec
+        # Only signals with a non-trivial secondary code contribute
+        # information about the wrap-window offset. Signals with
+        # secondary_code_length == 1 (e.g. GPS L1 C/A) lock only the
+        # bit-edge inside the primary period and don't pin the secondary
+        # phase; skip them.
+        if sec > 1 && total > best_len
+            best_len = total
+            best_chips = bb.secondary_phase * prim
+        end
+    end
+    _find_best_secondary_anchor(Base.tail(t), best_len, best_chips)
+end
+
 """
 $(SIGNATURES)
 

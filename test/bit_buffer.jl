@@ -49,6 +49,8 @@ end
         @test bit_buffer.code_block_buffer == 0
         @test bit_buffer.code_block_buffer_lengh == 0
         @test has_bit_or_secondary_code_been_found(bit_buffer) == false
+        @test bit_buffer.secondary_phase == 0
+        @test bit_buffer.polarity == 0
         @test bit_buffer.buffer == 0
         @test bit_buffer.length == 0
         @test bit_buffer.prompt_accumulator == complex(0, 0)
@@ -61,6 +63,7 @@ end
         signal = GPSL1CA()
         next_bit_buffer = @test_throws "The number code blocks must be equal to 1" buffer(
             signal,
+            1,
             bit_buffer,
             2,
             2 + 0im,
@@ -71,7 +74,7 @@ end
         bit_buffer = BitBuffer()
         signal = GPSL1CA()
 
-        next_bit_buffer = @inferred buffer(signal, bit_buffer, 1, 2 + 0im)
+        next_bit_buffer = @inferred buffer(signal, 1, bit_buffer, 1, 2 + 0im)
         @test next_bit_buffer.length == 0
         @test next_bit_buffer.buffer == 0
         @test next_bit_buffer.code_block_buffer == 1
@@ -96,7 +99,7 @@ end
         )
         signal = GPSL1CA()
 
-        next_bit_buffer = @inferred buffer(signal, bit_buffer, 1, -2 + 0im)
+        next_bit_buffer = @inferred buffer(signal, 1, bit_buffer, 1, -2 + 0im)
         @test next_bit_buffer.found == true
         @test next_bit_buffer.length == 3
         @test next_bit_buffer.buffer == 6
@@ -118,7 +121,7 @@ end
         )
         signal = GPSL1CA()
 
-        next_bit_buffer = @inferred buffer(signal, bit_buffer, 1, -2 + 0im)
+        next_bit_buffer = @inferred buffer(signal, 1, bit_buffer, 1, -2 + 0im)
         @test next_bit_buffer.buffer == 0
         @test next_bit_buffer.length == 0
         @test next_bit_buffer.prompt_accumulator == -3 + 0im
@@ -139,7 +142,7 @@ end
         )
         signal = GPSL1CA()
 
-        next_bit_buffer = @inferred buffer(signal, bit_buffer, 1, -2 + 0im)
+        next_bit_buffer = @inferred buffer(signal, 1, bit_buffer, 1, -2 + 0im)
         @test next_bit_buffer.buffer == 2
         @test next_bit_buffer.length == 3
         @test next_bit_buffer.prompt_accumulator == 0 + 0im
@@ -160,7 +163,7 @@ end
         )
         signal = GPSL1CA()
 
-        next_bit_buffer = @inferred buffer(signal, bit_buffer, 10, 10 + 1im)
+        next_bit_buffer = @inferred buffer(signal, 1, bit_buffer, 10, 10 + 1im)
         @test next_bit_buffer.buffer == 7
         @test next_bit_buffer.length == 3
         @test next_bit_buffer.prompt_accumulator == 0 + 0im
