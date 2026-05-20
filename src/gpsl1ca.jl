@@ -1,14 +1,20 @@
 """
 $(SIGNATURES)
 
-Checks if upcoming integration is a new bit for GPSL1CA.
+Bit-sync detector for GPS L1 C/A.
+
+Matches the low 40 bits of `code_block_bits` against the bit-edge
+template `0xfffff` (20 ones followed by 20 zeros). The negated-polarity
+template `0xfffff00000` is searched in the same call via
+[`_try_match`](@ref). Returns [`SyncResult`](@ref).
 """
-function is_upcoming_integration_new_bit(gpsl1::GPSL1CA, code_block_bits, num_code_blocks)
-    num_code_blocks < 40 && return false
-    masked_bit_synchronizer = code_block_bits & 0xffffffffff # First 40 bits
-    # Upcoming integration will be a new bit if masked_bit_synchronizer contains
-    # 20 zeros and 20 ones or 20 ones and 20 zeros
-    masked_bit_synchronizer == 0xfffff || masked_bit_synchronizer == 0xfffff00000
+@inline function is_upcoming_integration_new_bit(
+    ::GPSL1CA,
+    code_block_bits::B,
+    num_code_blocks::Integer,
+) where {B<:Unsigned}
+    num_code_blocks < 40 && return SyncResult(false, 0, Int8(0))
+    _try_match(code_block_bits, B(0xfffff), B(0xffffffffff), 0)
 end
 
 """

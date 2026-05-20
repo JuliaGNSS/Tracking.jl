@@ -14,11 +14,18 @@ using Tracking:
 
 @testset "GPS L1" begin
     gpsl1 = GPSL1CA()
-    @test @inferred(is_upcoming_integration_new_bit(gpsl1, 0xfffff00000, 50)) == true
+    # Matched at negative polarity (20 ones followed by 20 zeros).
+    res = @inferred(is_upcoming_integration_new_bit(gpsl1, UInt64(0xfffff00000), 50))
+    @test res.found == true
+    @test res.polarity == -1
 
-    @test @inferred(is_upcoming_integration_new_bit(gpsl1, 0xfffff, 10)) == false
+    # Not enough integrations yet — buffer hasn't filled to 40 blocks.
+    @test @inferred(is_upcoming_integration_new_bit(gpsl1, UInt64(0xfffff), 10)).found == false
 
-    @test @inferred(is_upcoming_integration_new_bit(gpsl1, 0xfffff, 40)) == true
+    # Matched at positive polarity (20 zeros followed by 20 ones).
+    res = @inferred(is_upcoming_integration_new_bit(gpsl1, UInt64(0xfffff), 40))
+    @test res.found == true
+    @test res.polarity == +1
 
     sampling_frequency = 5e6Hz
 

@@ -23,11 +23,15 @@ Tracked status: pilot tracking works, navigation-bit recovery via the
 secondary-code overlay is deferred to a follow-up.
 """
 function is_upcoming_integration_new_bit(
-    gpsl1c_p::GPSL1C_P,
-    code_block_bits,
-    num_code_blocks,
+    ::GPSL1C_P,
+    code_block_bits::Unsigned,
+    num_code_blocks::Integer,
 )
-    false
+    # Step 4 of the sync-detection redesign replaces this with the
+    # 1800-phase overlay search. Until then the pilot's bit buffer never
+    # locks and the inner loop integrates one primary code period (10 ms)
+    # at a time.
+    SyncResult(false, 0, Int8(0))
 end
 
 function get_default_correlator(gpsl1c_p::GPSL1C_P, num_ants::NumAnts = NumAnts(1))

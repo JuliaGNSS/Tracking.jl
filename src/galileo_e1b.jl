@@ -1,18 +1,20 @@
 """
 $(SIGNATURES)
 
-Checks if upcoming integration is a new bit for GalileoE1B.
+Bit-sync detector for Galileo E1B.
+
+Matches the 8-bit `code_block_bits` window against the bit-edge template
+`0x0f` (4 ones followed by 4 zeros). The negated-polarity template
+`0xf0` is searched in the same call via [`_try_match`](@ref). Returns
+[`SyncResult`](@ref).
 """
-function is_upcoming_integration_new_bit(
-    galileo_e1b::GalileoE1B,
-    code_block_bits,
-    num_code_blocks,
-)
-    num_code_blocks < 8 && return false
-    masked_bit_synchronizer = code_block_bits & 0xff # First 8 bits
-    # Upcoming integration will be a new bit if masked_bit_synchronizer contains
-    # 20 zeros and 20 ones or 20 ones and 20 zeros
-    masked_bit_synchronizer == 0xf || masked_bit_synchronizer == 0xf0
+@inline function is_upcoming_integration_new_bit(
+    ::GalileoE1B,
+    code_block_bits::B,
+    num_code_blocks::Integer,
+) where {B<:Unsigned}
+    num_code_blocks < 8 && return SyncResult(false, 0, Int8(0))
+    _try_match(code_block_bits, B(0x0f), B(0xff), 0)
 end
 
 # TODO: Very early very late correlator?

@@ -1,14 +1,20 @@
 """
 $(SIGNATURES)
 
-Checks if upcoming integration is a new bit for GPSL5I.
+Secondary-code sync detector for GPS L5I.
+
+Matches the low 10 bits of `code_block_bits` against the NH10 template
+`0x035` (= `0000110101`). The negated-polarity template `0x3ca` is
+searched in the same call via [`_try_match`](@ref). Returns
+[`SyncResult`](@ref).
 """
-function is_upcoming_integration_new_bit(gpsl5::GPSL5I, code_block_bits, num_code_blocks)
-    num_code_blocks < 10 && return false
-    masked_bit_synchronizer = code_block_bits & 0x3ff # First 10
-    xored_bit_synchronizer = masked_bit_synchronizer ⊻ 0x35 # 0x35 == 0000110101
-    # If xored_bit_synchronizer == 0 -> bit -1 and if xored_bit_synchronizer == 0x3ff -> bit 1
-    xored_bit_synchronizer == 0 || xored_bit_synchronizer == 0x3ff
+@inline function is_upcoming_integration_new_bit(
+    ::GPSL5I,
+    code_block_bits::B,
+    num_code_blocks::Integer,
+) where {B<:Unsigned}
+    num_code_blocks < 10 && return SyncResult(false, 0, Int8(0))
+    _try_match(code_block_bits, B(0x035), B(0x3ff), 0)
 end
 
 function get_default_correlator(gpsl5::GPSL5I, num_ants::NumAnts = NumAnts(1))
