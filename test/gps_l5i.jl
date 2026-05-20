@@ -6,6 +6,7 @@ using GNSSSignals: GPSL5I
 using Tracking:
     is_upcoming_integration_new_bit,
     get_default_correlator,
+    get_code_block_buffer_type,
     default_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     EarlyPromptLateCorrelator,
@@ -32,6 +33,9 @@ using Tracking:
     # at runtime, not changed by this default.
     @test @inferred(default_carrier_loop_filter_bandwidth(gpsl5)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(gpsl5)) ≈ 1.0Hz
+
+    # 20-block sync window (2 × NH10) fits in a UInt32.
+    @test @inferred(get_code_block_buffer_type(gpsl5)) === UInt32
 end
 
 end

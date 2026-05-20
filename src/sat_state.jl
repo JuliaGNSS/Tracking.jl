@@ -42,6 +42,10 @@ function TrackedSignal(
     num_prompts_for_cn0_estimation::Int = 100,
     post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),
 )
+    # Per-signal sync-search buffer width — see `get_code_block_buffer_type`.
+    # Picking the type here makes `B` concrete in the resulting
+    # `TrackedSignal{Sig, B, C, PCF}`.
+    B = get_code_block_buffer_type(signal)
     TrackedSignal(
         signal,
         0,
@@ -50,7 +54,7 @@ function TrackedSignal(
         correlator,
         complex(0.0, 0.0),
         MomentsCN0Estimator(num_prompts_for_cn0_estimation),
-        BitBuffer(),
+        BitBuffer{B}(),
         post_corr_filter,
         ComplexF64[],
     )

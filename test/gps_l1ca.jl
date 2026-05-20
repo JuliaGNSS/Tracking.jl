@@ -6,6 +6,7 @@ using GNSSSignals: GPSL1CA
 using Tracking:
     is_upcoming_integration_new_bit,
     get_default_correlator,
+    get_code_block_buffer_type,
     default_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     EarlyPromptLateCorrelator,
@@ -31,6 +32,9 @@ using Tracking:
     # as the universal default — that value falls out of the formula here.
     @test @inferred(default_carrier_loop_filter_bandwidth(gpsl1)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(gpsl1)) ≈ 1.0Hz
+
+    # 40-block sync window fits in a UInt64.
+    @test @inferred(get_code_block_buffer_type(gpsl1)) === UInt64
 end
 
 end

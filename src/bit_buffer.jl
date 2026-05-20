@@ -60,6 +60,31 @@ end
 @inline length(bit_buffer::BitBuffer) = bit_buffer.length
 @inline has_bit_or_secondary_code_been_found(bit_buffer::BitBuffer) = bit_buffer.found
 
+"""
+$(SIGNATURES)
+
+Width of the sync-search sliding window for `signal`, returned as a
+concrete `Unsigned` subtype.
+
+Each signal's bit/secondary-code sync detector matches the buffered
+primary-code-block signs against a per-signal template. This trait
+picks the smallest integer width that holds one full search horizon for
+that signal:
+
+| Signal            | Returns   | Window |
+|-------------------|-----------|--------|
+| GPS L1 C/A        | `UInt64`  | 40 blocks (2 × 20 blocks/symbol) |
+| Galileo E1B       | `UInt8`   | 8 blocks (2 × 4 blocks/symbol)   |
+| GPS L5I           | `UInt32`  | 20 blocks (2 × NH10 length)      |
+| GPS L1C-D         | `UInt8`   | n/a — symbol = primary period, buffer unused |
+| GPS L1C-P         | `UInt1800`| 1800-chip overlay (added in step 4) |
+
+The default for any signal not specialized below is `UInt64`. The width
+flows through `BitBuffer{B}` and `TrackedSignal{Sig, B, C, PCF}` so the
+parameter chain stays type-stable at construction.
+"""
+@inline get_code_block_buffer_type(::AbstractGNSSSignal) = UInt64
+
 # Number of primary-code blocks that form one navigation bit.
 # Returns 0 for pilot signals (`data_frequency = 0`), where the concept is
 # undefined; callers must guard for that case before using the result.

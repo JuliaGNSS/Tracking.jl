@@ -6,6 +6,7 @@ using GNSSSignals: GPSL1C_P
 using Tracking:
     is_upcoming_integration_new_bit,
     get_default_correlator,
+    get_code_block_buffer_type,
     default_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     EarlyPromptLateCorrelator,
@@ -32,6 +33,11 @@ using Tracking:
     # 10 ms primary period at BL·T ≈ 0.018 → 1.8 Hz carrier / 0.1 Hz code.
     @test @inferred(default_carrier_loop_filter_bandwidth(gpsl1c_p)) ≈ 1.8Hz
     @test @inferred(default_code_loop_filter_bandwidth(gpsl1c_p)) ≈ 0.1Hz
+
+    # Placeholder until step 4 of the sync-detection redesign brings
+    # `UInt1800` via BitIntegers. Step 4 will replace this assertion with
+    # `=== BitIntegers.UInt1800`.
+    @test @inferred(get_code_block_buffer_type(gpsl1c_p)) === UInt64
 end
 
 end

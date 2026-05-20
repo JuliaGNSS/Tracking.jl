@@ -21,3 +21,6 @@ for systems like Galileo E1B that use BOC modulation.
 function get_default_correlator(gpsl1::GPSL1CA, num_ants::NumAnts = NumAnts(1))
     EarlyPromptLateCorrelator(; num_ants)
 end
+
+# 40-block sync-search window (2 × 20 blocks/symbol) needs at least 40 bits.
+@inline get_code_block_buffer_type(::GPSL1CA) = UInt64
