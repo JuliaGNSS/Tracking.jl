@@ -15,7 +15,9 @@ Matches the 8-bit `code_block_bits` window against the bit-edge template
     num_code_blocks::Integer,
 ) where {B<:Unsigned}
     num_code_blocks < 8 && return SyncResult(false, 0, Int8(0))
-    _try_match(code_block_bits, B(0x0f), B(0xff), 0)
+    # Tolerance 1 ≈ 12.5 % per-block error — short window, but the BOC(1,1)
+    # primary code is 4 ms which gives much higher per-block SNR than L1 C/A.
+    _try_match(code_block_bits, B(0x0f), B(0xff), 1)
 end
 
 # TODO: Very early very late correlator?

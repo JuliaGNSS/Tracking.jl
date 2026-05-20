@@ -48,6 +48,14 @@ using Tracking:
 
     # 8-block sync window fits in a UInt8.
     @test @inferred(get_code_block_buffer_type(galileo_e1b)) === UInt8
+
+    @testset "Hamming tolerance" begin
+        # Inject 1 bit-flip into the positive-polarity template — must lock.
+        template = UInt8(0x0f)
+        @test is_upcoming_integration_new_bit(galileo_e1b, prn, template ⊻ UInt8(0x1), 8).found == true
+        # 2 errors → reject.
+        @test is_upcoming_integration_new_bit(galileo_e1b, prn, template ⊻ UInt8(0x3), 8).found == false
+    end
 end
 
 end

@@ -44,6 +44,16 @@ using Tracking:
 
     # 20-block sync window (2 × NH10) fits in a UInt32.
     @test @inferred(get_code_block_buffer_type(gpsl5)) === UInt32
+
+    @testset "Hamming tolerance" begin
+        # Inject up to 2 bit-flips into the positive-polarity NH10
+        # template — must still lock.
+        template = UInt32(0x035)
+        @test is_upcoming_integration_new_bit(gpsl5, prn, template ⊻ UInt32(0x1), 10).found == true
+        @test is_upcoming_integration_new_bit(gpsl5, prn, template ⊻ UInt32(0x3), 10).found == true
+        # 3 errors → reject.
+        @test is_upcoming_integration_new_bit(gpsl5, prn, template ⊻ UInt32(0x7), 10).found == false
+    end
 end
 
 end
