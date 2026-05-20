@@ -14,22 +14,23 @@ using Tracking:
 
 @testset "Galileo E1B" begin
     galileo_e1b = GalileoE1B()
+    prn = 1
     # 4-on-4-off bit-edge template — matched at positive polarity.
-    res = @inferred(is_upcoming_integration_new_bit(galileo_e1b, UInt8(0x0f), 29))
+    res = @inferred(is_upcoming_integration_new_bit(galileo_e1b, prn, UInt8(0x0f), 29))
     @test res.found == true
     @test res.polarity == +1
 
     # Buffer not yet at 8 blocks.
-    @test @inferred(is_upcoming_integration_new_bit(galileo_e1b, UInt8(0x0f), 6)).found == false
+    @test @inferred(is_upcoming_integration_new_bit(galileo_e1b, prn, UInt8(0x0f), 6)).found == false
 
     # Pattern is `0xc = 1100` — only 2 same/2 same, not 4+4.
-    @test @inferred(is_upcoming_integration_new_bit(galileo_e1b, UInt8(0xc), 40)).found == false
+    @test @inferred(is_upcoming_integration_new_bit(galileo_e1b, prn, UInt8(0xc), 40)).found == false
 
-    res = @inferred(is_upcoming_integration_new_bit(galileo_e1b, UInt8(0x0f), 8))
+    res = @inferred(is_upcoming_integration_new_bit(galileo_e1b, prn, UInt8(0x0f), 8))
     @test res.found == true
     @test res.polarity == +1
 
-    res = @inferred(is_upcoming_integration_new_bit(galileo_e1b, UInt8(0xf0), 8))
+    res = @inferred(is_upcoming_integration_new_bit(galileo_e1b, prn, UInt8(0xf0), 8))
     @test res.found == true
     @test res.polarity == -1
 

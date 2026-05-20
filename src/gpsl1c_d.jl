@@ -14,6 +14,7 @@ deferred to a follow-up.
 """
 function is_upcoming_integration_new_bit(
     ::GPSL1C_D,
+    ::Integer,           # PRN — ignored
     code_block_bits::Unsigned,
     num_code_blocks::Integer,
 )

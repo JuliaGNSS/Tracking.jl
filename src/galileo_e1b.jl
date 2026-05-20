@@ -10,6 +10,7 @@ Matches the 8-bit `code_block_bits` window against the bit-edge template
 """
 @inline function is_upcoming_integration_new_bit(
     ::GalileoE1B,
+    ::Integer,           # PRN — ignored; same template for every PRN
     code_block_bits::B,
     num_code_blocks::Integer,
 ) where {B<:Unsigned}
