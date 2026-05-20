@@ -25,7 +25,7 @@ julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
 
 julia> add_satellite!(track_state, :default, sat);
 
-julia> get_prn(track_state, :default, 1)
+julia> get_prn(track_state, 1)
 1
 ```
 
