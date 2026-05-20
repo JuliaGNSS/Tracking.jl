@@ -40,7 +40,11 @@ using Tracking: BitBuffer, buffer, has_bit_or_secondary_code_been_found
     end
 
     @testset "Find bit start and buffer bit" begin
-        code_blocks_buffer = 0xfffffffffff80000
+        # `UInt128` literal so that the expected post-shift value
+        # 0x1fffffffffff00000 (65 bits) fits without truncation. The
+        # buffer width is now a per-`BitBuffer{B}` parameter, so the
+        # test pins `B = UInt128` explicitly.
+        code_blocks_buffer = UInt128(0xfffffffffff80000)
         code_blocks_buffer_length = ndigits(code_blocks_buffer; base = 2)
         bit_buffer = BitBuffer(
             code_blocks_buffer,
