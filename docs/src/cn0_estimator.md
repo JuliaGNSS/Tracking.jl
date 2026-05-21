@@ -85,8 +85,8 @@ julia> function run_cn0_demo()
            estimate_cn0(track_state, 1)
        end;
 
-julia> run_cn0_demo()  # converges to ~45 dB-Hz as the buffer fills
-0.0 dB-Hz
+julia> run_cn0_demo()  # converges toward the 45 dB-Hz input as the buffer fills
+49.1 dB-Hz
 ```
 
 The 1-σ noise amplitude is derived from the target CN0 by inverting
