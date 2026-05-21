@@ -46,9 +46,7 @@ track_state = TrackState(;
 # In your acquisition loop
 while running
     acqs = acquire(GPSL1CA(), latest_chunk, sampling_frequency, candidate_prns)
-    for acq in filter(is_detected, acqs)
-        add_satellite!(track_state, acq)   # routes to the matching group
-    end
+    add_satellite!(track_state, filter(is_detected, acqs))   # routes each acq to the matching group
     track_state = track(latest_chunk, track_state, sampling_frequency)
 end
 ```
