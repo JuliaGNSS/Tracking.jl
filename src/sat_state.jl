@@ -449,7 +449,8 @@ get_doppler_estimator_state(s::TrackedSat) = s.doppler_estimator_state
 
 # Per-signal accessors on a TrackedSat.
 #
-# Three selector forms (in increasing specificity):
+# Three selector forms (in increasing specificity), all routed through
+# `_find_signal` so every per-signal accessor is one line:
 #   * no selector — only valid for single-signal sats; falls back to
 #     `only(s.signals)`. Errors on multi-signal sats.
 #   * `Integer` index — canonical: picks `s.signals[i]`. Unambiguous even
@@ -459,6 +460,11 @@ get_doppler_estimator_state(s::TrackedSat) = s.doppler_estimator_state
 #
 # Type-based selection walks the signals tuple recursively and folds at
 # compile time when the sat's `Signals` type is concrete.
+@inline _find_signal(s::Tuple) = only(s)
+@inline _find_signal(s::Tuple, i::Integer) = s[i]
+@inline _find_signal(s::Tuple, ::Type{T}) where {T<:AbstractGNSSSignal} =
+    _find_signal_by_type(s, T)
+
 @inline function _find_signal_by_type(::Tuple{}, ::Type{T}) where {T<:AbstractGNSSSignal}
     throw(ArgumentError("no signal of type $T on this satellite"))
 end
@@ -478,71 +484,22 @@ end
     _assert_no_more_of_type(Base.tail(t), T)
 end
 
-get_signal(s::TrackedSat) = get_signal(only(s.signals))
-get_signal(s::TrackedSat, i::Integer) = get_signal(s.signals[i])
-get_signal(s::TrackedSat, ::Type{T}) where {T<:AbstractGNSSSignal} =
-    get_signal(_find_signal_by_type(s.signals, T))
-
-get_correlator(s::TrackedSat) = get_correlator(only(s.signals))
-get_correlator(s::TrackedSat, i::Integer) = get_correlator(s.signals[i])
-get_correlator(s::TrackedSat, ::Type{T}) where {T<:AbstractGNSSSignal} =
-    get_correlator(_find_signal_by_type(s.signals, T))
-
-get_last_fully_integrated_correlator(s::TrackedSat) =
-    get_last_fully_integrated_correlator(only(s.signals))
-get_last_fully_integrated_correlator(s::TrackedSat, i::Integer) =
-    get_last_fully_integrated_correlator(s.signals[i])
-get_last_fully_integrated_correlator(s::TrackedSat, ::Type{T}) where {T<:AbstractGNSSSignal} =
-    get_last_fully_integrated_correlator(_find_signal_by_type(s.signals, T))
-
-get_last_fully_integrated_filtered_prompt(s::TrackedSat) =
-    get_last_fully_integrated_filtered_prompt(only(s.signals))
-get_last_fully_integrated_filtered_prompt(s::TrackedSat, i::Integer) =
-    get_last_fully_integrated_filtered_prompt(s.signals[i])
-get_last_fully_integrated_filtered_prompt(s::TrackedSat, ::Type{T}) where {T<:AbstractGNSSSignal} =
-    get_last_fully_integrated_filtered_prompt(_find_signal_by_type(s.signals, T))
-
-get_filtered_prompts(s::TrackedSat) = get_filtered_prompts(only(s.signals))
-get_filtered_prompts(s::TrackedSat, i::Integer) = get_filtered_prompts(s.signals[i])
-get_filtered_prompts(s::TrackedSat, ::Type{T}) where {T<:AbstractGNSSSignal} =
-    get_filtered_prompts(_find_signal_by_type(s.signals, T))
-
-get_post_corr_filter(s::TrackedSat) = get_post_corr_filter(only(s.signals))
-get_post_corr_filter(s::TrackedSat, i::Integer) = get_post_corr_filter(s.signals[i])
-get_post_corr_filter(s::TrackedSat, ::Type{T}) where {T<:AbstractGNSSSignal} =
-    get_post_corr_filter(_find_signal_by_type(s.signals, T))
-
-get_cn0_estimator(s::TrackedSat) = get_cn0_estimator(only(s.signals))
-get_cn0_estimator(s::TrackedSat, i::Integer) = get_cn0_estimator(s.signals[i])
-get_cn0_estimator(s::TrackedSat, ::Type{T}) where {T<:AbstractGNSSSignal} =
-    get_cn0_estimator(_find_signal_by_type(s.signals, T))
-
-get_bit_buffer(s::TrackedSat) = get_bit_buffer(only(s.signals))
-get_bit_buffer(s::TrackedSat, i::Integer) = get_bit_buffer(s.signals[i])
-get_bit_buffer(s::TrackedSat, ::Type{T}) where {T<:AbstractGNSSSignal} =
-    get_bit_buffer(_find_signal_by_type(s.signals, T))
-
-get_bits(s::TrackedSat) = get_bits(only(s.signals))
-get_bits(s::TrackedSat, i::Integer) = get_bits(s.signals[i])
-get_bits(s::TrackedSat, ::Type{T}) where {T<:AbstractGNSSSignal} =
-    get_bits(_find_signal_by_type(s.signals, T))
-
-get_num_bits(s::TrackedSat) = get_num_bits(only(s.signals))
-get_num_bits(s::TrackedSat, i::Integer) = get_num_bits(s.signals[i])
-get_num_bits(s::TrackedSat, ::Type{T}) where {T<:AbstractGNSSSignal} =
-    get_num_bits(_find_signal_by_type(s.signals, T))
-
-has_bit_or_secondary_code_been_found(s::TrackedSat) =
-    has_bit_or_secondary_code_been_found(only(s.signals))
-has_bit_or_secondary_code_been_found(s::TrackedSat, i::Integer) =
-    has_bit_or_secondary_code_been_found(s.signals[i])
-has_bit_or_secondary_code_been_found(s::TrackedSat, ::Type{T}) where {T<:AbstractGNSSSignal} =
-    has_bit_or_secondary_code_been_found(_find_signal_by_type(s.signals, T))
-
-get_integrated_samples(s::TrackedSat) = get_integrated_samples(only(s.signals))
-get_integrated_samples(s::TrackedSat, i::Integer) = get_integrated_samples(s.signals[i])
-get_integrated_samples(s::TrackedSat, ::Type{T}) where {T<:AbstractGNSSSignal} =
-    get_integrated_samples(_find_signal_by_type(s.signals, T))
+get_signal(s::TrackedSat, sel...) = get_signal(_find_signal(s.signals, sel...))
+get_correlator(s::TrackedSat, sel...) = get_correlator(_find_signal(s.signals, sel...))
+get_last_fully_integrated_correlator(s::TrackedSat, sel...) =
+    get_last_fully_integrated_correlator(_find_signal(s.signals, sel...))
+get_last_fully_integrated_filtered_prompt(s::TrackedSat, sel...) =
+    get_last_fully_integrated_filtered_prompt(_find_signal(s.signals, sel...))
+get_filtered_prompts(s::TrackedSat, sel...) = get_filtered_prompts(_find_signal(s.signals, sel...))
+get_post_corr_filter(s::TrackedSat, sel...) = get_post_corr_filter(_find_signal(s.signals, sel...))
+get_cn0_estimator(s::TrackedSat, sel...) = get_cn0_estimator(_find_signal(s.signals, sel...))
+get_bit_buffer(s::TrackedSat, sel...) = get_bit_buffer(_find_signal(s.signals, sel...))
+get_bits(s::TrackedSat, sel...) = get_bits(_find_signal(s.signals, sel...))
+get_num_bits(s::TrackedSat, sel...) = get_num_bits(_find_signal(s.signals, sel...))
+has_bit_or_secondary_code_been_found(s::TrackedSat, sel...) =
+    has_bit_or_secondary_code_been_found(_find_signal(s.signals, sel...))
+get_integrated_samples(s::TrackedSat, sel...) =
+    get_integrated_samples(_find_signal(s.signals, sel...))
 
 # Reset the satellite's signal-start sample and per-signal bit buffer between
 # `track` calls. Per-signal `filtered_prompts` vectors are emptied in place;
@@ -801,9 +758,6 @@ function estimate_cn0(tsig::TrackedSignal)
     )
 end
 
-# Single-signal sat: forward to the lone `TrackedSignal`.
-estimate_cn0(sat::TrackedSat) = estimate_cn0(only(sat.signals))
-# Per-signal selectors: pick a `TrackedSignal` and forward.
-estimate_cn0(sat::TrackedSat, i::Integer) = estimate_cn0(sat.signals[i])
-estimate_cn0(sat::TrackedSat, ::Type{T}) where {T<:AbstractGNSSSignal} =
-    estimate_cn0(_find_signal_by_type(sat.signals, T))
+# Per-signal selectors handled by `_find_signal` (no selector → only-fold;
+# Integer → indexed; Type{T} → unique-type match).
+estimate_cn0(sat::TrackedSat, sel...) = estimate_cn0(_find_signal(sat.signals, sel...))

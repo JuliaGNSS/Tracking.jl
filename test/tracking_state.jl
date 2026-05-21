@@ -12,13 +12,22 @@ using Tracking:
     get_signal,
     get_prn,
     get_num_ants,
+    get_code_phase,
+    get_code_doppler,
+    get_carrier_phase,
+    get_carrier_doppler,
     get_integrated_samples,
     get_signal_start_sample,
     get_correlator,
     get_last_fully_integrated_correlator,
+    get_last_fully_integrated_filtered_prompt,
     get_post_corr_filter,
     get_cn0_estimator,
     get_bit_buffer,
+    get_bits,
+    get_num_bits,
+    has_bit_or_secondary_code_been_found,
+    estimate_cn0,
     get_sat_state,
     get_sat_states,
     merge_sats,
@@ -373,6 +382,38 @@ end
         TrackedSat(gpsl1, 2, 11.5, 20.0Hz; doppler_estimator = default_estimator),
     )
     @test merged_default.doppler_estimator === default_estimator
+end
+
+# Type stability matters because every accessor is on the path between
+# user code and the hot tracking loop. A widened return type here can
+# silently propagate into a dynamic dispatch in the caller; `@inferred`
+# trips the moment the compiler's narrowest prediction stops matching
+# the actual return.
+@testset "Accessor type stability — single-group, single-signal" begin
+    track_state = TrackState(; signal = GPSL1CA())
+    add_satellite!(track_state; prn = 1, code_phase = 50.0, carrier_doppler = 1000.0Hz)
+
+    @inferred get_prn(track_state, 1)
+    @inferred get_num_ants(track_state, 1)
+    @inferred get_code_phase(track_state, 1)
+    @inferred get_code_doppler(track_state, 1)
+    @inferred get_carrier_phase(track_state, 1)
+    @inferred get_carrier_doppler(track_state, 1)
+    @inferred get_signal_start_sample(track_state, 1)
+    @inferred get_integrated_samples(track_state, 1)
+    @inferred get_correlator(track_state, 1)
+    @inferred get_last_fully_integrated_correlator(track_state, 1)
+    @inferred get_last_fully_integrated_filtered_prompt(track_state, 1)
+    @inferred get_post_corr_filter(track_state, 1)
+    @inferred get_cn0_estimator(track_state, 1)
+    @inferred get_bit_buffer(track_state, 1)
+    @inferred get_bits(track_state, 1)
+    @inferred get_num_bits(track_state, 1)
+    @inferred has_bit_or_secondary_code_been_found(track_state, 1)
+    @inferred estimate_cn0(track_state, 1)
+    @inferred get_signal(track_state)
+    @inferred get_sat_state(track_state, 1)
+    @test true   # gives the testset a passing assertion if all `@inferred` succeed
 end
 
 end

@@ -435,31 +435,9 @@ function get_sat_state(track_state::TrackState{<:SignalGroups{1}})
     only(get_sat_states(track_state, 1))
 end
 
-function estimate_cn0(
-    track_state::TrackState{<:SignalGroups},
-    group_idx::Union{Symbol,Integer,Val},
-    sat_identifier,
-)
-    estimate_cn0(get_sat_state(track_state, group_idx, sat_identifier))
-end
-
-# Per-signal selector — multi-group form.
-function estimate_cn0(
-    track_state::TrackState{<:SignalGroups},
-    group_idx::Union{Symbol,Integer,Val},
-    sat_identifier,
-    signal_sel::Union{Integer,Type{<:AbstractGNSSSignal}},
-)
-    estimate_cn0(get_sat_state(track_state, group_idx, sat_identifier), signal_sel)
-end
-
-function estimate_cn0(track_state::TrackState{<:SignalGroups{1}}, sat_identifier)
-    estimate_cn0(track_state, 1, sat_identifier)
-end
-
-function estimate_cn0(track_state::TrackState{<:SignalGroups{1}})
-    estimate_cn0(get_sat_state(track_state))
-end
+# `estimate_cn0` follows the same dispatch ladder as the per-signal
+# accessors — its `TrackState` overloads are generated alongside them
+# in the `@eval` loop further down (search for `:estimate_cn0`).
 
 function merge_sats(
     track_state::TrackState{G,DE},
@@ -760,16 +738,24 @@ get_signal_start_sample(s::TrackState, id...) =
 # (or `1`) as the group key in the single-group case.
 const _SignalSelector = Union{Integer,Type{<:AbstractGNSSSignal}}
 
+# Each accessor in the loop below gets two `TrackState` overloads:
+#   * `(s, id...)` — varargs forward to `get_sat_state`, covering the
+#     no-arg, prn-only, and (group, prn) shapes via that function's own
+#     dispatch ladder. Sat-level fallback when no signal selector is given.
+#   * `(s, group, prn, sig)` — the per-signal form. `sig` is `Integer` or
+#     `Type{<:AbstractGNSSSignal}`; the lookup goes via the sat-level
+#     accessor (which routes through `_find_signal`).
+#
+# Generated via `@eval` at module load — methods bake into the precompile
+# image, indistinguishable from hand-written ones at runtime.
 for fn in (
     :get_integrated_samples, :get_correlator,
     :get_last_fully_integrated_correlator, :get_last_fully_integrated_filtered_prompt,
     :get_post_corr_filter, :get_cn0_estimator, :get_bit_buffer, :get_bits,
-    :get_num_bits, :has_bit_or_secondary_code_been_found,
+    :get_num_bits, :has_bit_or_secondary_code_been_found, :estimate_cn0,
 )
     @eval begin
-        # No selector — forward all trailing args to `get_sat_state`.
         $fn(s::TrackState, id...) = $fn(get_sat_state(s, id...))
-        # Per-signal — always `(group, prn, sig)`.
         $fn(
             s::TrackState{<:SignalGroups},
             group::Union{Symbol,Integer,Val},
