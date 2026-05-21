@@ -230,7 +230,7 @@ end
     @test get_carrier_doppler(ts, :default, 2) == 200.0Hz
 end
 
-@testset "add_satellite!(ts, acq; group) — multi-group requires `group=`" begin
+@testset "add_satellite!(ts, acq; group) — multi-group with explicit `group=`" begin
     ts = TrackState(; signals = (
         gps = (GPSL1CA(),),
         gal = (GalileoE1B(),),
@@ -241,6 +241,42 @@ end
     add_satellite!(ts, gal_acq; group = :gal)
     @test get_prn(ts, :gps, 11) == 11
     @test get_prn(ts, :gal, 12) == 12
+end
+
+@testset "add_satellite!(ts, acq) — multi-group auto-routes by signal type" begin
+    ts = TrackState(; signals = (
+        gps = (GPSL1CA(),),
+        gal = (GalileoE1B(),),
+    ))
+    gps_acq = _make_acq(GPSL1CA(), 11, 1.5, 50.0Hz)
+    gal_acq = _make_acq(GalileoE1B(), 12, 2.5, 60.0Hz)
+    # No `group=`: each acq lands in the matching group automatically.
+    add_satellite!(ts, gps_acq)
+    add_satellite!(ts, gal_acq)
+    @test get_prn(ts, :gps, 11) == 11
+    @test get_prn(ts, :gal, 12) == 12
+end
+
+@testset "add_satellite!(ts, acqs::Vector) — mixed-system batch auto-routes" begin
+    ts = TrackState(; signals = (
+        gps = (GPSL1CA(),),
+        gal = (GalileoE1B(),),
+    ))
+    acqs = [
+        _make_acq(GPSL1CA(),    11, 1.5, 50.0Hz),
+        _make_acq(GalileoE1B(), 12, 2.5, 60.0Hz),
+        _make_acq(GPSL1CA(),    13, 3.5, 70.0Hz),
+    ]
+    add_satellite!(ts, acqs)  # no group= — routes per-entry
+    @test get_prn(ts, :gps, 11) == 11
+    @test get_prn(ts, :gps, 13) == 13
+    @test get_prn(ts, :gal, 12) == 12
+end
+
+@testset "add_satellite!(ts, acq) — unknown signal type errors with auto-routing" begin
+    ts = TrackState(; signals = (gps = (GPSL1CA(),),))
+    bad = _make_acq(GalileoE1B(), 5, 10.0, 100.0Hz)
+    @test_throws ArgumentError add_satellite!(ts, bad)
 end
 
 @testset "add_satellite!(ts, acq) rejects wrong-signal acq" begin
