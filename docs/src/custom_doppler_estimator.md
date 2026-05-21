@@ -77,99 +77,75 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
 
 ## Skeleton
 
-```julia
-using Tracking
-using Tracking: AbstractDopplerEstimator, TrackedSat, TrackedSignal, TrackState,
-    SignalGroup, Measurements, band_key
-using Tracking: init_estimator_state, update_estimator_on_handoff,
-    estimate_dopplers_and_filter_prompt
+The skeleton below is the smallest possible working estimator: every
+method returns a constant. Real estimators replace these bodies with
+the actual algorithm, but the *structure* — five methods, two structs
+— is what the rest of `Tracking.jl` dispatches on.
 
-# 1. Estimator type — config + any shared state
-struct MyEstimator <: AbstractDopplerEstimator
-    bandwidth_hz::Float64
-    # ... shared state held in resizable containers, e.g. Vector{Float64}
-    # for a growing joint-state vector — mutated in place on handoff ...
-end
+```jldoctest myestimator
+julia> using Tracking, GNSSSignals
 
-# 2. Per-sat state struct
-struct SatMyEstimator
-    # ... whatever your algorithm tracks per sat ...
-    integrator::Float64
-end
+julia> using Tracking: AbstractDopplerEstimator, TrackedSat, TrackState,
+                       SignalGroup, Measurements, band_key
 
-# 3. Seed each sat with its initial estimator state
-function Tracking.init_estimator_state(est::MyEstimator, sat::TrackedSat)
-    SatMyEstimator(0.0)
-end
+julia> # 1. Estimator type — config + any shared state
+       struct MyEstimator <: AbstractDopplerEstimator end
 
-# 4. (Optional) update shared state when sats join the track set
-function Tracking.update_estimator_on_handoff(est::MyEstimator, new_sats)
-    # `new_sats` is a `Dictionary{I, TrackedSat}` of just the incoming sats.
-    # Grow the shared joint-state container in place (immutable estimator,
-    # resizable field) and return the same `est`.
-    for _ in 1:length(new_sats)
-        push!(est.joint_state, 0.0)
-    end
-    return est
-end
+julia> # 2. Per-sat state struct
+       struct SatMyEstimator end
 
-# 5. The update step (immutable form). Walks each group in
-# `track_state.groups`, looks up that group's band's `Measurement`, and
-# produces new TrackedSats. The signals tuple is rebuilt per sat with
-# updated per-signal state (cleared correlator, advanced bit buffer, etc.).
-function Tracking.estimate_dopplers_and_filter_prompt(
-    track_state::TrackState{<:Any, <:MyEstimator},
-    measurements::Measurements,
-    preferred_num_code_blocks_to_integrate,
-)
-    new_groups = map(track_state.groups) do g
-        m = measurements[band_key(g.band)]
-        sampling_frequency = m.sampling_frequency
-        new_sats = map(g.satellites) do sat
-            de_state = sat.doppler_estimator_state
-            # ... compute new carrier_doppler, code_doppler, de_state ...
-            new_signals = my_update_signals(sat.signals, sampling_frequency)
-            TrackedSat(sat;
-                carrier_doppler = new_carrier_doppler,
-                code_doppler = new_code_doppler,
-                signals = new_signals,
-                doppler_estimator_state = new_de_state,
-            )
-        end
-        SignalGroup(g; satellites = new_sats)
-    end
-    return TrackState(track_state; groups = new_groups)
-end
+julia> # 3. Seed each sat
+       Tracking.init_estimator_state(::MyEstimator, ::TrackedSat) = SatMyEstimator();
+
+julia> # 4. (Optional) shared-state update on handoff — default returns
+       # `est` unchanged, so estimators with no shared state may skip this.
+       Tracking.update_estimator_on_handoff(est::MyEstimator, new_sats) = est;
+
+julia> # 5a. Immutable form — walks each group, looks up its band's
+       # `Measurement`, returns a fresh `TrackState`. Real implementations
+       # read `sat.signals[*].correlator` and compute new dopplers; here
+       # we just return the state unchanged.
+       function Tracking.estimate_dopplers_and_filter_prompt(
+           track_state::TrackState{<:Any, <:MyEstimator},
+           measurements::Measurements,
+           preferred_num_code_blocks_to_integrate,
+       )
+           return track_state
+       end;
+
+julia> # 5b. In-place form — what `track!` actually calls. Real
+       # implementations write back into `g.satellites.values[i]`.
+       function Tracking.estimate_dopplers_and_filter_prompt!(
+           track_state::TrackState{<:Any, <:MyEstimator},
+           measurements::Measurements,
+           preferred_num_code_blocks_to_integrate,
+       )
+           return track_state
+       end;
 ```
 
-For full real-time support (zero-allocation steady state), additionally
-provide an in-place version that walks each group's
-`satellites.values::Vector{TrackedSat}` and reassigns slots. The
-sampling frequency for each group is read from its band's `Measurement`:
+Plug it into a `TrackState` like any other estimator:
 
-```julia
-function Tracking.estimate_dopplers_and_filter_prompt!(
-    track_state::TrackState{<:Any, <:MyEstimator},
-    measurements::Measurements,
-    preferred_num_code_blocks_to_integrate,
-)
-    for g in track_state.groups
-        sampling_frequency = measurements[band_key(g.band)].sampling_frequency
-        vals = g.satellites.values
-        @inbounds for i in eachindex(vals)
-            vals[i] = my_per_sat_update(vals[i], sampling_frequency)
-        end
-    end
-    return track_state
-end
+```jldoctest myestimator
+julia> using Tracking: Hz
+
+julia> track_state = TrackState(; signal = GPSL1CA(), doppler_estimator = MyEstimator());
+
+julia> add_satellite!(track_state; prn = 1, code_phase = 0.0, carrier_doppler = 1000.0Hz);
+
+julia> track_state = track(zeros(ComplexF64, 4000), track_state, 4e6Hz);
+
+julia> get_doppler_estimator_state(get_sat_state(track_state, 1))
+SatMyEstimator()
 ```
 
 The existing [`ConventionalPLLAndDLL`](@ref) implementation in
 `src/conventional_pll_and_dll.jl` shows the full pattern, including how
 the immutable and in-place forms share a `_update_tracked_sat_doppler`
 helper so they cannot drift, and how the per-signal walk distinguishes
-the estimator-driver signal (`signals[1]`, which drives the conventional
-PLL/DLL) from the other signals (which only have their prompts filtered).
+the [estimator-driver signal](tracking_state.md#Estimator-driver-signal)
+(`signals[1]`, which drives the conventional PLL/DLL) from the other
+signals (which only have their prompts filtered).
 That split is a convention `ConventionalPLLAndDLL` chooses — your own
 estimator can use every signal's state any way you like.
 

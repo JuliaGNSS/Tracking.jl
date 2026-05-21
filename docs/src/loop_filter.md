@@ -21,13 +21,13 @@ signal-tuple declaration, the loop bandwidths are sized **per signal** at
 ~10× margin from the `BL · T < 0.18` stability edge of the bilinear
 third-order filter. The values fall out to:
 
-| Signal     | Primary period | Carrier BL | Code BL  |
-|------------|----------------|-----------:|---------:|
-| GPSL1CA    | 1 ms           |    18 Hz   |   1 Hz   |
-| GPSL5I     | 1 ms           |    18 Hz   |   1 Hz   |
-| GalileoE1B | 4 ms           |   4.5 Hz   |  0.25 Hz |
-| GPSL1C\\_D | 10 ms          |   1.8 Hz   |  0.1 Hz  |
-| GPSL1C\\_P | 10 ms          |   1.8 Hz   |  0.1 Hz  |
+| Signal      | Primary period | Carrier BL | Code BL  |
+|-------------|----------------|-----------:|---------:|
+| GPS L1 C/A  | 1 ms           |    18 Hz   |   1 Hz   |
+| GPS L5I     | 1 ms           |    18 Hz   |   1 Hz   |
+| Galileo E1B | 4 ms           |   4.5 Hz   |  0.25 Hz |
+| GPS L1C-D   | 10 ms          |   1.8 Hz   |  0.1 Hz  |
+| GPS L1C-P   | 10 ms          |   1.8 Hz   |  0.1 Hz  |
 
 The 1-ms-primary-period signals (L1 C/A, L5I) keep the historical 18 Hz /
 1 Hz default; longer-period signals get appropriately tighter loops so the
