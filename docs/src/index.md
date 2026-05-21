@@ -99,7 +99,7 @@ julia> get_code_phase(track_state, 1)
 50.00064935064897
 ```
 
-`estimate_cn0(track_state, group, prn)` returns the CN0 estimate in dB-Hz. With a noise-free test signal, this will be `Inf dB-Hz`. With real signals containing noise, you'll get finite values typically in the range of 30-50 dB-Hz.
+`estimate_cn0(track_state, prn)` (or `estimate_cn0(track_state, group, prn)` on a multi-group `TrackState`) returns the CN0 estimate in dB-Hz. With a noise-free test signal, this will be `Inf dB-Hz`. With real signals containing noise, you'll get finite values typically in the range of 30-50 dB-Hz.
 
 !!! tip "Real-time loops: hoist the correlator"
     For loops that process many signal chunks in sequence (e.g. an SDR
