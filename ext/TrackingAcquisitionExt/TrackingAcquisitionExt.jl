@@ -108,7 +108,7 @@ end
 end
 
 """
-    add_satellite!(track_state, acq::AcquisitionResults; group = :default)
+    add_satellite!(track_state, acq::AcquisitionResults; group = nothing)
 
 Add (or replace) a satellite in `track_state` from an acquisition result.
 The `prn`, `code_phase`, and `carrier_doppler` are read off `acq`; the
@@ -122,26 +122,30 @@ For a group tracking `(GPS L1C-P, GPS L1C-D, GPS L1 C/A)`, hand over a
 GPS L1C-P acquisition; L1CA's 1023-chip period would alias inside
 L1C-P's 10230-chip primary.
 
-For single-group [`TrackState`](@ref)s, `group` defaults to `:default`.
-Multi-group TrackStates require an explicit `group=`.
+If `group` is left as `nothing` (the default), the routing is inferred
+by matching `acq.system` against each group's longest-primary-code
+signal — the same rule the [`TrackState(acqs; signals = ...)`](@ref)
+constructor uses. Passing an explicit `group =` keyword bypasses the
+inference and asserts the match against that specific group.
 """
 function Tracking.add_satellite!(
     track_state::TrackState,
     acq::AcquisitionResults;
-    group::Symbol = :default,
+    group::Union{Symbol,Nothing} = nothing,
 )
-    _assert_acq_matches_group(track_state, group, acq)
+    resolved = isnothing(group) ? _find_group_for_acq(track_state, acq) : group
+    _assert_acq_matches_group(track_state, resolved, acq)
     Tracking.add_satellite!(
         track_state;
         prn = acq.prn,
-        group,
+        group = resolved,
         code_phase = acq.code_phase,
         carrier_doppler = acq.carrier_doppler,
     )
 end
 
 """
-    add_satellite(track_state, acq::AcquisitionResults; group = :default)
+    add_satellite(track_state, acq::AcquisitionResults; group = nothing)
 
 Immutable variant of [`add_satellite!`](@ref). Returns a new
 [`TrackState`](@ref); the input is left unchanged.
@@ -149,28 +153,34 @@ Immutable variant of [`add_satellite!`](@ref). Returns a new
 function Tracking.add_satellite(
     track_state::TrackState,
     acq::AcquisitionResults;
-    group::Symbol = :default,
+    group::Union{Symbol,Nothing} = nothing,
 )
-    _assert_acq_matches_group(track_state, group, acq)
+    resolved = isnothing(group) ? _find_group_for_acq(track_state, acq) : group
+    _assert_acq_matches_group(track_state, resolved, acq)
     Tracking.add_satellite(
         track_state;
         prn = acq.prn,
-        group,
+        group = resolved,
         code_phase = acq.code_phase,
         carrier_doppler = acq.carrier_doppler,
     )
 end
 
 """
-    add_satellite!(track_state, acqs::AbstractVector{<:AcquisitionResults}; group = :default)
+    add_satellite!(track_state, acqs::AbstractVector{<:AcquisitionResults}; group = nothing)
 
 Batch variant: add each entry of `acqs` to `track_state`. Same validation
-as the single-acq form runs per entry. Returns `track_state`.
+as the single-acq form runs per entry. With `group = nothing` (the
+default) each acq is routed to the matching group by signal type, so a
+mixed `Vector{AcquisitionResults}` from multiple constellations lands in
+the right place. Passing an explicit `group =` keyword applies that
+group to every entry (use the single-acq form per entry if your vector
+mixes groups). Returns `track_state`.
 """
 function Tracking.add_satellite!(
     track_state::TrackState,
     acqs::AbstractVector{<:AcquisitionResults};
-    group::Symbol = :default,
+    group::Union{Symbol,Nothing} = nothing,
 )
     for acq in acqs
         Tracking.add_satellite!(track_state, acq; group)
