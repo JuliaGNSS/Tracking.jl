@@ -25,11 +25,13 @@ function is_upcoming_integration_new_bit(
 )
     num_code_blocks < 1800 && return SyncResult(false, 0, Int8(0))
     overlay = _pack_overlay(signal, prn)
-    _full_phase_search(code_block_bits, overlay, L1C_P_MAX_ERRORS)
+    # Tolerance is a percentage of the 1800-chip overlay window. The
+    # default 2.5 % discretizes to floor(0.025 × 1800) = 45 bit-flips
+    # allowed. Adjustable via
+    # `get_bit_edge_or_secondary_code_tolerance(::GPSL1C_P)`.
+    max_errors = floor(Int, get_bit_edge_or_secondary_code_tolerance(signal) * 1800)
+    _full_phase_search(code_block_bits, overlay, max_errors)
 end
-
-# 2 % tolerance for the 1800-chip overlay search (see design doc).
-const L1C_P_MAX_ERRORS = 36
 
 # Pack the ±1 secondary-code column for `prn` into a UInt1800 where bit
 # `k` is `1` iff the overlay chip at secondary-chip index `k` is `+1`.

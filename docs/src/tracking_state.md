@@ -220,13 +220,22 @@ Per-signal contract. *Min-to-fire* is the smallest `num_code_blocks` the detecto
 
 | Signal | Min-to-fire | Buffer width | Template | Tolerance | Phase | Blocks per symbol |
 |--------|-------------|--------------|----------|-----------|-------|---------------------|
-| GPS L1 C/A | 40 blocks | `UInt64` (40 bits used) | bit-edge `0xfffff` (20+20) | 3 errors | 0 | 20 |
+| GPS L1 C/A | 40 blocks | `UInt64` (40 bits used) | bit-edge `0xfffff` (20+20) | 1 error (2.5 %) | 0 | 20 |
 | Galileo E1B | n/a | `UInt8` (unused) | trivial (1 block per symbol) | n/a | 0 | 1 |
-| GPS L5I | 10 blocks | `UInt32` (20 bits used, 2 × NH10) | NH10 `0x035` shared | 2 errors | 0 | 10 (secondary code) |
+| GPS L5I | 10 blocks | `UInt32` (20 bits used, 2 × NH10) | NH10 `0x035` shared | 0 errors (2.5 % → exact match) | 0 | 10 (secondary code) |
 | GPS L1C-D | n/a | `UInt8` (unused) | trivial (1 block per symbol) | n/a | 0 | 1 |
-| GPS L1C-P | 1800 blocks | `UInt1800` (exact width) | per-PRN overlay | 36 errors (2 %) | `0..1799` | n/a (pilot) |
+| GPS L1C-P | 1800 blocks | `UInt1800` (exact width) | per-PRN overlay | 45 errors (2.5 %) | `0..1799` | n/a (pilot) |
 
 The buffer-width type threads through `BitBuffer{B}` and `TrackedSignal{Sig, B, C, PCF}` as a type parameter. The L1C-P case uses an exact-width `UInt1800` defined via `BitIntegers.@define_integers 1800`; the other signals use built-in `UInt8` / `UInt32` / `UInt64`.
+
+The 2.5 % tolerance is a package-wide default and adjustable per-signal via dispatch:
+
+```julia
+# Loosen the L1 C/A ceiling to 5 % (= 2 errors over 40 blocks) for low-C/N₀ work.
+Tracking.get_bit_edge_or_secondary_code_tolerance(::GPSL1CA) = 0.05
+```
+
+Each detector reads the trait at its call site and converts to an integer error budget via `floor(Int, tolerance × window_size)`, so the override picks up the next time `is_upcoming_integration_new_bit` runs — no `TrackState` rebuild needed. Galileo E1B and GPS L1C-D have trivially-true detectors and ignore the trait.
 
 #### Lifecycle of a `BitBuffer`
 

@@ -9,15 +9,17 @@ template `0xfffff00000` is searched in the same call via
 [`_try_match`](@ref). Returns [`SyncResult`](@ref).
 """
 @inline function is_upcoming_integration_new_bit(
-    ::GPSL1CA,
+    signal::GPSL1CA,
     ::Integer,           # PRN — ignored; same template for every PRN
     code_block_bits::B,
     num_code_blocks::Integer,
 ) where {B<:Unsigned}
     num_code_blocks < 40 && return SyncResult(false, 0, Int8(0))
-    # Tolerance 3 ≈ 7.5 % per-block error. Comfortable at ~30 dB-Hz
-    # acquisition margin without enabling false locks.
-    _try_match(code_block_bits, B(0xfffff), B(0xffffffffff), 3)
+    # Tolerance is a percentage of the 40-block window. The default
+    # 2.5 % discretizes to floor(0.025 × 40) = 1 bit-flip allowed.
+    # Adjustable via `get_bit_edge_or_secondary_code_tolerance(::GPSL1CA)`.
+    max_errors = floor(Int, get_bit_edge_or_secondary_code_tolerance(signal) * 40)
+    _try_match(code_block_bits, B(0xfffff), B(0xffffffffff), max_errors)
 end
 
 """

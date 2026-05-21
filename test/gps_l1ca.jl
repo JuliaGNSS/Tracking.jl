@@ -3,12 +3,14 @@ module GPSL1CATest
 using Test: @test, @testset, @inferred
 using Unitful: Hz
 using GNSSSignals: GPSL1CA
+import Tracking
 using Tracking:
     is_upcoming_integration_new_bit,
     get_default_correlator,
     get_code_block_buffer_type,
     default_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
+    get_bit_edge_or_secondary_code_tolerance,
     EarlyPromptLateCorrelator,
     NumAnts
 
@@ -48,13 +50,35 @@ using Tracking:
     @test @inferred(get_code_block_buffer_type(gpsl1)) === UInt64
 
     @testset "Hamming tolerance" begin
-        # Inject up to 3 bit-flips into the positive-polarity bit-edge
-        # template — must still lock.
+        # Default tolerance is 2.5 % → floor(0.025 × 40) = 1 error allowed.
+        @test @inferred(get_bit_edge_or_secondary_code_tolerance(gpsl1)) ≈ 0.025
         template = UInt64(0xfffff)
         @test is_upcoming_integration_new_bit(gpsl1, prn, template ⊻ UInt64(0x1), 40).found == true
-        @test is_upcoming_integration_new_bit(gpsl1, prn, template ⊻ UInt64(0x7), 40).found == true
-        # 4 errors → reject.
-        @test is_upcoming_integration_new_bit(gpsl1, prn, template ⊻ UInt64(0xf), 40).found == false
+        # 2 errors → reject (above the 2.5 % ceiling).
+        @test is_upcoming_integration_new_bit(gpsl1, prn, template ⊻ UInt64(0x3), 40).found == false
+    end
+end
+
+# User override of the tolerance via dispatch on
+# `get_bit_edge_or_secondary_code_tolerance`. The detector picks up the
+# override immediately — no TrackState rebuild needed.
+#
+# `Core.eval` is used so the override and its rollback execute at test
+# time rather than at module-parse time (literal method-definition
+# expressions get hoisted to module scope and the last one would win
+# unconditionally).
+@testset "GPS L1 — tolerance override" begin
+    gpsl1 = GPSL1CA()
+    template = UInt64(0xfffff)
+    Core.eval(Tracking, :(get_bit_edge_or_secondary_code_tolerance(::$GPSL1CA) = 0.10))
+    try
+        # 10 % over a 40-block window = 4 errors allowed.
+        @test is_upcoming_integration_new_bit(gpsl1, 1, template ⊻ UInt64(0xf), 40).found == true
+        # 5 errors → still reject — override raised the ceiling, not removed it.
+        @test is_upcoming_integration_new_bit(gpsl1, 1, template ⊻ UInt64(0x1f), 40).found == false
+    finally
+        # Restore the package-wide default for any tests that run after this one.
+        Core.eval(Tracking, :(get_bit_edge_or_secondary_code_tolerance(::$GPSL1CA) = 0.025))
     end
 end
 

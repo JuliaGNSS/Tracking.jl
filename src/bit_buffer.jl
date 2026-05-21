@@ -142,6 +142,48 @@ parameter chain stays type-stable at construction.
 """
 @inline get_code_block_buffer_type(::AbstractGNSSSignal) = UInt64
 
+"""
+$(SIGNATURES)
+
+Per-signal Hamming tolerance used by the bit-edge / secondary-code
+sync-search detectors, expressed as a fraction of the search window.
+
+Returns the largest **fraction** of bit-flips the per-signal
+`is_upcoming_integration_new_bit` accepts before reporting
+`found = true`. Each detector converts this to an integer error budget
+at its call site: `max_errors = floor(Int, tolerance × window_size)`.
+
+Default is `0.025` (2.5 %), which discretizes per-signal as:
+
+| Signal      | Window (blocks) | Effective `max_errors` |
+|-------------|-----------------|------------------------|
+| GPS L1 C/A  | 40              | 1                      |
+| GPS L5I     | 10              | 0 (exact match)        |
+| GPS L1C-P   | 1800            | 45                     |
+| Galileo E1B | n/a — trivial   | unused                 |
+| GPS L1C-D   | n/a — trivial   | unused                 |
+
+Galileo E1B and GPS L1C-D broadcast one channel symbol per primary
+code period, so their detectors return `SyncResult(true, 0, +1)`
+unconditionally and never invoke [`_try_match`](@ref) — the trait
+default applies but the value is ignored.
+
+# Overriding
+
+To loosen the tolerance for low-C/N₀ work, dispatch the trait on the
+signal type in your own module:
+
+```julia
+Tracking.get_bit_edge_or_secondary_code_tolerance(::GPSL1CA) = 0.05
+```
+
+The override takes effect at the next call to
+`is_upcoming_integration_new_bit` — there is no need to rebuild any
+TrackState. The trait is `@inline`'d so the override folds at the
+detector's call site.
+"""
+@inline get_bit_edge_or_secondary_code_tolerance(::AbstractGNSSSignal) = 0.025
+
 # Number of primary-code blocks that form one navigation bit.
 # Returns 0 for pilot signals (`data_frequency = 0`), where the concept is
 # undefined; callers must guard for that case before using the result.
