@@ -46,13 +46,11 @@ using Tracking:
     @test @inferred(get_code_block_buffer_type(gpsl5)) === UInt32
 
     @testset "Hamming tolerance" begin
-        # Inject up to 2 bit-flips into the positive-polarity NH10
-        # template — must still lock.
+        # 2.5 % ceiling over a 10-block window discretizes to "exact match"
+        # (floor(0.025 × 10) = 0) — any single bit-flip rejects.
         template = UInt32(0x035)
-        @test is_upcoming_integration_new_bit(gpsl5, prn, template ⊻ UInt32(0x1), 10).found == true
-        @test is_upcoming_integration_new_bit(gpsl5, prn, template ⊻ UInt32(0x3), 10).found == true
-        # 3 errors → reject.
-        @test is_upcoming_integration_new_bit(gpsl5, prn, template ⊻ UInt32(0x7), 10).found == false
+        @test is_upcoming_integration_new_bit(gpsl5, prn, template, 10).found == true
+        @test is_upcoming_integration_new_bit(gpsl5, prn, template ⊻ UInt32(0x1), 10).found == false
     end
 end
 

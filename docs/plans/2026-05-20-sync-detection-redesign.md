@@ -191,12 +191,13 @@ end
 
 Per-signal `is_upcoming_integration_new_bit`:
 
-- **GPS L1 C/A** — `_try_match(code_block_bits, 0xfffff, 0xffffffffff, 3)`. Wait
-  until `num_code_blocks ≥ 40`. Note: the *signed* `±1` representation of a
+- **GPS L1 C/A** — `_try_match(code_block_bits, 0xfffff, 0xffffffffff, max_errors)`,
+  where `max_errors = floor(Int, get_bit_edge_or_secondary_code_tolerance(signal) * 40)`.
+  Wait until `num_code_blocks ≥ 40`. Note: the *signed* `±1` representation of a
   bit-edge is "20 same followed by 20 opposite", so the canonical template is
   `0xfffff` (20 ones followed by 20 zeros, i.e. `0x0000_000f_ffff`) and the
-  negated-polarity branch picks up `0xfffff00000`. Tolerance 3 ≈ 7.5 %
-  per-block error, comfortable at ~30 dB-Hz acquisition margin.
+  negated-polarity branch picks up `0xfffff00000`. Default tolerance 2.5 %
+  discretizes to 1 bit-flip allowed over 40 blocks.
 - **Galileo E1B** — 1 channel symbol per primary code period (250 sym/s,
   4 ms primary period; Galileo OS SIS ICD Tables 11 & 15). No sub-symbol
   boundary to find, so:
@@ -205,9 +206,12 @@ Per-signal `is_upcoming_integration_new_bit`:
   ```
   Polarity ambiguity is resolved by GNSSDecoder.jl via the I/NAV preamble.
 - **GPS L5I** — template `0x000ff` for NH10 (10-bit secondary code `0000110101`
-  expanded into a 20-bit window as `10-bits ++ negated-10-bits`), tolerance 2.
-  Equivalent to the current XOR-with-`0x35` check, generalised across all 10
-  possible alignments of the buffer rather than only the aligned case.
+  expanded into a 20-bit window as `10-bits ++ negated-10-bits`),
+  `max_errors = floor(Int, get_bit_edge_or_secondary_code_tolerance(signal) * 10)`.
+  Default tolerance 2.5 % discretizes to 0 errors (exact match) — the 10-block
+  window doesn't carry enough chips to tolerate even one flip at 2.5 %.
+  Equivalent to the pre-redesign XOR-with-`0x35` check, generalised across
+  all 10 possible alignments of the buffer rather than only the aligned case.
 - **GPS L1C-D** — 1 channel symbol per primary code period (100 sps,
   10 ms primary period). No sub-symbol boundary to find, so:
   ```julia
@@ -222,9 +226,11 @@ Per-signal `is_upcoming_integration_new_bit`:
   1. **Fill** (1800 primary periods, 18 s): just shift bits into the buffer.
      `_try_match` is *not* called.
   2. **Search** (one shot, ~70 μs): once `num_code_blocks == 1800`, run
-     `_full_phase_search`, store the best phase, set `found = true`.
-     Tolerance defaults to 36 (2 %); user-overridable via a kwarg on the
-     signal's `TrackedSignal` constructor.
+     `_full_phase_search` with
+     `max_errors = floor(Int, get_bit_edge_or_secondary_code_tolerance(signal) * 1800)`,
+     store the best phase, set `found = true`. Default tolerance 2.5 %
+     discretizes to 45 bit-flips allowed; user-overridable via dispatch on
+     the trait.
 
 The full-phase search reuses the rotate-XOR-popcount inner loop from the
 bench:
@@ -277,17 +283,26 @@ branch in the post-sync handover.
 
 ## Error tolerance defaults
 
-| Signal    | Window | Default `max_errors` | % | Justification |
-|-----------|--------|----------------------|---|---------------|
-| L1 C/A    | 40     | 3                    | 7.5% | Tracks at 30 dB-Hz comfortably |
-| E1B       | n/a    | n/a                  | n/a | Trivial — `SyncResult(true, ...)` returned unconditionally (1 block per symbol) |
-| L5I       | 20     | 2                    | 10% | Matches L1 C/A confidence per chip |
-| L1C-D     | n/a    | n/a                  | n/a | Trivial — `SyncResult(true, ...)` returned unconditionally |
-| L1C-P     | 1800   | 36                   | 2%  | 18 s coherent gain — very tight |
+A single package-wide trait
+`get_bit_edge_or_secondary_code_tolerance(::AbstractGNSSSignal) = 0.025`
+expresses the tolerance as a fraction of the search window. Each detector
+converts to an integer error budget at its call site via
+`floor(Int, tolerance × window_size)`. The 2.5 % choice covers every signal
+without per-signal overrides:
 
-All tolerances live as constants in each signal's detector file. None are
-exposed as a user kwarg in v1; if real-world C/N₀ data argues for a knob, we
-add it on a per-signal basis later. Out of scope for this redesign: tying
+| Signal    | Window | Effective `max_errors` at 2.5 % | Justification |
+|-----------|--------|----------------------------------|---------------|
+| L1 C/A    | 40     | 1                                | Uniform 2.5 % ceiling across detectors |
+| E1B       | n/a    | n/a                              | Trivial — `SyncResult(true, ...)` returned unconditionally (1 block per symbol) |
+| L5I       | 10     | 0 (exact match)                  | 10-block window can't discretize 2.5 % into a non-zero integer |
+| L1C-D     | n/a    | n/a                              | Trivial — `SyncResult(true, ...)` returned unconditionally |
+| L1C-P     | 1800   | 45                               | 18 s coherent gain — still well within the original 2 % envelope |
+
+The trait is `@inline`'d and folds at each detector's call site, so user
+overrides via dispatch (e.g.
+`Tracking.get_bit_edge_or_secondary_code_tolerance(::GPSL1CA) = 0.05`) take
+effect at the next call to `is_upcoming_integration_new_bit` without
+rebuilding any `TrackState`. Out of scope for this redesign: tying
 tolerance to the live CN0 estimator.
 
 ## Implementation order

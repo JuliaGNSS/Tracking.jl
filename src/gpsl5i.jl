@@ -9,15 +9,17 @@ searched in the same call via [`_try_match`](@ref). Returns
 [`SyncResult`](@ref).
 """
 @inline function is_upcoming_integration_new_bit(
-    ::GPSL5I,
+    signal::GPSL5I,
     ::Integer,           # PRN — ignored; NH10 is shared across PRNs
     code_block_bits::B,
     num_code_blocks::Integer,
 ) where {B<:Unsigned}
     num_code_blocks < 10 && return SyncResult(false, 0, Int8(0))
-    # Tolerance 2 ≈ 10 % per-block error — matches L1 C/A's per-chip
-    # confidence (3/40 ≈ 7.5 %) within the shorter 10-block window.
-    _try_match(code_block_bits, B(0x035), B(0x3ff), 2)
+    # Tolerance is a percentage of the 10-block window. The default
+    # 2.5 % discretizes to floor(0.025 × 10) = 0 (exact match).
+    # Adjustable via `get_bit_edge_or_secondary_code_tolerance(::GPSL5I)`.
+    max_errors = floor(Int, get_bit_edge_or_secondary_code_tolerance(signal) * 10)
+    _try_match(code_block_bits, B(0x035), B(0x3ff), max_errors)
 end
 
 function get_default_correlator(gpsl5::GPSL5I, num_ants::NumAnts = NumAnts(1))

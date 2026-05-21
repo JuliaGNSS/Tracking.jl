@@ -11,10 +11,12 @@ using Tracking:
     get_code_block_buffer_type,
     default_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
+    get_bit_edge_or_secondary_code_tolerance,
     EarlyPromptLateCorrelator,
     NumAnts,
-    SyncResult,
-    L1C_P_MAX_ERRORS
+    SyncResult
+
+const L1C_P_MAX_ERRORS = floor(Int, get_bit_edge_or_secondary_code_tolerance(GPSL1C_P()) * 1800)
 
 @testset "GPS L1C-P" begin
     gpsl1c_p = GPSL1C_P()
@@ -43,7 +45,7 @@ using Tracking:
         # Build PRN 1's overlay-packed UInt1800 by reusing the internal
         # helper, then rotate-left by a known offset and feed it back.
         # The detector should recover the offset and lock at positive
-        # polarity (no bit-flips, distance 0 < L1C_P_MAX_ERRORS).
+        # polarity (no bit-flips, distance 0 ≤ get_sync_max_errors).
         overlay = Tracking._pack_overlay(gpsl1c_p, prn)
         for k in (0, 137, 1799)
             rotated = k == 0 ? overlay :
