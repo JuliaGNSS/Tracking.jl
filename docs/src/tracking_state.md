@@ -55,7 +55,7 @@ This pattern keeps the `TrackState`'s concrete type fixed across the loop — th
 
 ### Power-user: pre-built `TrackedSat`s
 
-If you need to customize the correlator or post-correlation filter type (the slot type itself), build the `TrackedSat`s yourself and hand them to the legacy constructor `TrackState(signal, sats)` or the `add_satellite!(track_state, group, sat)` escape hatch. The kwarg-based constructors only let you customize the satellite's *values*, not its concrete type.
+If you need to customize the correlator or post-correlation filter type (the slot type itself), build the `TrackedSat`s yourself and hand them to the positional constructor `TrackState(signal, sats)` or the `add_satellite!(track_state, group, sat)` escape hatch. The kwarg-based constructors only let you customize the satellite's *values*, not its concrete type.
 
 ## TrackState
 
@@ -103,7 +103,7 @@ Tracking state nests as **TrackState → SignalGroup → TrackedSat → TrackedS
 
 The trailing `sig` selector is either:
 
-- an **`Integer`** index into the sat's `signals` tuple (`1` = first signal = Doppler source) — the canonical form, unambiguous even when the same signal type appears twice in the tuple, or
+- an **`Integer`** index into the sat's `signals` tuple (`1` = first signal = estimator-driver signal) — the canonical form, unambiguous even when the same signal type appears twice in the tuple, or
 - a **signal type** like `GPSL1CA` (the bare type, not `GPSL1CA()`) — readable sugar that errors if the type appears zero or more than once in the tuple.
 
 ### What you can read
@@ -151,7 +151,7 @@ julia> add_satellite!(track_state; prn = 11, group = :modern_gps,
 julia> get_carrier_doppler(track_state, :modern_gps, 11)  # sat-level: same for all signals
 1234.0 Hz
 
-julia> get_bits(track_state, :modern_gps, 11, 1)  # per-signal by index (Doppler source)
+julia> get_bits(track_state, :modern_gps, 11, 1)  # per-signal by index (estimator-driver signal)
 0x00000000000000000000000000000000
 
 julia> get_bits(track_state, :modern_gps, 11, GPSL1CA)  # per-signal by type
@@ -175,7 +175,7 @@ In addition to the accessors listed under [Addressing satellites and signals](#A
 
 Per-signal tracking state. Carries the correlator, post-correlation filter, CN0 estimator, bit buffer, and integration-progress flags for a single signal on a satellite. A multi-signal `TrackedSat` (e.g. one tracking GPS L1 C/A + L1C-D + L1C-P) carries one `TrackedSignal` per signal in `signals::Tuple{Vararg{TrackedSignal}}`.
 
-The first signal in the tuple is the Doppler source — its correlator is what the PLL/DLL discriminator runs on.
+The first signal in the tuple is the **estimator-driver signal** — the one the Doppler estimator uses to update the satellite-shared carrier and code Doppler. With the default [`ConventionalPLLAndDLL`](@ref) / [`ConventionalAssistedPLLAndDLL`](@ref), that means `signals[1]`'s correlator is the input to the PLL/DLL discriminator. A custom [`AbstractDopplerEstimator`](@ref) may use any or all signals' state — this is a convention of the conventional estimators, not a structural constraint of `TrackedSat`.
 
 ```@docs
 TrackedSignal

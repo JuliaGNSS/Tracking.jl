@@ -168,8 +168,10 @@ The existing [`ConventionalPLLAndDLL`](@ref) implementation in
 `src/conventional_pll_and_dll.jl` shows the full pattern, including how
 the immutable and in-place forms share a `_update_tracked_sat_doppler`
 helper so they cannot drift, and how the per-signal walk distinguishes
-the Doppler-source signal (`signals[1]`, which drives the PLL/DLL) from
-the other signals (which only have their prompts filtered).
+the estimator-driver signal (`signals[1]`, which drives the conventional
+PLL/DLL) from the other signals (which only have their prompts filtered).
+That split is a convention `ConventionalPLLAndDLL` chooses — your own
+estimator can use every signal's state any way you like.
 
 ## What stays generic
 
