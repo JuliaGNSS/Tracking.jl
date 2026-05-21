@@ -68,9 +68,9 @@ julia> get_carrier_doppler(track_state, 1)
 
 Adding a satellite with the same PRN again overwrites the existing entry (matching [`merge_sats`](@ref) semantics — no error).
 
-### Tracking a signal
+### Tracking a measurement
 
-To process a signal, call the [`track`](@ref) function. The signal should be a vector of complex samples:
+To process a measurement, call the [`track`](@ref) function. The measurement should be a vector of complex samples:
 
 ```jldoctest single_signal
 julia> using GNSSSignals: gen_code, get_code_frequency, get_code_center_frequency_ratio
@@ -79,14 +79,14 @@ julia> sampling_frequency = 4e6Hz;
 
 julia> num_samples = 4000;
 
-julia> system = GPSL1CA();
+julia> signal = GPSL1CA();
 
-julia> code_frequency = 1000.0Hz * get_code_center_frequency_ratio(system) + get_code_frequency(system);
+julia> code_frequency = 1000.0Hz * get_code_center_frequency_ratio(signal) + get_code_frequency(signal);
 
-julia> signal = cis.(2π .* 1000.0Hz .* (0:num_samples-1) ./ sampling_frequency) .*
-           gen_code(num_samples, system, 1, sampling_frequency, code_frequency, 50.0);
+julia> measurement = cis.(2π .* 1000.0Hz .* (0:num_samples-1) ./ sampling_frequency) .*
+           gen_code(num_samples, signal, 1, sampling_frequency, code_frequency, 50.0);
 
-julia> track_state = track(signal, track_state, sampling_frequency);
+julia> track_state = track(measurement, track_state, sampling_frequency);
 ```
 
 After tracking, you can retrieve the updated tracking parameters and results:
