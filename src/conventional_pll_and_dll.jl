@@ -219,14 +219,14 @@ function _update_tracked_sat_doppler(
     # Walk all signals. For each one whose integration completed this
     # iteration, normalize/filter its prompt, advance CN0 and bit buffer,
     # and move its correlator to `last_fully_integrated_*`. Additionally,
-    # for `signals[1]` (the Doppler source), run PLL/DLL and update the
-    # sat-shared carrier/code Doppler.
+    # for `signals[1]` (the estimator-driver signal), run PLL/DLL and
+    # update the sat-shared carrier/code Doppler.
     pll_and_dll_state = sat.doppler_estimator_state
     head = first(sat.signals)
     tail_signals = Base.tail(sat.signals)
 
     new_head, new_doppler_estimator_state, new_carrier_doppler, new_code_doppler =
-        _process_doppler_source_signal(
+        _process_estimator_driver_signal(
             head,
             sat,
             pll_and_dll_state,
@@ -258,11 +258,14 @@ function _update_tracked_sat_doppler(
     )
 end
 
-# Process the Doppler-source signal: if its integration completed, run the
-# PLL/DLL plus prompt filter / CN0 / bit-buffer update and return new
-# values for carrier_doppler, code_doppler, and doppler_estimator_state.
-# Otherwise return unchanged values.
-@inline function _process_doppler_source_signal(
+# Process the estimator-driver signal (signals[1]): if its integration
+# completed, run the PLL/DLL plus prompt filter / CN0 / bit-buffer update
+# and return new values for carrier_doppler, code_doppler, and
+# doppler_estimator_state. Otherwise return unchanged values. This is
+# where ConventionalPLLAndDLL hard-codes the "signals[1] drives the loop
+# filter" rule — a custom AbstractDopplerEstimator may use any/all
+# signals' state.
+@inline function _process_estimator_driver_signal(
     tracked_signal::TrackedSignal,
     sat::TrackedSat,
     pll_and_dll_state::SatConventionalPLLAndDLL,
@@ -331,9 +334,10 @@ end
     return new_signal, new_doppler_estimator_state, carrier_doppler, code_doppler
 end
 
-# Process the non-Doppler-source signals: per-signal prompt filter, CN0
-# update, bit-buffer advance, correlator hand-off. No loop-filter work.
-# Walks the tuple recursively to keep type-stability and avoid boxing.
+# Process the non-driver signals (signals[2:end]): per-signal prompt
+# filter, CN0 update, bit-buffer advance, correlator hand-off. No loop-
+# filter work. Walks the tuple recursively to keep type-stability and
+# avoid boxing.
 @inline _process_passenger_signals(
     ::Tuple{}, _, _,
 ) = ()

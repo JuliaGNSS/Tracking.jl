@@ -6,7 +6,9 @@ group tracks. A *group* is a set of satellites that share the same
 signal-tuple shape (and therefore the same concrete `TrackedSat` type,
 which is what gives the hot loop type stability). Each entry in `signals`
 is a tuple of `AbstractGNSSSignal` instances; the first signal is the
-Doppler source (its correlator drives the PLL/DLL). The group key
+estimator-driver signal — the one the Doppler estimator uses to update the
+satellite-shared carrier and code Doppler (with the conventional PLL/DLL,
+it's the signal the discriminator runs on). The group key
 (`:modern_gps`, `:legacy_gps`, …) is what `add_satellite!` later refers
 to.
 
@@ -74,8 +76,8 @@ end
 
 # Build the default `ConventionalAssistedPLLAndDLL` for a TrackState
 # declared via `signal=` or `signals=`. Sized for the *most constraining*
-# (longest-T) Doppler-source signal across all declared groups — "Doppler
-# source" = `signals[1]` of each group. Picking the minimum BL across
+# (longest-T) estimator-driver signal across all declared groups — the
+# driver is `signals[1]` of each group. Picking the minimum BL across
 # groups is the safe move: a BL chosen for a longer T is always stable at
 # a shorter T, just less responsive. The two-arg validation (exactly one
 # of `signal`/`signals` set) happens later in the constructor body; if
@@ -89,7 +91,7 @@ end
     sig_groups_nt = isnothing(signal) ?
         _normalize_signal_groups(signals) :
         (default = (signal,),)
-    driver_signals = map(_doppler_source_signal, Tuple(sig_groups_nt))
+    driver_signals = map(_estimator_driver_signal, Tuple(sig_groups_nt))
     carrier_bls = map(default_carrier_loop_filter_bandwidth, driver_signals)
     code_bls = map(default_code_loop_filter_bandwidth, driver_signals)
     ConventionalAssistedPLLAndDLL(;
@@ -98,8 +100,8 @@ end
     )
 end
 
-@inline _doppler_source_signal(sigs::Tuple{Vararg{AbstractGNSSSignal}}) = first(sigs)
-@inline _doppler_source_signal(g::SignalGroup) = first(g.signals)
+@inline _estimator_driver_signal(sigs::Tuple{Vararg{AbstractGNSSSignal}}) = first(sigs)
+@inline _estimator_driver_signal(g::SignalGroup) = first(g.signals)
 
 # Bare tuple of AbstractGNSSSignal → single :default capability NamedTuple.
 @inline _normalize_signal_groups(signals::Tuple{Vararg{AbstractGNSSSignal}}) =
@@ -195,8 +197,9 @@ function _make_template_tracked_sat(
             correlator = get_default_correlator(sig, num_ants),
         )
     end
-    # signals[1] is the Doppler source. Use it to infer a sensible zero
-    # code-doppler value (the math itself doesn't matter for the template).
+    # signals[1] is the estimator-driver signal. Use it to infer a sensible
+    # zero code-doppler value (the math itself doesn't matter for the
+    # template).
     bare = TrackedSat(
         0,
         0.0,
@@ -296,9 +299,10 @@ function TrackState(
 end
 
 # Picks the most-constraining (longest-T, lowest-BL) default across all
-# per-group dicts' driver signals. Each group has at least one sat by
-# the legacy constructor's precondition (_signal_group_from_dict errors
-# on empty dicts), so reading `signals[1]` of the first sat is safe.
+# per-group dicts' estimator-driver signals. Each group has at least one
+# sat by the positional constructor's precondition
+# (_signal_group_from_dict errors on empty dicts), so reading `signals[1]`
+# of the first sat is safe.
 @inline function _default_estimator_for_satellite_dicts(satellites::SatelliteDicts)
     driver_signals = map(
         d -> first(first(d.values).signals).signal,
@@ -328,7 +332,7 @@ end
 
 # Build a SignalGroup from a non-empty satellites dictionary by recovering
 # the signal-instance tuple, band, and antenna count from any sat. Used by
-# the legacy `TrackState(signal, sats)` / `TrackState(satellites)`
+# the positional `TrackState(signal, sats)` / `TrackState(satellites)`
 # constructors. Empty dicts can't be recovered this way (no sats to inspect)
 # — requires at least one sat in the dict.
 @inline function _signal_group_from_dict(dict::Dictionary{<:Any,<:TrackedSat})

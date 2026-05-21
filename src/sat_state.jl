@@ -118,11 +118,17 @@ level carrier/code Doppler and phase (shared across all signals on this
 satellite), the per-signal correlator state in `signals::Tuple{Vararg{TrackedSignal}}`,
 and the per-satellite Doppler-estimator state in `doppler_estimator_state`.
 
-The first signal in `signals` is the Doppler-source signal — its correlator
-is what the PLL/DLL discriminator runs on. Per-satellite carrier/code Doppler
-updates therefore happen at the rate of the first signal's integration
-boundary. Other signals filter their own prompts and update their own CN0
-estimates and bit buffers on their own boundaries.
+The first signal in `signals` is the **estimator-driver signal** — the one
+the Doppler estimator uses to update the satellite-shared carrier and code
+Doppler. With the default [`ConventionalPLLAndDLL`](@ref) /
+[`ConventionalAssistedPLLAndDLL`](@ref), that means `signals[1]`'s
+correlator is what the PLL/DLL discriminator runs on, and per-satellite
+Doppler updates happen at the rate of the first signal's integration
+boundary; other signals filter their own prompts and update their own CN0
+estimates and bit buffers on their own boundaries. A user-supplied
+[`AbstractDopplerEstimator`](@ref) is free to use the other signals' state
+too — `signals[1]`'s privileged role is a convention of the conventional
+estimators, not a structural constraint of the type.
 
 The shared `code_phase` wraps at the longest code period across all signals
 including secondary code (see [`max_code_length`](@ref)).

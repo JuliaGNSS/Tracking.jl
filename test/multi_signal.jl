@@ -7,7 +7,7 @@ module MultiSignalTest
 #  1. The tuple-walking code path in `_update_tracked_sat_correlator` and
 #     `_update_tracked_sat_doppler` handles N>1 signals without error.
 #  2. Both signals' correlators accumulate.
-#  3. The PLL/DLL only fires for `signals[1]` (the Doppler source) —
+#  3. The PLL/DLL only fires for `signals[1]` (the estimator-driver signal) —
 #     `signals[2]`'s `last_fully_integrated_correlator` updates but the
 #     sat-level Doppler reflects only `signals[1]`'s discriminator.
 #

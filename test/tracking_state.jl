@@ -71,7 +71,7 @@ using Tracking:
     ]
 end
 
-@testset "Legacy TrackState(satellites::SatelliteDicts) infers default estimator" begin
+@testset "Positional TrackState(satellites::SatelliteDicts) infers default estimator" begin
     # `_default_estimator_for_satellite_dicts` picks the most-constraining
     # default across all per-system driver signals when no estimator kwarg
     # is supplied.
@@ -91,7 +91,7 @@ end
     @test length(get_sat_states(ts, :gal)) == 1
 end
 
-@testset "Legacy TrackState(dict) default estimator inference" begin
+@testset "Positional TrackState(dict) default estimator inference" begin
     # `_default_estimator_for_sats_dict` (non-empty path) sizes a default
     # estimator from the dict's first sat's driver signal.
     gpsl1 = GPSL1CA()
@@ -101,7 +101,7 @@ end
     @test length(get_sat_states(ts)) == 1
 end
 
-@testset "Legacy TrackState constructor rejects sats with a different estimator" begin
+@testset "Positional TrackState constructor rejects sats with a different estimator" begin
     # `_assert_doppler_estimator_types_match` errors when sat-state and
     # the configured estimator would produce different concrete types.
     gpsl1 = GPSL1CA()
@@ -115,7 +115,7 @@ end
 end
 
 @testset "Internal merge_sats(::SatelliteDicts, group_idx, ::Dictionary)" begin
-    # The sat-state-level helper that the legacy TrackState `merge_sats`
+    # The sat-state-level helper that the positional TrackState `merge_sats`
     # delegates to. Exercise it directly so the recursion is recorded.
     gpsl1 = GPSL1CA()
     estimator = ConventionalAssistedPLLAndDLL()
