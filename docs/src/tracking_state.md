@@ -190,10 +190,28 @@ The per-signal accessors in the table under [Addressing satellites and signals](
 
 ### Code-phase wrap period
 
-The shared `TrackedSat.code_phase` wraps at the longest code period across all signals, including secondary code. For a sat tracking L1C-P (10230 primary chips × 1800 secondary chips ≈ 18.4 M chips ≈ 18 s at 1.023 Mcps), the wrap is 18.4 M; for a sat tracking only L1 C/A (1023 chips × 1) it's 1023. The helper [`max_code_length`](@ref) returns the wrap period for any signal tuple at compile time.
+The shared `TrackedSat.code_phase` wraps at two distinct values depending on the per-signal sync state:
+
+- **Before any signal has synced** — wrap is the largest primary code length across the sat's signals. For a sat tracking only L1 C/A this is 1023 chips. The wrap is intentionally narrow at this stage because we don't yet know which data bit or secondary-code chip the current primary period belongs to.
+
+- **After a signal syncs** — its contribution to the wrap widens to one full *symbol period*: `primary × secondary_code_length` for a pilot, or `primary × blocks_per_data_bit` for a data-bearing signal. The shared wrap is then the `max` across signals, so the longest synced signal pins it.
+
+Concrete values:
+
+| Sat tracks         | Before sync | After full sync                          |
+|--------------------|-------------|------------------------------------------|
+| GPS L1 C/A only    | 1023        | 1023 × 20 = **20460** (one 50 Hz data bit) |
+| GPS L5I only       | 10230       | 10230 × 10 = **102300** (one NH10 cycle / one data bit) |
+| GPS L1C-P only     | 10230       | 10230 × 1800 ≈ **18.4 M** (one overlay-code cycle, ≈ 18 s) |
+| L1C-P + L1C-D + L1CA | 10230 (longest primary) | 18.4 M (L1C-P dominates) |
+
+The post-sync widening is what lets downstream consumers (e.g. PositionVelocityTime.jl) distinguish which primary-code period within the symbol they're currently in — `mod(code_phase, primary)` gives the per-signal replica phase, while `div(code_phase, primary)` gives the symbol-internal position.
+
+[`max_code_length`](@ref) returns the *upper bound* (the post-full-sync value) at compile time. [`current_code_wrap`](@ref) returns the *runtime* value honoring the current per-signal sync state — this is what the inner loop's `mod` actually uses.
 
 ```@docs
 max_code_length
+current_code_wrap
 ```
 
 ### Bit-sync and secondary-code-sync detection
@@ -224,7 +242,13 @@ Pilot signals (`get_data_frequency = 0 Hz`, e.g. GPS L1C-P) never enter the post
 
 #### Code-phase seeding from the secondary-code phase
 
-When a signal locks at a non-zero `secondary_phase`, that phase is used to seed `TrackedSat.code_phase` so subsequent wrap-mod-[`max_code_length`](@ref) arithmetic gives the absolute position in the longest secondary-code cycle. The seeding follows a fallback chain: the synced signal with the largest `(primary × secondary)` code length wins. Signals with `secondary_code_length == 1` (bit-edge only, e.g. GPS L1 C/A) do **not** contribute to the snap — their bit-edge alignment is captured implicitly by the post-sync accumulation counter described above, not by a chip-level code-phase offset. The accumulator carries that alignment forward across `reset(bit_buffer)` calls (its `prompt_accumulator_integrated_code_blocks` is preserved), so the bit cadence survives intra-call resets without re-syncing.
+When a signal whose detector exposes a non-zero `secondary_phase` syncs — currently only GPS L1C-P — that phase is used to seed `TrackedSat.code_phase` so subsequent wrap-mod-[`current_code_wrap`](@ref) arithmetic gives the absolute position in the longest secondary-code cycle. The seeding follows a fallback chain: the synced signal with the largest `(primary × secondary)` code length wins.
+
+Signals with `secondary_code_length == 1` (bit-edge only, e.g. GPS L1 C/A) do **not** carry an explicit `secondary_phase` to snap — there's no per-PRN overlay to recover a chip offset from. Instead, their post-sync bit-edge alignment is captured by **two complementary mechanisms**:
+
+1. The `BitBuffer.prompt_accumulator_integrated_code_blocks` counter tracks "how many of the next N primary periods have I integrated since the last bit commit." `reset(bit_buffer)` preserves it, so the bit cadence survives intra-call resets without re-syncing.
+
+2. The wrap returned by [`current_code_wrap`](@ref) widens from `primary` to `primary × blocks_per_data_bit` (e.g. 1023 → 20460 for L1 C/A) the moment `bit_buffer.found` flips to `true`. From that point on `mod(code_phase, primary)` continues to give the replica phase, while `div(code_phase, primary)` reads off which primary period within the data bit we're in. The transition is one-shot: on the call that flips `found`, `code_phase` is implicitly the start of a fresh data bit because the detector only matches at a true bit boundary (the `[0, primary)` range of `code_phase` then represents primary period 0 of the new bit), so no explicit snap is needed.
 
 ## Group accessors
 

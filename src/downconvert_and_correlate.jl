@@ -27,7 +27,13 @@ function update(
         sampling_frequency,
         sat.carrier_phase,
     )
-    code_length = max_code_length(sat.signals)
+    # Runtime wrap honors per-signal sync state: an L1-C/A-only sat
+    # wraps at 1023 before bit-edge sync and at 20460 (= 20 × 1023)
+    # after, so downstream consumers (e.g. PositionVelocityTime.jl) can
+    # distinguish which primary-code-period of the 20-block bit they're
+    # in. Pilots widen to `primary × secondary_code_length`. See
+    # [`current_code_wrap`](@ref).
+    code_length = current_code_wrap(sat.signals)
     code_phase = mod(
         code_frequency * integrated_samples / sampling_frequency + sat.code_phase,
         code_length,

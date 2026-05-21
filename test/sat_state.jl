@@ -86,13 +86,49 @@ end
     # `get_sat_state(::Dictionary)` (no identifier) returns the only sat.
     @test get_sat_state(d).prn == 11
 
-    # `max_code_length` for L1 C/A: 1023 chips × 1 secondary = 1023.
-    @test @inferred(max_code_length(sat.signals)) == 1023
+    # `max_code_length` is the upper-bound wrap for L1 C/A: 1023 chips
+    # × 20 blocks per data bit = 20460. The runtime wrap returned by
+    # `current_code_wrap` shrinks to 1023 until bit-edge sync, then
+    # widens to 20460 — exercised below.
+    @test @inferred(max_code_length(sat.signals)) == 20460
+
+    # Before sync `bit_buffer.found == false`, so `current_code_wrap`
+    # returns just the primary code length.
+    @test @inferred(Tracking.current_code_wrap(sat.signals)) == 1023
+
+    # After sync the runtime wrap widens to the full data-bit period.
+    synced_sig = Tracking.TrackedSignal(
+        only(sat.signals);
+        bit_buffer = Tracking.BitBuffer{UInt64}(
+            zero(UInt64),
+            0,
+            true,                # found
+            0,
+            Int8(+1),
+            zero(UInt128),
+            0,
+            complex(0.0, 0.0),
+            0,
+        ),
+    )
+    synced_signals = (synced_sig,)
+    @test @inferred(Tracking.current_code_wrap(synced_signals)) == 20460
 
     # `_max_code_length` recursion terminator on an empty tuple. Not
     # reachable via TrackedSat itself (signals tuple is always non-empty),
     # but exercised here so the base case counts as covered.
     @test Tracking._max_code_length(()) == 0
+    @test Tracking._current_code_wrap(()) == 0
+
+    @testset "_post_sync_code_length per signal" begin
+        # Worst-case wrap contributions across all supported signals.
+        import GNSSSignals: GalileoE1B, GPSL5I, GPSL1C_D, GPSL1C_P
+        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL1CA())) == 1023 * 20
+        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GalileoE1B())) == 4092 * 1   # 1 block per symbol
+        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL5I())) == 10230 * 10
+        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL1C_D())) == 10230 * 1
+        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL1C_P())) == 10230 * 1800
+    end
 end
 
 end
