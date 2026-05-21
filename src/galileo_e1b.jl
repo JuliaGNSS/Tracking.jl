@@ -1,23 +1,26 @@
 """
 $(SIGNATURES)
 
-Bit-sync detector for Galileo E1B.
+Symbol-sync detector for Galileo E1B.
 
-Matches the 8-bit `code_block_bits` window against the bit-edge template
-`0x0f` (4 ones followed by 4 zeros). The negated-polarity template
-`0xf0` is searched in the same call via [`_try_match`](@ref). Returns
-[`SyncResult`](@ref).
+E1B broadcasts one I/NAV channel symbol per 4 ms primary code period
+(250 sym/s; Galileo OS SIS ICD Table 11 — symbol period = primary code
+period, Table 15 — 4092 chips at 1.023 Mcps with no secondary code), so
+the buffer of primary-block signs is itself the symbol stream — there
+is no sub-symbol boundary to find. The detector therefore reports
+`found = true` from the very first integration, leaving downstream
+consumers (GNSSDecoder.jl) to resolve the residual ±1 polarity
+ambiguity via the I/NAV preamble.
+
+Same shape as the GPS L1C-D "1-block-per-symbol" case.
 """
 @inline function is_upcoming_integration_new_bit(
     ::GalileoE1B,
-    ::Integer,           # PRN — ignored; same template for every PRN
-    code_block_bits::B,
-    num_code_blocks::Integer,
-) where {B<:Unsigned}
-    num_code_blocks < 8 && return SyncResult(false, 0, Int8(0))
-    # Tolerance 1 ≈ 12.5 % per-block error — short window, but the BOC(1,1)
-    # primary code is 4 ms which gives much higher per-block SNR than L1 C/A.
-    _try_match(code_block_bits, B(0x0f), B(0xff), 1)
+    ::Integer,           # PRN — ignored
+    ::Unsigned,
+    ::Integer,
+)
+    SyncResult(true, 0, Int8(+1))
 end
 
 # TODO: Very early very late correlator?
@@ -25,5 +28,9 @@ function get_default_correlator(galileo_e1b::GalileoE1B, num_ants::NumAnts = Num
     VeryEarlyPromptLateCorrelator(; num_ants)
 end
 
-# 8-block sync-search window (2 × 4 blocks/symbol) needs at least 8 bits.
+# 1 channel symbol = 1 primary code period (250 sym/s, 4 ms primary
+# period). No sub-symbol boundary to search for — the sync-search buffer
+# is dead state at runtime; we still pick a concrete type to keep the
+# `BitBuffer{B}` parameter chain stable. UInt8 is the smallest legal
+# Unsigned.
 @inline get_code_block_buffer_type(::GalileoE1B) = UInt8

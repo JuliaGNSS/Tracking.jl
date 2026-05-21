@@ -14,27 +14,19 @@ using Tracking:
 
 @testset "Galileo E1B" begin
     galileo_e1b = GalileoE1B()
+
+    # E1B broadcasts one I/NAV channel symbol per primary code period
+    # (250 sym/s, 4 ms primary period; Galileo OS SIS ICD Tables 11 & 15)
+    # — no sub-symbol boundary to find, so the detector reports
+    # `found = true` from the start. Polarity ambiguity is resolved
+    # downstream by GNSSDecoder.jl via the I/NAV preamble.
     prn = 1
-    # 4-on-4-off bit-edge template — matched at positive polarity.
-    res = @inferred(is_upcoming_integration_new_bit(galileo_e1b, prn, UInt8(0x0f), 29))
-    @test res.found == true
-    @test res.polarity == +1
-
-    # Buffer not yet at 8 blocks.
-    @test @inferred(is_upcoming_integration_new_bit(galileo_e1b, prn, UInt8(0x0f), 6)).found == false
-
-    # Pattern is `0xc = 1100` — only 2 same/2 same, not 4+4.
-    @test @inferred(is_upcoming_integration_new_bit(galileo_e1b, prn, UInt8(0xc), 40)).found == false
-
-    res = @inferred(is_upcoming_integration_new_bit(galileo_e1b, prn, UInt8(0x0f), 8))
-    @test res.found == true
-    @test res.polarity == +1
-
-    res = @inferred(is_upcoming_integration_new_bit(galileo_e1b, prn, UInt8(0xf0), 8))
-    @test res.found == true
-    @test res.polarity == -1
-
-    sampling_frequency = 5e6Hz
+    for (bits, n) in ((UInt8(0x0), 0), (UInt8(0x1), 1), (UInt8(0xff), 32))
+        res = @inferred is_upcoming_integration_new_bit(galileo_e1b, prn, bits, n)
+        @test res.found == true
+        @test res.phase == 0
+        @test res.polarity == +1
+    end
 
     @test @inferred(get_default_correlator(galileo_e1b, NumAnts(1))) ==
           VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(1))
@@ -46,16 +38,9 @@ using Tracking:
     @test @inferred(default_carrier_loop_filter_bandwidth(galileo_e1b)) ≈ 4.5Hz
     @test @inferred(default_code_loop_filter_bandwidth(galileo_e1b)) ≈ 0.25Hz
 
-    # 8-block sync window fits in a UInt8.
+    # 1 symbol = 1 primary period; sync buffer is dead state, but a
+    # concrete type is still required.
     @test @inferred(get_code_block_buffer_type(galileo_e1b)) === UInt8
-
-    @testset "Hamming tolerance" begin
-        # Inject 1 bit-flip into the positive-polarity template — must lock.
-        template = UInt8(0x0f)
-        @test is_upcoming_integration_new_bit(galileo_e1b, prn, template ⊻ UInt8(0x1), 8).found == true
-        # 2 errors → reject.
-        @test is_upcoming_integration_new_bit(galileo_e1b, prn, template ⊻ UInt8(0x3), 8).found == false
-    end
 end
 
 end
