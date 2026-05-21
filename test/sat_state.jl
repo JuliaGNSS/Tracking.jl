@@ -122,9 +122,10 @@ end
 
     @testset "_post_sync_code_length per signal" begin
         # Worst-case wrap contributions across all supported signals.
-        import GNSSSignals: GalileoE1B, GPSL5I, GPSL1C_D, GPSL1C_P
+        import GNSSSignals: GalileoE1B, GalileoE1B_BOC11, GPSL5I, GPSL1C_D, GPSL1C_P
         @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL1CA())) == 1023 * 20
         @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GalileoE1B())) == 4092 * 1   # 1 block per symbol
+        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GalileoE1B_BOC11())) == 4092 * 1   # BOC(1,1) approximation — same 1-block-per-symbol shape
         @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL5I())) == 10230 * 10
         @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL1C_D())) == 10230 * 1
         @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL1C_P())) == 10230 * 1800

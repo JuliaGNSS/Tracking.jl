@@ -1,7 +1,10 @@
+const GalileoE1BAny = Union{GalileoE1B,GalileoE1B_BOC11}
+
 """
 $(SIGNATURES)
 
-Symbol-sync detector for Galileo E1B.
+Symbol-sync detector for Galileo E1B (both [`GalileoE1B`](@ref) and the
+BOC(1,1) approximation [`GalileoE1B_BOC11`](@ref)).
 
 E1B broadcasts one I/NAV channel symbol per 4 ms primary code period
 (250 sym/s; Galileo OS SIS ICD Table 11 — symbol period = primary code
@@ -15,7 +18,7 @@ ambiguity via the I/NAV preamble.
 Same shape as the GPS L1C-D "1-block-per-symbol" case.
 """
 @inline function is_upcoming_integration_new_bit(
-    ::GalileoE1B,
+    ::GalileoE1BAny,
     ::Integer,           # PRN — ignored
     ::Unsigned,
     ::Integer,
@@ -24,7 +27,7 @@ Same shape as the GPS L1C-D "1-block-per-symbol" case.
 end
 
 # TODO: Very early very late correlator?
-function get_default_correlator(galileo_e1b::GalileoE1B, num_ants::NumAnts = NumAnts(1))
+function get_default_correlator(::GalileoE1BAny, num_ants::NumAnts = NumAnts(1))
     VeryEarlyPromptLateCorrelator(; num_ants)
 end
 
@@ -33,4 +36,4 @@ end
 # is dead state at runtime; we still pick a concrete type to keep the
 # `BitBuffer{B}` parameter chain stable. UInt8 is the smallest legal
 # Unsigned.
-@inline get_code_block_buffer_type(::GalileoE1B) = UInt8
+@inline get_code_block_buffer_type(::GalileoE1BAny) = UInt8
