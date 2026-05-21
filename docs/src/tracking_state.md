@@ -198,19 +198,33 @@ max_code_length
 
 ### Bit-sync and secondary-code-sync detection
 
-Each per-signal `BitBuffer` runs an `is_upcoming_integration_new_bit` detector against the running buffer of primary-code-block signs. The detector returns a `SyncResult` containing whether sync was found, the secondary-code phase (chips offset within the secondary code), and the locked polarity (±1). Per-signal contract:
+Each per-signal `BitBuffer` runs an `is_upcoming_integration_new_bit` detector against the running buffer of primary-code-block signs. The detector returns a `SyncResult` containing whether sync was found, the secondary-code phase (chip offset within the secondary code, used for code-phase seeding — see below), and the locked polarity (±1).
 
-| Signal | Window | Template | Tolerance | Phase | Notes |
-|--------|--------|----------|-----------|-------|-------|
-| GPS L1 C/A | 40 blocks | bit-edge `0xfffff` (20+20) | 3 errors | 0 | 50 sps, 20 blocks per data bit |
-| Galileo E1B | 8 blocks | bit-edge `0x0f` (4+4) | 1 error | 0 | 250 sps, 1 block per symbol; trivially synced once 8 blocks buffer |
-| GPS L5I | 10 blocks | NH10 `0x035` shared | 2 errors | 0 | Secondary-code sync, 10 blocks per data bit |
-| GPS L1C-D | n/a | trivial (1 block per symbol) | n/a | 0 | 100 sps; downstream decoder resolves residual polarity |
-| GPS L1C-P | 1800 blocks | per-PRN overlay | 36 errors (2 %) | `0..1799` | Full 1800-phase shifted Hamming sweep, ~71 μs |
+Per-signal contract:
+
+| Signal | Window | Template | Tolerance | Phase | Blocks per symbol |
+|--------|--------|----------|-----------|-------|---------------------|
+| GPS L1 C/A | 40 blocks | bit-edge `0xfffff` (20+20) | 3 errors | 0 | 20 |
+| Galileo E1B | 8 blocks | bit-edge `0x0f` (4+4) | 1 error | 0 | 1 |
+| GPS L5I | 10 blocks | NH10 `0x035` shared | 2 errors | 0 | 10 (secondary code) |
+| GPS L1C-D | n/a | trivial (1 block per symbol) | n/a | 0 | 1 |
+| GPS L1C-P | 1800 blocks | per-PRN overlay | 36 errors (2 %) | `0..1799` | n/a (pilot) |
 
 The per-signal sync-search buffer width is picked by `get_code_block_buffer_type(signal)` and threads through `BitBuffer{B}` and `TrackedSignal{Sig, B, C, PCF}` as a type parameter. The L1C-P case uses an exact-width `UInt1800` (defined via `BitIntegers.@define_integers 1800`); the other signals use built-in `UInt8` / `UInt32` / `UInt64`.
 
-When a signal locks at a non-zero `secondary_phase`, that phase is used to seed `TrackedSat.code_phase` so subsequent wrap-mod-`max_code_length` arithmetic gives the absolute position in the longest secondary-code cycle. The seeding follows a fallback chain: the synced signal with the largest `(primary × secondary)` code length wins. Signals with `secondary_code_length == 1` (bit-edge only, e.g. GPS L1 C/A) don't contribute to the snap.
+#### Lifecycle of a `BitBuffer`
+
+Two distinct phases, separated by the `found::Bool` flag:
+
+1. **Pre-sync search** (`found = false`). Each completed integration shifts one bit (the sign of the prompt's real part) into `code_block_buffer::B`. `is_upcoming_integration_new_bit` is called on every shift; while it returns `SyncResult(false, ...)` the loop keeps integrating one primary code period at a time. By construction, the detector only matches at a true bit/symbol boundary — so the very call that transitions `found` to `true` lands exactly on the edge between two data symbols.
+
+2. **Post-sync accumulation** (`found = true`). The post-sync branch in `Tracking.buffer` ignores `code_block_buffer` and instead accumulates the complex prompt into `prompt_accumulator`. Each integration also bumps `prompt_accumulator_integrated_code_blocks`. Once that counter reaches the per-signal "blocks per symbol" value above — `_calc_num_code_blocks_that_form_a_bit(signal) = get_code_frequency(signal) / (get_code_length(signal) * get_data_frequency(signal))` — one decoded bit is committed to `buffer::UInt128` and the accumulator resets to zero. For Galileo E1B and GPS L1C-D the counter is `1`, so one symbol commits per integration; for GPS L1 C/A it's `20`, so the loop counts 20 primary-code periods (≈ 20 × 1023 chips = 20460 chips of `code_phase` advance, modulo wrap) per data bit; for GPS L5I it's `10`. The polarity flag flips the accumulator's sign at commit time when the detector locked at negative polarity, so downstream consumers always see `1 = data symbol 0`.
+
+Pilot signals (`get_data_frequency = 0 Hz`, e.g. GPS L1C-P) never enter the post-sync accumulation branch — their `bit_buffer` carries the recovered secondary-code phase but no decoded bits, and the post-sync work is purely the [code-phase seeding](#Code-phase-wrap-period) described next.
+
+#### Code-phase seeding from the secondary-code phase
+
+When a signal locks at a non-zero `secondary_phase`, that phase is used to seed `TrackedSat.code_phase` so subsequent wrap-mod-[`max_code_length`](@ref) arithmetic gives the absolute position in the longest secondary-code cycle. The seeding follows a fallback chain: the synced signal with the largest `(primary × secondary)` code length wins. Signals with `secondary_code_length == 1` (bit-edge only, e.g. GPS L1 C/A) do **not** contribute to the snap — their bit-edge alignment is captured implicitly by the post-sync accumulation counter described above, not by a chip-level code-phase offset. The accumulator carries that alignment forward across `reset(bit_buffer)` calls (its `prompt_accumulator_integrated_code_blocks` is preserved), so the bit cadence survives intra-call resets without re-syncing.
 
 ## Group accessors
 
