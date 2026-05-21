@@ -9,15 +9,28 @@ Tracking.jl primarily consists of two main blocks:
 Tracking.jl provides defaults for both blocks, but it provides mechanisms to hook in your own implementation (by using multiple dispatch).
 For signal down-conversion and correlation Tracking.jl provides a highly optimized CPU implementation using hand-tuned SIMD intrinsics.
 With respect to the second block Tracking.jl provides conventional DLLs and PLLs with FLL-assisted carrier tracking as the default.
-Down-conversion and correlation is done in full code blocks meaning from code start to code end or multiples of that (e.g. in GPS L1 C/A from 0 to `N`*1023). The factor `N` can be specified, but will be `1` as long as the bit start is unknown in order to find the bit start. Once that is done for every tracked satellite the result will be handed over to the code and carrier estimation block.
+
+Down-conversion and correlation is done in full code blocks meaning from code start to code end or multiples of that (e.g. in GPS L1 C/A from 0 to `N`*1023).
+The factor `N` can be specified, but will be `1` as long as the bit start is unknown — Tracking.jl uses single-code-period integrations to locate the bit edge. Once the bit start is known for every tracked satellite, longer coherent integrations become available and the result is handed over to the code-and-carrier estimation block.
+
 Moreover, Tracking.jl allows tracking of signals from phased antenna arrays meaning that they are down-converted and correlated by the very same replica to conserve phase relationships.
 Multi-signal tracking is supported: a single satellite can be tracked on several signals at once (e.g. GPS L1 C/A together with L1C-D and L1C-P) sharing one carrier downconvert per outer iteration, with a per-signal correlator each.
+
+## Supported signals
+
+- GPS L1 C/A
+- GPS L1C-D (data)
+- GPS L1C-P (pilot, with 1800-chip overlay-code sync)
+- GPS L5I
+- Galileo E1B
 
 ```@contents
 Pages = [
   "track.md",
   "tracking_state.md",
+  "bit_sync.md",
   "loop_filter.md",
+  "custom_doppler_estimator.md",
   "correlator.md",
   "cn0_estimator.md"
 ]
@@ -68,7 +81,7 @@ julia> get_code_phase(track_state, 1)
 
 `estimate_cn0(track_state, prn)` returns the CN0 estimate in dB-Hz. With a noise-free test signal it is `Inf dB-Hz`; real signals typically land in 30–50 dB-Hz.
 
-Everything beyond this minimal case — multi-satellite, multi-system, multi-signal, multi-band, phased arrays, acquisition handoff, removing satellites, the accessor ladder — is covered in [Tracking State](tracking_state.md). Real-time loop patterns (hoisting the correlator, `track!`, allocation behaviour) are covered in [Track](track.md).
+Everything beyond this minimal case — multi-satellite, multi-system, multi-signal, multi-band, phased arrays, acquisition handoff, removing satellites, the accessor ladder — is covered in [Tracking State](tracking_state.md). Real-time loop patterns (hoisting the correlator, `track!`, allocation behavior) are covered in [Track](track.md).
 
 !!! tip "Real-time loops: hoist the correlator"
     For loops processing many chunks in sequence, construct

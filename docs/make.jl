@@ -7,11 +7,12 @@ makedocs(
     format = Documenter.HTML(prettyurls = false),
     modules = [Tracking],
     doctest = true,
-    warnonly = [:missing_docs],
+    checkdocs = :exports,  # only complain about undocumented *exported* symbols
     pages = [
         "index.md",
         "track.md",
         "tracking_state.md",
+        "bit_sync.md",
         "loop_filter.md",
         "custom_doppler_estimator.md",
         "correlator.md",

@@ -9,6 +9,8 @@ The tracking state nests as **TrackState → SignalGroup → TrackedSat → Trac
 - [`TrackedSat`](@ref) — per-satellite state: shared carrier/code Doppler and phase (one set of values per satellite, since all signals on a satellite share the same carrier), a tuple of [`TrackedSignal`](@ref)s, and the per-satellite Doppler-estimator state.
 - [`TrackedSignal`](@ref) — per-signal state: correlator, post-correlation filter, CN0 estimator, bit buffer, and integration-progress flags.
 
+### Estimator-driver signal
+
 The first signal in each group's tuple is the **estimator-driver signal** — the one the Doppler estimator uses to update the satellite-shared carrier and code Doppler. With the default [`ConventionalPLLAndDLL`](@ref) / [`ConventionalAssistedPLLAndDLL`](@ref), `signals[1]`'s correlator is the input to the PLL/DLL discriminator, and the per-signal default loop bandwidths are sized off this signal's primary-code period. A user-supplied [`AbstractDopplerEstimator`](@ref) is free to use the other signals' state too — `signals[1]`'s privileged role is a convention of the conventional estimators, not a structural constraint of `TrackedSat`.
 
 ## Choosing a `TrackState` constructor
@@ -67,6 +69,69 @@ The singular `signal = GPSL1CA()` keyword is the shortcut for the common one-gro
 ### Power-user: pre-built `TrackedSat`s
 
 If you need to customize the correlator or post-correlation filter type (the slot type itself), build the `TrackedSat`s yourself and hand them to the positional constructor `TrackState(signal, sats)` or the `add_satellite!(track_state, group, sat)` escape hatch. The kwarg-based constructors only let you customize the satellite's *values*, not its concrete type.
+
+The single-signal `TrackedSat` constructor surface:
+
+```julia
+TrackedSat(
+    signal,                # e.g. GPSL1CA()
+    prn::Int,
+    code_phase,
+    carrier_doppler;
+    # all kwargs below are optional and have signal-derived defaults
+    doppler_estimator     = ConventionalAssistedPLLAndDLL(...),
+    num_ants              = NumAnts(1),
+    correlator            = get_default_correlator(signal, num_ants),
+    carrier_phase         = 0.0,
+    code_doppler          = carrier_doppler * get_code_center_frequency_ratio(signal),
+    num_prompts_for_cn0_estimation = 100,
+    post_corr_filter      = DefaultPostCorrFilter(),
+)
+```
+
+A worked example combining a narrower-than-default correlator, a custom
+post-correlation filter (beamformer), and a larger CN0 buffer. The
+beamformer here is a trivial mean-of-antennas — a real receiver would
+plug in an actual beamforming algorithm:
+
+```jldoctest power_user
+julia> using Tracking, GNSSSignals
+
+julia> using Tracking: Hz, NumAnts, AbstractPostCorrFilter
+
+julia> # Trivial beamformer — averages across antenna elements
+       struct MyBeamformer <: AbstractPostCorrFilter end
+
+julia> Tracking.update(f::MyBeamformer, prompt) = f;
+
+julia> (::MyBeamformer)(x::AbstractVector) = sum(x) / length(x);
+
+julia> (::MyBeamformer)(x) = x;
+
+julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
+           num_ants                       = NumAnts(4),
+           correlator                     = EarlyPromptLateCorrelator(
+               num_ants = NumAnts(4),
+               preferred_early_late_to_prompt_code_shift = 0.1,
+           ),
+           post_corr_filter               = MyBeamformer(),
+           num_prompts_for_cn0_estimation = 200,
+       );
+
+julia> track_state = TrackState(GPSL1CA(), sat);
+
+julia> get_num_ants(track_state, 1)
+4
+
+julia> get_correlator(track_state, 1).preferred_early_late_to_prompt_code_shift
+0.1
+```
+
+For a multi-signal satellite, the empty `TrackState(; signals = (group =
+(sig1, sig2, …),))` path will build a default template sat the first time
+you `add_satellite!` to that group; customize individual `TrackedSignal`s
+afterwards via the [`TrackedSat`](@ref) kwarg-update constructor
+(`TrackedSat(sat; signals = (...))`).
 
 ```@docs
 TrackState
@@ -175,13 +240,30 @@ julia> get_num_ants(track_state, 1)
 4
 ```
 
-By default the track function uses the first antenna channel as the reference signal to drive the discriminators. An appropriate beamforming algorithm will probably suit better — construct a [`TrackedSat`](@ref) with a custom `post_corr_filter` and hand it to `add_satellite!`'s escape-hatch overload:
+By default the track function uses the first antenna channel as the reference signal to drive the discriminators. An appropriate beamforming algorithm will probably suit better — construct a [`TrackedSat`](@ref) with a custom `post_corr_filter` and build the `TrackState` from it (so the slot type takes the custom filter type rather than the default):
 
-```julia
-sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
-                 num_ants = NumAnts(4),
-                 post_corr_filter = MyBeamformer())
-add_satellite!(track_state, :default, sat)
+```jldoctest beamformer_array
+julia> using Tracking, GNSSSignals
+
+julia> using Tracking: Hz, NumAnts, AbstractPostCorrFilter
+
+julia> # Same trivial mean-of-antennas filter as the power-user example above
+       struct MyBeamformer <: AbstractPostCorrFilter end
+
+julia> Tracking.update(f::MyBeamformer, prompt) = f;
+
+julia> (::MyBeamformer)(x::AbstractVector) = sum(x) / length(x);
+
+julia> (::MyBeamformer)(x) = x;
+
+julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
+                        num_ants = NumAnts(4),
+                        post_corr_filter = MyBeamformer());
+
+julia> track_state = TrackState(GPSL1CA(), sat);
+
+julia> get_num_ants(track_state, 1)
+4
 ```
 
 ### Acquisition handoff
@@ -368,7 +450,7 @@ The accessor's argument count tells the lookup where to stop:
 
 The trailing `sig` selector is either:
 
-- an **`Integer`** index into the sat's `signals` tuple (`1` = first signal = estimator-driver signal) — the canonical form, unambiguous even when the same signal type appears twice in the tuple, or
+- an **`Integer`** index into the sat's `signals` tuple (`1` = first signal = [estimator-driver signal](#Estimator-driver-signal)) — the canonical form, unambiguous even when the same signal type appears twice in the tuple, or
 - a **signal type** like `GPSL1CA` (the bare type, not `GPSL1CA()`) — readable sugar that errors if the type appears zero or more than once in the tuple.
 
 ### What you can read
@@ -438,10 +520,18 @@ get_signal
 TrackedSat
 ```
 
-In addition to the accessors listed under [Addressing satellites and signals](#Addressing-satellites-and-signals), a `TrackedSat` exposes:
+The sat-level accessors listed under [Addressing satellites and signals](#Addressing-satellites-and-signals) all have a single-argument form that dispatches on a `TrackedSat` directly:
 
-- `get_signals(sat)` — the tuple of [`TrackedSignal`](@ref)s.
-- `get_doppler_estimator_state(sat)` — the per-satellite Doppler-estimator state (e.g. the loop-filter integrators for the conventional PLL/DLL).
+```@docs
+get_prn(::TrackedSat)
+get_code_phase(::TrackedSat)
+get_code_doppler(::TrackedSat)
+get_carrier_phase(::TrackedSat)
+get_carrier_doppler(::TrackedSat)
+get_signal_start_sample(::TrackedSat)
+get_signals(::TrackedSat)
+get_doppler_estimator_state(::TrackedSat)
+```
 
 ## TrackedSignal
 
@@ -454,73 +544,14 @@ The per-signal accessors in the table under [Addressing satellites and signals](
 - `get_signal(tsig)` — the GNSS signal instance (e.g. `GPSL1CA()`).
 - `get_filtered_prompts(tsig)` — every filtered prompt produced during the most recent `track` call. The vector is reset at the start of each call and appended for every completed integration.
 
-### Code-phase wrap period
+### Bit sync, secondary-code sync, and the code-phase wrap
 
-The shared `TrackedSat.code_phase` wraps at two distinct values depending on the per-signal sync state:
+The mechanics of bit / secondary-code synchronization — including the
+runtime widening of `TrackedSat.code_phase` from one primary code period
+to one full symbol period, the per-signal `BitBuffer` lifecycle, and the
+code-phase seeding from a recovered secondary-code phase — have a
+dedicated page: [Bit and Secondary-Code Sync](bit_sync.md).
 
-- **Before any signal has synced** — wrap is the largest primary code length across the sat's signals. For a sat tracking only L1 C/A this is 1023 chips. The wrap is intentionally narrow at this stage because we don't yet know which data bit or secondary-code chip the current primary period belongs to.
-
-- **After a signal syncs** — its contribution to the wrap widens to one full *symbol period*: `primary × secondary_code_length` for a pilot, or `primary × blocks_per_data_bit` for a data-bearing signal. The shared wrap is then the `max` across signals, so the longest synced signal pins it.
-
-Concrete values:
-
-| Sat tracks         | Before sync | After full sync                          |
-|--------------------|-------------|------------------------------------------|
-| GPS L1 C/A only    | 1023        | 1023 × 20 = **20460** (one 50 Hz data bit) |
-| GPS L5I only       | 10230       | 10230 × 10 = **102300** (one NH10 cycle / one data bit) |
-| GPS L1C-P only     | 10230       | 10230 × 1800 ≈ **18.4 M** (one overlay-code cycle, ≈ 18 s) |
-| L1C-P + L1C-D + L1CA | 10230 (longest primary) | 18.4 M (L1C-P dominates) |
-
-The post-sync widening is what lets downstream consumers (e.g. PositionVelocityTime.jl) distinguish which primary-code period within the symbol they're currently in — `mod(code_phase, primary)` gives the per-signal replica phase, while `div(code_phase, primary)` gives the symbol-internal position.
-
-[`max_code_length`](@ref) returns the *upper bound* (the post-full-sync value) at compile time. [`current_code_wrap`](@ref) returns the *runtime* value honoring the current per-signal sync state — this is what the inner loop's `mod` actually uses.
-
-```@docs
-max_code_length
-current_code_wrap
-```
-
-### Bit-sync and secondary-code-sync detection
-
-Each per-signal `BitBuffer` runs an `is_upcoming_integration_new_bit` detector against the running buffer of primary-code-block signs. The detector returns a `SyncResult` containing whether sync was found, the secondary-code phase (chip offset within the secondary code, used for code-phase seeding — see below), and the locked polarity (±1).
-
-Per-signal contract. *Min-to-fire* is the smallest `num_code_blocks` the detector accepts before it tries a match (smaller windows return `SyncResult(false, …)` without searching). *Buffer width* is the sliding window's container type, picked by `get_code_block_buffer_type(signal)`; it's at least `2 × min-to-fire` for the symmetric-template signals so a full bit/symbol period can slide past either polarity.
-
-| Signal | Min-to-fire | Buffer width | Template | Tolerance | Phase | Blocks per symbol |
-|--------|-------------|--------------|----------|-----------|-------|---------------------|
-| GPS L1 C/A | 40 blocks | `UInt64` (40 bits used) | bit-edge `0xfffff` (20+20) | 1 error (2.5 %) | 0 | 20 |
-| Galileo E1B | n/a | `UInt8` (unused) | trivial (1 block per symbol) | n/a | 0 | 1 |
-| GPS L5I | 10 blocks | `UInt32` (20 bits used, 2 × NH10) | NH10 `0x035` shared | 0 errors (2.5 % → exact match) | 0 | 10 (secondary code) |
-| GPS L1C-D | n/a | `UInt8` (unused) | trivial (1 block per symbol) | n/a | 0 | 1 |
-| GPS L1C-P | 1800 blocks | `UInt1800` (exact width) | per-PRN overlay | 45 errors (2.5 %) | `0..1799` | n/a (pilot) |
-
-The buffer-width type threads through `BitBuffer{B}` and `TrackedSignal{Sig, B, C, PCF}` as a type parameter. The L1C-P case uses an exact-width `UInt1800` defined via `BitIntegers.@define_integers 1800`; the other signals use built-in `UInt8` / `UInt32` / `UInt64`.
-
-The 2.5 % tolerance is a package-wide default and adjustable per-signal via dispatch:
-
-```julia
-# Loosen the L1 C/A ceiling to 5 % (= 2 errors over 40 blocks) for low-C/N₀ work.
-Tracking.get_bit_edge_or_secondary_code_tolerance(::GPSL1CA) = 0.05
-```
-
-Each detector reads the trait at its call site and converts to an integer error budget via `floor(Int, tolerance × window_size)`, so the override picks up the next time `is_upcoming_integration_new_bit` runs — no `TrackState` rebuild needed. Galileo E1B and GPS L1C-D have trivially-true detectors and ignore the trait.
-
-#### Lifecycle of a `BitBuffer`
-
-Two distinct phases, separated by the `found::Bool` flag:
-
-1. **Pre-sync search** (`found = false`). Each completed integration shifts one bit (the sign of the prompt's real part) into `code_block_buffer::B`. `is_upcoming_integration_new_bit` is called on every shift; while it returns `SyncResult(false, ...)` the loop keeps integrating one primary code period at a time. By construction, the detector only matches at a true bit/symbol boundary — so the very call that transitions `found` to `true` lands exactly on the edge between two data symbols.
-
-2. **Post-sync accumulation** (`found = true`). The post-sync branch in `Tracking.buffer` ignores `code_block_buffer` and instead accumulates the complex prompt into `prompt_accumulator`. Each integration also bumps `prompt_accumulator_integrated_code_blocks`. Once that counter reaches the per-signal "blocks per symbol" value above — `_calc_num_code_blocks_that_form_a_bit(signal) = get_code_frequency(signal) / (get_code_length(signal) * get_data_frequency(signal))` — one decoded bit is committed to `buffer::UInt128` and the accumulator resets to zero. For Galileo E1B and GPS L1C-D the counter is `1`, so one symbol commits per integration; for GPS L1 C/A it's `20`, so the loop counts 20 primary-code periods (≈ 20 × 1023 chips = 20460 chips of `code_phase` advance, modulo wrap) per data bit; for GPS L5I it's `10`. The polarity flag flips the accumulator's sign at commit time when the detector locked at negative polarity, so downstream consumers always see `1 = data symbol 0`.
-
-Pilot signals (`get_data_frequency = 0 Hz`, e.g. GPS L1C-P) never enter the post-sync accumulation branch — their `bit_buffer` carries the recovered secondary-code phase but no decoded bits, and the post-sync work is purely the [code-phase seeding](#Code-phase-wrap-period) described next.
-
-#### Code-phase seeding from the secondary-code phase
-
-When a signal whose detector exposes a non-zero `secondary_phase` syncs — currently only GPS L1C-P — that phase is used to seed `TrackedSat.code_phase` so subsequent wrap-mod-[`current_code_wrap`](@ref) arithmetic gives the absolute position in the longest secondary-code cycle. The seeding follows a fallback chain: the synced signal with the largest `(primary × secondary)` code length wins.
-
-Signals with `secondary_code_length == 1` (bit-edge only, e.g. GPS L1 C/A) do **not** carry an explicit `secondary_phase` to snap — there's no per-PRN overlay to recover a chip offset from. Instead, their post-sync bit-edge alignment is captured by **two complementary mechanisms**:
-
-1. The `BitBuffer.prompt_accumulator_integrated_code_blocks` counter tracks "how many of the next N primary periods have I integrated since the last bit commit." `reset(bit_buffer)` preserves it, so the bit cadence survives intra-call resets without re-syncing.
-
-2. The wrap returned by [`current_code_wrap`](@ref) widens from `primary` to `primary × blocks_per_data_bit` (e.g. 1023 → 20460 for L1 C/A) the moment `bit_buffer.found` flips to `true`. From that point on `mod(code_phase, primary)` continues to give the replica phase, while `div(code_phase, primary)` reads off which primary period within the data bit we're in. The transition is one-shot: on the call that flips `found`, `code_phase` is implicitly the start of a fresh data bit because the detector only matches at a true bit boundary (the `[0, primary)` range of `code_phase` then represents primary period 0 of the new bit), so no explicit snap is needed.
+For day-to-day use, the only thing most users need is
+`has_bit_or_secondary_code_been_found` (per signal) to gate calls to
+`get_bits` — both are listed in the [per-signal accessor table](#What-you-can-read).

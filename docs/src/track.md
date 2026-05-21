@@ -44,9 +44,25 @@ For single-band tracking, the bare-buffer form `track!(buf, state, fs)` and the 
 
 For multi-band tracking, build one `Measurement` per band and pass them as a NamedTuple keyed by [`band_key`](@ref):
 
-```julia
-track!((l1 = Measurement(buf_l1, 4e6Hz),
-        l5 = Measurement(buf_l5, 25e6Hz)), track_state)
+```jldoctest multi_band_call
+julia> using Tracking, GNSSSignals
+
+julia> using Tracking: Hz
+
+julia> track_state = TrackState(;
+           signals = (legacy_gps_l1 = (GPSL1CA(),), gps_l5 = (GPSL5I(),)),
+       );
+
+julia> add_satellite!(track_state; prn = 1, group = :legacy_gps_l1, code_phase = 0.0, carrier_doppler = 0.0Hz);
+
+julia> add_satellite!(track_state; prn = 1, group = :gps_l5,        code_phase = 0.0, carrier_doppler = 0.0Hz);
+
+julia> buf_l1 = zeros(ComplexF64, 4000);   # 1 ms at  4 MHz
+
+julia> buf_l5 = zeros(ComplexF64, 25000);  # 1 ms at 25 MHz
+
+julia> track!((l1 = Measurement(buf_l1, 4e6Hz),
+               l5 = Measurement(buf_l5, 25e6Hz)), track_state);
 ```
 
 See [Multi-band tracking](tracking_state.md#Multi-band-tracking) for the full setup (group declaration, per-band antenna counts, duration matching).
@@ -64,9 +80,4 @@ CPUThreadedDownconvertAndCorrelator
 AbstractDownconvertAndCorrelator
 ```
 
-## Correlator sample shifts
-
-```@docs
-get_correlator_sample_shifts
-get_early_late_sample_spacing
-```
+Correlator sample shifts and the early/late spacing are documented in [Correlator](correlator.md#Sample-shifts).
