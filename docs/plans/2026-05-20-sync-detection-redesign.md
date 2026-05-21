@@ -24,9 +24,10 @@ Replace the current "exact match against an unshifted template" sync detector
 with one that **(a)** works for arbitrary template lengths up to ~1800 bits,
 **(b)** runs an explicit phase search rather than waiting for self-alignment,
 and **(c)** tolerates bit errors. This unlocks secondary-code lock on GPS
-L1C-P and tightens the existing detectors on GPS L1 C/A, Galileo E1B, and
-GPS L5I. GPS L1C-D drops to a one-block-per-symbol trivial case (no edge
-search needed, identical shape to Galileo E1B at the tracker level).
+L1C-P and tightens the existing detectors on GPS L1 C/A and GPS L5I.
+GPS L1C-D and Galileo E1B drop to one-block-per-symbol trivial cases (no
+edge search needed — each broadcasts one channel symbol per primary code
+period).
 
 ## Motivation
 
@@ -69,7 +70,7 @@ Three problems:
 | Signal     | Primary period | Symbol rate | Primary blocks per symbol | Secondary code | Sync detector input length |
 |------------|----------------|-------------|---------------------------|----------------|----------------------------|
 | GPS L1 C/A | 1 ms           | 50 Hz       | 20                        | none           | 40 bits                    |
-| Galileo E1B| 4 ms           | 250 Hz      | 1                         | none           | 8 bits                     |
+| Galileo E1B| 4 ms           | 250 Hz      | 1                         | none           | n/a (no edge to find)      |
 | GPS L5I    | 1 ms           | 100 Hz      | 10 (= secondary code)     | NH10 (shared)  | 20 bits                    |
 | GPS L1C-D  | 10 ms          | 100 Hz      | 1                         | none           | n/a (no edge to find)      |
 | GPS L1C-P  | 10 ms          | 0 Hz        | n/a (pilot)               | 1800 (per-PRN) | 1800 bits                  |
@@ -151,7 +152,7 @@ Per-signal width is set by a new trait:
 ```julia
 get_code_block_buffer_type(::AbstractGNSSSignal) = UInt64
 get_code_block_buffer_type(::GPSL1CA)            = UInt64   # need 40 bits
-get_code_block_buffer_type(::GalileoE1B)         = UInt8    # need 8 bits  (also: sync trivially true after 1 block)
+get_code_block_buffer_type(::GalileoE1B)         = UInt8    # 1 block per symbol — buffer unused; type still required
 get_code_block_buffer_type(::GPSL5I)             = UInt32   # need 20 bits
 get_code_block_buffer_type(::GPSL1C_D)           = UInt8    # 1 block per symbol — buffer unused; type still required
 get_code_block_buffer_type(::GPSL1C_P)           = UInt1800 # need 1800 bits
@@ -196,8 +197,13 @@ Per-signal `is_upcoming_integration_new_bit`:
   `0xfffff` (20 ones followed by 20 zeros, i.e. `0x0000_000f_ffff`) and the
   negated-polarity branch picks up `0xfffff00000`. Tolerance 3 ≈ 7.5 %
   per-block error, comfortable at ~30 dB-Hz acquisition margin.
-- **Galileo E1B** — same shape, 4-on-4-off template `0x0f` (or `0xf0`),
-  tolerance 1. Reduces to the current behaviour with a single error allowed.
+- **Galileo E1B** — 1 channel symbol per primary code period (250 sym/s,
+  4 ms primary period; Galileo OS SIS ICD Tables 11 & 15). No sub-symbol
+  boundary to find, so:
+  ```julia
+  is_upcoming_integration_new_bit(::GalileoE1B, _, _, _) = SyncResult(true, 0, Int8(+1))
+  ```
+  Polarity ambiguity is resolved by GNSSDecoder.jl via the I/NAV preamble.
 - **GPS L5I** — template `0x000ff` for NH10 (10-bit secondary code `0000110101`
   expanded into a 20-bit window as `10-bits ++ negated-10-bits`), tolerance 2.
   Equivalent to the current XOR-with-`0x35` check, generalised across all 10
@@ -205,12 +211,12 @@ Per-signal `is_upcoming_integration_new_bit`:
 - **GPS L1C-D** — 1 channel symbol per primary code period (100 sps,
   10 ms primary period). No sub-symbol boundary to find, so:
   ```julia
-  is_upcoming_integration_new_bit(::GPSL1C_D, _, _) = SyncResult(true, 0, Int8(+1))
+  is_upcoming_integration_new_bit(::GPSL1C_D, _, _, _) = SyncResult(true, 0, Int8(+1))
   ```
-  Identical contract to Galileo E1B (which is also 1 block per symbol).
-  Polarity ambiguity (whose "+1" is the data symbol's "0" bit?) is
-  GNSSDecoder.jl's problem — it runs its CNAV-2 preamble search at both
-  polarities and locks the one whose CRC checks out.
+  Identical contract to Galileo E1B (also 1 block per symbol). Polarity
+  ambiguity (whose "+1" is the data symbol's "0" bit?) is GNSSDecoder.jl's
+  problem — it runs its CNAV-2 preamble search at both polarities and locks
+  the one whose CRC checks out.
 - **GPS L1C-P** — full 1800-phase shifted search against the per-PRN overlay
   matrix from `get_secondary_code(signal)`. Two-stage:
   1. **Fill** (1800 primary periods, 18 s): just shift bits into the buffer.
@@ -274,7 +280,7 @@ branch in the post-sync handover.
 | Signal    | Window | Default `max_errors` | % | Justification |
 |-----------|--------|----------------------|---|---------------|
 | L1 C/A    | 40     | 3                    | 7.5% | Tracks at 30 dB-Hz comfortably |
-| E1B       | 8      | 1                    | 12.5% | Short window — single error is one chip flip |
+| E1B       | n/a    | n/a                  | n/a | Trivial — `SyncResult(true, ...)` returned unconditionally (1 block per symbol) |
 | L5I       | 20     | 2                    | 10% | Matches L1 C/A confidence per chip |
 | L1C-D     | n/a    | n/a                  | n/a | Trivial — `SyncResult(true, ...)` returned unconditionally |
 | L1C-P     | 1800   | 36                   | 2%  | 18 s coherent gain — very tight |

@@ -221,7 +221,7 @@ Per-signal contract. *Min-to-fire* is the smallest `num_code_blocks` the detecto
 | Signal | Min-to-fire | Buffer width | Template | Tolerance | Phase | Blocks per symbol |
 |--------|-------------|--------------|----------|-----------|-------|---------------------|
 | GPS L1 C/A | 40 blocks | `UInt64` (40 bits used) | bit-edge `0xfffff` (20+20) | 3 errors | 0 | 20 |
-| Galileo E1B | 8 blocks | `UInt8` (8 bits) | bit-edge `0x0f` (4+4) | 1 error | 0 | 1 |
+| Galileo E1B | n/a | `UInt8` (unused) | trivial (1 block per symbol) | n/a | 0 | 1 |
 | GPS L5I | 10 blocks | `UInt32` (20 bits used, 2 × NH10) | NH10 `0x035` shared | 2 errors | 0 | 10 (secondary code) |
 | GPS L1C-D | n/a | `UInt8` (unused) | trivial (1 block per symbol) | n/a | 0 | 1 |
 | GPS L1C-P | 1800 blocks | `UInt1800` (exact width) | per-PRN overlay | 36 errors (2 %) | `0..1799` | n/a (pilot) |
