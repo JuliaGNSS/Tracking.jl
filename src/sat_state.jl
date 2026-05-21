@@ -138,25 +138,102 @@ struct TrackedSat{Signals<:Tuple{Vararg{TrackedSignal}},D}
     doppler_estimator_state::D
 end
 
+# Worst-case wrap *length* contributed by a single signal — used both by
+# the compile-time `max_code_length` upper bound and by the runtime
+# `current_code_wrap` (which falls back to the primary-only length when
+# the signal hasn't synced yet).
+#
+# For a pilot (`data_frequency == 0`) the long wrap is one full secondary
+# code period. For a data-bearing signal it is one full data-bit period,
+# which may or may not coincide with the secondary code length:
+#   - GPS L5I: 10230 × 10 = 102300 chips (NH10 spans exactly one data
+#     bit, so the two notions agree).
+#   - GPS L1 C/A: 1023 × 20 = 20460 chips (no secondary code; the long
+#     wrap is purely the 20-block bit period).
+# We take the `max` of the two so multi-signal callers stay
+# upper-bounded by whichever is larger.
+@inline function _post_sync_code_length(tsig::TrackedSignal)
+    sig = tsig.signal
+    primary = get_code_length(sig)
+    secondary = get_secondary_code_length(sig)
+    df = get_data_frequency(sig)
+    if iszero(df)
+        primary * secondary
+    else
+        blocks_per_bit = Int(get_code_frequency(sig) / (primary * df))
+        primary * max(secondary, blocks_per_bit)
+    end
+end
+
 @inline _max_code_length(::Tuple{}) = 0
 @inline _max_code_length(t::Tuple) = max(
-    get_code_length(first(t).signal) * get_secondary_code_length(first(t).signal),
+    _post_sync_code_length(first(t)),
     _max_code_length(Base.tail(t)),
 )
 
 """
 $(SIGNATURES)
 
-The longest code period (in chips, including secondary code) across all
-signals in `signals`. Returns the constant the shared `sat.code_phase`
-wraps at — for a sat tracking only GPS L1 C/A (1023 chips × 1) this is
-1023; for one tracking L1C-P (10230 × 1800 ≈ 18.4 M) it is 18 414 000.
+Upper bound on the shared `sat.code_phase` wrap period, in chips —
+the largest value `code_phase` ever takes once *every* signal on the
+sat has synced. For a sat tracking only GPS L1 C/A this is 1023 × 20 =
+20460 (one full data bit); for one tracking L1C-P this is 10230 × 1800
+≈ 18.4 M (one full secondary-code cycle).
+
+This is the *compile-time* bound. The actual runtime wrap shrinks to
+`get_code_length(signal) × 1` for any signal whose bit/secondary-code
+sync hasn't been found yet — see [`current_code_wrap`](@ref) for the
+runtime value used by the inner loop.
 
 Implemented via tuple recursion (not `@generated`) so the heterogeneous
 walk unrolls at type-inference time; the result folds to a literal in
 the calling site for any concrete `signals` tuple type.
 """
 @inline max_code_length(signals::Tuple{Vararg{TrackedSignal}}) = _max_code_length(signals)
+
+# Runtime per-signal wrap contribution, honoring the current sync state:
+# a signal that hasn't synced yet wraps at just its primary code length
+# (we don't yet know which bit / secondary-chip we're in), so its
+# contribution to the shared wrap is `primary × 1`. Once synced its
+# contribution widens to `_post_sync_code_length(tsig)`.
+@inline function _current_code_length(tsig::TrackedSignal)
+    if tsig.bit_buffer.found
+        _post_sync_code_length(tsig)
+    else
+        get_code_length(tsig.signal)
+    end
+end
+
+@inline _current_code_wrap(::Tuple{}) = 0
+@inline _current_code_wrap(t::Tuple) = max(
+    _current_code_length(first(t)),
+    _current_code_wrap(Base.tail(t)),
+)
+
+"""
+$(SIGNATURES)
+
+The runtime wrap period for the shared `sat.code_phase`, in chips —
+the value the inner loop uses to wrap `code_phase` modulo each
+integration step.
+
+Unlike [`max_code_length`](@ref) (which is the worst-case bound), this
+honors the current per-signal sync state. For each signal:
+
+- If `bit_buffer.found = true`, the signal contributes
+  `primary × max(secondary_code_length, blocks_per_data_bit)` — i.e.
+  the full secondary-code period for pilots, or the full data-bit
+  period for data-bearing signals.
+- If `bit_buffer.found = false`, the signal contributes just its
+  primary code length — we don't yet know which bit / secondary chip
+  we're in, so wrapping at the primary length is the most we can
+  legitimately do.
+
+The shared wrap is the `max` across all signals, so the longest synced
+signal pins the wrap to its full sync period and shorter signals just
+ride along.
+"""
+@inline current_code_wrap(signals::Tuple{Vararg{TrackedSignal}}) = _current_code_wrap(signals)
 
 # Phase-snap fallback chain: walk `signals` and pick the synced signal
 # whose `(primary × secondary)` code length is the largest. That signal's
