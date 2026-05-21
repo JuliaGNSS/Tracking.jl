@@ -1,62 +1,21 @@
 # Track
 
-The `track` function is the main entry point for processing GNSS signals. It takes an incoming signal and a `TrackState`, performs downconversion and correlation for all tracked satellites, estimates Doppler frequencies, and returns an updated `TrackState`.
-
-For hard real-time SDR loops where GC pauses must be avoided, an in-place
-counterpart [`track!`](@ref) is provided that mutates `TrackState` instead
-of rebuilding new immutable wrappers. After one warmup call (to seat the
-`filtered_prompts` buffer's capacity), the single-threaded `track!` path
-is **fully allocation-free**; the threaded path keeps a small irreducible
-per-call residual from Polyester's `@batch` closure capture (160 B per
-GNSS system).
-
-!!! tip "Hoist the correlator outside the hot loop"
-    Both [`CPUDownconvertAndCorrelator`](@ref) and
-    [`CPUThreadedDownconvertAndCorrelator`](@ref) hold long-lived per-thread
-    scratch buffers that grow on first use and are reused thereafter.
-    **Construct the correlator once outside the `track`/`track!` loop**
-    and pass it via the `downconvert_and_correlator =` keyword argument —
-    relying on the default kwarg value rebuilds the scratch buffers on
-    every call, which defeats the allocation-free design. This applies
-    to both `track` (immutable) and `track!` (in-place); both default to
-    `CPUThreadedDownconvertAndCorrelator()`.
-
-## Function Reference
+[`track`](@ref) is the main entry point: it takes an incoming measurement and a [`TrackState`](@ref), runs downconversion + correlation for every tracked satellite, drives the Doppler estimator, and returns the updated `TrackState`. [`track!`](@ref) is the in-place counterpart for hard real-time loops where GC pauses must be avoided — after one warmup call (to seat the `filtered_prompts` buffer's capacity), the single-threaded `track!` path is **fully allocation-free**; the threaded path keeps a small irreducible per-call residual from Polyester's `@batch` closure capture (160 B per GNSS system).
 
 ```@docs
 track
 track!
 ```
 
-## Optional Parameters
+## Optional parameters
 
-- `downconvert_and_correlator`: The downconversion and correlation implementation to use. Defaults to `CPUThreadedDownconvertAndCorrelator()`. **For real-time loops, hoist this outside the loop** (see the tip above).
-- `intermediate_frequency`: The intermediate frequency of the signal. Defaults to `0.0Hz`. Only accepted on the bare-buffer form `track!(buf, state, fs; intermediate_frequency = ...)`; for the [`Measurement`](@ref) and multi-band forms the IF lives on each `Measurement`.
-- `preferred_num_code_blocks_to_integrate`: The preferred number of code blocks to integrate. Defaults to `1`. Will only integrate more than one block once bit synchronization has been achieved.
+- `downconvert_and_correlator` — the downconversion and correlation implementation. Defaults to `CPUThreadedDownconvertAndCorrelator()`. **For real-time loops, hoist this outside the loop** (see below).
+- `intermediate_frequency` — the IF of the signal. Defaults to `0.0Hz`. Only accepted on the bare-buffer form `track!(buf, state, fs; intermediate_frequency = ...)`; on the [`Measurement`](@ref) and multi-band forms the IF lives on each `Measurement`.
+- `preferred_num_code_blocks_to_integrate` — preferred number of code blocks to integrate. Defaults to `1`. Only takes effect once bit synchronization has been achieved.
 
-## Measurement
+## Real-time loops
 
-One band's incoming sample buffer plus the front-end metadata needed to process it. Bundles `samples` with `sampling_frequency` and `intermediate_frequency` — these are inseparable in practice, and the bundle removes the chance of mismatched parallel NamedTuples in a multi-band `track` call.
-
-For multi-band tracking, build one `Measurement` per band and pass them as a NamedTuple keyed by [`band_key`](@ref):
-
-```julia
-track!((l1 = Measurement(buf_l1, 4e6Hz),
-        l5 = Measurement(buf_l5, 25e6Hz)), track_state)
-```
-
-For single-band tracking, the bare-buffer form `track!(buf, state, fs)` and the single-`Measurement` form `track!(Measurement(buf, fs), state)` both auto-wrap into a one-entry NamedTuple internally.
-
-```@docs
-Measurement
-Measurements
-```
-
-## Real-time use
-
-`track!` writes back into the existing `Vector{TrackedSat}` slots of each
-per-group dictionary, so the tracking loop can run without producing
-GC pressure once the sat set is steady. A typical setup looks like:
+A typical receiver loop builds the `TrackState` once, hoists the correlator outside the loop, and calls `track!` per chunk:
 
 ```julia
 track_state = TrackState(; signal = GPSL1CA())
@@ -67,22 +26,37 @@ dc = CPUThreadedDownconvertAndCorrelator()  # hoist outside the loop
 
 while got_signal_chunk(rx)
     chunk = read_chunk!(rx)
-    track!(chunk, track_state, sampling_freq;
-        downconvert_and_correlator = dc)
+    track!(chunk, track_state, sampling_frequency;
+           downconvert_and_correlator = dc)
     # ... read per-sat state e.g. via get_sat_state(track_state, group, prn) ...
 end
 ```
 
-Hoisting `dc` is what makes the loop allocation-free: each correlator holds
-long-lived per-thread scratch buffers that grow on first use and are reused
-thereafter. Calling `track!` without the kwarg works, but rebuilds the
-buffers on every call.
+Both [`CPUDownconvertAndCorrelator`](@ref) and [`CPUThreadedDownconvertAndCorrelator`](@ref) hold long-lived per-thread scratch buffers that grow on first use and are reused thereafter. Relying on the default kwarg value rebuilds them on every call, which defeats the allocation-free design. This applies to both `track` (immutable) and `track!` (in-place).
 
-The first `track!` call may also grow each signal's `filtered_prompts`
-buffer via `push!` reallocations; from the second call onwards the capacity
-is settled.
+`track!` writes back into the existing `Vector{TrackedSat}` slots of each per-group dictionary, so the tracking loop runs without GC pressure once the sat set is steady. The first `track!` call may grow each signal's `filtered_prompts` buffer via `push!`; from the second call onwards the capacity is settled.
 
-## Downconversion and Correlation
+## Measurement
+
+One band's incoming sample buffer plus the front-end metadata needed to process it. Bundles `samples` with `sampling_frequency` and `intermediate_frequency` — these are inseparable in practice, and the bundle removes the chance of mismatched parallel NamedTuples in a multi-band `track` call.
+
+For single-band tracking, the bare-buffer form `track!(buf, state, fs)` and the single-`Measurement` form `track!(Measurement(buf, fs), state)` both auto-wrap into a one-entry NamedTuple internally — see the [Quick start](index.md#Quick-start) for the bare-buffer form.
+
+For multi-band tracking, build one `Measurement` per band and pass them as a NamedTuple keyed by [`band_key`](@ref):
+
+```julia
+track!((l1 = Measurement(buf_l1, 4e6Hz),
+        l5 = Measurement(buf_l5, 25e6Hz)), track_state)
+```
+
+See [Multi-band tracking](tracking_state.md#Multi-band-tracking) for the full setup (group declaration, per-band antenna counts, duration matching).
+
+```@docs
+Measurement
+Measurements
+```
+
+## Downconversion and correlation
 
 ```@docs
 CPUDownconvertAndCorrelator
@@ -90,7 +64,7 @@ CPUThreadedDownconvertAndCorrelator
 AbstractDownconvertAndCorrelator
 ```
 
-## Correlator Sample Shifts
+## Correlator sample shifts
 
 ```@docs
 get_correlator_sample_shifts

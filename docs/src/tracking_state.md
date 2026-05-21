@@ -2,6 +2,15 @@
 
 Tracking.jl uses a small hierarchy of state types to manage tracking across multiple satellites, multiple signals per satellite, multiple signal groups, and multiple RF bands.
 
+The tracking state nests as **TrackState → SignalGroup → TrackedSat → TrackedSignal**:
+
+- [`TrackState`](@ref) — top-level container; holds a `NamedTuple` of [`SignalGroup`](@ref)s plus the Doppler-estimator configuration.
+- [`SignalGroup`](@ref) — named group of sats that share the same signal-tuple shape (and therefore the same concrete `TrackedSat` value type, which is what gives the hot loop type stability). Each group also carries its RF band and antenna count.
+- [`TrackedSat`](@ref) — per-satellite state: shared carrier/code Doppler and phase (one set of values per satellite, since all signals on a satellite share the same carrier), a tuple of [`TrackedSignal`](@ref)s, and the per-satellite Doppler-estimator state.
+- [`TrackedSignal`](@ref) — per-signal state: correlator, post-correlation filter, CN0 estimator, bit buffer, and integration-progress flags.
+
+The first signal in each group's tuple is the **estimator-driver signal** — the one the Doppler estimator uses to update the satellite-shared carrier and code Doppler. With the default [`ConventionalPLLAndDLL`](@ref) / [`ConventionalAssistedPLLAndDLL`](@ref), `signals[1]`'s correlator is the input to the PLL/DLL discriminator, and the per-signal default loop bandwidths are sized off this signal's primary-code period. A user-supplied [`AbstractDopplerEstimator`](@ref) is free to use the other signals' state too — `signals[1]`'s privileged role is a convention of the conventional estimators, not a structural constraint of `TrackedSat`.
+
 ## Choosing a `TrackState` constructor
 
 `TrackState` has several constructors. The right choice depends on **when you know which satellites you'll track**.
@@ -53,22 +62,276 @@ end
 
 This pattern keeps the `TrackState`'s concrete type fixed across the loop — the satellite-dict's slot type is frozen at construction, so the tracking hot path stays type-stable as sats come and go.
 
+The singular `signal = GPSL1CA()` keyword is the shortcut for the common one-group, one-signal case. It desugars internally to `signals = (default = (GPSL1CA(),),)`, so the rest of the API can stay uniform. With one group, [`add_satellite!`](@ref) may omit the `group =` keyword.
+
 ### Power-user: pre-built `TrackedSat`s
 
 If you need to customize the correlator or post-correlation filter type (the slot type itself), build the `TrackedSat`s yourself and hand them to the positional constructor `TrackState(signal, sats)` or the `add_satellite!(track_state, group, sat)` escape hatch. The kwarg-based constructors only let you customize the satellite's *values*, not its concrete type.
 
-## TrackState
-
-The main container for all tracking state. It holds:
-
-- `groups` — a `NamedTuple` of [`SignalGroup`](@ref)s. Each group bundles its satellites dictionary, signal-instance tuple, band, and antenna count.
-- `doppler_estimator` — the Doppler estimator configuration (e.g. PLL/DLL bandwidths).
-
-To reach per-group state, index `track_state.groups` by the group's key (e.g. `track_state.groups[:legacy_gps].satellites`). The high-level accessors below ([`get_sat_states`](@ref), [`get_sat_state`](@ref), …) take the group key as an argument and fold to compile-time constants when the groups type is known.
-
 ```@docs
 TrackState
 ```
+
+## Adding satellites
+
+Satellites are added to a `TrackState` via [`add_satellite!`](@ref). The acquisition handoff values (`prn`, `code_phase`, `carrier_doppler`, optionally `code_doppler` and `carrier_phase`) get wired into a fresh [`TrackedSat`](@ref) with the library's default correlator and post-correlation filter. Adding a satellite with the same PRN again overwrites the existing entry (matching [`merge_sats`](@ref) semantics — no error).
+
+### Multi-satellite tracking
+
+To track several satellites on the same signal, simply call `add_satellite!` repeatedly:
+
+```jldoctest multi_sat
+julia> using Tracking, GNSSSignals
+
+julia> using Tracking: Hz
+
+julia> track_state = TrackState(; signal = GPSL1CA());
+
+julia> add_satellite!(track_state; prn = 1,  code_phase = 50.0,  carrier_doppler = 1000.0Hz);
+
+julia> add_satellite!(track_state; prn = 5,  code_phase = 120.0, carrier_doppler = -500.0Hz);
+
+julia> add_satellite!(track_state; prn = 17, code_phase = 890.0, carrier_doppler = 2000.0Hz);
+
+julia> get_carrier_doppler(track_state, 5)
+-500.0 Hz
+
+julia> get_code_phase(track_state, 17)
+890.0
+```
+
+### Multi-system tracking (different signals on different sats)
+
+When different satellites carry different signal types, use multiple named groups. Each group has its own concrete `TrackedSat` value type, so type inference stays sharp across the heterogeneous mix.
+
+```jldoctest multi_system
+julia> using Tracking, GNSSSignals
+
+julia> using Tracking: Hz
+
+julia> track_state = TrackState(;
+           signals = (
+               gps     = (GPSL1CA(),),
+               galileo = (GalileoE1B(),),
+           ),
+       );
+
+julia> add_satellite!(track_state; prn = 1,  group = :gps,     code_phase = 50.0,  carrier_doppler = 1000.0Hz);
+
+julia> add_satellite!(track_state; prn = 11, group = :galileo, code_phase = 200.0, carrier_doppler = -300.0Hz);
+
+julia> get_carrier_doppler(track_state, :gps, 1)
+1000.0 Hz
+
+julia> get_carrier_doppler(track_state, :galileo, 11)
+-300.0 Hz
+```
+
+### Multi-signal tracking (one satellite, several signals)
+
+A modern GPS satellite transmits L1 C/A, L1C-D, and L1C-P simultaneously on the same carrier. Tracking.jl can track all three together on one satellite, sharing a single carrier downconvert per outer iteration:
+
+```jldoctest modern_gps
+julia> using Tracking, GNSSSignals
+
+julia> using Tracking: Hz
+
+julia> track_state = TrackState(;
+           signals = (
+               modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),
+           ),
+       );
+
+julia> add_satellite!(track_state;
+           prn = 11, group = :modern_gps,
+           code_phase = 0.0, carrier_doppler = 1234.0Hz,
+       );
+
+julia> get_carrier_doppler(track_state, :modern_gps, 11)
+1234.0 Hz
+```
+
+Putting a pilot signal first (e.g. `GPSL1C_P()`) is encouraged with the conventional estimators when one is available: pilot signals carry no data-bit modulation, which lets the PLL run longer coherent integrations and reach lower phase-noise floors. The data-bearing signals (L1C-D, L1 C/A) still recover their navigation bits independently — each [`TrackedSignal`](@ref) carries its own `bit_buffer` regardless of which signal drives the estimator.
+
+When a satellite tracks signals with different primary-code lengths (e.g. L1 C/A at 1 ms vs L1C-P at 10 ms), each outer iteration integrates to the **shortest** signal's next primary-code boundary. The shorter signal's correlator completes every iteration; the longer signal's correlator accumulates across multiple iterations and only marks `is_integration_completed = true` on its own boundary. Doppler updates therefore happen at the shortest signal's cadence (1 ms in this example), and longer signals see their integration windows spanned by piecewise Doppler updates — the natural per-iteration-Doppler-correction behaviour of a real receiver.
+
+### Phased-array tracking
+
+To track signals coherently across an antenna array, pass a `Matrix` measurement (rows = samples, columns = antenna elements) and declare the number of antennas at `TrackState` construction:
+
+```jldoctest phased_array
+julia> using Tracking, GNSSSignals
+
+julia> using Tracking: Hz
+
+julia> track_state = TrackState(;
+           signal = GPSL1CA(),
+           num_ants = NumAnts(4),
+       );
+
+julia> add_satellite!(track_state; prn = 1, code_phase = 50.0, carrier_doppler = 1000.0Hz);
+
+julia> get_num_ants(track_state, 1)
+4
+```
+
+By default the track function uses the first antenna channel as the reference signal to drive the discriminators. An appropriate beamforming algorithm will probably suit better — construct a [`TrackedSat`](@ref) with a custom `post_corr_filter` and hand it to `add_satellite!`'s escape-hatch overload:
+
+```julia
+sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
+                 num_ants = NumAnts(4),
+                 post_corr_filter = MyBeamformer())
+add_satellite!(track_state, :default, sat)
+```
+
+### Acquisition handoff
+
+When the [Acquisition.jl](https://github.com/JuliaGNSS/Acquisition.jl) extension is loaded (via `using Acquisition`), [`add_satellite!`](@ref) / [`add_satellite`](@ref) gain `AcquisitionResults` overloads that read `prn` / `code_phase` / `carrier_doppler` straight off the acq result. With `group = nothing` (the default) the routing is inferred by matching `acq.system` against each group's longest-primary-code signal; pass an explicit `group =` to bypass the inference. The batch form takes an `AbstractVector{<:AcquisitionResults}` and routes each entry independently — convenient for the `filter(is_detected, acquire(...))` pipeline.
+
+```julia
+using Acquisition  # loads the extension
+
+# Single acq
+add_satellite!(ts, acq)                       # auto-route
+add_satellite!(ts, acq; group = :legacy_gps)  # explicit group, asserts match
+
+# Vector of acqs (mixed constellations OK)
+add_satellite!(ts, filter(is_detected, acqs))
+```
+
+`acq.system` must match the **longest-primary-code** signal in the target group's tuple — its code phase is the only one that's unambiguous when the group tracks multiple signals on shared chips. Hand over an L1C-P acq (not L1 C/A) for a group tracking `(GPSL1C_P(), GPSL1C_D(), GPSL1CA())`.
+
+### Removing satellites
+
+```jldoctest remove_sats
+julia> using Tracking, GNSSSignals
+
+julia> using Tracking: Hz
+
+julia> track_state = TrackState(; signal = GPSL1CA());
+
+julia> add_satellite!(track_state; prn = 1,  code_phase = 50.0,  carrier_doppler = 1000.0Hz);
+
+julia> add_satellite!(track_state; prn = 23, code_phase = 500.0, carrier_doppler = 1500.0Hz);
+
+julia> remove_satellite!(track_state; prn = 1);
+
+julia> haskey(get_sat_states(track_state, :default), 23)
+true
+
+julia> haskey(get_sat_states(track_state, :default), 1)
+false
+```
+
+```@docs
+add_satellite!
+add_satellite
+remove_satellite!
+remove_satellite
+merge_sats
+```
+
+## Multi-band tracking
+
+A satellite often broadcasts on more than one RF band — GPS broadcasts on L1 (1575.42 MHz) and L5 (1176.45 MHz); Galileo broadcasts on E1 (L1) and E5a (L5). In a multi-band receiver these arrive from separate front-ends, generally at different sample rates, and need to be downconverted and correlated against their own carrier replicas. Tracking.jl exposes this as a multi-band `TrackState` where each group declares which RF band it sits on.
+
+**Why this matters.** A single physical satellite tracked on two bands gives the receiver two near-independent observations of the same path. The classic uses:
+
+- **Ionospheric correction** via dual-frequency (iono-free) pseudorange combinations.
+- **Wider effective bandwidth** for code-phase observations (L5 carries far more chip-rate bandwidth than L1 C/A).
+- **Cross-band-aided tracking**: the carrier Doppler ratio between L1 and L5 is exactly the ratio of their RF carrier frequencies. A joint estimator can fuse the two bands' discriminators and produce a more accurate Doppler estimate than either band alone — particularly valuable at low CN0 where the wider data-aided integration on L5 helps the noisier L1 C/A.
+
+This release ships the **structural enablers** for multi-band: per-band groups, per-band measurement routing, an estimation barrier that sees every band's correlator outputs at once. The cross-band joint-tracking *algorithm* (e.g. linking PRN-X-on-L1 with PRN-X-on-L5 in one estimator step) is a follow-up — see [docs/plans/2026-05-15-multi-band-tracking-design.md](https://github.com/JuliaGNSS/Tracking.jl/blob/master/docs/plans/2026-05-15-multi-band-tracking-design.md) for the design and the open mechanism question.
+
+### Declaring bands
+
+The `band` field of each [`SignalGroup`](@ref) is inferred from `get_band(signals[1])`, so you don't normally type it. Mix signals from different bands in the same `signals = (...)` keyword and the bands fall out:
+
+```jldoctest multi_band_groups
+julia> using Tracking, GNSSSignals
+
+julia> track_state = TrackState(;
+           signals = (
+               legacy_gps_l1 = (GPSL1CA(),),
+               modern_gps_l1 = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),
+               galileo       = (GalileoE1B(),),
+               gps_l5        = (GPSL5I(),),
+           ),
+       );
+
+julia> keys(track_state.groups)
+(:legacy_gps_l1, :modern_gps_l1, :galileo, :gps_l5)
+```
+
+Four groups, two distinct bands — the first three groups all sit on L1 (GPS L1 and Galileo E1 share the 1575.42 MHz carrier), the fourth sits on L5. Two groups sharing a band is fine; the grouping partitions satellites by *signal-tuple shape* (the type-stability axis), not by band.
+
+### Tracking against multiple measurements
+
+For multi-band tracking, build one [`Measurement`](@ref) per band — bundling sample buffer and front-end metadata — and pass them as a NamedTuple keyed by [`band_key`](@ref):
+
+```jldoctest multi_band_track; filter = r"[0-9]+\.[0-9]+" => "***"
+julia> using Tracking, GNSSSignals
+
+julia> using Tracking: Hz
+
+julia> using GNSSSignals: gen_code, get_code_frequency, get_code_center_frequency_ratio
+
+julia> function make_signal(sys, prn, carrier_doppler, num_samples, fs)
+           code_freq = carrier_doppler * get_code_center_frequency_ratio(sys) + get_code_frequency(sys)
+           range = 0:num_samples-1
+           cis.(2π .* carrier_doppler .* range ./ fs) .*
+               gen_code(num_samples, sys, prn, fs, code_freq, 0.0)
+       end;
+
+julia> track_state = TrackState(;
+           signals = (legacy_gps_l1 = (GPSL1CA(),), gps_l5 = (GPSL5I(),)),
+       );
+
+julia> add_satellite!(track_state; prn = 1, group = :legacy_gps_l1, code_phase = 0.0, carrier_doppler = 200Hz);
+
+julia> add_satellite!(track_state; prn = 1, group = :gps_l5, code_phase = 0.0, carrier_doppler = -150Hz);
+
+julia> buf_l1 = make_signal(GPSL1CA(),  1, 200Hz,  4000,  4e6Hz);  # 1 ms at 4 MHz
+
+julia> buf_l5 = make_signal(GPSL5I(),   1, -150Hz, 25000, 25e6Hz); # 1 ms at 25 MHz
+
+julia> track!((l1 = Measurement(buf_l1, 4e6Hz),
+               l5 = Measurement(buf_l5, 25e6Hz)), track_state);
+
+julia> get_carrier_doppler(track_state, :legacy_gps_l1, 1)
+200.00000359633913 Hz
+```
+
+The keys (`:l1`, `:l5`) come from `band_key(L1())` and `band_key(L5())`. All measurements must cover the **exact same observation duration** — `num_samples / sampling_frequency` must compare equal across bands. An L1 chunk of 4000 samples at 4 MHz and an L5 chunk of 25000 samples at 25 MHz both cover 1 ms, so they're compatible; an L5 chunk of 25001 samples is rejected.
+
+### Per-band antenna counts
+
+Different bands often come from different front-ends with different antenna arrangements. To declare per-band antenna counts, pass [`SignalGroup`](@ref) instances directly as the entries — the bare-tuple shortcut uses the constructor's single `num_ants` kwarg for all groups, but the `SignalGroup` form lets each group set its own:
+
+```jldoctest per_band_ants
+julia> using Tracking, GNSSSignals
+
+julia> using Tracking: NumAnts
+
+julia> track_state = TrackState(;
+           signals = (
+               legacy_gps_l1 = SignalGroup((GPSL1CA(),); num_ants = NumAnts(2)),
+               gps_l5        = SignalGroup((GPSL5I(),);  num_ants = NumAnts(1)),
+           ),
+       );
+
+julia> track_state.groups[:legacy_gps_l1].num_ants
+NumAnts{2}()
+
+julia> track_state.groups[:gps_l5].num_ants
+NumAnts{1}()
+```
+
+Two groups on the same band must declare the same `num_ants` — they share a physical front-end. The constructor errors at TrackState construction if they disagree.
+
+### Bare-buffer compatibility
+
+A single-band receiver doesn't need to type any of this. The bare-buffer call `track!(buf, state, fs)` keeps working for any `TrackState` that spans exactly one band — internally it wraps the buffer into a one-entry NamedTuple keyed by the lone band. Pass `intermediate_frequency` via the same kwarg as before, or move it onto a [`Measurement`](@ref) when you migrate to multi-band.
 
 ## SignalGroup
 
@@ -81,7 +344,7 @@ SignalGroup
 SignalGroups
 ```
 
-## Band routing
+### Band routing
 
 The mapping between GNSSSignals `Band` instances and the `Symbol` keys used in multi-band measurement collections (see [`Measurement`](@ref)).
 
@@ -92,7 +355,9 @@ band_keys
 
 ## Addressing satellites and signals
 
-Tracking state nests as **TrackState → SignalGroup → TrackedSat → TrackedSignal**, and the accessor functions accept a matching ladder of arguments. The accessor's argument count tells the lookup where to stop:
+To reach per-group state, index `track_state.groups` by the group's key (e.g. `track_state.groups[:legacy_gps].satellites`). The high-level accessors below ([`get_sat_states`](@ref), [`get_sat_state`](@ref), …) take the group key as an argument and fold to compile-time constants when the groups type is known.
+
+The accessor's argument count tells the lookup where to stop:
 
 | Form | Meaning |
 |------|---------|
@@ -158,9 +423,16 @@ julia> get_bits(track_state, :modern_gps, 11, GPSL1CA)  # per-signal by type
 0x00000000000000000000000000000000
 ```
 
-## TrackedSat
+### Group accessors
 
-Per-satellite tracking state. Carries the shared carrier and code Doppler and phase (one set of values per satellite, since all signals on a satellite share the same carrier), a tuple of per-signal [`TrackedSignal`](@ref) states, and the per-satellite Doppler-estimator state.
+```@docs
+SatelliteDicts
+get_sat_states
+get_sat_state
+get_signal
+```
+
+## TrackedSat
 
 ```@docs
 TrackedSat
@@ -172,10 +444,6 @@ In addition to the accessors listed under [Addressing satellites and signals](#A
 - `get_doppler_estimator_state(sat)` — the per-satellite Doppler-estimator state (e.g. the loop-filter integrators for the conventional PLL/DLL).
 
 ## TrackedSignal
-
-Per-signal tracking state. Carries the correlator, post-correlation filter, CN0 estimator, bit buffer, and integration-progress flags for a single signal on a satellite. A multi-signal `TrackedSat` (e.g. one tracking GPS L1 C/A + L1C-D + L1C-P) carries one `TrackedSignal` per signal in `signals::Tuple{Vararg{TrackedSignal}}`.
-
-The first signal in the tuple is the **estimator-driver signal** — the one the Doppler estimator uses to update the satellite-shared carrier and code Doppler. With the default [`ConventionalPLLAndDLL`](@ref) / [`ConventionalAssistedPLLAndDLL`](@ref), that means `signals[1]`'s correlator is the input to the PLL/DLL discriminator. A custom [`AbstractDopplerEstimator`](@ref) may use any or all signals' state — this is a convention of the conventional estimators, not a structural constraint of `TrackedSat`.
 
 ```@docs
 TrackedSignal
@@ -256,39 +524,3 @@ Signals with `secondary_code_length == 1` (bit-edge only, e.g. GPS L1 C/A) do **
 1. The `BitBuffer.prompt_accumulator_integrated_code_blocks` counter tracks "how many of the next N primary periods have I integrated since the last bit commit." `reset(bit_buffer)` preserves it, so the bit cadence survives intra-call resets without re-syncing.
 
 2. The wrap returned by [`current_code_wrap`](@ref) widens from `primary` to `primary × blocks_per_data_bit` (e.g. 1023 → 20460 for L1 C/A) the moment `bit_buffer.found` flips to `true`. From that point on `mod(code_phase, primary)` continues to give the replica phase, while `div(code_phase, primary)` reads off which primary period within the data bit we're in. The transition is one-shot: on the call that flips `found`, `code_phase` is implicitly the start of a fresh data bit because the detector only matches at a true bit boundary (the `[0, primary)` range of `code_phase` then represents primary period 0 of the new bit), so no explicit snap is needed.
-
-## Group accessors
-
-```@docs
-SatelliteDicts
-get_sat_states
-get_sat_state
-get_signal
-```
-
-## Adding and removing satellites
-
-```@docs
-add_satellite!
-add_satellite
-remove_satellite!
-remove_satellite
-merge_sats
-```
-
-### Acquisition handoff
-
-When the [Acquisition.jl](https://github.com/JuliaGNSS/Acquisition.jl) extension is loaded (via `using Acquisition`), [`add_satellite!`](@ref) / [`add_satellite`](@ref) gain `AcquisitionResults` overloads that read `prn` / `code_phase` / `carrier_doppler` straight off the acq result. With `group = nothing` (the default) the routing is inferred by matching `acq.system` against each group's longest-primary-code signal; pass an explicit `group =` to bypass the inference. The batch form takes an `AbstractVector{<:AcquisitionResults}` and routes each entry independently — convenient for the `filter(is_detected, acquire(...))` pipeline.
-
-```julia
-using Acquisition  # loads the extension
-
-# Single acq
-add_satellite!(ts, acq)                       # auto-route
-add_satellite!(ts, acq; group = :legacy_gps)  # explicit group, asserts match
-
-# Vector of acqs (mixed constellations OK)
-add_satellite!(ts, filter(is_detected, acqs))
-```
-
-`acq.system` must match the **longest-primary-code** signal in the target group's tuple — its code phase is the only one that's unambiguous when the group tracks multiple signals on shared chips. Hand over an L1C-P acq (not L1 C/A) for a group tracking `(GPSL1C_P(), GPSL1C_D(), GPSL1CA())`.
