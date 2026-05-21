@@ -216,17 +216,17 @@ current_code_wrap
 
 Each per-signal `BitBuffer` runs an `is_upcoming_integration_new_bit` detector against the running buffer of primary-code-block signs. The detector returns a `SyncResult` containing whether sync was found, the secondary-code phase (chip offset within the secondary code, used for code-phase seeding — see below), and the locked polarity (±1).
 
-Per-signal contract:
+Per-signal contract. *Min-to-fire* is the smallest `num_code_blocks` the detector accepts before it tries a match (smaller windows return `SyncResult(false, …)` without searching). *Buffer width* is the sliding window's container type, picked by `get_code_block_buffer_type(signal)`; it's at least `2 × min-to-fire` for the symmetric-template signals so a full bit/symbol period can slide past either polarity.
 
-| Signal | Window | Template | Tolerance | Phase | Blocks per symbol |
-|--------|--------|----------|-----------|-------|---------------------|
-| GPS L1 C/A | 40 blocks | bit-edge `0xfffff` (20+20) | 3 errors | 0 | 20 |
-| Galileo E1B | 8 blocks | bit-edge `0x0f` (4+4) | 1 error | 0 | 1 |
-| GPS L5I | 10 blocks | NH10 `0x035` shared | 2 errors | 0 | 10 (secondary code) |
-| GPS L1C-D | n/a | trivial (1 block per symbol) | n/a | 0 | 1 |
-| GPS L1C-P | 1800 blocks | per-PRN overlay | 36 errors (2 %) | `0..1799` | n/a (pilot) |
+| Signal | Min-to-fire | Buffer width | Template | Tolerance | Phase | Blocks per symbol |
+|--------|-------------|--------------|----------|-----------|-------|---------------------|
+| GPS L1 C/A | 40 blocks | `UInt64` (40 bits used) | bit-edge `0xfffff` (20+20) | 3 errors | 0 | 20 |
+| Galileo E1B | 8 blocks | `UInt8` (8 bits) | bit-edge `0x0f` (4+4) | 1 error | 0 | 1 |
+| GPS L5I | 10 blocks | `UInt32` (20 bits used, 2 × NH10) | NH10 `0x035` shared | 2 errors | 0 | 10 (secondary code) |
+| GPS L1C-D | n/a | `UInt8` (unused) | trivial (1 block per symbol) | n/a | 0 | 1 |
+| GPS L1C-P | 1800 blocks | `UInt1800` (exact width) | per-PRN overlay | 36 errors (2 %) | `0..1799` | n/a (pilot) |
 
-The per-signal sync-search buffer width is picked by `get_code_block_buffer_type(signal)` and threads through `BitBuffer{B}` and `TrackedSignal{Sig, B, C, PCF}` as a type parameter. The L1C-P case uses an exact-width `UInt1800` (defined via `BitIntegers.@define_integers 1800`); the other signals use built-in `UInt8` / `UInt32` / `UInt64`.
+The buffer-width type threads through `BitBuffer{B}` and `TrackedSignal{Sig, B, C, PCF}` as a type parameter. The L1C-P case uses an exact-width `UInt1800` defined via `BitIntegers.@define_integers 1800`; the other signals use built-in `UInt8` / `UInt32` / `UInt64`.
 
 #### Lifecycle of a `BitBuffer`
 
@@ -266,3 +266,20 @@ remove_satellite!
 remove_satellite
 merge_sats
 ```
+
+### Acquisition handoff
+
+When the [Acquisition.jl](https://github.com/JuliaGNSS/Acquisition.jl) extension is loaded (via `using Acquisition`), [`add_satellite!`](@ref) / [`add_satellite`](@ref) gain `AcquisitionResults` overloads that read `prn` / `code_phase` / `carrier_doppler` straight off the acq result. With `group = nothing` (the default) the routing is inferred by matching `acq.system` against each group's longest-primary-code signal; pass an explicit `group =` to bypass the inference. The batch form takes an `AbstractVector{<:AcquisitionResults}` and routes each entry independently — convenient for the `filter(is_detected, acquire(...))` pipeline.
+
+```julia
+using Acquisition  # loads the extension
+
+# Single acq
+add_satellite!(ts, acq)                       # auto-route
+add_satellite!(ts, acq; group = :legacy_gps)  # explicit group, asserts match
+
+# Vector of acqs (mixed constellations OK)
+add_satellite!(ts, filter(is_detected, acqs))
+```
+
+`acq.system` must match the **longest-primary-code** signal in the target group's tuple — its code phase is the only one that's unambiguous when the group tracks multiple signals on shared chips. Hand over an L1C-P acq (not L1 C/A) for a group tracking `(GPSL1C_P(), GPSL1C_D(), GPSL1CA())`.
