@@ -440,10 +440,53 @@ end
 # Master holds SatState directly; the wrapper branch holds TrackedSat that
 # itself holds SatState; the multi-signal branch holds flat TrackedSat with
 # the bit_buffer on `signals[1]`.
+#
+# BitBuffer has three historical layouts:
+#   1. Non-parametric, 7 fields (master + early multi-signal commits).
+#   2. Parametric `BitBuffer{B<:Unsigned}`, still 7 fields (Step 1 of the
+#      sync-detection redesign).
+#   3. Parametric, 9 fields with `secondary_phase::Int` and `polarity::Int8`
+#      inserted between `found` and `buffer` (Step 4 of the redesign).
+# Detect at load time via `hasfield`.
+const _HAS_PARAMETRIC_BITBUFFER =
+    _HAS_TRACKED_SIGNAL && Tracking.BitBuffer isa UnionAll
+const _HAS_BITBUFFER_PHASE_FIELDS =
+    _HAS_PARAMETRIC_BITBUFFER && hasfield(Tracking.BitBuffer, :secondary_phase)
+
+# Rebuild a `found = true` BitBuffer matching the existing buffer's
+# layout. On parametric branches we pull `B` off the live buffer; on the
+# non-parametric branch the type is just `BitBuffer` and the integer
+# fields default to `UInt128`.
+if _HAS_BITBUFFER_PHASE_FIELDS
+    _bb_int_type(::Tracking.BitBuffer{B}) where {B<:Unsigned} = B
+    @inline _make_found_bit_buffer(old_bb) = typeof(old_bb)(
+        zero(_bb_int_type(old_bb)),        # code_block_buffer::B
+        20,                                # code_block_buffer_lengh
+        true,                              # found
+        0,                                 # secondary_phase
+        Int8(0),                           # polarity
+        UInt128(0),                        # buffer
+        0,                                 # length
+        complex(0.0, 0.0),                 # prompt_accumulator
+        0,                                 # prompt_accumulator_integrated_code_blocks
+    )
+elseif _HAS_PARAMETRIC_BITBUFFER
+    _bb_int_type(::Tracking.BitBuffer{B}) where {B<:Unsigned} = B
+    @inline _make_found_bit_buffer(old_bb) = typeof(old_bb)(
+        zero(_bb_int_type(old_bb)),
+        20, true, UInt128(0), 0, complex(0.0, 0.0), 0,
+    )
+elseif _HAS_TRACKED_SIGNAL
+    @inline _make_found_bit_buffer(_old_bb) = Tracking.BitBuffer(
+        UInt128(0), 20, true, UInt128(0), 0, complex(0.0, 0.0), 0,
+    )
+end
+
 if _HAS_TRACKED_SIGNAL
-    function _with_found_bit_buffer(t, bb)
+    function _with_found_bit_buffer(t, _bb_template)
         sig = only(t.signals)
-        new_sig = Tracking.TrackedSignal(sig; bit_buffer = bb)
+        new_bb = _make_found_bit_buffer(sig.bit_buffer)
+        new_sig = Tracking.TrackedSignal(sig; bit_buffer = new_bb)
         Tracking.TrackedSat(
             t.prn, t.code_phase, t.code_doppler,
             t.carrier_phase, t.carrier_doppler,
@@ -510,7 +553,13 @@ end
 function _make_steady_state_track_state(; systems, nsats_list, nsamp, prn_max, code_dop)
     ts, signal, _ =
         _make_multi_sat_state(; systems, nsats_list, nsamp, prn_max, code_dop)
-    found_bb = BitBuffer(UInt128(0), 20, true, UInt128(0), 0, complex(0.0, 0.0), 0)
+    # Pre-multi-signal branches share a single found-true `BitBuffer`
+    # across sats; the multi-signal branch builds a per-signal-typed one
+    # inside `_with_found_bit_buffer` (parametric `B` per signal). Pass a
+    # plain non-parametric template for the older branches and `nothing`
+    # for the new one (the new path ignores its second argument).
+    found_bb = _HAS_PARAMETRIC_BITBUFFER ? nothing :
+        BitBuffer(UInt128(0), 20, true, UInt128(0), 0, complex(0.0, 0.0), 0)
     new_mss = map(_get_systems(ts)) do sss
         new_sats = _map_sats(s -> _with_found_bit_buffer(s, found_bb), sss)
         _rebuild_system_storage(sss, new_sats)
