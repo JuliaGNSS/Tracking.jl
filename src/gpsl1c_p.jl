@@ -93,8 +93,14 @@ on the XOR. Benchmark: ~71 μs for the full sweep on Zen 4.
     end
 end
 
+# GPS L1C-P is TMBOC(6,1,4/33): 29/33 of the spreading symbols are BOC(1,1)
+# and 4/33 are BOC(6,1), so its autocorrelation has the same BOC(1,1)-style
+# narrow main peak with side-lobes (slightly sharpened by the BOC(6,1) chips).
+# As for L1C-D, the C/A-style 0.5-chip early-late spacing would land the taps
+# on the side-lobes and bias the DLL discriminator; a narrow 0.1-chip spacing
+# keeps them on the main peak.
 function get_default_correlator(gpsl1c_p::GPSL1C_P, num_ants::NumAnts = NumAnts(1))
-    EarlyPromptLateCorrelator(; num_ants)
+    EarlyPromptLateCorrelator(; num_ants, preferred_early_late_to_prompt_code_shift = 0.1)
 end
 
 # 1800-chip overlay search needs an exact-width 1800-bit container. The

@@ -29,10 +29,18 @@ const L1C_P_MAX_ERRORS = floor(Int, get_bit_edge_or_secondary_code_tolerance(GPS
     @test @inferred(is_upcoming_integration_new_bit(gpsl1c_p, prn, Tracking.UInt1800(0x1), 1)).found == false
     @test @inferred(is_upcoming_integration_new_bit(gpsl1c_p, prn, Tracking.UInt1800(0xffffffff), 1799)).found == false
 
+    # TMBOC(6,1,4/33): narrow 0.1-chip early-late spacing keeps the taps on
+    # the BOC main peak rather than the side-lobes (see get_default_correlator).
     @test @inferred(get_default_correlator(gpsl1c_p, NumAnts(1))) ==
-          EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
+          EarlyPromptLateCorrelator(;
+              num_ants = NumAnts(1),
+              preferred_early_late_to_prompt_code_shift = 0.1,
+          )
     @test @inferred(get_default_correlator(gpsl1c_p, NumAnts(3))) ==
-          EarlyPromptLateCorrelator(; num_ants = NumAnts(3))
+          EarlyPromptLateCorrelator(;
+              num_ants = NumAnts(3),
+              preferred_early_late_to_prompt_code_shift = 0.1,
+          )
 
     # 10 ms primary period at BL·T ≈ 0.018 → 1.8 Hz carrier / 0.1 Hz code.
     @test @inferred(default_carrier_loop_filter_bandwidth(gpsl1c_p)) ≈ 1.8Hz
