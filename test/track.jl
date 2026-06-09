@@ -2,7 +2,7 @@ module TrackTest
 
 using Test: @test, @testset, @inferred
 using Random: Random
-using Unitful: Hz, kHz, MHz
+using Unitful: Hz, kHz, MHz, dBHz
 using Statistics: mean
 using Dictionaries: dictionary
 using GNSSSignals:
@@ -705,6 +705,60 @@ end
     # signal seeded 5 Hz off — should be well inside 1 Hz.
     final_doppler = get_carrier_doppler(track_state, :default, prn)
     @test abs(final_doppler - carrier_doppler) < 1.0Hz
+end
+
+# Regression test for the GPS L1C-D BOC(1,1) DLL early-late spacing.
+#
+# L1C-D's autocorrelation has nulls at ~±0.29 chip and side-lobes beyond, so
+# the C/A-style 0.5-chip early/late taps land on the side-lobes and bias the
+# DLL discriminator — the code loop then walks off the main peak as soon as the
+# code is perturbed off-center (as it always is after an acquisition handoff).
+# `get_default_correlator(::GPSL1C_D)` uses a narrow 0.1-chip spacing that keeps
+# the taps on the main peak. This is exactly what the earlier single-signal
+# L1C-D test above does NOT catch: it generates the signal at the tracker's own
+# code phase (zero offset), where the symmetric autocorrelation gives E == L and
+# the bias never shows, and it only asserts carrier-Doppler convergence (the
+# bias corrupts the *code* loop, not the carrier).
+#
+# Here we feed a noisy 45 dB-Hz signal, seed the satellite 0.2 chip off the true
+# code phase, and assert the estimated C/N0 stays high. With the narrow default
+# spacing the loop pulls in and holds ~45 dB-Hz; with the buggy 0.5-chip spacing
+# the code walks off and C/N0 collapses to ~31 dB-Hz. A wider-than-default code
+# loop (1 Hz vs ~0.1 Hz) just makes the divergence show within ~1.3 s.
+@testset "GPS L1C-D BOC code tracking holds lock under a code offset" begin
+    Random.seed!(1234)
+    signal = GPSL1C_D()
+    prn = 1
+    sampling_frequency = 10e6Hz
+    period = 100000  # 10 ms at 10 MHz — one L1C-D primary code period
+    # Baseband (carrier_doppler = 0), so the code frequency is nominal.
+    code_frequency = get_code_frequency(signal)
+    primary_len = get_code_length(signal)
+    amplitude = 10^(45 / 20)            # 45 dB-Hz with noise_std below
+    noise_std = sqrt(10e6)
+    range = 0:(period - 1)
+
+    estimator = ConventionalAssistedPLLAndDLL(;
+        carrier_loop_filter_bandwidth = 1.8Hz,
+        code_loop_filter_bandwidth = 1.0Hz,
+    )
+    track_state = TrackState(; signal, doppler_estimator = estimator)
+    # 0.2-chip seed offset — a realistic acquisition handoff error that puts the
+    # DLL discriminator onto the BOC autocorrelation slope. Uses the group's
+    # default correlator, so reverting the default spacing breaks this test.
+    add_satellite!(track_state; prn, code_phase = 0.2, carrier_doppler = 0.0Hz)
+
+    build(code_phase) =
+        gen_code(period, signal, prn, sampling_frequency, code_frequency, code_phase) .*
+        amplitude .+ randn(ComplexF64, period) .* noise_std
+
+    for i = 0:130
+        code_phase = mod(code_frequency * period * i / sampling_frequency, primary_len)
+        track!(build(code_phase), track_state, sampling_frequency)
+    end
+
+    # Narrow spacing holds ~45 dB-Hz; the 0.5-chip bug collapses to ~31 dB-Hz.
+    @test estimate_cn0(track_state, prn) > 40dBHz
 end
 
 # Multi-signal integration test for the README's flagship use case: a single
