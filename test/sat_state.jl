@@ -53,9 +53,20 @@ using Tracking:
         randn(100, 100),
         -500:100.0:500,
     )
-    acq = pkgversion(Acquisition) >= v"2" ?
-        AcquisitionResults(acq_args..., 1, length(-500:100.0:500)) :
+    # Construct across Acquisition's compat range: v1 has 11 fields; v2.0–v2.4
+    # appended num_blocks/block_size (13 fields); v2.5+ inserted
+    # secondary_code_phase (after code_phase) and appended
+    # num_secondary_rotations (15 fields).
+    acq = if pkgversion(Acquisition) >= v"2.5"
+        AcquisitionResults(
+            acq_args[1:5]..., nothing, acq_args[6:end]...,
+            1, length(-500:100.0:500), 1,
+        )
+    elseif pkgversion(Acquisition) >= v"2"
+        AcquisitionResults(acq_args..., 1, length(-500:100.0:500))
+    else
         AcquisitionResults(acq_args...)
+    end
     sat_state = @inferred TrackedSat(acq)
     @test get_prn(sat_state) == 5
     @test get_code_phase(sat_state) == 524.6

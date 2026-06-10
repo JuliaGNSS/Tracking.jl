@@ -184,17 +184,27 @@ end
     @test de_state.code_loop_filter_bandwidth == 1.5Hz
 end
 
-# Acquisition v2 added num_blocks/block_size fields (FM-DBZP backend).
-# Keep both constructors supported as long as Project.toml's Acquisition
-# compat range does.
+# Construct an `AcquisitionResults` across the Acquisition versions in
+# Project.toml's compat range:
+#   * v1            — 11 positional fields.
+#   * v2.0 – v2.4   — added num_blocks/block_size (FM-DBZP backend) → 13 fields.
+#   * v2.5+         — added secondary_code_phase (after code_phase) and
+#                     num_secondary_rotations (last) → 15 fields.
 function _make_acq(signal, prn, code_phase, carrier_doppler)
     args = (
         signal, prn, 5e6Hz, carrier_doppler, code_phase,
         45.0, 1.0, 10.0, 1, randn(10, 10), -500:100.0:500,
     )
-    pkgversion(Acquisition) >= v"2" ?
-        AcquisitionResults(args..., 1, length(-500:100.0:500)) :
+    if pkgversion(Acquisition) >= v"2.5"
+        AcquisitionResults(
+            args[1:5]..., nothing, args[6:end]...,
+            1, length(-500:100.0:500), 1,
+        )
+    elseif pkgversion(Acquisition) >= v"2"
+        AcquisitionResults(args..., 1, length(-500:100.0:500))
+    else
         AcquisitionResults(args...)
+    end
 end
 
 @testset "add_satellite!(ts, acq) — single-group shortcut" begin
