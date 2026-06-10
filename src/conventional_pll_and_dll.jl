@@ -244,9 +244,26 @@ function _update_tracked_sat_doppler(
     # Phase-snap fallback chain. Picks the synced signal with the
     # longest `(primary × secondary)` code length, and uses its
     # secondary-code phase to anchor `sat.code_phase` to the right
-    # secondary-chip window. No-op if no signal has secondary sync yet.
+    # secondary-chip window.
+    #
+    # This is a *one-time* anchoring applied only on the iteration a
+    # signal transitions `found == false → true`. The snap aligns
+    # `code_phase` to a primary-code boundary within the secondary-code
+    # window, which is only valid when `code_phase` actually sits on
+    # such a boundary — i.e. just after a completed integration, which
+    # is exactly when sync is detected. Re-running it on later
+    # iterations would clobber the within-primary-block phase that
+    # `update` advances during a partial (chunk-bounded) integration,
+    # pinning `code_phase` to the boundary and wedging the satellite
+    # into a state where no chunk can ever complete the block again
+    # (see issue #117). After sync, `update`'s `mod(…, current_code_wrap)`
+    # maintains the secondary alignment on its own.
     new_signals = (new_head, new_tail...)
-    snapped_code_phase = _snap_code_phase_from_synced_signal(new_signals, sat.code_phase)
+    snapped_code_phase = if _any_signal_just_synced(sat.signals, new_signals)
+        _snap_code_phase_from_synced_signal(new_signals, sat.code_phase)
+    else
+        sat.code_phase
+    end
 
     TrackedSat(
         sat;
