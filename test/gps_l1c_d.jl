@@ -4,7 +4,7 @@ using Test: @test, @testset, @inferred
 using Unitful: Hz
 using GNSSSignals: GPSL1C_D
 using Tracking:
-    is_upcoming_integration_new_bit,
+    detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
     default_carrier_loop_filter_bandwidth,
@@ -22,7 +22,7 @@ using Tracking:
     # preamble.
     prn = 1
     for (bits, n) in ((UInt8(0x0), 0), (UInt8(0x1), 1), (UInt8(0xff), 32))
-        res = @inferred is_upcoming_integration_new_bit(gpsl1c_d, prn, bits, n)
+        res = @inferred detect_bit_or_secondary_code_sync(gpsl1c_d, prn, bits, n)
         @test res.found == true
         @test res.phase == 0
         @test res.polarity == +1

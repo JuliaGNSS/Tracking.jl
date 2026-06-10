@@ -12,7 +12,7 @@ the residual ±1 polarity ambiguity via the CNAV-2 preamble's CRC.
 
 Same shape as the Galileo E1B "1-block-per-symbol" case.
 """
-@inline function is_upcoming_integration_new_bit(
+@inline function detect_bit_or_secondary_code_sync(
     ::GPSL1C_D,
     ::Integer,           # PRN — ignored
     ::Unsigned,

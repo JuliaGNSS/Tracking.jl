@@ -17,7 +17,7 @@ ambiguity via the I/NAV preamble.
 
 Same shape as the GPS L1C-D "1-block-per-symbol" case.
 """
-@inline function is_upcoming_integration_new_bit(
+@inline function detect_bit_or_secondary_code_sync(
     ::GalileoE1BAny,
     ::Integer,           # PRN — ignored
     ::Unsigned,
