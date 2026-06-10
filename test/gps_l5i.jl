@@ -4,7 +4,7 @@ using Test: @test, @testset, @inferred
 using Unitful: Hz
 using GNSSSignals: GPSL5I
 using Tracking:
-    is_upcoming_integration_new_bit,
+    detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
     default_carrier_loop_filter_bandwidth,
@@ -16,15 +16,15 @@ using Tracking:
     gpsl5 = GPSL5I()
     prn = 1
     # NH10 = 0x035 — matched at positive polarity.
-    res = @inferred(is_upcoming_integration_new_bit(gpsl5, prn, UInt32(0x35), 50))
+    res = @inferred(detect_bit_or_secondary_code_sync(gpsl5, prn, UInt32(0x35), 50))
     @test res.found == true
     @test res.polarity == +1
 
     # Buffer not yet at 10 blocks.
-    @test @inferred(is_upcoming_integration_new_bit(gpsl5, prn, UInt32(0x35), 5)).found == false
+    @test @inferred(detect_bit_or_secondary_code_sync(gpsl5, prn, UInt32(0x35), 5)).found == false
 
     # 0x3ca == 1111001010 is the negated NH10 (matches at negative polarity).
-    res = @inferred(is_upcoming_integration_new_bit(gpsl5, prn, UInt32(0x3ca), 10))
+    res = @inferred(detect_bit_or_secondary_code_sync(gpsl5, prn, UInt32(0x3ca), 10))
     @test res.found == true
     @test res.polarity == -1
 
@@ -49,8 +49,8 @@ using Tracking:
         # 2.5 % ceiling over a 10-block window discretizes to "exact match"
         # (floor(0.025 × 10) = 0) — any single bit-flip rejects.
         template = UInt32(0x035)
-        @test is_upcoming_integration_new_bit(gpsl5, prn, template, 10).found == true
-        @test is_upcoming_integration_new_bit(gpsl5, prn, template ⊻ UInt32(0x1), 10).found == false
+        @test detect_bit_or_secondary_code_sync(gpsl5, prn, template, 10).found == true
+        @test detect_bit_or_secondary_code_sync(gpsl5, prn, template ⊻ UInt32(0x1), 10).found == false
     end
 end
 

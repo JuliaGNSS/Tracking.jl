@@ -8,7 +8,7 @@ template `0xfffff` (20 ones followed by 20 zeros). The negated-polarity
 template `0xfffff00000` is searched in the same call via
 [`_try_match`](@ref). Returns [`SyncResult`](@ref).
 """
-@inline function is_upcoming_integration_new_bit(
+@inline function detect_bit_or_secondary_code_sync(
     signal::GPSL1CA,
     ::Integer,           # PRN — ignored; same template for every PRN
     code_block_bits::B,

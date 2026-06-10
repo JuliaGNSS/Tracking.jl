@@ -6,10 +6,12 @@ Outcome of a per-signal bit-sync / secondary-code-sync detector call.
 Fields:
 
 - `found::Bool` — whether the detector locked on this update.
-- `phase::Int` — when `found = true`, the secondary-code chip offset of
-  the buffer's *first* sample, in `0:secondary_code_length-1`. Zero for
-  signals without a secondary code (the L1 C/A bit-edge case picks the
-  bit boundary inside the detector, not a chip offset).
+- `phase::Int` — when `found = true`, the secondary-code chip the
+  *upcoming* integration aligns to, in `0:secondary_code_length-1`
+  (recovered by the rotation search in [`_secondary_code_search`](@ref)).
+  Zero for signals without a secondary code (the L1 C/A bit-edge case
+  fires at the data-bit boundary, where the upcoming integration starts a
+  new bit, not at a secondary-chip offset).
 - `polarity::Int8` — `+1` or `-1`; which match orientation the detector
   locked. Carries through to the post-sync prompt accumulator so that a
   negative-polarity lock doesn't trip the downstream bit decoder.
@@ -23,16 +25,18 @@ end
 """
 $(SIGNATURES)
 
-Hamming-tolerance template matcher used by every per-signal
-`is_upcoming_integration_new_bit` implementation.
+Fixed-alignment Hamming-tolerance template matcher for the GPS L1 C/A
+bit-edge detector (`detect_bit_or_secondary_code_sync(::GPSL1CA, …)`).
+Signals with a periodic secondary code (GPS L5I, GPS L1C-P) instead use
+[`_secondary_code_search`](@ref), which sweeps all rotations.
 
 Compares `code_block_bits & mask` against `template` for the "positive
 polarity" hit and against `template ⊻ mask` for the "negative polarity"
 hit. The first orientation whose Hamming distance does not exceed
 `max_errors` wins; if neither fits within tolerance the result reports
-`found = false`. `phase` is hard-coded to 0 — callers that need a
-non-zero phase (L1C-P overlay search) compute it themselves and build
-their own `SyncResult`.
+`found = false`. `phase` is always 0: the bit-edge template only matches
+at the data-bit boundary, so the upcoming integration starts a new bit
+(there is no secondary-chip offset to recover).
 
 Inlined so the per-signal template / mask / tolerance constants fold at
 the call site.
@@ -49,6 +53,73 @@ the call site.
     dist_neg = count_ones(masked ⊻ (template ⊻ mask))
     dist_neg <= max_errors && return SyncResult(true, 0, Int8(-1))
     return SyncResult(false, 0, Int8(0))
+end
+
+"""
+$(SIGNATURES)
+
+Generic secondary-code sync detector shared by every signal that locks
+onto a periodic secondary / overlay code — GPS L5I's NH10 and GPS L1C-P's
+1800-chip overlay both route through here. Unlike [`_try_match`](@ref)
+(which matches one fixed template alignment and is used for the GPS L1 C/A
+*bit-edge*), this runs a full rotation search, so it locks after a single
+secondary-code period in the worst case instead of two and recovers the
+true secondary-code phase.
+
+`received` is the prompt-sign sliding window with the newest block in
+bit 0. `reference` is the secondary code packed in that **same**
+newest-first order — bit `i` holds secondary chip `(N - 1 - i)` — so that
+when the most recent `N` blocks span exactly one period ending on its
+last chip, `received & mask == reference`. `N` is the secondary-code
+length.
+
+The search rotates the low `N` bits of `received` left by `d ∈ 0:N-1`,
+tracking the best positive- and negated-polarity Hamming match in one
+pass. The winning rotation `d` is how far the buffer leads the reference,
+which maps to the secondary-chip offset of the **upcoming** integration
+as `phase = mod(N - d, N)` — exactly the value the post-sync `code_phase`
+snap ([`_snap_code_phase_from_synced_signal`](@ref)) anchors on. Returns
+`SyncResult(false, 0, 0)` when the best distance exceeds `max_errors`.
+
+Inlined so the per-signal `reference` / `N` constants fold at the call
+site (the L5I window is 10, the L1C-P window 1800).
+"""
+@inline function _secondary_code_search(
+    received::B,
+    reference::B,
+    secondary_code_length::Int,
+    max_errors::Int,
+) where {B<:Unsigned}
+    N = secondary_code_length
+    # `reference` lives in the low `N` bits; mask the search to that window.
+    # `one(B) << N` is undefined when `N` equals the full bit width
+    # (e.g. UInt1800 for L1C-P), so special-case the exact-width buffer.
+    mask = N == 8 * sizeof(B) ? ~zero(B) : (one(B) << N) - one(B)
+    masked = received & mask
+    best_d = 0
+    best_dist = N + 1
+    best_pol = Int8(0)
+    @inbounds for d in 0:(N-1)
+        # Rotate-left by `d` within the N-bit window. `d == 0` is special-
+        # cased because `masked >> N` is undefined for an exact-width buffer.
+        shifted = d == 0 ? masked : ((masked << d) | (masked >> (N - d))) & mask
+        dist_pos = count_ones(shifted ⊻ reference)
+        # Both operands occupy only the low `N` bits, so the negated-polarity
+        # distance is the complement within that window.
+        dist_neg = N - dist_pos
+        if dist_pos < best_dist
+            best_dist = dist_pos
+            best_d = d
+            best_pol = Int8(+1)
+        end
+        if dist_neg < best_dist
+            best_dist = dist_neg
+            best_d = d
+            best_pol = Int8(-1)
+        end
+    end
+    best_dist > max_errors && return SyncResult(false, 0, Int8(0))
+    SyncResult(true, mod(N - best_d, N), best_pol)
 end
 
 """
@@ -149,7 +220,7 @@ Per-signal Hamming tolerance used by the bit-edge / secondary-code
 sync-search detectors, expressed as a fraction of the search window.
 
 Returns the largest **fraction** of bit-flips the per-signal
-`is_upcoming_integration_new_bit` accepts before reporting
+`detect_bit_or_secondary_code_sync` accepts before reporting
 `found = true`. Each detector converts this to an integer error budget
 at its call site: `max_errors = floor(Int, tolerance × window_size)`.
 
@@ -178,7 +249,7 @@ Tracking.get_bit_edge_or_secondary_code_tolerance(::GPSL1CA) = 0.05
 ```
 
 The override takes effect at the next call to
-`is_upcoming_integration_new_bit` — there is no need to rebuild any
+`detect_bit_or_secondary_code_sync` — there is no need to rebuild any
 TrackState. The trait is `@inline`'d so the override folds at the
 detector's call site.
 """
@@ -201,9 +272,6 @@ Buffer data bits based on the prompt accumulation and the current prompt value.
 function buffer(signal::AbstractGNSSSignal, prn::Integer, bit_buffer::BitBuffer{B}, integrated_code_blocks, prompt) where {B<:Unsigned}
     # The divide is deferred to the helper — pilot signals
     # (`get_data_frequency = 0`) would otherwise blow up here with `Int(Inf)`.
-    # Pilots take the `_buffer_find_bit` branch with `bit_buffer.found = false`
-    # forever (their per-signal `is_upcoming_integration_new_bit` returns
-    # false), so the value is unused for them.
     num_code_blocks_that_form_a_bit = _calc_num_code_blocks_that_form_a_bit(signal)
 
     if (bit_buffer.found == false)
@@ -212,6 +280,12 @@ function buffer(signal::AbstractGNSSSignal, prn::Integer, bit_buffer::BitBuffer{
             integrated_code_blocks, prompt,
         )
     end
+
+    # Pilot signals (e.g. GPS L1C-P) carry no navigation data; once their
+    # secondary code is synced there is nothing to decode, so the buffer is
+    # left untouched (the `found` / `secondary_phase` / `polarity` state stays
+    # for code-phase anchoring and longer coherent integration).
+    num_code_blocks_that_form_a_bit == 0 && return bit_buffer
 
     prompt_accumulator = bit_buffer.prompt_accumulator + prompt
     prompt_accumulator_integrated_code_blocks =
@@ -259,7 +333,7 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
     end
     code_block_buffer = bit_buffer.code_block_buffer << 1 + B(real(prompt) > 0)
     code_block_buffer_lengh = bit_buffer.code_block_buffer_lengh + 1
-    sync = is_upcoming_integration_new_bit(
+    sync = detect_bit_or_secondary_code_sync(
         signal,
         prn,
         code_block_buffer,
@@ -272,6 +346,26 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
             false,
             0,
             Int8(0),
+            zero(UInt128),
+            0,
+            complex(0.0, 0.0),
+            0,
+        )
+    end
+    if get_secondary_code_length(signal) > 1
+        # Secondary-code signals (GPS L5I, GPS L1C-P): the buffered pre-sync
+        # prompt signs are modulated by the secondary code, not the navigation
+        # data, so there are no data bits to recover from them. Data-bit
+        # decoding starts fresh post-sync — the integration cadence then aligns
+        # each integration to the secondary-code (data-bit) boundary, so no
+        # accumulator seeding is needed here. We only record the recovered
+        # `secondary_phase` / `polarity`, which anchor the shared `code_phase`.
+        return BitBuffer{B}(
+            code_block_buffer,
+            code_block_buffer_lengh,
+            true,
+            sync.phase,
+            sync.polarity,
             zero(UInt128),
             0,
             complex(0.0, 0.0),

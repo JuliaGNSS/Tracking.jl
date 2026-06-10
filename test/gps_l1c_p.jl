@@ -6,7 +6,7 @@ using GNSSSignals: GPSL1C_P
 using Random: MersenneTwister, randperm
 import Tracking
 using Tracking:
-    is_upcoming_integration_new_bit,
+    detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
     default_carrier_loop_filter_bandwidth,
@@ -25,9 +25,9 @@ const L1C_P_MAX_ERRORS = floor(Int, get_bit_edge_or_secondary_code_tolerance(GPS
     # false` without running the sweep. Above it, the sweep runs against
     # the per-PRN overlay.
     prn = 1
-    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_p, prn, Tracking.UInt1800(0x0), 0)).found == false
-    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_p, prn, Tracking.UInt1800(0x1), 1)).found == false
-    @test @inferred(is_upcoming_integration_new_bit(gpsl1c_p, prn, Tracking.UInt1800(0xffffffff), 1799)).found == false
+    @test @inferred(detect_bit_or_secondary_code_sync(gpsl1c_p, prn, Tracking.UInt1800(0x0), 0)).found == false
+    @test @inferred(detect_bit_or_secondary_code_sync(gpsl1c_p, prn, Tracking.UInt1800(0x1), 1)).found == false
+    @test @inferred(detect_bit_or_secondary_code_sync(gpsl1c_p, prn, Tracking.UInt1800(0xffffffff), 1799)).found == false
 
     # TMBOC(6,1,4/33): narrow 0.1-chip early-late spacing keeps the taps on
     # the BOC main peak rather than the side-lobes (see get_default_correlator).
@@ -50,26 +50,27 @@ const L1C_P_MAX_ERRORS = floor(Int, get_bit_edge_or_secondary_code_tolerance(GPS
     @test @inferred(get_code_block_buffer_type(gpsl1c_p)) === Tracking.UInt1800
 
     @testset "Overlay search — clean lock at known phase / polarity" begin
-        # Build PRN 1's overlay-packed UInt1800 by reusing the internal
-        # helper, then rotate-left by a known offset and feed it back.
-        # The detector should recover the offset and lock at positive
-        # polarity (no bit-flips, distance 0 ≤ get_sync_max_errors).
-        overlay = Tracking._pack_overlay(gpsl1c_p, prn)
-        for k in (0, 137, 1799)
-            rotated = k == 0 ? overlay :
-                ((overlay >> k) | (overlay << (1800 - k)))
-            res = @inferred is_upcoming_integration_new_bit(gpsl1c_p, prn, rotated, 1800)
+        # Build PRN 1's newest-first overlay reference, then rotate it *left*
+        # by `r` to emulate a prompt buffer whose upcoming integration is
+        # overlay chip `r`. The rotation search recovers `phase == r` (the
+        # upcoming chip) at positive polarity (distance 0 ≤ max_errors).
+        reference = Tracking._pack_overlay(gpsl1c_p, prn)
+        rotl(x, r) = r == 0 ? x : ((x << r) | (x >> (1800 - r)))
+        for r in (0, 137, 1799)
+            received = rotl(reference, r)
+            res = @inferred detect_bit_or_secondary_code_sync(gpsl1c_p, prn, received, 1800)
             @test res.found == true
-            @test res.phase == k
+            @test res.phase == r
             @test res.polarity == +1
         end
 
-        # Negative polarity = bitwise NOT of the overlay within the
+        # Negative polarity = bitwise NOT of the reference within the
         # 1800-bit window. The exact-width UInt1800 makes `~` equivalent
-        # to XOR with all-ones; build that explicitly.
+        # to XOR with all-ones; build that explicitly. No rotation, so the
+        # recovered upcoming chip is 0.
         all_ones = (Tracking.UInt1800(1) << 1799) | ((Tracking.UInt1800(1) << 1799) - one(Tracking.UInt1800))
-        negated = overlay ⊻ all_ones
-        res = @inferred is_upcoming_integration_new_bit(gpsl1c_p, prn, negated, 1800)
+        negated = reference ⊻ all_ones
+        res = @inferred detect_bit_or_secondary_code_sync(gpsl1c_p, prn, negated, 1800)
         @test res.found == true
         @test res.phase == 0
         @test res.polarity == -1
@@ -86,7 +87,7 @@ const L1C_P_MAX_ERRORS = floor(Int, get_bit_edge_or_secondary_code_tolerance(GPS
             for idx in indices
                 corrupted ⊻= Tracking.UInt1800(1) << (idx - 1)
             end
-            res = is_upcoming_integration_new_bit(gpsl1c_p, prn, corrupted, 1800)
+            res = detect_bit_or_secondary_code_sync(gpsl1c_p, prn, corrupted, 1800)
             @test res.found == true
             @test res.phase == 0
         end
@@ -102,7 +103,7 @@ const L1C_P_MAX_ERRORS = floor(Int, get_bit_edge_or_secondary_code_tolerance(GPS
         # for the corrupted buffer to coincide with the overlay rotated
         # by some other phase within tolerance. With this fixed seed we
         # verified that doesn't happen for PRN 1.
-        res = is_upcoming_integration_new_bit(gpsl1c_p, prn, corrupted, n_errors == L1C_P_MAX_ERRORS + 1 ? 1800 : 1800)
+        res = detect_bit_or_secondary_code_sync(gpsl1c_p, prn, corrupted, n_errors == L1C_P_MAX_ERRORS + 1 ? 1800 : 1800)
         @test res.found == false
     end
 end
