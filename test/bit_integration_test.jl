@@ -102,11 +102,16 @@ end
 
     # Sub-primary-block start phase: begin tracking half a primary-code period
     # into a secondary chip (`code_phase = (k + 0.5) x primary_code_length`).
-    # The first (half-block) integration runs to the next primary-code
-    # boundary, absorbing the sub-block offset; sync then locks and the code
-    # phase anchors exactly to secondary chip `k mod 10` (no leftover
-    # sub-block phase). Confirms the rotation search + phase snap handle a
-    # non-block-aligned start.
+    # The secondary-code phase snap runs once, at the sync transition, and
+    # anchors `code_phase` to the right NH10 chip while *preserving* the
+    # within-primary-block phase (issue #117): erasing it on every call would
+    # discard a chunk-bounded partial integration and could wedge the
+    # satellite into a state where no chunk ever completes a block. Here a
+    # 60-block buffer fed in one `track` call leaves the loop mid-block with a
+    # half-primary-period partial in flight, so the final `code_phase` lands
+    # at secondary chip `k mod 10` plus that leftover half-block phase.
+    # Confirms the rotation search + phase snap handle a non-block-aligned
+    # start without dropping in-flight integration progress.
     for k in (0, 1, 5, 9, 13)
         start_phase = (k + 0.5) * primary_code_length
         num_blocks = 60
@@ -123,7 +128,8 @@ end
         track_state = TrackState(gpsl5, [TrackedSat(gpsl5, prn, start_phase, 0.0Hz)])
         track_state = track(signal, track_state, sampling_frequency)
         @test has_bit_or_secondary_code_been_found(track_state)
-        @test get_code_phase(track_state) == (k % secondary_code_length) * primary_code_length
+        @test get_code_phase(track_state) ==
+              (k % secondary_code_length) * primary_code_length + 0.5 * primary_code_length
     end
 end
 
@@ -173,7 +179,11 @@ end
     # Locks after exactly one overlay cycle (1800 blocks).
     @test synced_at_block == secondary_code_length
     # Upcoming overlay chip after a full cycle from chip 0 is chip 0 again.
-    @test synced_code_phase == 0.0
+    # The phase snap preserves the within-primary-block phase (issue #117)
+    # rather than zeroing it, so the block-aligned start lands at chip 0 up
+    # to the floating-point residual accumulated over 1800 code-phase
+    # updates (~1e-7 chips out of 10230).
+    @test synced_code_phase ≈ 0.0 atol = 1e-4
 end
 
 end

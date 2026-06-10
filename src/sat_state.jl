@@ -241,6 +241,18 @@ ride along.
 """
 @inline current_code_wrap(signals::Tuple{Vararg{TrackedSignal}}) = _current_code_wrap(signals)
 
+# Detect whether any signal on the sat transitioned `bit_buffer.found`
+# from `false` (in `old_signals`) to `true` (in `new_signals`) during
+# this estimator iteration. Used to gate the one-time code-phase snap:
+# the snap is only valid at the sync transition (when `code_phase` sits
+# on a primary-code boundary) and must not run on subsequent iterations
+# (see `_update_tracked_sat_doppler` and issue #117). Walks the two
+# tuples in lockstep; folds to a compile-time-decided chain of `||`s.
+@inline _any_signal_just_synced(::Tuple{}, ::Tuple{}) = false
+@inline _any_signal_just_synced(old::Tuple, new::Tuple) =
+    (!first(old).bit_buffer.found && first(new).bit_buffer.found) ||
+    _any_signal_just_synced(Base.tail(old), Base.tail(new))
+
 # Phase-snap fallback chain: walk `signals` and pick the synced signal
 # whose `(primary × secondary)` code length is the largest. That signal's
 # `bit_buffer.secondary_phase` carries the secondary-chip offset for the
@@ -256,28 +268,36 @@ ride along.
     signals::Tuple{Vararg{TrackedSignal}},
     code_phase::Float64,
 )
-    best_len, best_phase_chips = _find_best_secondary_anchor(signals, 0, 0)
+    best_len, best_phase_chips, best_prim = _find_best_secondary_anchor(signals, 0, 0, 1)
     if best_len == 0
         return code_phase
     end
     # `code_phase` already wraps mod `max_code_length(signals)`. The
     # best-anchored signal has wrap = best_len; align the low
-    # `best_len` chips of `code_phase` to `best_phase_chips`, leaving
-    # the higher-order wrap untouched.
+    # `best_len` chips of `code_phase` to the synced secondary-chip
+    # window (`best_phase_chips`, a multiple of the primary length),
+    # leaving the higher-order wrap untouched. Crucially we *preserve*
+    # the within-primary-block phase `mod(code_phase, best_prim)`: the
+    # snap places `code_phase` into the right secondary window without
+    # discarding any partial (chunk-bounded) integration progress within
+    # the current primary block — dropping it would inject a one-block
+    # phase error at sync and force the loops to re-converge (issue #117).
     base = floor(Int, code_phase / best_len) * best_len
-    Float64(base + best_phase_chips)
+    within_primary = code_phase - floor(code_phase / best_prim) * best_prim
+    Float64(base + best_phase_chips) + within_primary
 end
 
 # Tuple walker — finds the synced signal with the largest
 # `(primary × secondary)` length and returns
-# `(length, secondary_phase_in_chips)` for it. `(0, 0)` if no signal is
-# synced.
-@inline _find_best_secondary_anchor(::Tuple{}, best_len::Int, best_chips::Int) =
-    (best_len, best_chips)
+# `(length, secondary_phase_in_chips, primary_length)` for it.
+# `(0, 0, 1)` if no signal is synced.
+@inline _find_best_secondary_anchor(::Tuple{}, best_len::Int, best_chips::Int, best_prim::Int) =
+    (best_len, best_chips, best_prim)
 @inline function _find_best_secondary_anchor(
     t::Tuple,
     best_len::Int,
     best_chips::Int,
+    best_prim::Int,
 )
     head = first(t)
     sig = head.signal
@@ -294,9 +314,10 @@ end
         if sec > 1 && total > best_len
             best_len = total
             best_chips = bb.secondary_phase * prim
+            best_prim = prim
         end
     end
-    _find_best_secondary_anchor(Base.tail(t), best_len, best_chips)
+    _find_best_secondary_anchor(Base.tail(t), best_len, best_chips, best_prim)
 end
 
 """

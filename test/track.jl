@@ -30,7 +30,10 @@ using Tracking:
     estimate_cn0,
     get_signal_start_sample,
     get_last_fully_integrated_filtered_prompt,
+    get_last_fully_integrated_correlator,
     get_filtered_prompts,
+    get_integrated_samples,
+    has_bit_or_secondary_code_been_found,
     get_sat_state,
     get_code_length,
     NumAnts,
@@ -833,6 +836,74 @@ end
     # PLL/DLL has had ~2 s to converge on a clean superposition.
     final_doppler = get_carrier_doppler(track_state, :modern_gps, prn)
     @test abs(final_doppler - carrier_doppler) < 5.0Hz
+end
+
+# Regression test for issue #117: a satellite must not deadlock when fed
+# chunks of exactly one code period.
+#
+# The trigger is a *continuous* signal sliced into fixed one-primary-code-
+# period chunks (the most natural streaming pattern — 1 ms of GPS L5I at
+# 20 MHz = 20000 samples = one code period) together with a *negative*
+# code Doppler. With negative Doppler a full code block spans slightly
+# more than one chunk (`ceil(10230·fs/(f_code+Δ)) = 20001 > 20000`), so a
+# block can never complete inside a single chunk; it must carry forward.
+#
+# Before the fix, once GPS L5I's NH10 secondary code synced, the per-call
+# code-phase snap re-anchored `code_phase` to a primary-block boundary on
+# *every* call — discarding the partial integration's within-block phase
+# and pinning `code_phase` to a value from which no future chunk could
+# ever complete the block. The satellite wedged forever: `code_phase`
+# frozen, `integrated_samples` growing without bound, the correlator
+# output frozen. Crucially this needs a real secondary-code sync, so the
+# signal is generated continuously (not re-aligned per call) and fed in
+# fixed slices.
+@testset "Does not deadlock on one-code-period chunks (issue #117)" begin
+    signal = GPSL5I()
+    carrier_doppler = -200Hz                 # negative ⇒ negative code Doppler
+    code_frequency =
+        carrier_doppler * get_code_center_frequency_ratio(signal) +
+        get_code_frequency(signal)
+    sampling_frequency = 20e6Hz
+    prn = 1
+    chunk = 20000                            # 1 ms = one L5I code period at 20 MHz
+    num_calls = 60                           # well past the 10-block NH10 sync
+
+    # One continuous signal, sliced into fixed `chunk`-sample pieces.
+    total_samples = chunk * (num_calls + 1)
+    t = 0:(total_samples - 1)
+    long_signal =
+        cis.(2π .* carrier_doppler .* t ./ sampling_frequency) .*
+        gen_code(total_samples, signal, prn, sampling_frequency, code_frequency, 0.0)
+
+    track_state = TrackState(; signal)
+    add_satellite!(track_state; prn, code_phase = 0.0, carrier_doppler = carrier_doppler - 20Hz)
+
+    track!((@view long_signal[1:chunk]), track_state, sampling_frequency)
+    prompts = ComplexF64[]
+    for i = 1:num_calls
+        chunk_signal = @view long_signal[(i * chunk + 1):((i + 1) * chunk)]
+        track!(chunk_signal, track_state, sampling_frequency)
+        push!(prompts, get_prompt(get_last_fully_integrated_correlator(track_state, prn)))
+    end
+
+    sat = get_sat_state(track_state, prn)
+
+    # The secondary code must actually have synced — that's the regime
+    # the bug lived in.
+    @test has_bit_or_secondary_code_been_found(sat)
+
+    # Deadlock signature: `integrated_samples` grows without bound because
+    # no integration ever completes. After the fix it completes every
+    # block, so it stays within one chunk's worth of samples.
+    @test get_integrated_samples(track_state, prn) <= 2 * chunk
+
+    # Deadlock signature: the correlator output freezes. After the fix the
+    # prompt keeps updating, so the last several prompts are not all equal.
+    @test length(unique(prompts[(end - 9):end])) > 1
+
+    # And it actually tracks: the loops stay locked on the true Doppler
+    # rather than diverging or freezing.
+    @test abs(get_carrier_doppler(track_state, prn) - carrier_doppler) < 5.0Hz
 end
 
 end
