@@ -13,6 +13,10 @@ track!
 - `intermediate_frequency` — the IF of the signal. Defaults to `0.0Hz`. Only accepted on the bare-buffer form `track!(buf, state, fs; intermediate_frequency = ...)`; on the [`Measurement`](@ref) and multi-band forms the IF lives on each `Measurement`.
 The **coherent-integration length** is not a `track!` argument — it is a per-signal setting on each [`TrackedSignal`](@ref) (its `preferred_num_code_blocks_to_integrate` field), changed with [`set_preferred_num_code_blocks_to_integrate!`](@ref). It defaults to `1`, is capped per integration by the signal's bit/secondary-code period, and only takes effect once bit/secondary-code synchronization has been achieved. With the conventional estimator the loop bandwidth auto-scales by `1/N` so longer integration stays stable without re-tuning.
 
+```@docs
+set_preferred_num_code_blocks_to_integrate!
+```
+
 ## Real-time loops
 
 A typical receiver loop builds the `TrackState` once, hoists the correlator outside the loop, and calls `track!` per chunk:
