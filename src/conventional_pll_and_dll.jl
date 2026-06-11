@@ -16,10 +16,23 @@ T = get_code_length(signal) / get_code_frequency(signal)   # primary period
 BL = 0.018 / T                                              # this default
 ```
 
-For L1 C/A (T = 1 ms) this returns 18 Hz — matching the historical
-hand-picked default. For L1C-D / L1C-P / L5I (T = 10 ms) it returns 1.8 Hz,
-which is the well-inside-stability value the multi-signal flagship use case
-needs.
+`T` here is the **primary**-code period, not the chosen coherent
+integration length. For GPS L1 C/A (T = 1 ms) and GPS L5I (T = 1 ms, a
+10230-chip code at 10.23 MHz) this returns 18 Hz — matching the historical
+hand-picked default. For L1C-D / L1C-P (T = 10 ms) it returns 1.8 Hz, and
+for Galileo E1B (T = 4 ms) 4.5 Hz — the well-inside-stability values the
+multi-signal flagship use case needs.
+
+!!! warning "Coherent integration longer than the primary period"
+    This default is sized for an integration interval of one primary code
+    period. If you integrate over `N` primary blocks (e.g. L5I with
+    `preferred_num_code_blocks_to_integrate = 10` to coherently integrate
+    one NH10 secondary-code period = 10 ms), the loop update interval grows
+    to `N·T`, so `BL·N·T` approaches the 0.18 stability edge and the PLL can
+    go unstable. Scale the bandwidth down by `1/N` (pass an explicit
+    `ConventionalPLLAndDLL` / `ConventionalAssistedPLLAndDLL` with
+    `carrier_loop_filter_bandwidth = default_carrier_loop_filter_bandwidth(signal) / N`)
+    when integrating longer than the primary period.
 """
 function default_carrier_loop_filter_bandwidth(signal::AbstractGNSSSignal)
     # T = primary_code_period_seconds. The estimator's bandwidth fields are
