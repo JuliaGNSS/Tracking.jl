@@ -11,7 +11,7 @@ track!
 
 - `downconvert_and_correlator` — the downconversion and correlation implementation. Defaults to `CPUThreadedDownconvertAndCorrelator()`. **For real-time loops, hoist this outside the loop** (see below).
 - `intermediate_frequency` — the IF of the signal. Defaults to `0.0Hz`. Only accepted on the bare-buffer form `track!(buf, state, fs; intermediate_frequency = ...)`; on the [`Measurement`](@ref) and multi-band forms the IF lives on each `Measurement`.
-- `preferred_num_code_blocks_to_integrate` — preferred number of code blocks to integrate. Defaults to `1`. Only takes effect once bit synchronization has been achieved.
+The **coherent-integration length** is not a `track!` argument — it is a per-signal setting on each [`TrackedSignal`](@ref) (its `preferred_num_code_blocks_to_integrate` field), changed with [`set_preferred_num_code_blocks_to_integrate!`](@ref). It defaults to `1`, is capped per integration by the signal's bit/secondary-code period, and only takes effect once bit/secondary-code synchronization has been achieved. With the conventional estimator the loop bandwidth auto-scales by `1/N` so longer integration stays stable without re-tuning.
 
 ## Real-time loops
 

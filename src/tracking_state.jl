@@ -753,6 +753,7 @@ for fn in (
     :get_last_fully_integrated_correlator, :get_last_fully_integrated_filtered_prompt,
     :get_post_corr_filter, :get_cn0_estimator, :get_bit_buffer, :get_bits,
     :get_num_bits, :has_bit_or_secondary_code_been_found, :estimate_cn0,
+    :get_preferred_num_code_blocks_to_integrate,
 )
     @eval begin
         $fn(s::TrackState, id...) = $fn(get_sat_state(s, id...))
@@ -763,6 +764,87 @@ for fn in (
             sig::_SignalSelector,
         ) = $fn(get_sat_state(s, group, sat_id), sig)
     end
+end
+
+# Resolve the index of the addressed signal within a sat's signals tuple.
+# Config-time only (not the hot path), so plain control flow is fine.
+_signal_index(signals::Tuple) =
+    length(signals) == 1 ? 1 :
+    throw(ArgumentError(
+        "satellite tracks multiple signals — pass a signal selector " *
+        "(integer index or signal type) to address one of them."))
+_signal_index(::Tuple, i::Integer) = Int(i)
+function _signal_index(signals::Tuple, ::Type{T}) where {T<:AbstractGNSSSignal}
+    idx = findfirst(s -> s.signal isa T, signals)
+    isnothing(idx) && throw(ArgumentError("no signal of type $T on this satellite"))
+    idx
+end
+
+# Rebuild `sat` with the addressed signal's coherent-integration length set
+# to `N`; the other signals are left untouched (types unchanged, so the
+# satellite's concrete type is preserved).
+function _set_sat_signal_preferred_blocks(sat::TrackedSat, N::Int, sel...)
+    idx = _signal_index(sat.signals, sel...)
+    idx_tuple = ntuple(identity, length(sat.signals))
+    new_signals = map(sat.signals, idx_tuple) do s, i
+        i == idx ? TrackedSignal(s; preferred_num_code_blocks_to_integrate = N) : s
+    end
+    TrackedSat(sat; signals = new_signals)
+end
+
+"""
+$(SIGNATURES)
+
+Set the preferred coherent-integration length, in primary code blocks, for one
+signal on one satellite — the `preferred_num_code_blocks_to_integrate` field of
+the addressed [`TrackedSignal`](@ref). The actual length is still capped per
+integration by the signal's bit/secondary-code period and held at 1 until
+bit/secondary sync (see `calc_num_code_blocks_to_integrate`); with the
+conventional estimator the loop bandwidth auto-scales by `1/N` so the loop
+stays stable at any length.
+
+The satellite is addressed exactly like the per-signal accessors
+(e.g. [`estimate_cn0`](@ref)):
+
+```julia
+set_preferred_num_code_blocks_to_integrate!(ts, :gps_l5, 1, GPSL5I, 10)  # (group, prn, signal)
+set_preferred_num_code_blocks_to_integrate!(ts, 1, GPSL5I, 10)           # single-group state
+set_preferred_num_code_blocks_to_integrate!(ts, 1, 10)                   # single-group, single-signal sat
+```
+
+Mutates `track_state` in place and returns it.
+"""
+function set_preferred_num_code_blocks_to_integrate!(
+    track_state::TrackState{<:SignalGroups},
+    group::Union{Symbol,Integer,Val},
+    sat_id,
+    sig::_SignalSelector,
+    num_code_blocks::Integer,
+)
+    sats = get_sat_states(track_state, group)
+    sats[sat_id] = _set_sat_signal_preferred_blocks(sats[sat_id], Int(num_code_blocks), sig)
+    track_state
+end
+
+function set_preferred_num_code_blocks_to_integrate!(
+    track_state::TrackState{<:SignalGroups{1}},
+    sat_id,
+    sig::_SignalSelector,
+    num_code_blocks::Integer,
+)
+    sats = get_sat_states(track_state)
+    sats[sat_id] = _set_sat_signal_preferred_blocks(sats[sat_id], Int(num_code_blocks), sig)
+    track_state
+end
+
+function set_preferred_num_code_blocks_to_integrate!(
+    track_state::TrackState{<:SignalGroups{1}},
+    sat_id,
+    num_code_blocks::Integer,
+)
+    sats = get_sat_states(track_state)
+    sats[sat_id] = _set_sat_signal_preferred_blocks(sats[sat_id], Int(num_code_blocks))
+    track_state
 end
 
 # Recursive tuple walk that folds the set of distinct `band_key`s across

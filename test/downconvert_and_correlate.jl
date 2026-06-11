@@ -41,7 +41,6 @@ end
     downconvert_and_correlator = DC()
     track_state = TrackState(gpsl1, sats)
 
-    preferred_num_code_blocks_to_integrate = 1
 
     signal =
         gen_code(
@@ -58,7 +57,6 @@ end
         downconvert_and_correlator,
         measurements,
         track_state,
-        preferred_num_code_blocks_to_integrate,
     )
 
     @test real.(get_correlator(next_track_state, 1).accumulators) ≈ [2921, 4949, 2917] rtol=1e-3
@@ -78,7 +76,6 @@ end
         downconvert_and_correlator,
         measurements,
         track_state,
-        preferred_num_code_blocks_to_integrate,
     )
 
     @test real.(get_correlator(next_track_state, 2).accumulators) ≈ [2919, 4947, 2915] rtol=1e-3
@@ -106,14 +103,14 @@ end
 
     # Immutable form
     result_skip = downconvert_and_correlate(
-        downconvert_and_correlator, measurements, ts_skip, 1,
+        downconvert_and_correlator, measurements, ts_skip,
     )
     @test get_correlator(result_skip, 1).accumulators == get_correlator(sat_past_end).accumulators
 
     # In-place form takes the same `signal_samples_to_integrate == 0` early
     # return per sat. The TrackedSat is reassigned to itself unchanged.
     Tracking.downconvert_and_correlate!(
-        downconvert_and_correlator, measurements, ts_skip, 1,
+        downconvert_and_correlator, measurements, ts_skip,
     )
     @test get_correlator(ts_skip, 1).accumulators == get_correlator(sat_past_end).accumulators
 end

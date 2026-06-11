@@ -99,7 +99,6 @@ end
     carrier_doppler = 100.0Hz
     prn = 1
     code_phase = 0.5
-    preferred_num_code_blocks_to_integrate = 1
 
     doppler_estimator = ConventionalPLLAndDLL()
 
@@ -127,7 +126,6 @@ end
     new_track_state = @inferred estimate_dopplers_and_filter_prompt(
         track_state,
         _meas_l1(sampling_frequency),
-        preferred_num_code_blocks_to_integrate,
     )
 
     # Since number of samples is too small the state doesn't change
@@ -156,7 +154,6 @@ end
     new_track_state_after_full_integration = @inferred estimate_dopplers_and_filter_prompt(
         track_state,
         _meas_l1(sampling_frequency),
-        preferred_num_code_blocks_to_integrate,
     )
 
     @test get_carrier_doppler(new_track_state_after_full_integration) ==
@@ -180,7 +177,6 @@ end
     gpsl1 = GPSL1CA()
     carrier_doppler = 100.0Hz
     code_phase = 0.5
-    preferred_num_code_blocks_to_integrate = 1
     num_samples = 5000
     correlator = update_accumulator(
         get_default_correlator(gpsl1),
@@ -242,7 +238,6 @@ end
     new_track_state = @inferred estimate_dopplers_and_filter_prompt(
         track_state,
         _meas_l1(sampling_frequency),
-        preferred_num_code_blocks_to_integrate,
     )
 
     # Sat 1 matches the baseline result from the previous testset.

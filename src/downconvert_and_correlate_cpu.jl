@@ -303,21 +303,19 @@ function _update_tracked_sat_correlator(
     dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
     signal,
     num_samples_signal,
-    preferred_num_code_blocks_to_integrate,
     sampling_frequency,
     intermediate_frequency,
 )
     # MIN samples-to-next-boundary across all signals on this sat, clamped
-    # to remaining buffer. The signal-level boundary calc reads each
-    # signal's primary-code-length-relative phase via mod(sat.code_phase,
-    # get_code_length(signal)).
+    # to remaining buffer. Each signal's coherent-integration length comes
+    # from its own `preferred_num_code_blocks_to_integrate` field; the
+    # signal-level boundary calc reads it per signal.
     samples_to_integrate, per_signal_completed = _calc_min_samples_and_completed(
         sat.signals,
         sat.signal_start_sample,
         sampling_frequency,
         sat.code_doppler,
         sat.code_phase,
-        preferred_num_code_blocks_to_integrate,
         num_samples_signal,
     )
     if samples_to_integrate == 0
@@ -358,12 +356,11 @@ end
     sampling_frequency,
     code_doppler,
     code_phase,
-    preferred_num_code_blocks_to_integrate,
     num_samples_signal,
 )
     per_signal_to_boundary = _per_signal_samples_to_boundary(
         signals, signal_start_sample, sampling_frequency, code_doppler, code_phase,
-        preferred_num_code_blocks_to_integrate, num_samples_signal,
+        num_samples_signal,
     )
     samples_to_integrate = _min_of_tuple(per_signal_to_boundary)
     signal_samples_left = num_samples_signal - signal_start_sample + 1
@@ -376,7 +373,7 @@ end
 # the signal-specific primary-code-relative phase. Tuple recursion keeps
 # the heterogeneous walk inline / inference-friendly.
 @inline _per_signal_samples_to_boundary(
-    ::Tuple{}, _, _, _, _, _, _,
+    ::Tuple{}, _, _, _, _, _,
 ) = ()
 @inline function _per_signal_samples_to_boundary(
     signals::Tuple,
@@ -384,29 +381,29 @@ end
     sampling_frequency,
     code_doppler,
     code_phase,
-    preferred_num_code_blocks_to_integrate,
     num_samples_signal,
 )
-    s = first(signals).signal
+    head = first(signals)
+    s = head.signal
     n_blocks = calc_num_code_blocks_to_integrate(
         s,
-        preferred_num_code_blocks_to_integrate,
-        has_bit_or_secondary_code_been_found(first(signals)),
+        head.preferred_num_code_blocks_to_integrate,
+        has_bit_or_secondary_code_been_found(head),
     )
     # Chips-to-next-boundary must be measured against the same wrap the
-    # multi-block window aligns to. After secondary-/bit-sync the window is
-    # `n_blocks` long and must land on the secondary-/bit-period boundary
-    # (one NH10 period = one L5I data symbol), so use the secondary-aware
-    # wrap; otherwise an N-block window started off the snapped secondary
-    # phase straddles the data-symbol boundary and the coherent sum cancels
-    # on data transitions. Pre-sync this is just the primary code length.
-    per_signal_phase = mod(code_phase, _replica_code_wrap(first(signals)))
+    # multi-block window aligns to. For an `n_blocks > 1` window past sync it
+    # must land on the secondary-/bit-period boundary (one NH10 period = one
+    # L5I data symbol), so use the secondary-aware wrap; otherwise an N-block
+    # window started off the snapped secondary phase straddles the data-symbol
+    # boundary and the coherent sum cancels on data transitions. For a single
+    # block (or pre-sync) this is just the primary code length.
+    per_signal_phase = mod(code_phase, _replica_code_wrap(head, n_blocks))
     n = calc_num_samples_left_to_integrate(
         s, n_blocks, sampling_frequency, code_doppler, per_signal_phase,
     )
     (n, _per_signal_samples_to_boundary(
         Base.tail(signals), signal_start_sample, sampling_frequency, code_doppler,
-        code_phase, preferred_num_code_blocks_to_integrate, num_samples_signal,
+        code_phase, num_samples_signal,
     )...)
 end
 
@@ -418,17 +415,23 @@ end
 @inline _flag_completed(t::Tuple, chosen) =
     (first(t) == chosen, _flag_completed(Base.tail(t), chosen)...)
 
-# Code-phase wrap to use when generating a signal's code replica. Must
-# preserve the secondary-/overlay-code phase once sync is found, otherwise
-# `gen_code!` bakes the secondary code starting at chip 0 and a multi-block
-# (N>1) coherent integration sums the blocks against a misaligned overlay,
-# cancelling the signal. Before sync we only know the primary-code phase, so
-# wrap at the primary length. (For signals without a baked secondary code —
-# e.g. GPS L1 C/A — the wider wrap is harmless: the primary repeats every
-# `get_code_length` chips and the secondary length is 1.)
-@inline _replica_code_wrap(tsig::TrackedSignal) =
-    has_bit_or_secondary_code_been_found(tsig) ? _post_sync_code_length(tsig) :
-    get_code_length(tsig.signal)
+# Code-phase wrap to use when generating a signal's code replica / sizing its
+# integration window over `num_blocks` primary blocks. For a MULTI-block
+# (`num_blocks > 1`) coherent integration past sync, the wrap must preserve the
+# secondary-/overlay-code phase: otherwise `gen_code!` bakes the secondary code
+# starting at chip 0 and the N blocks sum against a misaligned overlay (the
+# coherent sum cancels), and the boundary calc would start the N-block window
+# off the secondary phase and straddle the data-symbol boundary. A SINGLE-block
+# integration (`num_blocks == 1`) deliberately keeps the primary wrap so the
+# replica stays primary-only — the per-block secondary sign is then handled by
+# the bit buffer, exactly as before sync; this keeps the N=1 path bit-identical
+# and avoids double-removing the secondary. Before sync only the primary phase
+# is known. (Signals without a baked secondary code — e.g. GPS L1 C/A — are
+# unaffected: the primary repeats every `get_code_length` chips, secondary
+# length 1.)
+@inline _replica_code_wrap(tsig::TrackedSignal, num_blocks::Integer) =
+    (num_blocks > 1 && has_bit_or_secondary_code_been_found(tsig)) ?
+    _post_sync_code_length(tsig) : get_code_length(tsig.signal)
 
 # Single-signal path: gen one code replica + run the in-register fused
 # kernel. Returns a one-tuple of `(new_correlator, is_integration_completed)`.
@@ -458,7 +461,11 @@ end
         get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
     code_replica_size =
         num_samples_signal + maximum(sample_shifts) - minimum(sample_shifts)
-    per_signal_phase = mod(code_phase, _replica_code_wrap(head))
+    n_blocks = calc_num_code_blocks_to_integrate(
+        s, head.preferred_num_code_blocks_to_integrate,
+        has_bit_or_secondary_code_been_found(head),
+    )
+    per_signal_phase = mod(code_phase, _replica_code_wrap(head, n_blocks))
     new_corr = _with_code_replica_buffer(
         dc, get_code_type(s), code_replica_size,
     ) do code_replica
@@ -563,7 +570,11 @@ end
         )
         code_replica_size =
             num_samples_signal + maximum(sample_shifts) - minimum(sample_shifts)
-        per_signal_phase = mod(code_phase, _replica_code_wrap(head))
+        n_blocks = calc_num_code_blocks_to_integrate(
+            s, head.preferred_num_code_blocks_to_integrate,
+            has_bit_or_secondary_code_been_found(head),
+        )
+        per_signal_phase = mod(code_phase, _replica_code_wrap(head, n_blocks))
         slot = _code_replica_slot(bufs, i)
         CT = get_code_type(s)
         nbytes = code_replica_size * sizeof(CT)
@@ -610,16 +621,12 @@ function downconvert_and_correlate(
     dc::CPUDownconvertAndCorrelator,
     measurements::Measurements,
     track_state::TrackState,
-    preferred_num_code_blocks_to_integrate::Int,
 )
     new_track_state = TrackState(
         track_state;
         groups = _copy_groups_slot_vectors(track_state.groups),
     )
-    downconvert_and_correlate!(
-        dc, measurements, new_track_state,
-        preferred_num_code_blocks_to_integrate,
-    )
+    downconvert_and_correlate!(dc, measurements, new_track_state)
 end
 
 """
@@ -636,7 +643,7 @@ state — see [`track!`](@ref).
 # buffer and front-end metadata.
 @inline function _dc_one_group!(
     g::SignalGroup, dc::CPUDownconvertAndCorrelator,
-    measurements::Measurements, preferred_num_code_blocks_to_integrate,
+    measurements::Measurements,
 )
     vals = g.satellites.values
     isempty(vals) && return nothing
@@ -651,7 +658,6 @@ state — see [`track!`](@ref).
             dc,
             signal,
             num_samples_signal,
-            preferred_num_code_blocks_to_integrate,
             sampling_frequency,
             intermediate_frequency,
         )
@@ -663,12 +669,8 @@ function downconvert_and_correlate!(
     dc::CPUDownconvertAndCorrelator,
     measurements::Measurements,
     track_state::TrackState,
-    preferred_num_code_blocks_to_integrate::Int,
 )
-    _foreach_group!(
-        _dc_one_group!, track_state.groups,
-        dc, measurements, preferred_num_code_blocks_to_integrate,
-    )
+    _foreach_group!(_dc_one_group!, track_state.groups, dc, measurements)
     return track_state
 end
 
@@ -685,16 +687,12 @@ function downconvert_and_correlate(
     dc::CPUThreadedDownconvertAndCorrelator,
     measurements::Measurements,
     track_state::TrackState,
-    preferred_num_code_blocks_to_integrate::Int,
 )
     new_track_state = TrackState(
         track_state;
         groups = _copy_groups_slot_vectors(track_state.groups),
     )
-    downconvert_and_correlate!(
-        dc, measurements, new_track_state,
-        preferred_num_code_blocks_to_integrate,
-    )
+    downconvert_and_correlate!(dc, measurements, new_track_state)
 end
 
 """
@@ -711,7 +709,7 @@ write to disjoint slots, so no synchronization is needed. Returns the same
 # group tuples. Routes to this group's band's `Measurement`.
 @inline function _dc_one_group_threaded!(
     g::SignalGroup, dc::CPUThreadedDownconvertAndCorrelator,
-    measurements::Measurements, preferred_num_code_blocks_to_integrate,
+    measurements::Measurements,
 )
     vals = g.satellites.values
     n = length(vals)
@@ -727,7 +725,6 @@ write to disjoint slots, so no synchronization is needed. Returns the same
             dc,
             signal,
             num_samples_signal,
-            preferred_num_code_blocks_to_integrate,
             sampling_frequency,
             intermediate_frequency,
         )
@@ -739,12 +736,8 @@ function downconvert_and_correlate!(
     dc::CPUThreadedDownconvertAndCorrelator,
     measurements::Measurements,
     track_state::TrackState,
-    preferred_num_code_blocks_to_integrate::Int,
 )
-    _foreach_group!(
-        _dc_one_group_threaded!, track_state.groups,
-        dc, measurements, preferred_num_code_blocks_to_integrate,
-    )
+    _foreach_group!(_dc_one_group_threaded!, track_state.groups, dc, measurements)
     return track_state
 end
 

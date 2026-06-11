@@ -26,6 +26,12 @@ struct TrackedSignal{
     bit_buffer::BitBuffer{B}
     post_corr_filter::PCF
     filtered_prompts::Vector{ComplexF64}
+    # Preferred coherent-integration length for THIS signal, in primary code
+    # blocks. The actual length is capped per integration by the signal's
+    # bit/secondary-code period and held at 1 until bit/secondary sync (see
+    # `calc_num_code_blocks_to_integrate`). Defaults to 1; change it with
+    # [`set_preferred_num_code_blocks_to_integrate!`](@ref).
+    preferred_num_code_blocks_to_integrate::Int
 end
 
 """
@@ -41,6 +47,7 @@ function TrackedSignal(
     correlator::AbstractCorrelator = get_default_correlator(signal, num_ants),
     num_prompts_for_cn0_estimation::Int = 100,
     post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),
+    preferred_num_code_blocks_to_integrate::Int = 1,
 )
     # Per-signal sync-search buffer width — see `get_code_block_buffer_type`.
     # Picking the type here makes `B` concrete in the resulting
@@ -57,6 +64,7 @@ function TrackedSignal(
         BitBuffer{B}(),
         post_corr_filter,
         ComplexF64[],
+        preferred_num_code_blocks_to_integrate,
     )
 end
 
@@ -77,6 +85,7 @@ function TrackedSignal(
     bit_buffer::Maybe{BitBuffer{B}} = nothing,
     post_corr_filter::Maybe{PCF} = nothing,
     filtered_prompts::Maybe{Vector{ComplexF64}} = nothing,
+    preferred_num_code_blocks_to_integrate = nothing,
 ) where {Sig<:AbstractGNSSSignal,B<:Unsigned,C<:AbstractCorrelator,PCF<:AbstractPostCorrFilter}
     TrackedSignal{Sig,B,C,PCF}(
         isnothing(signal) ? t.signal : signal,
@@ -92,6 +101,8 @@ function TrackedSignal(
         isnothing(bit_buffer) ? t.bit_buffer : bit_buffer,
         isnothing(post_corr_filter) ? t.post_corr_filter : post_corr_filter,
         isnothing(filtered_prompts) ? t.filtered_prompts : filtered_prompts,
+        isnothing(preferred_num_code_blocks_to_integrate) ?
+        t.preferred_num_code_blocks_to_integrate : preferred_num_code_blocks_to_integrate,
     )
 end
 
@@ -109,6 +120,8 @@ get_num_bits(t::TrackedSignal) = length(t.bit_buffer)
 has_bit_or_secondary_code_been_found(t::TrackedSignal) =
     has_bit_or_secondary_code_been_found(t.bit_buffer)
 get_integrated_samples(t::TrackedSignal) = t.integrated_samples
+get_preferred_num_code_blocks_to_integrate(t::TrackedSignal) =
+    t.preferred_num_code_blocks_to_integrate
 
 """
 $(SIGNATURES)
@@ -521,6 +534,8 @@ has_bit_or_secondary_code_been_found(s::TrackedSat, sel...) =
     has_bit_or_secondary_code_been_found(_find_signal(s.signals, sel...))
 get_integrated_samples(s::TrackedSat, sel...) =
     get_integrated_samples(_find_signal(s.signals, sel...))
+get_preferred_num_code_blocks_to_integrate(s::TrackedSat, sel...) =
+    get_preferred_num_code_blocks_to_integrate(_find_signal(s.signals, sel...))
 
 # Reset the satellite's signal-start sample and per-signal bit buffer between
 # `track` calls. Per-signal `filtered_prompts` vectors are emptied in place;
