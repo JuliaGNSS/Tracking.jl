@@ -393,10 +393,14 @@ end
         preferred_num_code_blocks_to_integrate,
         has_bit_or_secondary_code_been_found(first(signals)),
     )
-    # The signal's chips-to-next-boundary uses its own primary code length;
-    # `mod(code_phase, get_code_length(s))` gives the signal's replica-
-    # relative phase.
-    per_signal_phase = mod(code_phase, get_code_length(s))
+    # Chips-to-next-boundary must be measured against the same wrap the
+    # multi-block window aligns to. After secondary-/bit-sync the window is
+    # `n_blocks` long and must land on the secondary-/bit-period boundary
+    # (one NH10 period = one L5I data symbol), so use the secondary-aware
+    # wrap; otherwise an N-block window started off the snapped secondary
+    # phase straddles the data-symbol boundary and the coherent sum cancels
+    # on data transitions. Pre-sync this is just the primary code length.
+    per_signal_phase = mod(code_phase, _replica_code_wrap(first(signals)))
     n = calc_num_samples_left_to_integrate(
         s, n_blocks, sampling_frequency, code_doppler, per_signal_phase,
     )
@@ -413,6 +417,18 @@ end
 @inline _flag_completed(::Tuple{}, _) = ()
 @inline _flag_completed(t::Tuple, chosen) =
     (first(t) == chosen, _flag_completed(Base.tail(t), chosen)...)
+
+# Code-phase wrap to use when generating a signal's code replica. Must
+# preserve the secondary-/overlay-code phase once sync is found, otherwise
+# `gen_code!` bakes the secondary code starting at chip 0 and a multi-block
+# (N>1) coherent integration sums the blocks against a misaligned overlay,
+# cancelling the signal. Before sync we only know the primary-code phase, so
+# wrap at the primary length. (For signals without a baked secondary code —
+# e.g. GPS L1 C/A — the wider wrap is harmless: the primary repeats every
+# `get_code_length` chips and the secondary length is 1.)
+@inline _replica_code_wrap(tsig::TrackedSignal) =
+    has_bit_or_secondary_code_been_found(tsig) ? _post_sync_code_length(tsig) :
+    get_code_length(tsig.signal)
 
 # Single-signal path: gen one code replica + run the in-register fused
 # kernel. Returns a one-tuple of `(new_correlator, is_integration_completed)`.
@@ -442,7 +458,7 @@ end
         get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
     code_replica_size =
         num_samples_signal + maximum(sample_shifts) - minimum(sample_shifts)
-    per_signal_phase = mod(code_phase, get_code_length(s))
+    per_signal_phase = mod(code_phase, _replica_code_wrap(head))
     new_corr = _with_code_replica_buffer(
         dc, get_code_type(s), code_replica_size,
     ) do code_replica
@@ -547,7 +563,7 @@ end
         )
         code_replica_size =
             num_samples_signal + maximum(sample_shifts) - minimum(sample_shifts)
-        per_signal_phase = mod(code_phase, get_code_length(s))
+        per_signal_phase = mod(code_phase, _replica_code_wrap(head))
         slot = _code_replica_slot(bufs, i)
         CT = get_code_type(s)
         nbytes = code_replica_size * sizeof(CT)
