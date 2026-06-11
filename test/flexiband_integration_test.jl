@@ -248,17 +248,18 @@ else
         @info "Flexiband acquisition" GPS_L1CA = prns_l1 Galileo_E1B = prns_e1 GPS_L5I =
             prns_l5
 
-        # Deterministic capture → deterministic detections. Assert the strong,
-        # physically-real satellites plus a healthy minimum count per signal.
-        @test length(acq_l1) ≥ 5
-        @test 17 in prns_l1 && 5 in prns_l1
-        @test length(acq_e1) ≥ 3
-        @test 7 in prns_e1 && 8 in prns_e1
-        @test length(acq_l5) ≥ 1
-        @test 6 in prns_l5
+        # Deterministic capture + fixed acquisition params → a fixed satellite
+        # set. Assert it exactly so a regression in the demux, the band
+        # parameters, or acquisition shows up as a changed PRN list.
+        #   GPS L5 is only carried by Block IIF satellites (Oct 2017), so of the
+        #   six L1 C/A satellites only PRN 6 (IIF) also appears on L5; PRN 9 (IIF)
+        #   is below the L1 detection threshold but acquires on L5.
+        @test prns_l1 == [2, 5, 6, 12, 17, 19]
+        @test prns_e1 == [1, 7, 8, 26]
+        @test prns_l5 == [6, 9]
         # GPS PRN 6 is visible on both the L1 and L5 bands — a cross-band check
         # that both demuxes are correct and time-aligned.
-        @test 6 in prns_l1
+        @test 6 in prns_l1 && 6 in prns_l5
 
         # Multi-band TrackState: GPS L1 C/A and Galileo E1B share the L1 band;
         # GPS L5I is its own band. `track!` walks each group against its band's
@@ -271,16 +272,13 @@ else
             ),
         )
         for a in acq_l1
-            ;
-            add_satellite!(track_state, a; group = :gps_l1);
+            add_satellite!(track_state, a; group = :gps_l1)
         end
         for a in acq_e1
-            ;
-            add_satellite!(track_state, a; group = :galileo);
+            add_satellite!(track_state, a; group = :galileo)
         end
         for a in acq_l5
-            ;
-            add_satellite!(track_state, a; group = :gps_l5);
+            add_satellite!(track_state, a; group = :gps_l5)
         end
 
         track!(
@@ -294,16 +292,15 @@ else
         doppler_hz(group, prn) = ustrip(Hz, get_carrier_doppler(track_state, group, prn))
         cn0_dbhz(group, prn) = ustrip(estimate_cn0(track_state, group, prn))
 
+        # Every acquired satellite — on all three signals — must hold lock: the
+        # tracked carrier Doppler stays close to the acquired value and the
+        # C/N0 estimate sits well above the noise floor.
         for (group, acqs) in ((:gps_l1, acq_l1), (:galileo, acq_e1), (:gps_l5, acq_l5))
             for a in acqs
-                @test abs(doppler_hz(group, a.prn) - ustrip(Hz, a.carrier_doppler)) < 150
+                @test abs(doppler_hz(group, a.prn) - ustrip(Hz, a.carrier_doppler)) < 100
+                @test cn0_dbhz(group, a.prn) > 32
             end
         end
-
-        # Strongest satellite per signal stays clearly locked.
-        @test cn0_dbhz(:gps_l1, 17) > 42
-        @test cn0_dbhz(:galileo, 8) > 38
-        @test cn0_dbhz(:gps_l5, 6) > 42
     end
 end
 
