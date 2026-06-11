@@ -108,7 +108,6 @@ julia> # 5a. Immutable form — walks each group, looks up its band's
        function Tracking.estimate_dopplers_and_filter_prompt(
            track_state::TrackState{<:Any, <:MyEstimator},
            measurements::Measurements,
-           preferred_num_code_blocks_to_integrate,
        )
            return track_state
        end;
@@ -118,7 +117,6 @@ julia> # 5b. In-place form — what `track!` actually calls. Real
        function Tracking.estimate_dopplers_and_filter_prompt!(
            track_state::TrackState{<:Any, <:MyEstimator},
            measurements::Measurements,
-           preferred_num_code_blocks_to_integrate,
        )
            return track_state
        end;

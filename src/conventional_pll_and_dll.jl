@@ -23,16 +23,16 @@ hand-picked default. For L1C-D / L1C-P (T = 10 ms) it returns 1.8 Hz, and
 for Galileo E1B (T = 4 ms) 4.5 Hz — the well-inside-stability values the
 multi-signal flagship use case needs.
 
-!!! warning "Coherent integration longer than the primary period"
-    This default is sized for an integration interval of one primary code
-    period. If you integrate over `N` primary blocks (e.g. L5I with
-    `preferred_num_code_blocks_to_integrate = 10` to coherently integrate
-    one NH10 secondary-code period = 10 ms), the loop update interval grows
-    to `N·T`, so `BL·N·T` approaches the 0.18 stability edge and the PLL can
-    go unstable. Scale the bandwidth down by `1/N` (pass an explicit
-    `ConventionalPLLAndDLL` / `ConventionalAssistedPLLAndDLL` with
-    `carrier_loop_filter_bandwidth = default_carrier_loop_filter_bandwidth(signal) / N`)
-    when integrating longer than the primary period.
+This value is the **reference** bandwidth for a one-primary-code-period
+integration; it is not the bandwidth that ends up in the loop when you
+integrate longer. Coherently integrating `N` primary blocks grows the loop
+update interval to `N·T`, which would push `BL·N·T` toward the ~0.18
+stability edge of the bilinear filter. To avoid that, the conventional
+estimator **automatically scales the effective loop bandwidth by
+`1/N`** at filter time (see [`ConventionalPLLAndDLL`](@ref)), holding the
+`BL·Δt` stability product fixed at its single-period value. So you set this
+reference bandwidth once and the loop stays stable at any integration length
+— no manual `1/N` adjustment is needed.
 """
 function default_carrier_loop_filter_bandwidth(signal::AbstractGNSSSignal)
     # T = primary_code_period_seconds. The estimator's bandwidth fields are
@@ -125,6 +125,15 @@ this estimator implicitly it picks per-signal bandwidths via
 [`default_carrier_loop_filter_bandwidth`](@ref) and
 [`default_code_loop_filter_bandwidth`](@ref) so longer-period signals
 (L1C-D, L1C-P, Galileo E1B) get appropriately tighter loops.
+
+The bandwidth fields are referenced to a **one-primary-code-period**
+integration. When a signal coherently integrates `N` primary blocks (its
+per-[`TrackedSignal`](@ref) `preferred_num_code_blocks_to_integrate`, set via
+[`set_preferred_num_code_blocks_to_integrate!`](@ref)), the effective loop
+bandwidth is automatically scaled to `BL/N` at filter time so the loop's
+`BL·Δt` stability product stays at its single-period value. This keeps the
+loop stable across integration lengths without the caller re-tuning the
+bandwidth — e.g. a 1 ms→10 ms switch needs no bandwidth change.
 """
 struct ConventionalPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter} <:
        AbstractDopplerEstimator
@@ -226,14 +235,14 @@ end
 # `estimate_dopplers_and_filter_prompt!` so the two cannot drift.
 function _update_tracked_sat_doppler(
     sat::TrackedSat,
-    preferred_num_code_blocks_to_integrate,
     sampling_frequency,
 )
     # Walk all signals. For each one whose integration completed this
     # iteration, normalize/filter its prompt, advance CN0 and bit buffer,
     # and move its correlator to `last_fully_integrated_*`. Additionally,
     # for `signals[1]` (the estimator-driver signal), run PLL/DLL and
-    # update the sat-shared carrier/code Doppler.
+    # update the sat-shared carrier/code Doppler. Each signal's coherent-
+    # integration length comes from its own `preferred_num_code_blocks_to_integrate`.
     pll_and_dll_state = sat.doppler_estimator_state
     head = first(sat.signals)
     tail_signals = Base.tail(sat.signals)
@@ -243,14 +252,12 @@ function _update_tracked_sat_doppler(
             head,
             sat,
             pll_and_dll_state,
-            preferred_num_code_blocks_to_integrate,
             sampling_frequency,
         )
 
     new_tail = _process_passenger_signals(
         tail_signals,
         sat.prn,
-        preferred_num_code_blocks_to_integrate,
         sampling_frequency,
     )
 
@@ -299,7 +306,6 @@ end
     tracked_signal::TrackedSignal,
     sat::TrackedSat,
     pll_and_dll_state::SatConventionalPLLAndDLL,
-    preferred_num_code_blocks_to_integrate,
     sampling_frequency,
 )
     if !tracked_signal.is_integration_completed || tracked_signal.integrated_samples == 0
@@ -308,7 +314,7 @@ end
     signal = tracked_signal.signal
     integrated_code_blocks = calc_num_code_blocks_to_integrate(
         signal,
-        preferred_num_code_blocks_to_integrate,
+        tracked_signal.preferred_num_code_blocks_to_integrate,
         has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
     )
 
@@ -321,13 +327,22 @@ end
     bit_buffer = buffer(signal, sat.prn, tracked_signal.bit_buffer, integrated_code_blocks, prompt)
     integration_time = tracked_signal.integrated_samples / sampling_frequency
 
+    # The configured bandwidths are referenced to a one-primary-code-period
+    # integration. Coherently integrating `integrated_code_blocks` periods
+    # grows the loop update interval by that factor, so scale the effective
+    # bandwidth by 1/integrated_code_blocks to hold the loop's BL·Δt stability
+    # product at its single-period value. For the N=1 path this divides by 1
+    # and is bit-identical to before.
+    carrier_bandwidth = pll_and_dll_state.carrier_loop_filter_bandwidth / integrated_code_blocks
+    code_bandwidth = pll_and_dll_state.code_loop_filter_bandwidth / integrated_code_blocks
+
     carrier_freq_update, carrier_loop_filter = calculate_carrier_frequency_update(
         signal,
         pll_and_dll_state.carrier_loop_filter,
         filtered_correlator,
         get_last_fully_integrated_filtered_prompt(tracked_signal),
         integration_time,
-        pll_and_dll_state.carrier_loop_filter_bandwidth,
+        carrier_bandwidth,
     )
     code_freq_update, code_loop_filter = calculate_code_frequency_update(
         signal,
@@ -336,7 +351,7 @@ end
         sat.code_doppler,
         sampling_frequency,
         integration_time,
-        pll_and_dll_state.code_loop_filter_bandwidth,
+        code_bandwidth,
     )
     carrier_doppler, code_doppler = aid_dopplers(
         signal,
@@ -369,28 +384,22 @@ end
 # filter work. Walks the tuple recursively to keep type-stability and
 # avoid boxing.
 @inline _process_passenger_signals(
-    ::Tuple{}, _, _,
-) = ()
-@inline _process_passenger_signals(
-    ::Tuple{}, prn::Integer, _, _,
+    ::Tuple{}, ::Integer, _,
 ) = ()
 @inline function _process_passenger_signals(
     signals::Tuple,
     prn::Integer,
-    preferred_num_code_blocks_to_integrate,
     sampling_frequency,
 )
     head = first(signals)
     new_head = _process_one_passenger_signal(
         head,
         prn,
-        preferred_num_code_blocks_to_integrate,
         sampling_frequency,
     )
     (new_head, _process_passenger_signals(
         Base.tail(signals),
         prn,
-        preferred_num_code_blocks_to_integrate,
         sampling_frequency,
     )...)
 end
@@ -398,7 +407,6 @@ end
 @inline function _process_one_passenger_signal(
     tracked_signal::TrackedSignal,
     prn::Integer,
-    preferred_num_code_blocks_to_integrate,
     sampling_frequency,
 )
     if !tracked_signal.is_integration_completed || tracked_signal.integrated_samples == 0
@@ -407,7 +415,7 @@ end
     signal = tracked_signal.signal
     integrated_code_blocks = calc_num_code_blocks_to_integrate(
         signal,
-        preferred_num_code_blocks_to_integrate,
+        tracked_signal.preferred_num_code_blocks_to_integrate,
         has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
     )
     normalized_correlator = normalize(tracked_signal.correlator, tracked_signal.integrated_samples)
@@ -447,7 +455,6 @@ zeroed values.
 function estimate_dopplers_and_filter_prompt(
     track_state::TrackState{<:SignalGroups,<:ConventionalPLLAndDLL},
     measurements::Measurements,
-    preferred_num_code_blocks_to_integrate,
 )
     # Detach slot vectors from the input, then delegate to the in-place
     # form. The per-sat doppler update is identical between the two —
@@ -456,9 +463,7 @@ function estimate_dopplers_and_filter_prompt(
         track_state;
         groups = _copy_groups_slot_vectors(track_state.groups),
     )
-    estimate_dopplers_and_filter_prompt!(
-        new_track_state, measurements, preferred_num_code_blocks_to_integrate,
-    )
+    estimate_dopplers_and_filter_prompt!(new_track_state, measurements)
 end
 
 """
@@ -477,7 +482,6 @@ allocation-free in steady state when [`track!`](@ref)'s preconditions are met.
 @inline function _est_one_group!(
     g::SignalGroup,
     measurements::Measurements,
-    preferred_num_code_blocks_to_integrate,
 )
     vals = g.satellites.values
     isempty(vals) && return nothing
@@ -485,7 +489,6 @@ allocation-free in steady state when [`track!`](@ref)'s preconditions are met.
     @inbounds for i in eachindex(vals)
         vals[i] = _update_tracked_sat_doppler(
             vals[i],
-            preferred_num_code_blocks_to_integrate,
             sampling_frequency,
         )
     end
@@ -495,12 +498,8 @@ end
 function estimate_dopplers_and_filter_prompt!(
     track_state::TrackState{<:SignalGroups,<:ConventionalPLLAndDLL},
     measurements::Measurements,
-    preferred_num_code_blocks_to_integrate,
 )
-    _foreach_group!(
-        _est_one_group!, track_state.groups,
-        measurements, preferred_num_code_blocks_to_integrate,
-    )
+    _foreach_group!(_est_one_group!, track_state.groups, measurements)
     return track_state
 end
 

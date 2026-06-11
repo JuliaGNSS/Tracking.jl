@@ -105,11 +105,11 @@ function measure_dc!(dc, signal, track_state, sampling_frequency)
     measurements = (l1 = Measurement(signal, sampling_frequency),)
     for _ in 1:8
         downconvert_and_correlate!(
-            dc, measurements, track_state, 1,
+            dc, measurements, track_state,
         )
     end
     @allocated downconvert_and_correlate!(
-        dc, measurements, track_state, 1,
+        dc, measurements, track_state,
     )
 end
 
@@ -118,10 +118,10 @@ function measure_est!(track_state, sampling_frequency)
     # samples are unused.
     measurements = (l1 = Measurement(ComplexF64[], sampling_frequency),)
     for _ in 1:8
-        estimate_dopplers_and_filter_prompt!(track_state, measurements, 1)
+        estimate_dopplers_and_filter_prompt!(track_state, measurements)
     end
     @allocated estimate_dopplers_and_filter_prompt!(
-        track_state, measurements, 1,
+        track_state, measurements,
     )
 end
 

@@ -38,12 +38,28 @@ The default kwarg value builds a fresh correlator (with fresh per-thread
 scratch buffers) on every call, which is fine for one-shot use but
 defeats the allocation-free design in tight loops. See also [`track!`](@ref)
 for the in-place variant that avoids rebuilding `track_state` per call.
+
+The coherent-integration length is a **per-signal** setting that lives on each
+[`TrackedSignal`](@ref) (its `preferred_num_code_blocks_to_integrate` field,
+addressed by `(group, prn, signal)`), not a `track!` argument. Set it with
+[`set_preferred_num_code_blocks_to_integrate!`](@ref); the actual length is
+capped per integration by the signal's bit/secondary-code period and held at 1
+until bit/secondary sync. Defaults to 1 (1 ms for GPS L5I / L1 C/A). Different
+satellites — and different signals on one satellite — can therefore integrate
+for different lengths:
+
+```julia
+set_preferred_num_code_blocks_to_integrate!(track_state, :gps_l5, 1, GPSL5I, 10)  # PRN 1 L5I: 10 ms
+```
+
+The conventional estimator auto-scales each signal's loop bandwidth by `1/N`
+for its integration length `N`, so longer integration stays stable without
+re-tuning (see [`ConventionalPLLAndDLL`](@ref)).
 """
 function track(
     measurements::Measurements,
     track_state::TS;
     downconvert_and_correlator::AbstractDownconvertAndCorrelator = CPUThreadedDownconvertAndCorrelator(),
-    preferred_num_code_blocks_to_integrate = 1,
 ) where {TS<:TrackState}
     _validate_measurements(track_state, measurements)
     track_state = reset_start_sample_and_bit_buffer(track_state)::TS
@@ -54,12 +70,10 @@ function track(
             downconvert_and_correlator,
             measurements,
             track_state,
-            preferred_num_code_blocks_to_integrate,
         )::TS
         track_state = estimate_dopplers_and_filter_prompt(
             track_state,
             measurements,
-            preferred_num_code_blocks_to_integrate,
         )::TS
     end
     return track_state
@@ -126,7 +140,6 @@ function track!(
     measurements::Measurements,
     track_state::TrackState;
     downconvert_and_correlator::AbstractDownconvertAndCorrelator = CPUThreadedDownconvertAndCorrelator(),
-    preferred_num_code_blocks_to_integrate = 1,
 )
     _validate_measurements(track_state, measurements)
     reset_start_sample_and_bit_buffer!(track_state)
@@ -137,12 +150,10 @@ function track!(
             downconvert_and_correlator,
             measurements,
             track_state,
-            preferred_num_code_blocks_to_integrate,
         )
         estimate_dopplers_and_filter_prompt!(
             track_state,
             measurements,
-            preferred_num_code_blocks_to_integrate,
         )
     end
     return track_state
