@@ -28,6 +28,15 @@ jobs:
         with:
           version: ${{ matrix.version }}
       - uses: julia-actions/cache@v3
+      # Cache the 1.6 GB Flexiband capture that the integration test downloads
+      # into Tracking's Scratch.jl scratchspace, so it is fetched once and
+      # reused across runs instead of re-downloaded on every job. The key is
+      # fixed (the capture never changes) → bump the suffix to invalidate.
+      - name: Cache Flexiband integration-test capture
+        uses: actions/cache@v4
+        with:
+          path: ~/.julia/scratchspaces/10b2438b-ffd4-5096-aa58-44041d5c8f3b/flexiband_iii_7a
+          key: flexiband-iii-7a-short-v1
       - uses: julia-actions/julia-runtest@v1
       - uses: julia-actions/julia-processcoverage@v1
       - uses: codecov/codecov-action@v7
