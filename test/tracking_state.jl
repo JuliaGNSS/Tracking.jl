@@ -37,6 +37,10 @@ using Tracking:
     MomentsCN0Estimator,
     BitBuffer,
     NumAnts,
+    get_preferred_num_code_blocks_to_integrate,
+    set_preferred_num_code_blocks_to_integrate!,
+    reset_loop_filters!,
+    get_doppler_estimator_state,
     ConventionalAssistedPLLAndDLL,
     ConventionalPLLAndDLL
 
@@ -414,6 +418,46 @@ end
     @inferred get_signal(track_state)
     @inferred get_sat_state(track_state, 1)
     @test true   # gives the testset a passing assertion if all `@inferred` succeed
+end
+
+@testset "per-signal preferred_num_code_blocks_to_integrate + reset_loop_filters!" begin
+    gpsl1 = GPSL1CA()
+    track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 100.0Hz)])
+
+    # Defaults to one block; settable per signal; persists.
+    @test get_preferred_num_code_blocks_to_integrate(track_state, 1) == 1
+    set_preferred_num_code_blocks_to_integrate!(track_state, 1, 20)
+    @test get_preferred_num_code_blocks_to_integrate(track_state, 1) == 20
+    set_preferred_num_code_blocks_to_integrate!(track_state, 1, GPSL1CA, 5)   # by signal type
+    @test get_preferred_num_code_blocks_to_integrate(track_state, 1) == 5
+
+    # The estimator state starts seeded at the init Doppler (100 Hz).
+    @test get_doppler_estimator_state(get_sat_state(track_state, 1)).init_carrier_doppler ==
+          100.0Hz
+
+    # Simulate the loop having converged to a different carrier/code Doppler.
+    sats = get_sat_states(track_state)
+    sats[1] = TrackedSat(sats[1]; carrier_doppler = 137.0Hz, code_doppler = 0.5Hz)
+    @test get_carrier_doppler(track_state, 1) == 137.0Hz
+    # The estimator state is still anchored at the original init (100 Hz).
+    @test get_doppler_estimator_state(get_sat_state(track_state, 1)).init_carrier_doppler ==
+          100.0Hz
+
+    reset_loop_filters!(track_state, 1)
+    # Carrier/code Doppler preserved across the reset.
+    @test get_carrier_doppler(track_state, 1) == 137.0Hz
+    @test get_code_doppler(track_state, 1) == 0.5Hz
+    # …and the estimator is re-seeded from the converged Doppler.
+    @test get_doppler_estimator_state(get_sat_state(track_state, 1)).init_carrier_doppler ==
+          137.0Hz
+    @test get_doppler_estimator_state(get_sat_state(track_state, 1)).init_code_doppler == 0.5Hz
+
+    # Whole-TrackState form resets every satellite and preserves Doppler.
+    sats[1] = TrackedSat(sats[1]; carrier_doppler = 201.0Hz)
+    reset_loop_filters!(track_state)
+    @test get_carrier_doppler(track_state, 1) == 201.0Hz
+    @test get_doppler_estimator_state(get_sat_state(track_state, 1)).init_carrier_doppler ==
+          201.0Hz
 end
 
 end
