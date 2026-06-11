@@ -847,6 +847,65 @@ function set_preferred_num_code_blocks_to_integrate!(
     track_state
 end
 
+# Re-seed one satellite's Doppler-estimator state from its current Doppler via
+# the estimator's `init_estimator_state` hook (a fresh, zeroed loop filter for
+# the conventional estimator), preserving `carrier_doppler` / `code_doppler`.
+@inline function _reset_sat_loop_filters(track_state::TrackState, sat::TrackedSat)
+    TrackedSat(sat; doppler_estimator_state = init_estimator_state(track_state.doppler_estimator, sat))
+end
+
+"""
+$(SIGNATURES)
+
+Re-seed the Doppler-estimator state of every satellite (or one addressed
+satellite) from its current Doppler, giving each a freshly initialized loop
+filter. For the conventional PLL/DLL estimator this zeroes the carrier and code
+loop-filter integrators while preserving the converged `carrier_doppler` /
+`code_doppler`, so the loop continues from the converged frequency with a clean
+filter.
+
+This is the recommended handoff when a signal's coherent-integration length
+changes mid-track — e.g. promoting GPS L5I from 1 ms to 10 ms via
+[`set_preferred_num_code_blocks_to_integrate!`](@ref). The bilinear loop
+filter's integrator state is not portable across the change in update interval
+(`Δt` grows by the integration factor), so resetting it avoids a transient that
+can drag the loop out of lock; the converged Doppler is the right seed for the
+new, longer integration.
+
+Addressed like the per-signal accessors — no satellite id resets every
+satellite in `track_state`; `(group, prn)` or (single-group) `prn` resets one.
+Mutates `track_state` in place and returns it. Works for any
+[`AbstractDopplerEstimator`](@ref) through its [`init_estimator_state`](@ref) hook.
+
+```julia
+set_preferred_num_code_blocks_to_integrate!(track_state, 1, GPSL5I, 10)
+reset_loop_filters!(track_state, 1)          # clean handoff for PRN 1
+reset_loop_filters!(track_state)             # …or reset every satellite
+```
+"""
+function reset_loop_filters!(track_state::TrackState)
+    for g in Tuple(track_state.groups)
+        vals = g.satellites.values
+        @inbounds for i in eachindex(vals)
+            vals[i] = _reset_sat_loop_filters(track_state, vals[i])
+        end
+    end
+    track_state
+end
+
+function reset_loop_filters!(
+    track_state::TrackState{<:SignalGroups},
+    group::Union{Symbol,Integer,Val},
+    sat_id,
+)
+    sats = get_sat_states(track_state, group)
+    sats[sat_id] = _reset_sat_loop_filters(track_state, sats[sat_id])
+    track_state
+end
+
+reset_loop_filters!(track_state::TrackState{<:SignalGroups{1}}, sat_id) =
+    reset_loop_filters!(track_state, 1, sat_id)
+
 # Recursive tuple walk that folds the set of distinct `band_key`s across
 # a `groups` tuple. Returns an `NTuple{N,Symbol}` of unique keys, in
 # first-encounter order. Concrete-typed input → fully unrolled at compile
