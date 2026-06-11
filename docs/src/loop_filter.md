@@ -45,6 +45,17 @@ default_carrier_loop_filter_bandwidth
 default_code_loop_filter_bandwidth
 ```
 
+## Resetting loop filters
+
+When you change a signal's coherent-integration length mid-track with
+[`set_preferred_num_code_blocks_to_integrate!`](@ref), reset the affected
+loop filters for a clean handoff so the previous integration length's filter
+state does not leak into the new one.
+
+```@docs
+reset_loop_filters!
+```
+
 ## Custom Configuration
 
 You can customize the loop filters and bandwidths when creating the Doppler estimator:
