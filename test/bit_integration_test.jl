@@ -13,7 +13,8 @@ using Tracking:
     get_bits,
     get_num_bits,
     get_soft_bits,
-    has_bit_or_secondary_code_been_found
+    has_bit_or_secondary_code_been_found,
+    set_preferred_num_code_blocks_to_integrate!
 
 @testset "Bit detection integration test" begin
     gpsl1 = GPSL1CA()
@@ -139,8 +140,108 @@ end
         track_state = TrackState(gpsl5, [TrackedSat(gpsl5, prn, start_phase, 0.0Hz)])
         track_state = track(signal, track_state, sampling_frequency)
         @test has_bit_or_secondary_code_been_found(track_state)
-        @test get_code_phase(track_state) ==
-              (k % secondary_code_length) * primary_code_length + 0.5 * primary_code_length
+        # Post-sync the replica bakes the NH chip per block (issue #125), so the
+        # loop sees a sign-consistent prompt and code Doppler nudges by floating-
+        # point noise over the continuous 60-block run; the converged code phase
+        # lands on chip `k mod 10` + the leftover half block up to a sub-microchip
+        # residual (~5e-7 of 10230 chips). Same tolerance as the L1C-P run below.
+        @test get_code_phase(track_state) ≈
+              (k % secondary_code_length) * primary_code_length + 0.5 * primary_code_length atol = 1e-4
+    end
+end
+
+# GPS L5I post-sync data-bit decoding (issue #125).
+#
+# The NH10 rotation search locks at *any* secondary chip, so the post-sync bit
+# decoder must (a) wipe the NH code from each prompt — at the default 1-block
+# integration the replica covers a single primary period and has to bake the
+# correct NH chip, otherwise a 10-block "bit" sum collapses to
+# `data x Σ(NH signs)` and loses ~14 dB of decision margin — and (b) start its
+# accumulation grid at the recovered secondary phase rather than at the lock
+# instant, so bits are emitted on the NH10 / data-bit boundary. This decodes a
+# known bit sequence through boundary and non-boundary locks at both the default
+# 1-block and a 10-block coherent integration.
+#
+# Note on polarity: locking onto a periodic secondary code carries an inherent
+# ±1 data-polarity ambiguity (the rotation search cannot tell a data "1" period
+# from a "0" period — both match the NH pattern in one orientation), resolved
+# downstream by the nav-message preamble. The fix's job is a *clean, aligned,
+# uncancelled* decode, so the sequence is checked up to a single global
+# inversion, with the per-bit coherent magnitude asserted near the full NH10
+# length (≈10, vs ≈2 if the NH code were left in).
+@testset "GPS L5I post-sync data-bit decoding (issue #125)" begin
+    gpsl5 = GPSL5I()
+    prn = 1
+    sampling_frequency = 25e6Hz
+    code_frequency = get_code_frequency(gpsl5)
+    primary_code_length = get_code_length(gpsl5)              # 10230 chips
+    secondary_code_length = get_secondary_code_length(gpsl5)  # 10 (NH10)
+    num_samples = round(Int, 25e6 / 1000)                     # 1 ms = one primary block
+
+    # One data bit per NH10 period (10 primary blocks). The first two bits are
+    # equal so the rotation search locks cleanly on a 10-block window that may
+    # straddle their boundary.
+    data_bits = [1, 1, 0, 1, 0, 0, 1, 1, 0, 1]
+
+    @testset "preferred = $preferred_blocks, start chip $start_secondary_chip" for
+            preferred_blocks in (1, 10), start_secondary_chip in (0, 3, 9)
+        # One continuous signal: `gen_code` bakes the NH chip per block via the
+        # advancing code phase, and each 1 ms block is scaled by its data bit.
+        # Fed in a single `track` call so the inner loop owns all block-boundary
+        # bookkeeping — robust to the sub-sample code-Doppler the loop develops,
+        # which would otherwise straddle fixed per-call chunks and drop bits.
+        total_blocks = secondary_code_length * length(data_bits) - start_secondary_chip
+        signal = ComplexF32.(
+            gen_code(
+                total_blocks * num_samples,
+                gpsl5,
+                prn,
+                sampling_frequency,
+                code_frequency,
+                start_secondary_chip * primary_code_length,
+            ),
+        )
+        for b in 0:(total_blocks-1)
+            abs_block = start_secondary_chip + b
+            data_bit = data_bits[div(abs_block, secondary_code_length)+1]
+            block_range = (b*num_samples+1):((b+1)*num_samples)
+            @views signal[block_range] .*= ComplexF32(2 * data_bit - 1)
+        end
+
+        track_state = TrackState(
+            gpsl5,
+            [TrackedSat(gpsl5, prn, start_secondary_chip * primary_code_length, 0.0Hz)],
+        )
+        set_preferred_num_code_blocks_to_integrate!(track_state, prn, preferred_blocks)
+        track_state = track(signal, track_state, sampling_frequency)
+
+        @test has_bit_or_secondary_code_been_found(track_state)
+
+        # The pre-sync rotation search consumes the first NH10 period (the lead
+        # of the lock data bit); decoding then begins with the remainder of that
+        # same data bit (`data_bits[2]`) and proceeds bit-by-bit. The trailing
+        # data bit may be left mid-integration, so compare the bits that
+        # completed.
+        soft_bits = get_soft_bits(track_state)
+        decoded_bits = [Int(s > 0) for s in soft_bits]
+        n_decoded = length(decoded_bits)
+        expected = data_bits[2:(1+n_decoded)]
+
+        # At least every full data bit but the last must have decoded.
+        @test n_decoded >= length(data_bits) - 2
+        # Clean, boundary-aligned decode — up to the global polarity ambiguity.
+        @test decoded_bits == expected || decoded_bits == 1 .- expected
+        # Soft-bit signs are internally consistent with the hard bits.
+        @test all((soft_bits .> 0) .== (decoded_bits .== 1))
+        # The NH code is wiped: every *full* post-sync bit (all but a possibly
+        # truncated first one, when the lock lands mid data bit) sums coherently.
+        # A full bit spans `secondary_code_length` primary blocks; the soft bit
+        # sums one unit-magnitude prompt per `preferred_blocks`-block integration,
+        # so its magnitude is ≈ `secondary_code_length / preferred_blocks`. Left
+        # in, the NH signs would nearly cancel (≈2 for NH10 at 1-block), so this
+        # half-of-nominal floor is the load-bearing assertion of the fix.
+        full_bit_magnitude = secondary_code_length / preferred_blocks
+        @test all(>(0.5 * full_bit_magnitude), abs.(soft_bits[2:end]))
     end
 end
 

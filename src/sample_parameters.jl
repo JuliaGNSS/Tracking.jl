@@ -26,6 +26,41 @@ end
 """
 $(SIGNATURES)
 
+Number of primary code blocks to credit the bit-buffer accumulator with for a
+just-completed integration.
+
+Pre-sync this is always 1: the bit/secondary-code search shifts exactly one
+prompt sign into its window per call, and a non-block-aligned start can make
+the first integration a *fractional* block — reporting anything but 1 would
+trip the single-block invariant in `_buffer_find_bit`.
+
+Post-sync it is the number of whole blocks the integration actually covered,
+recovered from its sample count. Integrations then end on a secondary-/data-bit
+boundary so this divides cleanly (the `round` absorbs the sub-chip Doppler
+residual in `code_frequency`). This can differ from the *intended* count
+returned by [`calc_num_code_blocks_to_integrate`](@ref): the first post-sync
+integration is truncated to `secondary_code_length − secondary_phase` blocks so
+it lands on the data-bit boundary, even though the preferred length is the full
+bit period. Crediting the accumulator with the intended length would misalign
+the decoded bits (issue #125).
+"""
+@inline function calc_num_code_blocks_for_bit_buffer(
+    signal::AbstractGNSSSignal,
+    integrated_samples::Integer,
+    sampling_frequency,
+    secondary_code_or_bit_found::Bool,
+)
+    secondary_code_or_bit_found || return 1
+    round(
+        Int,
+        integrated_samples * get_code_frequency(signal) /
+        (get_code_length(signal) * sampling_frequency),
+    )
+end
+
+"""
+$(SIGNATURES)
+
 Calculates the number of chips to integrate.
 """
 function calc_num_chips_to_integrate(
