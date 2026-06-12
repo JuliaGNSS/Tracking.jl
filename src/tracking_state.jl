@@ -789,10 +789,7 @@ end
 # Resolve the index of the addressed signal within a sat's signals tuple.
 # Config-time only (not the hot path), so plain control flow is fine.
 _signal_index(signals::Tuple) =
-    length(signals) == 1 ? 1 :
-    throw(ArgumentError(
-        "satellite tracks multiple signals — pass a signal selector " *
-        "(integer index or signal type) to address one of them."))
+    length(signals) == 1 ? 1 : _throw_needs_signal_selector()
 _signal_index(::Tuple, i::Integer) = Int(i)
 function _signal_index(signals::Tuple, ::Type{T}) where {T<:AbstractGNSSSignal}
     idx = findfirst(s -> s.signal isa T, signals)
@@ -830,12 +827,14 @@ thrown otherwise (issue #128). Pilot signals accept any length of at least
 one block.
 
 The satellite is addressed exactly like the per-signal accessors
-(e.g. [`estimate_cn0`](@ref)):
+(e.g. [`estimate_cn0`](@ref)) — in particular, the per-signal form always
+names the group explicitly, even on a single-group `TrackState`:
 
 ```julia
 set_preferred_num_code_blocks_to_integrate!(ts, :gps_l5, 1, GPSL5I, 10)  # (group, prn, signal)
-set_preferred_num_code_blocks_to_integrate!(ts, 1, GPSL5I, 10)           # single-group state
-set_preferred_num_code_blocks_to_integrate!(ts, 1, 10)                   # single-group, single-signal sat
+set_preferred_num_code_blocks_to_integrate!(ts, :gps_l5, 1, 10)          # single-signal sat
+set_preferred_num_code_blocks_to_integrate!(ts, 1, 10)                   # single-group state
+set_preferred_num_code_blocks_to_integrate!(ts, 10)                      # 1 group, 1 sat, 1 signal
 ```
 
 Mutates `track_state` in place and returns it.
@@ -843,7 +842,7 @@ Mutates `track_state` in place and returns it.
 function set_preferred_num_code_blocks_to_integrate!(
     track_state::TrackState{<:SignalGroups},
     group::Union{Symbol,Integer,Val},
-    sat_id,
+    sat_id::Integer,
     sig::_SignalSelector,
     num_code_blocks::Integer,
 )
@@ -853,22 +852,32 @@ function set_preferred_num_code_blocks_to_integrate!(
 end
 
 function set_preferred_num_code_blocks_to_integrate!(
-    track_state::TrackState{<:SignalGroups{1}},
-    sat_id,
-    sig::_SignalSelector,
+    track_state::TrackState{<:SignalGroups},
+    group::Union{Symbol,Integer,Val},
+    sat_id::Integer,
     num_code_blocks::Integer,
 )
-    sats = get_sat_states(track_state)
-    sats[sat_id] = _set_sat_signal_preferred_blocks(sats[sat_id], Int(num_code_blocks), sig)
+    sats = get_sat_states(track_state, group)
+    sats[sat_id] = _set_sat_signal_preferred_blocks(sats[sat_id], Int(num_code_blocks))
     track_state
 end
 
 function set_preferred_num_code_blocks_to_integrate!(
     track_state::TrackState{<:SignalGroups{1}},
-    sat_id,
+    sat_id::Integer,
     num_code_blocks::Integer,
 )
     sats = get_sat_states(track_state)
+    sats[sat_id] = _set_sat_signal_preferred_blocks(sats[sat_id], Int(num_code_blocks))
+    track_state
+end
+
+function set_preferred_num_code_blocks_to_integrate!(
+    track_state::TrackState{<:SignalGroups{1}},
+    num_code_blocks::Integer,
+)
+    sats = get_sat_states(track_state)
+    sat_id = only(keys(sats))
     sats[sat_id] = _set_sat_signal_preferred_blocks(sats[sat_id], Int(num_code_blocks))
     track_state
 end
@@ -962,14 +971,14 @@ band_keys(ts) == (:l1, :l5)
 # all groups when there is exactly one distinct band. Errors otherwise —
 # this is what gates whether the bare-buffer `track(buf, state, fs)`
 # entry point can route the measurement to a single auto-keyed
-# `Measurements` NamedTuple.
+# `BandMeasurements` NamedTuple.
 @inline function _single_band(track_state::TrackState)
     keys_tuple = band_keys(track_state)
     if length(keys_tuple) != 1
         throw(ArgumentError(string(
             "Bare-buffer `track`/`track!` requires a single-band TrackState, ",
             "but this TrackState spans bands ", keys_tuple,
-            ". Pass a NamedTuple of `Measurement`s instead, ",
+            ". Pass a NamedTuple of `BandMeasurement`s instead, ",
             "one per band.",
         )))
     end
@@ -992,13 +1001,13 @@ end
 # once at the top of `track` / `track!` — O(num_bands), irrelevant next
 # to the inner loop.
 @inline function _validate_measurements(
-    track_state::TrackState, measurements::Measurements,
+    track_state::TrackState, measurements::BandMeasurements,
 )
     expected_keys = band_keys(track_state)
     got_keys = keys(measurements)
     if !_tuple_sets_equal(expected_keys, got_keys)
         throw(ArgumentError(string(
-            "Measurement keys do not match the TrackState's band set. ",
+            "BandMeasurement keys do not match the TrackState's band set. ",
             "Expected: ", expected_keys,
             ". Got: ", got_keys, ".",
         )))
@@ -1015,20 +1024,20 @@ end
 # call. Walk via tuple recursion so each step has concrete types and
 # inlines cleanly.
 @inline function _validate_antenna_shapes(
-    track_state::TrackState, measurements::Measurements,
+    track_state::TrackState, measurements::BandMeasurements,
 )
     _validate_antenna_shapes_walk(Tuple(track_state.groups), measurements)
 end
 
-@inline _validate_antenna_shapes_walk(::Tuple{}, ::Measurements) = nothing
-@inline function _validate_antenna_shapes_walk(groups::Tuple, measurements::Measurements)
+@inline _validate_antenna_shapes_walk(::Tuple{}, ::BandMeasurements) = nothing
+@inline function _validate_antenna_shapes_walk(groups::Tuple, measurements::BandMeasurements)
     g = first(groups)
     m = measurements[band_key(g.band)]
     _assert_antenna_shape(g, m)
     _validate_antenna_shapes_walk(Base.tail(groups), measurements)
 end
 
-@inline function _assert_antenna_shape(g::SignalGroup{B,S,Sigs,NumAnts{M}}, m::Measurement) where {B,S,Sigs,M}
+@inline function _assert_antenna_shape(g::SignalGroup{B,S,Sigs,NumAnts{M}}, m::BandMeasurement) where {B,S,Sigs,M}
     cols = m.samples isa AbstractMatrix ? size(m.samples, 2) : 1
     cols == M && return nothing
     throw(ArgumentError(string(
@@ -1043,7 +1052,7 @@ end
 # rates (e.g. Float32 vs Float64) with identical real durations compare
 # equal; the rates are promoted first so neither product rounds in a
 # narrower type than the comparison.
-@inline function _validate_equal_durations(measurements::Measurements)
+@inline function _validate_equal_durations(measurements::BandMeasurements)
     ms = Tuple(measurements)
     isempty(ms) && return nothing
     first_m = first(ms)
@@ -1052,7 +1061,7 @@ end
         ref_fs, fs = promote(first_m.sampling_frequency, m.sampling_frequency)
         get_num_samples(m) * ref_fs == ref_num_samples * fs && continue
         throw(ArgumentError(string(
-            "Measurement durations must be exactly equal across bands. ",
+            "BandMeasurement durations must be exactly equal across bands. ",
             "Got ", uconvert(s, get_num_samples(m) / m.sampling_frequency),
             " and ", uconvert(s, ref_num_samples / first_m.sampling_frequency), ". ",
             "Check `num_samples / sampling_frequency` for each band.",

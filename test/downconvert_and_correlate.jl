@@ -12,7 +12,7 @@ using Tracking:
     NumAnts,
     TrackedSat,
     TrackState,
-    Measurement,
+    BandMeasurement,
     downconvert_and_correlate,
     get_accumulators,
     get_correlator,
@@ -52,7 +52,7 @@ end
             code_phase,
         ) .* cis.(2π * (0:(num_samples_signal-1)) * 1000.0Hz / sampling_frequency)
 
-    measurements = (l1 = Measurement(signal, sampling_frequency, intermediate_frequency),)
+    measurements = (l1 = BandMeasurement(signal, sampling_frequency, intermediate_frequency),)
     next_track_state = @inferred downconvert_and_correlate(
         downconvert_and_correlator,
         measurements,
@@ -71,7 +71,7 @@ end
             11.0,
         ) .* cis.(2π * (0:(num_samples_signal-1)) * 500.0Hz / sampling_frequency)
 
-    measurements = (l1 = Measurement(signal, sampling_frequency, intermediate_frequency),)
+    measurements = (l1 = BandMeasurement(signal, sampling_frequency, intermediate_frequency),)
     next_track_state = @inferred downconvert_and_correlate(
         downconvert_and_correlator,
         measurements,
@@ -99,7 +99,7 @@ end
     ts_skip = TrackState(gpsl1, [sat_past_end])
     downconvert_and_correlator = DC()
 
-    measurements = (l1 = Measurement(signal, sampling_frequency, intermediate_frequency),)
+    measurements = (l1 = BandMeasurement(signal, sampling_frequency, intermediate_frequency),)
 
     # Immutable form
     result_skip = downconvert_and_correlate(

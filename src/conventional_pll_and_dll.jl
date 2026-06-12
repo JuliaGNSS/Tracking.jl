@@ -466,7 +466,7 @@ zeroed values.
 """
 function estimate_dopplers_and_filter_prompt(
     track_state::TrackState{<:SignalGroups,<:ConventionalPLLAndDLL},
-    measurements::Measurements,
+    measurements::BandMeasurements,
 )
     # Detach the slot *values* from the input (sharing the key set), then
     # delegate to the in-place form. This step never changes the key set, so
@@ -494,10 +494,10 @@ allocation-free in steady state when [`track!`](@ref)'s preconditions are met.
 # `_foreach_group!` can call it without boxing when the groups tuple
 # is heterogeneous (e.g. GPS L1 + Galileo E1B). The per-signal type
 # is recovered from each signal inside `_update_tracked_sat_doppler`.
-# Routes to this group's band's `Measurement` for sampling frequency.
+# Routes to this group's band's `BandMeasurement` for sampling frequency.
 @inline function _est_one_group!(
     g::SignalGroup,
-    measurements::Measurements,
+    measurements::BandMeasurements,
 )
     vals = g.satellites.values
     isempty(vals) && return nothing
@@ -513,7 +513,7 @@ end
 
 function estimate_dopplers_and_filter_prompt!(
     track_state::TrackState{<:SignalGroups,<:ConventionalPLLAndDLL},
-    measurements::Measurements,
+    measurements::BandMeasurements,
 )
     _foreach_group!(_est_one_group!, track_state.groups, measurements)
     return track_state

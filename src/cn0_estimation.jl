@@ -1,3 +1,11 @@
+"""
+$(SIGNATURES)
+
+Abstract supertype for CN0 (carrier-to-noise-density ratio) estimators.
+Each [`TrackedSignal`](@ref) holds one estimator instance. Custom
+estimators subtype this and implement `Tracking.update` and
+[`estimate_cn0`](@ref).
+"""
 abstract type AbstractCN0Estimator end
 
 """
@@ -22,7 +30,9 @@ get_current_index(estimator::MomentsCN0Estimator) = estimator.buffer_current_ind
 """
 $(SIGNATURES)
 
-Buffers the prompts such that they can be used to estimate the CN0
+Buffers the prompts such that they can be used to estimate the CN0.
+Returns a new estimator with the latest prompt added (immutable update).
+This is the extension point for custom [`AbstractCN0Estimator`](@ref)s.
 """
 function update(estimator::MomentsCN0Estimator, prompt)
     buffer_length = length(estimator.prompt_buffer)

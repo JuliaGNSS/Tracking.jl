@@ -195,14 +195,18 @@ function bench_downconvert_and_correlate(;
         num_ants == 1 ? rand(Complex{signal_type}, num_samples) :
         rand(Complex{signal_type}, num_samples, num_ants)
 
-    # Multi-band branch uses `Measurement(samples, fs, if)`. The
+    # Multi-band branch uses `BandMeasurement(samples, fs, if)` (named
+    # `Measurement` before the issue-#132 rename). The
     # coherent-integration length used to be a trailing argument
     # (`downconvert_and_correlate(dc, measurements, ts, prefer)`) but moved
     # to a per-signal `TrackedSignal` field, leaving a 3-arg call. Pick the
-    # arity that exists so the script benches both shapes across revs.
+    # name and arity that exist so the script benches both shapes across revs.
     # Master / wrapper branches use the legacy 6-arg form.
-    @static if isdefined(Tracking, :Measurement)
-        measurements = (l1 = Tracking.Measurement(signal, sampling_frequency, 0.0Hz),)
+    @static if isdefined(Tracking, :BandMeasurement) || isdefined(Tracking, :Measurement)
+        measurement_type =
+            isdefined(Tracking, :BandMeasurement) ? Tracking.BandMeasurement :
+            Tracking.Measurement
+        measurements = (l1 = measurement_type(signal, sampling_frequency, 0.0Hz),)
         if hasmethod(
             Tracking.downconvert_and_correlate,
             Tuple{typeof(downconvert_and_correlator),typeof(measurements),typeof(track_state)},

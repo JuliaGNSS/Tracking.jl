@@ -13,17 +13,17 @@ Fields:
 - `sampling_frequency::F`: the buffer's sample rate (e.g. `4e6Hz`)
 - `intermediate_frequency::F`: the band's IF (defaults to `0.0Hz`)
 
-In a multi-band call, one `Measurement` is built per band; a NamedTuple
-of `Measurement`s keyed by band feeds `track`. For the single-band case
+In a multi-band call, one `BandMeasurement` is built per band; a NamedTuple
+of `BandMeasurement`s keyed by band feeds `track`. For the single-band case
 a plain buffer + scalar sample-rate keeps working unchanged.
 
 ```julia
-Measurement(buf, 4e6Hz)                              # IF defaults to 0.0Hz
-Measurement(buf, 4e6Hz, 1.575e6Hz)                   # explicit IF
-Measurement(buf; sampling_frequency = 4e6Hz)         # kwarg form
+BandMeasurement(buf, 4e6Hz)                              # IF defaults to 0.0Hz
+BandMeasurement(buf, 4e6Hz, 1.575e6Hz)                   # explicit IF
+BandMeasurement(buf; sampling_frequency = 4e6Hz)         # kwarg form
 ```
 """
-struct Measurement{S<:AbstractVecOrMat,F}
+struct BandMeasurement{S<:AbstractVecOrMat,F}
     samples::S
     sampling_frequency::F
     intermediate_frequency::F
@@ -32,34 +32,34 @@ end
 # Promotes the numeric type so `sampling_frequency` and
 # `intermediate_frequency` end up the same concrete type (`F`), e.g. an
 # integer-typed IF alongside a `Float64` sampling frequency.
-function Measurement(
+function BandMeasurement(
     samples::AbstractVecOrMat,
     sampling_frequency,
     intermediate_frequency,
 )
-    Measurement(samples, promote(sampling_frequency, intermediate_frequency)...)
+    BandMeasurement(samples, promote(sampling_frequency, intermediate_frequency)...)
 end
 
 # Positional constructor with IF defaulting to 0.0Hz.
-function Measurement(samples::AbstractVecOrMat, sampling_frequency)
+function BandMeasurement(samples::AbstractVecOrMat, sampling_frequency)
     intermediate_frequency = zero(sampling_frequency)
-    Measurement(samples, sampling_frequency, intermediate_frequency)
+    BandMeasurement(samples, sampling_frequency, intermediate_frequency)
 end
 
 # Kwarg constructor. `intermediate_frequency` defaults to zero of the
 # same type as `sampling_frequency` so the struct's `F` stays unified.
-function Measurement(
+function BandMeasurement(
     samples::AbstractVecOrMat;
     sampling_frequency,
     intermediate_frequency = zero(sampling_frequency),
 )
-    Measurement(samples, sampling_frequency, intermediate_frequency)
+    BandMeasurement(samples, sampling_frequency, intermediate_frequency)
 end
 
-@inline get_samples(m::Measurement) = m.samples
-@inline get_sampling_frequency(m::Measurement) = m.sampling_frequency
-@inline get_intermediate_frequency(m::Measurement) = m.intermediate_frequency
-@inline get_num_samples(m::Measurement) = get_num_samples(m.samples)
+@inline get_samples(m::BandMeasurement) = m.samples
+@inline get_sampling_frequency(m::BandMeasurement) = m.sampling_frequency
+@inline get_intermediate_frequency(m::BandMeasurement) = m.intermediate_frequency
+@inline get_num_samples(m::BandMeasurement) = get_num_samples(m.samples)
 
 """
 $(SIGNATURES)
@@ -79,7 +79,7 @@ function band_key end
 """
 $(SIGNATURES)
 
-Type alias for a NamedTuple of `Measurement`s — the multi-band input
+Type alias for a NamedTuple of `BandMeasurement`s — the multi-band input
 shape of `track` / `track!`. Keys are band symbols (see [`band_key`](@ref)).
 """
-const Measurements = NamedTuple{<:Any,<:Tuple{Vararg{Measurement}}}
+const BandMeasurements = NamedTuple{<:Any,<:Tuple{Vararg{BandMeasurement}}}

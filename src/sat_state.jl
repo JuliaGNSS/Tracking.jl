@@ -561,7 +561,11 @@ get_doppler_estimator_state(s::TrackedSat) = s.doppler_estimator_state
 #
 # Type-based selection walks the signals tuple recursively and folds at
 # compile time when the sat's `Signals` type is concrete.
-@inline _find_signal(s::Tuple) = only(s)
+@noinline _throw_needs_signal_selector() = throw(ArgumentError(
+    "satellite tracks multiple signals — pass a signal selector " *
+    "(integer index or signal type) to address one of them."))
+@inline _find_signal(s::Tuple{TrackedSignal}) = s[1]
+@inline _find_signal(::Tuple) = _throw_needs_signal_selector()
 @inline _find_signal(s::Tuple, i::Integer) = s[i]
 @inline _find_signal(s::Tuple, ::Type{T}) where {T<:AbstractGNSSSignal} =
     _find_signal_by_type(s, T)
