@@ -246,16 +246,12 @@ end
     # Dynamic-shifts fallback: pull SoA tile buffers from the calling
     # correlator's per-thread `ScratchBuffers` (one re-half + one
     # im-half) so the fused kernel doesn't allocate them per call.
-    bufs = _scratch_buffers(dc)
-    n = num_samples * M
-    _with_scratch_view(bufs.tile_re, Float32, n) do tile_re
-        _with_scratch_view(bufs.tile_im, Float32, n) do tile_im
-            downconvert_and_correlate_fused!(
-                correlator, signal, code_replica, sample_shifts,
-                carrier_frequency, sampling_frequency, carrier_phase,
-                start_sample, num_samples, tile_re, tile_im,
-            )::typeof(correlator)
-        end
+    _with_tile_buffers(dc, num_samples, M) do tile_re, tile_im
+        downconvert_and_correlate_fused!(
+            correlator, signal, code_replica, sample_shifts,
+            carrier_frequency, sampling_frequency, carrier_phase,
+            start_sample, num_samples, tile_re, tile_im,
+        )::typeof(correlator)
     end
 end
 
@@ -401,22 +397,20 @@ end
     num_samples_signal,
 )
     head = first(signals)
-    s = head.signal
-    n_blocks = calc_num_code_blocks_to_integrate(
-        s,
-        head.preferred_num_code_blocks_to_integrate,
-        has_bit_or_secondary_code_been_found(head),
-    )
     # Chips-to-next-boundary must be measured against the same wrap the
     # multi-block window aligns to. For an `n_blocks > 1` window past sync it
     # must land on the secondary-/bit-period boundary (one NH10 period = one
-    # L5I data symbol), so use the secondary-aware wrap; otherwise an N-block
-    # window started off the snapped secondary phase straddles the data-symbol
-    # boundary and the coherent sum cancels on data transitions. For a single
-    # block (or pre-sync) this is just the primary code length.
-    per_signal_phase = mod(code_phase, _replica_code_wrap(head, n_blocks))
+    # L5I data symbol), so `_signal_replica_params` uses the secondary-aware
+    # wrap; otherwise an N-block window started off the snapped secondary
+    # phase straddles the data-symbol boundary and the coherent sum cancels
+    # on data transitions. For a single block (or pre-sync) this is just the
+    # primary code length.
+    p = _signal_replica_params(
+        head, code_doppler, code_phase, sampling_frequency, num_samples_signal,
+    )
     n = calc_num_samples_left_to_integrate(
-        s, n_blocks, sampling_frequency, code_doppler, per_signal_phase,
+        head.signal, p.n_blocks, sampling_frequency, code_doppler,
+        p.signal_code_phase,
     )
     (n, _per_signal_samples_to_boundary(
         Base.tail(signals), signal_start_sample, sampling_frequency, code_doppler,
@@ -455,6 +449,36 @@ end
     has_bit_or_secondary_code_been_found(tsig) ?
     _post_sync_code_length(tsig) : get_code_length(tsig.signal)
 
+# All per-signal replica/kernel parameters, derived in exactly one place
+# so the boundary calc, replica sizing/generation, and kernel tap offsets
+# can never diverge (issue #133): the code frequency (sat code Doppler +
+# this signal's chip rate), the correlator tap `sample_shifts` for that
+# frequency, the replica buffer size covering the worst-case tap spread,
+# the coherent-integration length `n_blocks`, and the signal-relative
+# `code_phase` modded by the secondary-aware `_replica_code_wrap`.
+@inline function _signal_replica_params(
+    tsig::TrackedSignal,
+    code_doppler,
+    code_phase,
+    sampling_frequency,
+    num_samples_signal,
+)
+    s = tsig.signal
+    code_frequency = code_doppler + get_code_frequency(s)
+    sample_shifts = get_correlator_sample_shifts(
+        tsig.correlator, sampling_frequency, code_frequency,
+    )
+    code_replica_size =
+        num_samples_signal + maximum(sample_shifts) - minimum(sample_shifts)
+    n_blocks = calc_num_code_blocks_to_integrate(
+        s,
+        tsig.preferred_num_code_blocks_to_integrate,
+        has_bit_or_secondary_code_been_found(tsig),
+    )
+    signal_code_phase = mod(code_phase, _replica_code_wrap(tsig, n_blocks))
+    (; code_frequency, sample_shifts, code_replica_size, n_blocks, signal_code_phase)
+end
+
 # Single-signal path: gen one code replica + run the in-register fused
 # kernel. Returns a one-tuple of `(new_correlator, is_integration_completed)`.
 # This is the hot path for N=1 — the fused kernel keeps downconverted
@@ -477,30 +501,22 @@ end
 )
     head = signals[1]
     s = head.signal
-    correlator = head.correlator
-    code_frequency = code_doppler + get_code_frequency(s)
-    sample_shifts =
-        get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
-    code_replica_size =
-        num_samples_signal + maximum(sample_shifts) - minimum(sample_shifts)
-    n_blocks = calc_num_code_blocks_to_integrate(
-        s, head.preferred_num_code_blocks_to_integrate,
-        has_bit_or_secondary_code_been_found(head),
+    p = _signal_replica_params(
+        head, code_doppler, code_phase, sampling_frequency, num_samples_signal,
     )
-    per_signal_phase = mod(code_phase, _replica_code_wrap(head, n_blocks))
     new_corr = _with_code_replica_buffer(
-        dc, get_code_type(s), code_replica_size,
+        dc, get_code_type(s), p.code_replica_size,
     ) do code_replica
         _correlate_one_signal!(
             dc,
             code_replica,
             s,
-            correlator,
+            head.correlator,
             signal,
-            sample_shifts,
-            per_signal_phase,
+            p.sample_shifts,
+            p.signal_code_phase,
             carrier_phase,
-            code_frequency,
+            p.code_frequency,
             carrier_frequency,
             sampling_frequency,
             signal_start_sample,
@@ -543,7 +559,7 @@ end
             )
         correlators = _signal_correlators(signals)
         sample_shifts_tuple = _signal_sample_shifts(
-            signals, code_doppler, sampling_frequency,
+            signals, code_doppler, code_phase, sampling_frequency, num_samples_signal,
         )
         # All correlators in this sat agree on M (enforced by SignalGroup);
         # read it from the first correlator's type.
@@ -591,29 +607,21 @@ end
     idx_tuple = ntuple(identity, length(signals))
     map(signals, idx_tuple) do head, i
         s = head.signal
-        code_frequency = code_doppler + get_code_frequency(s)
-        sample_shifts = get_correlator_sample_shifts(
-            head.correlator, sampling_frequency, code_frequency,
+        p = _signal_replica_params(
+            head, code_doppler, code_phase, sampling_frequency, num_samples_signal,
         )
-        code_replica_size =
-            num_samples_signal + maximum(sample_shifts) - minimum(sample_shifts)
-        n_blocks = calc_num_code_blocks_to_integrate(
-            s, head.preferred_num_code_blocks_to_integrate,
-            has_bit_or_secondary_code_been_found(head),
-        )
-        per_signal_phase = mod(code_phase, _replica_code_wrap(head, n_blocks))
         slot = _code_replica_slot(bufs, i)
         CT = get_code_type(s)
-        nbytes = code_replica_size * sizeof(CT)
+        nbytes = p.code_replica_size * sizeof(CT)
         length(slot) < nbytes && resize!(slot, nbytes)
         # The raw pointer in this view outlives this function — the caller
         # (`_correlate_signals`) wraps replica generation and the kernel in
         # `GC.@preserve dc`, which roots `slot` (reachable through the
         # correlator's ScratchBuffers) for the views' entire lifetime.
-        view = ScratchView{CT}(Ptr{CT}(pointer(slot)), code_replica_size)
+        view = ScratchView{CT}(Ptr{CT}(pointer(slot)), p.code_replica_size)
         gen_code_replica!(
-            view, s, code_frequency, sampling_frequency, per_signal_phase,
-            signal_start_sample, samples_to_integrate, sample_shifts, prn,
+            view, s, p.code_frequency, sampling_frequency, p.signal_code_phase,
+            signal_start_sample, samples_to_integrate, p.sample_shifts, prn,
         )
         view
     end
@@ -621,41 +629,39 @@ end
 
 @inline _signal_correlators(signals::Tuple) = map(s -> s.correlator, signals)
 
+# Kernel tap offsets — derived through the same `_signal_replica_params`
+# the replica generation uses, so the two can never skew apart.
 @inline _signal_sample_shifts(
-    signals::Tuple, code_doppler, sampling_frequency,
+    signals::Tuple, code_doppler, code_phase, sampling_frequency, num_samples_signal,
 ) = map(signals) do head
-    s = head.signal
-    code_frequency = code_doppler + get_code_frequency(s)
-    get_correlator_sample_shifts(head.correlator, sampling_frequency, code_frequency)
+    _signal_replica_params(
+        head, code_doppler, code_phase, sampling_frequency, num_samples_signal,
+    ).sample_shifts
 end
 
 @inline _zip_correlators_with_completed(corrs::Tuple, completed::Tuple) =
     map(tuple, corrs, completed)
 
-@inline _correlate_all_signals(
-    ::Tuple{}, ::Tuple{},
-    _, _, _, _, _, _, _, _, _, _, _,
-) = ()
-
 """
 $(SIGNATURES)
 
-Downconvert and correlate all available satellites on the CPU.
-Returns a new `TrackState` whose slot *values* are detached from the
-input (the input's per-sat tracking values are left untouched), but
-whose key set (`Indices`) is *shared* with the input — this step never
-changes the key set, so sharing avoids copying the hash table on every
-`track` loop iteration. Detaching the key set happens once at the
-`track` boundary (`reset_start_sample_and_bit_buffer`); do not
-`add_satellite!`/`remove_satellite!` on this function's direct output,
-or you will corrupt the input's keys (#123). The copy is otherwise
-shallow: per-sat scratch vectors are shared, see [`track`](@ref).
-Per-call code-replica scratch comes from the correlator's
+Downconvert and correlate all available satellites on the CPU (both the
+single-threaded and the multi-threaded backend). Returns a new
+`TrackState` whose slot *values* are detached from the input (the input's
+per-sat tracking values are left untouched), but whose key set
+(`Indices`) is *shared* with the input — this step never changes the key
+set, so sharing avoids copying the hash table on every `track` loop
+iteration. Detaching the key set happens once at the `track` boundary
+(`reset_start_sample_and_bit_buffer`); do not
+`add_satellite!`/`remove_satellite!` on this function's direct output, or
+you will corrupt the input's keys (#123). The copy is otherwise shallow:
+per-sat scratch vectors are shared, see [`track`](@ref). Per-call
+code-replica scratch comes from the correlator's (per-thread)
 `ScratchBuffers` so the kernel itself stays allocation-free; the only
 per-call allocation is the slot-value copy.
 """
 function downconvert_and_correlate(
-    dc::CPUDownconvertAndCorrelator,
+    dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
     measurements::BandMeasurements,
     track_state::TrackState,
 )
@@ -669,41 +675,14 @@ end
 """
 $(SIGNATURES)
 
-In-place version: walks each group's `Vector{TrackedSat}` and overwrites
-slots in place. Returns the same `track_state`. Allocation-free in steady
-state — see [`track!`](@ref).
+In-place version: writes new `TrackedSat` values directly into each
+group's existing `Vector{TrackedSat}` backing storage. On the threaded
+backend, different `@batch` iterations write to disjoint slots, so no
+synchronization is needed. Returns the same `track_state`.
+Allocation-free in steady state — see [`track!`](@ref).
 """
-# Per-group body for the single-threaded backend. Pulled out so
-# `_foreach_group!` can call it on each `SignalGroup` in the
-# (possibly heterogeneous) `groups` tuple without dynamic dispatch /
-# boxing. Routes to this group's band's `BandMeasurement` for the signal
-# buffer and front-end metadata.
-@inline function _dc_one_group!(
-    g::SignalGroup, dc::CPUDownconvertAndCorrelator,
-    measurements::BandMeasurements,
-)
-    vals = g.satellites.values
-    isempty(vals) && return nothing
-    m = measurements[band_key(g.band)]
-    signal = m.samples
-    num_samples_signal = get_num_samples(m)
-    sampling_frequency = m.sampling_frequency
-    intermediate_frequency = m.intermediate_frequency
-    @inbounds for i in eachindex(vals)
-        vals[i] = _update_tracked_sat_correlator(
-            vals[i],
-            dc,
-            signal,
-            num_samples_signal,
-            sampling_frequency,
-            intermediate_frequency,
-        )
-    end
-    return nothing
-end
-
 function downconvert_and_correlate!(
-    dc::CPUDownconvertAndCorrelator,
+    dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
     measurements::BandMeasurements,
     track_state::TrackState,
 )
@@ -711,75 +690,50 @@ function downconvert_and_correlate!(
     return track_state
 end
 
-"""
-$(SIGNATURES)
-
-Multi-threaded downconvert and correlate. Returns a new `TrackState`
-whose slot *values* are detached from the input but whose key set
-(`Indices`) is *shared* — same contract as the single-threaded method
-above: the key set is detached once at the `track` boundary, so do not
-`add_satellite!`/`remove_satellite!` on this function's direct output
-(#123). The copy is otherwise shallow: per-sat scratch vectors are
-shared, see [`track`](@ref). Per-call scratch comes from the
-correlator's per-thread `ScratchBuffers`; the only per-call allocation
-is the slot-value copy.
-"""
-function downconvert_and_correlate(
-    dc::CPUThreadedDownconvertAndCorrelator,
-    measurements::BandMeasurements,
-    track_state::TrackState,
-)
-    new_track_state = TrackState(
-        track_state;
-        groups = _copy_groups_slot_vectors(track_state.groups),
-    )
-    downconvert_and_correlate!(dc, measurements, new_track_state)
-end
-
-"""
-$(SIGNATURES)
-
-In-place version: writes new `TrackedSat` values directly into each group's
-existing `Vector{TrackedSat}` backing storage. Different `@batch` iterations
-write to disjoint slots, so no synchronization is needed. Returns the same
-`track_state`. Allocation-free in steady state — see [`track!`](@ref).
-"""
-# Per-group body for the threaded backend. Each `@batch` writes to
-# disjoint slots in this group's `Vector{TrackedSat}`. Pulled out so
-# `_foreach_group!` can call it without boxing on heterogeneous
-# group tuples. Routes to this group's band's `BandMeasurement`.
-@inline function _dc_one_group_threaded!(
-    g::SignalGroup, dc::CPUThreadedDownconvertAndCorrelator,
+# Per-group body shared by both CPU backends. Pulled out so
+# `_foreach_group!` can call it on each `SignalGroup` in the (possibly
+# heterogeneous) `groups` tuple without dynamic dispatch / boxing.
+# Routes to this group's band's `BandMeasurement` for the signal buffer and
+# front-end metadata; the serial-vs-`@batch` loop choice is dispatched
+# per backend in `_dc_group_loop!`.
+@inline function _dc_one_group!(
+    g::SignalGroup,
+    dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
     measurements::BandMeasurements,
 )
     vals = g.satellites.values
-    n = length(vals)
-    n == 0 && return nothing
+    isempty(vals) && return nothing
     m = measurements[band_key(g.band)]
-    signal = m.samples
-    num_samples_signal = get_num_samples(m)
-    sampling_frequency = m.sampling_frequency
-    intermediate_frequency = m.intermediate_frequency
-    @batch for i = 1:n
-        @inbounds vals[i] = _update_tracked_sat_correlator(
-            vals[i],
-            dc,
-            signal,
-            num_samples_signal,
-            sampling_frequency,
-            intermediate_frequency,
-        )
+    _dc_group_loop!(
+        dc,
+        vals,
+        m.samples,
+        get_num_samples(m),
+        m.sampling_frequency,
+        m.intermediate_frequency,
+    )
+end
+
+@inline function _dc_group_loop!(
+    dc::CPUDownconvertAndCorrelator,
+    vals,
+    args::Vararg{Any,4},
+)
+    @inbounds for i in eachindex(vals)
+        vals[i] = _update_tracked_sat_correlator(vals[i], dc, args...)
     end
     return nothing
 end
 
-function downconvert_and_correlate!(
+@inline function _dc_group_loop!(
     dc::CPUThreadedDownconvertAndCorrelator,
-    measurements::BandMeasurements,
-    track_state::TrackState,
+    vals,
+    args::Vararg{Any,4},
 )
-    _foreach_group!(_dc_one_group_threaded!, track_state.groups, dc, measurements)
-    return track_state
+    @batch for i = 1:length(vals)
+        @inbounds vals[i] = _update_tracked_sat_correlator(vals[i], dc, args...)
+    end
+    return nothing
 end
 
 """

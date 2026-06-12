@@ -43,8 +43,7 @@ hand them to the `add_satellite!(track_state, group, sat)` overload.
 function TrackState(;
     signal::Maybe{AbstractGNSSSignal} = nothing,
     signals = nothing,
-    doppler_estimator::AbstractDopplerEstimator =
-        _auto_default_doppler_estimator(signal, signals),
+    doppler_estimator::Maybe{AbstractDopplerEstimator} = nothing,
     num_ants::NumAnts = NumAnts(1),
 )
     if isnothing(signal) && isnothing(signals)
@@ -62,42 +61,25 @@ function TrackState(;
     sig_groups_nt = isnothing(signal) ?
         _normalize_signal_groups(signals) :
         (default = (signal,),)
+    # Default estimator: sized for the first declared group's estimator-driver
+    # signal (`signals[1]` of the first group). The loop only ever runs on a
+    # group's own driver signal, so no cross-group bandwidth compromise is
+    # needed; mixed-period multi-group states that want a per-group bandwidth
+    # should pass an explicit `doppler_estimator`.
+    estimator = isnothing(doppler_estimator) ?
+        _default_estimator_for_signal(
+            _estimator_driver_signal(first(Tuple(sig_groups_nt))),
+        ) : doppler_estimator
     # Each entry of `sig_groups_nt` is either:
     #   - a bare `Tuple{Vararg{AbstractGNSSSignal}}` (the common case,
     #     uses the constructor's `num_ants` kwarg); or
     #   - a pre-built `SignalGroup` instance (carries its own band /
     #     num_ants — used when the user wants per-band overrides).
     groups = map(sig_groups_nt) do entry
-        _normalize_group_entry(entry, doppler_estimator, num_ants)
+        _normalize_group_entry(entry, estimator, num_ants)
     end
     _validate_same_band_num_ants(groups)
-    TrackState(groups, doppler_estimator)
-end
-
-# Build the default `ConventionalAssistedPLLAndDLL` for a TrackState
-# declared via `signal=` or `signals=`. Sized for the *most constraining*
-# (longest-T) estimator-driver signal across all declared groups — the
-# driver is `signals[1]` of each group. Picking the minimum BL across
-# groups is the safe move: a BL chosen for a longer T is always stable at
-# a shorter T, just less responsive. The two-arg validation (exactly one
-# of `signal`/`signals` set) happens later in the constructor body; if
-# both are nothing here we fall back to the no-signal default (which the
-# subsequent argument check then errors on with the helpful message).
-@inline function _auto_default_doppler_estimator(
-    signal::Maybe{AbstractGNSSSignal}, signals,
-)
-    isnothing(signal) && isnothing(signals) &&
-        return ConventionalAssistedPLLAndDLL()
-    sig_groups_nt = isnothing(signal) ?
-        _normalize_signal_groups(signals) :
-        (default = (signal,),)
-    driver_signals = map(_estimator_driver_signal, Tuple(sig_groups_nt))
-    carrier_bls = map(default_carrier_loop_filter_bandwidth, driver_signals)
-    code_bls = map(default_code_loop_filter_bandwidth, driver_signals)
-    ConventionalAssistedPLLAndDLL(;
-        carrier_loop_filter_bandwidth = minimum(carrier_bls),
-        code_loop_filter_bandwidth = minimum(code_bls),
-    )
+    TrackState(groups, estimator)
 end
 
 @inline _estimator_driver_signal(sigs::Tuple{Vararg{AbstractGNSSSignal}}) = first(sigs)
@@ -192,42 +174,14 @@ function _make_template_tracked_sat(
     doppler_estimator::AbstractDopplerEstimator,
     num_ants::NumAnts,
 )
-    tracked_signals = map(signal_tuple) do sig
-        TrackedSignal(
-            sig;
-            num_ants,
-            correlator = get_default_correlator(sig, num_ants),
-        )
-    end
-    # signals[1] is the estimator-driver signal. Use it to infer a sensible
-    # zero code-doppler value (the math itself doesn't matter for the
-    # template).
-    bare = TrackedSat(
-        0,
-        0.0,
-        0.0Hz,
-        0.0,
-        0.0Hz,
-        1,
-        tracked_signals,
-        nothing,
-    )
-    de_state = init_estimator_state(doppler_estimator, bare)
-    TrackedSat(
-        bare.prn, bare.code_phase, bare.code_doppler,
-        bare.carrier_phase, bare.carrier_doppler,
-        bare.signal_start_sample, bare.signals, de_state,
-    )
+    TrackedSat(signal_tuple, 0, 0.0, 0.0Hz; doppler_estimator, num_ants)
 end
 
 function TrackState(
     signal::AbstractGNSSSignal,
     tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}};
     doppler_estimator::AbstractDopplerEstimator =
-        ConventionalAssistedPLLAndDLL(;
-            carrier_loop_filter_bandwidth = default_carrier_loop_filter_bandwidth(signal),
-            code_loop_filter_bandwidth = default_code_loop_filter_bandwidth(signal),
-        ),
+        _default_estimator_for_signal(signal),
 )
     # `signal` is implied by each sat's `signals[1].signal` in the new
     # design; the positional argument is kept for backward-compatible
@@ -258,11 +212,7 @@ end
     tracked_sats::Dictionary{<:Any,<:TrackedSat},
 )
     isempty(tracked_sats) && return ConventionalAssistedPLLAndDLL()
-    sig = first(first(tracked_sats.values).signals).signal
-    ConventionalAssistedPLLAndDLL(;
-        carrier_loop_filter_bandwidth = default_carrier_loop_filter_bandwidth(sig),
-        code_loop_filter_bandwidth = default_code_loop_filter_bandwidth(sig),
-    )
+    _default_estimator_for_signal(first(first(tracked_sats.values).signals).signal)
 end
 
 # Verify every sat in `dict` has a `doppler_estimator_state` matching
@@ -304,23 +254,16 @@ function TrackState(
     TrackState(groups, doppler_estimator)
 end
 
-# Picks the most-constraining (longest-T, lowest-BL) default across all
-# per-group dicts' estimator-driver signals. An empty dict can't pick a
-# signal-aware default; fall back to the generic default and let the
-# constructor body's `_signal_group_from_dict` raise the friendly
-# ArgumentError (otherwise this kwarg-default expression would throw a
-# raw BoundsError first).
+# Sizes the default estimator for the first group's estimator-driver signal.
+# The loop runs on each group's own driver signal, so no cross-group
+# compromise is needed. An empty first dict can't pick a signal-aware
+# default; fall back to the generic default and let the constructor body's
+# `_signal_group_from_dict` raise the friendly ArgumentError (otherwise this
+# kwarg-default expression would throw a raw BoundsError first).
 @inline function _default_estimator_for_satellite_dicts(satellites::SatelliteDicts)
     any(isempty, Tuple(satellites)) && return ConventionalAssistedPLLAndDLL()
-    driver_signals = map(
-        d -> first(first(d.values).signals).signal,
-        Tuple(satellites),
-    )
-    carrier_bls = map(default_carrier_loop_filter_bandwidth, driver_signals)
-    code_bls = map(default_code_loop_filter_bandwidth, driver_signals)
-    ConventionalAssistedPLLAndDLL(;
-        carrier_loop_filter_bandwidth = minimum(carrier_bls),
-        code_loop_filter_bandwidth = minimum(code_bls),
+    _default_estimator_for_signal(
+        first(first(first(Tuple(satellites)).values).signals).signal,
     )
 end
 
@@ -458,6 +401,22 @@ end
 # accessors — its `TrackState` overloads are generated alongside them
 # in the `@eval` loop further down (search for `:estimate_cn0`).
 
+"""
+$(SIGNATURES)
+
+Merge already-built [`TrackedSat`](@ref)s into the `group_idx` group of
+`track_state`, returning a new [`TrackState`](@ref) (the input is left
+unchanged). `tracked_sats` may be a single `TrackedSat`, a `Vector`, or a
+`Dictionary` keyed by PRN; existing PRNs in the group are overwritten.
+
+Each sat's `doppler_estimator_state` must match the type the
+`track_state`'s configured estimator produces (checked up front), and the
+sat's signal-tuple shape must match the group's slot type. The estimator's
+[`update_estimator_on_handoff`](@ref) hook is invoked once with the incoming
+sats so estimators with cross-satellite shared state can grow it.
+
+For a single-group `TrackState` the `group_idx` may be omitted.
+"""
 function merge_sats(
     track_state::TrackState{G,DE},
     group_idx::Union{Symbol,Integer},
@@ -526,15 +485,9 @@ function add_satellite!(
     track_state::TrackState;
     prn::Int,
     group::Symbol = :default,
-    code_phase = 0.0,
-    code_doppler = nothing,
-    carrier_phase = 0.0,
-    carrier_doppler = 0.0Hz,
+    kwargs...,
 )
-    sat = _make_default_tracked_sat_for_group(
-        track_state, group;
-        prn, code_phase, code_doppler, carrier_phase, carrier_doppler,
-    )
+    sat = _make_default_tracked_sat_for_group(track_state, group; prn, kwargs...)
     add_satellite!(track_state, group, sat)
 end
 
@@ -625,15 +578,9 @@ function add_satellite(
     track_state::TrackState;
     prn::Int,
     group::Symbol = :default,
-    code_phase = 0.0,
-    code_doppler = nothing,
-    carrier_phase = 0.0,
-    carrier_doppler = 0.0Hz,
+    kwargs...,
 )
-    sat = _make_default_tracked_sat_for_group(
-        track_state, group;
-        prn, code_phase, code_doppler, carrier_phase, carrier_doppler,
-    )
+    sat = _make_default_tracked_sat_for_group(track_state, group; prn, kwargs...)
     add_satellite(track_state, group, sat)
 end
 
@@ -714,48 +661,24 @@ end
 # Build a default-correlator, default-PCF TrackedSat whose
 # signal-tuple shape matches the group's slot in `track_state`. Reads the
 # signal-instance tuple and antenna count straight off the SignalGroup.
+# Carries the acquisition-handoff kwarg defaults for both `add_satellite!`
+# and `add_satellite`, which forward their kwargs here verbatim.
 function _make_default_tracked_sat_for_group(
     track_state::TrackState,
     group::Symbol;
     prn::Int,
-    code_phase,
-    code_doppler,
-    carrier_phase,
-    carrier_doppler,
+    code_phase = 0.0,
+    code_doppler = nothing,
+    carrier_phase = 0.0,
+    carrier_doppler = 0.0Hz,
 )
     g = track_state.groups[group]
-    sig_tuple = g.signals
-    first_signal = first(sig_tuple)
-    # Float-ize the carrier first so its product with the code/center ratio
-    # is float-typed too; that way users may pass `200Hz` (Int) without
-    # the struct constructor's `typeof(1.0Hz)` field type rejecting it.
-    cdop = float(carrier_doppler)
-    cd = isnothing(code_doppler) ?
-        cdop * get_code_center_frequency_ratio(first_signal) :
-        float(code_doppler)
-    num_ants = g.num_ants
-    tracked_signals = map(sig_tuple) do sig
-        TrackedSignal(
-            sig;
-            num_ants,
-            correlator = get_default_correlator(sig, num_ants),
-        )
-    end
-    bare = TrackedSat(
-        prn,
-        float(code_phase),
-        cd,
-        float(carrier_phase) / 2π,
-        cdop,
-        1,
-        tracked_signals,
-        nothing,
-    )
-    de_state = init_estimator_state(track_state.doppler_estimator, bare)
     TrackedSat(
-        bare.prn, bare.code_phase, bare.code_doppler,
-        bare.carrier_phase, bare.carrier_doppler,
-        bare.signal_start_sample, bare.signals, de_state,
+        g.signals, prn, code_phase, carrier_doppler;
+        doppler_estimator = track_state.doppler_estimator,
+        num_ants = g.num_ants,
+        carrier_phase,
+        code_doppler,
     )
 end
 
@@ -878,9 +801,9 @@ function set_preferred_num_code_blocks_to_integrate!(
     sig::_SignalSelector,
     num_code_blocks::Integer,
 )
-    sats = get_sat_states(track_state, group)
-    sats[sat_id] = _set_sat_signal_preferred_blocks(sats[sat_id], Int(num_code_blocks), sig)
-    track_state
+    _set_preferred_blocks!(
+        track_state, get_sat_states(track_state, group), sat_id, num_code_blocks, sig,
+    )
 end
 
 function set_preferred_num_code_blocks_to_integrate!(
@@ -889,9 +812,9 @@ function set_preferred_num_code_blocks_to_integrate!(
     sat_id::Integer,
     num_code_blocks::Integer,
 )
-    sats = get_sat_states(track_state, group)
-    sats[sat_id] = _set_sat_signal_preferred_blocks(sats[sat_id], Int(num_code_blocks))
-    track_state
+    _set_preferred_blocks!(
+        track_state, get_sat_states(track_state, group), sat_id, num_code_blocks,
+    )
 end
 
 function set_preferred_num_code_blocks_to_integrate!(
@@ -899,8 +822,21 @@ function set_preferred_num_code_blocks_to_integrate!(
     sat_id::Integer,
     num_code_blocks::Integer,
 )
-    sats = get_sat_states(track_state)
-    sats[sat_id] = _set_sat_signal_preferred_blocks(sats[sat_id], Int(num_code_blocks))
+    _set_preferred_blocks!(
+        track_state, get_sat_states(track_state), sat_id, num_code_blocks,
+    )
+end
+
+# Shared body for the three addressing overloads above.
+@inline function _set_preferred_blocks!(
+    track_state::TrackState,
+    sats,
+    sat_id,
+    num_code_blocks::Integer,
+    sel...,
+)
+    sats[sat_id] =
+        _set_sat_signal_preferred_blocks(sats[sat_id], Int(num_code_blocks), sel...)
     track_state
 end
 

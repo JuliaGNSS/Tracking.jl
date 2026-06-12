@@ -403,35 +403,38 @@ end
 """
 $(SIGNATURES)
 
-Construct a [`TrackedSat`](@ref) from acquisition handoff values plus the
-Doppler estimator. The signal is wrapped in a single [`TrackedSignal`](@ref);
-multi-signal tracking is wired in a later step. The estimator's per-satellite
-state is built via [`init_estimator_state`](@ref).
+Core constructor: build a [`TrackedSat`](@ref) from pre-built
+[`TrackedSignal`](@ref)s plus acquisition handoff values. The first signal in
+the tuple is the estimator-driver signal — it scales the default
+`code_doppler` and sizes the default loop bandwidths. The estimator's
+per-satellite state is built via [`init_estimator_state`](@ref).
+
+`code_doppler = nothing` (the default) derives the code Doppler from
+`carrier_doppler` and the driver signal's code/center frequency ratio.
+`carrier_phase` is in radians.
+
+Use this form when a signal needs a non-default correlator or post-corr
+filter; otherwise prefer the signal-instance forms
+`TrackedSat(signal, prn, ...)` / `TrackedSat((sig_a, sig_b, ...), prn, ...)`,
+which build the `TrackedSignal`s with the library defaults.
 """
 function TrackedSat(
-    signal::AbstractGNSSSignal,
+    tracked_signals::Tuple{TrackedSignal,Vararg{TrackedSignal}},
     prn::Int,
     code_phase,
     carrier_doppler;
     doppler_estimator::AbstractDopplerEstimator =
-        ConventionalAssistedPLLAndDLL(;
-            carrier_loop_filter_bandwidth = default_carrier_loop_filter_bandwidth(signal),
-            code_loop_filter_bandwidth = default_code_loop_filter_bandwidth(signal),
-        ),
-    num_ants::NumAnts = NumAnts(1),
-    correlator::AbstractCorrelator = get_default_correlator(signal, num_ants),
+        _default_estimator_for_signal(first(tracked_signals).signal),
     carrier_phase = 0.0,
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(signal),
-    num_prompts_for_cn0_estimation::Int = 100,
-    post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),
+    code_doppler = nothing,
 )
-    tracked_signal = TrackedSignal(
-        signal;
-        num_ants,
-        correlator,
-        num_prompts_for_cn0_estimation,
-        post_corr_filter,
-    )
+    # Float-ize the carrier first so its product with the code/center ratio
+    # is float-typed too; that way users may pass `200Hz` (Int) without
+    # the struct constructor's `typeof(1.0Hz)` field type rejecting it.
+    cdop = float(carrier_doppler)
+    cd = isnothing(code_doppler) ?
+        cdop * get_code_center_frequency_ratio(first(tracked_signals).signal) :
+        float(code_doppler)
     # Two-stage build so the estimator's `init_estimator_state` sees a real
     # `TrackedSat` (handy for estimators that need carrier/code Doppler at
     # init time). The first stage builds a sat with `D = Nothing`; the
@@ -439,11 +442,11 @@ function TrackedSat(
     bare = TrackedSat(
         prn,
         float(code_phase),
-        float(code_doppler),
+        cd,
         float(carrier_phase) / 2π,
-        float(carrier_doppler),
+        cdop,
         1,
-        (tracked_signal,),
+        tracked_signals,
         nothing,
     )
     doppler_estimator_state = init_estimator_state(doppler_estimator, bare)
@@ -457,6 +460,67 @@ function TrackedSat(
         bare.signals,
         doppler_estimator_state,
     )
+end
+
+"""
+$(SIGNATURES)
+
+Public multi-signal constructor: build a [`TrackedSat`](@ref) tracking the
+given tuple of signal instances, e.g.
+`TrackedSat((GPSL1C_P(), GPSL1C_D(), GPSL1CA()), prn, code_phase, carrier_doppler)`.
+Each signal is wrapped in a [`TrackedSignal`](@ref) with its recommended
+default correlator. The first signal is the estimator-driver signal. Further
+kwargs (`doppler_estimator`, `carrier_phase`, `code_doppler`) forward to the
+`TrackedSignal`-tuple core constructor above.
+"""
+function TrackedSat(
+    signals::Tuple{AbstractGNSSSignal,Vararg{AbstractGNSSSignal}},
+    prn::Int,
+    code_phase,
+    carrier_doppler;
+    num_ants::NumAnts = NumAnts(1),
+    num_prompts_for_cn0_estimation::Int = 100,
+    post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),
+    kwargs...,
+)
+    tracked_signals = map(signals) do sig
+        TrackedSignal(
+            sig;
+            num_ants,
+            correlator = get_default_correlator(sig, num_ants),
+            num_prompts_for_cn0_estimation,
+            post_corr_filter,
+        )
+    end
+    TrackedSat(tracked_signals, prn, code_phase, carrier_doppler; kwargs...)
+end
+
+"""
+$(SIGNATURES)
+
+Construct a single-signal [`TrackedSat`](@ref) from acquisition handoff values
+plus the Doppler estimator. The signal is wrapped in a single
+[`TrackedSignal`](@ref); pass a tuple of signals for multi-signal tracking.
+"""
+function TrackedSat(
+    signal::AbstractGNSSSignal,
+    prn::Int,
+    code_phase,
+    carrier_doppler;
+    num_ants::NumAnts = NumAnts(1),
+    correlator::AbstractCorrelator = get_default_correlator(signal, num_ants),
+    num_prompts_for_cn0_estimation::Int = 100,
+    post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),
+    kwargs...,
+)
+    tracked_signal = TrackedSignal(
+        signal;
+        num_ants,
+        correlator,
+        num_prompts_for_cn0_estimation,
+        post_corr_filter,
+    )
+    TrackedSat((tracked_signal,), prn, code_phase, carrier_doppler; kwargs...)
 end
 
 # Kwarg-update constructor. `signals` and `doppler_estimator_state` carry
@@ -805,12 +869,7 @@ function SignalGroup(
     band = get_band(first(signals)),
     num_ants::NumAnts = NumAnts(1),
     doppler_estimator::AbstractDopplerEstimator =
-        ConventionalAssistedPLLAndDLL(;
-            carrier_loop_filter_bandwidth =
-                default_carrier_loop_filter_bandwidth(first(signals)),
-            code_loop_filter_bandwidth =
-                default_code_loop_filter_bandwidth(first(signals)),
-        ),
+        _default_estimator_for_signal(first(signals)),
 )
     _validate_signal_group(signals, band)
     # Build a template TrackedSat so the dict's value type is concrete.
@@ -828,22 +887,6 @@ Type alias: NamedTuple of `SignalGroup`s — the storage shape inside
 """
 const SignalGroups{N} = NamedTuple{<:Any,<:NTuple{N,SignalGroup}}
 
-"""
-$(SIGNATURES)
-
-Merge already-built tracked satellites into the existing tracking state.
-Used internally by [`TrackState`](@ref)'s `merge_sats` — external callers
-should prefer the `TrackState`-level method.
-"""
-function merge_sats(
-    satellites::SatelliteDicts,
-    group_idx,
-    new_tracked_sats::Dictionary{<:Any,<:TrackedSat},
-)
-    sats_dict = satellites[group_idx]
-    @set satellites[group_idx] = merge(sats_dict, new_tracked_sats)
-end
-
 # Build a `Dictionary` that shares its keys (`Indices`) with the original but
 # holds a freshly-copied `values::Vector{TrackedSat}`. Used by the immutable
 # per-iteration steps `downconvert_and_correlate` /
@@ -860,12 +903,6 @@ end
 # `remove_satellite`, for structural changes.
 @inline function _copy_slot_vector(sats::Dictionary{<:Any,<:TrackedSat})
     Dictionary(keys(sats), copy(sats.values))
-end
-
-@inline function _copy_slot_vectors(
-    satellites::SatelliteDicts,
-)
-    map(_copy_slot_vector, satellites)
 end
 
 # Fully-detached copy: freshly-copied `Indices` *and* `values`. `copy(sats)`

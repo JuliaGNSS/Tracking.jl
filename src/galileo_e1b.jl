@@ -17,14 +17,12 @@ ambiguity via the I/NAV preamble.
 
 Same shape as the GPS L1C-D "1-block-per-symbol" case.
 """
-@inline function detect_bit_or_secondary_code_sync(
-    ::GalileoE1BAny,
-    ::Integer,           # PRN — ignored
-    ::Unsigned,
-    ::Integer,
-)
-    SyncResult(true, 0, Int8(+1))
-end
+@inline detect_bit_or_secondary_code_sync(
+    signal::GalileoE1BAny,
+    prn::Integer,
+    code_block_bits::Unsigned,
+    num_code_blocks::Integer,
+) = _detect_symbol_is_code_block_sync(signal, prn, code_block_bits, num_code_blocks)
 
 # TODO: Very early very late correlator?
 function get_default_correlator(::GalileoE1BAny, num_ants::NumAnts = NumAnts(1))

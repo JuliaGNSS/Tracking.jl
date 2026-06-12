@@ -44,6 +44,7 @@ using Tracking:
     set_preferred_num_code_blocks_to_integrate!,
     reset_loop_filters!,
     get_doppler_estimator_state,
+    default_carrier_loop_filter_bandwidth,
     ConventionalAssistedPLLAndDLL,
     ConventionalPLLAndDLL,
     SignalGroup
@@ -120,9 +121,11 @@ end
 end
 
 @testset "Positional TrackState(satellites::SatelliteDicts) infers default estimator" begin
-    # `_default_estimator_for_satellite_dicts` picks the most-constraining
-    # default across all per-system driver signals when no estimator kwarg
-    # is supplied.
+    # `_default_estimator_for_satellite_dicts` sizes the default for the
+    # first group's estimator-driver signal when no estimator kwarg is
+    # supplied — the loop runs on each group's own driver signal, so there
+    # is no cross-group bandwidth compromise. Here the first group is GPS
+    # L1 C/A (18 Hz), not the lower E1B bandwidth (4.5 Hz).
     gpsl1 = GPSL1CA()
     galileo = GalileoE1B()
     estimator = ConventionalAssistedPLLAndDLL()
@@ -137,6 +140,8 @@ end
     ts = TrackState(sats)
     @test length(get_sat_states(ts, :gps)) == 1
     @test length(get_sat_states(ts, :gal)) == 1
+    @test ts.doppler_estimator.carrier_loop_filter_bandwidth ==
+          default_carrier_loop_filter_bandwidth(gpsl1)
 end
 
 @testset "Positional TrackState(dict) default estimator inference" begin
@@ -162,33 +167,25 @@ end
                                           doppler_estimator = different)
 end
 
-@testset "Internal merge_sats(::SatelliteDicts, group_idx, ::Dictionary)" begin
-    # The sat-state-level helper that the positional TrackState `merge_sats`
-    # delegates to. Exercise it directly so the recursion is recorded.
+@testset "Slot-vector copy helpers share vs detach Dictionary Indices (#123)" begin
     gpsl1 = GPSL1CA()
     estimator = ConventionalAssistedPLLAndDLL()
     a = TrackedSat(gpsl1, 1, 10.5, 10.0Hz; doppler_estimator = estimator)
-    b = TrackedSat(gpsl1, 2, 11.5, 20.0Hz; doppler_estimator = estimator)
-    sats = (gps = dictionary([1 => a]),)
-    new_sats = Tracking.merge_sats(sats, :gps, dictionary([2 => b]))
-    @test length(new_sats.gps) == 2
-    @test new_sats.gps[2].prn == 2
+    sats = dictionary([1 => a])
 
-    # `_copy_slot_vectors` is the cheap per-iteration copy used inside
+    # `_copy_slot_vector` is the cheap per-iteration copy used inside
     # `track`'s loop (`downconvert_and_correlate` / `estimate`): it detaches
     # the slot *values* but deliberately *shares* the key set (`Indices`), so
     # the hash table is not copied on every loop iteration. The key set is
     # detached once at the `track` boundary instead (see below, #123).
-    copies = Tracking._copy_slot_vectors(sats)
-    @test length(copies.gps) == 1
-    @test copies.gps.values !== sats.gps.values
-    @test keys(copies.gps) === keys(sats.gps)
+    shared = Tracking._copy_slot_vector(sats)
+    @test shared.values !== sats.values
+    @test keys(shared) === keys(sats)
 
-    # `_detach_slot_vector` / `_detach_groups_slot_vectors` are the boundary
-    # copy: keys *and* values detached.
-    detached = Tracking._detach_slot_vector(sats.gps)
-    @test detached.values !== sats.gps.values
-    @test keys(detached) !== keys(sats.gps)
+    # `_detach_slot_vector` is the boundary copy: keys *and* values detached.
+    detached = Tracking._detach_slot_vector(sats)
+    @test detached.values !== sats.values
+    @test keys(detached) !== keys(sats)
 end
 
 @testset "Immutable boundary copies do not share Dictionary Indices (#123)" begin

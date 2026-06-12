@@ -247,6 +247,82 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
 end
 
 
+# ── Shared downconvert-into-tile phase ────────────────────────────────
+# Generates the carrier on-the-fly and downconverts `signal` into the SoA
+# tile (one `num_samples`-long slice per antenna):
+# `tile_re/tile_im[(j-1)*num_samples + idx]`. Shared by the dynamic-shifts
+# fused kernel and the tuple tile-share kernel below so the two phase-1
+# loops cannot drift (issue #133). `@generated` so the M antenna slices
+# unroll via `@nexprs`, exactly as both kernels did before.
+@generated function _downconvert_into_tile!(
+    tile_re,
+    tile_im,
+    signal::AbstractArray{Complex{ST}},
+    ::NumAnts{M},
+    carrier_frequency,
+    sampling_frequency,
+    carrier_phase,
+    start_sample::Integer,
+    num_samples::Integer,
+) where {ST,M}
+    quote
+        T = Float32
+        sizeof_ST = sizeof(ST)
+        W = $(_simd_width(Float32))
+
+        carrier_freq = T(upreferred(carrier_frequency / Hz))
+        phase0 = T(carrier_phase)
+        two_pi = T(2π)
+        freq_ratio = carrier_freq / T(upreferred(sampling_frequency / Hz))
+
+        num_samples_signal = size(signal, 1)
+        p_sig = Ptr{ST}(pointer(signal))
+        sig_col_bytes = num_samples_signal * 2 * sizeof_ST
+
+        off_1 = _make_offset(T, Val{W}(), Val{1}())
+        two_pi_fr = SIMD.Vec{W,T}(two_pi * freq_ratio)
+        init_1 = two_pi * (off_1 * freq_ratio + phase0)
+
+        last = start_sample + num_samples - 1
+
+        i = start_sample
+        idx = 1
+        @inbounds while i + W - 1 <= last
+            base_phase = SIMD.Vec{W,T}(T(i - start_sample))
+            phase = muladd(base_phase, two_pi_fr, init_1)
+            ci, cr = fast_sincos_u100k(phase)
+            row_byte_off = (i - 1) * 2 * sizeof_ST
+            Base.Cartesian.@nexprs $M j -> begin
+                sr_j, si_j = _deinterleave_load(
+                    SIMD.Vec{W,T}, p_sig,
+                    (j - 1) * sig_col_bytes + row_byte_off,
+                )
+                dre_j = sr_j * cr + si_j * ci
+                dim_j = si_j * cr - sr_j * ci
+                off_j = ((j - 1) * num_samples + idx - 1) * sizeof(T)
+                vstore(dre_j, pointer(tile_re) + off_j)
+                vstore(dim_j, pointer(tile_im) + off_j)
+            end
+            i += W
+            idx += W
+        end
+        @inbounds while i <= last
+            ph = two_pi * (T(i - start_sample) * freq_ratio + phase0)
+            c_im_s, c_re_s = sincos(ph)
+            Base.Cartesian.@nexprs $M j -> begin
+                sig_j = signal[i, j]
+                tile_re[(j - 1) * num_samples + idx] =
+                    T(real(sig_j)) * c_re_s + T(imag(sig_j)) * c_im_s
+                tile_im[(j - 1) * num_samples + idx] =
+                    T(imag(sig_j)) * c_re_s - T(real(sig_j)) * c_im_s
+            end
+            i += 1
+            idx += 1
+        end
+        return nothing
+    end
+end
+
 # ── Overload for dynamic-length sample_shifts (AbstractVector) ────────
 # Fired when the caller passes a runtime-sized `AbstractVector` of
 # shifts; the common EPL/VEPL correlators use `SVector{NC}` and
@@ -272,59 +348,15 @@ function downconvert_and_correlate_fused!(
     tile_im,
 ) where {M,ST}
     T = Float32
-    sizeof_ST = sizeof(ST)
-    W = _simd_width(Float32)
     num_taps = length(sample_shifts)
     min_shift = minimum(sample_shifts)
 
-    carrier_freq = T(upreferred(carrier_frequency / Hz))
-    phase0 = T(carrier_phase)
-    two_pi = T(2π)
-    freq_ratio = carrier_freq / T(upreferred(sampling_frequency / Hz))
-
-    num_samples_signal = size(signal, 1)
-    p_sig = Ptr{ST}(pointer(signal))
-    sig_col_bytes = num_samples_signal * 2 * sizeof_ST
-
-    off_1 = _make_offset(T, Val{W}(), Val{1}())
-    two_pi_fr = SIMD.Vec{W,T}(two_pi * freq_ratio)
-    init_1 = two_pi * (off_1 * freq_ratio + phase0)
-
-    last = start_sample + num_samples - 1
-
     # Downconvert each antenna into its tile slice
-    i = start_sample
-    idx = 1
-    @inbounds while i + W - 1 <= last
-        base_phase = SIMD.Vec{W,T}(T(i - start_sample))
-        phase = muladd(base_phase, two_pi_fr, init_1)
-        ci, cr = fast_sincos_u100k(phase)
-        row_byte_off = (i - 1) * 2 * sizeof_ST
-        for j in 1:M
-            sr, si = _deinterleave_load(
-                SIMD.Vec{W,T}, p_sig,
-                (j - 1) * sig_col_bytes + row_byte_off,
-            )
-            dre = sr * cr + si * ci
-            dim = si * cr - sr * ci
-            off = ((j - 1) * num_samples + idx - 1) * sizeof(T)
-            vstore(dre, pointer(tile_re) + off)
-            vstore(dim, pointer(tile_im) + off)
-        end
-        i += W
-        idx += W
-    end
-    @inbounds while i <= last
-        ph = two_pi * (T(i - start_sample) * freq_ratio + phase0)
-        c_im_s, c_re_s = sincos(ph)
-        for j in 1:M
-            sig = signal[i, j]
-            tile_re[(j-1)*num_samples + idx] = T(real(sig)) * c_re_s + T(imag(sig)) * c_im_s
-            tile_im[(j-1)*num_samples + idx] = T(imag(sig)) * c_re_s - T(real(sig)) * c_im_s
-        end
-        i += 1
-        idx += 1
-    end
+    _downconvert_into_tile!(
+        tile_re, tile_im, signal, NumAnts{M}(),
+        carrier_frequency, sampling_frequency, carrier_phase,
+        start_sample, num_samples,
+    )
 
     # Correlate: tap-outer, antenna-inner with @simd. The code replica is
     # written at absolute index `start_sample` by `gen_code_replica!`, so
@@ -487,60 +519,12 @@ end
     end
 
     quote
-        T = Float32
-        sizeof_ST = sizeof(ST)
-        W = $(_simd_width(Float32))
-
-        carrier_freq = T(upreferred(carrier_frequency / Hz))
-        phase0 = T(carrier_phase)
-        two_pi = T(2π)
-        freq_ratio = carrier_freq / T(upreferred(sampling_frequency / Hz))
-
-        num_samples_signal = size(signal, 1)
-        p_sig = Ptr{ST}(pointer(signal))
-        sig_col_bytes = num_samples_signal * 2 * sizeof_ST
-
-        off_1 = _make_offset(T, Val{W}(), Val{1}())
-        two_pi_fr = SIMD.Vec{W,T}(two_pi * freq_ratio)
-        init_1 = two_pi * (off_1 * freq_ratio + phase0)
-
-        last = start_sample + num_samples - 1
-
         # ── Phase 1: downconvert into the shared tile (M antennas). ──
-        i = start_sample
-        idx = 1
-        @inbounds while i + W - 1 <= last
-            base_phase = SIMD.Vec{W,T}(T(i - start_sample))
-            phase = muladd(base_phase, two_pi_fr, init_1)
-            ci, cr = fast_sincos_u100k(phase)
-            row_byte_off = (i - 1) * 2 * sizeof_ST
-            Base.Cartesian.@nexprs $M j -> begin
-                sr_j, si_j = _deinterleave_load(
-                    SIMD.Vec{W,T}, p_sig,
-                    (j - 1) * sig_col_bytes + row_byte_off,
-                )
-                dre_j = sr_j * cr + si_j * ci
-                dim_j = si_j * cr - sr_j * ci
-                off_j = ((j - 1) * num_samples + idx - 1) * sizeof(T)
-                vstore(dre_j, pointer(tile_re) + off_j)
-                vstore(dim_j, pointer(tile_im) + off_j)
-            end
-            i += W
-            idx += W
-        end
-        @inbounds while i <= last
-            ph = two_pi * (T(i - start_sample) * freq_ratio + phase0)
-            c_im_s, c_re_s = sincos(ph)
-            Base.Cartesian.@nexprs $M j -> begin
-                sig_j = signal[i, j]
-                tile_re[(j - 1) * num_samples + idx] =
-                    T(real(sig_j)) * c_re_s + T(imag(sig_j)) * c_im_s
-                tile_im[(j - 1) * num_samples + idx] =
-                    T(imag(sig_j)) * c_re_s - T(real(sig_j)) * c_im_s
-            end
-            i += 1
-            idx += 1
-        end
+        _downconvert_into_tile!(
+            tile_re, tile_im, signal, NumAnts{$M}(),
+            carrier_frequency, sampling_frequency, carrier_phase,
+            start_sample, num_samples,
+        )
 
         # ── Phase 2: antenna-outer fused correlate, N·NC accumulators per pass. ──
         $correlate_passes

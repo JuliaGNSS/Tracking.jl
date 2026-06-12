@@ -46,8 +46,7 @@ using Tracking:
     NumAnts,
     DefaultPostCorrFilter,
     MomentsCN0Estimator,
-    BitBuffer,
-    init_estimator_state
+    BitBuffer
 using GNSSSignals: GPSL1C_P, GPSL1C_D, GalileoE1B
 
 @testset "Multi-signal track on a single sat" begin
@@ -60,9 +59,8 @@ using GNSSSignals: GPSL1C_P, GPSL1C_D, GalileoE1B
     prn = 1
     num_samples = 5000  # 1 ms at 5 MHz
 
-    # Build a 2-signal sat: both signals are GPSL1CA. The library doesn't
-    # yet expose a public multi-signal constructor (that's step 5), so we
-    # assemble the TrackedSat manually.
+    # Build a 2-signal sat via the public TrackedSignal-tuple constructor:
+    # both signals are GPSL1CA with explicit (default-equal) correlators.
     estimator = ConventionalAssistedPLLAndDLL()
     signal_a = TrackedSignal(
         gpsl1;
@@ -76,21 +74,9 @@ using GNSSSignals: GPSL1C_P, GPSL1C_D, GalileoE1B
         correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
         post_corr_filter = DefaultPostCorrFilter(),
     )
-    bare_sat = TrackedSat(
-        prn,
-        float(start_code_phase),
-        float(code_doppler),
-        0.0,
-        float(carrier_doppler),
-        1,
-        (signal_a, signal_b),
-        nothing,
-    )
-    doppler_state = init_estimator_state(estimator, bare_sat)
     sat = TrackedSat(
-        bare_sat.prn, bare_sat.code_phase, bare_sat.code_doppler,
-        bare_sat.carrier_phase, bare_sat.carrier_doppler,
-        bare_sat.signal_start_sample, bare_sat.signals, doppler_state,
+        (signal_a, signal_b), prn, start_code_phase, carrier_doppler;
+        doppler_estimator = estimator,
     )
 
     track_state = TrackState(gpsl1, sat; doppler_estimator = estimator)
@@ -241,12 +227,10 @@ end
         s_b = TrackedSignal(gpsl1; num_ants = NumAnts(1),
             correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
             post_corr_filter = DefaultPostCorrFilter())
-        bare = TrackedSat(1, 0.0, 0.0Hz, 0.0, 0.0Hz, 1, (s_a, s_b), nothing)
-        est = ConventionalAssistedPLLAndDLL()
-        de  = init_estimator_state(est, bare)
-        dup_sat = TrackedSat(bare.prn, bare.code_phase, bare.code_doppler,
-            bare.carrier_phase, bare.carrier_doppler, bare.signal_start_sample,
-            bare.signals, de)
+        dup_sat = TrackedSat(
+            (s_a, s_b), 1, 0.0, 0.0Hz;
+            doppler_estimator = ConventionalAssistedPLLAndDLL(),
+        )
         # Integer index still works.
         @test get_signal(dup_sat, 1) isa GPSL1CA
         @test get_signal(dup_sat, 2) isa GPSL1CA

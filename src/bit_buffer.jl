@@ -351,6 +351,76 @@ end
 """
 $(SIGNATURES)
 
+Shared detector body for signals that broadcast one channel symbol per
+primary code period (GPS L1C-D, Galileo E1B): the buffer of primary-block
+signs is itself the symbol stream — there is no sub-symbol boundary to
+find — so the detector reports `found = true` from the very first
+integration, leaving downstream consumers (GNSSDecoder.jl) to resolve the
+residual ±1 polarity ambiguity via the navigation preamble.
+
+A signal of this shape delegates its `detect_bit_or_secondary_code_sync`
+method here.
+"""
+@inline function _detect_symbol_is_code_block_sync(
+    ::AbstractGNSSSignal,
+    ::Integer,           # PRN — ignored
+    ::Unsigned,
+    ::Integer,
+)
+    SyncResult(true, 0, Int8(+1))
+end
+
+"""
+$(SIGNATURES)
+
+Shared detector body for signals that lock onto a periodic secondary /
+overlay code (GPS L5I's NH10, GPS L1C-P's 1800-chip overlay): wait until
+the sliding `code_block_bits` window covers one full secondary-code
+period, then run the [`_secondary_code_search`](@ref) rotation sweep
+against the signal's packed reference ([`_packed_secondary_code`](@ref)).
+The tolerance is a percentage of the secondary-code window, discretized
+per signal as `floor(tolerance × N)` — see
+[`get_bit_edge_or_secondary_code_tolerance`](@ref).
+
+A new secondary-coded signal only needs a [`_packed_secondary_code`](@ref)
+method (plus `get_code_block_buffer_type`) and a
+`detect_bit_or_secondary_code_sync` method delegating here.
+"""
+@inline function _detect_secondary_code_sync(
+    signal::AbstractGNSSSignal,
+    prn::Integer,
+    code_block_bits::B,
+    num_code_blocks::Integer,
+) where {B<:Unsigned}
+    secondary_code_length = get_secondary_code_length(signal)
+    num_code_blocks < secondary_code_length && return SyncResult(false, 0, Int8(0))
+    max_errors = floor(
+        Int,
+        get_bit_edge_or_secondary_code_tolerance(signal) * secondary_code_length,
+    )
+    _secondary_code_search(
+        code_block_bits,
+        _packed_secondary_code(B, signal, prn),
+        secondary_code_length,
+        max_errors,
+    )
+end
+
+"""
+$(SIGNATURES)
+
+Hook for [`_detect_secondary_code_sync`](@ref): return the signal's
+secondary / overlay code for `prn`, packed into the buffer type `B` in
+the same newest-first order the prompt buffer fills — bit `i` holds
+secondary chip `N - 1 - i`, so that when the most recent `N` blocks span
+exactly one period ending on its last chip, `received & mask ==
+reference` (see [`_secondary_code_search`](@ref)).
+"""
+function _packed_secondary_code end
+
+"""
+$(SIGNATURES)
+
 BitBuffer to buffer bits.
 
 The `code_block_buffer` field is the sync-search sliding window — its

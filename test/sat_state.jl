@@ -4,7 +4,8 @@ using Test: @test, @testset, @inferred
 using Unitful: Hz
 using Dictionaries: dictionary
 using GNSSSignals:
-    GNSSSignals, AbstractGNSSSignal, GPSL1CA, get_code_center_frequency_ratio
+    GNSSSignals, AbstractGNSSSignal, GPSL1CA, GPSL1C_D, GPSL1C_P,
+    get_code_center_frequency_ratio
 using Acquisition: Acquisition, AcquisitionResults
 import Tracking
 using Tracking:
@@ -26,6 +27,10 @@ using Tracking:
     to_dictionary,
     max_code_length
 
+# `_make_acq`: shared Acquisition-version shim for building
+# `AcquisitionResults` — see test/acquisition_test_helpers.jl.
+include("acquisition_test_helpers.jl")
+
 @testset "Satellite state" begin
     gpsl1 = GPSL1CA()
     sat_state = @inferred TrackedSat(gpsl1, 1, 10.0, 500.0Hz)
@@ -41,33 +46,9 @@ using Tracking:
     @test has_bit_or_secondary_code_been_found(sat_state) == false
     @test length(get_bit_buffer(sat_state)) == 0
 
-    acq_args = (
-        gpsl1,
-        5,
-        5e6Hz,
-        100.0Hz,
-        524.6,
-        45.0,
-        1.0,
-        10.0,
-        1,
-        randn(100, 100),
-        -500:100.0:500,
-    )
-    # Construct across Acquisition's compat range: v1 has 11 fields; v2.0–v2.4
-    # appended num_blocks/block_size (13 fields); v2.5+ inserted
-    # secondary_code_phase (after code_phase) and appended
-    # num_secondary_rotations (15 fields).
-    acq = if pkgversion(Acquisition) >= v"2.5"
-        AcquisitionResults(
-            acq_args[1:5]..., nothing, acq_args[6:end]...,
-            1, length(-500:100.0:500), 1,
-        )
-    elseif pkgversion(Acquisition) >= v"2"
-        AcquisitionResults(acq_args..., 1, length(-500:100.0:500))
-    else
-        AcquisitionResults(acq_args...)
-    end
+    # `_make_acq` is the shared Acquisition-version shim — see
+    # test/acquisition_test_helpers.jl.
+    acq = _make_acq(gpsl1, 5, 524.6, 100.0Hz)
     sat_state = @inferred TrackedSat(acq)
     @test get_prn(sat_state) == 5
     @test get_code_phase(sat_state) == 524.6
@@ -197,6 +178,46 @@ GNSSSignals.get_data_frequency(::FakeWrapSignal) = 0Hz
 
     # The compile-time bound covers the all-synced worst case: lcm(20, 6).
     @test @inferred(max_code_length((s4, s6))) == 60
+end
+
+@testset "Public multi-signal TrackedSat constructor" begin
+    # Issue #133 item 2: a tuple of signals must be constructible directly,
+    # without hand-rolling the bare-sat → init_estimator_state → rebuild
+    # two-stage build.
+    sigs = (GPSL1C_P(), GPSL1C_D(), GPSL1CA())
+    sat = @inferred TrackedSat(sigs, 11, 1234.5, 500.0Hz)
+    @test get_prn(sat) == 11
+    @test get_code_phase(sat) == 1234.5
+    @test get_carrier_doppler(sat) == 500.0Hz
+    # The default code doppler scales by the estimator-driver signal's
+    # (signals[1]) code/center frequency ratio.
+    @test get_code_doppler(sat) ==
+          500.0Hz * get_code_center_frequency_ratio(GPSL1C_P())
+    @test get_signal_start_sample(sat) == 1
+    sigs_on_sat = get_signals(sat)
+    @test length(sigs_on_sat) == 3
+    @test sigs_on_sat[1].signal isa GPSL1C_P
+    @test sigs_on_sat[2].signal isa GPSL1C_D
+    @test sigs_on_sat[3].signal isa GPSL1CA
+    @test sat.doppler_estimator_state isa Tracking.SatConventionalPLLAndDLL
+
+    # A one-tuple builds the same concrete type as the scalar-signal form.
+    sat_tuple = @inferred TrackedSat((GPSL1CA(),), 1, 10.0, 500.0Hz)
+    sat_scalar = @inferred TrackedSat(GPSL1CA(), 1, 10.0, 500.0Hz)
+    @test typeof(sat_tuple) === typeof(sat_scalar)
+
+    # Kwargs flow through: explicit carrier phase, code doppler, estimator.
+    estimator = Tracking.ConventionalAssistedPLLAndDLL()
+    sat_kw = TrackedSat(
+        sigs, 7, 0.25, -250.0Hz;
+        carrier_phase = 0.5,
+        code_doppler = -0.3Hz,
+        doppler_estimator = estimator,
+    )
+    @test get_carrier_phase(sat_kw) ≈ 0.5
+    @test get_code_doppler(sat_kw) == -0.3Hz
+    @test sat_kw.doppler_estimator_state.carrier_loop_filter_bandwidth ==
+          estimator.carrier_loop_filter_bandwidth
 end
 
 end

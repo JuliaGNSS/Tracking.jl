@@ -174,6 +174,20 @@ function ConventionalAssistedPLLAndDLL(
     )
 end
 
+# Build the default `ConventionalAssistedPLLAndDLL` sized for `signal`'s
+# recommended loop bandwidths. The conventional estimator drives the loop
+# off a single signal — the estimator-driver signal (`signals[1]`) — so the
+# default is sized for that signal alone; there is no cross-signal bandwidth
+# compromise to make. Every implicit-default-estimator path (TrackState
+# kwarg constructors, positional sat-dict constructors, TrackedSat/SignalGroup
+# defaults) routes through here so the derivation exists exactly once.
+@inline function _default_estimator_for_signal(signal::AbstractGNSSSignal)
+    ConventionalAssistedPLLAndDLL(;
+        carrier_loop_filter_bandwidth = default_carrier_loop_filter_bandwidth(signal),
+        code_loop_filter_bandwidth = default_code_loop_filter_bandwidth(signal),
+    )
+end
+
 # Kwarg-update constructor for tweaking bandwidths in place.
 function ConventionalPLLAndDLL(
     pll_and_dll::ConventionalPLLAndDLL{CA,CO};
@@ -323,6 +337,60 @@ function _update_tracked_sat_doppler(
     )
 end
 
+# Shared per-signal advance applied after a completed integration —
+# identical for the estimator-driver signal and the passenger signals:
+# normalize the correlator, update/apply the post-corr filter, record the
+# filtered prompt, advance the CN0 estimator and bit buffer, and rebuild
+# the `TrackedSignal` with the correlator moved to
+# `last_fully_integrated_*`. Returns the rebuilt signal plus the
+# intermediate values the driver's loop-filter section needs
+# (`filtered_correlator`, `integrated_code_blocks`). Keeping this in one
+# place is what guarantees driver and passengers cannot drift (issue #133).
+#
+# The bit accumulator is credited with the blocks *actually* integrated
+# (`calc_num_code_blocks_for_bit_buffer`), not the intended
+# `integrated_code_blocks`: post-sync the first integration is truncated to
+# land on the data-bit boundary, so crediting the intended length would
+# misalign the decoded bits (issue #125). The intended count is still
+# returned for the driver's `1/N` loop-bandwidth scaling.
+@inline function _advance_signal_after_integration(
+    tracked_signal::TrackedSignal,
+    prn::Integer,
+    sampling_frequency,
+)
+    signal = tracked_signal.signal
+    integrated_code_blocks = calc_num_code_blocks_to_integrate(
+        signal,
+        tracked_signal.preferred_num_code_blocks_to_integrate,
+        has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
+    )
+    normalized_correlator = normalize(tracked_signal.correlator, tracked_signal.integrated_samples)
+    post_corr_filter = update(tracked_signal.post_corr_filter, get_prompt(normalized_correlator))
+    filtered_correlator = apply(post_corr_filter, normalized_correlator)
+    prompt = get_prompt(filtered_correlator)
+    push!(tracked_signal.filtered_prompts, prompt)
+    cn0_estimator = update(get_cn0_estimator(tracked_signal), prompt)
+    bit_block_count = calc_num_code_blocks_for_bit_buffer(
+        signal,
+        tracked_signal.integrated_samples,
+        sampling_frequency,
+        has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
+    )
+    bit_buffer = buffer(signal, prn, tracked_signal.bit_buffer, bit_block_count, prompt)
+    new_signal = TrackedSignal(
+        tracked_signal;
+        integrated_samples = 0,
+        is_integration_completed = false,
+        last_fully_integrated_filtered_prompt = prompt,
+        bit_buffer,
+        cn0_estimator,
+        post_corr_filter,
+        correlator = zero(tracked_signal.correlator),
+        last_fully_integrated_correlator = tracked_signal.correlator,
+    )
+    return new_signal, filtered_correlator, integrated_code_blocks
+end
+
 # Process the estimator-driver signal (signals[1]): if its integration
 # completed, run the PLL/DLL plus prompt filter / CN0 / bit-buffer update
 # and return new values for carrier_doppler, code_doppler, and
@@ -340,29 +408,12 @@ end
         return tracked_signal, pll_and_dll_state, sat.carrier_doppler, sat.code_doppler
     end
     signal = tracked_signal.signal
-    integrated_code_blocks = calc_num_code_blocks_to_integrate(
-        signal,
-        tracked_signal.preferred_num_code_blocks_to_integrate,
-        has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
-    )
-
-    normalized_correlator = normalize(tracked_signal.correlator, tracked_signal.integrated_samples)
-    post_corr_filter = update(tracked_signal.post_corr_filter, get_prompt(normalized_correlator))
-    filtered_correlator = apply(post_corr_filter, normalized_correlator)
-    prompt = get_prompt(filtered_correlator)
-    push!(tracked_signal.filtered_prompts, prompt)
-    cn0_estimator = update(get_cn0_estimator(tracked_signal), prompt)
-    # The bit accumulator is credited with the blocks actually integrated, not
-    # the intended `integrated_code_blocks`: post-sync the first integration is
-    # truncated to land on the data-bit boundary (issue #125).
-    bit_block_count = calc_num_code_blocks_for_bit_buffer(
-        signal,
-        tracked_signal.integrated_samples,
-        sampling_frequency,
-        has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
-    )
-    bit_buffer = buffer(signal, sat.prn, tracked_signal.bit_buffer, bit_block_count, prompt)
+    # The previous fully-integrated prompt must be read off the *old*
+    # signal — the shared advance overwrites it with this integration's.
+    previous_prompt = get_last_fully_integrated_filtered_prompt(tracked_signal)
     integration_time = tracked_signal.integrated_samples / sampling_frequency
+    new_signal, filtered_correlator, integrated_code_blocks =
+        _advance_signal_after_integration(tracked_signal, sat.prn, sampling_frequency)
 
     # The configured bandwidths are referenced to a one-primary-code-period
     # integration. Coherently integrating `integrated_code_blocks` periods
@@ -377,7 +428,7 @@ end
         signal,
         pll_and_dll_state.carrier_loop_filter,
         filtered_correlator,
-        get_last_fully_integrated_filtered_prompt(tracked_signal),
+        previous_prompt,
         integration_time,
         carrier_bandwidth,
     )
@@ -402,24 +453,12 @@ end
         carrier_loop_filter,
         code_loop_filter,
     )
-    new_signal = TrackedSignal(
-        tracked_signal;
-        integrated_samples = 0,
-        is_integration_completed = false,
-        last_fully_integrated_filtered_prompt = prompt,
-        bit_buffer,
-        cn0_estimator,
-        post_corr_filter,
-        correlator = zero(tracked_signal.correlator),
-        last_fully_integrated_correlator = tracked_signal.correlator,
-    )
     return new_signal, new_doppler_estimator_state, carrier_doppler, code_doppler
 end
 
-# Process the non-driver signals (signals[2:end]): per-signal prompt
-# filter, CN0 update, bit-buffer advance, correlator hand-off. No loop-
-# filter work. Walks the tuple recursively to keep type-stability and
-# avoid boxing.
+# Process the non-driver signals (signals[2:end]): the shared per-signal
+# advance only — no loop-filter work. Walks the tuple recursively to keep
+# type-stability and avoid boxing.
 @inline _process_passenger_signals(
     ::Tuple{}, ::Integer, _,
 ) = ()
@@ -449,33 +488,7 @@ end
     if !tracked_signal.is_integration_completed || tracked_signal.integrated_samples == 0
         return tracked_signal
     end
-    signal = tracked_signal.signal
-    normalized_correlator = normalize(tracked_signal.correlator, tracked_signal.integrated_samples)
-    post_corr_filter = update(tracked_signal.post_corr_filter, get_prompt(normalized_correlator))
-    filtered_correlator = apply(post_corr_filter, normalized_correlator)
-    prompt = get_prompt(filtered_correlator)
-    push!(tracked_signal.filtered_prompts, prompt)
-    cn0_estimator = update(get_cn0_estimator(tracked_signal), prompt)
-    # Credit the accumulator with the blocks actually integrated (truncated on
-    # the first post-sync integration), not the intended count (issue #125).
-    bit_block_count = calc_num_code_blocks_for_bit_buffer(
-        signal,
-        tracked_signal.integrated_samples,
-        sampling_frequency,
-        has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
-    )
-    bit_buffer = buffer(signal, prn, tracked_signal.bit_buffer, bit_block_count, prompt)
-    TrackedSignal(
-        tracked_signal;
-        integrated_samples = 0,
-        is_integration_completed = false,
-        last_fully_integrated_filtered_prompt = prompt,
-        bit_buffer,
-        cn0_estimator,
-        post_corr_filter,
-        correlator = zero(tracked_signal.correlator),
-        last_fully_integrated_correlator = tracked_signal.correlator,
-    )
+    first(_advance_signal_after_integration(tracked_signal, prn, sampling_frequency))
 end
 
 """

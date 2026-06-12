@@ -70,24 +70,33 @@ re-tuning (see [`ConventionalPLLAndDLL`](@ref)).
 function track(
     measurements::BandMeasurements,
     track_state::TS;
-    downconvert_and_correlator::AbstractDownconvertAndCorrelator = CPUThreadedDownconvertAndCorrelator(),
+    kwargs...,
 ) where {TS<:TrackState}
-    _validate_measurements(track_state, measurements)
-    track_state = reset_start_sample_and_bit_buffer(track_state)::TS
-    while true
-        _all_groups_reached_end(track_state, measurements) && break
+    # Detach the slot storage from the input once — keys (`Indices`) *and*
+    # values (`_detach_groups_slot_vectors`, #123) — so a later
+    # `add_satellite!`/`remove_satellite!` on the returned state cannot
+    # corrupt the input's key set. Then run the fully in-place pipeline on
+    # the detached copy, which avoids re-copying the slot vectors twice per
+    # chunk iteration (issue #133). The copy is otherwise shallow:
+    # per-satellite scratch vectors are shared with the input — see the
+    # docstring above.
+    detached = TrackState(
+        track_state;
+        groups = _detach_groups_slot_vectors(track_state.groups),
+    )
+    track!(measurements, detached; kwargs...)::TS
+end
 
-        track_state = downconvert_and_correlate(
-            downconvert_and_correlator,
-            measurements,
-            track_state,
-        )::TS
-        track_state = estimate_dopplers_and_filter_prompt(
-            track_state,
-            measurements,
-        )::TS
-    end
-    return track_state
+# Wrap a bare buffer / single `BandMeasurement` into the one-entry
+# `BandMeasurements` NamedTuple keyed by the TrackState's only band. Shared
+# by the `track` and `track!` convenience wrappers; errors (via
+# `_single_band`) on multi-band TrackStates.
+@inline function _single_band_measurements(
+    measurement::BandMeasurement,
+    track_state::TrackState,
+)
+    key = band_key(_single_band(track_state))
+    NamedTuple{(key,)}((measurement,))
 end
 
 # Bare-buffer convenience wrapper. Single-band TrackStates only.
@@ -98,11 +107,8 @@ function track(
     intermediate_frequency = zero(sampling_frequency),
     kwargs...,
 )
-    band = _single_band(track_state)
-    key = band_key(band)
     m = BandMeasurement(signal, sampling_frequency, intermediate_frequency)
-    measurements = NamedTuple{(key,)}((m,))
-    track(measurements, track_state; kwargs...)
+    track(_single_band_measurements(m, track_state), track_state; kwargs...)
 end
 
 # Single-BandMeasurement convenience: still a single-band path.
@@ -111,10 +117,7 @@ function track(
     track_state::TrackState;
     kwargs...,
 )
-    band = _single_band(track_state)
-    key = band_key(band)
-    measurements = NamedTuple{(key,)}((measurement,))
-    track(measurements, track_state; kwargs...)
+    track(_single_band_measurements(measurement, track_state), track_state; kwargs...)
 end
 
 """
@@ -178,11 +181,8 @@ function track!(
     intermediate_frequency = zero(sampling_frequency),
     kwargs...,
 )
-    band = _single_band(track_state)
-    key = band_key(band)
     m = BandMeasurement(signal, sampling_frequency, intermediate_frequency)
-    measurements = NamedTuple{(key,)}((m,))
-    track!(measurements, track_state; kwargs...)
+    track!(_single_band_measurements(m, track_state), track_state; kwargs...)
 end
 
 # Single-BandMeasurement convenience: still a single-band path.
@@ -191,10 +191,7 @@ function track!(
     track_state::TrackState;
     kwargs...,
 )
-    band = _single_band(track_state)
-    key = band_key(band)
-    measurements = NamedTuple{(key,)}((measurement,))
-    track!(measurements, track_state; kwargs...)
+    track!(_single_band_measurements(measurement, track_state), track_state; kwargs...)
 end
 
 # Loop termination: every group has consumed its band's measurement to the
