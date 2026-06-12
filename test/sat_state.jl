@@ -121,7 +121,7 @@ end
             complex(0.0, 0.0),
             0,
             Float32[],
-            ComplexF64[],
+            Tracking.PhaseAccumulators(),
         ),
     )
     synced_signals = (synced_sig,)
