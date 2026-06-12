@@ -120,6 +120,7 @@ end
             0,
             complex(0.0, 0.0),
             0,
+            Float32[],
         ),
     )
     synced_signals = (synced_sig,)

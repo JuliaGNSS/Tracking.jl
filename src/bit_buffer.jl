@@ -145,23 +145,28 @@ struct BitBuffer{B<:Unsigned}
     length::Int
     prompt_accumulator::ComplexF64
     prompt_accumulator_integrated_code_blocks::Int
+    soft_bits::Vector{Float32}
 end
 
 # Default constructor preserves the pre-refactor `UInt128`-backed search
 # buffer. Once `get_code_block_buffer_type` lands (Step 2) the per-signal
 # `TrackedSignal` constructor picks the right width instead.
 function BitBuffer()
-    BitBuffer{UInt128}(zero(UInt128), 0, false, 0, Int8(0), zero(UInt128), 0, complex(0.0, 0.0), 0)
+    BitBuffer{UInt128}(
+        zero(UInt128), 0, false, 0, Int8(0), zero(UInt128), 0, complex(0.0, 0.0), 0, Float32[],
+    )
 end
 
 # Typed empty constructor used by the per-signal `TrackedSignal` path.
 function BitBuffer{B}() where {B<:Unsigned}
-    BitBuffer{B}(zero(B), 0, false, 0, Int8(0), zero(UInt128), 0, complex(0.0, 0.0), 0)
+    BitBuffer{B}(
+        zero(B), 0, false, 0, Int8(0), zero(UInt128), 0, complex(0.0, 0.0), 0, Float32[],
+    )
 end
 
 # Convenience outer constructor matching the legacy 7-arg form (no phase /
-# polarity arguments — assumed zero). Used by test code that builds a
-# `BitBuffer` from raw integer / Complex{Int} literals.
+# polarity arguments — assumed zero; soft bits default to empty). Used by test
+# code that builds a `BitBuffer` from raw integer / Complex{Int} literals.
 function BitBuffer(
     code_block_buffer::B,
     code_block_buffer_lengh::Integer,
@@ -181,12 +186,21 @@ function BitBuffer(
         Int(length),
         ComplexF64(prompt_accumulator),
         Int(prompt_accumulator_integrated_code_blocks),
+        Float32[],
     )
 end
 
 @inline get_bits(bit_buffer::BitBuffer) = bit_buffer.buffer
 @inline length(bit_buffer::BitBuffer) = bit_buffer.length
 @inline has_bit_or_secondary_code_been_found(bit_buffer::BitBuffer) = bit_buffer.found
+
+# Get the soft bits, i.e. the accumulated (summed) filtered prompt of each
+# completed bit. The sign of each soft bit corresponds to the respective hard
+# bit returned by `get_bits`. The buffer is reset to length 0 at the start of
+# each `track` call, mirroring the hard bit buffer. Kept as a plain comment (not
+# a docstring) to match the sibling accessors `get_bits` / `get_num_bits`, which
+# `checkdocs = :exports` would otherwise require to appear in the manual.
+@inline get_soft_bits(bit_buffer::BitBuffer) = bit_buffer.soft_bits
 
 """
 $(SIGNATURES)
@@ -298,6 +312,9 @@ function buffer(signal::AbstractGNSSSignal, prn::Integer, bit_buffer::BitBuffer{
         bit_acc = bit_buffer.polarity < 0 ?
                   -real(prompt_accumulator) : real(prompt_accumulator)
         bit = bit_acc > 0
+        # Store the polarity-corrected accumulation so the soft bit's sign
+        # matches the decoded hard bit.
+        push!(bit_buffer.soft_bits, Float32(bit_acc))
         return BitBuffer{B}(
             bit_buffer.code_block_buffer,
             bit_buffer.code_block_buffer_lengh,
@@ -308,6 +325,7 @@ function buffer(signal::AbstractGNSSSignal, prn::Integer, bit_buffer::BitBuffer{
             length(bit_buffer) + 1,
             zero(prompt_accumulator),
             0,
+            bit_buffer.soft_bits,
         )
     else
         return BitBuffer{B}(
@@ -320,6 +338,7 @@ function buffer(signal::AbstractGNSSSignal, prn::Integer, bit_buffer::BitBuffer{
             bit_buffer.length,
             prompt_accumulator,
             prompt_accumulator_integrated_code_blocks,
+            bit_buffer.soft_bits,
         )
     end
 end
@@ -350,6 +369,7 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
             0,
             complex(0.0, 0.0),
             0,
+            bit_buffer.soft_bits,
         )
     end
     if get_secondary_code_length(signal) > 1
@@ -370,6 +390,7 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
             0,
             complex(0.0, 0.0),
             0,
+            bit_buffer.soft_bits,
         )
     end
     num_bits = min(
@@ -387,6 +408,7 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
                 (bit_index - 1) * num_code_blocks_that_form_a_bit + code_block_index
             ((code_block_buffer & (one(B) << buffer_code_block_index)) > 0) * 2 - 1
         end
+        push!(bit_buffer.soft_bits, Float32(bit_sum))
         bits << 1 + (bit_sum > 0)
     end
     return BitBuffer{B}(
@@ -399,10 +421,12 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
         num_bits,
         complex(0, 0),
         0,
+        bit_buffer.soft_bits,
     )
 end
 
 function reset(bit_buffer::BitBuffer{B}) where {B<:Unsigned}
+    empty!(bit_buffer.soft_bits)
     BitBuffer{B}(
         bit_buffer.code_block_buffer,
         bit_buffer.code_block_buffer_lengh,
@@ -413,5 +437,6 @@ function reset(bit_buffer::BitBuffer{B}) where {B<:Unsigned}
         0,
         bit_buffer.prompt_accumulator,
         bit_buffer.prompt_accumulator_integrated_code_blocks,
+        bit_buffer.soft_bits,
     )
 end

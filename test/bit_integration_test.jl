@@ -12,6 +12,7 @@ using Tracking:
     get_code_phase,
     get_bits,
     get_num_bits,
+    get_soft_bits,
     has_bit_or_secondary_code_been_found
 
 @testset "Bit detection integration test" begin
@@ -39,6 +40,16 @@ using Tracking:
         @test has_bit_or_secondary_code_been_found(track_state) == (index >= 40)
         @test get_bits(track_state) == (index == 40 ? 2 : 0)
         @test get_num_bits(track_state) == (index == 40 ? 2 : 0)
+        soft_bits = get_soft_bits(track_state)
+        # There is exactly one soft bit (Float32 accumulation) per hard bit
+        @test eltype(soft_bits) == Float32
+        @test length(soft_bits) == get_num_bits(track_state)
+        if index == 40
+            # The sign of each soft bit must match the respective hard bit
+            # (bits == 0b10, ordered oldest first: a "1" followed by a "0")
+            @test soft_bits[1] > 0
+            @test soft_bits[2] < 0
+        end
     end
 end
 
