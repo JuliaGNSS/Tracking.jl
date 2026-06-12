@@ -139,12 +139,40 @@ end
     @test length(new_sats.gps) == 2
     @test new_sats.gps[2].prn == 2
 
-    # `_copy_slot_vectors` walks a `SatelliteDicts` and copies each dict's
-    # values vector — the result should share keys but detach the slot
-    # vector.
+    # `_copy_slot_vectors` walks a `SatelliteDicts` and copies each dict —
+    # the result must detach both the slot vector and the `Indices` object
+    # (#123): a shared `Indices` lets `set!`/`delete!` on one copy corrupt
+    # the other.
     copies = Tracking._copy_slot_vectors(sats)
     @test length(copies.gps) == 1
     @test copies.gps.values !== sats.gps.values
+    @test keys(copies.gps) !== keys(sats.gps)
+end
+
+@testset "Immutable copies do not share Dictionary Indices (#123)" begin
+    # Same copy path as the immutable `track` /
+    # `downconvert_and_correlate` / `reset_start_sample_and_bit_buffer`.
+    # With a shared `Indices`, `add_satellite!` on the copy grows the
+    # original's key set without resizing its values vector — leaving the
+    # original claiming keys it has no values for (UndefRefError or silent
+    # garbage on access).
+    ts = TrackState(; signal = GPSL1CA())
+    add_satellite!(ts; prn = 1, carrier_doppler = 100.0Hz)
+
+    ts2 = Tracking.reset_start_sample_and_bit_buffer(ts)
+    add_satellite!(ts2; prn = 2, carrier_doppler = 200.0Hz)
+
+    # The original must be untouched: still exactly one satellite.
+    @test length(get_sat_states(ts, :default)) == 1
+    @test collect(keys(get_sat_states(ts, :default))) == [1]
+    @test get_prn(ts, :default, 1) == 1
+    # The copy got the new satellite.
+    @test length(get_sat_states(ts2, :default)) == 2
+
+    # Removal on the copy must not shrink the original's key set either.
+    remove_satellite!(ts2; prn = 1)
+    @test length(get_sat_states(ts, :default)) == 1
+    @test get_prn(ts, :default, 1) == 1
 end
 
 @testset "remove_satellite! kwarg form mutates in place" begin
