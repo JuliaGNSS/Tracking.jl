@@ -10,8 +10,11 @@ using Tracking:
     get_soft_bits,
     has_bit_or_secondary_code_been_found,
     SyncResult,
+    PhaseAccumulators,
     _norm_quantile,
-    _detect_bit_edge_cfar
+    _detect_bit_edge_cfar,
+    _seed_phase_accumulators!,
+    _update_phase_accumulators!
 
 @testset "SyncResult" begin
     r = @inferred SyncResult(false, 0, Int8(0))
@@ -38,33 +41,48 @@ const L1CA_L = 20  # primary-code blocks per L1 C/A navigation bit
 _bitstream(bits; amp = 1.0) =
     ComplexF64[amp * (b == 1 ? 1.0 : -1.0) for b in bits for _ in 1:L1CA_L]
 
+# Fold a prompt stream into a fresh set of phase accumulators (mirrors what
+# `_buffer_find_bit` does) and run the detector after the n-th block. With
+# `upto = 0` it runs after every block and returns the (1-based) block index
+# at which it first locks (0 if never), else it returns the SyncResult after
+# exactly `upto` blocks.
+function _detect_over(prompts, confidence; upto = 0)
+    acc = PhaseAccumulators()
+    _seed_phase_accumulators!(acc, L1CA_L)
+    for (i, p) in enumerate(prompts)
+        _update_phase_accumulators!(acc, ComplexF64(p), i - 1, L1CA_L)
+        res = _detect_bit_edge_cfar(acc, L1CA_L, confidence, i)
+        upto == 0 && res.found && return i
+        upto == i && return res
+    end
+    return upto == 0 ? 0 : _detect_bit_edge_cfar(acc, L1CA_L, confidence, length(prompts))
+end
+
 @testset "_detect_bit_edge_cfar" begin
     @testset "Needs at least two bins" begin
         # 39 blocks (< 2L) — never enough to nominate a runner-up.
-        sp = _bitstream([0, 1])[1:39]
-        @test _detect_bit_edge_cfar(sp, L1CA_L, 0.999).found == false
+        @test _detect_over(_bitstream([0, 1])[1:39], 0.999; upto = 39).found == false
     end
 
     @testset "Noiseless lock fires at the true bit boundary, not one early" begin
         # Data 0,0,1: first transition preceded by a repeated bit (the
         # exact issue-#124 trigger). The true edge is at block 60; the old
         # tolerant matcher fired at 59.
-        sp = _bitstream([0, 0, 1])
-        @test _detect_bit_edge_cfar(sp[1:59], L1CA_L, 0.999).found == false
-        res = _detect_bit_edge_cfar(sp, L1CA_L, 0.999)
+        @test _detect_over(_bitstream([0, 0, 1])[1:59], 0.999; upto = 59).found == false
+        res = _detect_over(_bitstream([0, 0, 1]), 0.999; upto = 60)
         @test res.found == true
         @test res.phase == 0
         @test res.polarity == +1   # last completed bin is the "1"
 
         # Mirror pattern 1,1,0 → same boundary, negative polarity.
-        res = _detect_bit_edge_cfar(_bitstream([1, 1, 0]), L1CA_L, 0.999)
+        res = _detect_over(_bitstream([1, 1, 0]), 0.999; upto = 60)
         @test res.found == true
         @test res.polarity == -1
     end
 
     @testset "No data transition never locks" begin
         # A constant data stream carries no edge information.
-        @test _detect_bit_edge_cfar(_bitstream(fill(1, 5)), L1CA_L, 0.999).found == false
+        @test _detect_over(_bitstream(fill(1, 5)), 0.999) == 0
     end
 
     @testset "Confidence drives lock latency in noise" begin
@@ -75,12 +93,8 @@ _bitstream(bits; amp = 1.0) =
         function lock_block(confidence, seed)
             rng = MersenneTwister(seed)
             clean = _bitstream([i % 2 for i in 0:9]; amp = 8.0)
-            sp = ComplexF64[]
-            for (i, p) in enumerate(clean)
-                push!(sp, p + complex(randn(rng), randn(rng)))
-                _detect_bit_edge_cfar(sp, L1CA_L, confidence).found && return i
-            end
-            return 0
+            noisy = ComplexF64[p + complex(randn(rng), randn(rng)) for p in clean]
+            _detect_over(noisy, confidence)
         end
         for seed in 1:5
             lo = lock_block(0.95, seed)
@@ -94,6 +108,16 @@ _bitstream(bits; amp = 1.0) =
             @test lo % L1CA_L == 0
             @test hi % L1CA_L == 0
         end
+    end
+
+    @testset "Allocation-free per call" begin
+        acc = PhaseAccumulators()
+        _seed_phase_accumulators!(acc, L1CA_L)
+        for i in 1:80
+            _update_phase_accumulators!(acc, ComplexF64(1.0 + 0im), i - 1, L1CA_L)
+        end
+        _detect_bit_edge_cfar(acc, L1CA_L, 0.999, 80)  # compile
+        @test (@allocated _detect_bit_edge_cfar(acc, L1CA_L, 0.999, 80)) == 0
     end
 end
 
@@ -184,8 +208,6 @@ end
         soft = get_soft_bits(bit_buffer)
         @test length(soft) == 3
         @test soft[1] > 0 && soft[2] > 0 && soft[3] < 0
-        # The soft-prompt history is released once sync is found.
-        @test isempty(bit_buffer.soft_prompts)
     end
 
     @testset "Buffer prompt when bit has been found" begin

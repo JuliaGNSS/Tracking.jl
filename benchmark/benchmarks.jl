@@ -463,7 +463,7 @@ end
 #      inserted between `found` and `buffer` (Step 4 of the redesign).
 #   4. Parametric, 10 fields with a trailing `soft_bits::Vector{Float32}`.
 #   5. Parametric, 11 fields with a further trailing
-#      `soft_prompts::Vector{ComplexF64}` (soft-decision L1CA bit-edge
+#      `phase_acc::PhaseAccumulators` (soft-decision L1CA bit-edge
 #      detector, issue #124).
 # Detect at load time via `hasfield`.
 const _HAS_PARAMETRIC_BITBUFFER =
@@ -472,14 +472,14 @@ const _HAS_BITBUFFER_PHASE_FIELDS =
     _HAS_PARAMETRIC_BITBUFFER && hasfield(Tracking.BitBuffer, :secondary_phase)
 const _HAS_BITBUFFER_SOFT_BITS =
     _HAS_PARAMETRIC_BITBUFFER && hasfield(Tracking.BitBuffer, :soft_bits)
-const _HAS_BITBUFFER_SOFT_PROMPTS =
-    _HAS_PARAMETRIC_BITBUFFER && hasfield(Tracking.BitBuffer, :soft_prompts)
+const _HAS_BITBUFFER_PHASE_ACC =
+    _HAS_PARAMETRIC_BITBUFFER && hasfield(Tracking.BitBuffer, :phase_acc)
 
 # Rebuild a `found = true` BitBuffer matching the existing buffer's
 # layout. On parametric branches we pull `B` off the live buffer; on the
 # non-parametric branch the type is just `BitBuffer` and the integer
 # fields default to `UInt128`.
-if _HAS_BITBUFFER_SOFT_PROMPTS
+if _HAS_BITBUFFER_PHASE_ACC
     _bb_int_type(::Tracking.BitBuffer{B}) where {B<:Unsigned} = B
     @inline _make_found_bit_buffer(old_bb) = typeof(old_bb)(
         zero(_bb_int_type(old_bb)),        # code_block_buffer::B
@@ -492,7 +492,7 @@ if _HAS_BITBUFFER_SOFT_PROMPTS
         complex(0.0, 0.0),                 # prompt_accumulator
         0,                                 # prompt_accumulator_integrated_code_blocks
         Float32[],                         # soft_bits
-        ComplexF64[],                      # soft_prompts
+        Tracking.PhaseAccumulators(),      # phase_acc
     )
 elseif _HAS_BITBUFFER_SOFT_BITS
     _bb_int_type(::Tracking.BitBuffer{B}) where {B<:Unsigned} = B

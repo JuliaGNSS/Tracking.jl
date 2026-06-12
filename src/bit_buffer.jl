@@ -62,90 +62,154 @@ end
 """
 $(SIGNATURES)
 
+Incremental per-phase bin statistics for the soft GPS L1 C/A bit-edge
+detector [`_detect_bit_edge_cfar`](@ref). One entry per candidate edge
+phase `k ∈ 0:L-1`; updated in place by
+[`_update_phase_accumulators!`](@ref), one primary-code block at a time,
+so detection stays O(L) per block instead of rescanning the whole pre-sync
+history.
+
+Fields (all length `L` once seeded; empty before the first block):
+
+- `csum` — coherent sum of the phase's *currently open* bin.
+- `energy` — accumulated `Σ|Sₖₘ|²` over the phase's *completed* bins.
+- `energy_sq` — accumulated `Σ|Sₖₘ|⁴` (for the bin-to-bin energy variance).
+- `bins` — number of completed bins.
+- `last_bin_sum` — coherent sum of the most recently completed bin (its
+  sign gives the lock polarity).
+"""
+struct PhaseAccumulators
+    csum::Vector{ComplexF64}
+    energy::Vector{Float64}
+    energy_sq::Vector{Float64}
+    bins::Vector{Int}
+    last_bin_sum::Vector{ComplexF64}
+end
+
+PhaseAccumulators() =
+    PhaseAccumulators(ComplexF64[], Float64[], Float64[], Int[], ComplexF64[])
+
+# Are the accumulators seeded for an L-phase search yet?
+@inline _is_seeded(acc::PhaseAccumulators, L::Int) = length(acc.energy) == L
+
+# Size the (initially empty) accumulator vectors to `L` phases and zero them.
+function _seed_phase_accumulators!(acc::PhaseAccumulators, L::Int)
+    for v in (acc.csum, acc.energy, acc.energy_sq, acc.bins, acc.last_bin_sum)
+        resize!(v, L)
+    end
+    fill!(acc.csum, zero(ComplexF64))
+    fill!(acc.energy, 0.0)
+    fill!(acc.energy_sq, 0.0)
+    fill!(acc.bins, 0)
+    fill!(acc.last_bin_sum, zero(ComplexF64))
+    acc
+end
+
+"""
+$(SIGNATURES)
+
+Fold the prompt `p` of the primary-code block at 0-based index `idx` into
+the [`PhaseAccumulators`](@ref) for an `L`-phase bit-edge search. Each
+phase's bins start at index `k` and span `L` blocks; `p` is added to every
+phase whose bin is open at `idx` (`idx ≥ k`), and the single phase whose
+bin ends at `idx` (`(idx - k) % L == L-1`) has its completed bin's energy
+`|Sₖₘ|²` folded into the running energy / squared-energy / count totals.
+O(L) per call.
+"""
+function _update_phase_accumulators!(acc::PhaseAccumulators, p::ComplexF64, idx::Int, L::Int)
+    @inbounds for k in 0:(L-1)
+        idx < k && continue
+        acc.csum[k+1] += p
+        if (idx - k) % L == L - 1
+            s = acc.csum[k+1]
+            e = abs2(s)
+            acc.energy[k+1] += e
+            acc.energy_sq[k+1] += e * e
+            acc.bins[k+1] += 1
+            acc.last_bin_sum[k+1] = s
+            acc.csum[k+1] = zero(ComplexF64)
+        end
+    end
+    acc
+end
+
+"""
+$(SIGNATURES)
+
 Soft-decision, CFAR bit-edge detector for GPS L1 C/A — the
 maximum-energy timing synchronizer used by
 `detect_bit_or_secondary_code_sync(::GPSL1CA, …)`. Signals with a periodic
 secondary code (GPS L5I, GPS L1C-P) instead use
 [`_secondary_code_search`](@ref), which correlates against a known overlay.
 
-`soft_prompts` is the full pre-sync history of filtered prompt
-correlator outputs (one per primary-code period, oldest first); `L` is
-the number of primary-code blocks per navigation bit (20 for L1 C/A).
+The per-phase bin statistics are accumulated incrementally in `acc`
+([`PhaseAccumulators`](@ref), updated by
+[`_update_phase_accumulators!`](@ref)); `L` is the number of primary-code
+blocks per navigation bit (20 for L1 C/A) and `n` is the total number of
+prompts seen. The detector is O(L) per call — no rescan of history — so
+it stays cheap on the pre-sync hot path no matter how long sync takes.
 
 # Statistic
 
 Under the hypothesis that the bit edge sits at phase `k ∈ 0:L-1`, the
 prompts partition into `L`-block bins aligned to `k`. Each complete bin
-`m` is coherently summed (`Sₖₘ = Σ pᵢ`) and its energy `|Sₖₘ|²`
-accumulated; the true phase never straddles a data-bit transition, so it
-keeps full coherent gain on every bin while wrong phases lose energy on
-transition bins. The per-phase mean bin energy `Ēₖ` is therefore the
-maximum-likelihood timing statistic for unknown i.i.d. data in AWGN.
+is coherently summed (`Sₖₘ = Σ pᵢ`) and its energy `|Sₖₘ|²` accumulated
+in `acc.energy[k]`; the true phase never straddles a data-bit transition,
+so it keeps full coherent gain on every bin while wrong phases lose
+energy on transition bins. The per-phase mean bin energy `Ēₖ` is
+therefore the maximum-likelihood timing statistic for unknown i.i.d. data
+in AWGN.
 
 # CFAR confidence
 
-The thermal-noise floor is estimated *within* the winning phase's bins
-(residual of each sample about its bin mean) rather than across phases —
-the cross-phase spread is dominated by the deterministic transition
-structure, not noise, so it would never shrink with integration time.
-The peak phase is accepted only when it beats the runner-up by a margin
-that is significant under that noise estimate:
+The noise scale is the *bin-to-bin* sample variance of the winning
+phase's own completed-bin energies. The true edge's bins never straddle a
+transition, so their energies vary only with thermal noise and slow
+drift — exactly the run-to-run spread the test must compare the gap
+against. (A within-bin residual would read ~0 on a clean but drifting
+signal and then mistake a tiny systematic cross-phase asymmetry for a real
+edge.) The peak is accepted only when it beats the runner-up by a margin
+significant under that spread:
 
-    z = (Ē₍₁₎ - Ē₍₂₎) / √(Var Ē₍₁₎ + Var Ē₍₂₎))   ≥  Φ⁻¹(1 - P_fa/(L-1))
+    z = (Ē₍₁₎ - Ē₍₂₎) / √(s² (1/M₁ + 1/M₂))   ≥   Φ⁻¹(1 - P_fa/(L-1))
 
-where `Var Ēₖ = (N₀² + 2|μₖ|² N₀) / Mₖ` is the non-central-χ² energy
-variance (`N₀` the noise-bin energy, `|μₖ|²` the coherent signal energy,
-`Mₖ` the bin count) and `P_fa = 1 - confidence`, Bonferroni-split over the
-`L-1` competing phases. As integration grows the gap stays fixed while
-the standard error shrinks like `1/√M`, so `z` crosses the threshold
-sooner at high C/N₀ and later in noise — the detector self-paces.
+where `s²` is the peak phase's per-bin energy variance, `Mₖ` the bin
+counts, and `P_fa = 1 - confidence`, Bonferroni-split over the `L-1`
+competing phases. A real edge has a structural gap that dwarfs the thermal
+bin-to-bin spread, so `z` grows like `√M` and crosses the threshold sooner
+at high C/N₀ and later in noise — the detector self-paces — while a
+drift-only asymmetry keeps `z` bounded and never locks.
 
 # Boundary firing
 
 Detection is reported (`found = true`) only when the most recent block
-also *ends* the winning phase's bit (`length(soft_prompts) % L == k`), so
-the upcoming integration starts a fresh navigation bit. This keeps the
-`phase = 0` contract — and, crucially, the post-sync coherent 20-block
-integration — aligned to the true bit grid, which is what makes the
-off-by-one lock of issue #124 structurally impossible: the detector can
-only ever fire at the energy-maximizing phase's own boundary, never at a
-neighbour's.
+also *ends* the winning phase's bit (`n % L == k`), so the upcoming
+integration starts a fresh navigation bit. This keeps the `phase = 0`
+contract — and, crucially, the post-sync coherent 20-block integration —
+aligned to the true bit grid, which is what makes the off-by-one lock of
+issue #124 structurally impossible: the detector can only ever fire at the
+energy-maximizing phase's own boundary, never at a neighbour's.
 
 `polarity` is the sign of the most recently completed bin's coherent sum.
 """
-function _detect_bit_edge_cfar(
-    soft_prompts::AbstractVector{<:Complex},
-    L::Int,
-    confidence::Float64,
-)
-    n = length(soft_prompts)
+function _detect_bit_edge_cfar(acc::PhaseAccumulators, L::Int, confidence::Float64, n::Int)
     # Need at least two complete bins on some phase before any phase can
     # serve as a runner-up; below that a transition cannot have been
     # localized yet.
     n < 2L && return SyncResult(false, 0, Int8(0))
 
-    # Single allocation-free pass over the L candidate phases. This is on the
-    # pre-sync hot path (once per primary-code block per satellite), so it
-    # tracks the peak (best mean bin energy among phases with ≥ 2 complete
-    # bins) and the two highest phases overall inline rather than building
-    # per-phase arrays. The runner-up is then the higher of those two that
-    # isn't the peak.
+    energy = acc.energy
+    bins = acc.bins
+    # Single O(L) pass: peak (best mean bin energy among phases with ≥ 2
+    # complete bins) and the two highest phases overall. The runner-up is
+    # the higher of those two that isn't the peak.
     kpeak = -1; peak = -1.0; nb_peak = 0          # best with ≥ 2 bins
     top1k = -1; top1 = -1.0; nb1 = 0              # highest with ≥ 1 bin
     top2k = -1; top2 = -1.0; nb2 = 0              # second highest with ≥ 1 bin
     @inbounds for k in 0:(L-1)
-        nb = div(n - k, L)
+        nb = bins[k+1]
         nb < 1 && continue
-        energy = 0.0
-        for m in 0:(nb-1)
-            base = k + m * L
-            s = zero(ComplexF64)
-            for i in 1:L
-                s += soft_prompts[base+i]
-            end
-            energy += abs2(s)
-        end
-        e = energy / nb
+        e = energy[k+1] / nb
         if e > top1
             top2 = top1; top2k = top1k; nb2 = nb1
             top1 = e; top1k = k; nb1 = nb
@@ -160,43 +224,26 @@ function _detect_bit_edge_cfar(
     kpeak < 0 && return SyncResult(false, 0, Int8(0))
 
     # Runner-up: the highest-energy phase that isn't the peak (any bin count).
-    second, ksecond, nb_second = top1k == kpeak ? (top2, top2k, nb2) : (top1, top1k, nb1)
-    ksecond < 0 && return SyncResult(false, 0, Int8(0))
+    second, nb_second = top1k == kpeak ? (top2, nb2) : (top1, nb1)
+    nb_second < 1 && return SyncResult(false, 0, Int8(0))
 
     gap = peak - second
     gap <= 0 && return SyncResult(false, 0, Int8(0))
 
-    # Thermal-noise estimate: pooled within-bin residual variance of the
-    # peak phase's bins. Pure bins (true edge) leave only thermal noise;
-    # if a wrong phase transiently wins, its straddling bins inflate this
-    # estimate, which only makes the test more conservative.
-    resid = 0.0
-    last_bin_sum = zero(ComplexF64)
-    @inbounds for m in 0:(nb_peak-1)
-        base = kpeak + m * L
-        s = zero(ComplexF64)
-        sq = 0.0
-        for i in 1:L
-            p = soft_prompts[base+i]
-            s += p
-            sq += abs2(p)
-        end
-        # `Σ|pᵢ|² - |Σpᵢ|²/L = Σ|pᵢ - p̄|²` is non-negative in exact
-        # arithmetic, but catastrophic cancellation (near-constant high-SNR
-        # bins) can round it slightly below zero; clamp so the variance and
-        # its square root below stay real.
-        resid += max(sq - abs2(s) / L, 0.0)   # Σ|pᵢ - p̄|² within this bin
-        last_bin_sum = s
-    end
-    sigma2 = resid / (nb_peak * (L - 1))   # per-sample complex noise power
-    noise_bin = L * sigma2                 # mean energy of a noise-only bin
-
-    # Non-central-χ² energy variance Var Ēₖ = (N₀² + 2|μₖ|²N₀)/Mₖ, with
-    # |μₖ|² = max(Ēₖ - N₀, 0) the coherent signal energy.
-    var_peak = (noise_bin^2 + 2 * max(peak - noise_bin, 0.0) * noise_bin) / nb_peak
-    var_second = (noise_bin^2 + 2 * max(second - noise_bin, 0.0) * noise_bin) / nb_second
-    se = sqrt(max(var_peak + var_second, 0.0))
-    z = se > 0 ? gap / se : Inf
+    # Noise scale: the bin-to-bin sample variance of the peak phase's own
+    # completed-bin energies. The true edge has pure (non-straddling) bins,
+    # so this captures the actual run-to-run spread — thermal noise *and*
+    # any slow drift / quantization — which a within-bin residual would miss
+    # and then mistake a tiny systematic cross-phase asymmetry for a
+    # significant edge. The runner-up is assumed to share this per-bin
+    # variance (it can only be larger, from its straddling bins, so this is
+    # the optimistic — i.e. fastest-locking — choice that still rejects
+    # drift-only asymmetries).
+    @inbounds ep = acc.energy[kpeak+1]
+    @inbounds eqp = acc.energy_sq[kpeak+1]
+    var_per_bin = max((eqp - ep * ep / nb_peak) / (nb_peak - 1), 0.0)
+    se = sqrt(var_per_bin * (1 / nb_peak + 1 / nb_second))
+    z = se > 0 ? gap / se : (gap > 0 ? Inf : 0.0)
 
     z_threshold = _norm_quantile(1 - (1 - confidence) / (L - 1))
     z < z_threshold && return SyncResult(false, 0, Int8(0))
@@ -205,7 +252,7 @@ function _detect_bit_edge_cfar(
     # integration starts a new bit.
     n % L != kpeak && return SyncResult(false, 0, Int8(0))
 
-    polarity = real(last_bin_sum) < 0 ? Int8(-1) : Int8(+1)
+    @inbounds polarity = real(acc.last_bin_sum[kpeak+1]) < 0 ? Int8(-1) : Int8(+1)
     SyncResult(true, 0, polarity)
 end
 
@@ -289,13 +336,12 @@ for the GPS L1C-P overlay, etc.). After sync the field is dead state and
 the decoded navigation bits accumulate in the fixed-width
 `buffer::UInt128` instead.
 
-The `soft_prompts` field is the pre-sync soft-decision history (the
-filtered prompt of each primary-code block, oldest first) consumed by the
-soft bit-edge detector [`_detect_bit_edge_cfar`](@ref). It is populated
-only for signals whose [`uses_soft_bit_edge_detection`](@ref) trait is
-`true` (currently GPS L1 C/A), capped to a bounded window
-([`SOFT_PROMPT_HISTORY_CAP`](@ref) blocks), and emptied once sync is
-found.
+The `phase_acc` field holds the incremental per-phase bin statistics
+([`PhaseAccumulators`](@ref)) consumed by the soft bit-edge detector
+[`_detect_bit_edge_cfar`](@ref). It is seeded and updated only for signals
+whose [`uses_soft_bit_edge_detection`](@ref) trait is `true` (currently
+GPS L1 C/A); for all other signals it stays empty. Its size is bounded
+(one entry per phase), so there is no growing pre-sync history.
 """
 struct BitBuffer{B<:Unsigned}
     code_block_buffer::B
@@ -308,7 +354,7 @@ struct BitBuffer{B<:Unsigned}
     prompt_accumulator::ComplexF64
     prompt_accumulator_integrated_code_blocks::Int
     soft_bits::Vector{Float32}
-    soft_prompts::Vector{ComplexF64}
+    phase_acc::PhaseAccumulators
 end
 
 # Default constructor preserves the pre-refactor `UInt128`-backed search
@@ -317,7 +363,7 @@ end
 function BitBuffer()
     BitBuffer{UInt128}(
         zero(UInt128), 0, false, 0, Int8(0), zero(UInt128), 0, complex(0.0, 0.0), 0,
-        Float32[], ComplexF64[],
+        Float32[], PhaseAccumulators(),
     )
 end
 
@@ -325,7 +371,7 @@ end
 function BitBuffer{B}() where {B<:Unsigned}
     BitBuffer{B}(
         zero(B), 0, false, 0, Int8(0), zero(UInt128), 0, complex(0.0, 0.0), 0,
-        Float32[], ComplexF64[],
+        Float32[], PhaseAccumulators(),
     )
 end
 
@@ -352,7 +398,7 @@ function BitBuffer(
         ComplexF64(prompt_accumulator),
         Int(prompt_accumulator_integrated_code_blocks),
         Float32[],
-        ComplexF64[],
+        PhaseAccumulators(),
     )
 end
 
@@ -441,13 +487,13 @@ detector's call site.
 $(SIGNATURES)
 
 Whether `signal`'s bit-edge sync uses the soft-decision, maximum-energy
-CFAR detector [`_detect_bit_edge_cfar`](@ref) (which reads the
-`soft_prompts` history) instead of the hard-decision
+CFAR detector [`_detect_bit_edge_cfar`](@ref) (which reads the incremental
+[`PhaseAccumulators`](@ref)) instead of the hard-decision
 `detect_bit_or_secondary_code_sync` path.
 
 `true` only for GPS L1 C/A. Returned as a compile-time constant so the
 branch in [`_buffer_find_bit`](@ref) folds away per signal type — signals
-that return `false` never allocate or populate `soft_prompts`.
+that return `false` never seed or update `phase_acc`.
 """
 @inline uses_soft_bit_edge_detection(::AbstractGNSSSignal) = false
 
@@ -472,17 +518,6 @@ Tracking.get_bit_edge_detection_confidence(::GPSL1CA) = 0.9999
 Takes effect at the next detector call — no TrackState rebuild needed.
 """
 @inline get_bit_edge_detection_confidence(::AbstractGNSSSignal) = 0.999
-
-"""
-$(SIGNATURES)
-
-Maximum number of soft prompts retained in the pre-sync `soft_prompts`
-history before the oldest full bit's worth is dropped. Bounds memory and
-per-call work if a satellite never locks (e.g. a stream with no data
-transitions); 400 blocks (~400 ms for L1 C/A) is far longer than any
-trackable cold start needs.
-"""
-const SOFT_PROMPT_HISTORY_CAP = 400
 
 # Number of primary-code blocks that form one navigation bit.
 # Returns 0 for pilot signals (`data_frequency = 0`), where the concept is
@@ -541,7 +576,7 @@ function buffer(signal::AbstractGNSSSignal, prn::Integer, bit_buffer::BitBuffer{
             zero(prompt_accumulator),
             0,
             bit_buffer.soft_bits,
-            bit_buffer.soft_prompts,
+            bit_buffer.phase_acc,
         )
     else
         return BitBuffer{B}(
@@ -555,7 +590,7 @@ function buffer(signal::AbstractGNSSSignal, prn::Integer, bit_buffer::BitBuffer{
             prompt_accumulator,
             prompt_accumulator_integrated_code_blocks,
             bit_buffer.soft_bits,
-            bit_buffer.soft_prompts,
+            bit_buffer.phase_acc,
         )
     end
 end
@@ -570,26 +605,18 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
     code_block_buffer = bit_buffer.code_block_buffer << 1 + B(real(prompt) > 0)
     code_block_buffer_lengh = bit_buffer.code_block_buffer_lengh + 1
 
-    # Signals that detect the bit edge from soft prompts (GPS L1 C/A) keep a
-    # bounded soft-prompt history and run the maximum-energy CFAR detector;
-    # everything else stays on the hard-decision sliding-window path. The
-    # branch folds at compile time per signal type, so non-soft signals never
-    # touch `soft_prompts`.
-    soft_prompts = bit_buffer.soft_prompts
+    # Signals that detect the bit edge from soft prompts (GPS L1 C/A) fold
+    # each block into the incremental per-phase accumulators and run the
+    # maximum-energy CFAR detector; everything else stays on the
+    # hard-decision sliding-window path. The branch folds at compile time per
+    # signal type, so non-soft signals never touch `phase_acc`.
+    phase_acc = bit_buffer.phase_acc
     if uses_soft_bit_edge_detection(signal)
-        push!(soft_prompts, ComplexF64(prompt))
-        # Drop whole bits' worth of the oldest history when over the cap, on a
-        # bit boundary, so the window start stays aligned to the bit grid and
-        # the detector's phase indexing is unaffected.
-        if length(soft_prompts) > SOFT_PROMPT_HISTORY_CAP &&
-           num_code_blocks_that_form_a_bit > 0 &&
-           code_block_buffer_lengh % num_code_blocks_that_form_a_bit == 0
-            deleteat!(soft_prompts, 1:num_code_blocks_that_form_a_bit)
-        end
+        L = num_code_blocks_that_form_a_bit
+        _is_seeded(phase_acc, L) || _seed_phase_accumulators!(phase_acc, L)
+        _update_phase_accumulators!(phase_acc, ComplexF64(prompt), code_block_buffer_lengh - 1, L)
         sync = _detect_bit_edge_cfar(
-            soft_prompts,
-            num_code_blocks_that_form_a_bit,
-            get_bit_edge_detection_confidence(signal),
+            phase_acc, L, get_bit_edge_detection_confidence(signal), code_block_buffer_lengh,
         )
     else
         sync = detect_bit_or_secondary_code_sync(
@@ -611,11 +638,9 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
             complex(0.0, 0.0),
             0,
             bit_buffer.soft_bits,
-            soft_prompts,
+            phase_acc,
         )
     end
-    # Sync found: the soft-prompt history is dead state from here on.
-    empty!(soft_prompts)
     if get_secondary_code_length(signal) > 1
         # Secondary-code signals (GPS L5I, GPS L1C-P): the buffered pre-sync
         # prompt signs are modulated by the secondary code, not the navigation
@@ -635,7 +660,7 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
             complex(0.0, 0.0),
             0,
             bit_buffer.soft_bits,
-            soft_prompts,
+            phase_acc,
         )
     end
     num_bits = min(
@@ -667,7 +692,7 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
         complex(0, 0),
         0,
         bit_buffer.soft_bits,
-        soft_prompts,
+        phase_acc,
     )
 end
 
@@ -684,6 +709,6 @@ function reset(bit_buffer::BitBuffer{B}) where {B<:Unsigned}
         bit_buffer.prompt_accumulator,
         bit_buffer.prompt_accumulator_integrated_code_blocks,
         bit_buffer.soft_bits,
-        bit_buffer.soft_prompts,
+        bit_buffer.phase_acc,
     )
 end
