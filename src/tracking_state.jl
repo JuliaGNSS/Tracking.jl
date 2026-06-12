@@ -487,7 +487,14 @@ shortcut). For multi-group `TrackState`s, pass the group key explicitly.
 If a satellite with the same `prn` already exists in that group's
 dictionary, it is overwritten.
 
-Returns `track_state` unchanged (the dictionary is mutated in place).
+The satellite dictionary is mutated in place, but callers should keep
+using the *returned* `TrackState`: when the configured estimator's
+[`update_estimator_on_handoff`](@ref) returns a rebuilt estimator (rather
+than mutating in place), the rebuilt estimator is carried by the returned
+`TrackState` — `track_state.doppler_estimator` cannot be replaced in
+place because `TrackState` is immutable. For estimators that update in
+place (including the default conventional ones), the very same
+`track_state` comes back.
 
 ```julia
 track_state = TrackState(; signals = (modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),))
@@ -527,24 +534,28 @@ escape hatch for power users who need non-default correlator or
 post-corr-filter types. The sat's type must match the group's slot type
 already fixed at [`TrackState`](@ref) construction; passing a sat of the
 wrong type errors at dispatch time.
+
+Like the keyword form, the returned `TrackState` carries the estimator
+returned by [`update_estimator_on_handoff`](@ref) — keep using the
+return value.
 """
 function add_satellite!(
-    track_state::TrackState,
+    track_state::TrackState{G,DE},
     group::Symbol,
     sat::TrackedSat,
-)
+) where {G<:SignalGroups,DE<:AbstractDopplerEstimator}
     _assert_sat_matches_slot_type(track_state, group, sat)
     insert_or_set!(_dict_for_group(track_state, group), sat.prn, sat)
-    # `update_estimator_on_handoff` is called for its side effect on
-    # estimators with cross-sat shared state (the default returns the
-    # estimator unchanged). The return value must have the same concrete
-    # type as the input — the TrackState is parameterized on the
-    # estimator type and `track_state.doppler_estimator` is immutable.
-    update_estimator_on_handoff(
+    new_estimator = update_estimator_on_handoff(
         track_state.doppler_estimator,
         dictionary((sat.prn => sat,)),
     )
-    track_state
+    # `TrackState` is immutable, so a rebuilt estimator can only be honored
+    # through the return value. Estimators that update in place return the
+    # identical object (the contract guarantees the concrete type either
+    # way), and then the input `track_state` is handed back unchanged.
+    new_estimator === track_state.doppler_estimator && return track_state
+    TrackState{G,DE}(track_state.groups, new_estimator)
 end
 
 # Verify that `sat` has exactly the concrete type the capability's
