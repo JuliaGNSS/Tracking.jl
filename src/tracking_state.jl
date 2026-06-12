@@ -752,6 +752,7 @@ for fn in (
     :get_integrated_samples, :get_correlator,
     :get_last_fully_integrated_correlator, :get_last_fully_integrated_filtered_prompt,
     :get_post_corr_filter, :get_cn0_estimator, :get_bit_buffer, :get_bits,
+    :get_soft_bits,
     :get_num_bits, :has_bit_or_secondary_code_been_found, :estimate_cn0,
     :get_preferred_num_code_blocks_to_integrate,
 )
