@@ -456,9 +456,13 @@ function estimate_dopplers_and_filter_prompt(
     track_state::TrackState{<:SignalGroups,<:ConventionalPLLAndDLL},
     measurements::Measurements,
 )
-    # Detach slot vectors from the input, then delegate to the in-place
-    # form. The per-sat doppler update is identical between the two —
-    # only the storage ownership differs.
+    # Detach the slot *values* from the input (sharing the key set), then
+    # delegate to the in-place form. This step never changes the key set, so
+    # sharing the `Indices` is safe and avoids copying the hash table every
+    # `track` loop iteration; the key set is detached once at the `track`
+    # boundary (`reset_start_sample_and_bit_buffer`, #123). The per-sat
+    # doppler update is identical between the two forms — only the storage
+    # ownership differs.
     new_track_state = TrackState(
         track_state;
         groups = _copy_groups_slot_vectors(track_state.groups),

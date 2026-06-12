@@ -139,23 +139,29 @@ end
     @test length(new_sats.gps) == 2
     @test new_sats.gps[2].prn == 2
 
-    # `_copy_slot_vectors` walks a `SatelliteDicts` and copies each dict —
-    # the result must detach both the slot vector and the `Indices` object
-    # (#123): a shared `Indices` lets `set!`/`delete!` on one copy corrupt
-    # the other.
+    # `_copy_slot_vectors` is the cheap per-iteration copy used inside
+    # `track`'s loop (`downconvert_and_correlate` / `estimate`): it detaches
+    # the slot *values* but deliberately *shares* the key set (`Indices`), so
+    # the hash table is not copied on every loop iteration. The key set is
+    # detached once at the `track` boundary instead (see below, #123).
     copies = Tracking._copy_slot_vectors(sats)
     @test length(copies.gps) == 1
     @test copies.gps.values !== sats.gps.values
-    @test keys(copies.gps) !== keys(sats.gps)
+    @test keys(copies.gps) === keys(sats.gps)
+
+    # `_detach_slot_vector` / `_detach_groups_slot_vectors` are the boundary
+    # copy: keys *and* values detached.
+    detached = Tracking._detach_slot_vector(sats.gps)
+    @test detached.values !== sats.gps.values
+    @test keys(detached) !== keys(sats.gps)
 end
 
-@testset "Immutable copies do not share Dictionary Indices (#123)" begin
-    # Same copy path as the immutable `track` /
-    # `downconvert_and_correlate` / `reset_start_sample_and_bit_buffer`.
-    # With a shared `Indices`, `add_satellite!` on the copy grows the
-    # original's key set without resizing its values vector — leaving the
-    # original claiming keys it has no values for (UndefRefError or silent
-    # garbage on access).
+@testset "Immutable boundary copies do not share Dictionary Indices (#123)" begin
+    # `reset_start_sample_and_bit_buffer` is the boundary copy `track` makes
+    # of the caller's live state. With a shared `Indices`, `add_satellite!`
+    # on the copy would grow the original's key set without resizing its
+    # values vector — leaving the original claiming keys it has no values for
+    # (UndefRefError or silent garbage on access).
     ts = TrackState(; signal = GPSL1CA())
     add_satellite!(ts; prn = 1, carrier_doppler = 100.0Hz)
 
@@ -173,6 +179,27 @@ end
     remove_satellite!(ts2; prn = 1)
     @test length(get_sat_states(ts, :default)) == 1
     @test get_prn(ts, :default, 1) == 1
+end
+
+@testset "track output is structurally detached from input (#123)" begin
+    # The public contract: `add_satellite!` on `track`'s output must not
+    # corrupt the input state, even though the hot loop shares key sets among
+    # its throwaway intermediates. The detach at the `track` boundary
+    # (`reset_start_sample_and_bit_buffer`) makes the output's key set
+    # independent of the input's.
+    sampling_frequency = 5e6Hz
+    gpsl1 = GPSL1CA()
+    ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 10.5, 10.0Hz)])
+    signal = rand(ComplexF64, 5000)
+
+    ts2 = Tracking.track(signal, ts, sampling_frequency)
+    add_satellite!(ts2; prn = 2, carrier_doppler = 200.0Hz)
+
+    # Input keeps exactly its one satellite; output has two.
+    @test length(get_sat_states(ts, :default)) == 1
+    @test collect(keys(get_sat_states(ts, :default))) == [1]
+    @test get_prn(ts, :default, 1) == 1
+    @test length(get_sat_states(ts2, :default)) == 2
 end
 
 @testset "remove_satellite! kwarg form mutates in place" begin
