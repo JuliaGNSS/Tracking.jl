@@ -706,14 +706,18 @@ function merge_sats(
     @set satellites[group_idx] = merge(sats_dict, new_tracked_sats)
 end
 
-# Build a `Dictionary` that shares its keys with the original but holds a
-# freshly-copied `values::Vector{TrackedSat}`. Used by the immutable variants
-# of `downconvert_and_correlate` / `estimate_dopplers_and_filter_prompt` /
-# `reset_start_sample_and_bit_buffer` to detach the slot vector before
+# Build a `Dictionary` with freshly-copied `Indices` and
+# `values::Vector{TrackedSat}`. Used by the immutable variants of
+# `downconvert_and_correlate` / `estimate_dopplers_and_filter_prompt` /
+# `reset_start_sample_and_bit_buffer` to detach the slot storage before
 # delegating to the in-place form — preserves `track`'s "input is not
-# mutated" contract while reusing the in-place implementation.
+# mutated" contract while reusing the in-place implementation. The
+# `Indices` must be detached too (#123): sharing them lets a later
+# `add_satellite!`/`remove_satellite!` (`set!`/`delete!`) on one state
+# mutate the other's key set without resizing its values vector.
+# `Dictionaries.copy` detaches both.
 @inline function _copy_slot_vector(sats::Dictionary{<:Any,<:TrackedSat})
-    Dictionary(keys(sats), copy(sats.values))
+    copy(sats)
 end
 
 @inline function _copy_slot_vectors(

@@ -21,6 +21,17 @@ is preserved as a thin wrapper that builds a single-entry
 TrackState) is the same shape regardless of how many measurements are
 passed.
 
+The returned `TrackState` is *structurally* detached from the input:
+each group's key set and slot vector are copied, so
+[`add_satellite!`](@ref) / [`remove_satellite!`](@ref) and tracking
+itself on either state never affect the other's satellites. The copy
+is shallow, however — per-satellite scratch vectors (each signal's
+`filtered_prompts`, the soft-bit buffer, and the CN0 estimator's
+prompt buffer) are shared with the input and are overwritten by the
+next `track` call on either state. Treat the input as a stale handle
+after the call; `deepcopy` it first if you need to snapshot those
+buffers.
+
 For real-time loops processing many chunks of signal in sequence, **construct
 the correlator once outside the loop** and pass it via the
 `downconvert_and_correlator` keyword argument:
