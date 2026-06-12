@@ -423,7 +423,14 @@ end
             cr = Symbol("cr_$(i)")
             for k in 1:NC_per_signal[i]
                 sh = Symbol("sh_$(i)_$(k)")
-                push!(pass_body.args, :(c = Float32($cr[n + $sh])))
+                # `gen_code_replica!` writes its first sample at index
+                # `start_sample` (absolute), so the prompt code for the
+                # tile's sample `n` lives at `start_sample - 1 + n` (+tap
+                # shift). Indexing from `n` alone silently reads the wrong
+                # code for every integration whose `start_sample != 1`
+                # (i.e. all but the first per chunk) — see the in-register
+                # kernel above, which reads at the same absolute offset.
+                push!(pass_body.args, :(c = Float32($cr[start_sample - 1 + n + $sh])))
                 push!(pass_body.args, :($(Symbol("ar_$(j)_$(i)_$(k)")) =
                     muladd(tr, c, $(Symbol("ar_$(j)_$(i)_$(k)")))))
                 push!(pass_body.args, :($(Symbol("ai_$(j)_$(i)_$(k)")) =

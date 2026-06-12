@@ -38,6 +38,8 @@ using Tracking:
     get_bits,
     get_num_bits,
     get_integrated_samples,
+    get_carrier_doppler,
+    get_code_doppler,
     has_bit_or_secondary_code_been_found,
     ConventionalAssistedPLLAndDLL,
     EarlyPromptLateCorrelator,
@@ -116,6 +118,64 @@ using GNSSSignals: GPSL1C_P, GPSL1C_D, GalileoE1B
 
     # Identical signals + identical correlator config => identical results.
     @test corr_1.accumulators ≈ corr_2.accumulators
+end
+
+@testset "Multi-signal track over a multi-code-period chunk" begin
+    # Regression test for the tile-share tuple kernel's code-replica
+    # indexing. `gen_code_replica!` writes its first sample at the
+    # absolute buffer index `start_sample`; the in-register single-signal
+    # kernel reads the replica at that same absolute offset, but the
+    # multi-signal `downconvert_and_correlate_fused_tuple!` kernel used to
+    # read it from index 1. The two agree only for the *first* integration
+    # of a chunk (`start_sample == 1`) — every later integration within
+    # the same chunk correlated against the wrong code, decorrelating the
+    # loop. The single-code-period chunk used by the smoke test above
+    # never exercises `start_sample > 1`, so it missed this entirely.
+    #
+    # Here we feed a chunk spanning ten L1 C/A code periods (so nine
+    # integrations run at `start_sample > 1`) and require the multi-signal
+    # estimator-driver signal to match a single-signal reference bit for
+    # bit.
+    gpsl1 = GPSL1CA()
+    sampling_frequency = 5e6Hz
+    carrier_doppler = 1000.0Hz
+    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
+    code_frequency = code_doppler + get_code_frequency(gpsl1)
+    start_code_phase = 0.0
+    prn = 1
+    num_samples = 50_000  # 10 ms at 5 MHz => 10 L1 C/A code periods
+
+    range_ = 0:(num_samples - 1)
+    signal_buf =
+        cis.(2π .* carrier_doppler .* range_ ./ sampling_frequency) .*
+        gen_code(num_samples, gpsl1, prn, sampling_frequency, code_frequency, start_code_phase)
+
+    # Single-signal reference.
+    ref_state = TrackState(; signal = gpsl1)
+    add_satellite!(ref_state; prn, code_phase = start_code_phase, carrier_doppler)
+    ref_state = track(signal_buf, ref_state, sampling_frequency)
+    ref_sat = get_sat_state(ref_state, prn)
+
+    # Two-signal sat, both GPSL1CA with identical config.
+    multi_state = TrackState(; signals = (default = (gpsl1, gpsl1),))
+    add_satellite!(multi_state; prn, code_phase = start_code_phase, carrier_doppler)
+    multi_state = track(signal_buf, multi_state, sampling_frequency)
+    multi_sat = get_sat_state(multi_state, prn)
+
+    # Ten completed integrations for the driver signal.
+    @test length(get_filtered_prompts(multi_sat.signals[1])) == 10
+
+    # The estimator-driver signal must match the single-signal reference:
+    # same correlator, same shared carrier/code Doppler, same prompts.
+    ref_corr = get_last_fully_integrated_correlator(ref_sat).accumulators
+    multi_corr = get_last_fully_integrated_correlator(multi_sat.signals[1]).accumulators
+    @test multi_corr ≈ ref_corr rtol = 1e-4
+    @test get_carrier_doppler(multi_sat) ≈ get_carrier_doppler(ref_sat) rtol = 1e-6
+    @test get_code_doppler(multi_sat) ≈ get_code_doppler(ref_sat) rtol = 1e-6
+    @test get_filtered_prompts(multi_sat.signals[1]) ≈ get_filtered_prompts(ref_sat) rtol = 1e-4
+
+    # Both signals in the multi sat are identical => identical correlators.
+    @test get_last_fully_integrated_correlator(multi_sat.signals[2]).accumulators ≈ multi_corr
 end
 
 @testset "Per-signal accessors on multi-signal TrackedSat / TrackState" begin
