@@ -62,6 +62,26 @@ end
     @test new_ts isa TrackState
 end
 
+@testset "BandMeasurement rejects non-dense sample buffers (issue #134)" begin
+    # The SIMD kernels read `samples` through raw pointers with dense
+    # column-stride math; a non-contiguous strided view would silently
+    # correlate the wrong data, so the constructor must reject it.
+    buf = zeros(ComplexF64, 100, 4)
+    vec_buf = zeros(ComplexF64, 100)
+
+    # Dense arrays and contiguous views are accepted.
+    @test BandMeasurement(vec_buf, 4e6Hz) isa BandMeasurement
+    @test BandMeasurement(buf, 4e6Hz) isa BandMeasurement
+    @test BandMeasurement(view(vec_buf, 1:50), 4e6Hz) isa BandMeasurement
+    @test BandMeasurement(view(buf, :, 2), 4e6Hz) isa BandMeasurement
+    @test BandMeasurement(view(buf, :, 2:3), 4e6Hz) isa BandMeasurement
+
+    # Non-unit row stride / non-packed columns are rejected.
+    @test_throws ArgumentError BandMeasurement(view(vec_buf, 1:2:99), 4e6Hz)
+    @test_throws ArgumentError BandMeasurement(view(buf, 1:50, 2:3), 4e6Hz)
+    @test_throws ArgumentError BandMeasurement(transpose(buf), 4e6Hz)
+end
+
 @testset "band_key for L1 and L5" begin
     @test @inferred(band_key(L1())) === :l1
     @test @inferred(band_key(L5())) === :l5

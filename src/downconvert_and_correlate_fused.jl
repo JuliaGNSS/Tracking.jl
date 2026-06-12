@@ -359,7 +359,7 @@ end
 # must agree on the antenna count M.
 #
 # At N=2 this beats fused-N-times by ~37%; at N=3 by ~51% — see the
-# probes in `claude_scratch/` and the design doc. The single-signal path
+# multi-signal-tracking design doc in docs/plans. The single-signal path
 # (N=1) is intentionally NOT routed here — it still uses the in-register
 # static-shifts kernel above, which is ~24% faster at N=1 because the
 # downconverted samples never leave registers.
@@ -391,8 +391,8 @@ end
     # Correlate phase: emit M independent passes over `n`, one per antenna.
     # Each pass keeps only N·NC accumulators live (vs M·N·NC for a single
     # fused pass), which avoids register spilling on 16-ymm AVX2 targets
-    # and gives 15-31% speedups at M=2..4 — see the variant comparison in
-    # `claude_scratch/probe_full_kernel_ant_outer.jl`.
+    # and gives 15-31% speedups at M=2..4 (measured against the
+    # single-fused-pass variant during the multi-signal kernel work).
     # Each antenna's tile slice is streamed exactly once (same as the
     # single-pass shape); the code replicas are re-read M times across
     # passes, which costs nothing since each replica fits in L1.

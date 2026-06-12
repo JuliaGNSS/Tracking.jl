@@ -189,7 +189,7 @@ end
     @testset "Initialize" begin
         bit_buffer = @inferred BitBuffer()
         @test bit_buffer.code_block_buffer == 0
-        @test bit_buffer.code_block_buffer_lengh == 0
+        @test bit_buffer.code_block_buffer_length == 0
         @test has_bit_or_secondary_code_been_found(bit_buffer) == false
         @test bit_buffer.secondary_phase == 0
         @test bit_buffer.polarity == 0
@@ -220,7 +220,7 @@ end
         @test next_bit_buffer.length == 0
         @test next_bit_buffer.buffer == 0
         @test next_bit_buffer.code_block_buffer == 1
-        @test next_bit_buffer.code_block_buffer_lengh == 1
+        @test next_bit_buffer.code_block_buffer_length == 1
     end
 
     @testset "Find bit start and buffer the pre-sync bits (negative polarity)" begin
@@ -238,7 +238,7 @@ end
         @test bit_buffer.polarity == -1
         @test bit_buffer.length == 3
         @test bit_buffer.buffer == 1
-        @test bit_buffer.code_block_buffer_lengh == 60
+        @test bit_buffer.code_block_buffer_length == 60
         soft = get_soft_bits(bit_buffer)
         @test length(soft) == 3
         @test soft[1] < 0 && soft[2] < 0 && soft[3] > 0
@@ -258,7 +258,7 @@ end
         @test bit_buffer.polarity == +1
         @test bit_buffer.length == 3
         @test bit_buffer.buffer == 1
-        @test bit_buffer.code_block_buffer_lengh == 60
+        @test bit_buffer.code_block_buffer_length == 60
         soft = get_soft_bits(bit_buffer)
         @test length(soft) == 3
         @test soft[1] < 0 && soft[2] < 0 && soft[3] > 0
@@ -374,6 +374,31 @@ end
             @test isempty(get_soft_bits(next_bit_buffer))
         end
 
+        @testset "Pre-sync recovered soft bits are amplitude-scaled (issue #134)" begin
+            # Same data-1,1,0 stream as the negative-polarity lock test, but
+            # at amplitude 2 rather than 1. At sync the pre-sync bits only
+            # have ±1 prompt signs available, so each recovered bit's sign
+            # vote (±20 over the 20 blocks/bit, polarity-corrected) is scaled
+            # by the sync-time prompt magnitude — so these soft bits live in
+            # the same coherent-amplitude-sum units as the post-sync bits
+            # instead of being bare vote counts (issue #134).
+            found_at, bit_buffer =
+                _feed_prompts([fill(2.0 + 0.0im, 40); fill(-2.0 + 0.0im, 20)])
+            @test found_at == 60
+            @test bit_buffer.length == 3
+            soft = get_soft_bits(bit_buffer)
+            # 20 sign votes × |prompt| (2) = magnitude 40; signs match the
+            # decoded hard bits (0,0,1 → soft -,-,+, as in the polarity test).
+            @test soft == Float32[-40.0, -40.0, 40.0]
+
+            # Unit-amplitude prompts give magnitude 20 — i.e. the magnitude
+            # tracks |prompt|, confirming the scaling (a raw vote count would
+            # be ±20 in both runs).
+            _, unit_buffer =
+                _feed_prompts([fill(1.0 + 0.0im, 40); fill(-1.0 + 0.0im, 20)])
+            @test get_soft_bits(unit_buffer) == Float32[-20.0, -20.0, 20.0]
+        end
+
         @testset "Reset empties the soft bits but keeps the vector" begin
             bit_buffer = BitBuffer()
             push!(get_soft_bits(bit_buffer), 1.0f0, -2.0f0)
@@ -384,6 +409,23 @@ end
             # Same vector is reused (non-allocating after the first track calls)
             @test get_soft_bits(reset_bit_buffer) === soft_bits
         end
+    end
+
+    @testset "Hard-bit buffer overflows loudly past 128 bits (issue #134)" begin
+        # The hard bits live in a fixed UInt128. Pushing a 129th bit used to
+        # silently shift the oldest bit out while `get_num_bits` kept
+        # counting — now it must throw a descriptive error instead.
+        signal = GPSL1CA()
+        bit_buffer = BitBuffer(UInt128(0), 0, true, 0, 0, complex(0.0, 0.0), 0)
+        for _ in 1:(128*20)
+            bit_buffer = buffer(signal, 1, bit_buffer, 1, 1.0 + 0.0im)
+        end
+        @test bit_buffer.length == 128
+        # 19 more blocks are fine; the block completing the 129th bit throws.
+        for _ in 1:19
+            bit_buffer = buffer(signal, 1, bit_buffer, 1, 1.0 + 0.0im)
+        end
+        @test_throws "hard-bit buffer is full" buffer(signal, 1, bit_buffer, 1, 1.0 + 0.0im)
     end
 end
 

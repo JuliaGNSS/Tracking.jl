@@ -210,6 +210,34 @@ function init_estimator_state(
     )
 end
 
+# Re-seed hook used by `reset_loop_filters!`. The generic fallback simply
+# rebuilds the per-sat state from scratch via `init_estimator_state`; custom
+# estimators may specialize to preserve per-sat configuration across the
+# reset.
+_reset_estimator_state(estimator::AbstractDopplerEstimator, sat::TrackedSat) =
+    init_estimator_state(estimator, sat)
+
+# Conventional PLL/DLL: zero the loop-filter integrators and re-seed the
+# init Dopplers from the sat's current (converged) Dopplers, but keep the
+# bandwidths from the EXISTING per-sat state — a per-sat
+# `SatConventionalPLLAndDLL` bandwidth override must survive the reset
+# (going through `init_estimator_state` would silently revert it to the
+# estimator-level defaults).
+function _reset_estimator_state(
+    ::ConventionalPLLAndDLL,
+    sat::TrackedSat{<:Tuple{Vararg{TrackedSignal}},<:SatConventionalPLLAndDLL},
+)
+    state = sat.doppler_estimator_state
+    SatConventionalPLLAndDLL(
+        sat.carrier_doppler,
+        sat.code_doppler,
+        constructorof(typeof(state.carrier_loop_filter))(),
+        constructorof(typeof(state.code_loop_filter))(),
+        state.carrier_loop_filter_bandwidth,
+        state.code_loop_filter_bandwidth,
+    )
+end
+
 """
 $(SIGNATURES)
 
