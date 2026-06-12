@@ -348,8 +348,15 @@ end
     SignalGroup(band, dict, sig_tuple, num_ants)
 end
 
+# Immutable reset — the first copy `track` makes of the caller's live
+# `TrackState`. Detaches the key set (`Indices`) as well as the values
+# (`_detach_groups_slot_vectors`, #123) so that a later
+# `add_satellite!`/`remove_satellite!` on the returned state (or on `track`'s
+# output, which derives from it) cannot corrupt the input's key set. The
+# per-iteration loop steps inside `track` reuse this already-detached key set
+# via the cheaper, key-sharing `_copy_groups_slot_vectors`.
 function reset_start_sample_and_bit_buffer(track_state::TrackState)
-    new_groups = _copy_groups_slot_vectors(track_state.groups)
+    new_groups = _detach_groups_slot_vectors(track_state.groups)
     reset_start_sample_and_bit_buffer!(new_groups)
     TrackState(track_state; groups = new_groups)
 end

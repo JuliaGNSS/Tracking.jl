@@ -610,14 +610,18 @@ end
 $(SIGNATURES)
 
 Downconvert and correlate all available satellites on the CPU.
-Returns a new `TrackState` whose key sets and slot vectors are
-detached from the input — the input `track_state` keeps its
-satellites, satisfying `track`'s structural-immutability contract
-(the copy is shallow: per-sat scratch vectors are shared, see
-[`track`](@ref)). Per-call code-replica scratch comes from the
-correlator's `ScratchBuffers` so the kernel itself stays
-allocation-free; the only per-call allocation is the slot-storage
-copy needed for immutability.
+Returns a new `TrackState` whose slot *values* are detached from the
+input (the input's per-sat tracking values are left untouched), but
+whose key set (`Indices`) is *shared* with the input — this step never
+changes the key set, so sharing avoids copying the hash table on every
+`track` loop iteration. Detaching the key set happens once at the
+`track` boundary (`reset_start_sample_and_bit_buffer`); do not
+`add_satellite!`/`remove_satellite!` on this function's direct output,
+or you will corrupt the input's keys (#123). The copy is otherwise
+shallow: per-sat scratch vectors are shared, see [`track`](@ref).
+Per-call code-replica scratch comes from the correlator's
+`ScratchBuffers` so the kernel itself stays allocation-free; the only
+per-call allocation is the slot-value copy.
 """
 function downconvert_and_correlate(
     dc::CPUDownconvertAndCorrelator,
@@ -680,12 +684,14 @@ end
 $(SIGNATURES)
 
 Multi-threaded downconvert and correlate. Returns a new `TrackState`
-whose key sets and slot vectors are detached from the input — the
-input `track_state` keeps its satellites (the copy is shallow:
-per-sat scratch vectors are shared, see [`track`](@ref)). Per-call
-scratch comes from the correlator's per-thread `ScratchBuffers`; the
-only per-call allocation is the slot-storage copy needed for
-immutability.
+whose slot *values* are detached from the input but whose key set
+(`Indices`) is *shared* — same contract as the single-threaded method
+above: the key set is detached once at the `track` boundary, so do not
+`add_satellite!`/`remove_satellite!` on this function's direct output
+(#123). The copy is otherwise shallow: per-sat scratch vectors are
+shared, see [`track`](@ref). Per-call scratch comes from the
+correlator's per-thread `ScratchBuffers`; the only per-call allocation
+is the slot-value copy.
 """
 function downconvert_and_correlate(
     dc::CPUThreadedDownconvertAndCorrelator,
