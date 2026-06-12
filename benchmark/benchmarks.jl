@@ -703,17 +703,31 @@ if _HAS_TRACKED_SIGNAL
             n_signals,
         )
         carrier_doppler = 1000.0Hz
-        code_doppler =
-            carrier_doppler * GNSSSignals.get_code_center_frequency_ratio(gpsl1)
-        bare = Tracking.TrackedSat(
-            1, 10.5, code_doppler, 0.0, carrier_doppler, 1, signals, nothing,
+        # Prefer the public multi-signal `TrackedSat((sigs...), prn, ...)`
+        # constructor (added in #133); fall back to the hand-rolled
+        # bare-sat → init_estimator_state → rebuild build on revisions that
+        # predate it, so this script still benchmarks the baseline.
+        sat = if hasmethod(
+            Tracking.TrackedSat,
+            Tuple{typeof(signals),Int,Float64,typeof(carrier_doppler)},
         )
-        de_state = Tracking.init_estimator_state(estimator, bare)
-        sat = Tracking.TrackedSat(
-            bare.prn, bare.code_phase, bare.code_doppler,
-            bare.carrier_phase, bare.carrier_doppler,
-            bare.signal_start_sample, bare.signals, de_state,
-        )
+            Tracking.TrackedSat(
+                signals, 1, 10.5, carrier_doppler;
+                doppler_estimator = estimator,
+            )
+        else
+            code_doppler =
+                carrier_doppler * GNSSSignals.get_code_center_frequency_ratio(gpsl1)
+            bare = Tracking.TrackedSat(
+                1, 10.5, code_doppler, 0.0, carrier_doppler, 1, signals, nothing,
+            )
+            de_state = Tracking.init_estimator_state(estimator, bare)
+            Tracking.TrackedSat(
+                bare.prn, bare.code_phase, bare.code_doppler,
+                bare.carrier_phase, bare.carrier_doppler,
+                bare.signal_start_sample, bare.signals, de_state,
+            )
+        end
         ts = TrackState(gpsl1, sat; doppler_estimator = estimator)
         signal = rand(Complex{Float32}, nsamp)
         ts, signal

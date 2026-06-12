@@ -155,15 +155,8 @@ function Tracking.add_satellite!(
     acq::AcquisitionResults;
     group::Union{Symbol,Nothing} = nothing,
 )
-    resolved = isnothing(group) ? _find_group_for_acq(track_state, acq) : group
-    _assert_acq_matches_group(track_state, resolved, acq)
-    Tracking.add_satellite!(
-        track_state;
-        prn = acq.prn,
-        group = resolved,
-        code_phase = acq.code_phase,
-        carrier_doppler = acq.carrier_doppler,
-    )
+    resolved, sat = _group_and_sat_for_acq(track_state, acq, group)
+    Tracking.add_satellite!(track_state, resolved, sat)
 end
 
 """
@@ -177,15 +170,27 @@ function Tracking.add_satellite(
     acq::AcquisitionResults;
     group::Union{Symbol,Nothing} = nothing,
 )
+    resolved, sat = _group_and_sat_for_acq(track_state, acq, group)
+    Tracking.add_satellite(track_state, resolved, sat)
+end
+
+# Shared body of the mutable/immutable acq pair above: resolve (or assert)
+# the target group for `acq.system`, then build the group's
+# default-correlator TrackedSat from the acquisition handoff values.
+@inline function _group_and_sat_for_acq(
+    track_state::TrackState,
+    acq::AcquisitionResults,
+    group::Union{Symbol,Nothing},
+)
     resolved = isnothing(group) ? _find_group_for_acq(track_state, acq) : group
     _assert_acq_matches_group(track_state, resolved, acq)
-    Tracking.add_satellite(
-        track_state;
+    sat = Tracking._make_default_tracked_sat_for_group(
+        track_state, resolved;
         prn = acq.prn,
-        group = resolved,
         code_phase = acq.code_phase,
         carrier_doppler = acq.carrier_doppler,
     )
+    resolved, sat
 end
 
 """

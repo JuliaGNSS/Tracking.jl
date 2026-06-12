@@ -23,29 +23,21 @@ function detect_bit_or_secondary_code_sync(
     code_block_bits::UInt1800,
     num_code_blocks::Integer,
 )
-    secondary_code_length = get_secondary_code_length(signal)   # 1800
-    num_code_blocks < secondary_code_length && return SyncResult(false, 0, Int8(0))
-    reference = _pack_overlay(signal, prn)
-    # Tolerance is a percentage of the 1800-chip overlay window. The
-    # default 2.5 % discretizes to floor(0.025 × 1800) = 45 bit-flips
-    # allowed. Adjustable via
-    # `get_bit_edge_or_secondary_code_tolerance(::GPSL1C_P)`.
-    max_errors = floor(Int, get_bit_edge_or_secondary_code_tolerance(signal) * secondary_code_length)
-    _secondary_code_search(code_block_bits, reference, secondary_code_length, max_errors)
+    _detect_secondary_code_sync(signal, prn, code_block_bits, num_code_blocks)
 end
 
-# Pack the ±1 secondary-code column for `prn` into a UInt1800 in the same
-# newest-first order the prompt buffer fills (bit 0 = the most recent
-# block): bit `i` is `1` iff overlay chip `1799 - i` is `+1`. This makes
-# the packed reference directly comparable to the prompt buffer when the
-# most recent 1800 blocks end on the overlay's last chip — see
-# [`_secondary_code_search`](@ref). The reference is rebuilt on every
-# detector call once the 1800-block window has filled, until lock; each
-# rebuild walks 1800 chips, which is small next to the 1800-phase
-# Hamming sweep that follows it. Under weak-signal conditions (many
-# detector calls before lock) a per-PRN cache would shave that rebuild,
-# but the sweep still dominates, so it's not worth the state.
-@inline function _pack_overlay(signal::GPSL1C_P, prn::Integer)
+# Pack the ±1 overlay-code column for `prn` into a UInt1800 in the
+# newest-first order [`_packed_secondary_code`](@ref) requires: bit `i` is
+# `1` iff overlay chip `1799 - i` is `+1`. This makes the packed reference
+# directly comparable to the prompt buffer when the most recent 1800
+# blocks end on the overlay's last chip — see [`_secondary_code_search`](@ref).
+# The reference is rebuilt on every detector call once the 1800-block
+# window has filled, until lock; each rebuild walks 1800 chips, which is
+# small next to the 1800-phase Hamming sweep that follows it. Under
+# weak-signal conditions (many detector calls before lock) a per-PRN cache
+# would shave that rebuild, but the sweep still dominates, so it's not
+# worth the state.
+@inline function _packed_secondary_code(::Type{UInt1800}, signal::GPSL1C_P, prn::Integer)
     codes = signal.overlay_codes        # 1800 × 63 Int8 matrix
     x = UInt1800(0)
     @inbounds for k in 1:1800
@@ -56,15 +48,8 @@ end
     x
 end
 
-# GPS L1C-P is TMBOC(6,1,4/33): 29/33 of the spreading symbols are BOC(1,1)
-# and 4/33 are BOC(6,1), so its autocorrelation has the same BOC(1,1)-style
-# narrow main peak with side-lobes (slightly sharpened by the BOC(6,1) chips).
-# As for L1C-D, the C/A-style 0.5-chip early-late spacing would land the taps
-# on the side-lobes and bias the DLL discriminator; a narrow 0.1-chip spacing
-# keeps them on the main peak.
-function get_default_correlator(gpsl1c_p::GPSL1C_P, num_ants::NumAnts = NumAnts(1))
-    EarlyPromptLateCorrelator(; num_ants, preferred_early_late_to_prompt_code_shift = 0.1)
-end
+# `get_default_correlator(::GPSL1C_P)` — the narrow-spacing BOC default —
+# is defined jointly with GPS L1C-D in `gpsl1c_d.jl` (one `Union` method).
 
 # 1800-chip overlay search needs an exact-width 1800-bit container. The
 # `UInt1800` alias is defined in the top-level Tracking module via

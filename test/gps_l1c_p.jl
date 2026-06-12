@@ -54,7 +54,7 @@ const L1C_P_MAX_ERRORS = floor(Int, get_bit_edge_or_secondary_code_tolerance(GPS
         # by `r` to emulate a prompt buffer whose upcoming integration is
         # overlay chip `r`. The rotation search recovers `phase == r` (the
         # upcoming chip) at positive polarity (distance 0 ≤ max_errors).
-        reference = Tracking._pack_overlay(gpsl1c_p, prn)
+        reference = Tracking._packed_secondary_code(Tracking.UInt1800, gpsl1c_p, prn)
         rotl(x, r) = r == 0 ? x : ((x << r) | (x >> (1800 - r)))
         for r in (0, 137, 1799)
             received = rotl(reference, r)
@@ -77,7 +77,7 @@ const L1C_P_MAX_ERRORS = floor(Int, get_bit_edge_or_secondary_code_tolerance(GPS
     end
 
     @testset "Overlay search — tolerance" begin
-        overlay = Tracking._pack_overlay(gpsl1c_p, prn)
+        overlay = Tracking._packed_secondary_code(Tracking.UInt1800, gpsl1c_p, prn)
         rng = MersenneTwister(42)
 
         # Up to `L1C_P_MAX_ERRORS` bit-flips: still locks.
