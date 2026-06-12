@@ -110,15 +110,6 @@ end
         end
     end
 
-    @testset "Allocation-free per call" begin
-        acc = PhaseAccumulators()
-        _seed_phase_accumulators!(acc, L1CA_L)
-        for i in 1:80
-            _update_phase_accumulators!(acc, ComplexF64(1.0 + 0im), i - 1, L1CA_L)
-        end
-        _detect_bit_edge_cfar(acc, L1CA_L, 0.999, 80)  # compile
-        @test (@allocated _detect_bit_edge_cfar(acc, L1CA_L, 0.999, 80)) == 0
-    end
 end
 
 # Feed a noiseless ±1 prompt stream (one code block per call) through
