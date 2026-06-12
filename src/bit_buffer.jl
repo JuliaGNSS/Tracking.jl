@@ -38,6 +38,13 @@ hit. The first orientation whose Hamming distance does not exceed
 at the data-bit boundary, so the upcoming integration starts a new bit
 (there is no secondary-chip offset to recover).
 
+`edge_mask` selects window bits that must match **exactly** — the error
+budget is spent only on the remaining bits. The L1 C/A detector sets it
+to the two blocks straddling the claimed bit edge: without that
+constraint, a tolerated bit-flip adjacent to the edge lets the window one
+block before (or after) the true edge fire first, locking the bit grid
+1 ms off (issue #124).
+
 Inlined so the per-signal template / mask / tolerance constants fold at
 the call site.
 """
@@ -46,12 +53,17 @@ the call site.
     template::B,
     mask::B,
     max_errors::Int,
+    edge_mask::B = zero(B),
 ) where {B<:Unsigned}
     masked = code_block_bits & mask
-    dist_pos = count_ones(masked ⊻ template)
-    dist_pos <= max_errors && return SyncResult(true, 0, Int8(+1))
-    dist_neg = count_ones(masked ⊻ (template ⊻ mask))
-    dist_neg <= max_errors && return SyncResult(true, 0, Int8(-1))
+    diff_pos = masked ⊻ template
+    if iszero(diff_pos & edge_mask) && count_ones(diff_pos) <= max_errors
+        return SyncResult(true, 0, Int8(+1))
+    end
+    diff_neg = masked ⊻ (template ⊻ mask)
+    if iszero(diff_neg & edge_mask) && count_ones(diff_neg) <= max_errors
+        return SyncResult(true, 0, Int8(-1))
+    end
     return SyncResult(false, 0, Int8(0))
 end
 
