@@ -610,11 +610,13 @@ end
 $(SIGNATURES)
 
 Downconvert and correlate all available satellites on the CPU.
-Returns a new `TrackState` whose slot vectors are detached from the
-input — the input `track_state` is left untouched, satisfying
-`track`'s immutability contract. Per-call code-replica scratch comes
-from the correlator's `ScratchBuffers` so the kernel itself stays
-allocation-free; the only per-call allocation is the slot-vector
+Returns a new `TrackState` whose key sets and slot vectors are
+detached from the input — the input `track_state` keeps its
+satellites, satisfying `track`'s structural-immutability contract
+(the copy is shallow: per-sat scratch vectors are shared, see
+[`track`](@ref)). Per-call code-replica scratch comes from the
+correlator's `ScratchBuffers` so the kernel itself stays
+allocation-free; the only per-call allocation is the slot-storage
 copy needed for immutability.
 """
 function downconvert_and_correlate(
@@ -678,10 +680,12 @@ end
 $(SIGNATURES)
 
 Multi-threaded downconvert and correlate. Returns a new `TrackState`
-whose slot vectors are detached from the input — the input
-`track_state` is left untouched. Per-call scratch comes from the
-correlator's per-thread `ScratchBuffers`; the only per-call
-allocation is the slot-vector copy needed for immutability.
+whose key sets and slot vectors are detached from the input — the
+input `track_state` keeps its satellites (the copy is shallow:
+per-sat scratch vectors are shared, see [`track`](@ref)). Per-call
+scratch comes from the correlator's per-thread `ScratchBuffers`; the
+only per-call allocation is the slot-storage copy needed for
+immutability.
 """
 function downconvert_and_correlate(
     dc::CPUThreadedDownconvertAndCorrelator,
