@@ -643,7 +643,7 @@ per-call allocation is the slot-value copy.
 """
 function downconvert_and_correlate(
     dc::CPUDownconvertAndCorrelator,
-    measurements::Measurements,
+    measurements::BandMeasurements,
     track_state::TrackState,
 )
     new_track_state = TrackState(
@@ -663,11 +663,11 @@ state — see [`track!`](@ref).
 # Per-group body for the single-threaded backend. Pulled out so
 # `_foreach_group!` can call it on each `SignalGroup` in the
 # (possibly heterogeneous) `groups` tuple without dynamic dispatch /
-# boxing. Routes to this group's band's `Measurement` for the signal
+# boxing. Routes to this group's band's `BandMeasurement` for the signal
 # buffer and front-end metadata.
 @inline function _dc_one_group!(
     g::SignalGroup, dc::CPUDownconvertAndCorrelator,
-    measurements::Measurements,
+    measurements::BandMeasurements,
 )
     vals = g.satellites.values
     isempty(vals) && return nothing
@@ -691,7 +691,7 @@ end
 
 function downconvert_and_correlate!(
     dc::CPUDownconvertAndCorrelator,
-    measurements::Measurements,
+    measurements::BandMeasurements,
     track_state::TrackState,
 )
     _foreach_group!(_dc_one_group!, track_state.groups, dc, measurements)
@@ -713,7 +713,7 @@ is the slot-value copy.
 """
 function downconvert_and_correlate(
     dc::CPUThreadedDownconvertAndCorrelator,
-    measurements::Measurements,
+    measurements::BandMeasurements,
     track_state::TrackState,
 )
     new_track_state = TrackState(
@@ -734,10 +734,10 @@ write to disjoint slots, so no synchronization is needed. Returns the same
 # Per-group body for the threaded backend. Each `@batch` writes to
 # disjoint slots in this group's `Vector{TrackedSat}`. Pulled out so
 # `_foreach_group!` can call it without boxing on heterogeneous
-# group tuples. Routes to this group's band's `Measurement`.
+# group tuples. Routes to this group's band's `BandMeasurement`.
 @inline function _dc_one_group_threaded!(
     g::SignalGroup, dc::CPUThreadedDownconvertAndCorrelator,
-    measurements::Measurements,
+    measurements::BandMeasurements,
 )
     vals = g.satellites.values
     n = length(vals)
@@ -762,7 +762,7 @@ end
 
 function downconvert_and_correlate!(
     dc::CPUThreadedDownconvertAndCorrelator,
-    measurements::Measurements,
+    measurements::BandMeasurements,
     track_state::TrackState,
 )
     _foreach_group!(_dc_one_group_threaded!, track_state.groups, dc, measurements)

@@ -88,8 +88,8 @@ export get_early,
     SatelliteDicts,
     SignalGroup,
     SignalGroups,
-    Measurement,
-    Measurements,
+    BandMeasurement,
+    BandMeasurements,
     band_key,
     band_keys,
     get_samples,
@@ -98,7 +98,6 @@ export get_early,
     get_num_accumulators,
     get_correlator_sample_shifts,
     calc_signal_samples_to_integrate,
-    update,
     get_code_frequency,
     get_code_length,
     get_codes,
@@ -162,7 +161,7 @@ end
     size(signal, 1)
 end
 
-include("measurement.jl")
+include("band_measurement.jl")
 include("code_replica.jl")
 include("carrier_replica.jl")
 include("downconvert.jl")

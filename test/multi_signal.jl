@@ -118,6 +118,15 @@ using GNSSSignals: GPSL1C_P, GPSL1C_D, GalileoE1B
 
     # Identical signals + identical correlator config => identical results.
     @test corr_1.accumulators ≈ corr_2.accumulators
+
+    # A selector-less per-signal accessor on a multi-signal sat throws the
+    # curated "pass a signal selector" hint rather than a raw `only` error.
+    @test_throws "pass a signal selector" get_correlator(new_sat)
+    @test_throws "pass a signal selector" get_cn0_estimator(new_sat)
+    @test_throws "pass a signal selector" get_correlator(new_track_state, prn)
+    # …and an explicit integer selector resolves the addressed signal.
+    @test get_correlator(new_sat, 1) isa EarlyPromptLateCorrelator
+    @test get_correlator(new_sat, 2) isa EarlyPromptLateCorrelator
 end
 
 @testset "Multi-signal track over a multi-code-period chunk" begin

@@ -14,6 +14,13 @@ systems it will return the first antenna's value.
 """
 struct DefaultPostCorrFilter <: AbstractPostCorrFilter end
 
+"""
+$(SIGNATURES)
+
+Update the post-correlation filter with the latest prompt and return the
+new filter (immutable update). This is the extension point for custom
+[`AbstractPostCorrFilter`](@ref)s — e.g. a beamformer adapting its weights.
+"""
 update(filter::DefaultPostCorrFilter, prompt) = filter
 
 (filter::DefaultPostCorrFilter)(x) = x

@@ -7,7 +7,7 @@ using GNSSSignals:
     gen_code, get_code_frequency, get_code_center_frequency_ratio
 
 using Tracking:
-    TrackState, Measurement, NumAnts, SignalGroup,
+    TrackState, BandMeasurement, NumAnts, SignalGroup,
     track, track!, add_satellite!,
     band_key, band_keys,
     get_samples, get_sampling_frequency, get_intermediate_frequency,
@@ -28,27 +28,27 @@ function _make_signal(
         gen_code(num_samples, s, prn, sampling_frequency, code_freq, start_code_phase)
 end
 
-@testset "Measurement kwarg constructor and accessors" begin
+@testset "BandMeasurement kwarg constructor and accessors" begin
     buf = zeros(ComplexF64, 100)
-    m_kw = Measurement(buf; sampling_frequency = 4e6Hz, intermediate_frequency = 1.5e6Hz)
+    m_kw = BandMeasurement(buf; sampling_frequency = 4e6Hz, intermediate_frequency = 1.5e6Hz)
     @test get_samples(m_kw) === buf
     @test get_sampling_frequency(m_kw) == 4e6Hz
     @test get_intermediate_frequency(m_kw) == 1.5e6Hz
 
     # Kwarg form with default intermediate_frequency = zero(sampling_frequency).
-    m_kw_default = Measurement(buf; sampling_frequency = 4e6Hz)
+    m_kw_default = BandMeasurement(buf; sampling_frequency = 4e6Hz)
     @test get_intermediate_frequency(m_kw_default) == 0.0Hz
 end
 
-@testset "Measurement promotes mixed frequency types" begin
+@testset "BandMeasurement promotes mixed frequency types" begin
     buf = zeros(ComplexF64, 100)
     # Integer-typed IF alongside a Float64 sampling frequency — the most
     # natural spelling — must promote instead of throwing a MethodError.
-    m = @inferred Measurement(buf, 4e6Hz, 100Hz)
+    m = @inferred BandMeasurement(buf, 4e6Hz, 100Hz)
     @test get_sampling_frequency(m) === 4e6Hz
     @test get_intermediate_frequency(m) === 100.0Hz
 
-    m_kw = Measurement(buf; sampling_frequency = 4e6Hz, intermediate_frequency = 100Hz)
+    m_kw = BandMeasurement(buf; sampling_frequency = 4e6Hz, intermediate_frequency = 100Hz)
     @test get_intermediate_frequency(m_kw) === 100.0Hz
 end
 
@@ -67,14 +67,14 @@ end
     @test @inferred(band_key(L5())) === :l5
 end
 
-@testset "Single-Measurement track/track! shortcut on single-band TrackState" begin
+@testset "Single-BandMeasurement track/track! shortcut on single-band TrackState" begin
     fs = 4e6Hz
     num_samples = 4000
     prn = 1
     carrier_doppler = 200Hz
     start_code_phase = 100.0
     buf = _make_signal(GPSL1CA, prn, carrier_doppler, start_code_phase, num_samples, fs)
-    measurement = Measurement(buf, fs)
+    measurement = BandMeasurement(buf, fs)
 
     # Immutable variant.
     ts_imm = TrackState(; signal = GPSL1CA())
@@ -181,8 +181,8 @@ end
     )
 
     measurements = (
-        l1 = Measurement(signal_l1, fs_l1),
-        l5 = Measurement(signal_l5, fs_l5),
+        l1 = BandMeasurement(signal_l1, fs_l1),
+        l5 = BandMeasurement(signal_l5, fs_l5),
     )
 
     track!(measurements, track_state)
@@ -194,10 +194,10 @@ end
     @test abs(cd_l5_tracked - cd_l5) < 50.0Hz
 end
 
-@testset "Measurement keys mismatch errors" begin
+@testset "BandMeasurement keys mismatch errors" begin
     ts = TrackState(; signal = GPSL1CA())
     # Wrong key: TrackState has band L1 (key :l1) but we pass :l5.
-    m = Measurement(zeros(ComplexF64, 4000), 4e6Hz)
+    m = BandMeasurement(zeros(ComplexF64, 4000), 4e6Hz)
     @test_throws ArgumentError track!((l5 = m,), ts)
 end
 
@@ -211,8 +211,8 @@ end
 
     # L1 has 4000 samples @ 4 MHz = 1.000 ms; L5 has 25001 samples @ 25 MHz
     # ≈ 1.00004 ms. Off by one sample at L5's rate — must reject.
-    m_l1 = Measurement(zeros(ComplexF64, 4000),  4e6Hz)
-    m_l5 = Measurement(zeros(ComplexF64, 25001), 25e6Hz)
+    m_l1 = BandMeasurement(zeros(ComplexF64, 4000),  4e6Hz)
+    m_l5 = BandMeasurement(zeros(ComplexF64, 25001), 25e6Hz)
     @test_throws ArgumentError track!((l1 = m_l1, l5 = m_l5), ts)
 end
 
@@ -221,13 +221,13 @@ end
     # in Float32. Identical real durations must pass the check even though
     # `4000 / 4e6Hz` (Float64) and `25000 / 25f6Hz` (Float32) are not
     # `==` after division.
-    m_l1 = Measurement(zeros(ComplexF64, 4000),  4e6Hz)
-    m_l5 = Measurement(zeros(ComplexF64, 25000), 25f6Hz)
+    m_l1 = BandMeasurement(zeros(ComplexF64, 4000),  4e6Hz)
+    m_l5 = BandMeasurement(zeros(ComplexF64, 25000), 25f6Hz)
     @test _validate_equal_durations((l1 = m_l1, l5 = m_l5)) === nothing
 
     # A genuine one-sample mismatch must still throw, and the message
     # should print durations in seconds, not Hz^-1.
-    m_bad = Measurement(zeros(ComplexF64, 25001), 25f6Hz)
+    m_bad = BandMeasurement(zeros(ComplexF64, 25001), 25f6Hz)
     err = try
         _validate_equal_durations((l1 = m_l1, l5 = m_bad))
         nothing
@@ -242,7 +242,7 @@ end
     ts = TrackState(; signal = GPSL1CA(), num_ants = NumAnts(2))
     ts = add_satellite!(ts; prn = 1, carrier_doppler = 0Hz)
     # 2-antenna group expects a Matrix with 2 columns; pass a Vector.
-    m = Measurement(zeros(ComplexF64, 4000), 4e6Hz)
+    m = BandMeasurement(zeros(ComplexF64, 4000), 4e6Hz)
     @test_throws ArgumentError track!((l1 = m,), ts)
 end
 
