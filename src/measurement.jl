@@ -29,9 +29,18 @@ struct Measurement{S<:AbstractVecOrMat,F}
     intermediate_frequency::F
 end
 
-# Positional constructor with IF defaulting to 0.0Hz. Promotes the
-# numeric type so `sampling_frequency` and `intermediate_frequency` end
-# up the same concrete type (`F`).
+# Promotes the numeric type so `sampling_frequency` and
+# `intermediate_frequency` end up the same concrete type (`F`), e.g. an
+# integer-typed IF alongside a `Float64` sampling frequency.
+function Measurement(
+    samples::AbstractVecOrMat,
+    sampling_frequency,
+    intermediate_frequency,
+)
+    Measurement(samples, promote(sampling_frequency, intermediate_frequency)...)
+end
+
+# Positional constructor with IF defaulting to 0.0Hz.
 function Measurement(samples::AbstractVecOrMat, sampling_frequency)
     intermediate_frequency = zero(sampling_frequency)
     Measurement(samples, sampling_frequency, intermediate_frequency)

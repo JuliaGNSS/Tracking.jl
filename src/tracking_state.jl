@@ -1038,19 +1038,23 @@ end
     )))
 end
 
-# Exact-equality duration check across all measurements. `num_samples /
-# sampling_frequency` must compare equal across every band — no tolerance.
+# Exact-equality duration check across all measurements — no tolerance.
+# Cross-multiply instead of dividing so that mixed-precision sampling
+# rates (e.g. Float32 vs Float64) with identical real durations compare
+# equal; the rates are promoted first so neither product rounds in a
+# narrower type than the comparison.
 @inline function _validate_equal_durations(measurements::Measurements)
     ms = Tuple(measurements)
     isempty(ms) && return nothing
     first_m = first(ms)
-    ref_duration = get_num_samples(first_m) / first_m.sampling_frequency
+    ref_num_samples = get_num_samples(first_m)
     for m in Base.tail(ms)
-        d = get_num_samples(m) / m.sampling_frequency
-        d == ref_duration && continue
+        ref_fs, fs = promote(first_m.sampling_frequency, m.sampling_frequency)
+        get_num_samples(m) * ref_fs == ref_num_samples * fs && continue
         throw(ArgumentError(string(
             "Measurement durations must be exactly equal across bands. ",
-            "Got ", d, " and ", ref_duration, ". ",
+            "Got ", uconvert(s, get_num_samples(m) / m.sampling_frequency),
+            " and ", uconvert(s, ref_num_samples / first_m.sampling_frequency), ". ",
             "Check `num_samples / sampling_frequency` for each band.",
         )))
     end

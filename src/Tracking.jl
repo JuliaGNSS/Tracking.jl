@@ -19,7 +19,7 @@ using Polyester
 # UInt1856 variant because no mask is needed on shift/XOR.
 BitIntegers.@define_integers 1800
 
-using Unitful: upreferred, uconvert, Hz, dBHz, ms
+using Unitful: upreferred, uconvert, Hz, dBHz, ms, s
 import Base.zero, Base.length, Base.resize!, LinearAlgebra.dot
 
 export get_early,
