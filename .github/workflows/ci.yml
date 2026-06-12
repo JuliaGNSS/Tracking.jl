@@ -10,11 +10,13 @@ jobs:
     name: Julia ${{ matrix.version }} - ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     env:
-      # The Flexiband integration test downloads a 1.6 GB capture. Run it on a
-      # single job (Linux / Julia 1) and skip it elsewhere, so the matrix stays
-      # fast and the download is cached once for one OS instead of three. The
-      # test passes on Linux/macOS/Windows; ongoing CI only needs one of them.
-      TRACKING_SKIP_INTEGRATION_TEST: ${{ !(matrix.os == 'ubuntu-latest' && matrix.version == '1') }}
+      # The Flexiband integration test downloads a 1.6 GB capture. It is
+      # opt-in (skipped unless this is "true"), so a plain local `]test` never
+      # triggers the download. Run it on a single job (Linux / Julia 1), so
+      # the matrix stays fast and the download is cached once for one OS
+      # instead of three. The test passes on Linux/macOS/Windows; ongoing CI
+      # only needs one of them.
+      TRACKING_RUN_INTEGRATION_TEST: ${{ matrix.os == 'ubuntu-latest' && matrix.version == '1' }}
     strategy:
       matrix:
         version:
@@ -33,7 +35,14 @@ jobs:
       - uses: julia-actions/setup-julia@v3
         with:
           version: ${{ matrix.version }}
+      # cache-scratchspaces is disabled because the only scratchspace content
+      # is the 1.6 GB Flexiband capture, which the dedicated fixed-key cache
+      # step below already pins. julia-actions/cache uses a per-run key, so it
+      # would re-upload the capture on every run and double-store it against
+      # the 10 GB repo cache limit.
       - uses: julia-actions/cache@v3
+        with:
+          cache-scratchspaces: 'false'
       # Cache the 1.6 GB Flexiband capture that the integration test downloads
       # into Tracking's Scratch.jl scratchspace, so it is fetched once and
       # reused across runs instead of re-downloaded on every job. The key is
