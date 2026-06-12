@@ -324,7 +324,16 @@ end
     prompt = get_prompt(filtered_correlator)
     push!(tracked_signal.filtered_prompts, prompt)
     cn0_estimator = update(get_cn0_estimator(tracked_signal), prompt)
-    bit_buffer = buffer(signal, sat.prn, tracked_signal.bit_buffer, integrated_code_blocks, prompt)
+    # The bit accumulator is credited with the blocks actually integrated, not
+    # the intended `integrated_code_blocks`: post-sync the first integration is
+    # truncated to land on the data-bit boundary (issue #125).
+    bit_block_count = calc_num_code_blocks_for_bit_buffer(
+        signal,
+        tracked_signal.integrated_samples,
+        sampling_frequency,
+        has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
+    )
+    bit_buffer = buffer(signal, sat.prn, tracked_signal.bit_buffer, bit_block_count, prompt)
     integration_time = tracked_signal.integrated_samples / sampling_frequency
 
     # The configured bandwidths are referenced to a one-primary-code-period
@@ -413,18 +422,21 @@ end
         return tracked_signal
     end
     signal = tracked_signal.signal
-    integrated_code_blocks = calc_num_code_blocks_to_integrate(
-        signal,
-        tracked_signal.preferred_num_code_blocks_to_integrate,
-        has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
-    )
     normalized_correlator = normalize(tracked_signal.correlator, tracked_signal.integrated_samples)
     post_corr_filter = update(tracked_signal.post_corr_filter, get_prompt(normalized_correlator))
     filtered_correlator = apply(post_corr_filter, normalized_correlator)
     prompt = get_prompt(filtered_correlator)
     push!(tracked_signal.filtered_prompts, prompt)
     cn0_estimator = update(get_cn0_estimator(tracked_signal), prompt)
-    bit_buffer = buffer(signal, prn, tracked_signal.bit_buffer, integrated_code_blocks, prompt)
+    # Credit the accumulator with the blocks actually integrated (truncated on
+    # the first post-sync integration), not the intended count (issue #125).
+    bit_block_count = calc_num_code_blocks_for_bit_buffer(
+        signal,
+        tracked_signal.integrated_samples,
+        sampling_frequency,
+        has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
+    )
+    bit_buffer = buffer(signal, prn, tracked_signal.bit_buffer, bit_block_count, prompt)
     TrackedSignal(
         tracked_signal;
         integrated_samples = 0,

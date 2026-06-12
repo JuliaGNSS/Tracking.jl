@@ -697,10 +697,15 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
         # Secondary-code signals (GPS L5I, GPS L1C-P): the buffered pre-sync
         # prompt signs are modulated by the secondary code, not the navigation
         # data, so there are no data bits to recover from them. Data-bit
-        # decoding starts fresh post-sync — the integration cadence then aligns
-        # each integration to the secondary-code (data-bit) boundary, so no
-        # accumulator seeding is needed here. We only record the recovered
-        # `secondary_phase` / `polarity`, which anchor the shared `code_phase`.
+        # decoding starts fresh post-sync. The rotation search locks at *any*
+        # secondary chip, so the upcoming integration starts `sync.phase` blocks
+        # into the current data bit — not at its boundary. Seed the accumulator
+        # block count with `sync.phase` so the first emitted bit completes
+        # exactly `num_code_blocks_that_form_a_bit − sync.phase` blocks later, on
+        # the data-bit boundary, instead of `num_code_blocks_that_form_a_bit`
+        # blocks after the lock instant (issue #125). For pilots
+        # (`num_code_blocks_that_form_a_bit == 0`) the post-sync `buffer` path
+        # returns early and never consults this seed, so it is harmless there.
         return BitBuffer{B}(
             code_block_buffer,
             code_block_buffer_lengh,
@@ -710,7 +715,7 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
             zero(UInt128),
             0,
             complex(0.0, 0.0),
-            0,
+            sync.phase,
             bit_buffer.soft_bits,
             phase_acc,
         )
