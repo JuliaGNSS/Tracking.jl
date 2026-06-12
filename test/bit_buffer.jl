@@ -223,21 +223,45 @@ end
         @test next_bit_buffer.code_block_buffer_lengh == 1
     end
 
-    @testset "Find bit start and buffer the pre-sync bits" begin
+    @testset "Find bit start and buffer the pre-sync bits (negative polarity)" begin
         # Drive a clean data-1,1,0 stream (20 blocks each, +,+,-) through
         # `buffer()`. The soft detector locks at the true bit boundary
-        # (block 60) and the three completed bits are decoded with the most
-        # recent bit in the LSB: 0b110 = 6, with soft bits +, +, -.
+        # (block 60); the last completed bin is the "0", so the lock is at
+        # negative polarity. The three pre-sync bits are decoded with that
+        # polarity applied — the same sign-flip every post-sync bit gets — so
+        # they stay consistent across the sync boundary (issue #127): block
+        # signs +,+,- decode as bits 0,0,1 = 0b001 = 1, with soft bits -,-,+.
         found_at, bit_buffer =
             _feed_prompts([fill(1.0 + 0.0im, 40); fill(-1.0 + 0.0im, 20)])
         @test found_at == 60
         @test bit_buffer.found == true
+        @test bit_buffer.polarity == -1
         @test bit_buffer.length == 3
-        @test bit_buffer.buffer == 6
+        @test bit_buffer.buffer == 1
         @test bit_buffer.code_block_buffer_lengh == 60
         soft = get_soft_bits(bit_buffer)
         @test length(soft) == 3
-        @test soft[1] > 0 && soft[2] > 0 && soft[3] < 0
+        @test soft[1] < 0 && soft[2] < 0 && soft[3] > 0
+    end
+
+    @testset "Find bit start and buffer the pre-sync bits (positive polarity)" begin
+        # The whole-signal sign flip of the case above: data 0,0,1 (block
+        # signs -,-,+). The last completed bin is the "1", so the lock is at
+        # positive polarity. Because a global RF sign flip is exactly the
+        # ambiguity polarity resolves, the recovered hard bits and soft-bit
+        # signs are identical to the negative-polarity case (issue #127):
+        # buffer 0b001 = 1, soft -,-,+.
+        found_at, bit_buffer =
+            _feed_prompts([fill(-1.0 + 0.0im, 40); fill(1.0 + 0.0im, 20)])
+        @test found_at == 60
+        @test bit_buffer.found == true
+        @test bit_buffer.polarity == +1
+        @test bit_buffer.length == 3
+        @test bit_buffer.buffer == 1
+        @test bit_buffer.code_block_buffer_lengh == 60
+        soft = get_soft_bits(bit_buffer)
+        @test length(soft) == 3
+        @test soft[1] < 0 && soft[2] < 0 && soft[3] > 0
     end
 
     @testset "Buffer prompt when bit has been found" begin
