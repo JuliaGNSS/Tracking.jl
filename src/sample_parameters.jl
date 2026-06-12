@@ -2,8 +2,13 @@
 $(SIGNATURES)
 
 Returns the appropiate number of code blocks to integrate. It will be just a single
-code block when the secondary code or bit isn't found. The maximum number of code
-blocks to integrate is limited by the bit shift.
+code block when the secondary code or bit isn't found. The number of code blocks
+to integrate is clamped to the largest divisor of the blocks-per-bit that does
+not exceed the preferred value: an integration length that straddled a bit
+boundary would keep the post-sync accumulator from ever hitting the bit
+boundary, silently stalling bit emission (issue #128). Preferred values are
+additionally validated when a [`TrackedSignal`](@ref) is built, so this clamp
+only matters for direct callers.
 
 For pilot signals with `data_frequency == 0` (e.g. GPS L1C-P), longer coherent
 integration would be bounded by the secondary-code period instead, but secondary-
@@ -17,10 +22,13 @@ function calc_num_code_blocks_to_integrate(
     secondary_code_or_bit_found || return 1
     data_freq = get_data_frequency(signal)
     iszero(data_freq) && return 1
-    min(
-        Int(get_code_frequency(signal) / (get_code_length(signal) * data_freq)),
-        preferred_num_code_blocks,
-    )
+    num_code_blocks_that_form_a_bit =
+        Int(get_code_frequency(signal) / (get_code_length(signal) * data_freq))
+    num_code_blocks = clamp(preferred_num_code_blocks, 1, num_code_blocks_that_form_a_bit)
+    while num_code_blocks_that_form_a_bit % num_code_blocks != 0
+        num_code_blocks -= 1
+    end
+    num_code_blocks
 end
 
 """

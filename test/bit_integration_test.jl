@@ -82,6 +82,80 @@ using Tracking:
     end
 end
 
+# Multi-block coherent integration: bits keep flowing with `preferred > 1`.
+#
+# Until bit sync the integration length is clamped to one code block, so the
+# preferred length can be set from the start. After sync at block 40 (one
+# full bit of each polarity plus the transition) each integration spans 4
+# code blocks, five integrations form a bit, and a hard + soft bit must be
+# emitted at every 20-block bit boundary — with `preferred = 3` (which does
+# not divide the 20 blocks per bit and is therefore rejected since issue
+# #128) the integrations would straddle bit boundaries and bit emission
+# would stall forever. A single-block tracker runs alongside as the
+# reference: the multi-block tracker must decode the identical bit stream.
+# This exercises the post-sync multi-block path end to end: the widened
+# replica-code wrap, the multi-block integration boundary calculation, and
+# the `1/N` loop-bandwidth scaling.
+@testset "Bit detection with multi-block coherent integration" begin
+    gpsl1 = GPSL1CA()
+    sampling_frequency = 5e6Hz
+    num_samples = 5000
+    code_frequency = get_code_frequency(gpsl1)
+
+    multi_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0, 0.0Hz)])
+    set_preferred_num_code_blocks_to_integrate!(multi_state, 1, 4)
+    single_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0, 0.0Hz)])
+
+    # The bit buffer is flushed on every `track` call, so collect the bits
+    # and soft bits across calls.
+    multi_bits = Bool[]
+    single_bits = Bool[]
+    multi_soft = Float32[]
+    single_soft = Float32[]
+
+    bits = vcat(ones(20), zeros(20), ones(20), zeros(20), ones(20))
+    foreach(enumerate(bits)) do (index, bit)
+        code_phase = (index - 1) * num_samples * code_frequency / sampling_frequency
+        signal = ComplexF32.(
+            (bit * 2 - 1) .*
+            gen_code(num_samples, gpsl1, 1, sampling_frequency, code_frequency, code_phase),
+        )
+        multi_state = track(signal, multi_state, sampling_frequency)
+        single_state = track(signal, single_state, sampling_frequency)
+        @test has_bit_or_secondary_code_been_found(multi_state) == (index >= 40)
+        # Two bits are recovered from the buffered history at sync (block 40);
+        # afterwards exactly one bit must appear at every 20-block boundary.
+        expected_num_bits = index == 40 ? 2 : (index > 40 && index % 20 == 0 ? 1 : 0)
+        @test get_num_bits(multi_state) == expected_num_bits
+        @test get_num_bits(single_state) == expected_num_bits
+        num_bits = get_num_bits(multi_state)
+        for bit_index in (num_bits-1):-1:0
+            push!(multi_bits, (get_bits(multi_state) >> bit_index) & 1 == 1)
+            push!(single_bits, (get_bits(single_state) >> bit_index) & 1 == 1)
+        end
+        append!(multi_soft, get_soft_bits(multi_state))
+        append!(single_soft, get_soft_bits(single_state))
+    end
+
+    # All five data bits arrive and match the single-block reference bit for
+    # bit. The two bits replayed from the buffered history at sync alternate,
+    # and so do the three streamed post-sync bits; the relative polarity
+    # between the replayed and the streamed portion is a property of the
+    # bit-sync polarity convention and not asserted here.
+    @test length(multi_bits) == 5
+    @test multi_bits == single_bits
+    @test multi_bits[1] != multi_bits[2]
+    @test multi_bits[3] != multi_bits[4]
+    @test multi_bits[4] != multi_bits[5]
+
+    # The soft bits agree with the reference in sign; post-sync each bit is
+    # the sum of five 4-block prompts (magnitude ~5) instead of twenty
+    # single-block prompts.
+    @test sign.(multi_soft) == sign.(single_soft)
+    @test all(x -> abs(x) ≈ 5, multi_soft[3:end])
+    @test all(x -> abs(x) ≈ 20, single_soft[3:end])
+end
+
 # GPS L5I secondary-code (NH10) sync and phase recovery.
 #
 # The L5I detector runs the generic rotation search over NH10, so it locks
