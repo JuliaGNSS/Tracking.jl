@@ -804,6 +804,12 @@ bit/secondary sync (see `calc_num_code_blocks_to_integrate`); with the
 conventional estimator the loop bandwidth auto-scales by `1/N` so the loop
 stays stable at any length.
 
+For data-bearing signals the length must evenly divide the number of code
+blocks that form one bit (e.g. a divisor of 20 for GPS L1 C/A, of 10 for GPS
+L5I) so integrations stay aligned to bit boundaries; an `ArgumentError` is
+thrown otherwise (issue #128). Pilot signals accept any length of at least
+one block.
+
 The satellite is addressed exactly like the per-signal accessors
 (e.g. [`estimate_cn0`](@ref)):
 

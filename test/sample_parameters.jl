@@ -18,6 +18,13 @@ using Tracking:
     @test @inferred(calc_num_code_blocks_to_integrate(gpsl1, 20, true)) == 20
     @test @inferred(calc_num_code_blocks_to_integrate(gpsl1, 21, true)) == 20
 
+    # A preferred value that doesn't divide the 20 blocks per bit is clamped
+    # to the largest divisor below it — an integration that straddled a bit
+    # boundary would never emit a bit again (issue #128).
+    @test @inferred(calc_num_code_blocks_to_integrate(gpsl1, 3, true)) == 2
+    @test @inferred(calc_num_code_blocks_to_integrate(gpsl1, 7, true)) == 5
+    @test @inferred(calc_num_code_blocks_to_integrate(gpsl1, 19, true)) == 10
+
     @test @inferred(calc_num_chips_to_integrate(gpsl1, 1, 10.5)) == 1023 - 10.5
     @test @inferred(calc_num_chips_to_integrate(gpsl1, 1, 1023 + 10.5)) == 1023 - 10.5
     @test @inferred(calc_num_chips_to_integrate(gpsl1, 2, 10.5)) == 2 * 1023 - 10.5

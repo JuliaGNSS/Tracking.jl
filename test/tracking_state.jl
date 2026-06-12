@@ -2,7 +2,7 @@ module TrackingStateTest
 
 using Test: @test, @testset, @inferred, @test_throws
 using Unitful: Hz
-using GNSSSignals: GPSL1CA, GalileoE1B
+using GNSSSignals: GPSL1CA, GPSL5I, GPSL1C_P, GalileoE1B
 using Dictionaries: Dictionary, dictionary
 import Tracking
 using Tracking:
@@ -418,6 +418,53 @@ end
     @inferred get_signal(track_state)
     @inferred get_sat_state(track_state, 1)
     @test true   # gives the testset a passing assertion if all `@inferred` succeed
+end
+
+@testset "preferred_num_code_blocks_to_integrate validation (issue #128)" begin
+    gpsl1 = GPSL1CA()
+    track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 0.0Hz)])
+
+    # GPS L1 C/A has 20 code blocks per bit; only divisors keep integrations
+    # aligned to bit boundaries, so only divisors are accepted.
+    for valid in (1, 2, 4, 5, 10, 20)
+        set_preferred_num_code_blocks_to_integrate!(track_state, 1, valid)
+        @test get_preferred_num_code_blocks_to_integrate(track_state, 1) == valid
+    end
+    for invalid in (0, -1, 3, 7, 21, 40)
+        @test_throws ArgumentError set_preferred_num_code_blocks_to_integrate!(
+            track_state,
+            1,
+            invalid,
+        )
+    end
+    # A rejected value leaves the previous one untouched.
+    @test get_preferred_num_code_blocks_to_integrate(track_state, 1) == 20
+
+    # Validated at construction, too — not only via the setter.
+    @test_throws ArgumentError Tracking.TrackedSignal(
+        gpsl1;
+        preferred_num_code_blocks_to_integrate = 3,
+    )
+    @test Tracking.get_preferred_num_code_blocks_to_integrate(
+        Tracking.TrackedSignal(gpsl1; preferred_num_code_blocks_to_integrate = 10),
+    ) == 10
+
+    # GPS L5I has 10 blocks per bit — 4 doesn't divide it (issue #128), 10 does.
+    gpsl5 = GPSL5I()
+    l5_state = TrackState(gpsl5, [TrackedSat(gpsl5, 1, 0.0, 0.0Hz)])
+    @test_throws ArgumentError set_preferred_num_code_blocks_to_integrate!(l5_state, 1, 4)
+    set_preferred_num_code_blocks_to_integrate!(l5_state, 1, 10)
+    @test get_preferred_num_code_blocks_to_integrate(l5_state, 1) == 10
+
+    # Pilot signals carry no data bits, so there is no bit boundary to
+    # straddle — any length of at least one block is accepted (the actual
+    # integration is clamped to one block until secondary-code-bounded
+    # integration is wired up, see `calc_num_code_blocks_to_integrate`).
+    gpsl1c_p = GPSL1C_P()
+    p_state = TrackState(gpsl1c_p, [TrackedSat(gpsl1c_p, 1, 0.0, 0.0Hz)])
+    set_preferred_num_code_blocks_to_integrate!(p_state, 1, 7)
+    @test get_preferred_num_code_blocks_to_integrate(p_state, 1) == 7
+    @test_throws ArgumentError set_preferred_num_code_blocks_to_integrate!(p_state, 1, 0)
 end
 
 @testset "per-signal preferred_num_code_blocks_to_integrate + reset_loop_filters!" begin
