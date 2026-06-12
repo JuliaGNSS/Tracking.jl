@@ -182,14 +182,18 @@ function _detect_bit_edge_cfar(
             s += p
             sq += abs2(p)
         end
-        resid += sq - abs2(s) / L      # Σ|pᵢ - p̄|² within this bin
+        # `Σ|pᵢ|² - |Σpᵢ|²/L = Σ|pᵢ - p̄|²` is non-negative in exact
+        # arithmetic, but catastrophic cancellation (near-constant high-SNR
+        # bins) can round it slightly below zero; clamp so the variance and
+        # its square root below stay real.
+        resid += max(sq - abs2(s) / L, 0.0)   # Σ|pᵢ - p̄|² within this bin
         last_bin_sum = s
     end
     sigma2 = resid / (nb_peak * (L - 1))   # per-sample complex noise power
     noise_bin = L * sigma2                 # mean energy of a noise-only bin
 
     var_bin(e, m) = (noise_bin^2 + 2 * max(e - noise_bin, 0.0) * noise_bin) / m
-    se = sqrt(var_bin(peak, nb_peak) + var_bin(second, bin_count[ksecond+1]))
+    se = sqrt(max(var_bin(peak, nb_peak) + var_bin(second, bin_count[ksecond+1]), 0.0))
     z = se > 0 ? gap / se : Inf
 
     z_threshold = _norm_quantile(1 - (1 - confidence) / (L - 1))
