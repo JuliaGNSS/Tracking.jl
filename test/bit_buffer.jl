@@ -1,6 +1,7 @@
 module BitBufferTest
 
 using Test: @test, @testset, @inferred, @test_throws
+using Random: MersenneTwister
 using GNSSSignals: GPSL1CA
 using Tracking:
     BitBuffer,
@@ -9,7 +10,8 @@ using Tracking:
     get_soft_bits,
     has_bit_or_secondary_code_been_found,
     SyncResult,
-    _try_match
+    _norm_quantile,
+    _detect_bit_edge_cfar
 
 @testset "SyncResult" begin
     r = @inferred SyncResult(false, 0, Int8(0))
@@ -18,53 +20,81 @@ using Tracking:
     @test r.polarity == 0
 end
 
-@testset "_try_match" begin
-    # Exact match at positive polarity.
-    res = @inferred _try_match(UInt8(0x0f), UInt8(0x0f), UInt8(0xff), 0)
-    @test res.found == true
-    @test res.polarity == +1
-    @test res.phase == 0
+@testset "_norm_quantile" begin
+    # Symmetry and a few tabulated standard-normal quantiles.
+    @test _norm_quantile(0.5) ≈ 0.0 atol = 1e-9
+    @test _norm_quantile(0.975) ≈ 1.959963985 atol = 1e-6
+    @test _norm_quantile(0.025) ≈ -1.959963985 atol = 1e-6
+    @test _norm_quantile(0.999) ≈ 3.090232306 atol = 1e-6
+    @test _norm_quantile(1 - 0.999) ≈ -3.090232306 atol = 1e-6
+    # Monotonically increasing.
+    @test _norm_quantile(0.1) < _norm_quantile(0.2) < _norm_quantile(0.8)
+end
 
-    # Negative polarity = template XOR mask.
-    res = @inferred _try_match(UInt8(0xf0), UInt8(0x0f), UInt8(0xff), 0)
-    @test res.found == true
-    @test res.polarity == -1
+const L1CA_L = 20  # primary-code blocks per L1 C/A navigation bit
 
-    # Single bit-flip at tolerance 0 — rejected.
-    res = @inferred _try_match(UInt8(0x0e), UInt8(0x0f), UInt8(0xff), 0)
-    @test res.found == false
+# Build a noiseless ±1 soft-prompt stream from a list of data bits, one bit =
+# `L1CA_L` blocks, scaled by `amp`.
+_bitstream(bits; amp = 1.0) =
+    ComplexF64[amp * (b == 1 ? 1.0 : -1.0) for b in bits for _ in 1:L1CA_L]
 
-    # Same single bit-flip at tolerance 1 — accepted.
-    res = @inferred _try_match(UInt8(0x0e), UInt8(0x0f), UInt8(0xff), 1)
-    @test res.found == true
-    @test res.polarity == +1
+@testset "_detect_bit_edge_cfar" begin
+    @testset "Needs at least two bins" begin
+        # 39 blocks (< 2L) — never enough to nominate a runner-up.
+        sp = _bitstream([0, 1])[1:39]
+        @test _detect_bit_edge_cfar(sp, L1CA_L, 0.999).found == false
+    end
 
-    # Out-of-band bits don't affect the match (the mask hides them).
-    res = @inferred _try_match(UInt32(0xdeadbe0f), UInt32(0x0f), UInt32(0xff), 0)
-    @test res.found == true
-    @test res.polarity == +1
+    @testset "Noiseless lock fires at the true bit boundary, not one early" begin
+        # Data 0,0,1: first transition preceded by a repeated bit (the
+        # exact issue-#124 trigger). The true edge is at block 60; the old
+        # tolerant matcher fired at 59.
+        sp = _bitstream([0, 0, 1])
+        @test _detect_bit_edge_cfar(sp[1:59], L1CA_L, 0.999).found == false
+        res = _detect_bit_edge_cfar(sp, L1CA_L, 0.999)
+        @test res.found == true
+        @test res.phase == 0
+        @test res.polarity == +1   # last completed bin is the "1"
 
-    # Width-generic: works on UInt128 buffers too.
-    res = @inferred _try_match(UInt128(0x0f), UInt128(0x0f), UInt128(0xff), 0)
-    @test res.found == true
-    @test res.polarity == +1
+        # Mirror pattern 1,1,0 → same boundary, negative polarity.
+        res = _detect_bit_edge_cfar(_bitstream([1, 1, 0]), L1CA_L, 0.999)
+        @test res.found == true
+        @test res.polarity == -1
+    end
 
-    # Edge mask: an error inside the edge mask rejects even within budget…
-    res = @inferred _try_match(UInt8(0x07), UInt8(0x0f), UInt8(0xff), 1, UInt8(0x18))
-    @test res.found == false
-    # …an error on the other edge-mask bit rejects too…
-    res = @inferred _try_match(UInt8(0x1f), UInt8(0x0f), UInt8(0xff), 1, UInt8(0x18))
-    @test res.found == false
-    # …while the same budget spent outside the edge mask still matches.
-    res = @inferred _try_match(UInt8(0x0e), UInt8(0x0f), UInt8(0xff), 1, UInt8(0x18))
-    @test res.found == true
-    @test res.polarity == +1
-    # Negative polarity honors the edge mask as well.
-    res = @inferred _try_match(UInt8(0xe0), UInt8(0x0f), UInt8(0xff), 1, UInt8(0x18))
-    @test res.found == false
-    res = @inferred _try_match(UInt8(0xf1), UInt8(0x0f), UInt8(0xff), 1, UInt8(0x18))
-    @test res.found == true
-    @test res.polarity == -1
+    @testset "No data transition never locks" begin
+        # A constant data stream carries no edge information.
+        @test _detect_bit_edge_cfar(_bitstream(fill(1, 5)), L1CA_L, 0.999).found == false
+    end
+
+    @testset "Confidence drives lock latency in noise" begin
+        # Alternating bits give a transition at every boundary — the
+        # cleanest possible edge evidence. Add noise and feed the stream
+        # block-by-block; a higher confidence target locks no earlier than a
+        # lower one, and always at a true bit boundary.
+        function lock_block(confidence, seed)
+            rng = MersenneTwister(seed)
+            clean = _bitstream([i % 2 for i in 0:9]; amp = 8.0)
+            sp = ComplexF64[]
+            for (i, p) in enumerate(clean)
+                push!(sp, p + complex(randn(rng), randn(rng)))
+                _detect_bit_edge_cfar(sp, L1CA_L, confidence).found && return i
+            end
+            return 0
+        end
+        for seed in 1:5
+            lo = lock_block(0.95, seed)
+            hi = lock_block(0.99999, seed)
+            # Both lock on this high-SNR stream within the window.
+            @test lo > 0
+            @test hi > 0
+            # More confidence ⇒ never an earlier lock.
+            @test hi >= lo
+            # Whenever it does lock it is at a true bit boundary.
+            @test lo % L1CA_L == 0
+            @test hi % L1CA_L == 0
+        end
+    end
 end
 
 # Feed a noiseless ±1 prompt stream (one code block per call) through
@@ -83,12 +113,11 @@ function _feed_prompts(prompts)
     found_at, bit_buffer
 end
 
-@testset "L1CA bit-edge lock is not one block early (issue #124)" begin
+@testset "L1CA bit-edge lock is not one block early through buffer() (issue #124)" begin
     # Data bits 0, 0, 1 — the first transition is preceded by a repeated
     # bit. The buggy tolerant matcher fired at block 59 (one block before
-    # the true edge); an edge-locked detector fires exactly at block 60.
-    prompts = [fill(-1.0 + 0.0im, 40); fill(1.0 + 0.0im, 20)]
-    found_at, bit_buffer = _feed_prompts(prompts)
+    # the true edge); the soft edge-locked detector fires exactly at 60.
+    found_at, bit_buffer = _feed_prompts([fill(-1.0 + 0.0im, 40); fill(1.0 + 0.0im, 20)])
     @test found_at == 60
     @test bit_buffer.polarity == +1
 
@@ -96,21 +125,9 @@ end
     found_at, bit_buffer = _feed_prompts([fill(1.0 + 0.0im, 40); fill(-1.0 + 0.0im, 20)])
     @test found_at == 60
     @test bit_buffer.polarity == -1
-end
 
-@testset "L1CA sync tolerance budget through buffer (issue #124)" begin
-    # One flipped block (block 10) away from the edge — exactly at the
-    # 1-error budget. Sync still locks at the true edge (block 40).
-    prompts = [fill(-1.0 + 0.0im, 20); fill(1.0 + 0.0im, 20)]
-    prompts[10] = 1.0 + 0.0im
-    found_at, _ = _feed_prompts(prompts)
-    @test found_at == 40
-
-    # Two flipped blocks — budget + 1 — must not lock anywhere in the stream.
-    prompts = [fill(-1.0 + 0.0im, 20); fill(1.0 + 0.0im, 40)]
-    prompts[8] = 1.0 + 0.0im
-    prompts[10] = 1.0 + 0.0im
-    found_at, _ = _feed_prompts(prompts)
+    # A constant prompt stream (no data transition) never locks.
+    found_at, _ = _feed_prompts(fill(1.0 + 0.0im, 80))
     @test found_at == 0
 end
 
@@ -152,30 +169,23 @@ end
         @test next_bit_buffer.code_block_buffer_lengh == 1
     end
 
-    @testset "Find bit start and buffer bit" begin
-        # `UInt128` literal so that the expected post-shift value
-        # 0x1fffffffffff00000 (65 bits) fits without truncation. The
-        # buffer width is now a per-`BitBuffer{B}` parameter, so the
-        # test pins `B = UInt128` explicitly.
-        code_blocks_buffer = UInt128(0xfffffffffff80000)
-        code_blocks_buffer_length = ndigits(code_blocks_buffer; base = 2)
-        bit_buffer = BitBuffer(
-            code_blocks_buffer,
-            code_blocks_buffer_length,
-            false,
-            0,
-            0,
-            complex(0, 0),
-            0,
-        )
-        signal = GPSL1CA()
-
-        next_bit_buffer = @inferred buffer(signal, 1, bit_buffer, 1, -2 + 0im)
-        @test next_bit_buffer.found == true
-        @test next_bit_buffer.length == 3
-        @test next_bit_buffer.buffer == 6
-        @test next_bit_buffer.code_block_buffer == 0x1fffffffffff00000
-        @test next_bit_buffer.code_block_buffer_lengh == code_blocks_buffer_length + 1
+    @testset "Find bit start and buffer the pre-sync bits" begin
+        # Drive a clean data-1,1,0 stream (20 blocks each, +,+,-) through
+        # `buffer()`. The soft detector locks at the true bit boundary
+        # (block 60) and the three completed bits are decoded with the most
+        # recent bit in the LSB: 0b110 = 6, with soft bits +, +, -.
+        found_at, bit_buffer =
+            _feed_prompts([fill(1.0 + 0.0im, 40); fill(-1.0 + 0.0im, 20)])
+        @test found_at == 60
+        @test bit_buffer.found == true
+        @test bit_buffer.length == 3
+        @test bit_buffer.buffer == 6
+        @test bit_buffer.code_block_buffer_lengh == 60
+        soft = get_soft_bits(bit_buffer)
+        @test length(soft) == 3
+        @test soft[1] > 0 && soft[2] > 0 && soft[3] < 0
+        # The soft-prompt history is released once sync is found.
+        @test isempty(bit_buffer.soft_prompts)
     end
 
     @testset "Buffer prompt when bit has been found" begin

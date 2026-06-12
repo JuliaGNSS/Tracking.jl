@@ -121,6 +121,7 @@ end
             complex(0.0, 0.0),
             0,
             Float32[],
+            ComplexF64[],
         ),
     )
     synced_signals = (synced_sig,)
