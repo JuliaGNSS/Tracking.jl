@@ -149,50 +149,18 @@ end
     end
 end
 
-# Per-backend per-signal correlation kernel. Single-threaded backend uses
-# `downconvert_and_correlate!` (which internally gen-code-replicas then
-# runs the fused kernel); threaded backend pre-generates the code replica
-# and feeds the fused kernel directly. Both write into the supplied
-# `code_replica` buffer (from the calling correlator's `ScratchBuffers`)
-# and return a value of the same correlator type as `correlator`.
+# Per-signal correlation kernel, shared by both CPU backends: generate
+# the code replica into the supplied `code_replica` buffer (from the
+# calling correlator's `ScratchBuffers`), then run the fused kernel via
+# `_fused_with_tile_scratch!` (which supplies SoA tile scratch when the
+# shifts are a runtime-sized `AbstractVector`). Returns a value of the
+# same correlator type as `correlator`.
 #
 # Args are per-signal scalars: the caller is responsible for picking the
 # right `signal_type`, `correlator`, `code_phase` (modded into the signal's
 # primary period), `code_frequency`, and `sample_shifts` for this signal.
 @inline function _correlate_one_signal!(
-    ::CPUDownconvertAndCorrelator,
-    code_replica,
-    signal_type,
-    correlator,
-    signal,
-    sample_shifts,
-    code_phase,
-    carrier_phase,
-    code_frequency,
-    carrier_frequency,
-    sampling_frequency,
-    signal_start_sample,
-    signal_samples_to_integrate,
-    prn,
-)
-    downconvert_and_correlate!(
-        signal_type,
-        signal,
-        correlator,
-        code_replica,
-        code_phase,
-        carrier_phase,
-        code_frequency,
-        carrier_frequency,
-        sampling_frequency,
-        signal_start_sample,
-        signal_samples_to_integrate,
-        prn,
-    )::typeof(correlator)
-end
-
-@inline function _correlate_one_signal!(
-    dc::CPUThreadedDownconvertAndCorrelator,
+    dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
     code_replica,
     signal_type,
     correlator,
