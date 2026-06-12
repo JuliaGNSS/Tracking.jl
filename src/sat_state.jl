@@ -194,8 +194,8 @@ estimates and bit buffers on their own boundaries. A user-supplied
 too — `signals[1]`'s privileged role is a convention of the conventional
 estimators, not a structural constraint of the type.
 
-The shared `code_phase` wraps at the longest code period across all signals
-including secondary code (see [`max_code_length`](@ref)).
+The shared `code_phase` wraps at the least common multiple of the signals'
+code periods including secondary code (see [`max_code_length`](@ref)).
 """
 struct TrackedSat{Signals<:Tuple{Vararg{TrackedSignal}},D}
     prn::Int
@@ -235,8 +235,15 @@ end
     end
 end
 
-@inline _max_code_length(::Tuple{}) = 0
-@inline _max_code_length(t::Tuple) = max(
+# Folded with `lcm` (identity 1 on the empty tuple), not `max`: per-signal
+# phases are re-derived as `mod(code_phase, _replica_code_wrap(...))`,
+# which is only correct when the shared wrap is an integer multiple of
+# *every* signal's replica wrap (issue #129). For all shipped signal
+# pairings the shorter wraps divide the longer ones, so the lcm equals
+# the max — but `max` would silently corrupt non-driver code phases for
+# a future pairing where it isn't a common multiple.
+@inline _max_code_length(::Tuple{}) = 1
+@inline _max_code_length(t::Tuple) = lcm(
     _post_sync_code_length(first(t)),
     _max_code_length(Base.tail(t)),
 )
@@ -245,10 +252,12 @@ end
 $(SIGNATURES)
 
 Upper bound on the shared `sat.code_phase` wrap period, in chips —
-the largest value `code_phase` ever takes once *every* signal on the
-sat has synced. For a sat tracking only GPS L1 C/A this is 1023 × 20 =
-20460 (one full data bit); for one tracking L1C-P this is 10230 × 1800
-≈ 18.4 M (one full secondary-code cycle).
+the least common multiple of the per-signal wrap periods once *every*
+signal on the sat has synced. For a sat tracking only GPS L1 C/A this is
+1023 × 20 = 20460 (one full data bit); for one tracking L1C-P this is
+10230 × 1800 ≈ 18.4 M (one full secondary-code cycle). For every shipped
+multi-signal pairing the shorter wraps divide the longer ones, so the
+lcm coincides with the longest signal's wrap.
 
 This is the *compile-time* bound. The actual runtime wrap shrinks to
 `get_code_length(signal) × 1` for any signal whose bit/secondary-code
@@ -274,8 +283,11 @@ the calling site for any concrete `signals` tuple type.
     end
 end
 
-@inline _current_code_wrap(::Tuple{}) = 0
-@inline _current_code_wrap(t::Tuple) = max(
+# `lcm`-folded for the same reason as `_max_code_length` above: the wrap
+# must be a common multiple of every signal's current wrap, not merely
+# the largest of them.
+@inline _current_code_wrap(::Tuple{}) = 1
+@inline _current_code_wrap(t::Tuple) = lcm(
     _current_code_length(first(t)),
     _current_code_wrap(Base.tail(t)),
 )
@@ -299,9 +311,13 @@ honors the current per-signal sync state. For each signal:
   we're in, so wrapping at the primary length is the most we can
   legitimately do.
 
-The shared wrap is the `max` across all signals, so the longest synced
-signal pins the wrap to its full sync period and shorter signals just
-ride along.
+The shared wrap is the least common multiple of the per-signal
+contributions, so it stays an integer multiple of every signal's own
+replica wrap — per-signal phases are re-derived as
+`mod(code_phase, replica_wrap)`, which a non-common-multiple wrap would
+silently corrupt (issue #129). For all shipped signal pairings the
+shorter wraps divide the longer ones, so the lcm coincides with the
+longest synced signal's wrap and shorter signals just ride along.
 """
 @inline current_code_wrap(signals::Tuple{Vararg{TrackedSignal}}) = _current_code_wrap(signals)
 
@@ -695,6 +711,44 @@ function SignalGroup(
     )
 end
 
+# Constructor invariants for a group's signal tuple (issue #129):
+# (a) every signal lives on the group's RF band — the whole group is
+#     downconverted against the single measurement that `band` routes to,
+#     so a signal on another band would silently correlate against the
+#     wrong samples (and `_validate_measurements` would never ask for its
+#     band's buffer); and
+# (b) every signal shares one chip rate — the shared `code_phase` advances
+#     at `signals[1]`'s code frequency (see `update` in
+#     downconvert_and_correlate.jl), so a signal with a different chip
+#     rate would silently mistrack.
+# Bands compare by `band_key` (not instance) so a user-defined band that
+# aliases an existing measurement key still validates.
+function _validate_signal_group(signals::Tuple{Vararg{AbstractGNSSSignal}}, band)
+    driver = first(signals)
+    foreach(signals) do s
+        if band_key(get_band(s)) !== band_key(band)
+            throw(ArgumentError(string(
+                "All signals in a SignalGroup must be on the same RF band: `",
+                nameof(typeof(s)), "` is on band `:", band_key(get_band(s)),
+                "` but the group is on band `:", band_key(band),
+                "`. Put signals on different bands into separate groups, e.g. ",
+                "`signals = (l1 = (GPSL1CA(),), l5 = (GPSL5I(),))`.",
+            )))
+        end
+        if get_code_frequency(s) != get_code_frequency(driver)
+            throw(ArgumentError(string(
+                "All signals in a SignalGroup must share one chip rate: the ",
+                "shared code phase advances at the first signal's code ",
+                "frequency (`", nameof(typeof(driver)), "`: ",
+                get_code_frequency(driver), "), but `", nameof(typeof(s)),
+                "` has ", get_code_frequency(s),
+                ". Track it in its own group instead.",
+            )))
+        end
+    end
+    nothing
+end
+
 """
 $(SIGNATURES)
 
@@ -702,6 +756,10 @@ User-facing outer constructor: build a fresh `SignalGroup` from a signal
 tuple with band and antenna count as kwargs. `band` defaults to
 `get_band(first(signals))` (so users only override for the rare case of
 naming a band differently); `num_ants` defaults to `NumAnts(1)`.
+
+All signals must live on `band` and share one chip rate — signals on other
+bands or with other chip rates belong in their own group (the constructor
+throws an `ArgumentError` otherwise).
 
 The `satellites` dictionary is left empty — populate it via
 [`add_satellite!`](@ref) after the enclosing [`TrackState`](@ref) is
@@ -725,6 +783,7 @@ function SignalGroup(
                 default_code_loop_filter_bandwidth(first(signals)),
         ),
 )
+    _validate_signal_group(signals, band)
     # Build a template TrackedSat so the dict's value type is concrete.
     # Reuses the existing helper from tracking_state.jl, which is fine
     # because doppler_estimator only affects per-sat state type, not the
