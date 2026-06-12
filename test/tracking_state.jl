@@ -2,7 +2,8 @@ module TrackingStateTest
 
 using Test: @test, @testset, @inferred, @test_throws
 using Unitful: Hz
-using GNSSSignals: GPSL1CA, GPSL5I, GPSL1C_P, GalileoE1B
+using GNSSSignals:
+    GNSSSignals, AbstractGNSSSignal, GPSL1CA, GPSL1C_D, GPSL1C_P, GPSL5I, GalileoE1B
 using Dictionaries: Dictionary, dictionary
 import Tracking
 using Tracking:
@@ -42,7 +43,39 @@ using Tracking:
     reset_loop_filters!,
     get_doppler_estimator_state,
     ConventionalAssistedPLLAndDLL,
-    ConventionalPLLAndDLL
+    ConventionalPLLAndDLL,
+    SignalGroup
+
+# No real GNSS signal pair mixes chip rates on a single band, so fake one to
+# exercise the SignalGroup chip-rate invariant (issue #129): L1 band like
+# GPS L1 C/A, but at double the chip rate. Only `get_band` and
+# `get_code_frequency` are needed — validation throws before the group
+# touches any other part of the signal API.
+struct FakeDoubleRateL1Signal <: AbstractGNSSSignal{Matrix{Int16}} end
+GNSSSignals.get_band(::FakeDoubleRateL1Signal) = GNSSSignals.L1()
+GNSSSignals.get_code_frequency(::FakeDoubleRateL1Signal) = 2_046_000Hz
+
+@testset "SignalGroup rejects mixed bands and mixed chip rates (issue #129)" begin
+    # (a) Band homogeneity: every signal in a group is downconverted against
+    # the single band measurement the group's `band` routes to, so an L5
+    # signal in an L1 group would silently correlate against L1 samples.
+    @test_throws ArgumentError SignalGroup((GPSL1CA(), GPSL5I()))
+    @test_throws ArgumentError TrackState(; signals = (mix = (GPSL1CA(), GPSL5I()),))
+    # An explicit `band` override that contradicts the signals is just as wrong.
+    @test_throws ArgumentError SignalGroup((GPSL1CA(),); band = GNSSSignals.L5())
+
+    # (b) Shared chip rate: the shared `code_phase` advances at `signals[1]`'s
+    # code frequency, so a signal with a different chip rate silently mistracks.
+    @test_throws ArgumentError SignalGroup((GPSL1CA(), FakeDoubleRateL1Signal()))
+    @test_throws ArgumentError TrackState(;
+        signals = (l1 = (GPSL1CA(), FakeDoubleRateL1Signal()),),
+    )
+
+    # Valid same-band, same-chip-rate combinations still construct.
+    @test SignalGroup((GPSL1C_P(), GPSL1C_D(), GPSL1CA())) isa SignalGroup
+    ts = TrackState(; signals = (l1 = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()), l5 = (GPSL5I(),)))
+    @test ts isa TrackState
+end
 
 @testset "Tracking state" begin
     sampling_frequency = 5e6Hz

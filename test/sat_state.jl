@@ -3,7 +3,8 @@ module SatStateTest
 using Test: @test, @testset, @inferred
 using Unitful: Hz
 using Dictionaries: dictionary
-using GNSSSignals: GPSL1CA, get_code_center_frequency_ratio
+using GNSSSignals:
+    GNSSSignals, AbstractGNSSSignal, GPSL1CA, get_code_center_frequency_ratio
 using Acquisition: Acquisition, AcquisitionResults
 import Tracking
 using Tracking:
@@ -127,11 +128,12 @@ end
     synced_signals = (synced_sig,)
     @test @inferred(Tracking.current_code_wrap(synced_signals)) == 20460
 
-    # `_max_code_length` recursion terminator on an empty tuple. Not
-    # reachable via TrackedSat itself (signals tuple is always non-empty),
-    # but exercised here so the base case counts as covered.
-    @test Tracking._max_code_length(()) == 0
-    @test Tracking._current_code_wrap(()) == 0
+    # `_max_code_length` recursion terminator on an empty tuple — 1, the
+    # lcm identity. Not reachable via TrackedSat itself (signals tuple is
+    # always non-empty), but exercised here so the base case counts as
+    # covered.
+    @test Tracking._max_code_length(()) == 1
+    @test Tracking._current_code_wrap(()) == 1
 
     @testset "_post_sync_code_length per signal" begin
         # Worst-case wrap contributions across all supported signals.
@@ -143,6 +145,58 @@ end
         @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL1C_D())) == 10230 * 1
         @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL1C_P())) == 10230 * 1800
     end
+end
+
+# Pilot-style signal (data frequency 0) with arbitrary primary / secondary
+# code lengths. All real signal pairings have wrap periods that divide each
+# other, so the lcm-vs-max distinction in the shared code wrap (issue #129)
+# is only observable with fabricated lengths. Pre-sync the signal
+# contributes `code_length`; post-sync `code_length × secondary_code_length`.
+struct FakeWrapSignal <: AbstractGNSSSignal{Matrix{Int16}}
+    code_length::Int
+    secondary_code_length::Int
+end
+GNSSSignals.get_code_length(s::FakeWrapSignal) = s.code_length
+GNSSSignals.get_secondary_code_length(s::FakeWrapSignal) = s.secondary_code_length
+GNSSSignals.get_data_frequency(::FakeWrapSignal) = 0Hz
+
+@testset "shared code wrap is a common multiple, not a max (issue #129)" begin
+    # The per-signal code phase is re-derived as
+    # `mod(code_phase, _replica_code_wrap(signal))`, which is only correct
+    # when the shared wrap is an integer multiple of *every* signal's
+    # replica wrap — `max` is not a common multiple in general.
+    base = Tracking.TrackedSignal(GPSL1CA())
+    synced_buffer(::Tracking.BitBuffer{B}) where {B} = Tracking.BitBuffer{B}(
+        zero(B), 0, true, 0, Int8(+1), zero(UInt128), 0, complex(0.0, 0.0), 0, Float32[],
+        Tracking.PhaseAccumulators(),
+    )
+    fake_tracked_signal(code_length, secondary_length, found) = Tracking.TrackedSignal(
+        FakeWrapSignal(code_length, secondary_length),
+        base.integrated_samples,
+        base.is_integration_completed,
+        base.correlator,
+        base.last_fully_integrated_correlator,
+        base.last_fully_integrated_filtered_prompt,
+        base.cn0_estimator,
+        found ? synced_buffer(base.bit_buffer) : base.bit_buffer,
+        base.post_corr_filter,
+        base.filtered_prompts,
+        base.preferred_num_code_blocks_to_integrate,
+    )
+
+    # Pre-sync wraps 4 and 6: the shared wrap must be 12 (max would give 6,
+    # under which a phase of e.g. 5 re-derives as 1 for the 4-chip signal —
+    # but so does a phase of 9, silently corrupting the 4-chip signal).
+    s4 = fake_tracked_signal(4, 5, false)
+    s6 = fake_tracked_signal(6, 1, false)
+    @test @inferred(Tracking.current_code_wrap((s4, s6))) == 12
+
+    # Once the 4-chip signal syncs, its wrap widens to 4 × 5 = 20 → lcm 60.
+    s4_synced = fake_tracked_signal(4, 5, true)
+    @test @inferred(Tracking.current_code_wrap((s4_synced, s6))) == 60
+
+    # The compile-time bound covers the all-synced worst case: lcm(20, 6).
+    @test @inferred(max_code_length((s4, s6))) == 60
 end
 
 end

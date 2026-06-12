@@ -115,9 +115,10 @@ end
     doppler_estimator::AbstractDopplerEstimator,
     num_ants::NumAnts,
 )
+    band = get_band(first(sig_tuple))
+    _validate_signal_group(sig_tuple, band)
     template = _make_template_tracked_sat(sig_tuple, doppler_estimator, num_ants)
     sats = Dictionary{Int, typeof(template)}(Int[], typeof(template)[])
-    band = get_band(first(sig_tuple))
     SignalGroup(band, sats, sig_tuple, num_ants)
 end
 
