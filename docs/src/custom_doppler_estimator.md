@@ -79,8 +79,8 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
 5. **An `estimate_dopplers_and_filter_prompt` method** dispatched on
    `TrackState{<:Any, <:MyEstimator}`. This is where the actual update
    logic runs, once per integration completion. It walks each group in
-   `track_state.groups`, reads the band's `Measurement` from the
-   `measurements::Measurements` NamedTuple via `band_key(group.band)`,
+   `track_state.groups`, reads the band's `BandMeasurement` from the
+   `measurements::BandMeasurements` NamedTuple via `band_key(group.band)`,
    and produces new `TrackedSat`s with updated
    `carrier_doppler`/`code_doppler` and updated per-sat estimator state.
 
@@ -101,7 +101,7 @@ the actual algorithm, but the *structure* — five methods, two structs
 julia> using Tracking, GNSSSignals
 
 julia> using Tracking: AbstractDopplerEstimator, TrackedSat, TrackState,
-                       SignalGroup, Measurements, band_key
+                       SignalGroup, BandMeasurements, band_key
 
 julia> # 1. Estimator type — config + any shared state
        struct MyEstimator <: AbstractDopplerEstimator end
@@ -117,12 +117,12 @@ julia> # 4. (Optional) shared-state update on handoff — default returns
        Tracking.update_estimator_on_handoff(est::MyEstimator, new_sats) = est;
 
 julia> # 5a. Immutable form — walks each group, looks up its band's
-       # `Measurement`, returns a fresh `TrackState`. Real implementations
+       # `BandMeasurement`, returns a fresh `TrackState`. Real implementations
        # read `sat.signals[*].correlator` and compute new dopplers; here
        # we just return the state unchanged.
        function Tracking.estimate_dopplers_and_filter_prompt(
            track_state::TrackState{<:Any, <:MyEstimator},
-           measurements::Measurements,
+           measurements::BandMeasurements,
        )
            return track_state
        end;
@@ -131,7 +131,7 @@ julia> # 5b. In-place form — what `track!` actually calls. Real
        # implementations write back into `g.satellites.values[i]`.
        function Tracking.estimate_dopplers_and_filter_prompt!(
            track_state::TrackState{<:Any, <:MyEstimator},
-           measurements::Measurements,
+           measurements::BandMeasurements,
        )
            return track_state
        end;

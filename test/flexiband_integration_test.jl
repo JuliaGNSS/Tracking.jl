@@ -53,7 +53,7 @@ using Acquisition: acquire, is_detected
 using Tracking:
     Tracking,
     TrackState,
-    Measurement,
+    BandMeasurement,
     add_satellite!,
     track!,
     get_carrier_doppler,
@@ -285,7 +285,7 @@ else
         end
 
         track!(
-            (l1 = Measurement(l1, FS_L1, IF_L1), l5 = Measurement(l5, FS_L5, IF_L5)),
+            (l1 = BandMeasurement(l1, FS_L1, IF_L1), l5 = BandMeasurement(l5, FS_L5, IF_L5)),
             track_state,
         )
 

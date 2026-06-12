@@ -608,8 +608,14 @@ end
     @test get_preferred_num_code_blocks_to_integrate(track_state, 1) == 1
     set_preferred_num_code_blocks_to_integrate!(track_state, 1, 20)
     @test get_preferred_num_code_blocks_to_integrate(track_state, 1) == 20
-    set_preferred_num_code_blocks_to_integrate!(track_state, 1, GPSL1CA, 5)   # by signal type
+    set_preferred_num_code_blocks_to_integrate!(track_state, :default, 1, GPSL1CA, 5)   # by signal type
     @test get_preferred_num_code_blocks_to_integrate(track_state, 1) == 5
+    # Selector-less (group, prn) form mirrors `get_…(ts, group, prn)`.
+    set_preferred_num_code_blocks_to_integrate!(track_state, :default, 1, 4)
+    @test get_preferred_num_code_blocks_to_integrate(track_state, :default, 1) == 4
+    # No-id form mirrors `get_…(ts)` on a 1-group/1-sat state.
+    set_preferred_num_code_blocks_to_integrate!(track_state, 10)
+    @test get_preferred_num_code_blocks_to_integrate(track_state) == 10
 
     # The estimator state starts seeded at the init Doppler (100 Hz).
     @test get_doppler_estimator_state(get_sat_state(track_state, 1)).init_carrier_doppler ==

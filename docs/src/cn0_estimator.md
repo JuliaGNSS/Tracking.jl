@@ -17,7 +17,7 @@ prompt has been pushed in, and the estimate sharpens as the buffer fills.
 
 ```@docs
 MomentsCN0Estimator
-update(::MomentsCN0Estimator, ::Any)
+Tracking.update(::MomentsCN0Estimator, ::Any)
 ```
 
 You can shrink or grow the buffer by building the `TrackedSat` yourself
@@ -103,10 +103,14 @@ estimate_cn0
 
 ## Custom CN0 Estimators
 
-You can implement your own estimator by creating a subtype of
-`AbstractCN0Estimator` and implementing:
+```@docs
+AbstractCN0Estimator
+```
 
-- `update(cn0_estimator::MyCN0Estimator, prompt)` — return a new
+You can implement your own estimator by creating a subtype of
+[`AbstractCN0Estimator`](@ref) and implementing:
+
+- `Tracking.update(cn0_estimator::MyCN0Estimator, prompt)` — return a new
   estimator with the latest prompt added (immutable update).
 - `estimate_cn0(cn0_estimator::MyCN0Estimator, integration_time)` —
   return the CN0 estimate as a `dB-Hz` quantity.

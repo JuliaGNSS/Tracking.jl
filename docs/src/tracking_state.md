@@ -349,7 +349,7 @@ Four groups, two distinct bands — the first three groups all sit on L1 (GPS L1
 
 ### Tracking against multiple measurements
 
-For multi-band tracking, build one [`Measurement`](@ref) per band — bundling sample buffer and front-end metadata — and pass them as a NamedTuple keyed by [`band_key`](@ref):
+For multi-band tracking, build one [`BandMeasurement`](@ref) per band — bundling sample buffer and front-end metadata — and pass them as a NamedTuple keyed by [`band_key`](@ref):
 
 ```jldoctest multi_band_track; filter = r"[0-9]+\.[0-9]+" => "***"
 julia> using Tracking, GNSSSignals
@@ -377,8 +377,8 @@ julia> buf_l1 = make_signal(GPSL1CA(),  1, 200Hz,  4000,  4e6Hz);  # 1 ms at 4 M
 
 julia> buf_l5 = make_signal(GPSL5I(),   1, -150Hz, 25000, 25e6Hz); # 1 ms at 25 MHz
 
-julia> track!((l1 = Measurement(buf_l1, 4e6Hz),
-               l5 = Measurement(buf_l5, 25e6Hz)), track_state);
+julia> track!((l1 = BandMeasurement(buf_l1, 4e6Hz),
+               l5 = BandMeasurement(buf_l5, 25e6Hz)), track_state);
 
 julia> get_carrier_doppler(track_state, :legacy_gps_l1, 1)
 200.00000359633913 Hz
@@ -413,7 +413,7 @@ Two groups on the same band must declare the same `num_ants` — they share a ph
 
 ### Bare-buffer compatibility
 
-A single-band receiver doesn't need to type any of this. The bare-buffer call `track!(buf, state, fs)` keeps working for any `TrackState` that spans exactly one band — internally it wraps the buffer into a one-entry NamedTuple keyed by the lone band. Pass `intermediate_frequency` via the same kwarg as before, or move it onto a [`Measurement`](@ref) when you migrate to multi-band.
+A single-band receiver doesn't need to type any of this. The bare-buffer call `track!(buf, state, fs)` keeps working for any `TrackState` that spans exactly one band — internally it wraps the buffer into a one-entry NamedTuple keyed by the lone band. Pass `intermediate_frequency` via the same kwarg as before, or move it onto a [`BandMeasurement`](@ref) when you migrate to multi-band.
 
 ## SignalGroup
 
@@ -428,7 +428,7 @@ SignalGroups
 
 ### Band routing
 
-The mapping between GNSSSignals `Band` instances and the `Symbol` keys used in multi-band measurement collections (see [`Measurement`](@ref)).
+The mapping between GNSSSignals `Band` instances and the `Symbol` keys used in multi-band measurement collections (see [`BandMeasurement`](@ref)).
 
 ```@docs
 band_key

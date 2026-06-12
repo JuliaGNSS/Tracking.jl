@@ -1,7 +1,7 @@
 """
 $(SIGNATURES)
 
-Main tracking function that processes one or more `Measurement`s and updates
+Main tracking function that processes one or more `BandMeasurement`s and updates
 the tracking state. Performs downconversion, correlation, and Doppler
 estimation for all satellites in the track state. Returns an updated
 `TrackState` with new phase/Doppler estimates and decoded bits.
@@ -11,8 +11,8 @@ Three input shapes for the first positional argument:
 | Argument                              | Meaning                                                            |
 |---------------------------------------|--------------------------------------------------------------------|
 | `AbstractVecOrMat`                    | Today's bare buffer. Single-band TrackState only.                  |
-| `Measurement`                         | One band's bundled buffer + sample rate. Single-band TrackState.   |
-| `NamedTuple{...}` of `Measurement`s   | Multi-band: one `Measurement` per band key (see [`band_key`](@ref)). |
+| `BandMeasurement`                         | One band's bundled buffer + sample rate. Single-band TrackState.   |
+| `NamedTuple{...}` of `BandMeasurement`s   | Multi-band: one `BandMeasurement` per band key (see [`band_key`](@ref)). |
 
 The bare-buffer form `track(buf, state, fs; intermediate_frequency = ...)`
 is preserved as a thin wrapper that builds a single-entry
@@ -68,7 +68,7 @@ for its integration length `N`, so longer integration stays stable without
 re-tuning (see [`ConventionalPLLAndDLL`](@ref)).
 """
 function track(
-    measurements::Measurements,
+    measurements::BandMeasurements,
     track_state::TS;
     downconvert_and_correlator::AbstractDownconvertAndCorrelator = CPUThreadedDownconvertAndCorrelator(),
 ) where {TS<:TrackState}
@@ -100,14 +100,14 @@ function track(
 )
     band = _single_band(track_state)
     key = band_key(band)
-    m = Measurement(signal, sampling_frequency, intermediate_frequency)
+    m = BandMeasurement(signal, sampling_frequency, intermediate_frequency)
     measurements = NamedTuple{(key,)}((m,))
     track(measurements, track_state; kwargs...)
 end
 
-# Single-Measurement convenience: still a single-band path.
+# Single-BandMeasurement convenience: still a single-band path.
 function track(
-    measurement::Measurement,
+    measurement::BandMeasurement,
     track_state::TrackState;
     kwargs...,
 )
@@ -148,7 +148,7 @@ first use; rebuilding it via the default kwarg value would re-grow them
 every call.
 """
 function track!(
-    measurements::Measurements,
+    measurements::BandMeasurements,
     track_state::TrackState;
     downconvert_and_correlator::AbstractDownconvertAndCorrelator = CPUThreadedDownconvertAndCorrelator(),
 )
@@ -180,14 +180,14 @@ function track!(
 )
     band = _single_band(track_state)
     key = band_key(band)
-    m = Measurement(signal, sampling_frequency, intermediate_frequency)
+    m = BandMeasurement(signal, sampling_frequency, intermediate_frequency)
     measurements = NamedTuple{(key,)}((m,))
     track!(measurements, track_state; kwargs...)
 end
 
-# Single-Measurement convenience: still a single-band path.
+# Single-BandMeasurement convenience: still a single-band path.
 function track!(
-    measurement::Measurement,
+    measurement::BandMeasurement,
     track_state::TrackState;
     kwargs...,
 )
@@ -202,14 +202,14 @@ end
 # when that group's measurement is fully integrated; the outer `while`
 # exits once every group has reached its own band's measurement end.
 @inline function _all_groups_reached_end(
-    track_state::TrackState, measurements::Measurements,
+    track_state::TrackState, measurements::BandMeasurements,
 )
     _check_all_groups_at_end(Tuple(track_state.groups), measurements)
 end
 
 # Recursive tuple-walk: each step has fully concrete types.
-@inline _check_all_groups_at_end(::Tuple{}, ::Measurements) = true
-@inline function _check_all_groups_at_end(t::Tuple, measurements::Measurements)
+@inline _check_all_groups_at_end(::Tuple{}, ::BandMeasurements) = true
+@inline function _check_all_groups_at_end(t::Tuple, measurements::BandMeasurements)
     g = first(t)
     m = measurements[band_key(g.band)]
     target = get_num_samples(m) + 1

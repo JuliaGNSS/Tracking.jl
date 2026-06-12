@@ -8,7 +8,7 @@ using GNSSSignals:
 using Tracking:
     TrackedSat,
     TrackState,
-    Measurement,
+    BandMeasurement,
     track,
     track!,
     reset_start_sample_and_bit_buffer!,
@@ -102,7 +102,7 @@ function measure_reset!(track_state)
 end
 
 function measure_dc!(dc, signal, track_state, sampling_frequency)
-    measurements = (l1 = Measurement(signal, sampling_frequency),)
+    measurements = (l1 = BandMeasurement(signal, sampling_frequency),)
     for _ in 1:8
         downconvert_and_correlate!(
             dc, measurements, track_state,
@@ -116,7 +116,7 @@ end
 function measure_est!(track_state, sampling_frequency)
     # Estimator only reads `sampling_frequency` off the measurement;
     # samples are unused.
-    measurements = (l1 = Measurement(ComplexF64[], sampling_frequency),)
+    measurements = (l1 = BandMeasurement(ComplexF64[], sampling_frequency),)
     for _ in 1:8
         estimate_dopplers_and_filter_prompt!(track_state, measurements)
     end

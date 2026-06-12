@@ -10,7 +10,7 @@ track!
 ## Optional parameters
 
 - `downconvert_and_correlator` — the downconversion and correlation implementation. Defaults to `CPUThreadedDownconvertAndCorrelator()`. **For real-time loops, hoist this outside the loop** (see below).
-- `intermediate_frequency` — the IF of the signal. Defaults to `0.0Hz`. Only accepted on the bare-buffer form `track!(buf, state, fs; intermediate_frequency = ...)`; on the [`Measurement`](@ref) and multi-band forms the IF lives on each `Measurement`.
+- `intermediate_frequency` — the IF of the signal. Defaults to `0.0Hz`. Only accepted on the bare-buffer form `track!(buf, state, fs; intermediate_frequency = ...)`; on the [`BandMeasurement`](@ref) and multi-band forms the IF lives on each `BandMeasurement`.
 The **coherent-integration length** is not a `track!` argument — it is a per-signal setting on each [`TrackedSignal`](@ref) (its `preferred_num_code_blocks_to_integrate` field), changed with [`set_preferred_num_code_blocks_to_integrate!`](@ref). It defaults to `1`, is capped per integration by the signal's bit/secondary-code period, and only takes effect once bit/secondary-code synchronization has been achieved. For data-bearing signals the length must evenly divide the number of code blocks that form one bit (e.g. a divisor of 20 for GPS L1 C/A, of 10 for GPS L5I) so integrations stay aligned to bit boundaries; other values throw an `ArgumentError`. With the conventional estimator the loop bandwidth auto-scales by `1/N` so longer integration stays stable without re-tuning.
 
 ```@docs
@@ -40,13 +40,13 @@ Both [`CPUDownconvertAndCorrelator`](@ref) and [`CPUThreadedDownconvertAndCorrel
 
 `track!` writes back into the existing `Vector{TrackedSat}` slots of each per-group dictionary, so the tracking loop runs without GC pressure once the sat set is steady. The first `track!` call may grow each signal's `filtered_prompts` buffer via `push!`; from the second call onwards the capacity is settled.
 
-## Measurement
+## BandMeasurement
 
 One band's incoming sample buffer plus the front-end metadata needed to process it. Bundles `samples` with `sampling_frequency` and `intermediate_frequency` — these are inseparable in practice, and the bundle removes the chance of mismatched parallel NamedTuples in a multi-band `track` call.
 
-For single-band tracking, the bare-buffer form `track!(buf, state, fs)` and the single-`Measurement` form `track!(Measurement(buf, fs), state)` both auto-wrap into a one-entry NamedTuple internally — see the [Quick start](index.md#Quick-start) for the bare-buffer form.
+For single-band tracking, the bare-buffer form `track!(buf, state, fs)` and the single-`BandMeasurement` form `track!(BandMeasurement(buf, fs), state)` both auto-wrap into a one-entry NamedTuple internally — see the [Quick start](index.md#Quick-start) for the bare-buffer form.
 
-For multi-band tracking, build one `Measurement` per band and pass them as a NamedTuple keyed by [`band_key`](@ref):
+For multi-band tracking, build one `BandMeasurement` per band and pass them as a NamedTuple keyed by [`band_key`](@ref):
 
 ```jldoctest multi_band_call
 julia> using Tracking, GNSSSignals
@@ -65,15 +65,15 @@ julia> buf_l1 = zeros(ComplexF64, 4000);   # 1 ms at  4 MHz
 
 julia> buf_l5 = zeros(ComplexF64, 25000);  # 1 ms at 25 MHz
 
-julia> track!((l1 = Measurement(buf_l1, 4e6Hz),
-               l5 = Measurement(buf_l5, 25e6Hz)), track_state);
+julia> track!((l1 = BandMeasurement(buf_l1, 4e6Hz),
+               l5 = BandMeasurement(buf_l5, 25e6Hz)), track_state);
 ```
 
 See [Multi-band tracking](tracking_state.md#Multi-band-tracking) for the full setup (group declaration, per-band antenna counts, duration matching).
 
 ```@docs
-Measurement
-Measurements
+BandMeasurement
+BandMeasurements
 ```
 
 ## Downconversion and correlation
