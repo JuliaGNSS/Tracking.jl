@@ -10,8 +10,8 @@ Three input shapes for the first positional argument:
 
 | Argument                              | Meaning                                                            |
 |---------------------------------------|--------------------------------------------------------------------|
-| `AbstractVecOrMat`                    | Today's bare buffer. Single-band TrackState only.                  |
-| `BandMeasurement`                         | One band's bundled buffer + sample rate. Single-band TrackState.   |
+| `AbstractVecOrMat`                        | Bare sample buffer. Single-band TrackState only.                         |
+| `BandMeasurement`                         | One band's bundled buffer + sample rate. Single-band TrackState.         |
 | `NamedTuple{...}` of `BandMeasurement`s   | Multi-band: one `BandMeasurement` per band key (see [`band_key`](@ref)). |
 
 The bare-buffer form `track(buf, state, fs; intermediate_frequency = ...)`

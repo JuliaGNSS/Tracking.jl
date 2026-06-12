@@ -1,18 +1,19 @@
 """
 $(SIGNATURES)
 
-Returns the appropiate number of code blocks to integrate. It will be just a single
-code block when the secondary code or bit isn't found. The number of code blocks
-to integrate is clamped to the largest divisor of the blocks-per-bit that does
-not exceed the preferred value: an integration length that straddled a bit
-boundary would keep the post-sync accumulator from ever hitting the bit
-boundary, silently stalling bit emission (issue #128). Preferred values are
-additionally validated when a [`TrackedSignal`](@ref) is built, so this clamp
-only matters for direct callers.
+Returns the appropriate number of code blocks to integrate. It will be just a
+single code block as long as the secondary code or bit hasn't been found. Once
+found, the coherent integration is capped by one full symbol period — the
+data-bit period for data-bearing signals, or the secondary-code period for
+pilot signals (`data_frequency == 0`, e.g. GPS L1C-P; `set_preferred_num_code_blocks_to_integrate!`
+used to be a silent no-op for these, issue #134).
 
-For pilot signals with `data_frequency == 0` (e.g. GPS L1C-P), longer coherent
-integration would be bounded by the secondary-code period instead, but secondary-
-code sync isn't wired up yet — clamp to one code block until it lands.
+The number of code blocks is then clamped to the largest divisor of that symbol
+period not exceeding the preferred value: an integration length that straddled
+a symbol boundary would keep the post-sync accumulator from ever hitting the
+boundary, silently stalling bit/secondary emission (issue #128). Preferred
+values are additionally validated when a [`TrackedSignal`](@ref) is built, so
+this clamp only matters for direct callers.
 """
 function calc_num_code_blocks_to_integrate(
     signal::AbstractGNSSSignal,
@@ -21,11 +22,13 @@ function calc_num_code_blocks_to_integrate(
 )
     secondary_code_or_bit_found || return 1
     data_freq = get_data_frequency(signal)
-    iszero(data_freq) && return 1
-    num_code_blocks_that_form_a_bit =
+    # One full symbol = one data bit for data-bearing signals, or one
+    # secondary-code period for pilots (`data_frequency == 0`).
+    num_code_blocks_that_form_a_symbol = iszero(data_freq) ?
+        get_secondary_code_length(signal) :
         Int(get_code_frequency(signal) / (get_code_length(signal) * data_freq))
-    num_code_blocks = clamp(preferred_num_code_blocks, 1, num_code_blocks_that_form_a_bit)
-    while num_code_blocks_that_form_a_bit % num_code_blocks != 0
+    num_code_blocks = clamp(preferred_num_code_blocks, 1, num_code_blocks_that_form_a_symbol)
+    while num_code_blocks_that_form_a_symbol % num_code_blocks != 0
         num_code_blocks -= 1
     end
     num_code_blocks

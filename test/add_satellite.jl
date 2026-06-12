@@ -311,6 +311,36 @@ end
     @test get_prn(ts, :mix, 7) == 7
 end
 
+@testset "add_satellite!(ts, acq) accepts code-length ties (issue #134)" begin
+    # GPS L1C-D and L1C-P share a 10230-chip primary code. Either
+    # acquisition is a valid handoff — the code-phase scaling is identical
+    # — so the longest-code match must be by code length, not by being
+    # the one signal `_longest_code_signal` happens to pick first.
+    ts = TrackState(; signals = (mix = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),))
+    d_acq = _make_acq(GPSL1C_D(), 8, 100.0, 50.0Hz)
+    add_satellite!(ts, d_acq; group = :mix)
+    @test get_prn(ts, :mix, 8) == 8
+    # Auto-routing accepts it as well.
+    d_acq2 = _make_acq(GPSL1C_D(), 9, 100.0, 50.0Hz)
+    add_satellite!(ts, d_acq2)
+    @test get_prn(ts, :mix, 9) == 9
+    # The short L1CA acquisition stays rejected.
+    short_acq = _make_acq(GPSL1CA(), 10, 100.0, 50.0Hz)
+    @test_throws ArgumentError add_satellite!(ts, short_acq; group = :mix)
+end
+
+@testset "add_satellite!(ts, acq) errors on ambiguous group routing (issue #134)" begin
+    # Two groups with the same longest-code signal type: silently routing
+    # to the first declared group would be a footgun — auto-routing must
+    # error and ask for an explicit `group =`.
+    ts = TrackState(; signals = (a = (GPSL1CA(),), b = (GPSL1CA(),)))
+    acq = _make_acq(GPSL1CA(), 5, 10.0, 100.0Hz)
+    @test_throws ArgumentError add_satellite!(ts, acq)
+    # Explicit group still works.
+    add_satellite!(ts, acq; group = :b)
+    @test get_prn(ts, :b, 5) == 5
+end
+
 @testset "TrackState(acq) — single-acq convenience" begin
     acq = _make_acq(GPSL1CA(), 7, 524.6, 100.0Hz)
     ts = TrackState(acq)
