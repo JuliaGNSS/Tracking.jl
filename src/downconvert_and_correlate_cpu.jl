@@ -86,10 +86,14 @@ CPUThreadedDownconvertAndCorrelator() = CPUThreadedDownconvertAndCorrelator(
 
 # Look up the active `ScratchBuffers` for this thread. Single-threaded
 # backend has just one; threaded backend indexes by `Threads.threadid()`
-# (stable under Polyester `@batch`).
+# (stable under Polyester `@batch`). The index stays bounds-checked:
+# `Threads.maxthreadid()` at construction time is not a lifetime bound —
+# foreign threads adopted via `@ccallable`/`jl_adopt_thread` after the
+# correlator was built get larger ids, which must fail loudly here
+# rather than read out of bounds.
 @inline _scratch_buffers(dc::CPUDownconvertAndCorrelator) = dc.buffers
 @inline _scratch_buffers(dc::CPUThreadedDownconvertAndCorrelator) =
-    @inbounds dc.buffers[Threads.threadid()]
+    dc.buffers[Threads.threadid()]
 
 # Grow the role's byte buffer to fit `n` elements of `T` and hand a
 # typed `ScratchView` of exactly that size to `f`. The view is bitstype,
@@ -528,32 +532,37 @@ end
 )
     # Generate each signal's code replica into its per-thread slot, then
     # call the tuple kernel with N replicas + the shared tile buffers.
-    code_replicas =
-        _gen_all_code_replicas(
-            signals, dc, code_doppler, code_phase, sampling_frequency,
-            signal_start_sample, samples_to_integrate, prn, num_samples_signal,
+    # The replica views carry raw pointers into `dc`'s scratch byte
+    # vectors, so root `dc` for their entire lifetime — generation
+    # through the kernel call.
+    new_correlators = GC.@preserve dc begin
+        code_replicas =
+            _gen_all_code_replicas(
+                signals, dc, code_doppler, code_phase, sampling_frequency,
+                signal_start_sample, samples_to_integrate, prn, num_samples_signal,
+            )
+        correlators = _signal_correlators(signals)
+        sample_shifts_tuple = _signal_sample_shifts(
+            signals, code_doppler, sampling_frequency,
         )
-    correlators = _signal_correlators(signals)
-    sample_shifts_tuple = _signal_sample_shifts(
-        signals, code_doppler, sampling_frequency,
-    )
-    # All correlators in this sat agree on M (enforced by SignalGroup);
-    # read it from the first correlator's type.
-    num_ants = get_num_ants(correlators[1])
-    new_correlators = _with_tile_buffers(dc, num_samples_signal, num_ants) do tile_re, tile_im
-        downconvert_and_correlate_fused_tuple!(
-            correlators,
-            signal,
-            code_replicas,
-            sample_shifts_tuple,
-            carrier_frequency,
-            sampling_frequency,
-            carrier_phase,
-            signal_start_sample,
-            samples_to_integrate,
-            tile_re,
-            tile_im,
-        )
+        # All correlators in this sat agree on M (enforced by SignalGroup);
+        # read it from the first correlator's type.
+        num_ants = get_num_ants(correlators[1])
+        _with_tile_buffers(dc, num_samples_signal, num_ants) do tile_re, tile_im
+            downconvert_and_correlate_fused_tuple!(
+                correlators,
+                signal,
+                code_replicas,
+                sample_shifts_tuple,
+                carrier_frequency,
+                sampling_frequency,
+                carrier_phase,
+                signal_start_sample,
+                samples_to_integrate,
+                tile_re,
+                tile_im,
+            )
+        end
     end
     _zip_correlators_with_completed(new_correlators, per_signal_completed)
 end
@@ -597,7 +606,11 @@ end
         CT = get_code_type(s)
         nbytes = code_replica_size * sizeof(CT)
         length(slot) < nbytes && resize!(slot, nbytes)
-        view = GC.@preserve slot ScratchView{CT}(Ptr{CT}(pointer(slot)), code_replica_size)
+        # The raw pointer in this view outlives this function — the caller
+        # (`_correlate_signals`) wraps replica generation and the kernel in
+        # `GC.@preserve dc`, which roots `slot` (reachable through the
+        # correlator's ScratchBuffers) for the views' entire lifetime.
+        view = ScratchView{CT}(Ptr{CT}(pointer(slot)), code_replica_size)
         gen_code_replica!(
             view, s, code_frequency, sampling_frequency, per_signal_phase,
             signal_start_sample, samples_to_integrate, sample_shifts, prn,

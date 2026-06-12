@@ -39,8 +39,12 @@ end
 # block): bit `i` is `1` iff overlay chip `1799 - i` is `+1`. This makes
 # the packed reference directly comparable to the prompt buffer when the
 # most recent 1800 blocks end on the overlay's last chip — see
-# [`_secondary_code_search`](@ref). Each rebuild walks 1800 chips and is
-# hit once per sat at sync time, so the cost is negligible.
+# [`_secondary_code_search`](@ref). The reference is rebuilt on every
+# detector call once the 1800-block window has filled, until lock; each
+# rebuild walks 1800 chips, which is small next to the 1800-phase
+# Hamming sweep that follows it. Under weak-signal conditions (many
+# detector calls before lock) a per-PRN cache would shave that rebuild,
+# but the sweep still dominates, so it's not worth the state.
 @inline function _pack_overlay(signal::GPSL1C_P, prn::Integer)
     codes = signal.overlay_codes        # 1800 × 63 Int8 matrix
     x = UInt1800(0)

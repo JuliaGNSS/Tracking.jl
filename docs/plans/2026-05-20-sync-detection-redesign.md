@@ -103,9 +103,9 @@ Measured on the dev machine, `--startup-file=no`:
 **Exact-width `UInt1800` wins.** The padded variant pays a mask-everywhere
 tax; the limbs variant matches it on a single op but loses on the shift because
 multi-limb rotation in scalar Julia is awkward; FFT is no faster and
-allocates. Bench scripts live in
-[`claude_scratch/bench_bitintegers_1800.jl`](../../claude_scratch/bench_bitintegers_1800.jl)
-and [`claude_scratch/bench_bitintegers_1800_exact.jl`](../../claude_scratch/bench_bitintegers_1800_exact.jl).
+allocates. (Measured with throwaway bench scripts —
+`bench_bitintegers_1800.jl` / `bench_bitintegers_1800_exact.jl` — that
+were not committed to the repository.)
 
 ## Design
 

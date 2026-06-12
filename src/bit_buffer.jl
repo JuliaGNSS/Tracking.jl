@@ -370,7 +370,7 @@ GPS L1 C/A); for all other signals it stays empty. Its size is bounded
 """
 struct BitBuffer{B<:Unsigned}
     code_block_buffer::B
-    code_block_buffer_lengh::Int
+    code_block_buffer_length::Int
     found::Bool
     secondary_phase::Int      # 0 until found; secondary-chip offset post-sync
     polarity::Int8            # +1 or -1 once found; 0 before sync
@@ -405,7 +405,7 @@ end
 # code that builds a `BitBuffer` from raw integer / Complex{Int} literals.
 function BitBuffer(
     code_block_buffer::B,
-    code_block_buffer_lengh::Integer,
+    code_block_buffer_length::Integer,
     found::Bool,
     buffer::Integer,
     length::Integer,
@@ -414,7 +414,7 @@ function BitBuffer(
 ) where {B<:Unsigned}
     BitBuffer{B}(
         code_block_buffer,
-        Int(code_block_buffer_lengh),
+        Int(code_block_buffer_length),
         found,
         0,
         Int8(0),
@@ -433,10 +433,14 @@ end
 
 # Get the soft bits, i.e. the accumulated (summed) filtered prompt of each
 # completed bit. The sign of each soft bit corresponds to the respective hard
-# bit returned by `get_bits`. The buffer is reset to length 0 at the start of
-# each `track` call, mirroring the hard bit buffer. Kept as a plain comment (not
-# a docstring) to match the sibling accessors `get_bits` / `get_num_bits`, which
-# `checkdocs = :exports` would otherwise require to appear in the manual.
+# bit returned by `get_bits`. Bits recovered from the pre-sync sign window at
+# bit-sync time only have ±1 prompt signs available; their sign-vote sum is
+# scaled by the sync-time prompt magnitude so the magnitudes stay comparable
+# (as reliabilities) with the coherently accumulated post-sync bits. The
+# buffer is reset to length 0 at the start of each `track` call, mirroring the
+# hard bit buffer. Kept as a plain comment (not a docstring) to match the
+# sibling accessors `get_bits` / `get_num_bits`, which `checkdocs = :exports`
+# would otherwise require to appear in the manual.
 @inline get_soft_bits(bit_buffer::BitBuffer) = bit_buffer.soft_bits
 
 """
@@ -602,6 +606,18 @@ function buffer(signal::AbstractGNSSSignal, prn::Integer, bit_buffer::BitBuffer{
         bit_buffer.prompt_accumulator_integrated_code_blocks + integrated_code_blocks
 
     if prompt_accumulator_integrated_code_blocks == num_code_blocks_that_form_a_bit
+        # The hard-bit storage is a fixed-width UInt128; pushing a 129th bit
+        # would silently shift the oldest bit out while `get_num_bits` keeps
+        # counting. Fail loudly instead — the buffer is reset at the start of
+        # each `track` call, so this only triggers when a single call spans
+        # more than 128 bits of signal.
+        length(bit_buffer) == 8 * sizeof(bit_buffer.buffer) && throw(ArgumentError(string(
+            "The hard-bit buffer is full (",
+            8 * sizeof(bit_buffer.buffer),
+            " bits). Bits are reset at the start of each `track` call — ",
+            "process the signal in shorter chunks to read out the bits ",
+            "more often.",
+        )))
         # Flip the decoded bit if the detector locked at negative polarity:
         # the prompt accumulator's real-part sign is then inverted relative
         # to the data symbol's "0/1" convention.
@@ -613,7 +629,7 @@ function buffer(signal::AbstractGNSSSignal, prn::Integer, bit_buffer::BitBuffer{
         push!(bit_buffer.soft_bits, Float32(bit_acc))
         return BitBuffer{B}(
             bit_buffer.code_block_buffer,
-            bit_buffer.code_block_buffer_lengh,
+            bit_buffer.code_block_buffer_length,
             true,
             bit_buffer.secondary_phase,
             bit_buffer.polarity,
@@ -627,7 +643,7 @@ function buffer(signal::AbstractGNSSSignal, prn::Integer, bit_buffer::BitBuffer{
     else
         return BitBuffer{B}(
             bit_buffer.code_block_buffer,
-            bit_buffer.code_block_buffer_lengh,
+            bit_buffer.code_block_buffer_length,
             true,
             bit_buffer.secondary_phase,
             bit_buffer.polarity,
@@ -649,7 +665,7 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
         )
     end
     code_block_buffer = bit_buffer.code_block_buffer << 1 + B(real(prompt) > 0)
-    code_block_buffer_lengh = bit_buffer.code_block_buffer_lengh + 1
+    code_block_buffer_length = bit_buffer.code_block_buffer_length + 1
 
     # Signals that detect the bit edge from soft prompts (GPS L1 C/A) fold
     # each block into the per-phase accumulators and run the maximum-energy
@@ -662,26 +678,26 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
         _is_seeded(phase_acc, blocks_per_bit) ||
             _seed_phase_accumulators!(phase_acc, blocks_per_bit)
         _update_phase_accumulators!(
-            phase_acc, ComplexF64(prompt), code_block_buffer_lengh - 1, blocks_per_bit,
+            phase_acc, ComplexF64(prompt), code_block_buffer_length - 1, blocks_per_bit,
         )
         sync = _detect_bit_edge_cfar(
             phase_acc,
             blocks_per_bit,
             get_bit_edge_detection_confidence(signal),
-            code_block_buffer_lengh,
+            code_block_buffer_length,
         )
     else
         sync = detect_bit_or_secondary_code_sync(
             signal,
             prn,
             code_block_buffer,
-            code_block_buffer_lengh,
+            code_block_buffer_length,
         )
     end
     if !sync.found
         return BitBuffer{B}(
             code_block_buffer,
-            code_block_buffer_lengh,
+            code_block_buffer_length,
             false,
             0,
             Int8(0),
@@ -708,7 +724,7 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
         # returns early and never consults this seed, so it is harmless there.
         return BitBuffer{B}(
             code_block_buffer,
-            code_block_buffer_lengh,
+            code_block_buffer_length,
             true,
             sync.phase,
             sync.polarity,
@@ -721,7 +737,7 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
         )
     end
     num_bits = min(
-        div(code_block_buffer_lengh, num_code_blocks_that_form_a_bit),
+        div(code_block_buffer_length, num_code_blocks_that_form_a_bit),
         div(sizeof(code_block_buffer) * 8, num_code_blocks_that_form_a_bit),
     )
     bits = reduce(num_bits:-1:1; init = UInt128(0)) do bits, bit_index
@@ -740,12 +756,17 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
                 (bit_index - 1) * num_code_blocks_that_form_a_bit + code_block_index
             ((code_block_buffer & (one(B) << buffer_code_block_index)) > 0) * 2 - 1
         end * Int(sync.polarity)
-        push!(bit_buffer.soft_bits, Float32(bit_sum))
+        # The pre-sync window only stores prompt signs, so `bit_sum` is a
+        # ±1-per-block vote count (already polarity-corrected above). Scale it
+        # by the sync-time prompt magnitude (the best available amplitude
+        # estimate) so these recovered soft bits live in the same
+        # coherent-amplitude-sum units as the bits accumulated post-sync.
+        push!(bit_buffer.soft_bits, Float32(bit_sum * abs(prompt)))
         bits << 1 + (bit_sum > 0)
     end
     return BitBuffer{B}(
         code_block_buffer,
-        code_block_buffer_lengh,
+        code_block_buffer_length,
         true,
         sync.phase,
         sync.polarity,
@@ -762,7 +783,7 @@ function reset(bit_buffer::BitBuffer{B}) where {B<:Unsigned}
     empty!(bit_buffer.soft_bits)
     BitBuffer{B}(
         bit_buffer.code_block_buffer,
-        bit_buffer.code_block_buffer_lengh,
+        bit_buffer.code_block_buffer_length,
         bit_buffer.found,
         bit_buffer.secondary_phase,
         bit_buffer.polarity,

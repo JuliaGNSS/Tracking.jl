@@ -13,14 +13,14 @@ using Accessors
 using Polyester
 
 # 1800-bit exact-width unsigned for the GPS L1C-P overlay-code search.
-# Defined once at module load; the benchmark in
-# claude_scratch/bench_bitintegers_1800_exact.jl shows ~71 μs for the
-# full 1800-phase Hamming-distance sweep, ~1.5× faster than the padded
-# UInt1856 variant because no mask is needed on shift/XOR.
+# Defined once at module load. Benchmarked at ~71 μs for the full
+# 1800-phase Hamming-distance sweep, ~1.5× faster than a padded
+# UInt1856 variant because no mask is needed on shift/XOR (see the
+# sync-detection-redesign plan in docs/plans for the comparison).
 BitIntegers.@define_integers 1800
 
 using Unitful: upreferred, uconvert, Hz, dBHz, ms, s
-import Base.zero, Base.length, Base.resize!, LinearAlgebra.dot
+import Base.zero, Base.length, Base.resize!
 
 export get_early,
     get_prompt,

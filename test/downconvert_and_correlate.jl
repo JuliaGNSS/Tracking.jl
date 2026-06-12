@@ -20,9 +20,9 @@ using Tracking:
     update_accumulator
 
 @testset "Downconvert and Correlator" begin
-    # Both backends are now empty structs — buffer ownership moved to a
-    # per-call `PtrArrays.malloc` inside the correlate body, so default
-    # construction is allocation-free and there is no field to inspect.
+    # Both backends own long-lived `ScratchBuffers` (one per thread for
+    # the threaded backend) that grow lazily on first use, so default
+    # construction is cheap and valid without any further setup.
     @test CPUDownconvertAndCorrelator() isa CPUDownconvertAndCorrelator
     @test CPUThreadedDownconvertAndCorrelator() isa CPUThreadedDownconvertAndCorrelator
 end

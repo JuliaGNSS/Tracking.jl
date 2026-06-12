@@ -22,6 +22,8 @@ using Tracking:
     get_correlator,
     get_last_fully_integrated_correlator,
     get_last_fully_integrated_filtered_prompt,
+    get_filtered_prompts,
+    VeryEarlyPromptLateCorrelator,
     get_post_corr_filter,
     get_cn0_estimator,
     get_bit_buffer,
@@ -589,15 +591,130 @@ end
     set_preferred_num_code_blocks_to_integrate!(l5_state, 1, 10)
     @test get_preferred_num_code_blocks_to_integrate(l5_state, 1) == 10
 
-    # Pilot signals carry no data bits, so there is no bit boundary to
-    # straddle — any length of at least one block is accepted (the actual
-    # integration is clamped to one block until secondary-code-bounded
-    # integration is wired up, see `calc_num_code_blocks_to_integrate`).
+    # Pilot signals carry no data bits, so the setter accepts any length of
+    # at least one block. Post-sync the integration is bounded by the
+    # secondary-code period (and divisor-clamped to it at runtime, issue
+    # #134), see `calc_num_code_blocks_to_integrate`.
     gpsl1c_p = GPSL1C_P()
     p_state = TrackState(gpsl1c_p, [TrackedSat(gpsl1c_p, 1, 0.0, 0.0Hz)])
     set_preferred_num_code_blocks_to_integrate!(p_state, 1, 7)
     @test get_preferred_num_code_blocks_to_integrate(p_state, 1) == 7
     @test_throws ArgumentError set_preferred_num_code_blocks_to_integrate!(p_state, 1, 0)
+end
+
+@testset "get_filtered_prompts TrackState accessor (issue #134)" begin
+    ts = TrackState(; signal = GPSL1CA())
+    add_satellite!(ts; prn = 1)
+    # Sibling of `get_bits(ts, 1)` — must resolve through the same
+    # accessor ladder instead of throwing a MethodError.
+    @test get_filtered_prompts(ts, 1) isa Vector{ComplexF64}
+    @test isempty(get_filtered_prompts(ts, 1))
+    # Per-signal form `(group, prn, signal selector)`.
+    @test get_filtered_prompts(ts, :default, 1, 1) isa Vector{ComplexF64}
+    @test get_filtered_prompts(ts, :default, 1, GPSL1CA) isa Vector{ComplexF64}
+end
+
+@testset "get_signal works on a declared-but-unpopulated group (issue #134)" begin
+    ts = TrackState(; signals = (gps = (GPSL1CA(),), gal = (GalileoE1B(),)))
+    @test get_signal(ts, :gps) isa GPSL1CA
+    @test get_signal(ts, :gal) isa GalileoE1B
+    @test get_signal(ts, 1) isa GPSL1CA
+    # `Val` group keys resolve at compile time (same convention as
+    # `get_sat_states`).
+    @test @inferred(get_signal(ts, Val(:gal))) isa GalileoE1B
+    single = TrackState(; signal = GPSL1CA())
+    @test get_signal(single) isa GPSL1CA
+end
+
+@testset "remove_satellite throws KeyError carrying the prn (issue #134)" begin
+    ts = TrackState(; signal = GPSL1CA())
+    add_satellite!(ts; prn = 1)
+    err = try
+        remove_satellite(ts; prn = 99)
+        nothing
+    catch e
+        e
+    end
+    @test err isa KeyError
+    @test err.key == 99
+end
+
+@testset "TrackState from empty SatelliteDicts throws friendly error (issue #134)" begin
+    gpsl1 = GPSL1CA()
+    sat = TrackedSat(gpsl1, 1, 0.0, 0.0Hz)
+    empty_dict = Dictionary{Int,typeof(sat)}(Int[], typeof(sat)[])
+    # Must be the curated ArgumentError from `_signal_group_from_dict`,
+    # not a raw BoundsError from the estimator kwarg default.
+    @test_throws ArgumentError TrackState((gps = empty_dict,))
+end
+
+@testset "TrackState(satellites::SatelliteDicts) validates estimator state types (issue #134)" begin
+    gpsl1 = GPSL1CA()
+    sat_default = TrackedSat(gpsl1, 1, 10.5, 10.0Hz)  # assisted default estimator
+    different = ConventionalPLLAndDLL(;
+        carrier_loop_filter_bandwidth = 22.0Hz,
+        code_loop_filter_bandwidth = 1.5Hz,
+    )
+    @test_throws ArgumentError TrackState(
+        (gps = dictionary([1 => sat_default]),);
+        doppler_estimator = different,
+    )
+end
+
+@testset "TrackState(; signals = SignalGroup) validates pre-populated sats' estimator (issue #134)" begin
+    ts0 = TrackState(; signal = GPSL1CA())
+    add_satellite!(ts0; prn = 1)
+    populated_group = ts0.groups.default
+    different = ConventionalPLLAndDLL(;
+        carrier_loop_filter_bandwidth = 22.0Hz,
+        code_loop_filter_bandwidth = 1.5Hz,
+    )
+    @test_throws ArgumentError TrackState(;
+        signals = (gps = populated_group,),
+        doppler_estimator = different,
+    )
+end
+
+@testset "merge_sats rejects sats whose full slot type mismatches (issue #134)" begin
+    gpsl1 = GPSL1CA()
+    ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 10.5, 10.0Hz)])
+    # Same estimator-state type, different correlator type — must hit the
+    # curated slot-type ArgumentError, not a downstream MethodError.
+    odd = TrackedSat(
+        gpsl1, 2, 0.0, 0.0Hz;
+        correlator = VeryEarlyPromptLateCorrelator(),
+    )
+    @test_throws ArgumentError merge_sats(ts, 1, odd)
+end
+
+@testset "reset_loop_filters! keeps per-sat bandwidth override and clears FLL history (issue #134)" begin
+    gpsl1 = GPSL1CA()
+    ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 100.0Hz)])
+    sats = get_sat_states(ts)
+    old = sats[1]
+    overridden_state = Tracking.SatConventionalPLLAndDLL(
+        get_doppler_estimator_state(old);
+        carrier_loop_filter_bandwidth = 5.0Hz,
+        code_loop_filter_bandwidth = 0.25Hz,
+    )
+    fake_prompt_signals = map(
+        s -> Tracking.TrackedSignal(s; last_fully_integrated_filtered_prompt = 1.0 + 2.0im),
+        old.signals,
+    )
+    sats[1] = TrackedSat(
+        old;
+        signals = fake_prompt_signals,
+        doppler_estimator_state = overridden_state,
+    )
+
+    reset_loop_filters!(ts, 1)
+    state = get_doppler_estimator_state(get_sat_state(ts, 1))
+    # The per-sat bandwidth override survives the reset…
+    @test state.carrier_loop_filter_bandwidth == 5.0Hz
+    @test state.code_loop_filter_bandwidth == 0.25Hz
+    # …and the FLL's previous-prompt memory is cleared, so the first
+    # post-reset fll_disc doesn't span the old integration interval.
+    @test get_last_fully_integrated_filtered_prompt(ts, 1) == 0.0 + 0.0im
 end
 
 @testset "per-signal preferred_num_code_blocks_to_integrate + reset_loop_filters!" begin

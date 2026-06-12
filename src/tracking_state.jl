@@ -139,8 +139,9 @@ end
     # default for bare-tuple entries.
     sats = g.satellites
     if !isempty(sats)
-        # Pre-populated SignalGroup — assume the user knew what they
-        # were doing and leave the slot type alone.
+        # Pre-populated SignalGroup — the slot type is fixed by the
+        # existing sats, so it must already match the estimator.
+        _assert_doppler_estimator_types_match(sats, doppler_estimator)
         return g
     end
     template = _make_template_tracked_sat(g.signals, doppler_estimator, g.num_ants)
@@ -295,16 +296,22 @@ function TrackState(
     doppler_estimator::AbstractDopplerEstimator =
         _default_estimator_for_satellite_dicts(satellites),
 )
+    foreach(
+        d -> _assert_doppler_estimator_types_match(d, doppler_estimator),
+        Tuple(satellites),
+    )
     groups = map(_signal_group_from_dict, satellites)
     TrackState(groups, doppler_estimator)
 end
 
 # Picks the most-constraining (longest-T, lowest-BL) default across all
-# per-group dicts' estimator-driver signals. Each group has at least one
-# sat by the positional constructor's precondition
-# (_signal_group_from_dict errors on empty dicts), so reading `signals[1]`
-# of the first sat is safe.
+# per-group dicts' estimator-driver signals. An empty dict can't pick a
+# signal-aware default; fall back to the generic default and let the
+# constructor body's `_signal_group_from_dict` raise the friendly
+# ArgumentError (otherwise this kwarg-default expression would throw a
+# raw BoundsError first).
 @inline function _default_estimator_for_satellite_dicts(satellites::SatelliteDicts)
+    any(isempty, Tuple(satellites)) && return ConventionalAssistedPLLAndDLL()
     driver_signals = map(
         d -> first(first(d.values).signals).signal,
         Tuple(satellites),
@@ -317,9 +324,10 @@ end
     )
 end
 
-# Be careful when calling this.
-# It might lead to types that are inferred at runtime?!
-# Tested with 1.11.6
+# Copy-with-overrides constructor: rebuild a TrackState reusing the
+# input's groups / estimator unless an override is supplied. The
+# overrides are constrained to the input's concrete `G` / `DE` types so
+# the result's type parameters are preserved.
 function TrackState(
     track_state::TrackState{G,DE};
     groups::Maybe{G} = nothing,
@@ -383,8 +391,10 @@ function get_sat_states(
     _index_group(satellites, group_idx)
 end
 
-@inline _index_group(t::SatelliteDicts, i::Union{Symbol,Integer}) = t[i]
-@inline _index_group(t::SatelliteDicts, ::Val{M}) where {M} = t[M]
+# Works for any group-shaped (named) tuple — per-group satellite dicts
+# as well as the `SignalGroup`s NamedTuple itself.
+@inline _index_group(t, i::Union{Symbol,Integer}) = t[i]
+@inline _index_group(t, ::Val{M}) where {M} = t[M]
 
 function get_sat_states(satellites::SatelliteDicts{1})
     get_sat_states(satellites, 1)
@@ -416,8 +426,9 @@ function get_signal(
     track_state::TrackState{<:SignalGroups{N}},
     group_idx::Union{Symbol,Integer,Val},
 ) where {N}
-    sats = get_sat_states(track_state, group_idx)
-    get_signal(first(sats.values))
+    # Read the signal off the group's declared signal tuple (not off a
+    # tracked sat) so this also works on declared-but-unpopulated groups.
+    first(_index_group(track_state.groups, group_idx).signals)
 end
 
 function get_signal(track_state::TrackState{<:SignalGroups{1}})
@@ -458,6 +469,7 @@ function merge_sats(
         update_estimator_on_handoff(track_state.doppler_estimator, new_sats_dict)
     groups = track_state.groups
     g = groups[group_idx]
+    _assert_sats_match_slot_type(g, new_sats_dict, group_idx)
     new_group = SignalGroup(g; satellites = merge(g.satellites, new_sats_dict))
     new_groups = @set groups[group_idx] = new_group
     TrackState{G,DE}(new_groups, new_estimator)
@@ -578,6 +590,26 @@ end
     )))
 end
 
+# Dictionary-level variant used by `merge_sats`: the incoming dict's
+# value type must match the group's slot type exactly (not just the
+# estimator-state type) so correlator / PCF / signal-shape mismatches
+# also get the curated error instead of a confusing MethodError.
+@inline function _assert_sats_match_slot_type(
+    g::SignalGroup, new_sats_dict::Dictionary{<:Any,<:TrackedSat}, group_idx,
+)
+    SlotT = eltype(g.satellites)
+    T = eltype(new_sats_dict)
+    T === SlotT && return nothing
+    throw(ArgumentError(string(
+        "TrackedSat type does not match the `", group_idx, "` group's slot. ",
+        "Got: ", T,
+        ". Expected: ", SlotT,
+        ". The slot type is fixed at TrackState construction; rebuild the ",
+        "sats with the matching signals, correlator, post_corr_filter, and ",
+        "doppler_estimator types.",
+    )))
+end
+
 # Dictionaries.jl: `insert!` errors on existing key; `set!` overwrites.
 # We want overwrite semantics, matching `merge_sats`.
 @inline insert_or_set!(d::Dictionary, k, v) = set!(d, k, v)
@@ -659,8 +691,7 @@ function remove_satellite(
     group::Symbol = :default,
 ) where {G<:SignalGroups,DE<:AbstractDopplerEstimator}
     dict = _dict_for_group(track_state, group)
-    haskey(dict, prn) ||
-        throw(KeyError("Dictionary does not contain index: $prn"))
+    haskey(dict, prn) || throw(KeyError(prn))
     # Copy-then-delete preserves the dict's concrete value type, which the
     # `map`/`filter` round-trip would otherwise leave under-specified to
     # `Dictionary{<:Any,<:TrackedSat}` from the type system's perspective.
@@ -770,6 +801,7 @@ const _SignalSelector = Union{Integer,Type{<:AbstractGNSSSignal}}
 for fn in (
     :get_integrated_samples, :get_correlator,
     :get_last_fully_integrated_correlator, :get_last_fully_integrated_filtered_prompt,
+    :get_filtered_prompts,
     :get_post_corr_filter, :get_cn0_estimator, :get_bit_buffer, :get_bits,
     :get_soft_bits,
     :get_num_bits, :has_bit_or_secondary_code_been_found, :estimate_cn0,
@@ -883,10 +915,25 @@ function set_preferred_num_code_blocks_to_integrate!(
 end
 
 # Re-seed one satellite's Doppler-estimator state from its current Doppler via
-# the estimator's `init_estimator_state` hook (a fresh, zeroed loop filter for
-# the conventional estimator), preserving `carrier_doppler` / `code_doppler`.
+# the estimator's `_reset_estimator_state` hook (a fresh, zeroed loop filter
+# for the conventional estimator, keeping any per-sat bandwidth override),
+# preserving `carrier_doppler` / `code_doppler`. Each signal's
+# `last_fully_integrated_filtered_prompt` is cleared too: the FLL
+# discriminator measures the prompt rotation since the previous integration,
+# and after a cadence change that previous prompt belongs to the old
+# integration interval — `fll_disc` returns 0 for a zeroed previous prompt,
+# so the first post-reset update skips the stale measurement.
 @inline function _reset_sat_loop_filters(track_state::TrackState, sat::TrackedSat)
-    TrackedSat(sat; doppler_estimator_state = init_estimator_state(track_state.doppler_estimator, sat))
+    new_signals = map(
+        s -> TrackedSignal(s; last_fully_integrated_filtered_prompt = complex(0.0, 0.0)),
+        sat.signals,
+    )
+    TrackedSat(
+        sat;
+        signals = new_signals,
+        doppler_estimator_state =
+            _reset_estimator_state(track_state.doppler_estimator, sat),
+    )
 end
 
 """
@@ -896,8 +943,12 @@ Re-seed the Doppler-estimator state of every satellite (or one addressed
 satellite) from its current Doppler, giving each a freshly initialized loop
 filter. For the conventional PLL/DLL estimator this zeroes the carrier and code
 loop-filter integrators while preserving the converged `carrier_doppler` /
-`code_doppler`, so the loop continues from the converged frequency with a clean
-filter.
+`code_doppler` — and any per-satellite loop-bandwidth override carried on the
+`SatConventionalPLLAndDLL` state — so the loop continues from the
+converged frequency with a clean filter. Each signal's
+`last_fully_integrated_filtered_prompt` is cleared as well, so the first
+FLL update after the reset doesn't measure a prompt rotation that spans the
+old integration interval.
 
 This is the recommended handoff when a signal's coherent-integration length
 changes mid-track — e.g. promoting GPS L5I from 1 ms to 10 ms via
