@@ -11,7 +11,8 @@ using Tracking:
     track, track!, add_satellite!,
     band_key, band_keys,
     get_samples, get_sampling_frequency, get_intermediate_frequency,
-    get_carrier_doppler, get_code_doppler, get_num_ants
+    get_carrier_doppler, get_code_doppler, get_num_ants,
+    _validate_equal_durations
 
 # Build a synthetic complex sample buffer for one PRN at one band, with a
 # given Doppler offset and starting code phase.
@@ -37,6 +38,28 @@ end
     # Kwarg form with default intermediate_frequency = zero(sampling_frequency).
     m_kw_default = Measurement(buf; sampling_frequency = 4e6Hz)
     @test get_intermediate_frequency(m_kw_default) == 0.0Hz
+end
+
+@testset "Measurement promotes mixed frequency types" begin
+    buf = zeros(ComplexF64, 100)
+    # Integer-typed IF alongside a Float64 sampling frequency — the most
+    # natural spelling — must promote instead of throwing a MethodError.
+    m = @inferred Measurement(buf, 4e6Hz, 100Hz)
+    @test get_sampling_frequency(m) === 4e6Hz
+    @test get_intermediate_frequency(m) === 100.0Hz
+
+    m_kw = Measurement(buf; sampling_frequency = 4e6Hz, intermediate_frequency = 100Hz)
+    @test get_intermediate_frequency(m_kw) === 100.0Hz
+end
+
+@testset "track with integer-typed intermediate_frequency" begin
+    fs = 4e6Hz
+    buf = _make_signal(GPSL1CA, 1, 200Hz, 100.0, 4000, fs)
+    ts = TrackState(; signal = GPSL1CA())
+    add_satellite!(ts; prn = 1, code_phase = 100.0, carrier_doppler = 180Hz)
+    # Integer IF must promote inside the bare-buffer wrapper, not throw.
+    new_ts = track(buf, ts, fs; intermediate_frequency = 0Hz)
+    @test new_ts isa TrackState
 end
 
 @testset "band_key for L1 and L5" begin
@@ -191,6 +214,28 @@ end
     m_l1 = Measurement(zeros(ComplexF64, 4000),  4e6Hz)
     m_l5 = Measurement(zeros(ComplexF64, 25001), 25e6Hz)
     @test_throws ArgumentError track!((l1 = m_l1, l5 = m_l5), ts)
+end
+
+@testset "Equal durations across mixed Float32/Float64 sampling rates" begin
+    # Both bands span exactly 1 ms, but the L5 front-end reports its rate
+    # in Float32. Identical real durations must pass the check even though
+    # `4000 / 4e6Hz` (Float64) and `25000 / 25f6Hz` (Float32) are not
+    # `==` after division.
+    m_l1 = Measurement(zeros(ComplexF64, 4000),  4e6Hz)
+    m_l5 = Measurement(zeros(ComplexF64, 25000), 25f6Hz)
+    @test _validate_equal_durations((l1 = m_l1, l5 = m_l5)) === nothing
+
+    # A genuine one-sample mismatch must still throw, and the message
+    # should print durations in seconds, not Hz^-1.
+    m_bad = Measurement(zeros(ComplexF64, 25001), 25f6Hz)
+    err = try
+        _validate_equal_durations((l1 = m_l1, l5 = m_bad))
+        nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError
+    @test !occursin("Hz^-1", err.msg)
 end
 
 @testset "Antenna shape mismatch errors" begin
