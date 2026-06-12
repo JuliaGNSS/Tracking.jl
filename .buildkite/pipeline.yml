@@ -12,6 +12,6 @@ steps:
       echo "TrackingCUDAExt was removed in v2.0.0; GPU CI will return"
       echo "when the KernelAbstractions-based replacement lands."
     agents:
-      queue: "juliagpu"
+      queue: "cuda"
     if: build.message !~ /\[skip tests\]/
     timeout_in_minutes: 5
