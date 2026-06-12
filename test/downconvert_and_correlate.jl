@@ -368,6 +368,163 @@ end
     @test get_accumulators(fused_dynamic) ≈ ref_accumulators rtol = 1e-4
 end
 
+@testset "Fused dynamic-shifts kernel with start_sample > 1" begin
+    # Issue #126 (a): the AbstractVector-shifts fused kernel must read the
+    # code replica at the absolute window offset, matching where
+    # gen_code_replica! writes it (index start_sample), like the static
+    # in-register kernel and the tuple tile-share kernel do.
+    gpsl1 = GPSL1CA()
+    sampling_frequency = 5e6Hz
+    code_phase = 10.5
+    num_samples_signal = 5000
+    start_sample = 3001
+    num_samples = 2000
+    carrier_doppler = 1000.0Hz
+    prn = 1
+
+    carrier_frequency = carrier_doppler + 0.0Hz
+    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
+    code_frequency = code_doppler + get_code_frequency(gpsl1)
+
+    correlator = EarlyPromptLateCorrelator()
+    sample_shifts = get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
+
+    signal =
+        gen_code(
+            num_samples_signal, gpsl1, prn, sampling_frequency,
+            code_frequency, code_phase,
+        ) .* cis.(2π * (0:(num_samples_signal - 1)) * carrier_doppler / sampling_frequency)
+
+    # Code phase of the first sample of the window at start_sample
+    window_code_phase =
+        code_phase + (start_sample - 1) * Float64(code_frequency / sampling_frequency)
+    code_replica_length =
+        start_sample - 1 + num_samples + maximum(sample_shifts) - minimum(sample_shifts)
+    code_replica = zeros(get_code_type(gpsl1), code_replica_length)
+    Tracking.gen_code_replica!(
+        code_replica, gpsl1, code_frequency, sampling_frequency,
+        window_code_phase, start_sample, num_samples, sample_shifts, prn,
+    )
+
+    # Scalar reference over the window only
+    NC = length(sample_shifts)
+    min_shift = minimum(sample_shifts)
+    ref_accumulators = zeros(ComplexF64, NC)
+    carrier_step = 2π * Float64(carrier_frequency / sampling_frequency)
+    for i in 1:num_samples
+        carrier = cis(-carrier_step * (i - 1))
+        dc_sample = signal[start_sample - 1 + i] * carrier
+        for tap in 1:NC
+            code_idx = start_sample - 1 + i + sample_shifts[tap] - min_shift
+            ref_accumulators[tap] += dc_sample * code_replica[code_idx]
+        end
+    end
+
+    # Dynamic (AbstractVector) path
+    dynamic_shifts = collect(sample_shifts)
+    tile_re = Vector{Float32}(undef, num_samples)
+    tile_im = Vector{Float32}(undef, num_samples)
+    fused_dynamic = Tracking.downconvert_and_correlate_fused!(
+        correlator, signal, code_replica, dynamic_shifts,
+        carrier_frequency, sampling_frequency, 0.0, start_sample, num_samples,
+        tile_re, tile_im,
+    )
+    @test get_accumulators(fused_dynamic) ≈ ref_accumulators rtol = 1e-4
+
+    # Must match the static in-register kernel on the same window
+    fused_static = Tracking.downconvert_and_correlate_fused!(
+        correlator, signal, code_replica, sample_shifts,
+        carrier_frequency, sampling_frequency, 0.0, start_sample, num_samples,
+    )
+    @test get_accumulators(fused_dynamic) ≈ get_accumulators(fused_static) rtol = 1e-4
+end
+
+# Custom correlator whose `get_correlator_sample_shifts` returns a plain
+# `Vector` — a supported, exported extension point (issue #126 (b)).
+struct VectorShiftsCorrelator <: AbstractCorrelator{1}
+    accumulators::Vector{ComplexF64}
+    shifts::Vector{Int}
+end
+Tracking.get_accumulators(c::VectorShiftsCorrelator) = c.accumulators
+Tracking.update_accumulator(c::VectorShiftsCorrelator, acc) =
+    VectorShiftsCorrelator(collect(acc), c.shifts)
+Tracking.get_correlator_sample_shifts(c::VectorShiftsCorrelator, sampling_frequency, code_frequency) =
+    c.shifts
+
+@testset "Vector-shifts correlator through CPU backend paths" begin
+    # Issue #126 (b): both CPU backends and the public single-satellite
+    # downconvert_and_correlate! must handle correlators whose sample
+    # shifts are a runtime-sized Vector, and produce correct results for
+    # windows that do not start at sample 1.
+    gpsl1 = GPSL1CA()
+    sampling_frequency = 5e6Hz
+    code_phase = 10.5
+    num_samples_signal = 5000
+    start_sample = 3001
+    num_samples = 2000
+    carrier_doppler = 1000.0Hz
+    prn = 1
+
+    carrier_frequency = carrier_doppler + 0.0Hz
+    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
+    code_frequency = code_doppler + get_code_frequency(gpsl1)
+
+    epl = EarlyPromptLateCorrelator()
+    static_shifts = get_correlator_sample_shifts(epl, sampling_frequency, code_frequency)
+    dynamic_shifts = collect(static_shifts)
+    correlator = VectorShiftsCorrelator(zeros(ComplexF64, 3), dynamic_shifts)
+
+    signal =
+        gen_code(
+            num_samples_signal, gpsl1, prn, sampling_frequency,
+            code_frequency, code_phase,
+        ) .* cis.(2π * (0:(num_samples_signal - 1)) * carrier_doppler / sampling_frequency)
+
+    window_code_phase =
+        code_phase + (start_sample - 1) * Float64(code_frequency / sampling_frequency)
+    code_replica_length =
+        start_sample - 1 + num_samples + maximum(dynamic_shifts) - minimum(dynamic_shifts)
+
+    # Scalar reference over the window
+    ref_code_replica = zeros(get_code_type(gpsl1), code_replica_length)
+    Tracking.gen_code_replica!(
+        ref_code_replica, gpsl1, code_frequency, sampling_frequency,
+        window_code_phase, start_sample, num_samples, dynamic_shifts, prn,
+    )
+    NC = length(dynamic_shifts)
+    min_shift = minimum(dynamic_shifts)
+    ref_accumulators = zeros(ComplexF64, NC)
+    carrier_step = 2π * Float64(carrier_frequency / sampling_frequency)
+    for i in 1:num_samples
+        carrier = cis(-carrier_step * (i - 1))
+        dc_sample = signal[start_sample - 1 + i] * carrier
+        for tap in 1:NC
+            code_idx = start_sample - 1 + i + dynamic_shifts[tap] - min_shift
+            ref_accumulators[tap] += dc_sample * ref_code_replica[code_idx]
+        end
+    end
+
+    # Public single-satellite entry point (12-arg downconvert_and_correlate!)
+    code_replica = zeros(get_code_type(gpsl1), code_replica_length)
+    public_result = Tracking.downconvert_and_correlate!(
+        gpsl1, signal, correlator, code_replica, window_code_phase, 0.0,
+        code_frequency, carrier_frequency, sampling_frequency,
+        start_sample, num_samples, prn,
+    )
+    @test get_accumulators(public_result) ≈ ref_accumulators rtol = 1e-4
+
+    # Both backends' per-signal kernel
+    for dc in (CPUDownconvertAndCorrelator(), CPUThreadedDownconvertAndCorrelator())
+        backend_code_replica = zeros(get_code_type(gpsl1), code_replica_length)
+        backend_result = Tracking._correlate_one_signal!(
+            dc, backend_code_replica, gpsl1, correlator, signal, dynamic_shifts,
+            window_code_phase, 0.0, code_frequency, carrier_frequency,
+            sampling_frequency, start_sample, num_samples, prn,
+        )
+        @test get_accumulators(backend_result) ≈ ref_accumulators rtol = 1e-4
+    end
+end
+
 @testset "Fused downconvert and correlate tuple kernel" begin
     using StaticArrays: SVector
 
