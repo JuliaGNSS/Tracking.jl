@@ -124,8 +124,15 @@ function _detect_bit_edge_cfar(
     # localized yet.
     n < 2L && return SyncResult(false, 0, Int8(0))
 
-    mean_energy = fill(-1.0, L)   # Ēₖ, -1 marks "too few bins"
-    bin_count = zeros(Int, L)
+    # Single allocation-free pass over the L candidate phases. This is on the
+    # pre-sync hot path (once per primary-code block per satellite), so it
+    # tracks the peak (best mean bin energy among phases with ≥ 2 complete
+    # bins) and the two highest phases overall inline rather than building
+    # per-phase arrays. The runner-up is then the higher of those two that
+    # isn't the peak.
+    kpeak = -1; peak = -1.0; nb_peak = 0          # best with ≥ 2 bins
+    top1k = -1; top1 = -1.0; nb1 = 0              # highest with ≥ 1 bin
+    top2k = -1; top2 = -1.0; nb2 = 0              # second highest with ≥ 1 bin
     @inbounds for k in 0:(L-1)
         nb = div(n - k, L)
         nb < 1 && continue
@@ -138,29 +145,22 @@ function _detect_bit_edge_cfar(
             end
             energy += abs2(s)
         end
-        mean_energy[k+1] = energy / nb
-        bin_count[k+1] = nb
-    end
-
-    # Peak phase (needs ≥ 2 bins) and best competing phase (needs ≥ 1).
-    kpeak = 0
-    peak = -1.0
-    @inbounds for k in 0:(L-1)
-        if bin_count[k+1] >= 2 && mean_energy[k+1] > peak
-            peak = mean_energy[k+1]
-            kpeak = k
+        e = energy / nb
+        if e > top1
+            top2 = top1; top2k = top1k; nb2 = nb1
+            top1 = e; top1k = k; nb1 = nb
+        elseif e > top2
+            top2 = e; top2k = k; nb2 = nb
+        end
+        if nb >= 2 && e > peak
+            peak = e; kpeak = k; nb_peak = nb
         end
     end
-    peak < 0 && return SyncResult(false, 0, Int8(0))
+    # `n >= 2L` guarantees phase 0 has ≥ 2 bins, so `kpeak` is always set.
+    kpeak < 0 && return SyncResult(false, 0, Int8(0))
 
-    ksecond = -1
-    second = -1.0
-    @inbounds for k in 0:(L-1)
-        if k != kpeak && bin_count[k+1] >= 1 && mean_energy[k+1] > second
-            second = mean_energy[k+1]
-            ksecond = k
-        end
-    end
+    # Runner-up: the highest-energy phase that isn't the peak (any bin count).
+    second, ksecond, nb_second = top1k == kpeak ? (top2, top2k, nb2) : (top1, top1k, nb1)
     ksecond < 0 && return SyncResult(false, 0, Int8(0))
 
     gap = peak - second
@@ -170,7 +170,6 @@ function _detect_bit_edge_cfar(
     # peak phase's bins. Pure bins (true edge) leave only thermal noise;
     # if a wrong phase transiently wins, its straddling bins inflate this
     # estimate, which only makes the test more conservative.
-    nb_peak = bin_count[kpeak+1]
     resid = 0.0
     last_bin_sum = zero(ComplexF64)
     @inbounds for m in 0:(nb_peak-1)
@@ -192,8 +191,11 @@ function _detect_bit_edge_cfar(
     sigma2 = resid / (nb_peak * (L - 1))   # per-sample complex noise power
     noise_bin = L * sigma2                 # mean energy of a noise-only bin
 
-    var_bin(e, m) = (noise_bin^2 + 2 * max(e - noise_bin, 0.0) * noise_bin) / m
-    se = sqrt(max(var_bin(peak, nb_peak) + var_bin(second, bin_count[ksecond+1]), 0.0))
+    # Non-central-χ² energy variance Var Ēₖ = (N₀² + 2|μₖ|²N₀)/Mₖ, with
+    # |μₖ|² = max(Ēₖ - N₀, 0) the coherent signal energy.
+    var_peak = (noise_bin^2 + 2 * max(peak - noise_bin, 0.0) * noise_bin) / nb_peak
+    var_second = (noise_bin^2 + 2 * max(second - noise_bin, 0.0) * noise_bin) / nb_second
+    se = sqrt(max(var_peak + var_second, 0.0))
     z = se > 0 ? gap / se : Inf
 
     z_threshold = _norm_quantile(1 - (1 - confidence) / (L - 1))
