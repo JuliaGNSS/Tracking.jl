@@ -25,46 +25,182 @@ end
 """
 $(SIGNATURES)
 
-Fixed-alignment Hamming-tolerance template matcher for the GPS L1 C/A
-bit-edge detector (`detect_bit_or_secondary_code_sync(::GPSL1CA, …)`).
-Signals with a periodic secondary code (GPS L5I, GPS L1C-P) instead use
-[`_secondary_code_search`](@ref), which sweeps all rotations.
-
-Compares `code_block_bits & mask` against `template` for the "positive
-polarity" hit and against `template ⊻ mask` for the "negative polarity"
-hit. The first orientation whose Hamming distance does not exceed
-`max_errors` wins; if neither fits within tolerance the result reports
-`found = false`. `phase` is always 0: the bit-edge template only matches
-at the data-bit boundary, so the upcoming integration starts a new bit
-(there is no secondary-chip offset to recover).
-
-`edge_mask` selects window bits that must match **exactly** — the error
-budget is spent only on the remaining bits. The L1 C/A detector sets it
-to the two blocks straddling the claimed bit edge: without that
-constraint, a tolerated bit-flip adjacent to the edge lets the window one
-block before (or after) the true edge fire first, locking the bit grid
-1 ms off (issue #124).
-
-Inlined so the per-signal template / mask / tolerance constants fold at
-the call site.
+Standard-normal quantile (inverse CDF) `Φ⁻¹(p)` for `p ∈ (0, 1)`, via
+Acklam's rational approximation (relative error < 1.2e-9 across the
+range). Used by [`_detect_bit_edge_cfar`](@ref) to turn a false-sync
+probability into a detection z-threshold without pulling in a
+special-functions dependency.
 """
-@inline function _try_match(
-    code_block_bits::B,
-    template::B,
-    mask::B,
-    max_errors::Int,
-    edge_mask::B = zero(B),
-) where {B<:Unsigned}
-    masked = code_block_bits & mask
-    diff_pos = masked ⊻ template
-    if iszero(diff_pos & edge_mask) && count_ones(diff_pos) <= max_errors
-        return SyncResult(true, 0, Int8(+1))
+function _norm_quantile(p::Float64)
+    # Acklam's algorithm. Coefficients for the central and tail regions.
+    a = (-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
+         1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00)
+    b = (-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
+         6.680131188771972e+01, -1.328068155288572e+01)
+    c = (-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00,
+         -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00)
+    d = (7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00,
+         3.754408661907416e+00)
+    plow = 0.02425
+    phigh = 1 - plow
+    if p < plow
+        q = sqrt(-2 * log(p))
+        return (((((c[1] * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) * q + c[6]) /
+               ((((d[1] * q + d[2]) * q + d[3]) * q + d[4]) * q + 1)
+    elseif p <= phigh
+        q = p - 0.5
+        r = q * q
+        return (((((a[1] * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * r + a[6]) * q /
+               (((((b[1] * r + b[2]) * r + b[3]) * r + b[4]) * r + b[5]) * r + 1)
+    else
+        q = sqrt(-2 * log(1 - p))
+        return -(((((c[1] * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) * q + c[6]) /
+                ((((d[1] * q + d[2]) * q + d[3]) * q + d[4]) * q + 1)
     end
-    diff_neg = masked ⊻ (template ⊻ mask)
-    if iszero(diff_neg & edge_mask) && count_ones(diff_neg) <= max_errors
-        return SyncResult(true, 0, Int8(-1))
+end
+
+"""
+$(SIGNATURES)
+
+Soft-decision, CFAR bit-edge detector for GPS L1 C/A — the
+maximum-energy timing synchronizer used by
+`detect_bit_or_secondary_code_sync(::GPSL1CA, …)`. Signals with a periodic
+secondary code (GPS L5I, GPS L1C-P) instead use
+[`_secondary_code_search`](@ref), which correlates against a known overlay.
+
+`soft_prompts` is the full pre-sync history of filtered prompt
+correlator outputs (one per primary-code period, oldest first); `L` is
+the number of primary-code blocks per navigation bit (20 for L1 C/A).
+
+# Statistic
+
+Under the hypothesis that the bit edge sits at phase `k ∈ 0:L-1`, the
+prompts partition into `L`-block bins aligned to `k`. Each complete bin
+`m` is coherently summed (`Sₖₘ = Σ pᵢ`) and its energy `|Sₖₘ|²`
+accumulated; the true phase never straddles a data-bit transition, so it
+keeps full coherent gain on every bin while wrong phases lose energy on
+transition bins. The per-phase mean bin energy `Ēₖ` is therefore the
+maximum-likelihood timing statistic for unknown i.i.d. data in AWGN.
+
+# CFAR confidence
+
+The thermal-noise floor is estimated *within* the winning phase's bins
+(residual of each sample about its bin mean) rather than across phases —
+the cross-phase spread is dominated by the deterministic transition
+structure, not noise, so it would never shrink with integration time.
+The peak phase is accepted only when it beats the runner-up by a margin
+that is significant under that noise estimate:
+
+    z = (Ē₍₁₎ - Ē₍₂₎) / √(Var Ē₍₁₎ + Var Ē₍₂₎))   ≥  Φ⁻¹(1 - P_fa/(L-1))
+
+where `Var Ēₖ = (N₀² + 2|μₖ|² N₀) / Mₖ` is the non-central-χ² energy
+variance (`N₀` the noise-bin energy, `|μₖ|²` the coherent signal energy,
+`Mₖ` the bin count) and `P_fa = 1 - confidence`, Bonferroni-split over the
+`L-1` competing phases. As integration grows the gap stays fixed while
+the standard error shrinks like `1/√M`, so `z` crosses the threshold
+sooner at high C/N₀ and later in noise — the detector self-paces.
+
+# Boundary firing
+
+Detection is reported (`found = true`) only when the most recent block
+also *ends* the winning phase's bit (`length(soft_prompts) % L == k`), so
+the upcoming integration starts a fresh navigation bit. This keeps the
+`phase = 0` contract — and, crucially, the post-sync coherent 20-block
+integration — aligned to the true bit grid, which is what makes the
+off-by-one lock of issue #124 structurally impossible: the detector can
+only ever fire at the energy-maximizing phase's own boundary, never at a
+neighbour's.
+
+`polarity` is the sign of the most recently completed bin's coherent sum.
+"""
+function _detect_bit_edge_cfar(
+    soft_prompts::AbstractVector{<:Complex},
+    L::Int,
+    confidence::Float64,
+)
+    n = length(soft_prompts)
+    # Need at least two complete bins on some phase before any phase can
+    # serve as a runner-up; below that a transition cannot have been
+    # localized yet.
+    n < 2L && return SyncResult(false, 0, Int8(0))
+
+    mean_energy = fill(-1.0, L)   # Ēₖ, -1 marks "too few bins"
+    bin_count = zeros(Int, L)
+    @inbounds for k in 0:(L-1)
+        nb = div(n - k, L)
+        nb < 1 && continue
+        energy = 0.0
+        for m in 0:(nb-1)
+            base = k + m * L
+            s = zero(ComplexF64)
+            for i in 1:L
+                s += soft_prompts[base+i]
+            end
+            energy += abs2(s)
+        end
+        mean_energy[k+1] = energy / nb
+        bin_count[k+1] = nb
     end
-    return SyncResult(false, 0, Int8(0))
+
+    # Peak phase (needs ≥ 2 bins) and best competing phase (needs ≥ 1).
+    kpeak = 0
+    peak = -1.0
+    @inbounds for k in 0:(L-1)
+        if bin_count[k+1] >= 2 && mean_energy[k+1] > peak
+            peak = mean_energy[k+1]
+            kpeak = k
+        end
+    end
+    peak < 0 && return SyncResult(false, 0, Int8(0))
+
+    ksecond = -1
+    second = -1.0
+    @inbounds for k in 0:(L-1)
+        if k != kpeak && bin_count[k+1] >= 1 && mean_energy[k+1] > second
+            second = mean_energy[k+1]
+            ksecond = k
+        end
+    end
+    ksecond < 0 && return SyncResult(false, 0, Int8(0))
+
+    gap = peak - second
+    gap <= 0 && return SyncResult(false, 0, Int8(0))
+
+    # Thermal-noise estimate: pooled within-bin residual variance of the
+    # peak phase's bins. Pure bins (true edge) leave only thermal noise;
+    # if a wrong phase transiently wins, its straddling bins inflate this
+    # estimate, which only makes the test more conservative.
+    nb_peak = bin_count[kpeak+1]
+    resid = 0.0
+    last_bin_sum = zero(ComplexF64)
+    @inbounds for m in 0:(nb_peak-1)
+        base = kpeak + m * L
+        s = zero(ComplexF64)
+        sq = 0.0
+        for i in 1:L
+            p = soft_prompts[base+i]
+            s += p
+            sq += abs2(p)
+        end
+        resid += sq - abs2(s) / L      # Σ|pᵢ - p̄|² within this bin
+        last_bin_sum = s
+    end
+    sigma2 = resid / (nb_peak * (L - 1))   # per-sample complex noise power
+    noise_bin = L * sigma2                 # mean energy of a noise-only bin
+
+    var_bin(e, m) = (noise_bin^2 + 2 * max(e - noise_bin, 0.0) * noise_bin) / m
+    se = sqrt(var_bin(peak, nb_peak) + var_bin(second, bin_count[ksecond+1]))
+    z = se > 0 ? gap / se : Inf
+
+    z_threshold = _norm_quantile(1 - (1 - confidence) / (L - 1))
+    z < z_threshold && return SyncResult(false, 0, Int8(0))
+
+    # Fire only at the winning phase's own bit boundary so the upcoming
+    # integration starts a new bit.
+    n % L != kpeak && return SyncResult(false, 0, Int8(0))
+
+    polarity = real(last_bin_sum) < 0 ? Int8(-1) : Int8(+1)
+    SyncResult(true, 0, polarity)
 end
 
 """
@@ -72,11 +208,11 @@ $(SIGNATURES)
 
 Generic secondary-code sync detector shared by every signal that locks
 onto a periodic secondary / overlay code — GPS L5I's NH10 and GPS L1C-P's
-1800-chip overlay both route through here. Unlike [`_try_match`](@ref)
-(which matches one fixed template alignment and is used for the GPS L1 C/A
-*bit-edge*), this runs a full rotation search, so it locks after a single
-secondary-code period in the worst case instead of two and recovers the
-true secondary-code phase.
+1800-chip overlay both route through here. Unlike
+[`_detect_bit_edge_cfar`](@ref) (the soft maximum-energy bit-edge
+detector used for GPS L1 C/A), this runs a full rotation search against a
+*known* overlay code, so it locks after a single secondary-code period in
+the worst case and recovers the true secondary-code phase.
 
 `received` is the prompt-sign sliding window with the newest block in
 bit 0. `reference` is the secondary code packed in that **same**
@@ -146,6 +282,14 @@ NH10 period for GPS L5I, 40 primary blocks for GPS L1 C/A, 1800 chips
 for the GPS L1C-P overlay, etc.). After sync the field is dead state and
 the decoded navigation bits accumulate in the fixed-width
 `buffer::UInt128` instead.
+
+The `soft_prompts` field is the pre-sync soft-decision history (the
+filtered prompt of each primary-code block, oldest first) consumed by the
+soft bit-edge detector [`_detect_bit_edge_cfar`](@ref). It is populated
+only for signals whose [`uses_soft_bit_edge_detection`](@ref) trait is
+`true` (currently GPS L1 C/A), capped to a bounded window
+([`SOFT_PROMPT_HISTORY_CAP`](@ref) blocks), and emptied once sync is
+found.
 """
 struct BitBuffer{B<:Unsigned}
     code_block_buffer::B
@@ -158,6 +302,7 @@ struct BitBuffer{B<:Unsigned}
     prompt_accumulator::ComplexF64
     prompt_accumulator_integrated_code_blocks::Int
     soft_bits::Vector{Float32}
+    soft_prompts::Vector{ComplexF64}
 end
 
 # Default constructor preserves the pre-refactor `UInt128`-backed search
@@ -165,14 +310,16 @@ end
 # `TrackedSignal` constructor picks the right width instead.
 function BitBuffer()
     BitBuffer{UInt128}(
-        zero(UInt128), 0, false, 0, Int8(0), zero(UInt128), 0, complex(0.0, 0.0), 0, Float32[],
+        zero(UInt128), 0, false, 0, Int8(0), zero(UInt128), 0, complex(0.0, 0.0), 0,
+        Float32[], ComplexF64[],
     )
 end
 
 # Typed empty constructor used by the per-signal `TrackedSignal` path.
 function BitBuffer{B}() where {B<:Unsigned}
     BitBuffer{B}(
-        zero(B), 0, false, 0, Int8(0), zero(UInt128), 0, complex(0.0, 0.0), 0, Float32[],
+        zero(B), 0, false, 0, Int8(0), zero(UInt128), 0, complex(0.0, 0.0), 0,
+        Float32[], ComplexF64[],
     )
 end
 
@@ -199,6 +346,7 @@ function BitBuffer(
         ComplexF64(prompt_accumulator),
         Int(prompt_accumulator_integrated_code_blocks),
         Float32[],
+        ComplexF64[],
     )
 end
 
@@ -242,8 +390,9 @@ parameter chain stays type-stable at construction.
 """
 $(SIGNATURES)
 
-Per-signal Hamming tolerance used by the bit-edge / secondary-code
-sync-search detectors, expressed as a fraction of the search window.
+Per-signal Hamming tolerance used by the secondary-code sync-search
+detector [`_secondary_code_search`](@ref), expressed as a fraction of the
+search window.
 
 Returns the largest **fraction** of bit-flips the per-signal
 `detect_bit_or_secondary_code_sync` accepts before reporting
@@ -254,15 +403,16 @@ Default is `0.025` (2.5 %), which discretizes per-signal as:
 
 | Signal      | Window (blocks) | Effective `max_errors` |
 |-------------|-----------------|------------------------|
-| GPS L1 C/A  | 40              | 1                      |
 | GPS L5I     | 10              | 0 (exact match)        |
 | GPS L1C-P   | 1800            | 45                     |
 | Galileo E1B | n/a — trivial   | unused                 |
 | GPS L1C-D   | n/a — trivial   | unused                 |
 
-Galileo E1B and GPS L1C-D broadcast one channel symbol per primary
-code period, so their detectors return `SyncResult(true, 0, +1)`
-unconditionally and never invoke [`_try_match`](@ref) — the trait
+GPS L1 C/A does **not** use this trait: its bit-edge detector is the
+soft-decision, confidence-driven [`_detect_bit_edge_cfar`](@ref), tuned
+by [`get_bit_edge_detection_confidence`](@ref) instead. Galileo E1B and
+GPS L1C-D broadcast one channel symbol per primary code period, so their
+detectors return `SyncResult(true, 0, +1)` unconditionally — the trait
 default applies but the value is ignored.
 
 # Overriding
@@ -271,7 +421,7 @@ To loosen the tolerance for low-C/N₀ work, dispatch the trait on the
 signal type in your own module:
 
 ```julia
-Tracking.get_bit_edge_or_secondary_code_tolerance(::GPSL1CA) = 0.05
+Tracking.get_bit_edge_or_secondary_code_tolerance(::GPSL5I) = 0.05
 ```
 
 The override takes effect at the next call to
@@ -280,6 +430,53 @@ TrackState. The trait is `@inline`'d so the override folds at the
 detector's call site.
 """
 @inline get_bit_edge_or_secondary_code_tolerance(::AbstractGNSSSignal) = 0.025
+
+"""
+$(SIGNATURES)
+
+Whether `signal`'s bit-edge sync uses the soft-decision, maximum-energy
+CFAR detector [`_detect_bit_edge_cfar`](@ref) (which reads the
+`soft_prompts` history) instead of the hard-decision
+`detect_bit_or_secondary_code_sync` path.
+
+`true` only for GPS L1 C/A. Returned as a compile-time constant so the
+branch in [`_buffer_find_bit`](@ref) folds away per signal type — signals
+that return `false` never allocate or populate `soft_prompts`.
+"""
+@inline uses_soft_bit_edge_detection(::AbstractGNSSSignal) = false
+
+"""
+$(SIGNATURES)
+
+Target confidence (one minus the probability of a false bit-edge lock)
+for the GPS L1 C/A soft bit-edge detector [`_detect_bit_edge_cfar`](@ref).
+
+Default `0.999`: the detector keeps integrating primary-code blocks until
+the maximum-energy phase beats its closest competitor with this
+confidence, so a clean signal locks in as little as two bits (~40 ms)
+while a noisy one self-paces to as long as it takes. Lower it to lock
+faster at the cost of more false locks; raise it to be more conservative.
+
+# Overriding
+
+```julia
+Tracking.get_bit_edge_detection_confidence(::GPSL1CA) = 0.9999
+```
+
+Takes effect at the next detector call — no TrackState rebuild needed.
+"""
+@inline get_bit_edge_detection_confidence(::AbstractGNSSSignal) = 0.999
+
+"""
+$(SIGNATURES)
+
+Maximum number of soft prompts retained in the pre-sync `soft_prompts`
+history before the oldest full bit's worth is dropped. Bounds memory and
+per-call work if a satellite never locks (e.g. a stream with no data
+transitions); 400 blocks (~400 ms for L1 C/A) is far longer than any
+trackable cold start needs.
+"""
+const SOFT_PROMPT_HISTORY_CAP = 400
 
 # Number of primary-code blocks that form one navigation bit.
 # Returns 0 for pilot signals (`data_frequency = 0`), where the concept is
@@ -338,6 +535,7 @@ function buffer(signal::AbstractGNSSSignal, prn::Integer, bit_buffer::BitBuffer{
             zero(prompt_accumulator),
             0,
             bit_buffer.soft_bits,
+            bit_buffer.soft_prompts,
         )
     else
         return BitBuffer{B}(
@@ -351,6 +549,7 @@ function buffer(signal::AbstractGNSSSignal, prn::Integer, bit_buffer::BitBuffer{
             prompt_accumulator,
             prompt_accumulator_integrated_code_blocks,
             bit_buffer.soft_bits,
+            bit_buffer.soft_prompts,
         )
     end
 end
@@ -364,12 +563,36 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
     end
     code_block_buffer = bit_buffer.code_block_buffer << 1 + B(real(prompt) > 0)
     code_block_buffer_lengh = bit_buffer.code_block_buffer_lengh + 1
-    sync = detect_bit_or_secondary_code_sync(
-        signal,
-        prn,
-        code_block_buffer,
-        code_block_buffer_lengh,
-    )
+
+    # Signals that detect the bit edge from soft prompts (GPS L1 C/A) keep a
+    # bounded soft-prompt history and run the maximum-energy CFAR detector;
+    # everything else stays on the hard-decision sliding-window path. The
+    # branch folds at compile time per signal type, so non-soft signals never
+    # touch `soft_prompts`.
+    soft_prompts = bit_buffer.soft_prompts
+    if uses_soft_bit_edge_detection(signal)
+        push!(soft_prompts, ComplexF64(prompt))
+        # Drop whole bits' worth of the oldest history when over the cap, on a
+        # bit boundary, so the window start stays aligned to the bit grid and
+        # the detector's phase indexing is unaffected.
+        if length(soft_prompts) > SOFT_PROMPT_HISTORY_CAP &&
+           num_code_blocks_that_form_a_bit > 0 &&
+           code_block_buffer_lengh % num_code_blocks_that_form_a_bit == 0
+            deleteat!(soft_prompts, 1:num_code_blocks_that_form_a_bit)
+        end
+        sync = _detect_bit_edge_cfar(
+            soft_prompts,
+            num_code_blocks_that_form_a_bit,
+            get_bit_edge_detection_confidence(signal),
+        )
+    else
+        sync = detect_bit_or_secondary_code_sync(
+            signal,
+            prn,
+            code_block_buffer,
+            code_block_buffer_lengh,
+        )
+    end
     if !sync.found
         return BitBuffer{B}(
             code_block_buffer,
@@ -382,8 +605,11 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
             complex(0.0, 0.0),
             0,
             bit_buffer.soft_bits,
+            soft_prompts,
         )
     end
+    # Sync found: the soft-prompt history is dead state from here on.
+    empty!(soft_prompts)
     if get_secondary_code_length(signal) > 1
         # Secondary-code signals (GPS L5I, GPS L1C-P): the buffered pre-sync
         # prompt signs are modulated by the secondary code, not the navigation
@@ -403,6 +629,7 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
             complex(0.0, 0.0),
             0,
             bit_buffer.soft_bits,
+            soft_prompts,
         )
     end
     num_bits = min(
@@ -434,6 +661,7 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
         complex(0, 0),
         0,
         bit_buffer.soft_bits,
+        soft_prompts,
     )
 end
 
@@ -450,5 +678,6 @@ function reset(bit_buffer::BitBuffer{B}) where {B<:Unsigned}
         bit_buffer.prompt_accumulator,
         bit_buffer.prompt_accumulator_integrated_code_blocks,
         bit_buffer.soft_bits,
+        bit_buffer.soft_prompts,
     )
 end
