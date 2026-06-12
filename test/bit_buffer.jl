@@ -48,6 +48,70 @@ end
     res = @inferred _try_match(UInt128(0x0f), UInt128(0x0f), UInt128(0xff), 0)
     @test res.found == true
     @test res.polarity == +1
+
+    # Edge mask: an error inside the edge mask rejects even within budget…
+    res = @inferred _try_match(UInt8(0x07), UInt8(0x0f), UInt8(0xff), 1, UInt8(0x18))
+    @test res.found == false
+    # …an error on the other edge-mask bit rejects too…
+    res = @inferred _try_match(UInt8(0x1f), UInt8(0x0f), UInt8(0xff), 1, UInt8(0x18))
+    @test res.found == false
+    # …while the same budget spent outside the edge mask still matches.
+    res = @inferred _try_match(UInt8(0x0e), UInt8(0x0f), UInt8(0xff), 1, UInt8(0x18))
+    @test res.found == true
+    @test res.polarity == +1
+    # Negative polarity honors the edge mask as well.
+    res = @inferred _try_match(UInt8(0xe0), UInt8(0x0f), UInt8(0xff), 1, UInt8(0x18))
+    @test res.found == false
+    res = @inferred _try_match(UInt8(0xf1), UInt8(0x0f), UInt8(0xff), 1, UInt8(0x18))
+    @test res.found == true
+    @test res.polarity == -1
+end
+
+# Feed a noiseless ±1 prompt stream (one code block per call) through
+# `buffer()` and return the 1-based block index at which the detector locked
+# (0 if it never locked) together with the final bit buffer.
+function _feed_prompts(prompts)
+    signal = GPSL1CA()
+    bit_buffer = BitBuffer{UInt64}()
+    found_at = 0
+    for (i, prompt) in enumerate(prompts)
+        bit_buffer = buffer(signal, 1, bit_buffer, 1, prompt)
+        if found_at == 0 && has_bit_or_secondary_code_been_found(bit_buffer)
+            found_at = i
+        end
+    end
+    found_at, bit_buffer
+end
+
+@testset "L1CA bit-edge lock is not one block early (issue #124)" begin
+    # Data bits 0, 0, 1 — the first transition is preceded by a repeated
+    # bit. The buggy tolerant matcher fired at block 59 (one block before
+    # the true edge); an edge-locked detector fires exactly at block 60.
+    prompts = [fill(-1.0 + 0.0im, 40); fill(1.0 + 0.0im, 20)]
+    found_at, bit_buffer = _feed_prompts(prompts)
+    @test found_at == 60
+    @test bit_buffer.polarity == +1
+
+    # Mirror pattern 1, 1, 0 locks at the same block with negative polarity.
+    found_at, bit_buffer = _feed_prompts([fill(1.0 + 0.0im, 40); fill(-1.0 + 0.0im, 20)])
+    @test found_at == 60
+    @test bit_buffer.polarity == -1
+end
+
+@testset "L1CA sync tolerance budget through buffer (issue #124)" begin
+    # One flipped block (block 10) away from the edge — exactly at the
+    # 1-error budget. Sync still locks at the true edge (block 40).
+    prompts = [fill(-1.0 + 0.0im, 20); fill(1.0 + 0.0im, 20)]
+    prompts[10] = 1.0 + 0.0im
+    found_at, _ = _feed_prompts(prompts)
+    @test found_at == 40
+
+    # Two flipped blocks — budget + 1 — must not lock anywhere in the stream.
+    prompts = [fill(-1.0 + 0.0im, 20); fill(1.0 + 0.0im, 40)]
+    prompts[8] = 1.0 + 0.0im
+    prompts[10] = 1.0 + 0.0im
+    found_at, _ = _feed_prompts(prompts)
+    @test found_at == 0
 end
 
 @testset "Bit buffer" begin

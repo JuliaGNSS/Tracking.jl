@@ -57,6 +57,24 @@ using Tracking:
         # 2 errors → reject (above the 2.5 % ceiling).
         @test detect_bit_or_secondary_code_sync(gpsl1, prn, template ⊻ UInt64(0x3), 40).found == false
     end
+
+    @testset "Edge-locked: errors straddling the claimed edge reject (issue #124)" begin
+        template = UInt64(0xfffff)
+        # A mismatch at window bit 19 is the signature of the window one
+        # block BEFORE the true edge (data pattern …0,0,1…). It must be
+        # rejected even though it is within the 1-error budget.
+        @test detect_bit_or_secondary_code_sync(gpsl1, prn, template ⊻ (UInt64(1) << 19), 40).found == false
+        # A mismatch at window bit 20 is the one-block-LATE signature
+        # (data pattern …0,1,1…) — equally rejected.
+        @test detect_bit_or_secondary_code_sync(gpsl1, prn, template ⊻ (UInt64(1) << 20), 40).found == false
+        # Same for the negative-polarity orientation.
+        neg_template = UInt64(0xfffff00000)
+        @test detect_bit_or_secondary_code_sync(gpsl1, prn, neg_template ⊻ (UInt64(1) << 19), 40).found == false
+        @test detect_bit_or_secondary_code_sync(gpsl1, prn, neg_template ⊻ (UInt64(1) << 20), 40).found == false
+        # An error away from the edge still fits in the budget.
+        @test detect_bit_or_secondary_code_sync(gpsl1, prn, template ⊻ (UInt64(1) << 30), 40).found == true
+        @test detect_bit_or_secondary_code_sync(gpsl1, prn, neg_template ⊻ (UInt64(1) << 30), 40).found == true
+    end
 end
 
 # User override of the tolerance via dispatch on

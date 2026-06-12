@@ -7,6 +7,13 @@ Matches the low 40 bits of `code_block_bits` against the bit-edge
 template `0xfffff` (20 ones followed by 20 zeros). The negated-polarity
 template `0xfffff00000` is searched in the same call via
 [`_try_match`](@ref). Returns [`SyncResult`](@ref).
+
+The two blocks straddling the claimed bit edge (window bits 19 and 20)
+must match exactly; the Hamming tolerance applies only to the other 38
+blocks. Otherwise a single tolerated bit-flip adjacent to the edge would
+let the window one block before the true edge fire first whenever the
+first transition is preceded by a repeated bit, permanently misaligning
+the bit grid by 1 ms (issue #124).
 """
 @inline function detect_bit_or_secondary_code_sync(
     signal::GPSL1CA,
@@ -19,7 +26,7 @@ template `0xfffff00000` is searched in the same call via
     # 2.5 % discretizes to floor(0.025 × 40) = 1 bit-flip allowed.
     # Adjustable via `get_bit_edge_or_secondary_code_tolerance(::GPSL1CA)`.
     max_errors = floor(Int, get_bit_edge_or_secondary_code_tolerance(signal) * 40)
-    _try_match(code_block_bits, B(0xfffff), B(0xffffffffff), max_errors)
+    _try_match(code_block_bits, B(0xfffff), B(0xffffffffff), max_errors, B(0x180000))
 end
 
 """
