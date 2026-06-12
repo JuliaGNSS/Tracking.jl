@@ -326,11 +326,14 @@ function downconvert_and_correlate_fused!(
         idx += 1
     end
 
-    # Correlate: tap-outer, antenna-inner with @simd
+    # Correlate: tap-outer, antenna-inner with @simd. The code replica is
+    # written at absolute index `start_sample` by `gen_code_replica!`, so
+    # reads must be offset by `start_sample - 1` (like the in-register and
+    # tuple tile-share kernels).
     prev = get_accumulators(correlator)
     new_acc = _mutable_copy(prev)
     @inbounds for k in 1:num_taps
-        shift_offset = sample_shifts[k] - min_shift
+        shift_offset = start_sample - 1 + sample_shifts[k] - min_shift
         for j in 1:M
             acc_r = zero(T)
             acc_i = zero(T)
@@ -346,6 +349,31 @@ function downconvert_and_correlate_fused!(
     end
 
     update_accumulator(correlator, _to_immutable(new_acc))
+end
+
+# Convenience 9-arg overload for dynamic-length shifts: allocates the SoA
+# tile buffers per call. Direct callers (e.g. the public single-satellite
+# `downconvert_and_correlate!`) land here; the CPU backends' hot paths go
+# through `_fused_with_tile_scratch!` instead, which supplies long-lived
+# scratch buffers so the kernel stays allocation-free.
+function downconvert_and_correlate_fused!(
+    correlator::AbstractCorrelator{M},
+    signal::AbstractArray{Complex{ST}},
+    code_replica,
+    sample_shifts::AbstractVector,
+    carrier_frequency,
+    sampling_frequency,
+    carrier_phase,
+    start_sample::Integer,
+    num_samples::Integer,
+) where {M,ST}
+    tile_re = Vector{Float32}(undef, num_samples * M)
+    tile_im = Vector{Float32}(undef, num_samples * M)
+    downconvert_and_correlate_fused!(
+        correlator, signal, code_replica, sample_shifts,
+        carrier_frequency, sampling_frequency, carrier_phase,
+        start_sample, num_samples, tile_re, tile_im,
+    )
 end
 
 # ── Tuple-of-correlators tile-share fused kernel ──────────────────────
