@@ -25,7 +25,6 @@ ts  = TrackState(acq)
 function Tracking.TrackState(acq::AcquisitionResults; kwargs...)
     ts = Tracking.TrackState(; signal = acq.system, kwargs...)
     Tracking.add_satellite!(ts, acq)
-    ts
 end
 
 """
@@ -80,13 +79,12 @@ function Tracking.TrackState(
             )))
         end
         ts = Tracking.TrackState(; signal = sig, kwargs...)
-        Tracking.add_satellite!(ts, acqs)
-        return ts
+        return Tracking.add_satellite!(ts, acqs)
     end
     ts = Tracking.TrackState(; signals, kwargs...)
     for acq in acqs
         group = _find_group_for_acq(ts, acq)
-        Tracking.add_satellite!(ts, acq; group)
+        ts = Tracking.add_satellite!(ts, acq; group)
     end
     ts
 end
@@ -175,7 +173,9 @@ default) each acq is routed to the matching group by signal type, so a
 mixed `Vector{AcquisitionResults}` from multiple constellations lands in
 the right place. Passing an explicit `group =` keyword applies that
 group to every entry (use the single-acq form per entry if your vector
-mixes groups). Returns `track_state`.
+mixes groups). Returns the track state carrying the estimator after all
+per-entry [`Tracking.update_estimator_on_handoff`](@ref) updates — keep
+using the return value.
 """
 function Tracking.add_satellite!(
     track_state::TrackState,
@@ -183,7 +183,7 @@ function Tracking.add_satellite!(
     group::Union{Symbol,Nothing} = nothing,
 )
     for acq in acqs
-        Tracking.add_satellite!(track_state, acq; group)
+        track_state = Tracking.add_satellite!(track_state, acq; group)
     end
     track_state
 end

@@ -476,6 +476,51 @@ end
     @test merged_default.doppler_estimator === default_estimator
 end
 
+@testset "add_satellite! honors a rebuilt estimator on handoff" begin
+    import Tracking
+    using Tracking: AbstractDopplerEstimator
+
+    # Spec-conforming estimator that *rebuilds itself* on handoff — same
+    # concrete type, replaced field — the style the
+    # `update_estimator_on_handoff` docstring explicitly sanctions.
+    struct RebuildingEstimator <: AbstractDopplerEstimator
+        num_registered::Int
+    end
+
+    struct SatRebuildingState end
+
+    Tracking.init_estimator_state(::RebuildingEstimator, ::TrackedSat) =
+        SatRebuildingState()
+
+    Tracking.update_estimator_on_handoff(est::RebuildingEstimator, new_sats) =
+        RebuildingEstimator(est.num_registered + length(new_sats))
+
+    # Keyword form: the returned TrackState carries the rebuilt estimator.
+    ts = TrackState(; signal = GPSL1CA(), doppler_estimator = RebuildingEstimator(0))
+    ts2 = add_satellite!(ts; prn = 1, carrier_doppler = 100.0Hz)
+    @test ts2.doppler_estimator.num_registered == 1
+    # The dictionary mutation is still in place — shared with the input.
+    @test length(get_sat_states(ts, :default)) == 1
+    @test get_sat_states(ts2, :default) === get_sat_states(ts, :default)
+
+    # Escape-hatch overload behaves the same.
+    sat = get_sat_state(ts2, :default, 1)
+    sat2 = TrackedSat(
+        sat.prn + 1, sat.code_phase, sat.code_doppler,
+        sat.carrier_phase, sat.carrier_doppler,
+        sat.signal_start_sample, sat.signals, sat.doppler_estimator_state,
+    )
+    ts3 = add_satellite!(ts2, :default, sat2)
+    @test ts3.doppler_estimator.num_registered == 2
+    @test length(get_sat_states(ts3, :default)) == 2
+
+    # Estimators that update in place (or don't override the hook) keep
+    # the in-place contract: the identical TrackState comes back.
+    conventional_ts = TrackState(; signal = GPSL1CA())
+    ret = add_satellite!(conventional_ts; prn = 5, carrier_doppler = 100.0Hz)
+    @test ret === conventional_ts
+end
+
 # Type stability matters because every accessor is on the path between
 # user code and the hot tracking loop. A widened return type here can
 # silently propagate into a dynamic dispatch in the caller; `@inferred`

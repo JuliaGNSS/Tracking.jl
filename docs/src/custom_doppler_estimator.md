@@ -30,13 +30,19 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
    the Kalman state vector.
 
 3. **An [`init_estimator_state`](@ref) method** for your estimator.
-   Called once per satellite when a sat enters the track set
-   (acquisition → tracking handoff), it produces the initial per-sat
-   state for that sat:
+   It produces the initial per-sat state for a sat entering the track
+   set (acquisition → tracking handoff):
 
    ```julia
    Tracking.init_estimator_state(::MyEstimator, sat::TrackedSat) = MyPerSatState(...)
    ```
+
+   It must be **pure** (no observable side effects): besides seeding
+   real sats, it is also called on the throwaway PRN-0 template sat that
+   fixes a group's slot type at `TrackState` construction, as a type
+   probe when validating pre-built sats, and by
+   [`reset_loop_filters!`](@ref). Register sats into shared state in
+   `update_estimator_on_handoff` (below), never here.
 
 4. **(Optional) An [`update_estimator_on_handoff`](@ref) method**, if
    your estimator carries cross-satellite or cross-system shared state
@@ -60,6 +66,15 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
    resizable containers (e.g. `Vector`, `Matrix`) you `push!`/`resize!`
    in place; if scalar fields need replacing, rebuild the estimator
    with `Setfield.@set` or a copying constructor.
+
+   **Use the return value of the handoff functions.** Every entry point
+   carries the estimator you return in the `TrackState` it gives back.
+   Since `TrackState` is immutable, even [`add_satellite!`](@ref) can
+   only honor a *rebuilt* estimator through its return value — write
+   `track_state = add_satellite!(track_state; ...)`, not a bare
+   `add_satellite!(track_state; ...)`, if your estimator rebuilds
+   itself on handoff. (For in-place estimators, including the
+   conventional ones, the returned `TrackState` is the input itself.)
 
 5. **An `estimate_dopplers_and_filter_prompt` method** dispatched on
    `TrackState{<:Any, <:MyEstimator}`. This is where the actual update

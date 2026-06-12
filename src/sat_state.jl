@@ -623,9 +623,18 @@ end
 $(SIGNATURES)
 
 Build the per-satellite Doppler-estimator state used by `estimator` for the
-given satellite. Called once per satellite when a new sat enters the track
-set. A custom doppler estimator must define this method for its
+given satellite. A custom doppler estimator must define this method for its
 [`AbstractDopplerEstimator`](@ref) subtype.
+
+This function must be **pure** (free of observable side effects): besides
+seeding each real satellite on entry, it is also called to build the
+throwaway PRN-0 template sat that fixes a group's dictionary slot type at
+[`TrackState`](@ref) construction, as a type probe when validating
+pre-built sats, and by [`reset_loop_filters!`](@ref) to re-seed existing
+satellites. Estimators with cross-satellite shared state must therefore
+not register satellites here — perform shared-state registration in
+[`update_estimator_on_handoff`](@ref), which is called exactly once per
+handoff with the real incoming satellites.
 """
 function init_estimator_state end
 
@@ -633,8 +642,9 @@ function init_estimator_state end
 $(SIGNATURES)
 
 Optionally update an estimator's cross-satellite or cross-system shared state
-when new satellites enter the track set. Called once per [`merge_sats`](@ref)
-call with the dictionary of incoming satellites, *after* per-sat seeding via
+when new satellites enter the track set. Called once per handoff entry point
+([`merge_sats`](@ref), [`add_satellite`](@ref), [`add_satellite!`](@ref))
+with the dictionary of incoming satellites, *after* per-sat seeding via
 [`init_estimator_state`](@ref).
 
 The default returns `estimator` unchanged, so estimators with no shared state
@@ -647,6 +657,13 @@ resizable container (e.g. `Vector`, `Matrix`) on an otherwise immutable
 estimator and `push!`/`resize!` it in place; rebuild the estimator with
 [`Setfield.@set`](https://jw3126.github.io/Setfield.jl/stable/) or a copying
 constructor when fields need replacing.
+
+Every entry point honors the return value: the `TrackState` it returns
+carries the returned estimator. `TrackState` is immutable, so even the
+in-place [`add_satellite!`](@ref) can only honor a *rebuilt* estimator
+through its return value — callers must keep using the returned
+`TrackState` rather than the one they passed in (for in-place estimators
+the two are identical).
 """
 update_estimator_on_handoff(estimator::AbstractDopplerEstimator, _new_sats) = estimator
 
@@ -765,6 +782,14 @@ The `satellites` dictionary is left empty — populate it via
 [`add_satellite!`](@ref) after the enclosing [`TrackState`](@ref) is
 built. The signal-tuple shape determines the dict's concrete value type,
 so the slot is type-stable.
+
+The `doppler_estimator` kwarg only shapes the dictionary's slot type
+(via the per-sat estimator-state type); the estimator that actually runs
+is the one configured on the enclosing `TrackState`. When the two
+disagree, `TrackState` rebuilds the empty slot to match its own
+estimator, so pass the same estimator instance to both — or simply leave
+this kwarg at its default and configure the estimator on `TrackState`
+alone.
 
 ```julia
 SignalGroup((GPSL1CA(),))                              # band L1(), 1 antenna
