@@ -9,9 +9,11 @@ module FlexibandIntegrationTest
 # GPS L5I (on the L5 band) — exercising the multi-band `track!` path with two
 # front-ends running at different sample rates.
 #
-# The 1.6 GB zip is cached in a Scratch.jl scratchspace so it is only
-# downloaded once. Set `ENV["TRACKING_SKIP_INTEGRATION_TEST"] = "true"` to
-# skip the whole file (e.g. on a network-less machine).
+# The test is OPT-IN: it is skipped unless
+# `ENV["TRACKING_RUN_INTEGRATION_TEST"] = "true"` is set, so a plain `]test`
+# never triggers the 1.6 GB download. CI enables it on a single matrix job.
+# The zip is cached in a Scratch.jl scratchspace so it is only downloaded
+# once.
 #
 # ── Capture format (Flexiband / ION SDR-metadata standard) ─────────────────
 # The `.usb` file is a stream of fixed 1024-byte USB frames:
@@ -183,8 +185,9 @@ const IF_L5 = 2.903125e6Hz    # GPS L5 within the 1173.546875 MHz band
 
 # ── Test ───────────────────────────────────────────────────────────────────
 
-if get(ENV, "TRACKING_SKIP_INTEGRATION_TEST", "false") == "true"
-    @info "Skipping Flexiband integration test (TRACKING_SKIP_INTEGRATION_TEST=true)"
+if get(ENV, "TRACKING_RUN_INTEGRATION_TEST", "false") != "true"
+    @info "Skipping Flexiband integration test (downloads a 1.6 GB capture). " *
+          "Set ENV[\"TRACKING_RUN_INTEGRATION_TEST\"] = \"true\" to run it."
 else
     @testset "Flexiband III-7a multi-band acquire + track" begin
         zippath = download_capture()
