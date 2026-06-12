@@ -34,12 +34,53 @@ struct TrackedSignal{
     preferred_num_code_blocks_to_integrate::Int
 end
 
+# Reject a preferred coherent-integration length that cannot work for this
+# signal. For data-bearing signals the length must evenly divide the number
+# of code blocks that form one bit: a non-divisor length would make the
+# post-sync integrations straddle bit boundaries, so the bit buffer's
+# blocks-per-bit boundary check would never fire and no bit would ever be
+# emitted again (issue #128). Pilot signals (`data_frequency == 0`) have no
+# bit boundary to straddle, so any length of at least one block is accepted.
+function validate_preferred_num_code_blocks_to_integrate(
+    signal::AbstractGNSSSignal,
+    preferred_num_code_blocks::Integer,
+)
+    preferred_num_code_blocks >= 1 || throw(
+        ArgumentError(
+            "preferred_num_code_blocks_to_integrate must be at least 1, got " *
+            "$preferred_num_code_blocks",
+        ),
+    )
+    num_code_blocks_that_form_a_bit = _calc_num_code_blocks_that_form_a_bit(signal)
+    num_code_blocks_that_form_a_bit == 0 && return nothing
+    if num_code_blocks_that_form_a_bit % preferred_num_code_blocks != 0
+        valid = filter(
+            d -> num_code_blocks_that_form_a_bit % d == 0,
+            1:num_code_blocks_that_form_a_bit,
+        )
+        throw(
+            ArgumentError(
+                "preferred_num_code_blocks_to_integrate = $preferred_num_code_blocks " *
+                "must evenly divide the $num_code_blocks_that_form_a_bit code blocks " *
+                "that form one bit of $(typeof(signal)) — an integration straddling " *
+                "a bit boundary would never emit a bit. Valid values: " *
+                "$(join(valid, ", ")).",
+            ),
+        )
+    end
+    nothing
+end
+
 """
 $(SIGNATURES)
 
 Construct a fresh [`TrackedSignal`](@ref) for `signal`. The correlator and
 post-corr filter default to the signal's recommended values; pass
 `correlator` and `post_corr_filter` explicitly to override.
+
+Throws an `ArgumentError` if `preferred_num_code_blocks_to_integrate` is
+invalid for `signal` (see
+[`set_preferred_num_code_blocks_to_integrate!`](@ref)).
 """
 function TrackedSignal(
     signal::AbstractGNSSSignal;
@@ -49,6 +90,10 @@ function TrackedSignal(
     post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),
     preferred_num_code_blocks_to_integrate::Int = 1,
 )
+    validate_preferred_num_code_blocks_to_integrate(
+        signal,
+        preferred_num_code_blocks_to_integrate,
+    )
     # Per-signal sync-search buffer width — see `get_code_block_buffer_type`.
     # Picking the type here makes `B` concrete in the resulting
     # `TrackedSignal{Sig, B, C, PCF}`.
@@ -87,6 +132,11 @@ function TrackedSignal(
     filtered_prompts::Maybe{Vector{ComplexF64}} = nothing,
     preferred_num_code_blocks_to_integrate = nothing,
 ) where {Sig<:AbstractGNSSSignal,B<:Unsigned,C<:AbstractCorrelator,PCF<:AbstractPostCorrFilter}
+    isnothing(preferred_num_code_blocks_to_integrate) ||
+        validate_preferred_num_code_blocks_to_integrate(
+            isnothing(signal) ? t.signal : signal,
+            preferred_num_code_blocks_to_integrate,
+        )
     TrackedSignal{Sig,B,C,PCF}(
         isnothing(signal) ? t.signal : signal,
         isnothing(integrated_samples) ? t.integrated_samples : integrated_samples,
