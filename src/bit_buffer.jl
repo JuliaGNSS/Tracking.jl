@@ -730,11 +730,16 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
         # Julia conservatively boxes the outer parameter even though this
         # closure path does not always run, leading to a per-call
         # Core.Box allocation.
+        # Apply the lock polarity to the buffered pre-sync bits as well, so
+        # they map symbol levels to bit values the same way as every
+        # post-sync bit (which is sign-flipped via `bit_buffer.polarity` in
+        # `buffer`). Otherwise a negative-polarity lock would invert only
+        # the post-sync part of the bit stream (issue #127).
         bit_sum = sum(0:num_code_blocks_that_form_a_bit-1) do code_block_index
             buffer_code_block_index =
                 (bit_index - 1) * num_code_blocks_that_form_a_bit + code_block_index
             ((code_block_buffer & (one(B) << buffer_code_block_index)) > 0) * 2 - 1
-        end
+        end * Int(sync.polarity)
         push!(bit_buffer.soft_bits, Float32(bit_sum))
         bits << 1 + (bit_sum > 0)
     end

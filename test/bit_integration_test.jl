@@ -23,34 +23,62 @@ using Tracking:
     code_frequency = get_code_frequency(gpsl1)
     carrier_doppler = 0.0Hz
 
-    track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0, carrier_doppler)];)
+    # Run the same bit stream at both lock polarities: the bit-edge detector
+    # locks at block 40, where the newest 20 buffered blocks carry the second
+    # data bit — `1, 0, …` yields a negative-polarity lock, `0, 1, …` a
+    # positive one. The bits recovered from the pre-sync buffer and the bits
+    # decoded after sync must be consistent: equal to the transmitted bits up
+    # to a single *global* inversion across the whole stream (issue #127).
+    for data_bits in ([1, 0, 1, 1, 0, 0, 1], [0, 1, 0, 0, 1, 1, 0])
+        track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0, carrier_doppler)];)
 
-    bits = vcat(ones(20), zeros(20), ones(1))
-    foreach(enumerate(bits)) do (index, bit)
-        code_phase = (index - 1) * num_samples * code_frequency / sampling_frequency
-        carrier_phase =
-            2π * (index - 1) * num_samples * carrier_doppler / sampling_frequency
-        signal =
-            (bit * 2 - 1) .*
-            cis.(
-                2π * (0:(num_samples-1)) * carrier_doppler / sampling_frequency .+
-                carrier_phase,
-            ) .*
-            gen_code(num_samples, gpsl1, 1, sampling_frequency, code_frequency, code_phase)
-        track_state = track(signal, track_state, sampling_frequency)
-        @test has_bit_or_secondary_code_been_found(track_state) == (index >= 40)
-        @test get_bits(track_state) == (index == 40 ? 2 : 0)
-        @test get_num_bits(track_state) == (index == 40 ? 2 : 0)
-        soft_bits = get_soft_bits(track_state)
-        # There is exactly one soft bit (Float32 accumulation) per hard bit
-        @test eltype(soft_bits) == Float32
-        @test length(soft_bits) == get_num_bits(track_state)
-        if index == 40
-            # The sign of each soft bit must match the respective hard bit
-            # (bits == 0b10, ordered oldest first: a "1" followed by a "0")
-            @test soft_bits[1] > 0
-            @test soft_bits[2] < 0
+        block_bits = repeat(data_bits, inner = 20)  # 20 code blocks per bit
+        decoded_bits = Bool[]
+        decoded_soft_bits = Float32[]
+        foreach(enumerate(block_bits)) do (index, bit)
+            code_phase = (index - 1) * num_samples * code_frequency / sampling_frequency
+            carrier_phase =
+                2π * (index - 1) * num_samples * carrier_doppler / sampling_frequency
+            signal =
+                (bit * 2 - 1) .*
+                cis.(
+                    2π * (0:(num_samples-1)) * carrier_doppler / sampling_frequency .+
+                    carrier_phase,
+                ) .*
+                gen_code(
+                    num_samples,
+                    gpsl1,
+                    1,
+                    sampling_frequency,
+                    code_frequency,
+                    code_phase,
+                )
+            track_state = track(signal, track_state, sampling_frequency)
+            @test has_bit_or_secondary_code_been_found(track_state) == (index >= 40)
+            # Sync at block 40 recovers the 2 buffered bits; afterwards one
+            # bit completes every 20 blocks.
+            expected_num_bits = index == 40 ? 2 : (index > 40 && index % 20 == 0 ? 1 : 0)
+            num_bits = get_num_bits(track_state)
+            @test num_bits == expected_num_bits
+            bits_word = get_bits(track_state)
+            for bit_index in num_bits:-1:1
+                push!(decoded_bits, (bits_word >> (bit_index - 1)) & 1 == 1)
+            end
+            soft_bits = get_soft_bits(track_state)
+            # There is exactly one soft bit (Float32 accumulation) per hard bit
+            @test eltype(soft_bits) == Float32
+            @test length(soft_bits) == num_bits
+            append!(decoded_soft_bits, soft_bits)
         end
+
+        @test length(decoded_bits) == length(data_bits)
+        # Pre-sync (first 2) and post-sync bits must agree on the symbol
+        # mapping: the decoded stream matches the transmitted one up to a
+        # global inversion, never a mixed one (issue #127).
+        @test decoded_bits == Bool.(data_bits) || decoded_bits == .!Bool.(data_bits)
+        # The sign of each soft bit must match the respective hard bit —
+        # including the soft bits recovered from the pre-sync buffer.
+        @test (decoded_soft_bits .> 0) == decoded_bits
     end
 end
 
