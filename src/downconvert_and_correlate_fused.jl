@@ -351,31 +351,6 @@ function downconvert_and_correlate_fused!(
     update_accumulator(correlator, _to_immutable(new_acc))
 end
 
-# Convenience 9-arg overload for dynamic-length shifts: allocates the SoA
-# tile buffers per call. Direct callers (e.g. the public single-satellite
-# `downconvert_and_correlate!`) land here; the CPU backends' hot paths go
-# through `_fused_with_tile_scratch!` instead, which supplies long-lived
-# scratch buffers so the kernel stays allocation-free.
-function downconvert_and_correlate_fused!(
-    correlator::AbstractCorrelator{M},
-    signal::AbstractArray{Complex{ST}},
-    code_replica,
-    sample_shifts::AbstractVector,
-    carrier_frequency,
-    sampling_frequency,
-    carrier_phase,
-    start_sample::Integer,
-    num_samples::Integer,
-) where {M,ST}
-    tile_re = Vector{Float32}(undef, num_samples * M)
-    tile_im = Vector{Float32}(undef, num_samples * M)
-    downconvert_and_correlate_fused!(
-        correlator, signal, code_replica, sample_shifts,
-        carrier_frequency, sampling_frequency, carrier_phase,
-        start_sample, num_samples, tile_re, tile_im,
-    )
-end
-
 # ── Tuple-of-correlators tile-share fused kernel ──────────────────────
 # For multi-signal-per-satellite tracking: one downconvert into the
 # `tile_re` / `tile_im` SoA tile (one slice per antenna), followed by M
