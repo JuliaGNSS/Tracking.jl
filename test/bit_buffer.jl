@@ -110,6 +110,37 @@ end
         end
     end
 
+    @testset "confidence = 1.0 stays conservative, not an instant lock" begin
+        # On a *noisy* signal (finite z) confidence 1.0 must be maximally
+        # conservative, not lock at the first boundary the way the old
+        # NaN-threshold path did. (A noiseless edge has z = Inf and still
+        # locks — genuine certainty, exercised above.)
+        rng = MersenneTwister(7)
+        clean = _bitstream([i % 2 for i in 0:9]; amp = 3.0)
+        noisy = ComplexF64[p + complex(randn(rng), randn(rng)) for p in clean]
+        lo = _detect_over(noisy, 0.99)
+        hi = _detect_over(noisy, 1.0)
+        @test lo > 0                          # locks at moderate confidence
+        @test hi == 0 || hi > lo              # 1.0 never earlier than 0.99
+    end
+
+    @testset "no false lock on a long near-constant run (Welford stability)" begin
+        # High-magnitude, near-constant prompts with a tiny systematic drift
+        # and no real bit edge. A naive Σe² − (Σe)²/M variance would lose
+        # precision and could read zero (→ infinite confidence → false lock)
+        # at large bin counts; Welford keeps it stable, so this never locks.
+        acc = PhaseAccumulators()
+        _seed_phase_accumulators!(acc, L1CA_L)
+        found = false
+        for i in 1:5000
+            _update_phase_accumulators!(acc, complex(1e4 * (1 + 1e-7 * (i - 1)), 0.0), i - 1, L1CA_L)
+            if _detect_bit_edge_cfar(acc, L1CA_L, 0.999, i).found
+                found = true
+                break
+            end
+        end
+        @test !found
+    end
 end
 
 # Feed a noiseless ±1 prompt stream (one code block per call) through
