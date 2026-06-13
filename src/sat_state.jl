@@ -706,12 +706,20 @@ function merge_sats(
     @set satellites[group_idx] = merge(sats_dict, new_tracked_sats)
 end
 
-# Build a `Dictionary` that shares its keys with the original but holds a
-# freshly-copied `values::Vector{TrackedSat}`. Used by the immutable variants
-# of `downconvert_and_correlate` / `estimate_dopplers_and_filter_prompt` /
-# `reset_start_sample_and_bit_buffer` to detach the slot vector before
-# delegating to the in-place form — preserves `track`'s "input is not
-# mutated" contract while reusing the in-place implementation.
+# Build a `Dictionary` that shares its keys (`Indices`) with the original but
+# holds a freshly-copied `values::Vector{TrackedSat}`. Used by the immutable
+# per-iteration steps `downconvert_and_correlate` /
+# `estimate_dopplers_and_filter_prompt` to detach the slot *values* before
+# delegating to the in-place form. These steps never change the key set —
+# they only overwrite per-sat values — so sharing the `Indices` is safe and
+# avoids copying the hash table on every loop iteration of `track`.
+#
+# The key set is detached separately, once, at the `track` boundary via
+# `_detach_slot_vector` (see below and #123). A caller that invokes these
+# per-iteration steps directly (outside `track`) and then mutates the key set
+# of the result with `add_satellite!`/`remove_satellite!` would corrupt the
+# input's keys — use `track`'s output, or the immutable `add_satellite` /
+# `remove_satellite`, for structural changes.
 @inline function _copy_slot_vector(sats::Dictionary{<:Any,<:TrackedSat})
     Dictionary(keys(sats), copy(sats.values))
 end
@@ -722,16 +730,32 @@ end
     map(_copy_slot_vector, satellites)
 end
 
+# Fully-detached copy: freshly-copied `Indices` *and* `values`. `copy(sats)`
+# detaches both (#123). Used at the `track` boundary
+# (`reset_start_sample_and_bit_buffer`, the first copy of the caller's live
+# state) so that a later `add_satellite!`/`remove_satellite!` on the returned
+# state cannot mutate the input's key set. Costs one hash-table copy per group
+# per `track` call — the irreducible price of an independently-mutable result.
+@inline function _detach_slot_vector(sats::Dictionary{<:Any,<:TrackedSat})
+    copy(sats)
+end
+
 # Groups-shape variant: produce a fresh `SignalGroups` where each `SignalGroup`
 # reuses the original's band / signals / num_ants but holds a Dictionary whose
-# `values` vector is freshly copied. Used by the immutable
-# downconvert/estimator/reset paths to detach storage from the input
-# `TrackState` before delegating to the in-place form.
+# `values` vector is freshly copied (keys shared — per-iteration loop steps).
 @inline _copy_group_slot_vectors(g::SignalGroup) =
     SignalGroup(g; satellites = _copy_slot_vector(g.satellites))
 
 @inline _copy_groups_slot_vectors(groups::SignalGroups) =
     map(_copy_group_slot_vectors, groups)
+
+# Groups-shape variant of `_detach_slot_vector`: keys *and* values detached.
+# Used by the immutable `reset_start_sample_and_bit_buffer` boundary copy.
+@inline _detach_group_slot_vectors(g::SignalGroup) =
+    SignalGroup(g; satellites = _detach_slot_vector(g.satellites))
+
+@inline _detach_groups_slot_vectors(groups::SignalGroups) =
+    map(_detach_group_slot_vectors, groups)
 
 # Recursive tuple walker: applies `f(sats_dict, args...)` to each per-group
 # satellite dictionary in the (named-)tuple. Each step has fully concrete

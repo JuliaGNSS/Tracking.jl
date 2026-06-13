@@ -1,26 +1,15 @@
-"""
-$(SIGNATURES)
-
-Bit-sync detector for GPS L1 C/A.
-
-Matches the low 40 bits of `code_block_bits` against the bit-edge
-template `0xfffff` (20 ones followed by 20 zeros). The negated-polarity
-template `0xfffff00000` is searched in the same call via
-[`_try_match`](@ref). Returns [`SyncResult`](@ref).
-"""
-@inline function detect_bit_or_secondary_code_sync(
-    signal::GPSL1CA,
-    ::Integer,           # PRN — ignored; same template for every PRN
-    code_block_bits::B,
-    num_code_blocks::Integer,
-) where {B<:Unsigned}
-    num_code_blocks < 40 && return SyncResult(false, 0, Int8(0))
-    # Tolerance is a percentage of the 40-block window. The default
-    # 2.5 % discretizes to floor(0.025 × 40) = 1 bit-flip allowed.
-    # Adjustable via `get_bit_edge_or_secondary_code_tolerance(::GPSL1CA)`.
-    max_errors = floor(Int, get_bit_edge_or_secondary_code_tolerance(signal) * 40)
-    _try_match(code_block_bits, B(0xfffff), B(0xffffffffff), max_errors)
-end
+# GPS L1 C/A has 20 primary-code blocks per navigation bit and no secondary
+# code, so the signal-agnostic `uses_soft_bit_edge_detection` default routes
+# it to the soft, maximum-energy CFAR detector `_detect_bit_edge_cfar`
+# (`_buffer_find_bit`) rather than a hard-decision template match — there is
+# no `detect_bit_or_secondary_code_sync(::GPSL1CA, …)` method.
+#
+# That detector is edge-locked by construction: it can only ever fire at the
+# energy-maximizing phase's own bit boundary, so it cannot lock one block
+# early the way the old fixed-tolerance template matcher did when the first
+# data transition was preceded by a repeated bit (issue #124). The lock
+# latency self-paces with C/N₀ — ~40 ms for a clean signal, longer in
+# noise — via `get_bit_edge_detection_confidence`.
 
 """
 $(SIGNATURES)

@@ -429,21 +429,26 @@ end
     (first(t) == chosen, _flag_completed(Base.tail(t), chosen)...)
 
 # Code-phase wrap to use when generating a signal's code replica / sizing its
-# integration window over `num_blocks` primary blocks. For a MULTI-block
-# (`num_blocks > 1`) coherent integration past sync, the wrap must preserve the
-# secondary-/overlay-code phase: otherwise `gen_code!` bakes the secondary code
-# starting at chip 0 and the N blocks sum against a misaligned overlay (the
-# coherent sum cancels), and the boundary calc would start the N-block window
-# off the secondary phase and straddle the data-symbol boundary. A SINGLE-block
-# integration (`num_blocks == 1`) deliberately keeps the primary wrap so the
-# replica stays primary-only — the per-block secondary sign is then handled by
-# the bit buffer, exactly as before sync; this keeps the N=1 path bit-identical
-# and avoids double-removing the secondary. Before sync only the primary phase
-# is known. (Signals without a baked secondary code — e.g. GPS L1 C/A — are
-# unaffected: the primary repeats every `get_code_length` chips, secondary
-# length 1.)
+# integration window. Past sync the wrap is the full secondary-/bit-period
+# length so that `gen_code!` bakes the secondary code at the correct chip for
+# the current primary-code period: the replica's start phase carries the
+# secondary-period offset, so the secondary sign is wiped per block right in
+# the replica. This holds at ANY integration length — including the default
+# `num_blocks == 1`. The previous code kept the N=1 replica primary-only and
+# left the per-block secondary sign for the bit buffer to handle, but the
+# post-sync bit decoder never did that wipe, so a `data × Σ(secondary signs)`
+# collapse cost ~14 dB of decision margin at the default 1-block integration
+# (issue #125). Wiping in the replica matches what `master` did via
+# `update_code_phase` and is correct for multi-block windows too (otherwise the
+# N blocks sum against a misaligned overlay and the coherent sum cancels).
+# The boundary calc is unaffected at N=1: `calc_num_chips_to_integrate` re-mods
+# the phase by the primary length, so the wider wrap yields the same per-block
+# boundary. Before sync only the primary phase is known, so the wrap stays at
+# the primary length. (Signals without a baked secondary code — e.g. GPS L1
+# C/A — are unaffected: the primary repeats every `get_code_length` chips,
+# secondary length 1.) `num_blocks` is retained for call-site symmetry.
 @inline _replica_code_wrap(tsig::TrackedSignal, num_blocks::Integer) =
-    (num_blocks > 1 && has_bit_or_secondary_code_been_found(tsig)) ?
+    has_bit_or_secondary_code_been_found(tsig) ?
     _post_sync_code_length(tsig) : get_code_length(tsig.signal)
 
 # Single-signal path: gen one code replica + run the in-register fused
@@ -623,12 +628,18 @@ end
 $(SIGNATURES)
 
 Downconvert and correlate all available satellites on the CPU.
-Returns a new `TrackState` whose slot vectors are detached from the
-input — the input `track_state` is left untouched, satisfying
-`track`'s immutability contract. Per-call code-replica scratch comes
-from the correlator's `ScratchBuffers` so the kernel itself stays
-allocation-free; the only per-call allocation is the slot-vector
-copy needed for immutability.
+Returns a new `TrackState` whose slot *values* are detached from the
+input (the input's per-sat tracking values are left untouched), but
+whose key set (`Indices`) is *shared* with the input — this step never
+changes the key set, so sharing avoids copying the hash table on every
+`track` loop iteration. Detaching the key set happens once at the
+`track` boundary (`reset_start_sample_and_bit_buffer`); do not
+`add_satellite!`/`remove_satellite!` on this function's direct output,
+or you will corrupt the input's keys (#123). The copy is otherwise
+shallow: per-sat scratch vectors are shared, see [`track`](@ref).
+Per-call code-replica scratch comes from the correlator's
+`ScratchBuffers` so the kernel itself stays allocation-free; the only
+per-call allocation is the slot-value copy.
 """
 function downconvert_and_correlate(
     dc::CPUDownconvertAndCorrelator,
@@ -691,10 +702,14 @@ end
 $(SIGNATURES)
 
 Multi-threaded downconvert and correlate. Returns a new `TrackState`
-whose slot vectors are detached from the input — the input
-`track_state` is left untouched. Per-call scratch comes from the
-correlator's per-thread `ScratchBuffers`; the only per-call
-allocation is the slot-vector copy needed for immutability.
+whose slot *values* are detached from the input but whose key set
+(`Indices`) is *shared* — same contract as the single-threaded method
+above: the key set is detached once at the `track` boundary, so do not
+`add_satellite!`/`remove_satellite!` on this function's direct output
+(#123). The copy is otherwise shallow: per-sat scratch vectors are
+shared, see [`track`](@ref). Per-call scratch comes from the
+correlator's per-thread `ScratchBuffers`; the only per-call allocation
+is the slot-value copy.
 """
 function downconvert_and_correlate(
     dc::CPUThreadedDownconvertAndCorrelator,
