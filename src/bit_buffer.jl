@@ -25,53 +25,23 @@ end
 """
 $(SIGNATURES)
 
-Standard-normal quantile (inverse CDF) `Φ⁻¹(p)` for `p ∈ (0, 1)`, via
-Acklam's rational approximation (relative error < 1.2e-9 across the
-range). Used by [`_detect_bit_edge_cfar`](@ref) to turn a false-sync
-probability into a detection z-threshold without pulling in a
-special-functions dependency.
+Standard-normal quantile (inverse CDF) `Φ⁻¹(probability)` for
+`probability ∈ (0, 1)`, as `√2 · erfinv(2·probability − 1)` (`erfinv` from
+SpecialFunctions.jl). Used by [`_detect_bit_edge_cfar`](@ref) to turn a
+false-sync probability into a detection z-score threshold. Returns `±Inf`
+at `probability = 1` / `0`; callers keep the argument in the open interval.
 """
-# Acklam's coefficients for the central and tail regions, hoisted to module
-# scope so `_norm_quantile` allocates nothing (building these tuples per call
-# heap-allocates on some Julia versions).
-const _ACKLAM_A = (-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
-    1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00)
-const _ACKLAM_B = (-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
-    6.680131188771972e+01, -1.328068155288572e+01)
-const _ACKLAM_C = (-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00,
-    -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00)
-const _ACKLAM_D = (7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00,
-    3.754408661907416e+00)
-
-function _norm_quantile(p::Float64)
-    a, b, c, d = _ACKLAM_A, _ACKLAM_B, _ACKLAM_C, _ACKLAM_D
-    plow = 0.02425
-    phigh = 1 - plow
-    if p < plow
-        q = sqrt(-2 * log(p))
-        return (((((c[1] * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) * q + c[6]) /
-               ((((d[1] * q + d[2]) * q + d[3]) * q + d[4]) * q + 1)
-    elseif p <= phigh
-        q = p - 0.5
-        r = q * q
-        return (((((a[1] * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * r + a[6]) * q /
-               (((((b[1] * r + b[2]) * r + b[3]) * r + b[4]) * r + b[5]) * r + 1)
-    else
-        q = sqrt(-2 * log(1 - p))
-        return -(((((c[1] * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) * q + c[6]) /
-                ((((d[1] * q + d[2]) * q + d[3]) * q + d[4]) * q + 1)
-    end
-end
+@inline _norm_quantile(probability::Float64) = sqrt(2.0) * erfinv(2 * probability - 1)
 
 """
 $(SIGNATURES)
 
 Per-phase bin statistics for the soft, maximum-energy bit-edge detector
 [`_detect_bit_edge_cfar`](@ref) — one entry per candidate edge phase
-`k ∈ 0:L-1`, where `L` is the (per-signal) number of primary-code blocks
-per navigation bit. Updated one primary-code block at a time by
-[`_update_phase_accumulators!`](@ref) so detection stays O(L) per block
-with no growing pre-sync history.
+`phase ∈ 0:blocks_per_bit-1`, where `blocks_per_bit` is the (per-signal)
+number of primary-code blocks per navigation bit. Updated one primary-code
+block at a time by [`_update_phase_accumulators!`](@ref) so detection stays
+O(blocks_per_bit) per block with no growing pre-sync history.
 
 The vectors are mutated in place across the immutable [`BitBuffer`](@ref)
 reconstructions (the same pattern as `soft_bits`). This is deliberate: the
@@ -82,97 +52,110 @@ each block — both reintroduce the per-block allocation this design exists
 to avoid. A single shared, in-place-updated buffer per satellite is the
 allocation-free choice.
 
-Fields (all length `L` once seeded; empty before the first block):
+Fields (all length `blocks_per_bit` once seeded; empty before the first block):
 
-- `csum` — coherent sum of the phase's *currently open* bin.
-- `mean` / `m2` — Welford running mean and sum-of-squared-deviations of the
-  phase's *completed*-bin energies (numerically stable variance; the bin
-  count is not stored — it is `div(n - k, L)` for the total block count `n`).
-- `last_pol` — sign (`±1`, `0` before the first bin) of the most recently
-  completed bin's real part, i.e. the lock polarity.
+- `open_bin_sum` — coherent sum of the phase's *currently open* bin.
+- `mean_bin_energy` / `bin_energy_sum_sq_dev` — Welford running mean and
+  sum of squared deviations (`M₂ = Σ(energyᵢ − mean)²`) of the phase's
+  *completed*-bin energies, for a numerically stable variance. The bin
+  count is not stored — it is `div(num_blocks - phase, blocks_per_bit)`.
+- `last_bin_polarity` — sign (`±1`, `0` before the first bin) of the most
+  recently completed bin's real part, i.e. the lock polarity.
 """
 struct PhaseAccumulators
-    csum::Vector{ComplexF64}
-    mean::Vector{Float64}
-    m2::Vector{Float64}
-    last_pol::Vector{Int8}
+    open_bin_sum::Vector{ComplexF64}
+    mean_bin_energy::Vector{Float64}
+    bin_energy_sum_sq_dev::Vector{Float64}
+    last_bin_polarity::Vector{Int8}
 end
 
 PhaseAccumulators() = PhaseAccumulators(ComplexF64[], Float64[], Float64[], Int8[])
 
-# Are the accumulators seeded for an L-phase search yet?
-@inline _is_seeded(acc::PhaseAccumulators, L::Int) = length(acc.mean) == L
+# Are the accumulators seeded for a `blocks_per_bit`-phase search yet?
+@inline _is_seeded(accumulators::PhaseAccumulators, blocks_per_bit::Int) =
+    length(accumulators.mean_bin_energy) == blocks_per_bit
 
-# Size the (initially empty) accumulator vectors to `L` phases and zero them.
-function _seed_phase_accumulators!(acc::PhaseAccumulators, L::Int)
-    for v in (acc.csum, acc.mean, acc.m2, acc.last_pol)
-        resize!(v, L)
+# Size the (initially empty) accumulator vectors to `blocks_per_bit` phases
+# and zero them.
+function _seed_phase_accumulators!(accumulators::PhaseAccumulators, blocks_per_bit::Int)
+    for vector in (
+        accumulators.open_bin_sum,
+        accumulators.mean_bin_energy,
+        accumulators.bin_energy_sum_sq_dev,
+        accumulators.last_bin_polarity,
+    )
+        resize!(vector, blocks_per_bit)
     end
-    fill!(acc.csum, zero(ComplexF64))
-    fill!(acc.mean, 0.0)
-    fill!(acc.m2, 0.0)
-    fill!(acc.last_pol, Int8(0))
-    acc
+    fill!(accumulators.open_bin_sum, zero(ComplexF64))
+    fill!(accumulators.mean_bin_energy, 0.0)
+    fill!(accumulators.bin_energy_sum_sq_dev, 0.0)
+    fill!(accumulators.last_bin_polarity, Int8(0))
+    accumulators
 end
 
 """
 $(SIGNATURES)
 
-Fold the prompt `p` of the primary-code block at 0-based index `idx` into
-the [`PhaseAccumulators`](@ref) (in place) for an `L`-phase bit-edge search.
-Each phase `k`'s bins start at index `k` and span `L` blocks; `p` is added
-to every phase whose bin is open at `idx` (`idx ≥ k`), and the single phase
-whose bin ends at `idx` has that completed bin's energy `|Sₖₘ|²` folded into
-its Welford mean / M2 and its polarity recorded. O(L) per call,
-allocation-free.
+Fold the `prompt` of the primary-code block at 0-based `block_index` into
+the [`PhaseAccumulators`](@ref) (in place) for a `blocks_per_bit`-phase
+bit-edge search. Each `phase`'s bins start at index `phase` and span
+`blocks_per_bit` blocks; `prompt` is added to every phase whose bin is open
+at `block_index` (`block_index ≥ phase`), and the single phase whose bin
+ends at `block_index` has that completed bin's energy `|bin_sum|²` folded
+into its Welford mean / sum-of-squared-deviations and its polarity recorded.
+O(blocks_per_bit) per call, allocation-free.
 """
-function _update_phase_accumulators!(acc::PhaseAccumulators, p::ComplexF64, idx::Int, L::Int)
-    @inbounds for k in 0:(L-1)
-        idx < k && continue
-        acc.csum[k+1] += p
-        if (idx - k) % L == L - 1
-            s = acc.csum[k+1]
-            e = abs2(s)
-            # Welford update of phase `k`'s completed-bin energy mean / M2.
-            c = div(idx + 1 - k, L)        # this phase's completed-bin count after the fold
-            delta = e - acc.mean[k+1]
-            acc.mean[k+1] += delta / c
-            acc.m2[k+1] += delta * (e - acc.mean[k+1])
-            acc.last_pol[k+1] = real(s) < 0 ? Int8(-1) : Int8(1)
-            acc.csum[k+1] = zero(ComplexF64)
+function _update_phase_accumulators!(
+    accumulators::PhaseAccumulators, prompt::ComplexF64, block_index::Int, blocks_per_bit::Int,
+)
+    @inbounds for phase in 0:(blocks_per_bit-1)
+        block_index < phase && continue
+        accumulators.open_bin_sum[phase+1] += prompt
+        if (block_index - phase) % blocks_per_bit == blocks_per_bit - 1
+            bin_sum = accumulators.open_bin_sum[phase+1]
+            bin_energy = abs2(bin_sum)
+            # Welford update of this phase's completed-bin energy mean / M₂.
+            completed_bin_count = div(block_index + 1 - phase, blocks_per_bit)
+            energy_delta = bin_energy - accumulators.mean_bin_energy[phase+1]
+            accumulators.mean_bin_energy[phase+1] += energy_delta / completed_bin_count
+            accumulators.bin_energy_sum_sq_dev[phase+1] +=
+                energy_delta * (bin_energy - accumulators.mean_bin_energy[phase+1])
+            accumulators.last_bin_polarity[phase+1] = real(bin_sum) < 0 ? Int8(-1) : Int8(1)
+            accumulators.open_bin_sum[phase+1] = zero(ComplexF64)
         end
     end
-    acc
+    accumulators
 end
 
 """
 $(SIGNATURES)
 
 Soft-decision, CFAR bit-edge detector — a signal-agnostic maximum-energy
-timing synchronizer for any signal whose navigation bit spans `L > 1`
-primary-code periods with no secondary code (selected by
+timing synchronizer for any signal whose navigation bit spans more than one
+primary-code period with no secondary code (selected by
 [`uses_soft_bit_edge_detection`](@ref); GPS L1 C/A is the current example
-with `L = 20`). Signals with a periodic secondary code (GPS L5I, GPS
-L1C-P) instead use [`_secondary_code_search`](@ref), which correlates
-against a known overlay.
+with `blocks_per_bit = 20`). Signals with a periodic secondary code (GPS
+L5I, GPS L1C-P) instead use [`_secondary_code_search`](@ref), which
+correlates against a known overlay.
 
-The per-phase bin statistics are carried in `acc`
+The per-phase bin statistics are carried in `accumulators`
 ([`PhaseAccumulators`](@ref), advanced in place by
-[`_update_phase_accumulators!`](@ref)); `L` is the number of primary-code
-blocks per navigation bit (20 for L1 C/A) and `n` is the total number of
-prompts seen. The detector is O(L) per call — no rescan of history — so
-it stays cheap on the pre-sync hot path no matter how long sync takes.
+[`_update_phase_accumulators!`](@ref)); `blocks_per_bit` is the number of
+primary-code blocks per navigation bit (20 for L1 C/A) and `num_blocks` is
+the total number of prompts seen. The detector is O(blocks_per_bit) per
+call — no rescan of history — so it stays cheap on the pre-sync hot path no
+matter how long sync takes.
 
 # Statistic
 
-Under the hypothesis that the bit edge sits at phase `k ∈ 0:L-1`, the
-prompts partition into `L`-block bins aligned to `k`. Each complete bin
-is coherently summed (`Sₖₘ = Σ pᵢ`) and its energy `|Sₖₘ|²` accumulated
-in `acc.energy[k]`; the true phase never straddles a data-bit transition,
-so it keeps full coherent gain on every bin while wrong phases lose
-energy on transition bins. The per-phase mean bin energy `Ēₖ` is
-therefore the maximum-likelihood timing statistic for unknown i.i.d. data
-in AWGN.
+Under the hypothesis that the bit edge sits at `phase ∈ 0:blocks_per_bit-1`,
+the prompts partition into `blocks_per_bit`-block bins aligned to `phase`.
+Each complete bin is coherently summed (`Sₖₘ = Σ pᵢ`) and its energy
+`|Sₖₘ|²` folded into the phase's running `mean_bin_energy`; the true phase
+never straddles a data-bit transition, so it keeps full coherent gain on
+every bin while wrong phases lose energy on transition bins. The per-phase
+mean bin energy is therefore the maximum-likelihood timing statistic for
+unknown i.i.d. data in AWGN.
 
 # CFAR confidence
 
@@ -185,64 +168,78 @@ signal and then mistake a tiny systematic cross-phase asymmetry for a real
 edge.) The peak is accepted only when it beats the runner-up by a margin
 significant under that spread:
 
-    z = (Ē₍₁₎ - Ē₍₂₎) / √(s² (1/M₁ + 1/M₂))   ≥   Φ⁻¹(1 - P_fa/(L-1))
+    z_score = energy_gap / standard_error   ≥   Φ⁻¹(1 - false_alarm_probability/(blocks_per_bit - 1))
 
-where `s²` is the peak phase's per-bin energy variance, `Mₖ` the bin
-counts, and `P_fa = 1 - confidence`, Bonferroni-split over the `L-1`
-competing phases. A real edge has a structural gap that dwarfs the thermal
-bin-to-bin spread, so `z` grows like `√M` and crosses the threshold sooner
-at high C/N₀ and later in noise — the detector self-paces — while a
-drift-only asymmetry keeps `z` bounded and never locks.
+where the standard error combines the peak phase's per-bin energy variance
+over the peak and runner-up bin counts, `false_alarm_probability =
+1 - confidence` is Bonferroni-split over the `blocks_per_bit - 1` competing
+phases, and `Φ⁻¹` is [`_norm_quantile`](@ref). A real edge has a structural
+gap that dwarfs the thermal bin-to-bin spread, so `z_score` grows like the
+square root of the bin count and crosses the threshold sooner at high C/N₀
+and later in noise — the detector self-paces — while a drift-only asymmetry
+keeps `z_score` bounded and never locks.
 
 # Boundary firing
 
-Detection is reported (`found = true`) only when the most recent block
-also *ends* the winning phase's bit (`n % L == k`), so the upcoming
-integration starts a fresh navigation bit. This keeps the `phase = 0`
-contract — and, crucially, the post-sync coherent 20-block integration —
-aligned to the true bit grid, which is what makes the off-by-one lock of
-issue #124 structurally impossible: the detector can only ever fire at the
-energy-maximizing phase's own boundary, never at a neighbour's.
+Detection is reported (`found = true`) only when the most recent block also
+*ends* the winning phase's bit (`num_blocks % blocks_per_bit == peak_phase`),
+so the upcoming integration starts a fresh navigation bit. This keeps the
+`phase = 0` contract — and, crucially, the post-sync coherent
+`blocks_per_bit`-block integration — aligned to the true bit grid, which is
+what makes the off-by-one lock of issue #124 structurally impossible: the
+detector can only ever fire at the energy-maximizing phase's own boundary,
+never at a neighbour's.
 
 `polarity` is the sign of the most recently completed bin's coherent sum.
 """
-function _detect_bit_edge_cfar(acc::PhaseAccumulators, L::Int, confidence::Float64, n::Int)
+function _detect_bit_edge_cfar(
+    accumulators::PhaseAccumulators, blocks_per_bit::Int, confidence::Float64, num_blocks::Int,
+)
     # Need at least two complete bins on some phase before any phase can
     # serve as a runner-up; below that a transition cannot have been
     # localized yet.
-    n < 2L && return SyncResult(false, 0, Int8(0))
+    num_blocks < 2 * blocks_per_bit && return SyncResult(false, 0, Int8(0))
 
-    means = acc.mean
-    # Single O(L) pass: peak (best mean bin energy among phases with ≥ 2
-    # complete bins) and the two highest phases overall. The runner-up is
-    # the higher of those two that isn't the peak. The completed-bin count of
-    # phase `k` is `div(n - k, L)` (not stored).
-    kpeak = -1; peak = -1.0; nb_peak = 0          # best with ≥ 2 bins
-    top1k = -1; top1 = -1.0; nb1 = 0              # highest with ≥ 1 bin
-    top2 = -1.0; nb2 = 0                          # second highest with ≥ 1 bin
-    @inbounds for k in 0:(L-1)
-        nb = div(n - k, L)
-        nb < 1 && continue
-        e = means[k+1]
-        if e > top1
-            top2 = top1; nb2 = nb1
-            top1 = e; top1k = k; nb1 = nb
-        elseif e > top2
-            top2 = e; nb2 = nb
+    mean_bin_energy = accumulators.mean_bin_energy
+    # Single O(blocks_per_bit) pass: the peak (highest mean bin energy among
+    # phases with ≥ 2 complete bins) and the two highest phases overall. The
+    # runner-up is the higher of those two that isn't the peak. A phase's
+    # completed-bin count is `div(num_blocks - phase, blocks_per_bit)`.
+    peak_phase = -1; peak_energy = -1.0; peak_bin_count = 0          # best, ≥ 2 bins
+    best_phase = -1; best_energy = -1.0; best_bin_count = 0          # highest, ≥ 1 bin
+    second_best_energy = -1.0; second_best_bin_count = 0             # 2nd highest, ≥ 1 bin
+    @inbounds for phase in 0:(blocks_per_bit-1)
+        bin_count = div(num_blocks - phase, blocks_per_bit)
+        bin_count < 1 && continue
+        energy = mean_bin_energy[phase+1]
+        if energy > best_energy
+            second_best_energy = best_energy
+            second_best_bin_count = best_bin_count
+            best_energy = energy
+            best_phase = phase
+            best_bin_count = bin_count
+        elseif energy > second_best_energy
+            second_best_energy = energy
+            second_best_bin_count = bin_count
         end
-        if nb >= 2 && e > peak
-            peak = e; kpeak = k; nb_peak = nb
+        if bin_count >= 2 && energy > peak_energy
+            peak_energy = energy
+            peak_phase = phase
+            peak_bin_count = bin_count
         end
     end
-    # `n >= 2L` guarantees phase 0 has ≥ 2 bins, so `kpeak` is always set.
-    kpeak < 0 && return SyncResult(false, 0, Int8(0))
+    # `num_blocks >= 2 * blocks_per_bit` guarantees phase 0 has ≥ 2 bins, so
+    # `peak_phase` is always set.
+    peak_phase < 0 && return SyncResult(false, 0, Int8(0))
 
     # Runner-up: the highest-energy phase that isn't the peak (any bin count).
-    second, nb_second = top1k == kpeak ? (top2, nb2) : (top1, nb1)
-    nb_second < 1 && return SyncResult(false, 0, Int8(0))
+    runner_up_energy, runner_up_bin_count =
+        best_phase == peak_phase ? (second_best_energy, second_best_bin_count) :
+        (best_energy, best_bin_count)
+    runner_up_bin_count < 1 && return SyncResult(false, 0, Int8(0))
 
-    gap = peak - second
-    gap <= 0 && return SyncResult(false, 0, Int8(0))
+    energy_gap = peak_energy - runner_up_energy
+    energy_gap <= 0 && return SyncResult(false, 0, Int8(0))
 
     # Noise scale: the bin-to-bin variance of the peak phase's own
     # completed-bin energies, maintained by Welford so it is numerically
@@ -253,25 +250,34 @@ function _detect_bit_edge_cfar(acc::PhaseAccumulators, L::Int, confidence::Float
     # The runner-up is assumed to share this per-bin variance (it can only be
     # larger, from its straddling bins, so this is the optimistic —
     # fastest-locking — choice that still rejects drift-only asymmetries).
-    @inbounds var_per_bin = acc.m2[kpeak+1] / (nb_peak - 1)
-    se = sqrt(var_per_bin * (1 / nb_peak + 1 / nb_second))
-    z = se > 0 ? gap / se : (gap > 0 ? Inf : 0.0)
+    @inbounds bin_energy_variance =
+        accumulators.bin_energy_sum_sq_dev[peak_phase+1] / (peak_bin_count - 1)
+    standard_error =
+        sqrt(bin_energy_variance * (1 / peak_bin_count + 1 / runner_up_bin_count))
+    z_score = standard_error > 0 ? energy_gap / standard_error : (energy_gap > 0 ? Inf : 0.0)
 
     # `confidence` is the (1 - false-sync probability) target, Bonferroni-
-    # split over the L-1 competing phases. Clamp the quantile argument to the
-    # open interval (0, 1): otherwise `confidence = 1.0` (or the rounding of
-    # `1 - tiny/(L-1)` up to 1.0) yields `Φ⁻¹(1) = NaN`, and the
-    # `z < threshold` gate would silently pass (NaN comparisons are false),
-    # turning "maximum confidence" into "lock immediately".
-    p = clamp(1 - (1 - confidence) / (L - 1), nextfloat(0.0), prevfloat(1.0))
-    z_threshold = _norm_quantile(p)
-    z < z_threshold && return SyncResult(false, 0, Int8(0))
+    # split over the `blocks_per_bit - 1` competing phases. Clamp the quantile
+    # argument to the open interval (0, 1): otherwise `confidence = 1.0` (or
+    # the rounding of `1 - tiny/(blocks_per_bit-1)` up to 1.0) yields
+    # `Φ⁻¹(1) = NaN`, and the `z_score < threshold` gate would silently pass
+    # (NaN comparisons are false), turning "maximum confidence" into "lock
+    # immediately".
+    false_alarm_probability = 1 - confidence
+    quantile_argument = clamp(
+        1 - false_alarm_probability / (blocks_per_bit - 1),
+        nextfloat(0.0),
+        prevfloat(1.0),
+    )
+    z_threshold = _norm_quantile(quantile_argument)
+    z_score < z_threshold && return SyncResult(false, 0, Int8(0))
 
     # Fire only at the winning phase's own bit boundary so the upcoming
     # integration starts a new bit.
-    n % L != kpeak && return SyncResult(false, 0, Int8(0))
+    num_blocks % blocks_per_bit != peak_phase && return SyncResult(false, 0, Int8(0))
 
-    @inbounds polarity = acc.last_pol[kpeak+1] < 0 ? Int8(-1) : Int8(+1)
+    @inbounds polarity =
+        accumulators.last_bin_polarity[peak_phase+1] < 0 ? Int8(-1) : Int8(+1)
     SyncResult(true, 0, polarity)
 end
 
@@ -646,17 +652,23 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
     code_block_buffer_lengh = bit_buffer.code_block_buffer_lengh + 1
 
     # Signals that detect the bit edge from soft prompts (GPS L1 C/A) fold
-    # each block into the immutable per-phase accumulators and run the
-    # maximum-energy CFAR detector; everything else stays on the
-    # hard-decision sliding-window path. The branch folds at compile time per
-    # signal type, so non-soft signals never update `phase_acc`.
+    # each block into the per-phase accumulators and run the maximum-energy
+    # CFAR detector; everything else stays on the hard-decision sliding-window
+    # path. The branch folds at compile time per signal type, so non-soft
+    # signals never update `phase_acc`.
     phase_acc = bit_buffer.phase_acc
     if uses_soft_bit_edge_detection(signal)
-        L = num_code_blocks_that_form_a_bit
-        _is_seeded(phase_acc, L) || _seed_phase_accumulators!(phase_acc, L)
-        _update_phase_accumulators!(phase_acc, ComplexF64(prompt), code_block_buffer_lengh - 1, L)
+        blocks_per_bit = num_code_blocks_that_form_a_bit
+        _is_seeded(phase_acc, blocks_per_bit) ||
+            _seed_phase_accumulators!(phase_acc, blocks_per_bit)
+        _update_phase_accumulators!(
+            phase_acc, ComplexF64(prompt), code_block_buffer_lengh - 1, blocks_per_bit,
+        )
         sync = _detect_bit_edge_cfar(
-            phase_acc, L, get_bit_edge_detection_confidence(signal), code_block_buffer_lengh,
+            phase_acc,
+            blocks_per_bit,
+            get_bit_edge_detection_confidence(signal),
+            code_block_buffer_lengh,
         )
     else
         sync = detect_bit_or_secondary_code_sync(
