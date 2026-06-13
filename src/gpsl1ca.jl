@@ -1,16 +1,15 @@
-# GPS L1 C/A locks its bit edge with the soft-decision, maximum-energy
-# CFAR detector `_detect_bit_edge_cfar` (driven by the `soft_prompts`
-# history) rather than a hard-decision template match. The trait below
-# routes `_buffer_find_bit` to that path; there is no
-# `detect_bit_or_secondary_code_sync(::GPSL1CA, …)` method.
+# GPS L1 C/A has 20 primary-code blocks per navigation bit and no secondary
+# code, so the signal-agnostic `uses_soft_bit_edge_detection` default routes
+# it to the soft, maximum-energy CFAR detector `_detect_bit_edge_cfar`
+# (`_buffer_find_bit`) rather than a hard-decision template match — there is
+# no `detect_bit_or_secondary_code_sync(::GPSL1CA, …)` method.
 #
-# The soft detector is edge-locked by construction: it can only ever fire
-# at the energy-maximizing phase's own bit boundary, so it cannot lock one
-# block early the way the old fixed-tolerance template matcher did when the
-# first data transition was preceded by a repeated bit (issue #124). The
-# lock latency self-paces with C/N₀ — ~40 ms for a clean signal, longer in
-# noise — via `get_bit_edge_detection_confidence(::GPSL1CA)`.
-@inline uses_soft_bit_edge_detection(::GPSL1CA) = true
+# That detector is edge-locked by construction: it can only ever fire at the
+# energy-maximizing phase's own bit boundary, so it cannot lock one block
+# early the way the old fixed-tolerance template matcher did when the first
+# data transition was preceded by a repeated bit (issue #124). The lock
+# latency self-paces with C/N₀ — ~40 ms for a clean signal, longer in
+# noise — via `get_bit_edge_detection_confidence`.
 
 """
 $(SIGNATURES)
