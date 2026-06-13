@@ -34,12 +34,12 @@ end
     @test _norm_quantile(0.1) < _norm_quantile(0.2) < _norm_quantile(0.8)
 end
 
-const L1CA_L = 20  # primary-code blocks per L1 C/A navigation bit
+const L1CA_BLOCKS_PER_BIT = 20  # primary-code blocks per L1 C/A navigation bit
 
 # Build a noiseless ±1 soft-prompt stream from a list of data bits, one bit =
-# `L1CA_L` blocks, scaled by `amp`.
+# `L1CA_BLOCKS_PER_BIT` blocks, scaled by `amp`.
 _bitstream(bits; amp = 1.0) =
-    ComplexF64[amp * (b == 1 ? 1.0 : -1.0) for b in bits for _ in 1:L1CA_L]
+    ComplexF64[amp * (b == 1 ? 1.0 : -1.0) for b in bits for _ in 1:L1CA_BLOCKS_PER_BIT]
 
 # Fold a prompt stream into a fresh set of phase accumulators (mirrors what
 # `_buffer_find_bit` does) and run the detector after the n-th block. With
@@ -47,15 +47,18 @@ _bitstream(bits; amp = 1.0) =
 # at which it first locks (0 if never), else it returns the SyncResult after
 # exactly `upto` blocks.
 function _detect_over(prompts, confidence; upto = 0)
-    acc = PhaseAccumulators()
-    _seed_phase_accumulators!(acc, L1CA_L)
-    for (i, p) in enumerate(prompts)
-        _update_phase_accumulators!(acc, ComplexF64(p), i - 1, L1CA_L)
-        res = _detect_bit_edge_cfar(acc, L1CA_L, confidence, i)
-        upto == 0 && res.found && return i
-        upto == i && return res
+    accumulators = PhaseAccumulators()
+    _seed_phase_accumulators!(accumulators, L1CA_BLOCKS_PER_BIT)
+    for (block_number, prompt) in enumerate(prompts)
+        _update_phase_accumulators!(
+            accumulators, ComplexF64(prompt), block_number - 1, L1CA_BLOCKS_PER_BIT,
+        )
+        result = _detect_bit_edge_cfar(accumulators, L1CA_BLOCKS_PER_BIT, confidence, block_number)
+        upto == 0 && result.found && return block_number
+        upto == block_number && return result
     end
-    return upto == 0 ? 0 : _detect_bit_edge_cfar(acc, L1CA_L, confidence, length(prompts))
+    return upto == 0 ? 0 :
+           _detect_bit_edge_cfar(accumulators, L1CA_BLOCKS_PER_BIT, confidence, length(prompts))
 end
 
 @testset "_detect_bit_edge_cfar" begin
@@ -92,21 +95,21 @@ end
         # lower one, and always at a true bit boundary.
         function lock_block(confidence, seed)
             rng = MersenneTwister(seed)
-            clean = _bitstream([i % 2 for i in 0:9]; amp = 8.0)
-            noisy = ComplexF64[p + complex(randn(rng), randn(rng)) for p in clean]
+            clean = _bitstream([bit % 2 for bit in 0:9]; amp = 8.0)
+            noisy = ComplexF64[prompt + complex(randn(rng), randn(rng)) for prompt in clean]
             _detect_over(noisy, confidence)
         end
         for seed in 1:5
-            lo = lock_block(0.95, seed)
-            hi = lock_block(0.99999, seed)
+            low_confidence_lock = lock_block(0.95, seed)
+            high_confidence_lock = lock_block(0.99999, seed)
             # Both lock on this high-SNR stream within the window.
-            @test lo > 0
-            @test hi > 0
+            @test low_confidence_lock > 0
+            @test high_confidence_lock > 0
             # More confidence ⇒ never an earlier lock.
-            @test hi >= lo
+            @test high_confidence_lock >= low_confidence_lock
             # Whenever it does lock it is at a true bit boundary.
-            @test lo % L1CA_L == 0
-            @test hi % L1CA_L == 0
+            @test low_confidence_lock % L1CA_BLOCKS_PER_BIT == 0
+            @test high_confidence_lock % L1CA_BLOCKS_PER_BIT == 0
         end
     end
 
@@ -116,12 +119,12 @@ end
         # NaN-threshold path did. (A noiseless edge has z = Inf and still
         # locks — genuine certainty, exercised above.)
         rng = MersenneTwister(7)
-        clean = _bitstream([i % 2 for i in 0:9]; amp = 3.0)
-        noisy = ComplexF64[p + complex(randn(rng), randn(rng)) for p in clean]
-        lo = _detect_over(noisy, 0.99)
-        hi = _detect_over(noisy, 1.0)
-        @test lo > 0                          # locks at moderate confidence
-        @test hi == 0 || hi > lo              # 1.0 never earlier than 0.99
+        clean = _bitstream([bit % 2 for bit in 0:9]; amp = 3.0)
+        noisy = ComplexF64[prompt + complex(randn(rng), randn(rng)) for prompt in clean]
+        low_confidence_lock = _detect_over(noisy, 0.99)
+        high_confidence_lock = _detect_over(noisy, 1.0)
+        @test low_confidence_lock > 0                                      # locks at moderate confidence
+        @test high_confidence_lock == 0 || high_confidence_lock > low_confidence_lock  # 1.0 never earlier
     end
 
     @testset "no false lock on a long near-constant run (Welford stability)" begin
@@ -129,12 +132,17 @@ end
         # and no real bit edge. A naive Σe² − (Σe)²/M variance would lose
         # precision and could read zero (→ infinite confidence → false lock)
         # at large bin counts; Welford keeps it stable, so this never locks.
-        acc = PhaseAccumulators()
-        _seed_phase_accumulators!(acc, L1CA_L)
+        accumulators = PhaseAccumulators()
+        _seed_phase_accumulators!(accumulators, L1CA_BLOCKS_PER_BIT)
         found = false
-        for i in 1:5000
-            _update_phase_accumulators!(acc, complex(1e4 * (1 + 1e-7 * (i - 1)), 0.0), i - 1, L1CA_L)
-            if _detect_bit_edge_cfar(acc, L1CA_L, 0.999, i).found
+        for block_number in 1:5000
+            _update_phase_accumulators!(
+                accumulators,
+                complex(1e4 * (1 + 1e-7 * (block_number - 1)), 0.0),
+                block_number - 1,
+                L1CA_BLOCKS_PER_BIT,
+            )
+            if _detect_bit_edge_cfar(accumulators, L1CA_BLOCKS_PER_BIT, 0.999, block_number).found
                 found = true
                 break
             end
