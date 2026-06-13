@@ -255,6 +255,51 @@ end
     end
 end
 
+# Backend-less standalone fused dispatch for the public single-satellite
+# `downconvert_and_correlate!`, which has no `ScratchBuffers` to draw on.
+# Static (`SVector`) shifts use the allocation-free in-register kernel;
+# dynamic (`AbstractVector`) shifts need SoA tile buffers, allocated per
+# call here. This is a convenience entry point — the hot paths run through
+# `_fused_with_tile_scratch!` with pooled scratch instead, so the dynamic
+# fused kernel itself stays buffer-taking only (no allocating overload).
+@inline function _fused_standalone!(
+    correlator::AbstractCorrelator{M},
+    signal,
+    code_replica,
+    sample_shifts::SVector,
+    carrier_frequency,
+    sampling_frequency,
+    carrier_phase,
+    start_sample,
+    num_samples,
+) where {M}
+    downconvert_and_correlate_fused!(
+        correlator, signal, code_replica, sample_shifts,
+        carrier_frequency, sampling_frequency, carrier_phase,
+        start_sample, num_samples,
+    )::typeof(correlator)
+end
+
+@inline function _fused_standalone!(
+    correlator::AbstractCorrelator{M},
+    signal,
+    code_replica,
+    sample_shifts::AbstractVector,
+    carrier_frequency,
+    sampling_frequency,
+    carrier_phase,
+    start_sample,
+    num_samples,
+) where {M}
+    tile_re = Vector{Float32}(undef, num_samples * M)
+    tile_im = Vector{Float32}(undef, num_samples * M)
+    downconvert_and_correlate_fused!(
+        correlator, signal, code_replica, sample_shifts,
+        carrier_frequency, sampling_frequency, carrier_phase,
+        start_sample, num_samples, tile_re, tile_im,
+    )::typeof(correlator)
+end
+
 # Per-sat downconvert+correlate. Pure: returns the updated TrackedSat. Shared
 # by `downconvert_and_correlate` and `downconvert_and_correlate!` across both
 # CPU backends; the per-backend differences (kernel choice) are dispatched
@@ -741,7 +786,7 @@ function downconvert_and_correlate!(
         sample_shifts,
         prn,
     )
-    downconvert_and_correlate_fused!(
+    _fused_standalone!(
         correlator,
         signal,
         code_replica,
