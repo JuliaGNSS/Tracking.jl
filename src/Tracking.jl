@@ -5,6 +5,7 @@ using DocStringExtensions
 using FastSinCos
 using GNSSSignals
 using SIMD
+using SpecialFunctions: erfinv
 using StaticArrays
 using TrackingLoopFilters
 using Dictionaries
