@@ -55,7 +55,7 @@ allocation-free choice.
 Fields (all length `blocks_per_bit` once seeded; empty before the first block):
 
 - `open_bin_sum` — coherent sum of the phase's *currently open* bin.
-- `mean_bin_energy` / `bin_energy_sum_sq_dev` — Welford running mean and
+- `mean_bin_energy` / `bin_energy_sum_of_squared_deviations` — Welford running mean and
   sum of squared deviations (`M₂ = Σ(energyᵢ − mean)²`) of the phase's
   *completed*-bin energies, for a numerically stable variance. The bin
   count is not stored — it is `div(num_blocks - phase, blocks_per_bit)`.
@@ -65,7 +65,7 @@ Fields (all length `blocks_per_bit` once seeded; empty before the first block):
 struct PhaseAccumulators
     open_bin_sum::Vector{ComplexF64}
     mean_bin_energy::Vector{Float64}
-    bin_energy_sum_sq_dev::Vector{Float64}
+    bin_energy_sum_of_squared_deviations::Vector{Float64}
     last_bin_polarity::Vector{Int8}
 end
 
@@ -81,14 +81,14 @@ function _seed_phase_accumulators!(accumulators::PhaseAccumulators, blocks_per_b
     for vector in (
         accumulators.open_bin_sum,
         accumulators.mean_bin_energy,
-        accumulators.bin_energy_sum_sq_dev,
+        accumulators.bin_energy_sum_of_squared_deviations,
         accumulators.last_bin_polarity,
     )
         resize!(vector, blocks_per_bit)
     end
     fill!(accumulators.open_bin_sum, zero(ComplexF64))
     fill!(accumulators.mean_bin_energy, 0.0)
-    fill!(accumulators.bin_energy_sum_sq_dev, 0.0)
+    fill!(accumulators.bin_energy_sum_of_squared_deviations, 0.0)
     fill!(accumulators.last_bin_polarity, Int8(0))
     accumulators
 end
@@ -118,7 +118,7 @@ function _update_phase_accumulators!(
             completed_bin_count = div(block_index + 1 - phase, blocks_per_bit)
             energy_delta = bin_energy - accumulators.mean_bin_energy[phase+1]
             accumulators.mean_bin_energy[phase+1] += energy_delta / completed_bin_count
-            accumulators.bin_energy_sum_sq_dev[phase+1] +=
+            accumulators.bin_energy_sum_of_squared_deviations[phase+1] +=
                 energy_delta * (bin_energy - accumulators.mean_bin_energy[phase+1])
             accumulators.last_bin_polarity[phase+1] = real(bin_sum) < 0 ? Int8(-1) : Int8(1)
             accumulators.open_bin_sum[phase+1] = zero(ComplexF64)
@@ -251,7 +251,7 @@ function _detect_bit_edge_cfar(
     # larger, from its straddling bins, so this is the optimistic —
     # fastest-locking — choice that still rejects drift-only asymmetries).
     @inbounds bin_energy_variance =
-        accumulators.bin_energy_sum_sq_dev[peak_phase+1] / (peak_bin_count - 1)
+        accumulators.bin_energy_sum_of_squared_deviations[peak_phase+1] / (peak_bin_count - 1)
     standard_error =
         sqrt(bin_energy_variance * (1 / peak_bin_count + 1 / runner_up_bin_count))
     z_score = standard_error > 0 ? energy_gap / standard_error : (energy_gap > 0 ? Inf : 0.0)
