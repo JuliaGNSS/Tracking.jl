@@ -523,6 +523,18 @@ Tracking.get_correlator_sample_shifts(c::VectorShiftsCorrelator, sampling_freque
         )
         @test get_accumulators(backend_result) ≈ ref_accumulators rtol = 1e-4
     end
+
+    # The same public entry point with a standard SVector-shifts correlator
+    # must route through the in-register kernel and agree with the scalar
+    # reference (covers the static branch of the standalone fused dispatch).
+    epl_static = EarlyPromptLateCorrelator()
+    static_code_replica = zeros(get_code_type(gpsl1), code_replica_length)
+    static_result = Tracking.downconvert_and_correlate!(
+        gpsl1, signal, epl_static, static_code_replica, window_code_phase, 0.0,
+        code_frequency, carrier_frequency, sampling_frequency,
+        start_sample, num_samples, prn,
+    )
+    @test get_accumulators(static_result) ≈ ref_accumulators rtol = 1e-4
 end
 
 @testset "Fused downconvert and correlate tuple kernel" begin
