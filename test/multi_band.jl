@@ -56,7 +56,7 @@ end
     fs = 4e6Hz
     buf = _make_signal(GPSL1CA, 1, 200Hz, 100.0, 4000, fs)
     ts = TrackState(; signal = GPSL1CA())
-    add_satellite!(ts; prn = 1, code_phase = 100.0, carrier_doppler = 180Hz)
+    ts = add_satellite!(ts; prn = 1, code_phase = 100.0, carrier_doppler = 180Hz)
     # Integer IF must promote inside the bare-buffer wrapper, not throw.
     new_ts = track(buf, ts, fs; intermediate_frequency = 0Hz)
     @test new_ts isa TrackState
