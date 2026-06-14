@@ -604,7 +604,7 @@ end
 
 @testset "get_filtered_prompts TrackState accessor (issue #134)" begin
     ts = TrackState(; signal = GPSL1CA())
-    add_satellite!(ts; prn = 1)
+    ts = add_satellite!(ts; prn = 1)
     # Sibling of `get_bits(ts, 1)` — must resolve through the same
     # accessor ladder instead of throwing a MethodError.
     @test get_filtered_prompts(ts, 1) isa Vector{ComplexF64}
@@ -628,7 +628,7 @@ end
 
 @testset "remove_satellite throws KeyError carrying the prn (issue #134)" begin
     ts = TrackState(; signal = GPSL1CA())
-    add_satellite!(ts; prn = 1)
+    ts = add_satellite!(ts; prn = 1)
     err = try
         remove_satellite(ts; prn = 99)
         nothing
@@ -663,7 +663,7 @@ end
 
 @testset "TrackState(; signals = SignalGroup) validates pre-populated sats' estimator (issue #134)" begin
     ts0 = TrackState(; signal = GPSL1CA())
-    add_satellite!(ts0; prn = 1)
+    ts0 = add_satellite!(ts0; prn = 1)
     populated_group = ts0.groups.default
     different = ConventionalPLLAndDLL(;
         carrier_loop_filter_bandwidth = 22.0Hz,
