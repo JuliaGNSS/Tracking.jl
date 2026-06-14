@@ -144,7 +144,7 @@ julia> using Tracking: Hz
 
 julia> track_state = TrackState(; signal = GPSL1CA(), doppler_estimator = MyEstimator());
 
-julia> add_satellite!(track_state; prn = 1, code_phase = 0.0, carrier_doppler = 1000.0Hz);
+julia> track_state = add_satellite!(track_state; prn = 1, code_phase = 0.0, carrier_doppler = 1000.0Hz);
 
 julia> track_state = track(zeros(ComplexF64, 4000), track_state, 4e6Hz);
 

@@ -23,7 +23,7 @@ A typical receiver loop builds the `TrackState` once, hoists the correlator outs
 
 ```julia
 track_state = TrackState(; signal = GPSL1CA())
-add_satellite!(track_state; prn = 1, code_phase = 0.0, carrier_doppler = 1000.0Hz)
+track_state = add_satellite!(track_state; prn = 1, code_phase = 0.0, carrier_doppler = 1000.0Hz)
 # ... more sats ...
 
 dc = CPUThreadedDownconvertAndCorrelator()  # hoist outside the loop
@@ -57,9 +57,9 @@ julia> track_state = TrackState(;
            signals = (legacy_gps_l1 = (GPSL1CA(),), gps_l5 = (GPSL5I(),)),
        );
 
-julia> add_satellite!(track_state; prn = 1, group = :legacy_gps_l1, code_phase = 0.0, carrier_doppler = 0.0Hz);
+julia> track_state = add_satellite!(track_state; prn = 1, group = :legacy_gps_l1, code_phase = 0.0, carrier_doppler = 0.0Hz);
 
-julia> add_satellite!(track_state; prn = 1, group = :gps_l5,        code_phase = 0.0, carrier_doppler = 0.0Hz);
+julia> track_state = add_satellite!(track_state; prn = 1, group = :gps_l5,        code_phase = 0.0, carrier_doppler = 0.0Hz);
 
 julia> buf_l1 = zeros(ComplexF64, 4000);   # 1 ms at  4 MHz
 

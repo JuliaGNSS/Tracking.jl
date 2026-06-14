@@ -176,7 +176,7 @@ julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
                             preferred_early_late_to_prompt_code_shift = 0.1,
                         ));
 
-julia> add_satellite!(track_state, :default, sat);
+julia> track_state = add_satellite!(track_state, :default, sat);
 
 julia> get_correlator(track_state, :default, 1, 1).preferred_early_late_to_prompt_code_shift
 0.1

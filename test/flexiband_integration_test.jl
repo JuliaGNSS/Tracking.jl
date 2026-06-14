@@ -272,13 +272,13 @@ else
             ),
         )
         for a in acq_l1
-            add_satellite!(track_state, a; group = :gps_l1)
+            track_state = add_satellite!(track_state, a; group = :gps_l1)
         end
         for a in acq_e1
-            add_satellite!(track_state, a; group = :galileo)
+            track_state = add_satellite!(track_state, a; group = :galileo)
         end
         for a in acq_l5
-            add_satellite!(track_state, a; group = :gps_l5)
+            track_state = add_satellite!(track_state, a; group = :gps_l5)
         end
 
         track!(
