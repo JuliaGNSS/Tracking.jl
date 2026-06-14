@@ -55,14 +55,14 @@ end
 
     # Immutable variant.
     ts_imm = TrackState(; signal = GPSL1CA())
-    add_satellite!(ts_imm; prn, code_phase = start_code_phase,
+    ts_imm = add_satellite!(ts_imm; prn, code_phase = start_code_phase,
                    carrier_doppler = carrier_doppler - 20Hz)
     new_ts = track(measurement, ts_imm)
     @test abs(get_carrier_doppler(new_ts, :default, prn) - carrier_doppler) < 50Hz
 
     # In-place variant.
     ts_inp = TrackState(; signal = GPSL1CA())
-    add_satellite!(ts_inp; prn, code_phase = start_code_phase,
+    ts_inp = add_satellite!(ts_inp; prn, code_phase = start_code_phase,
                    carrier_doppler = carrier_doppler - 20Hz)
     track!(measurement, ts_inp)
     @test abs(get_carrier_doppler(ts_inp, :default, prn) - carrier_doppler) < 50Hz
@@ -110,7 +110,7 @@ end
     start_code_phase = 100.0
 
     track_state = TrackState(; signal = GPSL1CA())
-    add_satellite!(track_state;
+    track_state = add_satellite!(track_state;
         prn, code_phase = start_code_phase,
         carrier_doppler = carrier_doppler - 20Hz,
     )
@@ -148,11 +148,11 @@ end
         legacy_gps_l1 = (GPSL1CA(),),
         gps_l5        = (GPSL5I(),),
     ))
-    add_satellite!(track_state;
+    track_state = add_satellite!(track_state;
         prn = prn_l1, group = :legacy_gps_l1,
         code_phase = cp_l1, carrier_doppler = cd_l1 - 20Hz,
     )
-    add_satellite!(track_state;
+    track_state = add_satellite!(track_state;
         prn = prn_l5, group = :gps_l5,
         code_phase = cp_l5, carrier_doppler = cd_l5 - 20.0Hz,
     )
@@ -183,8 +183,8 @@ end
         legacy_gps_l1 = (GPSL1CA(),),
         gps_l5        = (GPSL5I(),),
     ))
-    add_satellite!(ts; prn = 1, group = :legacy_gps_l1, carrier_doppler = 0Hz)
-    add_satellite!(ts; prn = 1, group = :gps_l5,        carrier_doppler = 0Hz)
+    ts = add_satellite!(ts; prn = 1, group = :legacy_gps_l1, carrier_doppler = 0Hz)
+    ts = add_satellite!(ts; prn = 1, group = :gps_l5,        carrier_doppler = 0Hz)
 
     # L1 has 4000 samples @ 4 MHz = 1.000 ms; L5 has 25001 samples @ 25 MHz
     # ≈ 1.00004 ms. Off by one sample at L5's rate — must reject.
@@ -195,7 +195,7 @@ end
 
 @testset "Antenna shape mismatch errors" begin
     ts = TrackState(; signal = GPSL1CA(), num_ants = NumAnts(2))
-    add_satellite!(ts; prn = 1, carrier_doppler = 0Hz)
+    ts = add_satellite!(ts; prn = 1, carrier_doppler = 0Hz)
     # 2-antenna group expects a Matrix with 2 columns; pass a Vector.
     m = Measurement(zeros(ComplexF64, 4000), 4e6Hz)
     @test_throws ArgumentError track!((l1 = m,), ts)
@@ -208,8 +208,8 @@ end
         legacy_gps_l1 = SignalGroup((GPSL1CA(),); num_ants = NumAnts(2)),
         gps_l5        = SignalGroup((GPSL5I(),);  num_ants = NumAnts(1)),
     ))
-    add_satellite!(ts; prn = 1, group = :legacy_gps_l1, carrier_doppler = 0Hz)
-    add_satellite!(ts; prn = 1, group = :gps_l5,        carrier_doppler = 0Hz)
+    ts = add_satellite!(ts; prn = 1, group = :legacy_gps_l1, carrier_doppler = 0Hz)
+    ts = add_satellite!(ts; prn = 1, group = :gps_l5,        carrier_doppler = 0Hz)
 
     @test get_num_ants(ts, :legacy_gps_l1, 1) == 2
     @test get_num_ants(ts, :gps_l5, 1) == 1

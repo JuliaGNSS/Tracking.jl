@@ -196,10 +196,10 @@ end
     # values vector — leaving the original claiming keys it has no values for
     # (UndefRefError or silent garbage on access).
     ts = TrackState(; signal = GPSL1CA())
-    add_satellite!(ts; prn = 1, carrier_doppler = 100.0Hz)
+    ts = add_satellite!(ts; prn = 1, carrier_doppler = 100.0Hz)
 
     ts2 = Tracking.reset_start_sample_and_bit_buffer(ts)
-    add_satellite!(ts2; prn = 2, carrier_doppler = 200.0Hz)
+    ts2 = add_satellite!(ts2; prn = 2, carrier_doppler = 200.0Hz)
 
     # The original must be untouched: still exactly one satellite.
     @test length(get_sat_states(ts, :default)) == 1
@@ -209,7 +209,7 @@ end
     @test length(get_sat_states(ts2, :default)) == 2
 
     # Removal on the copy must not shrink the original's key set either.
-    remove_satellite!(ts2; prn = 1)
+    ts2 = remove_satellite!(ts2; prn = 1)
     @test length(get_sat_states(ts, :default)) == 1
     @test get_prn(ts, :default, 1) == 1
 end
@@ -226,7 +226,7 @@ end
     signal = rand(ComplexF64, 5000)
 
     ts2 = Tracking.track(signal, ts, sampling_frequency)
-    add_satellite!(ts2; prn = 2, carrier_doppler = 200.0Hz)
+    ts2 = add_satellite!(ts2; prn = 2, carrier_doppler = 200.0Hz)
 
     # Input keeps exactly its one satellite; output has two.
     @test length(get_sat_states(ts, :default)) == 1
@@ -237,8 +237,8 @@ end
 
 @testset "remove_satellite! kwarg form mutates in place" begin
     ts = TrackState(; signal = GPSL1CA())
-    add_satellite!(ts; prn = 5, carrier_doppler = 100.0Hz)
-    add_satellite!(ts; prn = 6, carrier_doppler = 200.0Hz)
+    ts = add_satellite!(ts; prn = 5, carrier_doppler = 100.0Hz)
+    ts = add_satellite!(ts; prn = 6, carrier_doppler = 200.0Hz)
     @test length(get_sat_states(ts, :default)) == 2
 
     ret = remove_satellite!(ts; prn = 5)
@@ -528,7 +528,7 @@ end
 # the actual return.
 @testset "Accessor type stability — single-group, single-signal" begin
     track_state = TrackState(; signal = GPSL1CA())
-    add_satellite!(track_state; prn = 1, code_phase = 50.0, carrier_doppler = 1000.0Hz)
+    track_state = add_satellite!(track_state; prn = 1, code_phase = 50.0, carrier_doppler = 1000.0Hz)
 
     @inferred get_prn(track_state, 1)
     @inferred get_num_ants(track_state, 1)

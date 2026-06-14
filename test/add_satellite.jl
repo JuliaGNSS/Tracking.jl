@@ -65,7 +65,7 @@ end
         signals = (legacy = sg,),
         doppler_estimator = custom,
     )
-    add_satellite!(ts; prn = 1, group = :legacy, carrier_doppler = 0.0Hz)
+    ts = add_satellite!(ts; prn = 1, group = :legacy, carrier_doppler = 0.0Hz)
     de_state = get_sat_state(ts, :legacy, 1).doppler_estimator_state
     @test de_state.carrier_loop_filter_bandwidth == 22.0Hz
 end
@@ -96,7 +96,7 @@ end
 
 @testset "add_satellite! — single-group shortcut (no `group=`)" begin
     track_state = TrackState(; signal = GPSL1CA())
-    add_satellite!(track_state;
+    track_state = add_satellite!(track_state;
         prn = 11,
         code_phase = 10.5,
         carrier_doppler = 1234.0Hz,
@@ -116,10 +116,10 @@ end
             galileo = (GalileoE1B(),),
         ),
     )
-    add_satellite!(track_state;
+    track_state = add_satellite!(track_state;
         prn = 5, group = :legacy, carrier_doppler = 500.0Hz,
     )
-    add_satellite!(track_state;
+    track_state = add_satellite!(track_state;
         prn = 11, group = :galileo, carrier_doppler = 2000.0Hz,
     )
     @test length(get_sat_states(track_state, :legacy)) == 1
@@ -130,10 +130,10 @@ end
 
 @testset "add_satellite! — overwrites on duplicate PRN" begin
     track_state = TrackState(; signal = GPSL1CA())
-    add_satellite!(track_state;
+    track_state = add_satellite!(track_state;
         prn = 7, carrier_doppler = 100.0Hz,
     )
-    add_satellite!(track_state;
+    track_state = add_satellite!(track_state;
         prn = 7, carrier_doppler = 200.0Hz,
     )
     @test length(get_sat_states(track_state, :default)) == 1
@@ -156,7 +156,7 @@ end
     track_state = TrackState(; signal = GPSL1CA())
     sat = TrackedSat(GPSL1CA(), 9, 5.0, 300.0Hz;
         doppler_estimator = ConventionalAssistedPLLAndDLL())
-    add_satellite!(track_state, :default, sat)
+    track_state = add_satellite!(track_state, :default, sat)
     @test get_prn(track_state, :default, 9) == 9
     @test get_carrier_doppler(track_state, :default, 9) == 300.0Hz
 end
@@ -175,7 +175,7 @@ end
         code_loop_filter_bandwidth = 1.5Hz,
     )
     track_state = TrackState(; signal = GPSL1CA(), doppler_estimator = custom)
-    add_satellite!(track_state;
+    track_state = add_satellite!(track_state;
         prn = 4, carrier_doppler = 0.0Hz,
     )
     de_state = get_sat_state(track_state, :default, 4).doppler_estimator_state
@@ -235,7 +235,7 @@ end
         _make_acq(GPSL1CA(), 2, 10.0, 200.0Hz),
         _make_acq(GPSL1CA(), 3, 20.0, 300.0Hz),
     ]
-    add_satellite!(ts, acqs)
+    ts = add_satellite!(ts, acqs)
     @test length(get_sat_states(ts, :default)) == 3
     @test get_carrier_doppler(ts, :default, 2) == 200.0Hz
 end
@@ -247,8 +247,8 @@ end
     ))
     gps_acq = _make_acq(GPSL1CA(), 11, 1.5, 50.0Hz)
     gal_acq = _make_acq(GalileoE1B(), 12, 2.5, 60.0Hz)
-    add_satellite!(ts, gps_acq; group = :gps)
-    add_satellite!(ts, gal_acq; group = :gal)
+    ts = add_satellite!(ts, gps_acq; group = :gps)
+    ts = add_satellite!(ts, gal_acq; group = :gal)
     @test get_prn(ts, :gps, 11) == 11
     @test get_prn(ts, :gal, 12) == 12
 end
@@ -261,8 +261,8 @@ end
     gps_acq = _make_acq(GPSL1CA(), 11, 1.5, 50.0Hz)
     gal_acq = _make_acq(GalileoE1B(), 12, 2.5, 60.0Hz)
     # No `group=`: each acq lands in the matching group automatically.
-    add_satellite!(ts, gps_acq)
-    add_satellite!(ts, gal_acq)
+    ts = add_satellite!(ts, gps_acq)
+    ts = add_satellite!(ts, gal_acq)
     @test get_prn(ts, :gps, 11) == 11
     @test get_prn(ts, :gal, 12) == 12
 end
@@ -277,7 +277,7 @@ end
         _make_acq(GalileoE1B(), 12, 2.5, 60.0Hz),
         _make_acq(GPSL1CA(),    13, 3.5, 70.0Hz),
     ]
-    add_satellite!(ts, acqs)  # no group= — routes per-entry
+    ts = add_satellite!(ts, acqs)  # no group= — routes per-entry
     @test get_prn(ts, :gps, 11) == 11
     @test get_prn(ts, :gps, 13) == 13
     @test get_prn(ts, :gal, 12) == 12
@@ -307,7 +307,7 @@ end
     @test_throws ArgumentError add_satellite!(ts, short_acq; group = :mix)
     # An L1C-P acquisition is accepted.
     long_acq = _make_acq(GPSL1C_P(), 7, 100.0, 50.0Hz)
-    add_satellite!(ts, long_acq; group = :mix)
+    ts = add_satellite!(ts, long_acq; group = :mix)
     @test get_prn(ts, :mix, 7) == 7
 end
 
