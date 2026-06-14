@@ -57,7 +57,7 @@ julia> using GNSSSignals: gen_code, get_code_frequency, get_code_center_frequenc
 
 julia> track_state = TrackState(; signal = GPSL1CA());
 
-julia> add_satellite!(track_state; prn = 1, code_phase = 50.0, carrier_doppler = 1000.0Hz);
+julia> track_state = add_satellite!(track_state; prn = 1, code_phase = 50.0, carrier_doppler = 1000.0Hz);
 
 julia> sampling_frequency = 4e6Hz;
 

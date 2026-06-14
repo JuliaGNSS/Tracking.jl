@@ -33,7 +33,7 @@ julia> track_state = TrackState(; signal = GPSL1CA());
 julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
                         num_prompts_for_cn0_estimation = 200);
 
-julia> add_satellite!(track_state, :default, sat);
+julia> track_state = add_satellite!(track_state, :default, sat);
 
 julia> get_prn(track_state, 1)
 1
@@ -76,7 +76,7 @@ julia> function run_cn0_demo()
            code_freq = get_code_frequency(sys)
            rng = MersenneTwister(0)
            track_state = TrackState(; signal = GPSL1CA())
-           add_satellite!(track_state; prn, code_phase = 0.0, carrier_doppler = 0.0Hz)
+           track_state = add_satellite!(track_state; prn, code_phase = 0.0, carrier_doppler = 0.0Hz)
            for _ in 1:25
                clean = gen_code(num_samples, sys, prn, fs, code_freq, 0.0)
                noise = sigma .* randn(rng, ComplexF64, num_samples)

@@ -672,7 +672,7 @@ end
     start_carrier_phase = π / 2
 
     track_state = @inferred TrackState(; signal)
-    add_satellite!(track_state;
+    track_state = add_satellite!(track_state;
         prn,
         code_phase = start_code_phase,
         carrier_doppler = carrier_doppler - 5Hz,
@@ -749,7 +749,7 @@ end
     # 0.2-chip seed offset — a realistic acquisition handoff error that puts the
     # DLL discriminator onto the BOC autocorrelation slope. Uses the group's
     # default correlator, so reverting the default spacing breaks this test.
-    add_satellite!(track_state; prn, code_phase = 0.2, carrier_doppler = 0.0Hz)
+    track_state = add_satellite!(track_state; prn, code_phase = 0.2, carrier_doppler = 0.0Hz)
 
     build(code_phase) =
         gen_code(period, signal, prn, sampling_frequency, code_frequency, code_phase) .*
@@ -781,7 +781,7 @@ end
     track_state = TrackState(;
         signals = (modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),),
     )
-    add_satellite!(track_state;
+    track_state = add_satellite!(track_state;
         prn, group = :modern_gps,
         code_phase = 0.0,
         carrier_doppler = carrier_doppler - init_offset,
@@ -876,7 +876,7 @@ end
         gen_code(total_samples, signal, prn, sampling_frequency, code_frequency, 0.0)
 
     track_state = TrackState(; signal)
-    add_satellite!(track_state; prn, code_phase = 0.0, carrier_doppler = carrier_doppler - 20Hz)
+    track_state = add_satellite!(track_state; prn, code_phase = 0.0, carrier_doppler = carrier_doppler - 20Hz)
 
     track!((@view long_signal[1:chunk]), track_state, sampling_frequency)
     prompts = ComplexF64[]

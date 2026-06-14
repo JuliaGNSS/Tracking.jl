@@ -152,13 +152,13 @@ end
 
     # Single-signal reference.
     ref_state = TrackState(; signal = gpsl1)
-    add_satellite!(ref_state; prn, code_phase = start_code_phase, carrier_doppler)
+    ref_state = add_satellite!(ref_state; prn, code_phase = start_code_phase, carrier_doppler)
     ref_state = track(signal_buf, ref_state, sampling_frequency)
     ref_sat = get_sat_state(ref_state, prn)
 
     # Two-signal sat, both GPSL1CA with identical config.
     multi_state = TrackState(; signals = (default = (gpsl1, gpsl1),))
-    add_satellite!(multi_state; prn, code_phase = start_code_phase, carrier_doppler)
+    multi_state = add_satellite!(multi_state; prn, code_phase = start_code_phase, carrier_doppler)
     multi_state = track(signal_buf, multi_state, sampling_frequency)
     multi_sat = get_sat_state(multi_state, prn)
 
@@ -185,7 +185,7 @@ end
     track_state = TrackState(;
         signals = (modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),),
     )
-    add_satellite!(track_state;
+    track_state = add_satellite!(track_state;
         prn = 11, group = :modern_gps,
         code_phase = 0.0, carrier_doppler = 1234.0Hz,
     )

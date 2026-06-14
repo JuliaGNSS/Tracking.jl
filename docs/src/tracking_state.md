@@ -57,7 +57,7 @@ track_state = TrackState(;
 # In your acquisition loop
 while running
     acqs = acquire(GPSL1CA(), latest_chunk, sampling_frequency, candidate_prns)
-    add_satellite!(track_state, filter(is_detected, acqs))   # routes each acq to the matching group
+    track_state = add_satellite!(track_state, filter(is_detected, acqs))   # routes each acq to the matching group
     track_state = track(latest_chunk, track_state, sampling_frequency)
 end
 ```
@@ -152,11 +152,11 @@ julia> using Tracking: Hz
 
 julia> track_state = TrackState(; signal = GPSL1CA());
 
-julia> add_satellite!(track_state; prn = 1,  code_phase = 50.0,  carrier_doppler = 1000.0Hz);
+julia> track_state = add_satellite!(track_state; prn = 1,  code_phase = 50.0,  carrier_doppler = 1000.0Hz);
 
-julia> add_satellite!(track_state; prn = 5,  code_phase = 120.0, carrier_doppler = -500.0Hz);
+julia> track_state = add_satellite!(track_state; prn = 5,  code_phase = 120.0, carrier_doppler = -500.0Hz);
 
-julia> add_satellite!(track_state; prn = 17, code_phase = 890.0, carrier_doppler = 2000.0Hz);
+julia> track_state = add_satellite!(track_state; prn = 17, code_phase = 890.0, carrier_doppler = 2000.0Hz);
 
 julia> get_carrier_doppler(track_state, 5)
 -500.0 Hz
@@ -181,9 +181,9 @@ julia> track_state = TrackState(;
            ),
        );
 
-julia> add_satellite!(track_state; prn = 1,  group = :gps,     code_phase = 50.0,  carrier_doppler = 1000.0Hz);
+julia> track_state = add_satellite!(track_state; prn = 1,  group = :gps,     code_phase = 50.0,  carrier_doppler = 1000.0Hz);
 
-julia> add_satellite!(track_state; prn = 11, group = :galileo, code_phase = 200.0, carrier_doppler = -300.0Hz);
+julia> track_state = add_satellite!(track_state; prn = 11, group = :galileo, code_phase = 200.0, carrier_doppler = -300.0Hz);
 
 julia> get_carrier_doppler(track_state, :gps, 1)
 1000.0 Hz
@@ -207,7 +207,7 @@ julia> track_state = TrackState(;
            ),
        );
 
-julia> add_satellite!(track_state;
+julia> track_state = add_satellite!(track_state;
            prn = 11, group = :modern_gps,
            code_phase = 0.0, carrier_doppler = 1234.0Hz,
        );
@@ -234,7 +234,7 @@ julia> track_state = TrackState(;
            num_ants = NumAnts(4),
        );
 
-julia> add_satellite!(track_state; prn = 1, code_phase = 50.0, carrier_doppler = 1000.0Hz);
+julia> track_state = add_satellite!(track_state; prn = 1, code_phase = 50.0, carrier_doppler = 1000.0Hz);
 
 julia> get_num_ants(track_state, 1)
 4
@@ -274,11 +274,11 @@ When the [Acquisition.jl](https://github.com/JuliaGNSS/Acquisition.jl) extension
 using Acquisition  # loads the extension
 
 # Single acq
-add_satellite!(ts, acq)                       # auto-route
-add_satellite!(ts, acq; group = :legacy_gps)  # explicit group, asserts match
+ts = add_satellite!(ts, acq)                       # auto-route
+ts = add_satellite!(ts, acq; group = :legacy_gps)  # explicit group, asserts match
 
 # Vector of acqs (mixed constellations OK)
-add_satellite!(ts, filter(is_detected, acqs))
+ts = add_satellite!(ts, filter(is_detected, acqs))
 ```
 
 `acq.system` must match the **longest-primary-code** signal in the target group's tuple — its code phase is the only one that's unambiguous when the group tracks multiple signals on shared chips. Hand over an L1C-P acq (not L1 C/A) for a group tracking `(GPSL1C_P(), GPSL1C_D(), GPSL1CA())`.
@@ -292,11 +292,11 @@ julia> using Tracking: Hz
 
 julia> track_state = TrackState(; signal = GPSL1CA());
 
-julia> add_satellite!(track_state; prn = 1,  code_phase = 50.0,  carrier_doppler = 1000.0Hz);
+julia> track_state = add_satellite!(track_state; prn = 1,  code_phase = 50.0,  carrier_doppler = 1000.0Hz);
 
-julia> add_satellite!(track_state; prn = 23, code_phase = 500.0, carrier_doppler = 1500.0Hz);
+julia> track_state = add_satellite!(track_state; prn = 23, code_phase = 500.0, carrier_doppler = 1500.0Hz);
 
-julia> remove_satellite!(track_state; prn = 1);
+julia> track_state = remove_satellite!(track_state; prn = 1);
 
 julia> haskey(get_sat_states(track_state, :default), 23)
 true
@@ -369,9 +369,9 @@ julia> track_state = TrackState(;
            signals = (legacy_gps_l1 = (GPSL1CA(),), gps_l5 = (GPSL5I(),)),
        );
 
-julia> add_satellite!(track_state; prn = 1, group = :legacy_gps_l1, code_phase = 0.0, carrier_doppler = 200Hz);
+julia> track_state = add_satellite!(track_state; prn = 1, group = :legacy_gps_l1, code_phase = 0.0, carrier_doppler = 200Hz);
 
-julia> add_satellite!(track_state; prn = 1, group = :gps_l5, code_phase = 0.0, carrier_doppler = -150Hz);
+julia> track_state = add_satellite!(track_state; prn = 1, group = :gps_l5, code_phase = 0.0, carrier_doppler = -150Hz);
 
 julia> buf_l1 = make_signal(GPSL1CA(),  1, 200Hz,  4000,  4e6Hz);  # 1 ms at 4 MHz
 
@@ -492,7 +492,7 @@ julia> track_state = TrackState(;
            signals = (modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),),
        );
 
-julia> add_satellite!(track_state; prn = 11, group = :modern_gps,
+julia> track_state = add_satellite!(track_state; prn = 11, group = :modern_gps,
                                    code_phase = 0.0, carrier_doppler = 1234.0Hz);
 
 julia> get_carrier_doppler(track_state, :modern_gps, 11)  # sat-level: same for all signals
