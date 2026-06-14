@@ -318,11 +318,11 @@ end
     # the one signal `_longest_code_signal` happens to pick first.
     ts = TrackState(; signals = (mix = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),))
     d_acq = _make_acq(GPSL1C_D(), 8, 100.0, 50.0Hz)
-    add_satellite!(ts, d_acq; group = :mix)
+    ts = add_satellite!(ts, d_acq; group = :mix)
     @test get_prn(ts, :mix, 8) == 8
     # Auto-routing accepts it as well.
     d_acq2 = _make_acq(GPSL1C_D(), 9, 100.0, 50.0Hz)
-    add_satellite!(ts, d_acq2)
+    ts = add_satellite!(ts, d_acq2)
     @test get_prn(ts, :mix, 9) == 9
     # The short L1CA acquisition stays rejected.
     short_acq = _make_acq(GPSL1CA(), 10, 100.0, 50.0Hz)
@@ -337,7 +337,7 @@ end
     acq = _make_acq(GPSL1CA(), 5, 10.0, 100.0Hz)
     @test_throws ArgumentError add_satellite!(ts, acq)
     # Explicit group still works.
-    add_satellite!(ts, acq; group = :b)
+    ts = add_satellite!(ts, acq; group = :b)
     @test get_prn(ts, :b, 5) == 5
 end
 
