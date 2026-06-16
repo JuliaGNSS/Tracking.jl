@@ -423,8 +423,7 @@ function TrackedSat(
     prn::Int,
     code_phase,
     carrier_doppler;
-    doppler_estimator::AbstractDopplerEstimator =
-        _default_estimator_for_signal(first(tracked_signals).signal),
+    doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
     carrier_phase = 0.0,
     code_doppler = nothing,
 )
@@ -868,8 +867,7 @@ function SignalGroup(
     signals::Tuple{Vararg{AbstractGNSSSignal}};
     band = get_band(first(signals)),
     num_ants::NumAnts = NumAnts(1),
-    doppler_estimator::AbstractDopplerEstimator =
-        _default_estimator_for_signal(first(signals)),
+    doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
 )
     _validate_signal_group(signals, band)
     # Build a template TrackedSat so the dict's value type is concrete.

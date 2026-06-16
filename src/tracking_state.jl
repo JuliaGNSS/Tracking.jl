@@ -61,15 +61,12 @@ function TrackState(;
     sig_groups_nt = isnothing(signal) ?
         _normalize_signal_groups(signals) :
         (default = (signal,),)
-    # Default estimator: sized for the first declared group's estimator-driver
-    # signal (`signals[1]` of the first group). The loop only ever runs on a
-    # group's own driver signal, so no cross-group bandwidth compromise is
-    # needed; mixed-period multi-group states that want a per-group bandwidth
-    # should pass an explicit `doppler_estimator`.
+    # Default estimator: the auto-bandwidth `ConventionalAssistedPLLAndDLL`.
+    # Each group's satellites are then seeded (via `init_estimator_state`)
+    # with the loop bandwidth recommended for that group's own driver signal,
+    # so every group gets the right bandwidth without a cross-group compromise.
     estimator = isnothing(doppler_estimator) ?
-        _default_estimator_for_signal(
-            _estimator_driver_signal(first(Tuple(sig_groups_nt))),
-        ) : doppler_estimator
+        ConventionalAssistedPLLAndDLL() : doppler_estimator
     # Each entry of `sig_groups_nt` is either:
     #   - a bare `Tuple{Vararg{AbstractGNSSSignal}}` (the common case,
     #     uses the constructor's `num_ants` kwarg); or
@@ -81,9 +78,6 @@ function TrackState(;
     _validate_same_band_num_ants(groups)
     TrackState(groups, estimator)
 end
-
-@inline _estimator_driver_signal(sigs::Tuple{Vararg{AbstractGNSSSignal}}) = first(sigs)
-@inline _estimator_driver_signal(g::SignalGroup) = first(g.signals)
 
 # Bare tuple of AbstractGNSSSignal → single :default capability NamedTuple.
 @inline _normalize_signal_groups(signals::Tuple{Vararg{AbstractGNSSSignal}}) =
@@ -180,13 +174,12 @@ end
 function TrackState(
     signal::AbstractGNSSSignal,
     tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}};
-    doppler_estimator::AbstractDopplerEstimator =
-        _default_estimator_for_signal(signal),
+    doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
 )
-    # `signal` is implied by each sat's `signals[1].signal` in the new
-    # design; the positional argument is kept for backward-compatible
-    # construction but is otherwise unused — but it IS what sizes the
-    # default loop bandwidths in the kwarg default expression above.
+    # `signal` is implied by each sat's `signals[1].signal` in the new design;
+    # the positional argument is kept for backward-compatible construction but
+    # is otherwise unused — the default estimator auto-sizes each sat's loop
+    # bandwidth from its own driver signal.
     sats_dict = to_dictionary(tracked_sats)
     _assert_doppler_estimator_types_match(sats_dict, doppler_estimator)
     groups = (default = _signal_group_from_dict(sats_dict),)
@@ -195,24 +188,11 @@ end
 
 function TrackState(
     tracked_sats::Dictionary{<:Any,<:TrackedSat};
-    doppler_estimator::AbstractDopplerEstimator =
-        _default_estimator_for_sats_dict(tracked_sats),
+    doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
 )
     _assert_doppler_estimator_types_match(tracked_sats, doppler_estimator)
     groups = (default = _signal_group_from_dict(tracked_sats),)
     TrackState(groups, doppler_estimator)
-end
-
-# Default estimator inferred from the dictionary's first sat's driver
-# signal. Empty dicts can't pick a signal-aware default and fall back to
-# the historical 18 Hz / 1 Hz that worked for the L1CA-only era; the
-# `_assert_doppler_estimator_types_match` check on an empty dict is a
-# no-op so no harm there.
-@inline function _default_estimator_for_sats_dict(
-    tracked_sats::Dictionary{<:Any,<:TrackedSat},
-)
-    isempty(tracked_sats) && return ConventionalAssistedPLLAndDLL()
-    _default_estimator_for_signal(first(first(tracked_sats.values).signals).signal)
 end
 
 # Verify every sat in `dict` has a `doppler_estimator_state` matching
@@ -243,8 +223,7 @@ end
 
 function TrackState(
     satellites::SatelliteDicts;
-    doppler_estimator::AbstractDopplerEstimator =
-        _default_estimator_for_satellite_dicts(satellites),
+    doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
 )
     foreach(
         d -> _assert_doppler_estimator_types_match(d, doppler_estimator),
@@ -252,19 +231,6 @@ function TrackState(
     )
     groups = map(_signal_group_from_dict, satellites)
     TrackState(groups, doppler_estimator)
-end
-
-# Sizes the default estimator for the first group's estimator-driver signal.
-# The loop runs on each group's own driver signal, so no cross-group
-# compromise is needed. An empty first dict can't pick a signal-aware
-# default; fall back to the generic default and let the constructor body's
-# `_signal_group_from_dict` raise the friendly ArgumentError (otherwise this
-# kwarg-default expression would throw a raw BoundsError first).
-@inline function _default_estimator_for_satellite_dicts(satellites::SatelliteDicts)
-    any(isempty, Tuple(satellites)) && return ConventionalAssistedPLLAndDLL()
-    _default_estimator_for_signal(
-        first(first(first(Tuple(satellites)).values).signals).signal,
-    )
 end
 
 # Copy-with-overrides constructor: rebuild a TrackState reusing the

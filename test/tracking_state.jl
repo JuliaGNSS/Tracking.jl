@@ -121,11 +121,12 @@ end
 end
 
 @testset "Positional TrackState(satellites::SatelliteDicts) infers default estimator" begin
-    # `_default_estimator_for_satellite_dicts` sizes the default for the
-    # first group's estimator-driver signal when no estimator kwarg is
-    # supplied — the loop runs on each group's own driver signal, so there
-    # is no cross-group bandwidth compromise. Here the first group is GPS
-    # L1 C/A (18 Hz), not the lower E1B bandwidth (4.5 Hz).
+    # With no estimator kwarg, the default is the auto-bandwidth
+    # `ConventionalAssistedPLLAndDLL`; each group's sats are then seeded with
+    # the bandwidth recommended for that group's own driver signal — the loop
+    # runs on each group's driver, so there is no cross-group compromise. The
+    # GPS L1 C/A sat gets 18 Hz while the Galileo E1B sat gets 4.5 Hz, from
+    # the one shared (auto) estimator.
     gpsl1 = GPSL1CA()
     galileo = GalileoE1B()
     estimator = ConventionalAssistedPLLAndDLL()
@@ -140,8 +141,10 @@ end
     ts = TrackState(sats)
     @test length(get_sat_states(ts, :gps)) == 1
     @test length(get_sat_states(ts, :gal)) == 1
-    @test ts.doppler_estimator.carrier_loop_filter_bandwidth ==
+    @test get_sat_states(ts, :gps)[1].doppler_estimator_state.carrier_loop_filter_bandwidth ==
           default_carrier_loop_filter_bandwidth(gpsl1)
+    @test get_sat_states(ts, :gal)[2].doppler_estimator_state.carrier_loop_filter_bandwidth ==
+          default_carrier_loop_filter_bandwidth(galileo)
 end
 
 @testset "Positional TrackState(dict) default estimator inference" begin

@@ -118,16 +118,18 @@ estimator. Configuration-only — per-satellite state lives in each
 [`TrackedSat`](@ref) wrapper, produced via [`init_estimator_state`](@ref).
 
 Type parameters `CA` and `CO` select the carrier and code loop filter types;
-the bandwidth fields configure the default loop bandwidths used when seeding
-new satellites. The literal defaults on this constructor are 18 Hz / 1 Hz,
-sized for GPS L1 C/A's 1 ms integration; when [`TrackState`](@ref) builds
-this estimator implicitly it picks per-signal bandwidths via
-[`default_carrier_loop_filter_bandwidth`](@ref) and
-[`default_code_loop_filter_bandwidth`](@ref) so longer-period signals
-(L1C-D, L1C-P, Galileo E1B) get appropriately tighter loops.
+the bandwidth fields configure the loop bandwidths used when seeding new
+satellites. Each bandwidth field is `Maybe{typeof(1.0Hz)}`: a `nothing`
+field (the default) means **auto** — [`init_estimator_state`](@ref) sizes the
+bandwidth per satellite from that sat's estimator-driver signal (`signals[1]`)
+via [`default_carrier_loop_filter_bandwidth`](@ref) /
+[`default_code_loop_filter_bandwidth`](@ref), so each signal gets a loop sized
+for its own integration period (18 Hz for GPS L1 C/A, 4.5 Hz for Galileo E1B,
+1.8 Hz for L1C-D / L1C-P, …). Pass an explicit bandwidth to override the
+auto-sizing for every satellite this estimator seeds.
 
-The bandwidth fields are referenced to a **one-primary-code-period**
-integration. When a signal coherently integrates `N` primary blocks (its
+The bandwidth is referenced to a **one-primary-code-period** integration.
+When a signal coherently integrates `N` primary blocks (its
 per-[`TrackedSignal`](@ref) `preferred_num_code_blocks_to_integrate`, set via
 [`set_preferred_num_code_blocks_to_integrate!`](@ref)), the effective loop
 bandwidth is automatically scaled to `BL/N` at filter time so the loop's
@@ -137,15 +139,15 @@ bandwidth — e.g. a 1 ms→10 ms switch needs no bandwidth change.
 """
 struct ConventionalPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter} <:
        AbstractDopplerEstimator
-    carrier_loop_filter_bandwidth::typeof(1.0Hz)
-    code_loop_filter_bandwidth::typeof(1.0Hz)
+    carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)}
+    code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)}
 end
 
 function ConventionalPLLAndDLL(
     ::Type{CA} = ThirdOrderBilinearLF,
     ::Type{CO} = SecondOrderBilinearLF;
-    carrier_loop_filter_bandwidth::typeof(1.0Hz) = 18.0Hz,
-    code_loop_filter_bandwidth::typeof(1.0Hz) = 1.0Hz,
+    carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
+    code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
 ) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     ConventionalPLLAndDLL{CA,CO}(
         carrier_loop_filter_bandwidth,
@@ -160,31 +162,21 @@ Create a ConventionalPLLAndDLL with FLL-assisted carrier tracking. This is the
 default Doppler estimator used by TrackState. Uses a ThirdOrderAssistedBilinearLF
 for the carrier loop filter which combines PLL and FLL discriminators for
 improved tracking under high dynamics.
+
+Bandwidths default to `nothing` (auto): each satellite is seeded with the
+loop bandwidth recommended for its own estimator-driver signal — see
+[`ConventionalPLLAndDLL`](@ref). Pass explicit bandwidths to override.
 """
 function ConventionalAssistedPLLAndDLL(
     ::Type{CO} = SecondOrderBilinearLF;
-    carrier_loop_filter_bandwidth::typeof(1.0Hz) = 18.0Hz,
-    code_loop_filter_bandwidth::typeof(1.0Hz) = 1.0Hz,
+    carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
+    code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
 ) where {CO<:AbstractLoopFilter}
     ConventionalPLLAndDLL(
         ThirdOrderAssistedBilinearLF,
         CO;
         carrier_loop_filter_bandwidth,
         code_loop_filter_bandwidth,
-    )
-end
-
-# Build the default `ConventionalAssistedPLLAndDLL` sized for `signal`'s
-# recommended loop bandwidths. The conventional estimator drives the loop
-# off a single signal — the estimator-driver signal (`signals[1]`) — so the
-# default is sized for that signal alone; there is no cross-signal bandwidth
-# compromise to make. Every implicit-default-estimator path (TrackState
-# kwarg constructors, positional sat-dict constructors, TrackedSat/SignalGroup
-# defaults) routes through here so the derivation exists exactly once.
-@inline function _default_estimator_for_signal(signal::AbstractGNSSSignal)
-    ConventionalAssistedPLLAndDLL(;
-        carrier_loop_filter_bandwidth = default_carrier_loop_filter_bandwidth(signal),
-        code_loop_filter_bandwidth = default_code_loop_filter_bandwidth(signal),
     )
 end
 
@@ -207,6 +199,13 @@ $(SIGNATURES)
 
 Build the per-satellite estimator state stored in a [`TrackedSat`](@ref) for a
 satellite tracked under [`ConventionalPLLAndDLL`](@ref).
+
+Auto bandwidths (`nothing` on the estimator) are resolved here, per satellite,
+from the sat's estimator-driver signal (`signals[1]`): each sat gets the loop
+bandwidth recommended for the signal that actually drives its loop, so a
+multi-group / multi-constellation [`TrackState`](@ref) ends up with the right
+bandwidth per group even though it carries one shared estimator. An explicit
+bandwidth on the estimator is used verbatim for every satellite.
 """
 function init_estimator_state(
     estimator::ConventionalPLLAndDLL{CA,CO},
@@ -214,13 +213,22 @@ function init_estimator_state(
 ) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     carrier_loop_filter = constructorof(CA)()
     code_loop_filter = constructorof(CO)()
+    driver_signal = first(sat.signals).signal
+    carrier_loop_filter_bandwidth =
+        isnothing(estimator.carrier_loop_filter_bandwidth) ?
+        default_carrier_loop_filter_bandwidth(driver_signal) :
+        estimator.carrier_loop_filter_bandwidth
+    code_loop_filter_bandwidth =
+        isnothing(estimator.code_loop_filter_bandwidth) ?
+        default_code_loop_filter_bandwidth(driver_signal) :
+        estimator.code_loop_filter_bandwidth
     SatConventionalPLLAndDLL(
         sat.carrier_doppler,
         sat.code_doppler,
         carrier_loop_filter,
         code_loop_filter,
-        estimator.carrier_loop_filter_bandwidth,
-        estimator.code_loop_filter_bandwidth,
+        carrier_loop_filter_bandwidth,
+        code_loop_filter_bandwidth,
     )
 end
 
