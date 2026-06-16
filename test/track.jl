@@ -217,7 +217,14 @@ end
     range = 0:3999
     start_carrier_phase = π / 2
 
-    estimator = ConventionalAssistedPLLAndDLL()
+    # Pin the loop bandwidths explicitly: this is a convergence test, so it
+    # fixes the bandwidth it was calibrated for rather than depending on the
+    # per-signal auto defaults (which would give Galileo E1B a tighter 4.5 Hz
+    # loop that converges more slowly over this chunk schedule).
+    estimator = ConventionalAssistedPLLAndDLL(;
+        carrier_loop_filter_bandwidth = 18.0Hz,
+        code_loop_filter_bandwidth = 1.0Hz,
+    )
     gps_sat = TrackedSat(gpsl1, prn, start_code_phase, carrier_doppler_gps;
                          doppler_estimator = estimator)
     gal_sat = TrackedSat(galileo_e1b, prn, start_code_phase, carrier_doppler_gal;

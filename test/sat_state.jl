@@ -207,7 +207,11 @@ end
     @test typeof(sat_tuple) === typeof(sat_scalar)
 
     # Kwargs flow through: explicit carrier phase, code doppler, estimator.
+    # The default (auto-bandwidth) estimator sizes the sat's loop from its
+    # own driver signal (signals[1] = GPS L1C-P → 1.8 Hz), not from a fixed
+    # value on the estimator (which is `nothing` = auto).
     estimator = Tracking.ConventionalAssistedPLLAndDLL()
+    @test estimator.carrier_loop_filter_bandwidth === nothing
     sat_kw = TrackedSat(
         sigs, 7, 0.25, -250.0Hz;
         carrier_phase = 0.5,
@@ -217,7 +221,7 @@ end
     @test get_carrier_phase(sat_kw) ≈ 0.5
     @test get_code_doppler(sat_kw) == -0.3Hz
     @test sat_kw.doppler_estimator_state.carrier_loop_filter_bandwidth ==
-          estimator.carrier_loop_filter_bandwidth
+          Tracking.default_carrier_loop_filter_bandwidth(GPSL1C_P())
 end
 
 end
