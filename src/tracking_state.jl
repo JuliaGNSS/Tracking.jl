@@ -79,7 +79,7 @@ function TrackState(;
     TrackState(groups, estimator)
 end
 
-# Bare tuple of AbstractGNSSSignal → single :default capability NamedTuple.
+# Bare tuple of AbstractGNSSSignal → single :default group NamedTuple.
 @inline _normalize_signal_groups(signals::Tuple{Vararg{AbstractGNSSSignal}}) =
     (default = signals,)
 # NamedTuple of signal tuples / SignalGroups → pass through unchanged.
@@ -158,7 +158,7 @@ end
 """
 $(SIGNATURES)
 
-Internal helper: build a template `TrackedSat` for a capability declared
+Internal helper: build a template `TrackedSat` for a group declared
 as `signal_tuple = (GPSL1C_P(), GPSL1C_D(), GPSL1CA())`. The template's
 data is meaningless (PRN 0, zero Doppler); only its concrete type is
 used to fix the dictionary value type at TrackState construction.
@@ -323,13 +323,13 @@ end
 """
 $(SIGNATURES)
 
-Return the first signal of the given capability — useful when the caller
+Return the first signal of the given group — useful when the caller
 needs the signal instance (for `gen_code`, frequency lookups, …) but
 doesn't already have a sat in hand. The dictionary's value type carries
 the signal type, so this resolves at compile time when `group_idx` is a
 literal `Symbol` / `Integer`.
 
-For a single-capability `TrackState` the index can be omitted.
+For a single-group `TrackState` the index can be omitted.
 """
 function get_signal(
     track_state::TrackState{<:SignalGroups{N}},
@@ -489,7 +489,7 @@ function add_satellite!(
     TrackState{G,DE}(track_state.groups, new_estimator)
 end
 
-# Verify that `sat` has exactly the concrete type the capability's
+# Verify that `sat` has exactly the concrete type the group's
 # dictionary slot expects. Throws a clear ArgumentError that names the
 # mismatching types if not; called from the escape-hatch overloads so
 # the user gets a useful message before Dictionaries.jl's `set!` raises

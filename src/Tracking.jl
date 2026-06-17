@@ -188,7 +188,7 @@ systems and the Doppler estimator (e.g., PLL/DLL). This is the primary
 struct used for tracking operations.
 
 `groups` is a NamedTuple of [`SignalGroup`](@ref)s. Each group bundles its
-per-capability `satellites` dictionary, signal-instance tuple, band, and
+per-group `satellites` dictionary, signal-instance tuple, band, and
 antenna count.
 """
 struct TrackState{G<:SignalGroups,DE<:AbstractDopplerEstimator}

@@ -50,7 +50,8 @@ integration period. Picks 1/18 of [`default_carrier_loop_filter_bandwidth`](@ref
 — the historical 18:1 carrier:code-bandwidth ratio that gives the DLL good
 noise rejection without lagging the PLL.
 
-For L1 C/A this returns 1 Hz; for L1C-D / L1C-P / L5I it returns 0.1 Hz.
+For L1 C/A and L5I (T = 1 ms) this returns 1 Hz; for L1C-D / L1C-P
+(T = 10 ms) it returns 0.1 Hz.
 Override by defining a method for your signal type.
 """
 function default_code_loop_filter_bandwidth(signal::AbstractGNSSSignal)
