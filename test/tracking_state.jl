@@ -249,6 +249,16 @@ end
     @test get_prn(ts, :default, 6) == 6
 end
 
+@testset "remove_satellite! throws KeyError for a missing PRN" begin
+    ts = TrackState(; signal = GPSL1CA())
+    ts = add_satellite!(ts; prn = 5, carrier_doppler = 100.0Hz)
+    # Same contract as the immutable `remove_satellite`.
+    @test_throws KeyError remove_satellite!(ts; prn = 99)
+    @test_throws KeyError remove_satellite(ts; prn = 99)
+    # The existing sat is untouched after the failed remove.
+    @test get_prn(ts, :default, 5) == 5
+end
+
 @testset "Add and remove satellite state to and from track state" begin
     sampling_frequency = 5e6Hz
     gpsl1 = GPSL1CA()

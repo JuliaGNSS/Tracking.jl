@@ -571,9 +571,9 @@ end
 """
 $(SIGNATURES)
 
-Remove a satellite from `track_state` in place. Errors if no satellite
-with the given `prn` exists in the named group (matches Dictionaries.jl's
-`delete!` semantics).
+Remove a satellite from `track_state` in place. Throws a `KeyError` if no
+satellite with the given `prn` exists in the named group (same contract as
+the immutable [`remove_satellite`](@ref)).
 
 ```julia
 remove_satellite!(track_state; prn = 11, group = :modern_gps)
@@ -587,7 +587,9 @@ function remove_satellite!(
     prn::Int,
     group::Symbol = :default,
 )
-    delete!(_dict_for_group(track_state, group), prn)
+    dict = _dict_for_group(track_state, group)
+    haskey(dict, prn) || throw(KeyError(prn))
+    delete!(dict, prn)
     track_state
 end
 
