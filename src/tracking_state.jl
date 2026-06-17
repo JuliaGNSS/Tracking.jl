@@ -715,6 +715,12 @@ _signal_index(::Tuple, i::Integer) = Int(i)
 function _signal_index(signals::Tuple, ::Type{T}) where {T<:AbstractGNSSSignal}
     idx = findfirst(s -> s.signal isa T, signals)
     isnothing(idx) && throw(ArgumentError("no signal of type $T on this satellite"))
+    # Match the read-accessor contract (`_find_signal_by_type`): a type
+    # selector must be unambiguous. If the sat tracks the same signal type
+    # twice, require the caller to address it by integer index instead.
+    isnothing(findnext(s -> s.signal isa T, signals, idx + 1)) || throw(ArgumentError(
+        "more than one signal of type $T on this satellite — " *
+        "pass an integer index to address one of them."))
     idx
 end
 
