@@ -55,13 +55,50 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
     num_samples::Integer,
 ) where {M,ST,NC}
     W = _simd_width(Float32)  # Compute at generation time, embed as literal
-    # ── Accumulator init: acc_re_j_k, acc_im_j_k (SIMD), s_re_j_k, s_im_j_k (scalar) ──
+    # Block-accumulation period: flush the Float32 lane accumulators into the
+    # Float64 running totals every FLUSH_EVERY main-loop iterations. Each main
+    # iteration adds 4 terms per lane (the 4× unroll), so a lane accumulates
+    # 4·FLUSH_EVERY = 128 Float32 terms before being flushed — small enough that
+    # the Float32 partial sum stays accurate (width-difference stays ~1e-8,
+    # far below the ~1e-7 floor that matters for tracking), large enough that
+    # the Float64 flush (amortised over 4·FLUSH_EVERY·W samples) is negligible.
+    FLUSH_EVERY = 32
+    # ── Accumulators ──
+    # The correlator sum is the sum of ~10^5-10^6 per-sample products. Summing
+    # those in Float32 loses precision that *scales with the SIMD width*: each
+    # of the W lanes accumulates a different strided subset of the terms, and
+    # the per-lane Float32 rounding grows with the partial-sum magnitude, so the
+    # final hsum — and the closed tracking loop downstream — depended on the
+    # host's vector width (AVX2 width-8 vs AVX-512 width-16, a >100 Hz Doppler
+    # swing; issue #152).
+    #
+    # Fix: two-level (blocked) accumulation. The hot loop keeps the fast
+    # full-width Float32 FMA into per-lane block accumulators `f_re/f_im`; every
+    # FLUSH_EVERY iterations those are widened and added into Float64 running
+    # totals `acc_re/acc_im` and reset to zero. Bounding the Float32 partial sum
+    # this way makes the result width-independent to ~1e-9 (vs ~4e-6 unblocked)
+    # while keeping Float32 throughput — the product is exact for the ±1 code
+    # replica, and only the cheap flush runs in Float64. `s_re/s_im` hold the
+    # scalar-remainder tail in Float64.
     acc_init = Expr(:block)
     for j in 1:M, k in 1:NC
-        push!(acc_init.args, :($(Symbol("acc_re_$(j)_$(k)")) = z))
-        push!(acc_init.args, :($(Symbol("acc_im_$(j)_$(k)")) = z))
+        push!(acc_init.args, :($(Symbol("acc_re_$(j)_$(k)")) = z64))
+        push!(acc_init.args, :($(Symbol("acc_im_$(j)_$(k)")) = z64))
+        push!(acc_init.args, :($(Symbol("f_re_$(j)_$(k)")) = z32))
+        push!(acc_init.args, :($(Symbol("f_im_$(j)_$(k)")) = z32))
         push!(acc_init.args, :($(Symbol("s_re_$(j)_$(k)")) = 0.0))
         push!(acc_init.args, :($(Symbol("s_im_$(j)_$(k)")) = 0.0))
+    end
+
+    # ── Flush block: acc_{re,im} += widen(f_{re,im}); reset f_{re,im} = 0 ──
+    flush_block = Expr(:block)
+    for j in 1:M, k in 1:NC
+        are = Symbol("acc_re_$(j)_$(k)"); aim = Symbol("acc_im_$(j)_$(k)")
+        fre = Symbol("f_re_$(j)_$(k)"); fim = Symbol("f_im_$(j)_$(k)")
+        push!(flush_block.args, :($are += _to_vec(SIMD.Vec{W,Float64}, $fre)))
+        push!(flush_block.args, :($aim += _to_vec(SIMD.Vec{W,Float64}, $fim)))
+        push!(flush_block.args, :($fre = z32))
+        push!(flush_block.args, :($fim = z32))
     end
 
     # ── Precompute per-tap shifted code pointers ──
@@ -81,15 +118,15 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
         push!(main_accum.args, :(@nexprs 4 u -> dre_u = sr_u * cr_u + si_u * ci_u))
         push!(main_accum.args, :(@nexprs 4 u -> dim_u = si_u * cr_u - sr_u * ci_u))
         for k in 1:NC
-            are = Symbol("acc_re_$(j)_$(k)")
-            aim = Symbol("acc_im_$(j)_$(k)")
+            fre = Symbol("f_re_$(j)_$(k)")
+            fim = Symbol("f_im_$(j)_$(k)")
             pck = Symbol("p_code_$(k)")
             push!(main_accum.args, quote
                 @nexprs 4 u -> begin
                     code_u = vload(SIMD.Vec{W,CT}, $pck + (i - 1 + (u - 1) * W) * sizeof_CT)
                     code_f_u = _to_vec(SIMD.Vec{W,T}, code_u)
-                    $are = muladd(dre_u, code_f_u, $are)
-                    $aim = muladd(dim_u, code_f_u, $aim)
+                    $fre = muladd(dre_u, code_f_u, $fre)
+                    $fim = muladd(dim_u, code_f_u, $fim)
                 end
             end)
         end
@@ -114,8 +151,8 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
             cf_jk = Symbol("code_f_c_$(j)_$(k)")
             pck = Symbol("p_code_$(k)")
             push!(cleanup_accum.args, :($cf_jk = _to_vec(SIMD.Vec{W,T}, vload(SIMD.Vec{W,CT}, $pck + (i - 1) * sizeof_CT))))
-            push!(cleanup_accum.args, :($are = muladd($dre_j, $cf_jk, $are)))
-            push!(cleanup_accum.args, :($aim = muladd($dim_j, $cf_jk, $aim)))
+            push!(cleanup_accum.args, :($are += _to_vec(SIMD.Vec{W,Float64}, $dre_j * $cf_jk)))
+            push!(cleanup_accum.args, :($aim += _to_vec(SIMD.Vec{W,Float64}, $dim_j * $cf_jk)))
         end
     end
 
@@ -189,7 +226,8 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
         sig_col_bytes = num_samples_signal * 2 * sizeof_ST
         p_code = Ptr{CT}(pointer(code_replica))
 
-        z = zero(SIMD.Vec{W,T})
+        z32 = zero(SIMD.Vec{W,T})
+        z64 = zero(SIMD.Vec{W,Float64})
         $acc_init
         $shift_init
 
@@ -211,6 +249,7 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
         i = start_sample
         last = start_sample + num_samples - 1
 
+        blk = 0
         @inbounds while i + 4W - 1 <= last
             base_phase = SIMD.Vec{W,T}(T(i - start_sample))
             p_1 = muladd(base_phase, two_pi_fr, init_1)
@@ -224,7 +263,14 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
             row_byte_off = (i - 1) * 2 * sizeof_ST
             $main_accum
             i += 4W
+            blk += 1
+            if blk == $FLUSH_EVERY
+                $flush_block
+                blk = 0
+            end
         end
+        # Final flush of the partial Float32 block into the Float64 totals.
+        $flush_block
 
         @inbounds while i + W - 1 <= last
             base_phase = SIMD.Vec{W,T}(T(i - start_sample))
@@ -350,6 +396,7 @@ function downconvert_and_correlate_fused!(
     T = Float32
     num_taps = length(sample_shifts)
     min_shift = minimum(sample_shifts)
+    CHUNK = 512  # block-accumulation length; see issue #152
 
     # Downconvert each antenna into its tile slice
     _downconvert_into_tile!(
@@ -367,15 +414,27 @@ function downconvert_and_correlate_fused!(
     @inbounds for k in 1:num_taps
         shift_offset = start_sample - 1 + sample_shifts[k] - min_shift
         for j in 1:M
-            acc_r = zero(T)
-            acc_i = zero(T)
+            # Block accumulation: fast Float32 @simd inner sum over CHUNK-sample
+            # blocks, flushed into Float64 totals so the result is accurate and
+            # width-independent without paying full-Float64 throughput (#152).
+            acc_r = zero(Float64)
+            acc_i = zero(Float64)
             ant_off = (j - 1) * num_samples
-            @simd for n in 1:num_samples
-                c = code_replica[n + shift_offset]
-                acc_r += tile_re[ant_off + n] * c
-                acc_i += tile_im[ant_off + n] * c
+            n0 = 1
+            while n0 <= num_samples
+                n1 = ifelse(n0 + CHUNK - 1 < num_samples, n0 + CHUNK - 1, num_samples)
+                fr = zero(Float32)
+                fi = zero(Float32)
+                @simd for n in n0:n1
+                    c = code_replica[n + shift_offset]
+                    fr += tile_re[ant_off + n] * c
+                    fi += tile_im[ant_off + n] * c
+                end
+                acc_r += Float64(fr)
+                acc_i += Float64(fi)
+                n0 = n1 + 1
             end
-            corr_val = complex(Float64(acc_r), Float64(acc_i))
+            corr_val = complex(acc_r, acc_i)
             new_acc[k] = _add_antenna(new_acc[k], prev[k], j, corr_val)
         end
     end
@@ -420,6 +479,14 @@ end
     # available on the type itself, via the StaticArray Size interface).
     NC_per_signal = Int[length(all_sample_shifts.parameters[i]) for i in 1:N]
 
+    # Block-accumulation chunk length (issue #152). The inner `@simd` reduction
+    # runs in Float32 (fast, full-width), but a plain Float32 sum over the whole
+    # ~10^5-10^6-sample integration loses precision that depends on the SIMD
+    # width. Summing each CHUNK-sample block in Float32 and flushing into a
+    # Float64 total keeps the Float32 partial sum short enough to stay accurate
+    # and width-independent (~1e-8) while preserving Float32 throughput.
+    CHUNK = 512
+
     # Correlate phase: emit M independent passes over `n`, one per antenna.
     # Each pass keeps only N·NC accumulators live (vs M·N·NC for a single
     # fused pass), which avoids register spilling on 16-ymm AVX2 targets
@@ -433,9 +500,18 @@ end
         # Per-pass accumulator init: ar_j_i_k / ai_j_i_k for THIS antenna.
         # We keep the global naming so `finalize` resolves to these locals.
         pass_init = Expr(:block)
+        block_init = Expr(:block)
+        flush_block = Expr(:block)
         for i in 1:N, k in 1:NC_per_signal[i]
-            push!(pass_init.args, :($(Symbol("ar_$(j)_$(i)_$(k)")) = zero(Float32)))
-            push!(pass_init.args, :($(Symbol("ai_$(j)_$(i)_$(k)")) = zero(Float32)))
+            ar = Symbol("ar_$(j)_$(i)_$(k)"); ai = Symbol("ai_$(j)_$(i)_$(k)")
+            far = Symbol("far_$(j)_$(i)_$(k)"); fai = Symbol("fai_$(j)_$(i)_$(k)")
+            # Float64 running totals + Float32 per-block accumulators (issue #152).
+            push!(pass_init.args, :($ar = zero(Float64)))
+            push!(pass_init.args, :($ai = zero(Float64)))
+            push!(block_init.args, :($far = zero(Float32)))
+            push!(block_init.args, :($fai = zero(Float32)))
+            push!(flush_block.args, :($ar += Float64($far)))
+            push!(flush_block.args, :($ai += Float64($fai)))
         end
         # Per-pass locals: code_replica pointers + per-tap shift offsets.
         pass_locals = Expr(:block)
@@ -466,17 +542,24 @@ end
                 # (i.e. all but the first per chunk) — see the in-register
                 # kernel above, which reads at the same absolute offset.
                 push!(pass_body.args, :(c = Float32($cr[start_sample - 1 + n + $sh])))
-                push!(pass_body.args, :($(Symbol("ar_$(j)_$(i)_$(k)")) =
-                    muladd(tr, c, $(Symbol("ar_$(j)_$(i)_$(k)")))))
-                push!(pass_body.args, :($(Symbol("ai_$(j)_$(i)_$(k)")) =
-                    muladd(ti, c, $(Symbol("ai_$(j)_$(i)_$(k)")))))
+                push!(pass_body.args, :($(Symbol("far_$(j)_$(i)_$(k)")) =
+                    muladd(tr, c, $(Symbol("far_$(j)_$(i)_$(k)")))))
+                push!(pass_body.args, :($(Symbol("fai_$(j)_$(i)_$(k)")) =
+                    muladd(ti, c, $(Symbol("fai_$(j)_$(i)_$(k)")))))
             end
         end
         push!(correlate_passes.args, quote
             $pass_init
             $pass_locals
-            @inbounds @simd for n in 1:num_samples
-                $pass_body
+            n0 = 1
+            @inbounds while n0 <= num_samples
+                n1 = ifelse(n0 + $CHUNK - 1 < num_samples, n0 + $CHUNK - 1, num_samples)
+                $block_init
+                @simd for n in n0:n1
+                    $pass_body
+                end
+                $flush_block
+                n0 = n1 + 1
             end
         end)
     end
