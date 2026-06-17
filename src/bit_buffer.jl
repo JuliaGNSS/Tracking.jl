@@ -703,7 +703,7 @@ function buffer(signal::AbstractGNSSSignal, prn::Integer, bit_buffer::BitBuffer{
             true,
             bit_buffer.secondary_phase,
             bit_buffer.polarity,
-            get_bits(bit_buffer) << 1 + UInt64(bit),
+            (get_bits(bit_buffer) << 1) + UInt64(bit),
             length(bit_buffer) + 1,
             zero(prompt_accumulator),
             0,
@@ -734,7 +734,7 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
             "The number code blocks must be equal to 1 if bit or secondary code hasn't been found yet.",
         )
     end
-    code_block_buffer = bit_buffer.code_block_buffer << 1 + B(real(prompt) > 0)
+    code_block_buffer = (bit_buffer.code_block_buffer << 1) + B(real(prompt) > 0)
     code_block_buffer_length = bit_buffer.code_block_buffer_length + 1
 
     # Signals that detect the bit edge from soft prompts (GPS L1 C/A) fold
@@ -832,7 +832,7 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
         # estimate) so these recovered soft bits live in the same
         # coherent-amplitude-sum units as the bits accumulated post-sync.
         push!(bit_buffer.soft_bits, Float32(bit_sum * abs(prompt)))
-        bits << 1 + (bit_sum > 0)
+        (bits << 1) + (bit_sum > 0)
     end
     return BitBuffer{B}(
         code_block_buffer,
