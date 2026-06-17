@@ -1,0 +1,29 @@
+name: Format
+on:
+  push:
+    branches:
+      - 'master'
+  pull_request:
+jobs:
+  format:
+    name: Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      # Pin JuliaFormatter exactly: formatting output is version-sensitive, so
+      # a floating version would make CI flap whenever a release tweaks a rule.
+      # Bump this in lockstep with a reformat commit.
+      - name: Install JuliaFormatter
+        run: julia --color=yes -e 'using Pkg; Pkg.add(PackageSpec(name = "JuliaFormatter", version = "2.8.5"))'
+      # Format in place against the repo's .JuliaFormatter.toml, then fail if
+      # anything changed — `git diff` prints the exact reformatting CI wants,
+      # so the fix is copy-pasteable. Scoped to the Julia source/test/ext trees:
+      # the config's `format_markdown = true` currently trips the markdown
+      # formatter on the repo's .md files, so docs are not checked here.
+      - name: Check formatting
+        run: |
+          julia --color=yes -e 'using JuliaFormatter; format(["src", "ext", "test"])'
+          git diff --color --exit-code
