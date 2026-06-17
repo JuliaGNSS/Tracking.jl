@@ -11,13 +11,17 @@ _simd_width(::Type{T}) where {T} = Int(pick_vector_width(T))
 # that occurs for large N (e.g. N=16 on AVX-512).
 @inline _to_vec(::Type{SIMD.Vec{N,T}}, v::SIMD.Vec{N,T}) where {N,T} = v
 @inline @generated function _to_vec(::Type{SIMD.Vec{N,T}}, v::SIMD.Vec{N,S}) where {N,T,S}
-    elems = [:(T(v[$k])) for k in 1:N]
+    elems = [:(T(v[$k])) for k = 1:N]
     :(SIMD.Vec{$N,T}(($(elems...),)))
 end
 
 # SIMD deinterleave load: load N interleaved complex pairs [re1,im1,re2,im2,...]
 # and separate into (re_vec, im_vec) using shufflevector.
-@inline @generated function _deinterleave_load(::Type{SIMD.Vec{N,T}}, p::Ptr{ST}, byte_offset::Int) where {N,T,ST}
+@inline @generated function _deinterleave_load(
+    ::Type{SIMD.Vec{N,T}},
+    p::Ptr{ST},
+    byte_offset::Int,
+) where {N,T,ST}
     re_idx = ntuple(k -> 2(k - 1), N)
     im_idx = ntuple(k -> 2(k - 1) + 1, N)
     quote

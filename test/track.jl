@@ -151,18 +151,23 @@ end
     tolerance = 1.0  # Hz, tight tolerance since no noise
 
     function test_convergence(carrier_error, use_assisted)
-        doppler_estimator = use_assisted ? ConventionalAssistedPLLAndDLL() :
-                                           ConventionalPLLAndDLL()
-        sat_states = [TrackedSat(
-            gpsl1, 1, start_code_phase, carrier_doppler + carrier_error;
-            doppler_estimator,
-        )]
+        doppler_estimator =
+            use_assisted ? ConventionalAssistedPLLAndDLL() : ConventionalPLLAndDLL()
+        sat_states = [
+            TrackedSat(
+                gpsl1,
+                1,
+                start_code_phase,
+                carrier_doppler + carrier_error;
+                doppler_estimator,
+            ),
+        ]
         track_state = TrackState(gpsl1, sat_states; doppler_estimator)
 
         # Initial tracking step
         signal =
             cis.(
-                2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase
+                2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase,
             ) .*
             gen_code(4000, gpsl1, prn, sampling_frequency, code_frequency, start_code_phase)
         track_state = track(signal, track_state, sampling_frequency)
@@ -179,7 +184,7 @@ end
                 mod(code_frequency * 4000 * i / sampling_frequency + start_code_phase, 1023)
             signal =
                 cis.(
-                    2π .* carrier_doppler .* range ./ sampling_frequency .+ carrier_phase
+                    2π .* carrier_doppler .* range ./ sampling_frequency .+ carrier_phase,
                 ) .*
                 gen_code(4000, gpsl1, prn, sampling_frequency, code_frequency, code_phase)
             track_state = track(signal, track_state, sampling_frequency)
@@ -225,15 +230,22 @@ end
         carrier_loop_filter_bandwidth = 18.0Hz,
         code_loop_filter_bandwidth = 1.0Hz,
     )
-    gps_sat = TrackedSat(gpsl1, prn, start_code_phase, carrier_doppler_gps;
-                         doppler_estimator = estimator)
-    gal_sat = TrackedSat(galileo_e1b, prn, start_code_phase, carrier_doppler_gal;
-                         doppler_estimator = estimator)
+    gps_sat = TrackedSat(
+        gpsl1,
+        prn,
+        start_code_phase,
+        carrier_doppler_gps;
+        doppler_estimator = estimator,
+    )
+    gal_sat = TrackedSat(
+        galileo_e1b,
+        prn,
+        start_code_phase,
+        carrier_doppler_gal;
+        doppler_estimator = estimator,
+    )
     track_state = @inferred TrackState(
-        (
-            gps = dictionary([prn => gps_sat]),
-            gal = dictionary([prn => gal_sat]),
-        );
+        (gps = dictionary([prn => gps_sat]), gal = dictionary([prn => gal_sat]));
         doppler_estimator = estimator,
     )
 
@@ -377,8 +389,7 @@ end
         cis.(
             2π .* (carrier_doppler + intermediate_frequency) .* range ./
             sampling_frequency .+ start_carrier_phase,
-        ) .*
-        get_code.(
+        ) .* get_code.(
             gpsl1,
             code_frequency .* range ./ sampling_frequency .+ start_code_phase,
             prn,
@@ -409,8 +420,7 @@ end
             cis.(
                 2π .* (carrier_doppler + intermediate_frequency) .* range ./
                 sampling_frequency .+ carrier_phase,
-            ) .*
-            get_code.(
+            ) .* get_code.(
                 gpsl1,
                 code_frequency .* range ./ sampling_frequency .+ code_phase,
                 prn,
@@ -586,17 +596,19 @@ end
         for code_idx = 0:(num_codes-1)
             carrier_phase =
                 mod2pi(
-                    2π * carrier_doppler * samples_per_code * code_idx / sampling_frequency +
-                    start_carrier_phase + π,
+                    2π * carrier_doppler * samples_per_code * code_idx /
+                    sampling_frequency +
+                    start_carrier_phase +
+                    π,
                 ) - π
             code_phase = mod(
                 code_frequency * samples_per_code * code_idx / sampling_frequency +
                 start_code_phase,
                 1023,
             )
-            r = (code_idx * samples_per_code):((code_idx + 1) * samples_per_code - 1)
-            local_range = 0:(samples_per_code - 1)
-            signal[(code_idx * samples_per_code + 1):((code_idx + 1) * samples_per_code)] .=
+            r = (code_idx*samples_per_code):((code_idx+1)*samples_per_code-1)
+            local_range = 0:(samples_per_code-1)
+            signal[(code_idx*samples_per_code+1):((code_idx+1)*samples_per_code)] .=
                 cis.(
                     2π .* carrier_doppler .* local_range ./ sampling_frequency .+
                     carrier_phase,
@@ -612,10 +624,8 @@ end
         signal
     end
 
-    track_state = TrackState(
-        gpsl1,
-        [TrackedSat(gpsl1, prn, start_code_phase, carrier_doppler)],
-    )
+    track_state =
+        TrackState(gpsl1, [TrackedSat(gpsl1, prn, start_code_phase, carrier_doppler)])
 
     # First call: 10 code periods -> expect 10 filtered prompts
     signal1 = make_signal(10, π / 2, start_code_phase)
@@ -659,8 +669,10 @@ end
 # (`default_carrier_loop_filter_bandwidth(::GPSL1C_D)` etc.) which size BL
 # at ~0.018/T (Hz). For L1C-D / L1C-P that gives ~1.8 Hz carrier / ~0.1 Hz
 # code — well inside the `BL * T < 0.4` stability bound for 10 ms integration.
-@testset "Tracking single signal $name with $type samples" for
-    (name, sig_type) in (("GPSL1C_D", GPSL1C_D), ("GPSL1C_P", GPSL1C_P)),
+@testset "Tracking single signal $name with $type samples" for (name, sig_type) in (
+        ("GPSL1C_D", GPSL1C_D),
+        ("GPSL1C_P", GPSL1C_P),
+    ),
     type in (Float32, Float64)
 
     signal = sig_type()
@@ -675,41 +687,53 @@ end
     sampling_frequency = 15e6Hz
     prn = 1
     primary_period_samples = 150000  # 10 ms at 15 MHz
-    range = 0:(primary_period_samples - 1)
+    range = 0:(primary_period_samples-1)
     start_carrier_phase = π / 2
 
     track_state = @inferred TrackState(; signal)
-    track_state = add_satellite!(track_state;
+    track_state = add_satellite!(
+        track_state;
         prn,
         code_phase = start_code_phase,
         carrier_doppler = carrier_doppler - 5Hz,
     )
 
     function build_signal(carrier_phase, code_phase)
-        s = cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ carrier_phase) .*
-            gen_code(primary_period_samples, signal, prn, sampling_frequency,
-                     code_frequency, code_phase)
+        s =
+            cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ carrier_phase) .*
+            gen_code(
+                primary_period_samples,
+                signal,
+                prn,
+                sampling_frequency,
+                code_frequency,
+                code_phase,
+            )
         Complex{type}.(s)
     end
 
     # First iteration to seed the loop filters.
-    track!(build_signal(start_carrier_phase, start_code_phase),
-           track_state, sampling_frequency)
+    track!(
+        build_signal(start_carrier_phase, start_code_phase),
+        track_state,
+        sampling_frequency,
+    )
 
     iterations = 100
     primary_code_len = get_code_length(signal)
     for i = 1:iterations
-        carrier_phase = mod2pi(
-            2π * carrier_doppler * primary_period_samples * i / sampling_frequency +
-            start_carrier_phase + π,
-        ) - π
+        carrier_phase =
+            mod2pi(
+                2π * carrier_doppler * primary_period_samples * i / sampling_frequency +
+                start_carrier_phase +
+                π,
+            ) - π
         code_phase = mod(
             code_frequency * primary_period_samples * i / sampling_frequency +
             start_code_phase,
             primary_code_len,
         )
-        track!(build_signal(carrier_phase, code_phase),
-               track_state, sampling_frequency)
+        track!(build_signal(carrier_phase, code_phase), track_state, sampling_frequency)
     end
     # By now the PLL/DLL has had 100 × 10 ms = 1 s to converge on a clean
     # signal seeded 5 Hz off — should be well inside 1 Hz.
@@ -746,7 +770,7 @@ end
     primary_len = get_code_length(signal)
     amplitude = 10^(45 / 20)            # 45 dB-Hz with noise_std below
     noise_std = sqrt(10e6)
-    range = 0:(period - 1)
+    range = 0:(period-1)
 
     estimator = ConventionalAssistedPLLAndDLL(;
         carrier_loop_filter_bandwidth = 1.8Hz,
@@ -756,7 +780,8 @@ end
     # 0.2-chip seed offset — a realistic acquisition handoff error that puts the
     # DLL discriminator onto the BOC autocorrelation slope. Uses the group's
     # default correlator, so reverting the default spacing breaks this test.
-    track_state = add_satellite!(track_state; prn, code_phase = 0.2, carrier_doppler = 0.0Hz)
+    track_state =
+        add_satellite!(track_state; prn, code_phase = 0.2, carrier_doppler = 0.0Hz)
 
     build(code_phase) =
         gen_code(period, signal, prn, sampling_frequency, code_frequency, code_phase) .*
@@ -785,34 +810,45 @@ end
 
     # Driver is signals[1] = L1C_P at 10 ms; the per-signal default loop
     # bandwidth picks the right (~1.8 Hz) value automatically.
-    track_state = TrackState(;
-        signals = (modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),),
-    )
-    track_state = add_satellite!(track_state;
-        prn, group = :modern_gps,
+    track_state =
+        TrackState(; signals = (modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),))
+    track_state = add_satellite!(
+        track_state;
+        prn,
+        group = :modern_gps,
         code_phase = 0.0,
         carrier_doppler = carrier_doppler - init_offset,
     )
 
     # Synthesize a signal that contains all three signals on the same carrier
     # (modeling what a real GPS satellite broadcasts on L1).
-    range = 0:(n_samples - 1)
+    range = 0:(n_samples-1)
     function build_signal(code_phase, carrier_phase)
-        carrier = cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ carrier_phase)
+        carrier =
+            cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ carrier_phase)
         signal_cp = let s = GPSL1C_P()
-            cf = carrier_doppler * get_code_center_frequency_ratio(s) + get_code_frequency(s)
+            cf =
+                carrier_doppler * get_code_center_frequency_ratio(s) + get_code_frequency(s)
             carrier .* gen_code(n_samples, s, prn, sampling_frequency, cf, code_phase)
         end
         signal_cd = let s = GPSL1C_D()
-            cf = carrier_doppler * get_code_center_frequency_ratio(s) + get_code_frequency(s)
+            cf =
+                carrier_doppler * get_code_center_frequency_ratio(s) + get_code_frequency(s)
             carrier .* gen_code(n_samples, s, prn, sampling_frequency, cf, code_phase)
         end
         signal_ca = let s = GPSL1CA()
-            cf = carrier_doppler * get_code_center_frequency_ratio(s) + get_code_frequency(s)
+            cf =
+                carrier_doppler * get_code_center_frequency_ratio(s) + get_code_frequency(s)
             # L1 C/A code phase wraps every 1023 chips; map the shared phase
             # to its primary period.
-            carrier .* gen_code(n_samples, s, prn, sampling_frequency, cf,
-                                mod(code_phase, get_code_length(s)))
+            carrier .* gen_code(
+                n_samples,
+                s,
+                prn,
+                sampling_frequency,
+                cf,
+                mod(code_phase, get_code_length(s)),
+            )
         end
         signal_cp .+ signal_cd .+ signal_ca
     end
@@ -827,11 +863,11 @@ end
             mod2pi(2π * carrier_doppler * n_samples * i / sampling_frequency + π) - π
         # Drive code_phase off the L1C_P/L1C_D primary length (10230 chips);
         # L1CA mods inside build_signal.
-        cf_cp = carrier_doppler * get_code_center_frequency_ratio(GPSL1C_P()) +
-                get_code_frequency(GPSL1C_P())
+        cf_cp =
+            carrier_doppler * get_code_center_frequency_ratio(GPSL1C_P()) +
+            get_code_frequency(GPSL1C_P())
         code_phase = mod(cf_cp * n_samples * i / sampling_frequency, cp_primary_len)
-        track!(build_signal(code_phase, carrier_phase),
-               track_state, sampling_frequency)
+        track!(build_signal(code_phase, carrier_phase), track_state, sampling_frequency)
     end
 
     # All three signals must have completed integrations.
@@ -877,18 +913,23 @@ end
 
     # One continuous signal, sliced into fixed `chunk`-sample pieces.
     total_samples = chunk * (num_calls + 1)
-    t = 0:(total_samples - 1)
+    t = 0:(total_samples-1)
     long_signal =
         cis.(2π .* carrier_doppler .* t ./ sampling_frequency) .*
         gen_code(total_samples, signal, prn, sampling_frequency, code_frequency, 0.0)
 
     track_state = TrackState(; signal)
-    track_state = add_satellite!(track_state; prn, code_phase = 0.0, carrier_doppler = carrier_doppler - 20Hz)
+    track_state = add_satellite!(
+        track_state;
+        prn,
+        code_phase = 0.0,
+        carrier_doppler = carrier_doppler - 20Hz,
+    )
 
     track!((@view long_signal[1:chunk]), track_state, sampling_frequency)
     prompts = ComplexF64[]
     for i = 1:num_calls
-        chunk_signal = @view long_signal[(i * chunk + 1):((i + 1) * chunk)]
+        chunk_signal = @view long_signal[(i*chunk+1):((i+1)*chunk)]
         track!(chunk_signal, track_state, sampling_frequency)
         push!(prompts, get_prompt(get_last_fully_integrated_correlator(track_state, prn)))
     end
@@ -906,7 +947,7 @@ end
 
     # Deadlock signature: the correlator output freezes. After the fix the
     # prompt keeps updating, so the last several prompts are not all equal.
-    @test length(unique(prompts[(end - 9):end])) > 1
+    @test length(unique(prompts[(end-9):end])) > 1
 
     # And it actually tracks: the loops stay locked on the true Doppler
     # rather than diverging or freezing.

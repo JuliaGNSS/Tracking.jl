@@ -21,7 +21,8 @@ using Tracking:
     @test res.polarity == +1
 
     # Buffer not yet at 10 blocks.
-    @test @inferred(detect_bit_or_secondary_code_sync(gpsl5, prn, UInt32(0x35), 5)).found == false
+    @test @inferred(detect_bit_or_secondary_code_sync(gpsl5, prn, UInt32(0x35), 5)).found ==
+          false
 
     # 0x3ca == 1111001010 is the negated NH10 (matches at negative polarity).
     res = @inferred(detect_bit_or_secondary_code_sync(gpsl5, prn, UInt32(0x3ca), 10))
@@ -50,7 +51,8 @@ using Tracking:
         # (floor(0.025 × 10) = 0) — any single bit-flip rejects.
         template = UInt32(0x035)
         @test detect_bit_or_secondary_code_sync(gpsl5, prn, template, 10).found == true
-        @test detect_bit_or_secondary_code_sync(gpsl5, prn, template ⊻ UInt32(0x1), 10).found == false
+        @test detect_bit_or_secondary_code_sync(gpsl5, prn, template ⊻ UInt32(0x1), 10).found ==
+              false
     end
 end
 

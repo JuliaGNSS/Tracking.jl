@@ -67,5 +67,8 @@ end
         is_integration_completed = completed,
         correlator = corr,
     )
-    (new_s, _build_new_signals(Base.tail(signals), Base.tail(new_data), integrated_samples)...)
+    (
+        new_s,
+        _build_new_signals(Base.tail(signals), Base.tail(new_data), integrated_samples)...,
+    )
 end

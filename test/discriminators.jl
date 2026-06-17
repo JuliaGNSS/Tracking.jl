@@ -55,9 +55,8 @@ end
     @test @inferred(
         fll_disc(gpsl1, correlator_0off, get_prompt(correlator_plus90off), 1ms)
     ) == -250Hz
-    @test @inferred(
-        fll_disc(gpsl1, correlator_0off, get_prompt(correlator_empty), 1ms)
-    ) == 0Hz
+    @test @inferred(fll_disc(gpsl1, correlator_0off, get_prompt(correlator_empty), 1ms)) ==
+          0Hz
 end
 
 @testset "DLL discriminator" begin

@@ -76,7 +76,8 @@ GNSSSignals.get_code_frequency(::FakeDoubleRateL1Signal) = 2_046_000Hz
 
     # Valid same-band, same-chip-rate combinations still construct.
     @test SignalGroup((GPSL1C_P(), GPSL1C_D(), GPSL1CA())) isa SignalGroup
-    ts = TrackState(; signals = (l1 = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()), l5 = (GPSL5I(),)))
+    ts =
+        TrackState(; signals = (l1 = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()), l5 = (GPSL5I(),)))
     @test ts isa TrackState
 end
 
@@ -99,8 +100,10 @@ end
     @test get_cn0_estimator(track_state, 1) isa MomentsCN0Estimator
     @test get_bit_buffer(track_state, 1) isa BitBuffer
 
-    @test get_sat_states(track_state)[1].doppler_estimator_state.init_carrier_doppler == 10.0Hz
-    @test get_sat_states(track_state)[2].doppler_estimator_state.init_carrier_doppler == 20.0Hz
+    @test get_sat_states(track_state)[1].doppler_estimator_state.init_carrier_doppler ==
+          10.0Hz
+    @test get_sat_states(track_state)[2].doppler_estimator_state.init_carrier_doppler ==
+          20.0Hz
 
     track_state2 = @inferred TrackState(
         gpsl1,
@@ -111,8 +114,10 @@ end
     @test @inferred(get_sat_state(track_state2, 1)).prn == 1
     @test @inferred(get_sat_state(track_state2, 2)).prn == 2
 
-    @test get_sat_states(track_state2)[1].doppler_estimator_state.init_carrier_doppler == 10.0Hz
-    @test get_sat_states(track_state2)[2].doppler_estimator_state.init_carrier_doppler == 20.0Hz
+    @test get_sat_states(track_state2)[1].doppler_estimator_state.init_carrier_doppler ==
+          10.0Hz
+    @test get_sat_states(track_state2)[2].doppler_estimator_state.init_carrier_doppler ==
+          20.0Hz
 
     sat_states_num_ants2 = [
         TrackedSat(gpsl1, 1, 10.5, 10.0Hz; num_ants = NumAnts(2)),
@@ -166,8 +171,11 @@ end
         carrier_loop_filter_bandwidth = 22.0Hz,
         code_loop_filter_bandwidth = 1.5Hz,
     )
-    @test_throws ArgumentError TrackState(gpsl1, [sat_default];
-                                          doppler_estimator = different)
+    @test_throws ArgumentError TrackState(
+        gpsl1,
+        [sat_default];
+        doppler_estimator = different,
+    )
 end
 
 @testset "Slot-vector copy helpers share vs detach Dictionary Indices (#123)" begin
@@ -278,7 +286,8 @@ end
 
     track_state = @inferred TrackState(gpsl1, sat_states)
 
-    new_track_state = @inferred merge_sats(track_state, 1, TrackedSat(gpsl1, 3, 5.5, 80.0Hz))
+    new_track_state =
+        @inferred merge_sats(track_state, 1, TrackedSat(gpsl1, 3, 5.5, 80.0Hz))
 
     @test length(@inferred(get_sat_states(new_track_state))) == 3
     @test @inferred(get_prn(new_track_state, 3)) == 3
@@ -300,11 +309,10 @@ end
     @test @inferred(get_prn(new_new_track_state, 6)) == 6
     @test @inferred(get_prn(new_new_track_state, 8)) == 8
 
-    filtered_new_new_track_state =
-        @inferred remove_satellite(
-            @inferred(remove_satellite(new_new_track_state; prn = 1));
-            prn = 6,
-        )
+    filtered_new_new_track_state = @inferred remove_satellite(
+        @inferred(remove_satellite(new_new_track_state; prn = 1));
+        prn = 6,
+    )
 
     @test length(@inferred(get_sat_states(filtered_new_new_track_state))) == 2
     @test @inferred(get_prn(filtered_new_new_track_state, 3)) == 3
@@ -329,7 +337,8 @@ end
 
     track_state = @inferred TrackState(satellites; doppler_estimator = estimator)
 
-    new_track_state = @inferred merge_sats(track_state, 1, TrackedSat(gpsl1, 3, 5.5, 80.0Hz))
+    new_track_state =
+        @inferred merge_sats(track_state, 1, TrackedSat(gpsl1, 3, 5.5, 80.0Hz))
 
     @test length(@inferred(get_sat_states(new_track_state, Val(:gps)))) == 3
     @test length(@inferred(get_sat_states(new_track_state, Val(:gal)))) == 2
@@ -378,11 +387,11 @@ end
     @test get_prn(new_new_new_track_state, :gps, 6) == 6
     @test get_prn(new_new_new_track_state, :gps, 8) == 8
 
-    filtered_new_new_new_track_state =
-        @inferred remove_satellite(
-            @inferred(remove_satellite(new_new_new_track_state; prn = 1, group = :gps));
-            prn = 6, group = :gps,
-        )
+    filtered_new_new_new_track_state = @inferred remove_satellite(
+        @inferred(remove_satellite(new_new_new_track_state; prn = 1, group = :gps));
+        prn = 6,
+        group = :gps,
+    )
 
     @test length(get_sat_states(filtered_new_new_new_track_state, :gps)) == 2
     @test length(get_sat_states(filtered_new_new_new_track_state, :gal)) == 2
@@ -409,10 +418,8 @@ end
     @test length(get_sat_states(ts_from_vec)) == 2
     ts_from_one = TrackState(gpsl1, sat; doppler_estimator = estimator)
     @test length(get_sat_states(ts_from_one)) == 1
-    ts_from_dict = TrackState(
-        dictionary([1 => sat, 2 => sat2]);
-        doppler_estimator = estimator,
-    )
+    ts_from_dict =
+        TrackState(dictionary([1 => sat, 2 => sat2]); doppler_estimator = estimator)
     @test length(get_sat_states(ts_from_dict)) == 2
 
     # Direct accessors on TrackedSat
@@ -445,7 +452,8 @@ end
 
     struct SatCountingEstimator end
 
-    Tracking.init_estimator_state(::CountingEstimator, ::TrackedSat) = SatCountingEstimator()
+    Tracking.init_estimator_state(::CountingEstimator, ::TrackedSat) =
+        SatCountingEstimator()
 
     function Tracking.update_estimator_on_handoff(est::CountingEstimator, new_sats)
         est.sats_added[1] += length(new_sats)
@@ -530,9 +538,14 @@ end
     # Escape-hatch overload behaves the same.
     sat = get_sat_state(ts2, :default, 1)
     sat2 = TrackedSat(
-        sat.prn + 1, sat.code_phase, sat.code_doppler,
-        sat.carrier_phase, sat.carrier_doppler,
-        sat.signal_start_sample, sat.signals, sat.doppler_estimator_state,
+        sat.prn + 1,
+        sat.code_phase,
+        sat.code_doppler,
+        sat.carrier_phase,
+        sat.carrier_doppler,
+        sat.signal_start_sample,
+        sat.signals,
+        sat.doppler_estimator_state,
     )
     ts3 = add_satellite!(ts2, :default, sat2)
     @test ts3.doppler_estimator.num_registered == 2
@@ -552,7 +565,8 @@ end
 # the actual return.
 @testset "Accessor type stability — single-group, single-signal" begin
     track_state = TrackState(; signal = GPSL1CA())
-    track_state = add_satellite!(track_state; prn = 1, code_phase = 50.0, carrier_doppler = 1000.0Hz)
+    track_state =
+        add_satellite!(track_state; prn = 1, code_phase = 50.0, carrier_doppler = 1000.0Hz)
 
     @inferred get_prn(track_state, 1)
     @inferred get_num_ants(track_state, 1)
@@ -702,10 +716,7 @@ end
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 10.5, 10.0Hz)])
     # Same estimator-state type, different correlator type — must hit the
     # curated slot-type ArgumentError, not a downstream MethodError.
-    odd = TrackedSat(
-        gpsl1, 2, 0.0, 0.0Hz;
-        correlator = VeryEarlyPromptLateCorrelator(),
-    )
+    odd = TrackedSat(gpsl1, 2, 0.0, 0.0Hz; correlator = VeryEarlyPromptLateCorrelator())
     @test_throws ArgumentError merge_sats(ts, 1, odd)
 end
 
@@ -775,7 +786,8 @@ end
     # …and the estimator is re-seeded from the converged Doppler.
     @test get_doppler_estimator_state(get_sat_state(track_state, 1)).init_carrier_doppler ==
           137.0Hz
-    @test get_doppler_estimator_state(get_sat_state(track_state, 1)).init_code_doppler == 0.5Hz
+    @test get_doppler_estimator_state(get_sat_state(track_state, 1)).init_code_doppler ==
+          0.5Hz
 
     # Whole-TrackState form resets every satellite and preserves Doppler.
     sats[1] = TrackedSat(sats[1]; carrier_doppler = 201.0Hz)

@@ -150,10 +150,7 @@ function ConventionalPLLAndDLL(
     carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
     code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
 ) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
-    ConventionalPLLAndDLL{CA,CO}(
-        carrier_loop_filter_bandwidth,
-        code_loop_filter_bandwidth,
-    )
+    ConventionalPLLAndDLL{CA,CO}(carrier_loop_filter_bandwidth, code_loop_filter_bandwidth)
 end
 
 """
@@ -190,8 +187,8 @@ function ConventionalPLLAndDLL(
     ConventionalPLLAndDLL{CA,CO}(
         isnothing(carrier_loop_filter_bandwidth) ?
         pll_and_dll.carrier_loop_filter_bandwidth : carrier_loop_filter_bandwidth,
-        isnothing(code_loop_filter_bandwidth) ?
-        pll_and_dll.code_loop_filter_bandwidth : code_loop_filter_bandwidth,
+        isnothing(code_loop_filter_bandwidth) ? pll_and_dll.code_loop_filter_bandwidth :
+        code_loop_filter_bandwidth,
     )
 end
 
@@ -284,10 +281,7 @@ end
 # TrackedSat and returns the updated TrackedSat. Shared by the immutable
 # `estimate_dopplers_and_filter_prompt` and the in-place
 # `estimate_dopplers_and_filter_prompt!` so the two cannot drift.
-function _update_tracked_sat_doppler(
-    sat::TrackedSat,
-    sampling_frequency,
-)
+function _update_tracked_sat_doppler(sat::TrackedSat, sampling_frequency)
     # Walk all signals. For each one whose integration completed this
     # iteration, normalize/filter its prompt, advance CN0 and bit buffer,
     # and move its correlator to `last_fully_integrated_*`. Additionally,
@@ -299,18 +293,9 @@ function _update_tracked_sat_doppler(
     tail_signals = Base.tail(sat.signals)
 
     new_head, new_doppler_estimator_state, new_carrier_doppler, new_code_doppler =
-        _process_estimator_driver_signal(
-            head,
-            sat,
-            pll_and_dll_state,
-            sampling_frequency,
-        )
+        _process_estimator_driver_signal(head, sat, pll_and_dll_state, sampling_frequency)
 
-    new_tail = _process_passenger_signals(
-        tail_signals,
-        sat.prn,
-        sampling_frequency,
-    )
+    new_tail = _process_passenger_signals(tail_signals, sat.prn, sampling_frequency)
 
     # Phase-snap fallback chain. Picks the synced signal with the
     # longest `(primary × secondary)` code length, and uses its
@@ -373,8 +358,10 @@ end
         tracked_signal.preferred_num_code_blocks_to_integrate,
         has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
     )
-    normalized_correlator = normalize(tracked_signal.correlator, tracked_signal.integrated_samples)
-    post_corr_filter = update(tracked_signal.post_corr_filter, get_prompt(normalized_correlator))
+    normalized_correlator =
+        normalize(tracked_signal.correlator, tracked_signal.integrated_samples)
+    post_corr_filter =
+        update(tracked_signal.post_corr_filter, get_prompt(normalized_correlator))
     filtered_correlator = apply(post_corr_filter, normalized_correlator)
     prompt = get_prompt(filtered_correlator)
     push!(tracked_signal.filtered_prompts, prompt)
@@ -430,7 +417,8 @@ end
     # bandwidth by 1/integrated_code_blocks to hold the loop's BL·Δt stability
     # product at its single-period value. For the N=1 path this divides by 1
     # and is bit-identical to before.
-    carrier_bandwidth = pll_and_dll_state.carrier_loop_filter_bandwidth / integrated_code_blocks
+    carrier_bandwidth =
+        pll_and_dll_state.carrier_loop_filter_bandwidth / integrated_code_blocks
     code_bandwidth = pll_and_dll_state.code_loop_filter_bandwidth / integrated_code_blocks
 
     carrier_freq_update, carrier_loop_filter = calculate_carrier_frequency_update(
@@ -457,36 +445,23 @@ end
         carrier_freq_update,
         code_freq_update,
     )
-    new_doppler_estimator_state = SatConventionalPLLAndDLL(
-        pll_and_dll_state;
-        carrier_loop_filter,
-        code_loop_filter,
-    )
+    new_doppler_estimator_state =
+        SatConventionalPLLAndDLL(pll_and_dll_state; carrier_loop_filter, code_loop_filter)
     return new_signal, new_doppler_estimator_state, carrier_doppler, code_doppler
 end
 
 # Process the non-driver signals (signals[2:end]): the shared per-signal
 # advance only — no loop-filter work. Walks the tuple recursively to keep
 # type-stability and avoid boxing.
-@inline _process_passenger_signals(
-    ::Tuple{}, ::Integer, _,
-) = ()
+@inline _process_passenger_signals(::Tuple{}, ::Integer, _) = ()
 @inline function _process_passenger_signals(
     signals::Tuple,
     prn::Integer,
     sampling_frequency,
 )
     head = first(signals)
-    new_head = _process_one_passenger_signal(
-        head,
-        prn,
-        sampling_frequency,
-    )
-    (new_head, _process_passenger_signals(
-        Base.tail(signals),
-        prn,
-        sampling_frequency,
-    )...)
+    new_head = _process_one_passenger_signal(head, prn, sampling_frequency)
+    (new_head, _process_passenger_signals(Base.tail(signals), prn, sampling_frequency)...)
 end
 
 @inline function _process_one_passenger_signal(
@@ -525,10 +500,8 @@ function estimate_dopplers_and_filter_prompt(
     # boundary (`reset_start_sample_and_bit_buffer`, #123). The per-sat
     # doppler update is identical between the two forms — only the storage
     # ownership differs.
-    new_track_state = TrackState(
-        track_state;
-        groups = _copy_groups_slot_vectors(track_state.groups),
-    )
+    new_track_state =
+        TrackState(track_state; groups = _copy_groups_slot_vectors(track_state.groups))
     estimate_dopplers_and_filter_prompt!(new_track_state, measurements)
 end
 
@@ -545,18 +518,12 @@ allocation-free in steady state when [`track!`](@ref)'s preconditions are met.
 # is heterogeneous (e.g. GPS L1 + Galileo E1B). The per-signal type
 # is recovered from each signal inside `_update_tracked_sat_doppler`.
 # Routes to this group's band's `BandMeasurement` for sampling frequency.
-@inline function _est_one_group!(
-    g::SignalGroup,
-    measurements::BandMeasurements,
-)
+@inline function _est_one_group!(g::SignalGroup, measurements::BandMeasurements)
     vals = g.satellites.values
     isempty(vals) && return nothing
     sampling_frequency = measurements[band_key(g.band)].sampling_frequency
     @inbounds for i in eachindex(vals)
-        vals[i] = _update_tracked_sat_doppler(
-            vals[i],
-            sampling_frequency,
-        )
+        vals[i] = _update_tracked_sat_doppler(vals[i], sampling_frequency)
     end
     return nothing
 end

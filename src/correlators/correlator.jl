@@ -141,4 +141,3 @@ function calc_preferred_code_shift_to_sample_shift(
     sample_shift = round(Int, preferred_code_shift * sampling_frequency / code_frequency)
     max(1, sample_shift)
 end
-

@@ -39,7 +39,7 @@ const L1CA_BLOCKS_PER_BIT = 20  # primary-code blocks per L1 C/A navigation bit
 # Build a noiseless ±1 soft-prompt stream from a list of data bits, one bit =
 # `L1CA_BLOCKS_PER_BIT` blocks, scaled by `amp`.
 _bitstream(bits; amp = 1.0) =
-    ComplexF64[amp * (b == 1 ? 1.0 : -1.0) for b in bits for _ in 1:L1CA_BLOCKS_PER_BIT]
+    ComplexF64[amp * (b == 1 ? 1.0 : -1.0) for b in bits for _ = 1:L1CA_BLOCKS_PER_BIT]
 
 # Fold a prompt stream into a fresh set of phase accumulators (mirrors what
 # `_buffer_find_bit` does) and run the detector after the n-th block. With
@@ -51,14 +51,27 @@ function _detect_over(prompts, confidence; upto = 0)
     _seed_phase_accumulators!(accumulators, L1CA_BLOCKS_PER_BIT)
     for (block_number, prompt) in enumerate(prompts)
         _update_phase_accumulators!(
-            accumulators, ComplexF64(prompt), block_number - 1, L1CA_BLOCKS_PER_BIT,
+            accumulators,
+            ComplexF64(prompt),
+            block_number - 1,
+            L1CA_BLOCKS_PER_BIT,
         )
-        result = _detect_bit_edge_cfar(accumulators, L1CA_BLOCKS_PER_BIT, confidence, block_number)
+        result = _detect_bit_edge_cfar(
+            accumulators,
+            L1CA_BLOCKS_PER_BIT,
+            confidence,
+            block_number,
+        )
         upto == 0 && result.found && return block_number
         upto == block_number && return result
     end
     return upto == 0 ? 0 :
-           _detect_bit_edge_cfar(accumulators, L1CA_BLOCKS_PER_BIT, confidence, length(prompts))
+           _detect_bit_edge_cfar(
+        accumulators,
+        L1CA_BLOCKS_PER_BIT,
+        confidence,
+        length(prompts),
+    )
 end
 
 @testset "_detect_bit_edge_cfar" begin
@@ -95,11 +108,11 @@ end
         # lower one, and always at a true bit boundary.
         function lock_block(confidence, seed)
             rng = MersenneTwister(seed)
-            clean = _bitstream([bit % 2 for bit in 0:9]; amp = 8.0)
+            clean = _bitstream([bit % 2 for bit = 0:9]; amp = 8.0)
             noisy = ComplexF64[prompt + complex(randn(rng), randn(rng)) for prompt in clean]
             _detect_over(noisy, confidence)
         end
-        for seed in 1:5
+        for seed = 1:5
             low_confidence_lock = lock_block(0.95, seed)
             high_confidence_lock = lock_block(0.99999, seed)
             # Both lock on this high-SNR stream within the window.
@@ -119,7 +132,7 @@ end
         # NaN-threshold path did. (A noiseless edge has z = Inf and still
         # locks — genuine certainty, exercised above.)
         rng = MersenneTwister(7)
-        clean = _bitstream([bit % 2 for bit in 0:9]; amp = 3.0)
+        clean = _bitstream([bit % 2 for bit = 0:9]; amp = 3.0)
         noisy = ComplexF64[prompt + complex(randn(rng), randn(rng)) for prompt in clean]
         low_confidence_lock = _detect_over(noisy, 0.99)
         high_confidence_lock = _detect_over(noisy, 1.0)
@@ -135,7 +148,7 @@ end
         accumulators = PhaseAccumulators()
         _seed_phase_accumulators!(accumulators, L1CA_BLOCKS_PER_BIT)
         found = false
-        for block_number in 1:5000
+        for block_number = 1:5000
             _update_phase_accumulators!(
                 accumulators,
                 complex(1e4 * (1 + 1e-7 * (block_number - 1)), 0.0),
@@ -394,8 +407,7 @@ end
             # Unit-amplitude prompts give magnitude 20 — i.e. the magnitude
             # tracks |prompt|, confirming the scaling (a raw vote count would
             # be ±20 in both runs).
-            _, unit_buffer =
-                _feed_prompts([fill(1.0 + 0.0im, 40); fill(-1.0 + 0.0im, 20)])
+            _, unit_buffer = _feed_prompts([fill(1.0 + 0.0im, 40); fill(-1.0 + 0.0im, 20)])
             @test get_soft_bits(unit_buffer) == Float32[-20.0, -20.0, 20.0]
         end
 
@@ -417,12 +429,12 @@ end
         # counting — now it must throw a descriptive error instead.
         signal = GPSL1CA()
         bit_buffer = BitBuffer(UInt128(0), 0, true, 0, 0, complex(0.0, 0.0), 0)
-        for _ in 1:(128*20)
+        for _ = 1:(128*20)
             bit_buffer = buffer(signal, 1, bit_buffer, 1, 1.0 + 0.0im)
         end
         @test bit_buffer.length == 128
         # 19 more blocks are fine; the block completing the 129th bit throws.
-        for _ in 1:19
+        for _ = 1:19
             bit_buffer = buffer(signal, 1, bit_buffer, 1, 1.0 + 0.0im)
         end
         @test_throws "hard-bit buffer is full" buffer(signal, 1, bit_buffer, 1, 1.0 + 0.0im)

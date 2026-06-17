@@ -113,16 +113,12 @@ import Tracking
     end
 
     @testset "is_zero correlator" begin
-        zero_corr = EarlyPromptLateCorrelator(
-            SVector(0.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im),
-            0.5,
-        )
+        zero_corr =
+            EarlyPromptLateCorrelator(SVector(0.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im), 0.5)
         @test Tracking.is_zero(zero_corr)
 
-        nonzero_corr = EarlyPromptLateCorrelator(
-            SVector(0.0 + 0.0im, 1.0 + 0.0im, 0.0 + 0.0im),
-            0.5,
-        )
+        nonzero_corr =
+            EarlyPromptLateCorrelator(SVector(0.0 + 0.0im, 1.0 + 0.0im, 0.0 + 0.0im), 0.5)
         @test !Tracking.is_zero(nonzero_corr)
     end
 
@@ -238,7 +234,6 @@ import Tracking
             0.5,
         )
     end
-
 end
 
 end

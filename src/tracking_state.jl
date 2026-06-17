@@ -17,7 +17,7 @@ track_state = TrackState(;
     signals = (
         legacy_gps = (GPSL1CA(),),
         modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),
-        galileo    = (GalileoE1B(),),
+        galileo = (GalileoE1B(),),
     ),
 )
 ```
@@ -47,26 +47,29 @@ function TrackState(;
     num_ants::NumAnts = NumAnts(1),
 )
     if isnothing(signal) && isnothing(signals)
-        throw(ArgumentError(
-            "TrackState requires either `signal = <AbstractGNSSSignal>` or " *
-            "`signals = (...)`. See the docstring for examples.",
-        ))
+        throw(
+            ArgumentError(
+                "TrackState requires either `signal = <AbstractGNSSSignal>` or " *
+                "`signals = (...)`. See the docstring for examples.",
+            ),
+        )
     end
     if !isnothing(signal) && !isnothing(signals)
-        throw(ArgumentError(
-            "Pass either `signal` (singular, one AbstractGNSSSignal) or " *
-            "`signals` (plural, a NamedTuple of signal tuples) — not both.",
-        ))
+        throw(
+            ArgumentError(
+                "Pass either `signal` (singular, one AbstractGNSSSignal) or " *
+                "`signals` (plural, a NamedTuple of signal tuples) — not both.",
+            ),
+        )
     end
-    sig_groups_nt = isnothing(signal) ?
-        _normalize_signal_groups(signals) :
-        (default = (signal,),)
+    sig_groups_nt =
+        isnothing(signal) ? _normalize_signal_groups(signals) : (default = (signal,),)
     # Default estimator: the auto-bandwidth `ConventionalAssistedPLLAndDLL`.
     # Each group's satellites are then seeded (via `init_estimator_state`)
     # with the loop bandwidth recommended for that group's own driver signal,
     # so every group gets the right bandwidth without a cross-group compromise.
-    estimator = isnothing(doppler_estimator) ?
-        ConventionalAssistedPLLAndDLL() : doppler_estimator
+    estimator =
+        isnothing(doppler_estimator) ? ConventionalAssistedPLLAndDLL() : doppler_estimator
     # Each entry of `sig_groups_nt` is either:
     #   - a bare `Tuple{Vararg{AbstractGNSSSignal}}` (the common case,
     #     uses the constructor's `num_ants` kwarg); or
@@ -94,7 +97,7 @@ end
     band = get_band(first(sig_tuple))
     _validate_signal_group(sig_tuple, band)
     template = _make_template_tracked_sat(sig_tuple, doppler_estimator, num_ants)
-    sats = Dictionary{Int, typeof(template)}(Int[], typeof(template)[])
+    sats = Dictionary{Int,typeof(template)}(Int[], typeof(template)[])
     SignalGroup(band, sats, sig_tuple, num_ants)
 end
 
@@ -124,7 +127,7 @@ end
     if typeof(template) === eltype(sats)
         return g
     end
-    new_sats = Dictionary{Int, typeof(template)}(Int[], typeof(template)[])
+    new_sats = Dictionary{Int,typeof(template)}(Int[], typeof(template)[])
     SignalGroup(g.band, new_sats, g.signals, g.num_ants)
 end
 
@@ -143,13 +146,20 @@ end
     bk = band_key(g.band)
     for (sk, sna) in seen
         if sk === bk && sna !== g.num_ants
-            throw(ArgumentError(string(
-                "Two groups on band `:", bk,
-                "` declare different antenna counts (",
-                sna, " vs ", g.num_ants,
-                "). Groups sharing a band must share NumAnts ",
-                "— they're sampled by the same front-end.",
-            )))
+            throw(
+                ArgumentError(
+                    string(
+                        "Two groups on band `:",
+                        bk,
+                        "` declare different antenna counts (",
+                        sna,
+                        " vs ",
+                        g.num_ants,
+                        "). Groups sharing a band must share NumAnts ",
+                        "— they're sampled by the same front-end.",
+                    ),
+                ),
+            )
         end
     end
     _check_same_band_num_ants(Base.tail(t), (seen..., (bk, g.num_ants)))
@@ -209,16 +219,20 @@ end
     expected_state_type = typeof(init_estimator_state(estimator, sat))
     actual_state_type = typeof(sat.doppler_estimator_state)
     expected_state_type === actual_state_type && return nothing
-    throw(ArgumentError(string(
-        "TrackedSat has doppler_estimator_state of type ",
-        actual_state_type,
-        ", but the configured doppler_estimator (",
-        typeof(estimator),
-        ") would produce ",
-        expected_state_type,
-        ". Construct each TrackedSat with `doppler_estimator = <same instance>` ",
-        "as the one passed here.",
-    )))
+    throw(
+        ArgumentError(
+            string(
+                "TrackedSat has doppler_estimator_state of type ",
+                actual_state_type,
+                ", but the configured doppler_estimator (",
+                typeof(estimator),
+                ") would produce ",
+                expected_state_type,
+                ". Construct each TrackedSat with `doppler_estimator = <same instance>` ",
+                "as the one passed here.",
+            ),
+        ),
+    )
 end
 
 function TrackState(
@@ -254,11 +268,13 @@ end
 # constructors. Empty dicts can't be recovered this way (no sats to inspect)
 # — requires at least one sat in the dict.
 @inline function _signal_group_from_dict(dict::Dictionary{<:Any,<:TrackedSat})
-    isempty(dict) && throw(ArgumentError(
-        "Cannot recover the signal-instance tuple from an empty " *
-        "satellites dictionary. Use the `TrackState(; signals = ...)` " *
-        "constructor to declare signal groups before populating sats.",
-    ))
+    isempty(dict) && throw(
+        ArgumentError(
+            "Cannot recover the signal-instance tuple from an empty " *
+            "satellites dictionary. Use the `TrackState(; signals = ...)` " *
+            "constructor to declare signal groups before populating sats.",
+        ),
+    )
     sat = first(dict.values)
     sig_tuple = map(s -> s.signal, sat.signals)
     band = get_band(first(sig_tuple))
@@ -352,10 +368,7 @@ function get_sat_state(
     get_sat_state(get_sat_states(track_state, group_idx), sat_identifier)
 end
 
-function get_sat_state(
-    track_state::TrackState{<:SignalGroups{1}},
-    sat_identifier,
-)
+function get_sat_state(track_state::TrackState{<:SignalGroups{1}}, sat_identifier)
     get_sat_state(track_state, 1, sat_identifier)
 end
 
@@ -436,7 +449,8 @@ place (including the default conventional ones), the very same
 
 ```julia
 track_state = TrackState(; signals = (modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),))
-add_satellite!(track_state;
+add_satellite!(
+    track_state;
     prn = 11,
     group = :modern_gps,
     code_phase = 0.0,
@@ -497,18 +511,28 @@ end
 # the user gets a useful message before Dictionaries.jl's `set!` raises
 # a deep MethodError about `convert`.
 @inline function _assert_sat_matches_slot_type(
-    track_state::TrackState, group::Symbol, sat::TrackedSat,
+    track_state::TrackState,
+    group::Symbol,
+    sat::TrackedSat,
 )
     SlotT = eltype(track_state.groups[group].satellites)
     typeof(sat) === SlotT && return nothing
-    throw(ArgumentError(string(
-        "TrackedSat type does not match the `:", group, "` group's slot. ",
-        "Got: ", typeof(sat),
-        ". Expected: ", SlotT,
-        ". The slot type is fixed at TrackState construction; rebuild the ",
-        "sat with the matching correlator, post_corr_filter, and ",
-        "doppler_estimator types.",
-    )))
+    throw(
+        ArgumentError(
+            string(
+                "TrackedSat type does not match the `:",
+                group,
+                "` group's slot. ",
+                "Got: ",
+                typeof(sat),
+                ". Expected: ",
+                SlotT,
+                ". The slot type is fixed at TrackState construction; rebuild the ",
+                "sat with the matching correlator, post_corr_filter, and ",
+                "doppler_estimator types.",
+            ),
+        ),
+    )
 end
 
 # Dictionary-level variant used by `merge_sats`: the incoming dict's
@@ -516,19 +540,29 @@ end
 # estimator-state type) so correlator / PCF / signal-shape mismatches
 # also get the curated error instead of a confusing MethodError.
 @inline function _assert_sats_match_slot_type(
-    g::SignalGroup, new_sats_dict::Dictionary{<:Any,<:TrackedSat}, group_idx,
+    g::SignalGroup,
+    new_sats_dict::Dictionary{<:Any,<:TrackedSat},
+    group_idx,
 )
     SlotT = eltype(g.satellites)
     T = eltype(new_sats_dict)
     T === SlotT && return nothing
-    throw(ArgumentError(string(
-        "TrackedSat type does not match the `", group_idx, "` group's slot. ",
-        "Got: ", T,
-        ". Expected: ", SlotT,
-        ". The slot type is fixed at TrackState construction; rebuild the ",
-        "sats with the matching signals, correlator, post_corr_filter, and ",
-        "doppler_estimator types.",
-    )))
+    throw(
+        ArgumentError(
+            string(
+                "TrackedSat type does not match the `",
+                group_idx,
+                "` group's slot. ",
+                "Got: ",
+                T,
+                ". Expected: ",
+                SlotT,
+                ". The slot type is fixed at TrackState construction; rebuild the ",
+                "sats with the matching signals, correlator, post_corr_filter, and ",
+                "doppler_estimator types.",
+            ),
+        ),
+    )
 end
 
 # Dictionaries.jl: `insert!` errors on existing key; `set!` overwrites.
@@ -643,9 +677,17 @@ end
 @inline function _resolve_group(track_state::TrackState, ::Nothing)
     g = keys(track_state.groups)
     length(g) == 1 && return only(g)
-    throw(ArgumentError(string(
-        "track_state has ", length(g), " groups ", g,
-        "; pass `group = :one_of_them` to select one.")))
+    throw(
+        ArgumentError(
+            string(
+                "track_state has ",
+                length(g),
+                " groups ",
+                g,
+                "; pass `group = :one_of_them` to select one.",
+            ),
+        ),
+    )
 end
 
 # Build a default-correlator, default-PCF TrackedSat whose
@@ -664,7 +706,10 @@ function _make_default_tracked_sat_for_group(
 )
     g = track_state.groups[group]
     TrackedSat(
-        g.signals, prn, code_phase, carrier_doppler;
+        g.signals,
+        prn,
+        code_phase,
+        carrier_doppler;
         doppler_estimator = track_state.doppler_estimator,
         num_ants = g.num_ants,
         carrier_phase,
@@ -712,12 +757,19 @@ const _SignalSelector = Union{Integer,Type{<:AbstractGNSSSignal}}
 # Generated via `@eval` at module load — methods bake into the precompile
 # image, indistinguishable from hand-written ones at runtime.
 for fn in (
-    :get_integrated_samples, :get_correlator,
-    :get_last_fully_integrated_correlator, :get_last_fully_integrated_filtered_prompt,
+    :get_integrated_samples,
+    :get_correlator,
+    :get_last_fully_integrated_correlator,
+    :get_last_fully_integrated_filtered_prompt,
     :get_filtered_prompts,
-    :get_post_corr_filter, :get_cn0_estimator, :get_bit_buffer, :get_bits,
+    :get_post_corr_filter,
+    :get_cn0_estimator,
+    :get_bit_buffer,
+    :get_bits,
     :get_soft_bits,
-    :get_num_bits, :has_bit_or_secondary_code_been_found, :estimate_cn0,
+    :get_num_bits,
+    :has_bit_or_secondary_code_been_found,
+    :estimate_cn0,
     :get_preferred_num_code_blocks_to_integrate,
 )
     @eval begin
@@ -733,8 +785,7 @@ end
 
 # Resolve the index of the addressed signal within a sat's signals tuple.
 # Config-time only (not the hot path), so plain control flow is fine.
-_signal_index(signals::Tuple) =
-    length(signals) == 1 ? 1 : _throw_needs_signal_selector()
+_signal_index(signals::Tuple) = length(signals) == 1 ? 1 : _throw_needs_signal_selector()
 _signal_index(::Tuple, i::Integer) = Int(i)
 function _signal_index(signals::Tuple, ::Type{T}) where {T<:AbstractGNSSSignal}
     idx = findfirst(s -> s.signal isa T, signals)
@@ -742,9 +793,12 @@ function _signal_index(signals::Tuple, ::Type{T}) where {T<:AbstractGNSSSignal}
     # Match the read-accessor contract (`_find_signal_by_type`): a type
     # selector must be unambiguous. If the sat tracks the same signal type
     # twice, require the caller to address it by integer index instead.
-    isnothing(findnext(s -> s.signal isa T, signals, idx + 1)) || throw(ArgumentError(
-        "more than one signal of type $T on this satellite — " *
-        "pass an integer index to address one of them."))
+    isnothing(findnext(s -> s.signal isa T, signals, idx + 1)) || throw(
+        ArgumentError(
+            "more than one signal of type $T on this satellite — " *
+            "pass an integer index to address one of them.",
+        ),
+    )
     idx
 end
 
@@ -798,7 +852,11 @@ function set_preferred_num_code_blocks_to_integrate!(
     num_code_blocks::Integer,
 )
     _set_preferred_blocks!(
-        track_state, get_sat_states(track_state, group), sat_id, num_code_blocks, sig,
+        track_state,
+        get_sat_states(track_state, group),
+        sat_id,
+        num_code_blocks,
+        sig,
     )
 end
 
@@ -809,7 +867,10 @@ function set_preferred_num_code_blocks_to_integrate!(
     num_code_blocks::Integer,
 )
     _set_preferred_blocks!(
-        track_state, get_sat_states(track_state, group), sat_id, num_code_blocks,
+        track_state,
+        get_sat_states(track_state, group),
+        sat_id,
+        num_code_blocks,
     )
 end
 
@@ -819,7 +880,10 @@ function set_preferred_num_code_blocks_to_integrate!(
     num_code_blocks::Integer,
 )
     _set_preferred_blocks!(
-        track_state, get_sat_states(track_state), sat_id, num_code_blocks,
+        track_state,
+        get_sat_states(track_state),
+        sat_id,
+        num_code_blocks,
     )
 end
 
@@ -857,14 +921,17 @@ end
 # so the first post-reset update skips the stale measurement.
 @inline function _reset_sat_loop_filters(track_state::TrackState, sat::TrackedSat)
     new_signals = map(
-        s -> TrackedSignal(s; last_fully_integrated_filtered_prompt = complex(0.0, 0.0)),
+        s ->
+            TrackedSignal(s; last_fully_integrated_filtered_prompt = complex(0.0, 0.0)),
         sat.signals,
     )
     TrackedSat(
         sat;
         signals = new_signals,
-        doppler_estimator_state =
-            _reset_estimator_state(track_state.doppler_estimator, sat),
+        doppler_estimator_state = _reset_estimator_state(
+            track_state.doppler_estimator,
+            sat,
+        ),
     )
 end
 
@@ -958,12 +1025,17 @@ band_keys(ts) == (:l1, :l5)
 @inline function _single_band(track_state::TrackState)
     keys_tuple = band_keys(track_state)
     if length(keys_tuple) != 1
-        throw(ArgumentError(string(
-            "Bare-buffer `track`/`track!` requires a single-band TrackState, ",
-            "but this TrackState spans bands ", keys_tuple,
-            ". Pass a NamedTuple of `BandMeasurement`s instead, ",
-            "one per band.",
-        )))
+        throw(
+            ArgumentError(
+                string(
+                    "Bare-buffer `track`/`track!` requires a single-band TrackState, ",
+                    "but this TrackState spans bands ",
+                    keys_tuple,
+                    ". Pass a NamedTuple of `BandMeasurement`s instead, ",
+                    "one per band.",
+                ),
+            ),
+        )
     end
     # All groups share one band — pull it off the first group.
     first(track_state.groups).band
@@ -984,16 +1056,24 @@ end
 # once at the top of `track` / `track!` — O(num_bands), irrelevant next
 # to the inner loop.
 @inline function _validate_measurements(
-    track_state::TrackState, measurements::BandMeasurements,
+    track_state::TrackState,
+    measurements::BandMeasurements,
 )
     expected_keys = band_keys(track_state)
     got_keys = keys(measurements)
     if !_tuple_sets_equal(expected_keys, got_keys)
-        throw(ArgumentError(string(
-            "BandMeasurement keys do not match the TrackState's band set. ",
-            "Expected: ", expected_keys,
-            ". Got: ", got_keys, ".",
-        )))
+        throw(
+            ArgumentError(
+                string(
+                    "BandMeasurement keys do not match the TrackState's band set. ",
+                    "Expected: ",
+                    expected_keys,
+                    ". Got: ",
+                    got_keys,
+                    ".",
+                ),
+            ),
+        )
     end
     _validate_antenna_shapes(track_state, measurements)
     _validate_equal_durations(measurements)
@@ -1007,27 +1087,43 @@ end
 # call. Walk via tuple recursion so each step has concrete types and
 # inlines cleanly.
 @inline function _validate_antenna_shapes(
-    track_state::TrackState, measurements::BandMeasurements,
+    track_state::TrackState,
+    measurements::BandMeasurements,
 )
     _validate_antenna_shapes_walk(Tuple(track_state.groups), measurements)
 end
 
 @inline _validate_antenna_shapes_walk(::Tuple{}, ::BandMeasurements) = nothing
-@inline function _validate_antenna_shapes_walk(groups::Tuple, measurements::BandMeasurements)
+@inline function _validate_antenna_shapes_walk(
+    groups::Tuple,
+    measurements::BandMeasurements,
+)
     g = first(groups)
     m = measurements[band_key(g.band)]
     _assert_antenna_shape(g, m)
     _validate_antenna_shapes_walk(Base.tail(groups), measurements)
 end
 
-@inline function _assert_antenna_shape(g::SignalGroup{B,S,Sigs,NumAnts{M}}, m::BandMeasurement) where {B,S,Sigs,M}
+@inline function _assert_antenna_shape(
+    g::SignalGroup{B,S,Sigs,NumAnts{M}},
+    m::BandMeasurement,
+) where {B,S,Sigs,M}
     cols = m.samples isa AbstractMatrix ? size(m.samples, 2) : 1
     cols == M && return nothing
-    throw(ArgumentError(string(
-        "Antenna shape mismatch for band `:", band_key(g.band),
-        "`. Group declares NumAnts(", M, ") but the measurement's ",
-        "`samples` has ", cols, " column(s).",
-    )))
+    throw(
+        ArgumentError(
+            string(
+                "Antenna shape mismatch for band `:",
+                band_key(g.band),
+                "`. Group declares NumAnts(",
+                M,
+                ") but the measurement's ",
+                "`samples` has ",
+                cols,
+                " column(s).",
+            ),
+        ),
+    )
 end
 
 # Exact-equality duration check across all measurements — no tolerance.
@@ -1043,12 +1139,19 @@ end
     for m in Base.tail(ms)
         ref_fs, fs = promote(first_m.sampling_frequency, m.sampling_frequency)
         get_num_samples(m) * ref_fs == ref_num_samples * fs && continue
-        throw(ArgumentError(string(
-            "BandMeasurement durations must be exactly equal across bands. ",
-            "Got ", uconvert(s, get_num_samples(m) / m.sampling_frequency),
-            " and ", uconvert(s, ref_num_samples / first_m.sampling_frequency), ". ",
-            "Check `num_samples / sampling_frequency` for each band.",
-        )))
+        throw(
+            ArgumentError(
+                string(
+                    "BandMeasurement durations must be exactly equal across bands. ",
+                    "Got ",
+                    uconvert(s, get_num_samples(m) / m.sampling_frequency),
+                    " and ",
+                    uconvert(s, ref_num_samples / first_m.sampling_frequency),
+                    ". ",
+                    "Check `num_samples / sampling_frequency` for each band.",
+                ),
+            ),
+        )
     end
     return nothing
 end

@@ -40,7 +40,7 @@ end
 @inline function _packed_secondary_code(::Type{UInt1800}, signal::GPSL1C_P, prn::Integer)
     codes = signal.overlay_codes        # 1800 × 63 Int8 matrix
     x = UInt1800(0)
-    @inbounds for k in 1:1800
+    @inbounds for k = 1:1800
         if codes[k, prn] > 0
             x |= UInt1800(1) << (1800 - k)
         end

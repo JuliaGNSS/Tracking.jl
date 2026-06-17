@@ -25,7 +25,7 @@ function gen_code_replica!(
     latest_sample_shift = minimum(correlator_sample_shifts)
     total_samples = num_samples + earliest_sample_shift - latest_sample_shift
     gen_code!(
-        view(code_replica, start_sample:start_sample+total_samples-1),
+        view(code_replica, start_sample:(start_sample+total_samples-1)),
         signal,
         prn,
         sampling_frequency,

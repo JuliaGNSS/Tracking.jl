@@ -11,13 +11,26 @@
 # `AcquisitionResults` to be imported by the including module.
 function _make_acq(signal, prn, code_phase, carrier_doppler; noise_power = 1.0)
     args = (
-        signal, prn, 5e6Hz, carrier_doppler, code_phase,
-        45.0, noise_power, 10.0, 1, randn(10, 10), -500:100.0:500,
+        signal,
+        prn,
+        5e6Hz,
+        carrier_doppler,
+        code_phase,
+        45.0,
+        noise_power,
+        10.0,
+        1,
+        randn(10, 10),
+        -500:100.0:500,
     )
     if pkgversion(Acquisition) >= v"2.5"
         AcquisitionResults(
-            args[1:5]..., nothing, args[6:end]...,
-            1, length(-500:100.0:500), 1,
+            args[1:5]...,
+            nothing,
+            args[6:end]...,
+            1,
+            length(-500:100.0:500),
+            1,
         )
     elseif pkgversion(Acquisition) >= v"2"
         AcquisitionResults(args..., 1, length(-500:100.0:500))

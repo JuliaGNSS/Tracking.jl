@@ -63,12 +63,11 @@ end
                 code_frequency .* range ./ sampling_frequency .+ start_code_phase,
                 prn,
             ) .* 10^(45 / 20) .+ randn(ComplexF64, length(range)) .* sqrt(4e6)
-        code =
-            get_code.(
-                gpsl1,
-                code_frequency .* (-2:4001) ./ sampling_frequency .+ start_code_phase,
-                prn,
-            )
+        code = get_code.(
+            gpsl1,
+            code_frequency .* (-2:4001) ./ sampling_frequency .+ start_code_phase,
+            prn,
+        )
         correlator = EarlyPromptLateCorrelator()
         sample_shifts =
             get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)

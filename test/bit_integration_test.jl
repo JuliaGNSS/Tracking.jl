@@ -2,8 +2,14 @@ module BitDetectionIntegrationTest
 
 using Test: @test, @testset
 using Unitful: Hz
-using GNSSSignals: GPSL1CA, GPSL5I, GPSL1C_P, gen_code, get_code_frequency,
-    get_code_length, get_secondary_code_length
+using GNSSSignals:
+    GPSL1CA,
+    GPSL5I,
+    GPSL1C_P,
+    gen_code,
+    get_code_frequency,
+    get_code_length,
+    get_secondary_code_length
 using Tracking:
     TrackedSat,
     TrackState,
@@ -40,12 +46,10 @@ using Tracking:
             carrier_phase =
                 2π * (index - 1) * num_samples * carrier_doppler / sampling_frequency
             signal =
-                (bit * 2 - 1) .*
-                cis.(
+                (bit * 2 - 1) .* cis.(
                     2π * (0:(num_samples-1)) * carrier_doppler / sampling_frequency .+
                     carrier_phase,
-                ) .*
-                gen_code(
+                ) .* gen_code(
                     num_samples,
                     gpsl1,
                     1,
@@ -61,7 +65,7 @@ using Tracking:
             num_bits = get_num_bits(track_state)
             @test num_bits == expected_num_bits
             bits_word = get_bits(track_state)
-            for bit_index in num_bits:-1:1
+            for bit_index = num_bits:-1:1
                 push!(decoded_bits, (bits_word >> (bit_index - 1)) & 1 == 1)
             end
             soft_bits = get_soft_bits(track_state)
@@ -117,8 +121,14 @@ end
     foreach(enumerate(bits)) do (index, bit)
         code_phase = (index - 1) * num_samples * code_frequency / sampling_frequency
         signal = ComplexF32.(
-            (bit * 2 - 1) .*
-            gen_code(num_samples, gpsl1, 1, sampling_frequency, code_frequency, code_phase),
+            (bit * 2 - 1) .* gen_code(
+                num_samples,
+                gpsl1,
+                1,
+                sampling_frequency,
+                code_frequency,
+                code_phase,
+            ),
         )
         multi_state = track(signal, multi_state, sampling_frequency)
         single_state = track(signal, single_state, sampling_frequency)
@@ -129,7 +139,7 @@ end
         @test get_num_bits(multi_state) == expected_num_bits
         @test get_num_bits(single_state) == expected_num_bits
         num_bits = get_num_bits(multi_state)
-        for bit_index in (num_bits-1):-1:0
+        for bit_index = (num_bits-1):-1:0
             push!(multi_bits, (get_bits(multi_state) >> bit_index) & 1 == 1)
             push!(single_bits, (get_bits(single_state) >> bit_index) & 1 == 1)
         end
@@ -175,17 +185,15 @@ end
     secondary_code_length = get_secondary_code_length(gpsl5)  # 10 (NH10)
     num_samples = round(Int, 25e6 / 1000)                  # 1 ms = one primary-code block
 
-    for start_secondary_chip in 0:(secondary_code_length-1)
-        track_state =
-            TrackState(gpsl5, [TrackedSat(gpsl5, prn, 0.0, 0.0Hz)])
+    for start_secondary_chip = 0:(secondary_code_length-1)
+        track_state = TrackState(gpsl5, [TrackedSat(gpsl5, prn, 0.0, 0.0Hz)])
         synced_at_block = -1
         synced_code_phase = NaN
-        for index in 1:40
+        for index = 1:40
             # Advance the *generated* signal's absolute code phase from an
             # initial offset of `start_secondary_chip` primary periods, so
             # block `index` carries NH10 chip `(start_secondary_chip + index - 1) % 10`.
-            gen_code_phase =
-                (start_secondary_chip + (index - 1)) * primary_code_length
+            gen_code_phase = (start_secondary_chip + (index - 1)) * primary_code_length
             signal = ComplexF32.(
                 gen_code(
                     num_samples,
@@ -248,7 +256,8 @@ end
         # lands on chip `k mod 10` + the leftover half block up to a sub-microchip
         # residual (~5e-7 of 10230 chips). Same tolerance as the L1C-P run below.
         @test get_code_phase(track_state) ≈
-              (k % secondary_code_length) * primary_code_length + 0.5 * primary_code_length atol = 1e-4
+              (k % secondary_code_length) * primary_code_length + 0.5 * primary_code_length atol =
+            1e-4
     end
 end
 
@@ -285,8 +294,9 @@ end
     # straddle their boundary.
     data_bits = [1, 1, 0, 1, 0, 0, 1, 1, 0, 1]
 
-    @testset "preferred = $preferred_blocks, start chip $start_secondary_chip" for
-            preferred_blocks in (1, 10), start_secondary_chip in (0, 3, 9)
+    @testset "preferred = $preferred_blocks, start chip $start_secondary_chip" for preferred_blocks in
+                                                                                   (1, 10),
+        start_secondary_chip in (0, 3, 9)
         # One continuous signal: `gen_code` bakes the NH chip per block via the
         # advancing code phase, and each 1 ms block is scaled by its data bit.
         # Fed in a single `track` call so the inner loop owns all block-boundary
@@ -303,7 +313,7 @@ end
                 start_secondary_chip * primary_code_length,
             ),
         )
-        for b in 0:(total_blocks-1)
+        for b = 0:(total_blocks-1)
             abs_block = start_secondary_chip + b
             data_bit = data_bits[div(abs_block, secondary_code_length)+1]
             block_range = (b*num_samples+1):((b+1)*num_samples)
@@ -369,7 +379,7 @@ end
     track_state = TrackState(gpsl1c_p, [TrackedSat(gpsl1c_p, prn, 0.0, 0.0Hz)])
     synced_at_block = -1
     synced_code_phase = NaN
-    for index in 1:(secondary_code_length + 5)
+    for index = 1:(secondary_code_length+5)
         # Continuous code phase so `gen_code` lays down the correct overlay
         # chip on each successive primary-code period.
         gen_code_phase = (index - 1) * primary_code_length

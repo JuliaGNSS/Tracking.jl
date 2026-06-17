@@ -5,16 +5,16 @@ Outcome of a per-signal bit-sync / secondary-code-sync detector call.
 
 Fields:
 
-- `found::Bool` — whether the detector locked on this update.
-- `phase::Int` — when `found = true`, the secondary-code chip the
-  *upcoming* integration aligns to, in `0:secondary_code_length-1`
-  (recovered by the rotation search in [`_secondary_code_search`](@ref)).
-  Zero for signals without a secondary code (the L1 C/A bit-edge case
-  fires at the data-bit boundary, where the upcoming integration starts a
-  new bit, not at a secondary-chip offset).
-- `polarity::Int8` — `+1` or `-1`; which match orientation the detector
-  locked. Carries through to the post-sync prompt accumulator so that a
-  negative-polarity lock doesn't trip the downstream bit decoder.
+  - `found::Bool` — whether the detector locked on this update.
+  - `phase::Int` — when `found = true`, the secondary-code chip the
+    *upcoming* integration aligns to, in `0:secondary_code_length-1`
+    (recovered by the rotation search in [`_secondary_code_search`](@ref)).
+    Zero for signals without a secondary code (the L1 C/A bit-edge case
+    fires at the data-bit boundary, where the upcoming integration starts a
+    new bit, not at a secondary-chip offset).
+  - `polarity::Int8` — `+1` or `-1`; which match orientation the detector
+    locked. Carries through to the post-sync prompt accumulator so that a
+    negative-polarity lock doesn't trip the downstream bit decoder.
 """
 struct SyncResult
     found::Bool
@@ -54,13 +54,13 @@ allocation-free choice.
 
 Fields (all length `blocks_per_bit` once seeded; empty before the first block):
 
-- `open_bin_sum` — coherent sum of the phase's *currently open* bin.
-- `mean_bin_energy` / `bin_energy_sum_of_squared_deviations` — Welford running mean and
-  sum of squared deviations (`M₂ = Σ(energyᵢ − mean)²`) of the phase's
-  *completed*-bin energies, for a numerically stable variance. The bin
-  count is not stored — it is `div(num_blocks - phase, blocks_per_bit)`.
-- `last_bin_polarity` — sign (`±1`, `0` before the first bin) of the most
-  recently completed bin's real part, i.e. the lock polarity.
+  - `open_bin_sum` — coherent sum of the phase's *currently open* bin.
+  - `mean_bin_energy` / `bin_energy_sum_of_squared_deviations` — Welford running mean and
+    sum of squared deviations (`M₂ = Σ(energyᵢ − mean)²`) of the phase's
+    *completed*-bin energies, for a numerically stable variance. The bin
+    count is not stored — it is `div(num_blocks - phase, blocks_per_bit)`.
+  - `last_bin_polarity` — sign (`±1`, `0` before the first bin) of the most
+    recently completed bin's real part, i.e. the lock polarity.
 """
 struct PhaseAccumulators
     open_bin_sum::Vector{ComplexF64}
@@ -106,9 +106,12 @@ into its Welford mean / sum-of-squared-deviations and its polarity recorded.
 O(blocks_per_bit) per call, allocation-free.
 """
 function _update_phase_accumulators!(
-    accumulators::PhaseAccumulators, prompt::ComplexF64, block_index::Int, blocks_per_bit::Int,
+    accumulators::PhaseAccumulators,
+    prompt::ComplexF64,
+    block_index::Int,
+    blocks_per_bit::Int,
 )
-    @inbounds for phase in 0:(blocks_per_bit-1)
+    @inbounds for phase = 0:(blocks_per_bit-1)
         block_index < phase && continue
         accumulators.open_bin_sum[phase+1] += prompt
         if (block_index - phase) % blocks_per_bit == blocks_per_bit - 1
@@ -171,8 +174,7 @@ significant under that spread:
     z_score = energy_gap / standard_error   ≥   Φ⁻¹(1 - false_alarm_probability/(blocks_per_bit - 1))
 
 where the standard error combines the peak phase's per-bin energy variance
-over the peak and runner-up bin counts, `false_alarm_probability =
-1 - confidence` is Bonferroni-split over the `blocks_per_bit - 1` competing
+over the peak and runner-up bin counts, `false_alarm_probability = 1 - confidence` is Bonferroni-split over the `blocks_per_bit - 1` competing
 phases, and `Φ⁻¹` is [`_norm_quantile`](@ref). A real edge has a structural
 gap that dwarfs the thermal bin-to-bin spread, so `z_score` grows like the
 square root of the bin count and crosses the threshold sooner at high C/N₀
@@ -193,7 +195,10 @@ never at a neighbour's.
 `polarity` is the sign of the most recently completed bin's coherent sum.
 """
 function _detect_bit_edge_cfar(
-    accumulators::PhaseAccumulators, blocks_per_bit::Int, confidence::Float64, num_blocks::Int,
+    accumulators::PhaseAccumulators,
+    blocks_per_bit::Int,
+    confidence::Float64,
+    num_blocks::Int,
 )
     # Need at least two complete bins on some phase before any phase can
     # serve as a runner-up; below that a transition cannot have been
@@ -205,10 +210,15 @@ function _detect_bit_edge_cfar(
     # phases with ≥ 2 complete bins) and the two highest phases overall. The
     # runner-up is the higher of those two that isn't the peak. A phase's
     # completed-bin count is `div(num_blocks - phase, blocks_per_bit)`.
-    peak_phase = -1; peak_energy = -1.0; peak_bin_count = 0          # best, ≥ 2 bins
-    best_phase = -1; best_energy = -1.0; best_bin_count = 0          # highest, ≥ 1 bin
-    second_best_energy = -1.0; second_best_bin_count = 0             # 2nd highest, ≥ 1 bin
-    @inbounds for phase in 0:(blocks_per_bit-1)
+    peak_phase = -1;
+    peak_energy = -1.0;
+    peak_bin_count = 0          # best, ≥ 2 bins
+    best_phase = -1;
+    best_energy = -1.0;
+    best_bin_count = 0          # highest, ≥ 1 bin
+    second_best_energy = -1.0;
+    second_best_bin_count = 0             # 2nd highest, ≥ 1 bin
+    @inbounds for phase = 0:(blocks_per_bit-1)
         bin_count = div(num_blocks - phase, blocks_per_bit)
         bin_count < 1 && continue
         energy = mean_bin_energy[phase+1]
@@ -251,10 +261,12 @@ function _detect_bit_edge_cfar(
     # larger, from its straddling bins, so this is the optimistic —
     # fastest-locking — choice that still rejects drift-only asymmetries).
     @inbounds bin_energy_variance =
-        accumulators.bin_energy_sum_of_squared_deviations[peak_phase+1] / (peak_bin_count - 1)
+        accumulators.bin_energy_sum_of_squared_deviations[peak_phase+1] /
+        (peak_bin_count - 1)
     standard_error =
         sqrt(bin_energy_variance * (1 / peak_bin_count + 1 / runner_up_bin_count))
-    z_score = standard_error > 0 ? energy_gap / standard_error : (energy_gap > 0 ? Inf : 0.0)
+    z_score =
+        standard_error > 0 ? energy_gap / standard_error : (energy_gap > 0 ? Inf : 0.0)
 
     # `confidence` is the (1 - false-sync probability) target, Bonferroni-
     # split over the `blocks_per_bit - 1` competing phases. Clamp the quantile
@@ -325,7 +337,7 @@ site (the L5I window is 10, the L1C-P window 1800).
     best_d = 0
     best_dist = N + 1
     best_pol = Int8(0)
-    @inbounds for d in 0:(N-1)
+    @inbounds for d = 0:(N-1)
         # Rotate-left by `d` within the N-bit window. `d == 0` is special-
         # cased because `masked >> N` is undefined for an exact-width buffer.
         shifted = d == 0 ? masked : ((masked << d) | (masked >> (N - d))) & mask
@@ -394,10 +406,8 @@ method (plus `get_code_block_buffer_type`) and a
 ) where {B<:Unsigned}
     secondary_code_length = get_secondary_code_length(signal)
     num_code_blocks < secondary_code_length && return SyncResult(false, 0, Int8(0))
-    max_errors = floor(
-        Int,
-        get_bit_edge_or_secondary_code_tolerance(signal) * secondary_code_length,
-    )
+    max_errors =
+        floor(Int, get_bit_edge_or_secondary_code_tolerance(signal) * secondary_code_length)
     _secondary_code_search(
         code_block_bits,
         _packed_secondary_code(B, signal, prn),
@@ -413,8 +423,7 @@ Hook for [`_detect_secondary_code_sync`](@ref): return the signal's
 secondary / overlay code for `prn`, packed into the buffer type `B` in
 the same newest-first order the prompt buffer fills — bit `i` holds
 secondary chip `N - 1 - i`, so that when the most recent `N` blocks span
-exactly one period ending on its last chip, `received & mask ==
-reference` (see [`_secondary_code_search`](@ref)).
+exactly one period ending on its last chip, `received & mask == reference` (see [`_secondary_code_search`](@ref)).
 """
 function _packed_secondary_code end
 
@@ -457,16 +466,34 @@ end
 # `TrackedSignal` constructor picks the right width instead.
 function BitBuffer()
     BitBuffer{UInt128}(
-        zero(UInt128), 0, false, 0, Int8(0), zero(UInt128), 0, complex(0.0, 0.0), 0,
-        Float32[], PhaseAccumulators(),
+        zero(UInt128),
+        0,
+        false,
+        0,
+        Int8(0),
+        zero(UInt128),
+        0,
+        complex(0.0, 0.0),
+        0,
+        Float32[],
+        PhaseAccumulators(),
     )
 end
 
 # Typed empty constructor used by the per-signal `TrackedSignal` path.
 function BitBuffer{B}() where {B<:Unsigned}
     BitBuffer{B}(
-        zero(B), 0, false, 0, Int8(0), zero(UInt128), 0, complex(0.0, 0.0), 0,
-        Float32[], PhaseAccumulators(),
+        zero(B),
+        0,
+        false,
+        0,
+        Int8(0),
+        zero(UInt128),
+        0,
+        complex(0.0, 0.0),
+        0,
+        Float32[],
+        PhaseAccumulators(),
     )
 end
 
@@ -524,13 +551,13 @@ primary-code-block signs against a per-signal template. This trait
 picks the smallest integer width that holds one full search horizon for
 that signal:
 
-| Signal            | Returns   | Window |
-|-------------------|-----------|--------|
-| GPS L1 C/A        | `UInt64`  | 40 blocks (2 × 20 blocks/symbol) |
-| Galileo E1B       | `UInt8`   | 8 blocks (2 × 4 blocks/symbol)   |
-| GPS L5I           | `UInt32`  | 20 blocks (2 × NH10 length)      |
-| GPS L1C-D         | `UInt8`   | n/a — symbol = primary period, buffer unused |
-| GPS L1C-P         | `UInt1800`| 1800-chip overlay (added in step 4) |
+| Signal      | Returns    | Window                                       |
+|:----------- |:---------- |:-------------------------------------------- |
+| GPS L1 C/A  | `UInt64`   | 40 blocks (2 × 20 blocks/symbol)             |
+| Galileo E1B | `UInt8`    | 8 blocks (2 × 4 blocks/symbol)               |
+| GPS L5I     | `UInt32`   | 20 blocks (2 × NH10 length)                  |
+| GPS L1C-D   | `UInt8`    | n/a — symbol = primary period, buffer unused |
+| GPS L1C-P   | `UInt1800` | 1800-chip overlay (added in step 4)          |
 
 The default for any signal not specialized below is `UInt64`. The width
 flows through `BitBuffer{B}` and `TrackedSignal{Sig, B, C, PCF}` so the
@@ -553,7 +580,7 @@ at its call site: `max_errors = floor(Int, tolerance × window_size)`.
 Default is `0.025` (2.5 %), which discretizes per-signal as:
 
 | Signal      | Window (blocks) | Effective `max_errors` |
-|-------------|-----------------|------------------------|
+|:----------- |:--------------- |:---------------------- |
 | GPS L5I     | 10              | 0 (exact match)        |
 | GPS L1C-P   | 1800            | 45                     |
 | Galileo E1B | n/a — trivial   | unused                 |
@@ -653,15 +680,25 @@ $(SIGNATURES)
 
 Buffer data bits based on the prompt accumulation and the current prompt value.
 """
-function buffer(signal::AbstractGNSSSignal, prn::Integer, bit_buffer::BitBuffer{B}, integrated_code_blocks, prompt) where {B<:Unsigned}
+function buffer(
+    signal::AbstractGNSSSignal,
+    prn::Integer,
+    bit_buffer::BitBuffer{B},
+    integrated_code_blocks,
+    prompt,
+) where {B<:Unsigned}
     # The divide is deferred to the helper — pilot signals
     # (`get_data_frequency = 0`) would otherwise blow up here with `Int(Inf)`.
     num_code_blocks_that_form_a_bit = _calc_num_code_blocks_that_form_a_bit(signal)
 
     if (bit_buffer.found == false)
         return _buffer_find_bit(
-            signal, prn, bit_buffer, num_code_blocks_that_form_a_bit,
-            integrated_code_blocks, prompt,
+            signal,
+            prn,
+            bit_buffer,
+            num_code_blocks_that_form_a_bit,
+            integrated_code_blocks,
+            prompt,
         )
     end
 
@@ -681,18 +718,22 @@ function buffer(signal::AbstractGNSSSignal, prn::Integer, bit_buffer::BitBuffer{
         # counting. Fail loudly instead — the buffer is reset at the start of
         # each `track` call, so this only triggers when a single call spans
         # more than 128 bits of signal.
-        length(bit_buffer) == 8 * sizeof(bit_buffer.buffer) && throw(ArgumentError(string(
-            "The hard-bit buffer is full (",
-            8 * sizeof(bit_buffer.buffer),
-            " bits). Bits are reset at the start of each `track` call — ",
-            "process the signal in shorter chunks to read out the bits ",
-            "more often.",
-        )))
+        length(bit_buffer) == 8 * sizeof(bit_buffer.buffer) && throw(
+            ArgumentError(
+                string(
+                    "The hard-bit buffer is full (",
+                    8 * sizeof(bit_buffer.buffer),
+                    " bits). Bits are reset at the start of each `track` call — ",
+                    "process the signal in shorter chunks to read out the bits ",
+                    "more often.",
+                ),
+            ),
+        )
         # Flip the decoded bit if the detector locked at negative polarity:
         # the prompt accumulator's real-part sign is then inverted relative
         # to the data symbol's "0/1" convention.
-        bit_acc = bit_buffer.polarity < 0 ?
-                  -real(prompt_accumulator) : real(prompt_accumulator)
+        bit_acc =
+            bit_buffer.polarity < 0 ? -real(prompt_accumulator) : real(prompt_accumulator)
         bit = bit_acc > 0
         # Store the polarity-corrected accumulation so the soft bit's sign
         # matches the decoded hard bit.
@@ -727,8 +768,14 @@ function buffer(signal::AbstractGNSSSignal, prn::Integer, bit_buffer::BitBuffer{
     end
 end
 
-function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_code_blocks_that_form_a_bit,
-                          integrated_code_blocks, prompt) where {B<:Unsigned}
+function _buffer_find_bit(
+    signal,
+    prn::Integer,
+    bit_buffer::BitBuffer{B},
+    num_code_blocks_that_form_a_bit,
+    integrated_code_blocks,
+    prompt,
+) where {B<:Unsigned}
     if (integrated_code_blocks != 1)
         error(
             "The number code blocks must be equal to 1 if bit or secondary code hasn't been found yet.",
@@ -748,7 +795,10 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
         _is_seeded(phase_acc, blocks_per_bit) ||
             _seed_phase_accumulators!(phase_acc, blocks_per_bit)
         _update_phase_accumulators!(
-            phase_acc, ComplexF64(prompt), code_block_buffer_length - 1, blocks_per_bit,
+            phase_acc,
+            ComplexF64(prompt),
+            code_block_buffer_length - 1,
+            blocks_per_bit,
         )
         sync = _detect_bit_edge_cfar(
             phase_acc,
@@ -821,11 +871,12 @@ function _buffer_find_bit(signal, prn::Integer, bit_buffer::BitBuffer{B}, num_co
         # post-sync bit (which is sign-flipped via `bit_buffer.polarity` in
         # `buffer`). Otherwise a negative-polarity lock would invert only
         # the post-sync part of the bit stream (issue #127).
-        bit_sum = sum(0:num_code_blocks_that_form_a_bit-1) do code_block_index
-            buffer_code_block_index =
-                (bit_index - 1) * num_code_blocks_that_form_a_bit + code_block_index
-            ((code_block_buffer & (one(B) << buffer_code_block_index)) > 0) * 2 - 1
-        end * Int(sync.polarity)
+        bit_sum =
+            sum(0:(num_code_blocks_that_form_a_bit-1)) do code_block_index
+                buffer_code_block_index =
+                    (bit_index - 1) * num_code_blocks_that_form_a_bit + code_block_index
+                ((code_block_buffer & (one(B) << buffer_code_block_index)) > 0) * 2 - 1
+            end * Int(sync.polarity)
         # The pre-sync window only stores prompt signs, so `bit_sum` is a
         # ±1-per-block vote count (already polarity-corrected above). Scale it
         # by the sync-time prompt magnitude (the best available amplitude

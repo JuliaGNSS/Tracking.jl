@@ -8,11 +8,11 @@ estimation for all satellites in the track state. Returns an updated
 
 Three input shapes for the first positional argument:
 
-| Argument                              | Meaning                                                            |
-|---------------------------------------|--------------------------------------------------------------------|
-| `AbstractVecOrMat`                        | Bare sample buffer. Single-band TrackState only.                         |
-| `BandMeasurement`                         | One band's bundled buffer + sample rate. Single-band TrackState.         |
-| `NamedTuple{...}` of `BandMeasurement`s   | Multi-band: one `BandMeasurement` per band key (see [`band_key`](@ref)). |
+| Argument                                | Meaning                                                                  |
+|:--------------------------------------- |:------------------------------------------------------------------------ |
+| `AbstractVecOrMat`                      | Bare sample buffer. Single-band TrackState only.                         |
+| `BandMeasurement`                       | One band's bundled buffer + sample rate. Single-band TrackState.         |
+| `NamedTuple{...}` of `BandMeasurement`s | Multi-band: one `BandMeasurement` per band key (see [`band_key`](@ref)). |
 
 The bare-buffer form `track(buf, state, fs; intermediate_frequency = ...)`
 is preserved as a thin wrapper that builds a single-entry
@@ -40,8 +40,8 @@ the correlator once outside the loop** and pass it via the
 dc = CPUThreadedDownconvertAndCorrelator()
 while got_chunk(rx)
     chunk = read_chunk!(rx)
-    track_state = track(chunk, track_state, sampling_frequency;
-                        downconvert_and_correlator = dc)
+    track_state =
+        track(chunk, track_state, sampling_frequency; downconvert_and_correlator = dc)
 end
 ```
 
@@ -80,10 +80,8 @@ function track(
     # chunk iteration (issue #133). The copy is otherwise shallow:
     # per-satellite scratch vectors are shared with the input — see the
     # docstring above.
-    detached = TrackState(
-        track_state;
-        groups = _detach_groups_slot_vectors(track_state.groups),
-    )
+    detached =
+        TrackState(track_state; groups = _detach_groups_slot_vectors(track_state.groups))
     track!(measurements, detached; kwargs...)::TS
 end
 
@@ -112,11 +110,7 @@ function track(
 end
 
 # Single-BandMeasurement convenience: still a single-band path.
-function track(
-    measurement::BandMeasurement,
-    track_state::TrackState;
-    kwargs...,
-)
+function track(measurement::BandMeasurement, track_state::TrackState; kwargs...)
     track(_single_band_measurements(measurement, track_state), track_state; kwargs...)
 end
 
@@ -141,8 +135,7 @@ dc = CPUThreadedDownconvertAndCorrelator()      # hoist!
 
 while got_chunk(rx)
     chunk = read_chunk!(rx)
-    track!(chunk, track_state, sampling_frequency;
-           downconvert_and_correlator = dc)
+    track!(chunk, track_state, sampling_frequency; downconvert_and_correlator = dc)
 end
 ```
 
@@ -160,15 +153,8 @@ function track!(
     while true
         _all_groups_reached_end(track_state, measurements) && break
 
-        downconvert_and_correlate!(
-            downconvert_and_correlator,
-            measurements,
-            track_state,
-        )
-        estimate_dopplers_and_filter_prompt!(
-            track_state,
-            measurements,
-        )
+        downconvert_and_correlate!(downconvert_and_correlator, measurements, track_state)
+        estimate_dopplers_and_filter_prompt!(track_state, measurements)
     end
     return track_state
 end
@@ -186,11 +172,7 @@ function track!(
 end
 
 # Single-BandMeasurement convenience: still a single-band path.
-function track!(
-    measurement::BandMeasurement,
-    track_state::TrackState;
-    kwargs...,
-)
+function track!(measurement::BandMeasurement, track_state::TrackState; kwargs...)
     track!(_single_band_measurements(measurement, track_state), track_state; kwargs...)
 end
 
@@ -199,7 +181,8 @@ end
 # when that group's measurement is fully integrated; the outer `while`
 # exits once every group has reached its own band's measurement end.
 @inline function _all_groups_reached_end(
-    track_state::TrackState, measurements::BandMeasurements,
+    track_state::TrackState,
+    measurements::BandMeasurements,
 )
     _check_all_groups_at_end(Tuple(track_state.groups), measurements)
 end

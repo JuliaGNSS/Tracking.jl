@@ -179,7 +179,6 @@ include("gpsl5i.jl")
 include("galileo_e1b.jl")
 include("sat_state.jl")
 
-
 """
 $(SIGNATURES)
 

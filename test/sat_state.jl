@@ -4,7 +4,11 @@ using Test: @test, @testset, @inferred
 using Unitful: Hz
 using Dictionaries: dictionary
 using GNSSSignals:
-    GNSSSignals, AbstractGNSSSignal, GPSL1CA, GPSL1C_D, GPSL1C_P,
+    GNSSSignals,
+    AbstractGNSSSignal,
+    GPSL1CA,
+    GPSL1C_D,
+    GPSL1C_P,
     get_code_center_frequency_ratio
 using Acquisition: Acquisition, AcquisitionResults
 import Tracking
@@ -119,12 +123,18 @@ end
     @testset "_post_sync_code_length per signal" begin
         # Worst-case wrap contributions across all supported signals.
         import GNSSSignals: GalileoE1B, GalileoE1B_BOC11, GPSL5I, GPSL1C_D, GPSL1C_P
-        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL1CA())) == 1023 * 20
-        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GalileoE1B())) == 4092 * 1   # 1 block per symbol
-        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GalileoE1B_BOC11())) == 4092 * 1   # BOC(1,1) approximation — same 1-block-per-symbol shape
-        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL5I())) == 10230 * 10
-        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL1C_D())) == 10230 * 1
-        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL1C_P())) == 10230 * 1800
+        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL1CA())) ==
+              1023 * 20
+        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GalileoE1B())) ==
+              4092 * 1   # 1 block per symbol
+        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GalileoE1B_BOC11())) ==
+              4092 * 1   # BOC(1,1) approximation — same 1-block-per-symbol shape
+        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL5I())) ==
+              10230 * 10
+        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL1C_D())) ==
+              10230 * 1
+        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL1C_P())) ==
+              10230 * 1800
     end
 end
 
@@ -148,7 +158,16 @@ GNSSSignals.get_data_frequency(::FakeWrapSignal) = 0Hz
     # replica wrap — `max` is not a common multiple in general.
     base = Tracking.TrackedSignal(GPSL1CA())
     synced_buffer(::Tracking.BitBuffer{B}) where {B} = Tracking.BitBuffer{B}(
-        zero(B), 0, true, 0, Int8(+1), zero(UInt128), 0, complex(0.0, 0.0), 0, Float32[],
+        zero(B),
+        0,
+        true,
+        0,
+        Int8(+1),
+        zero(UInt128),
+        0,
+        complex(0.0, 0.0),
+        0,
+        Float32[],
         Tracking.PhaseAccumulators(),
     )
     fake_tracked_signal(code_length, secondary_length, found) = Tracking.TrackedSignal(
@@ -191,8 +210,7 @@ end
     @test get_carrier_doppler(sat) == 500.0Hz
     # The default code doppler scales by the estimator-driver signal's
     # (signals[1]) code/center frequency ratio.
-    @test get_code_doppler(sat) ==
-          500.0Hz * get_code_center_frequency_ratio(GPSL1C_P())
+    @test get_code_doppler(sat) == 500.0Hz * get_code_center_frequency_ratio(GPSL1C_P())
     @test get_signal_start_sample(sat) == 1
     sigs_on_sat = get_signals(sat)
     @test length(sigs_on_sat) == 3
@@ -213,7 +231,10 @@ end
     estimator = Tracking.ConventionalAssistedPLLAndDLL()
     @test estimator.carrier_loop_filter_bandwidth === nothing
     sat_kw = TrackedSat(
-        sigs, 7, 0.25, -250.0Hz;
+        sigs,
+        7,
+        0.25,
+        -250.0Hz;
         carrier_phase = 0.5,
         code_doppler = -0.3Hz,
         doppler_estimator = estimator,

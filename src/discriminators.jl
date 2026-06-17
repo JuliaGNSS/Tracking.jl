@@ -69,7 +69,7 @@ function fll_disc(signal::AbstractGNSSSignal, correlator, previous_prompt, integ
         # return 0 when there is no previous prompt
         return 0.0/integration_time
     end
-    
+
     current_prompt = get_prompt(correlator)
 
     result = conj(previous_prompt) * current_prompt

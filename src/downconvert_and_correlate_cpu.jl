@@ -80,9 +80,8 @@ struct CPUThreadedDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator
     buffers::Vector{ScratchBuffers}
 end
 
-CPUThreadedDownconvertAndCorrelator() = CPUThreadedDownconvertAndCorrelator(
-    [ScratchBuffers() for _ in 1:Threads.maxthreadid()],
-)
+CPUThreadedDownconvertAndCorrelator() =
+    CPUThreadedDownconvertAndCorrelator([ScratchBuffers() for _ = 1:Threads.maxthreadid()],)
 
 # Look up the active `ScratchBuffers` for this thread. Single-threaded
 # backend has just one; threaded backend indexes by `Threads.threadid()`
@@ -132,7 +131,7 @@ end
 @inline function _code_replica_slot(bufs::ScratchBuffers, i::Int)
     i == 1 && return bufs.code_replica
     _ensure_extra_code_replicas!(bufs, i - 1)
-    bufs.extra_code_replicas[i - 1]
+    bufs.extra_code_replicas[i-1]
 end
 
 # Multi-signal tile-share scratch handle: yields ScratchViews over the
@@ -225,9 +224,15 @@ end
 ) where {M}
     # Static-shifts overload: no tile buffers needed.
     downconvert_and_correlate_fused!(
-        correlator, signal, code_replica, sample_shifts,
-        carrier_frequency, sampling_frequency, carrier_phase,
-        start_sample, num_samples,
+        correlator,
+        signal,
+        code_replica,
+        sample_shifts,
+        carrier_frequency,
+        sampling_frequency,
+        carrier_phase,
+        start_sample,
+        num_samples,
     )::typeof(correlator)
 end
 
@@ -248,9 +253,17 @@ end
     # im-half) so the fused kernel doesn't allocate them per call.
     _with_tile_buffers(dc, num_samples, M) do tile_re, tile_im
         downconvert_and_correlate_fused!(
-            correlator, signal, code_replica, sample_shifts,
-            carrier_frequency, sampling_frequency, carrier_phase,
-            start_sample, num_samples, tile_re, tile_im,
+            correlator,
+            signal,
+            code_replica,
+            sample_shifts,
+            carrier_frequency,
+            sampling_frequency,
+            carrier_phase,
+            start_sample,
+            num_samples,
+            tile_re,
+            tile_im,
         )::typeof(correlator)
     end
 end
@@ -274,9 +287,15 @@ end
     num_samples,
 ) where {M}
     downconvert_and_correlate_fused!(
-        correlator, signal, code_replica, sample_shifts,
-        carrier_frequency, sampling_frequency, carrier_phase,
-        start_sample, num_samples,
+        correlator,
+        signal,
+        code_replica,
+        sample_shifts,
+        carrier_frequency,
+        sampling_frequency,
+        carrier_phase,
+        start_sample,
+        num_samples,
     )::typeof(correlator)
 end
 
@@ -294,9 +313,17 @@ end
     tile_re = Vector{Float32}(undef, num_samples * M)
     tile_im = Vector{Float32}(undef, num_samples * M)
     downconvert_and_correlate_fused!(
-        correlator, signal, code_replica, sample_shifts,
-        carrier_frequency, sampling_frequency, carrier_phase,
-        start_sample, num_samples, tile_re, tile_im,
+        correlator,
+        signal,
+        code_replica,
+        sample_shifts,
+        carrier_frequency,
+        sampling_frequency,
+        carrier_phase,
+        start_sample,
+        num_samples,
+        tile_re,
+        tile_im,
     )::typeof(correlator)
 end
 
@@ -372,7 +399,11 @@ end
     num_samples_signal,
 )
     per_signal_to_boundary = _per_signal_samples_to_boundary(
-        signals, signal_start_sample, sampling_frequency, code_doppler, code_phase,
+        signals,
+        signal_start_sample,
+        sampling_frequency,
+        code_doppler,
+        code_phase,
         num_samples_signal,
     )
     samples_to_integrate = _min_of_tuple(per_signal_to_boundary)
@@ -385,9 +416,7 @@ end
 # For each signal, return its samples-to-next-primary-code-boundary using
 # the signal-specific primary-code-relative phase. Tuple recursion keeps
 # the heterogeneous walk inline / inference-friendly.
-@inline _per_signal_samples_to_boundary(
-    ::Tuple{}, _, _, _, _, _,
-) = ()
+@inline _per_signal_samples_to_boundary(::Tuple{}, _, _, _, _, _) = ()
 @inline function _per_signal_samples_to_boundary(
     signals::Tuple,
     signal_start_sample,
@@ -406,16 +435,30 @@ end
     # on data transitions. For a single block (or pre-sync) this is just the
     # primary code length.
     p = _signal_replica_params(
-        head, code_doppler, code_phase, sampling_frequency, num_samples_signal,
+        head,
+        code_doppler,
+        code_phase,
+        sampling_frequency,
+        num_samples_signal,
     )
     n = calc_num_samples_left_to_integrate(
-        head.signal, p.n_blocks, sampling_frequency, code_doppler,
+        head.signal,
+        p.n_blocks,
+        sampling_frequency,
+        code_doppler,
         p.signal_code_phase,
     )
-    (n, _per_signal_samples_to_boundary(
-        Base.tail(signals), signal_start_sample, sampling_frequency, code_doppler,
-        code_phase, num_samples_signal,
-    )...)
+    (
+        n,
+        _per_signal_samples_to_boundary(
+            Base.tail(signals),
+            signal_start_sample,
+            sampling_frequency,
+            code_doppler,
+            code_phase,
+            num_samples_signal,
+        )...,
+    )
 end
 
 @inline _min_of_tuple(t::Tuple{Any}) = first(t)
@@ -446,8 +489,8 @@ end
 # C/A — are unaffected: the primary repeats every `get_code_length` chips,
 # secondary length 1.) `num_blocks` is retained for call-site symmetry.
 @inline _replica_code_wrap(tsig::TrackedSignal, num_blocks::Integer) =
-    has_bit_or_secondary_code_been_found(tsig) ?
-    _post_sync_code_length(tsig) : get_code_length(tsig.signal)
+    has_bit_or_secondary_code_been_found(tsig) ? _post_sync_code_length(tsig) :
+    get_code_length(tsig.signal)
 
 # All per-signal replica/kernel parameters, derived in exactly one place
 # so the boundary calc, replica sizing/generation, and kernel tap offsets
@@ -465,11 +508,9 @@ end
 )
     s = tsig.signal
     code_frequency = code_doppler + get_code_frequency(s)
-    sample_shifts = get_correlator_sample_shifts(
-        tsig.correlator, sampling_frequency, code_frequency,
-    )
-    code_replica_size =
-        num_samples_signal + maximum(sample_shifts) - minimum(sample_shifts)
+    sample_shifts =
+        get_correlator_sample_shifts(tsig.correlator, sampling_frequency, code_frequency)
+    code_replica_size = num_samples_signal + maximum(sample_shifts) - minimum(sample_shifts)
     n_blocks = calc_num_code_blocks_to_integrate(
         s,
         tsig.preferred_num_code_blocks_to_integrate,
@@ -502,28 +543,31 @@ end
     head = signals[1]
     s = head.signal
     p = _signal_replica_params(
-        head, code_doppler, code_phase, sampling_frequency, num_samples_signal,
+        head,
+        code_doppler,
+        code_phase,
+        sampling_frequency,
+        num_samples_signal,
     )
-    new_corr = _with_code_replica_buffer(
-        dc, get_code_type(s), p.code_replica_size,
-    ) do code_replica
-        _correlate_one_signal!(
-            dc,
-            code_replica,
-            s,
-            head.correlator,
-            signal,
-            p.sample_shifts,
-            p.signal_code_phase,
-            carrier_phase,
-            p.code_frequency,
-            carrier_frequency,
-            sampling_frequency,
-            signal_start_sample,
-            samples_to_integrate,
-            prn,
-        )
-    end
+    new_corr =
+        _with_code_replica_buffer(dc, get_code_type(s), p.code_replica_size) do code_replica
+            _correlate_one_signal!(
+                dc,
+                code_replica,
+                s,
+                head.correlator,
+                signal,
+                p.sample_shifts,
+                p.signal_code_phase,
+                carrier_phase,
+                p.code_frequency,
+                carrier_frequency,
+                sampling_frequency,
+                signal_start_sample,
+                samples_to_integrate,
+                prn,
+            )
+        end
     ((new_corr, per_signal_completed[1]),)
 end
 
@@ -532,7 +576,7 @@ end
 # correlate over all N×NC accumulators. Beats fused-N-times by ~40% at
 # N=2 and ~53% at N=3 — see the design doc.
 @inline function _correlate_signals(
-    signals::Tuple{TrackedSignal, TrackedSignal, Vararg{TrackedSignal}},
+    signals::Tuple{TrackedSignal,TrackedSignal,Vararg{TrackedSignal}},
     per_signal_completed::Tuple,
     dc,
     signal,
@@ -552,14 +596,24 @@ end
     # vectors, so root `dc` for their entire lifetime — generation
     # through the kernel call.
     new_correlators = GC.@preserve dc begin
-        code_replicas =
-            _gen_all_code_replicas(
-                signals, dc, code_doppler, code_phase, sampling_frequency,
-                signal_start_sample, samples_to_integrate, prn, num_samples_signal,
-            )
+        code_replicas = _gen_all_code_replicas(
+            signals,
+            dc,
+            code_doppler,
+            code_phase,
+            sampling_frequency,
+            signal_start_sample,
+            samples_to_integrate,
+            prn,
+            num_samples_signal,
+        )
         correlators = _signal_correlators(signals)
         sample_shifts_tuple = _signal_sample_shifts(
-            signals, code_doppler, code_phase, sampling_frequency, num_samples_signal,
+            signals,
+            code_doppler,
+            code_phase,
+            sampling_frequency,
+            num_samples_signal,
         )
         # All correlators in this sat agree on M (enforced by SignalGroup);
         # read it from the first correlator's type.
@@ -608,7 +662,11 @@ end
     map(signals, idx_tuple) do head, i
         s = head.signal
         p = _signal_replica_params(
-            head, code_doppler, code_phase, sampling_frequency, num_samples_signal,
+            head,
+            code_doppler,
+            code_phase,
+            sampling_frequency,
+            num_samples_signal,
         )
         slot = _code_replica_slot(bufs, i)
         CT = get_code_type(s)
@@ -620,8 +678,15 @@ end
         # correlator's ScratchBuffers) for the views' entire lifetime.
         view = ScratchView{CT}(Ptr{CT}(pointer(slot)), p.code_replica_size)
         gen_code_replica!(
-            view, s, p.code_frequency, sampling_frequency, p.signal_code_phase,
-            signal_start_sample, samples_to_integrate, p.sample_shifts, prn,
+            view,
+            s,
+            p.code_frequency,
+            sampling_frequency,
+            p.signal_code_phase,
+            signal_start_sample,
+            samples_to_integrate,
+            p.sample_shifts,
+            prn,
         )
         view
     end
@@ -632,10 +697,18 @@ end
 # Kernel tap offsets — derived through the same `_signal_replica_params`
 # the replica generation uses, so the two can never skew apart.
 @inline _signal_sample_shifts(
-    signals::Tuple, code_doppler, code_phase, sampling_frequency, num_samples_signal,
+    signals::Tuple,
+    code_doppler,
+    code_phase,
+    sampling_frequency,
+    num_samples_signal,
 ) = map(signals) do head
     _signal_replica_params(
-        head, code_doppler, code_phase, sampling_frequency, num_samples_signal,
+        head,
+        code_doppler,
+        code_phase,
+        sampling_frequency,
+        num_samples_signal,
     ).sample_shifts
 end
 
@@ -665,10 +738,8 @@ function downconvert_and_correlate(
     measurements::BandMeasurements,
     track_state::TrackState,
 )
-    new_track_state = TrackState(
-        track_state;
-        groups = _copy_groups_slot_vectors(track_state.groups),
-    )
+    new_track_state =
+        TrackState(track_state; groups = _copy_groups_slot_vectors(track_state.groups))
     downconvert_and_correlate!(dc, measurements, new_track_state)
 end
 
@@ -714,11 +785,7 @@ end
     )
 end
 
-@inline function _dc_group_loop!(
-    dc::CPUDownconvertAndCorrelator,
-    vals,
-    args::Vararg{Any,4},
-)
+@inline function _dc_group_loop!(dc::CPUDownconvertAndCorrelator, vals, args::Vararg{Any,4})
     @inbounds for i in eachindex(vals)
         vals[i] = _update_tracked_sat_correlator(vals[i], dc, args...)
     end

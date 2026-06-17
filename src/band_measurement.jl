@@ -8,16 +8,17 @@ in practice, and the bundle removes the chance of mismatched parallel
 NamedTuples in a multi-band `track` call.
 
 Fields:
-- `samples::S`: complex sample buffer (`Vector` for one antenna, `Matrix`
-  with rows = samples and columns = antennas for an antenna array).
-  Must be densely laid out in memory (unit row stride, columns packed
-  back-to-back) — the SIMD downconvert/correlate kernels read the buffer
-  through raw pointers with dense column-stride math, so a non-contiguous
-  strided view would silently correlate the wrong samples. The constructor
-  validates this and rejects non-dense buffers with an `ArgumentError`;
-  contiguous `view`s (e.g. `view(buf, 1:4000)`) remain fine.
-- `sampling_frequency::F`: the buffer's sample rate (e.g. `4e6Hz`)
-- `intermediate_frequency::F`: the band's IF (defaults to `0.0Hz`)
+
+  - `samples::S`: complex sample buffer (`Vector` for one antenna, `Matrix`
+    with rows = samples and columns = antennas for an antenna array).
+    Must be densely laid out in memory (unit row stride, columns packed
+    back-to-back) — the SIMD downconvert/correlate kernels read the buffer
+    through raw pointers with dense column-stride math, so a non-contiguous
+    strided view would silently correlate the wrong samples. The constructor
+    validates this and rejects non-dense buffers with an `ArgumentError`;
+    contiguous `view`s (e.g. `view(buf, 1:4000)`) remain fine.
+  - `sampling_frequency::F`: the buffer's sample rate (e.g. `4e6Hz`)
+  - `intermediate_frequency::F`: the band's IF (defaults to `0.0Hz`)
 
 In a multi-band call, one `BandMeasurement` is built per band; a NamedTuple
 of `BandMeasurement`s keyed by band feeds `track`. For the single-band case
@@ -57,13 +58,17 @@ function _assert_dense_layout(samples::AbstractVecOrMat)
        (samples isa AbstractVector || stride(samples, 2) == size(samples, 1))
         return nothing
     end
-    throw(ArgumentError(string(
-        "BandMeasurement `samples` must be densely laid out in memory ",
-        "(unit row stride; for a matrix, columns packed back-to-back): ",
-        "the SIMD kernels read it through raw pointers. Got ",
-        typeof(samples),
-        ". Pass a dense `Vector`/`Matrix` or a contiguous `view` of one.",
-    )))
+    throw(
+        ArgumentError(
+            string(
+                "BandMeasurement `samples` must be densely laid out in memory ",
+                "(unit row stride; for a matrix, columns packed back-to-back): ",
+                "the SIMD kernels read it through raw pointers. Got ",
+                typeof(samples),
+                ". Pass a dense `Vector`/`Matrix` or a contiguous `view` of one.",
+            ),
+        ),
+    )
 end
 
 # Promotes the numeric type so `sampling_frequency` and
@@ -115,10 +120,21 @@ function band_key end
 # Fallback for bands without a `band_key` method: a raw `MethodError` deep
 # inside the multi-band machinery would be opaque, so point the caller at
 # the fix.
-band_key(band::GNSSSignals.Band) = throw(ArgumentError(string(
-    "No `band_key` method for band `", band, "` (", typeof(band), "). ",
-    "Define `Tracking.band_key(::", typeof(band), ") = :some_symbol` so the ",
-    "multi-band `track` call can key its measurements by this band.")))
+band_key(band::GNSSSignals.Band) = throw(
+    ArgumentError(
+        string(
+            "No `band_key` method for band `",
+            band,
+            "` (",
+            typeof(band),
+            "). ",
+            "Define `Tracking.band_key(::",
+            typeof(band),
+            ") = :some_symbol` so the ",
+            "multi-band `track` call can key its measurements by this band.",
+        ),
+    ),
+)
 
 """
 $(SIGNATURES)

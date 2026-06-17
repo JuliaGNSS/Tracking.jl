@@ -75,17 +75,26 @@ using GNSSSignals: GPSL1C_P, GPSL1C_D, GalileoE1B
         post_corr_filter = DefaultPostCorrFilter(),
     )
     sat = TrackedSat(
-        (signal_a, signal_b), prn, start_code_phase, carrier_doppler;
+        (signal_a, signal_b),
+        prn,
+        start_code_phase,
+        carrier_doppler;
         doppler_estimator = estimator,
     )
 
     track_state = TrackState(gpsl1, sat; doppler_estimator = estimator)
 
     # Synthetic L1 C/A signal — same as track tests use.
-    range_ = 0:(num_samples - 1)
+    range_ = 0:(num_samples-1)
     signal_buf =
-        cis.(2π .* carrier_doppler .* range_ ./ sampling_frequency) .*
-        gen_code(num_samples, gpsl1, prn, sampling_frequency, code_frequency, start_code_phase)
+        cis.(2π .* carrier_doppler .* range_ ./ sampling_frequency) .* gen_code(
+            num_samples,
+            gpsl1,
+            prn,
+            sampling_frequency,
+            code_frequency,
+            start_code_phase,
+        )
 
     new_track_state = track(signal_buf, track_state, sampling_frequency)
 
@@ -140,20 +149,28 @@ end
     prn = 1
     num_samples = 50_000  # 10 ms at 5 MHz => 10 L1 C/A code periods
 
-    range_ = 0:(num_samples - 1)
+    range_ = 0:(num_samples-1)
     signal_buf =
-        cis.(2π .* carrier_doppler .* range_ ./ sampling_frequency) .*
-        gen_code(num_samples, gpsl1, prn, sampling_frequency, code_frequency, start_code_phase)
+        cis.(2π .* carrier_doppler .* range_ ./ sampling_frequency) .* gen_code(
+            num_samples,
+            gpsl1,
+            prn,
+            sampling_frequency,
+            code_frequency,
+            start_code_phase,
+        )
 
     # Single-signal reference.
     ref_state = TrackState(; signal = gpsl1)
-    ref_state = add_satellite!(ref_state; prn, code_phase = start_code_phase, carrier_doppler)
+    ref_state =
+        add_satellite!(ref_state; prn, code_phase = start_code_phase, carrier_doppler)
     ref_state = track(signal_buf, ref_state, sampling_frequency)
     ref_sat = get_sat_state(ref_state, prn)
 
     # Two-signal sat, both GPSL1CA with identical config.
     multi_state = TrackState(; signals = (default = (gpsl1, gpsl1),))
-    multi_state = add_satellite!(multi_state; prn, code_phase = start_code_phase, carrier_doppler)
+    multi_state =
+        add_satellite!(multi_state; prn, code_phase = start_code_phase, carrier_doppler)
     multi_state = track(signal_buf, multi_state, sampling_frequency)
     multi_sat = get_sat_state(multi_state, prn)
 
@@ -167,22 +184,26 @@ end
     @test multi_corr ≈ ref_corr rtol = 1e-4
     @test get_carrier_doppler(multi_sat) ≈ get_carrier_doppler(ref_sat) rtol = 1e-6
     @test get_code_doppler(multi_sat) ≈ get_code_doppler(ref_sat) rtol = 1e-6
-    @test get_filtered_prompts(multi_sat.signals[1]) ≈ get_filtered_prompts(ref_sat) rtol = 1e-4
+    @test get_filtered_prompts(multi_sat.signals[1]) ≈ get_filtered_prompts(ref_sat) rtol =
+        1e-4
 
     # Both signals in the multi sat are identical => identical correlators.
-    @test get_last_fully_integrated_correlator(multi_sat.signals[2]).accumulators ≈ multi_corr
+    @test get_last_fully_integrated_correlator(multi_sat.signals[2]).accumulators ≈
+          multi_corr
 end
 
 @testset "Per-signal accessors on multi-signal TrackedSat / TrackState" begin
     # Build a TrackState with one 3-signal sat (GPSL1C_P, GPSL1C_D, GPSL1CA).
     # The signal types are distinct, so the type-based selector form has no
     # collisions.
-    track_state = TrackState(;
-        signals = (modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),),
-    )
-    track_state = add_satellite!(track_state;
-        prn = 11, group = :modern_gps,
-        code_phase = 0.0, carrier_doppler = 1234.0Hz,
+    track_state =
+        TrackState(; signals = (modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),))
+    track_state = add_satellite!(
+        track_state;
+        prn = 11,
+        group = :modern_gps,
+        code_phase = 0.0,
+        carrier_doppler = 1234.0Hz,
     )
     sat = get_sat_state(track_state, :modern_gps, 11)
 
@@ -207,7 +228,7 @@ end
     @testset "TrackedSat: signal type" begin
         @test get_signal(sat, GPSL1C_P) isa GPSL1C_P
         @test get_signal(sat, GPSL1C_D) isa GPSL1C_D
-        @test get_signal(sat, GPSL1CA)  isa GPSL1CA
+        @test get_signal(sat, GPSL1CA) isa GPSL1CA
         @test get_num_bits(sat, GPSL1CA) == 0
         @test get_cn0_estimator(sat, GPSL1C_P) isa MomentsCN0Estimator
     end
@@ -221,14 +242,23 @@ end
         # Build a sat that tracks GPSL1CA twice (different correlator slots).
         # The type-based selector should refuse to disambiguate.
         gpsl1 = GPSL1CA()
-        s_a = TrackedSignal(gpsl1; num_ants = NumAnts(1),
+        s_a = TrackedSignal(
+            gpsl1;
+            num_ants = NumAnts(1),
             correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
-            post_corr_filter = DefaultPostCorrFilter())
-        s_b = TrackedSignal(gpsl1; num_ants = NumAnts(1),
+            post_corr_filter = DefaultPostCorrFilter(),
+        )
+        s_b = TrackedSignal(
+            gpsl1;
+            num_ants = NumAnts(1),
             correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
-            post_corr_filter = DefaultPostCorrFilter())
+            post_corr_filter = DefaultPostCorrFilter(),
+        )
         dup_sat = TrackedSat(
-            (s_a, s_b), 1, 0.0, 0.0Hz;
+            (s_a, s_b),
+            1,
+            0.0,
+            0.0Hz;
             doppler_estimator = ConventionalAssistedPLLAndDLL(),
         )
         # Integer index still works.
@@ -243,7 +273,8 @@ end
         @test get_num_bits(track_state, :modern_gps, 11, 1) == 0
         @test get_num_bits(track_state, :modern_gps, 11, GPSL1CA) == 0
         @test get_cn0_estimator(track_state, :modern_gps, 11, 2) isa MomentsCN0Estimator
-        @test get_cn0_estimator(track_state, :modern_gps, 11, GPSL1C_D) isa MomentsCN0Estimator
+        @test get_cn0_estimator(track_state, :modern_gps, 11, GPSL1C_D) isa
+              MomentsCN0Estimator
         @test get_bit_buffer(track_state, :modern_gps, 11, 3) isa BitBuffer
         @test get_bits(track_state, :modern_gps, 11, GPSL1CA) == 0
         @test estimate_cn0(track_state, :modern_gps, 11, 1) == 0.0dBHz

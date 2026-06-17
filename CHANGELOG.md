@@ -2,154 +2,132 @@
 
 # [1.5.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v1.4.0...v1.5.0) (2026-04-30)
 
-
 ### Features
 
-* **deps:** support Acquisition v2 ([f58ee8e](https://github.com/JuliaGNSS/Tracking.jl/commit/f58ee8eae23f420dda224a88a96eea1eacdef4c3))
+  - **deps:** support Acquisition v2 ([f58ee8e](https://github.com/JuliaGNSS/Tracking.jl/commit/f58ee8eae23f420dda224a88a96eea1eacdef4c3))
 
 # [1.4.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v1.3.0...v1.4.0) (2026-04-27)
 
-
 ### Features
 
-* **pll_and_dll:** support per-satellite loop filter bandwidths ([5e4a9d3](https://github.com/JuliaGNSS/Tracking.jl/commit/5e4a9d32d1723be5783450832b5dc610a54f9508))
+  - **pll_and_dll:** support per-satellite loop filter bandwidths ([5e4a9d3](https://github.com/JuliaGNSS/Tracking.jl/commit/5e4a9d32d1723be5783450832b5dc610a54f9508))
 
 # [1.3.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v1.2.1...v1.3.0) (2026-04-27)
 
-
 ### Features
 
-* collect filtered prompt per correlation in SatState ([8a086b7](https://github.com/JuliaGNSS/Tracking.jl/commit/8a086b77c2f96eaf4727eb93a6047a2bb816d528))
+  - collect filtered prompt per correlation in SatState ([8a086b7](https://github.com/JuliaGNSS/Tracking.jl/commit/8a086b77c2f96eaf4727eb93a6047a2bb816d528))
 
 ## [1.2.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v1.2.0...v1.2.1) (2026-03-25)
 
-
 ### Bug Fixes
 
-* use Threads.maxthreadid() instead of Threads.nthreads() ([1f7d104](https://github.com/JuliaGNSS/Tracking.jl/commit/1f7d104f706439c17757ab7b8e14f1b9059249ff))
+  - use Threads.maxthreadid() instead of Threads.nthreads() ([1f7d104](https://github.com/JuliaGNSS/Tracking.jl/commit/1f7d104f706439c17757ab7b8e14f1b9059249ff))
 
 # [1.2.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v1.1.1...v1.2.0) (2026-03-25)
 
-
 ### Bug Fixes
 
-* remove objectid-based system lookup in CPUThreadedDownconvertAndCorrelator ([e4fa722](https://github.com/JuliaGNSS/Tracking.jl/commit/e4fa722487cd7e750c65dde1cc4ec1207e7975ee))
-
+  - remove objectid-based system lookup in CPUThreadedDownconvertAndCorrelator ([e4fa722](https://github.com/JuliaGNSS/Tracking.jl/commit/e4fa722487cd7e750c65dde1cc4ec1207e7975ee))
 
 ### Features
 
-* add CPUThreadedDownconvertAndCorrelator struct and constructor ([0b6ca67](https://github.com/JuliaGNSS/Tracking.jl/commit/0b6ca676ec0e74aaaa831255d1eb20a79db21387))
-* default to CPUThreadedDownconvertAndCorrelator in track() ([bd66b92](https://github.com/JuliaGNSS/Tracking.jl/commit/bd66b9242f3acd90591fd574a4634a573934e0cc))
-
+  - add CPUThreadedDownconvertAndCorrelator struct and constructor ([0b6ca67](https://github.com/JuliaGNSS/Tracking.jl/commit/0b6ca676ec0e74aaaa831255d1eb20a79db21387))
+  - default to CPUThreadedDownconvertAndCorrelator in track() ([bd66b92](https://github.com/JuliaGNSS/Tracking.jl/commit/bd66b9242f3acd90591fd574a4634a573934e0cc))
 
 ### Performance Improvements
 
-* use Polyester [@batch](https://github.com/batch) instead of Threads.[@threads](https://github.com/threads) and update benchmarks ([01e190f](https://github.com/JuliaGNSS/Tracking.jl/commit/01e190f307b3bf371402f33d79ef952ab538ba59))
+  - use Polyester [@batch](https://github.com/batch) instead of Threads.[@threads](https://github.com/threads) and update benchmarks ([01e190f](https://github.com/JuliaGNSS/Tracking.jl/commit/01e190f307b3bf371402f33d79ef952ab538ba59))
 
 ## [1.1.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v1.1.0...v1.1.1) (2026-03-25)
 
-
 ### Bug Fixes
 
-* drop conventional_pll_and_dll.jl change (no alloc reduction) ([6c84e3b](https://github.com/JuliaGNSS/Tracking.jl/commit/6c84e3bf91d761f1f97e7df7557506340b2dd339))
-
+  - drop conventional_pll_and_dll.jl change (no alloc reduction) ([6c84e3b](https://github.com/JuliaGNSS/Tracking.jl/commit/6c84e3bf91d761f1f97e7df7557506340b2dd339))
 
 ### Performance Improvements
 
-* reduce allocations in estimate_dopplers_and_filter_prompt ([894f3db](https://github.com/JuliaGNSS/Tracking.jl/commit/894f3db7357da705ec9db1e3f8675f4bf5c27560))
-* use map_unzip to avoid intermediate Dictionary in estimate_dopplers ([7137bd7](https://github.com/JuliaGNSS/Tracking.jl/commit/7137bd7c9414a8a84d811d39b1dfaf7a91c72278))
+  - reduce allocations in estimate_dopplers_and_filter_prompt ([894f3db](https://github.com/JuliaGNSS/Tracking.jl/commit/894f3db7357da705ec9db1e3f8675f4bf5c27560))
+  - use map_unzip to avoid intermediate Dictionary in estimate_dopplers ([7137bd7](https://github.com/JuliaGNSS/Tracking.jl/commit/7137bd7c9414a8a84d811d39b1dfaf7a91c72278))
 
 # [1.1.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v1.0.1...v1.1.0) (2026-03-21)
 
-
 ### Bug Fixes
 
-* compute SIMD width at [@generated](https://github.com/generated) time, not runtime ([2caba06](https://github.com/JuliaGNSS/Tracking.jl/commit/2caba0611e89cd39f406ceaa9535d53e38a1d26a))
-* use extension test path for v1.10 Buildkite step ([827e608](https://github.com/JuliaGNSS/Tracking.jl/commit/827e6085e0c6b80d4dd3266517e75ed52f5b6181))
-
+  - compute SIMD width at [@generated](https://github.com/generated) time, not runtime ([2caba06](https://github.com/JuliaGNSS/Tracking.jl/commit/2caba0611e89cd39f406ceaa9535d53e38a1d26a))
+  - use extension test path for v1.10 Buildkite step ([827e608](https://github.com/JuliaGNSS/Tracking.jl/commit/827e6085e0c6b80d4dd3266517e75ed52f5b6181))
 
 ### Features
 
-* add fused downconvert + correlate SIMD kernel ([960e472](https://github.com/JuliaGNSS/Tracking.jl/commit/960e4727fe5f6a90daab29ea46a3318aebe6a5b8))
-* fused carrier gen + downconvert with [@generated](https://github.com/generated) NumAnts unrolling ([9866a33](https://github.com/JuliaGNSS/Tracking.jl/commit/9866a33b50872d5a4236475ee61f6c2ea272f9f4))
-* restore VectorizationBase for optimal SIMD width detection ([23ff237](https://github.com/JuliaGNSS/Tracking.jl/commit/23ff2377136c1265f02e829ef7e6e65df161efd8))
-
+  - add fused downconvert + correlate SIMD kernel ([960e472](https://github.com/JuliaGNSS/Tracking.jl/commit/960e4727fe5f6a90daab29ea46a3318aebe6a5b8))
+  - fused carrier gen + downconvert with [@generated](https://github.com/generated) NumAnts unrolling ([9866a33](https://github.com/JuliaGNSS/Tracking.jl/commit/9866a33b50872d5a4236475ee61f6c2ea272f9f4))
+  - restore VectorizationBase for optimal SIMD width detection ([23ff237](https://github.com/JuliaGNSS/Tracking.jl/commit/23ff2377136c1265f02e829ef7e6e65df161efd8))
 
 ### Performance Improvements
 
-* fix AVX-512 heap allocations in SIMD helpers ([2bf3ceb](https://github.com/JuliaGNSS/Tracking.jl/commit/2bf3ceb0e87821027409955e1883c12814663036))
-* optimize fused downconvert+correlate kernel ([a6a6213](https://github.com/JuliaGNSS/Tracking.jl/commit/a6a6213555ac0cfcd06b3b7bc0c8528127180bf9))
-
+  - fix AVX-512 heap allocations in SIMD helpers ([2bf3ceb](https://github.com/JuliaGNSS/Tracking.jl/commit/2bf3ceb0e87821027409955e1883c12814663036))
+  - optimize fused downconvert+correlate kernel ([a6a6213](https://github.com/JuliaGNSS/Tracking.jl/commit/a6a6213555ac0cfcd06b3b7bc0c8528127180bf9))
 
 ### Reverts
 
-* remove .codecov.yml, coverage fixed in test instead ([481047c](https://github.com/JuliaGNSS/Tracking.jl/commit/481047c939ec43a6520be60fbb9d5c71bc4585b1))
+  - remove .codecov.yml, coverage fixed in test instead ([481047c](https://github.com/JuliaGNSS/Tracking.jl/commit/481047c939ec43a6520be60fbb9d5c71bc4585b1))
 
 ## [1.0.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v1.0.0...v1.0.1) (2026-02-25)
 
-
 ### Bug Fixes
 
-* correct DLL discriminator normalization and update docstrings ([bb9fa6f](https://github.com/JuliaGNSS/Tracking.jl/commit/bb9fa6ff7e1dd716548e5e9ea49e0df9dd8a5b16))
+  - correct DLL discriminator normalization and update docstrings ([bb9fa6f](https://github.com/JuliaGNSS/Tracking.jl/commit/bb9fa6ff7e1dd716548e5e9ea49e0df9dd8a5b16))
 
 # [0.18.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v0.17.1...v0.18.0) (2026-01-11)
 
-
 ### Features
 
-* add type-stable loop filter selection for ConventionalPLLAndDLL ([18f3bc2](https://github.com/JuliaGNSS/Tracking.jl/commit/18f3bc2a5cd714fdbff1623e05bf4a84b8974277))
+  - add type-stable loop filter selection for ConventionalPLLAndDLL ([18f3bc2](https://github.com/JuliaGNSS/Tracking.jl/commit/18f3bc2a5cd714fdbff1623e05bf4a84b8974277))
 
 ## [0.17.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v0.17.0...v0.17.1) (2025-12-20)
 
-
 ### Bug Fixes
 
-* initial fll discriminator ([3eb5a13](https://github.com/JuliaGNSS/Tracking.jl/commit/3eb5a13decd952e72685bac4e0b799fbd0a7977b))
+  - initial fll discriminator ([3eb5a13](https://github.com/JuliaGNSS/Tracking.jl/commit/3eb5a13decd952e72685bac4e0b799fbd0a7977b))
 
 # [0.17.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v0.16.1...v0.17.0) (2025-12-19)
 
-
 ### Bug Fixes
 
-* added missing imports for fll discriminator test ([8242dab](https://github.com/JuliaGNSS/Tracking.jl/commit/8242dab6840f3f95f19683a5c7ce0f34b4eaca7a))
-* correct units in fll discriminator test ([1b19ed1](https://github.com/JuliaGNSS/Tracking.jl/commit/1b19ed182faca872c81f84b1250586cda3f09ffd))
-* simplify fll discriminator ([51ba424](https://github.com/JuliaGNSS/Tracking.jl/commit/51ba424ac1295ee6ce0dd6febc6fab9cbe16d5da))
-* simplify units of fll discriminator ([28dfa8f](https://github.com/JuliaGNSS/Tracking.jl/commit/28dfa8f04cdc607098e69d5e54d7507dc4570eae))
-
+  - added missing imports for fll discriminator test ([8242dab](https://github.com/JuliaGNSS/Tracking.jl/commit/8242dab6840f3f95f19683a5c7ce0f34b4eaca7a))
+  - correct units in fll discriminator test ([1b19ed1](https://github.com/JuliaGNSS/Tracking.jl/commit/1b19ed182faca872c81f84b1250586cda3f09ffd))
+  - simplify fll discriminator ([51ba424](https://github.com/JuliaGNSS/Tracking.jl/commit/51ba424ac1295ee6ce0dd6febc6fab9cbe16d5da))
+  - simplify units of fll discriminator ([28dfa8f](https://github.com/JuliaGNSS/Tracking.jl/commit/28dfa8f04cdc607098e69d5e54d7507dc4570eae))
 
 ### Features
 
-* fll discriminator ([b9b7124](https://github.com/JuliaGNSS/Tracking.jl/commit/b9b7124af03f1a5626330eed882f934a0d46d156))
+  - fll discriminator ([b9b7124](https://github.com/JuliaGNSS/Tracking.jl/commit/b9b7124af03f1a5626330eed882f934a0d46d156))
 
 ## [0.16.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v0.16.0...v0.16.1) (2025-12-09)
 
-
 ### Bug Fixes
 
-* update acquisition to 0.2 ([1c756c0](https://github.com/JuliaGNSS/Tracking.jl/commit/1c756c0c9e70ce6e71e38a491f41e93643746eda))
+  - update acquisition to 0.2 ([1c756c0](https://github.com/JuliaGNSS/Tracking.jl/commit/1c756c0c9e70ce6e71e38a491f41e93643746eda))
 
 # [0.16.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v0.15.8...v0.16.0) (2025-11-19)
 
-
 ### Bug Fixes
 
-* add Pkg.develop in CI to properly resolve Tracking dependencies ([6a7c299](https://github.com/JuliaGNSS/Tracking.jl/commit/6a7c299b17ae792bed86ed749d2beeadcc678bf4))
-* export types and functions needed by CUDA extension ([dde6f40](https://github.com/JuliaGNSS/Tracking.jl/commit/dde6f4070a6016b19bd44c044b9b0253d1c634d8))
-* import functions from Tracking to properly extend in GPU extension ([fbd09aa](https://github.com/JuliaGNSS/Tracking.jl/commit/fbd09aabeec55aa5839be9880183abe7fb6aecde))
-* import get_num_samples and update from Tracking in GPU extension ([90865cc](https://github.com/JuliaGNSS/Tracking.jl/commit/90865cccef2fa15ffdf9ebdb518f23e81558d038))
-* properly export GPU types from extension to parent module ([a50656d](https://github.com/JuliaGNSS/Tracking.jl/commit/a50656d4a6e92d6591452574f3fa348098e5cd9a))
-* remove __init__() pattern and update tests to import from TrackingCUDAExt ([49d0c44](https://github.com/JuliaGNSS/Tracking.jl/commit/49d0c446cdc49d6c8790a69a8dbf2fd6ad117d3e))
-* use Base.get_extension to access GPU types in extension tests ([3e6ccd7](https://github.com/JuliaGNSS/Tracking.jl/commit/3e6ccd74734c3b06d585291a66e047c924caecbd))
-
+  - add Pkg.develop in CI to properly resolve Tracking dependencies ([6a7c299](https://github.com/JuliaGNSS/Tracking.jl/commit/6a7c299b17ae792bed86ed749d2beeadcc678bf4))
+  - export types and functions needed by CUDA extension ([dde6f40](https://github.com/JuliaGNSS/Tracking.jl/commit/dde6f4070a6016b19bd44c044b9b0253d1c634d8))
+  - import functions from Tracking to properly extend in GPU extension ([fbd09aa](https://github.com/JuliaGNSS/Tracking.jl/commit/fbd09aabeec55aa5839be9880183abe7fb6aecde))
+  - import get_num_samples and update from Tracking in GPU extension ([90865cc](https://github.com/JuliaGNSS/Tracking.jl/commit/90865cccef2fa15ffdf9ebdb518f23e81558d038))
+  - properly export GPU types from extension to parent module ([a50656d](https://github.com/JuliaGNSS/Tracking.jl/commit/a50656d4a6e92d6591452574f3fa348098e5cd9a))
+  - remove __init__() pattern and update tests to import from TrackingCUDAExt ([49d0c44](https://github.com/JuliaGNSS/Tracking.jl/commit/49d0c446cdc49d6c8790a69a8dbf2fd6ad117d3e))
+  - use Base.get_extension to access GPU types in extension tests ([3e6ccd7](https://github.com/JuliaGNSS/Tracking.jl/commit/3e6ccd74734c3b06d585291a66e047c924caecbd))
 
 ### Features
 
-* add TrackingCUDAExt extension entry point ([37f3113](https://github.com/JuliaGNSS/Tracking.jl/commit/37f3113764c24a586309ed7acdf94f088f192714))
+  - add TrackingCUDAExt extension entry point ([37f3113](https://github.com/JuliaGNSS/Tracking.jl/commit/37f3113764c24a586309ed7acdf94f088f192714))
 
 ## [0.15.8](https://github.com/JuliaGNSS/Tracking.jl/compare/v0.15.7...v0.15.8) (2025-10-04)
 
-
 ### Bug Fixes
 
-* use correct earliest and latest sample shift in gen_code_replica function ([a0be2d7](https://github.com/JuliaGNSS/Tracking.jl/commit/a0be2d7c761e124d9b49e599070f7e636a24f43b))
-* use correct latest sample shift in correlate function ([8b8b49b](https://github.com/JuliaGNSS/Tracking.jl/commit/8b8b49b9c402ae5409ab43bbd4231515d886d457))
+  - use correct earliest and latest sample shift in gen_code_replica function ([a0be2d7](https://github.com/JuliaGNSS/Tracking.jl/commit/a0be2d7c761e124d9b49e599070f7e636a24f43b))
+  - use correct latest sample shift in correlate function ([8b8b49b](https://github.com/JuliaGNSS/Tracking.jl/commit/8b8b49b9c402ae5409ab43bbd4231515d886d457))

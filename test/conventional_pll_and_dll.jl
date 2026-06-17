@@ -164,9 +164,8 @@ end
     ) == 0.4 + 0.004im
     # One integration completed -> one filtered prompt recorded, equal to the
     # last_fully_integrated_filtered_prompt value.
-    let prompts = get_filtered_prompts(
-            get_sat_state(new_track_state_after_full_integration, prn),
-        )
+    let prompts =
+            get_filtered_prompts(get_sat_state(new_track_state_after_full_integration, prn))
         @test length(prompts) == 1
         @test prompts[1] == 0.4 + 0.004im
     end
@@ -265,9 +264,7 @@ end
 
     # Kwarg-update constructor returns a new estimator with overridden
     # bandwidths and preserves the carrier/code filter type parameters.
-    bumped = ConventionalPLLAndDLL(estimator;
-        carrier_loop_filter_bandwidth = 30.0Hz,
-    )
+    bumped = ConventionalPLLAndDLL(estimator; carrier_loop_filter_bandwidth = 30.0Hz)
     @test bumped.carrier_loop_filter_bandwidth == 30.0Hz
     @test bumped.code_loop_filter_bandwidth == 1.5Hz  # unchanged
     preserved = ConventionalPLLAndDLL(estimator)

@@ -131,7 +131,12 @@ function TrackedSignal(
     post_corr_filter::Maybe{PCF} = nothing,
     filtered_prompts::Maybe{Vector{ComplexF64}} = nothing,
     preferred_num_code_blocks_to_integrate = nothing,
-) where {Sig<:AbstractGNSSSignal,B<:Unsigned,C<:AbstractCorrelator,PCF<:AbstractPostCorrFilter}
+) where {
+    Sig<:AbstractGNSSSignal,
+    B<:Unsigned,
+    C<:AbstractCorrelator,
+    PCF<:AbstractPostCorrFilter,
+}
     isnothing(preferred_num_code_blocks_to_integrate) ||
         validate_preferred_num_code_blocks_to_integrate(
             isnothing(signal) ? t.signal : signal,
@@ -243,10 +248,8 @@ end
 # the max — but `max` would silently corrupt non-driver code phases for
 # a future pairing where it isn't a common multiple.
 @inline _max_code_length(::Tuple{}) = 1
-@inline _max_code_length(t::Tuple) = lcm(
-    _post_sync_code_length(first(t)),
-    _max_code_length(Base.tail(t)),
-)
+@inline _max_code_length(t::Tuple) =
+    lcm(_post_sync_code_length(first(t)), _max_code_length(Base.tail(t)))
 
 """
 $(SIGNATURES)
@@ -287,10 +290,8 @@ end
 # must be a common multiple of every signal's current wrap, not merely
 # the largest of them.
 @inline _current_code_wrap(::Tuple{}) = 1
-@inline _current_code_wrap(t::Tuple) = lcm(
-    _current_code_length(first(t)),
-    _current_code_wrap(Base.tail(t)),
-)
+@inline _current_code_wrap(t::Tuple) =
+    lcm(_current_code_length(first(t)), _current_code_wrap(Base.tail(t)))
 
 """
 $(SIGNATURES)
@@ -302,14 +303,14 @@ integration step.
 Unlike [`max_code_length`](@ref) (which is the worst-case bound), this
 honors the current per-signal sync state. For each signal:
 
-- If `bit_buffer.found = true`, the signal contributes
-  `primary × max(secondary_code_length, blocks_per_data_bit)` — i.e.
-  the full secondary-code period for pilots, or the full data-bit
-  period for data-bearing signals.
-- If `bit_buffer.found = false`, the signal contributes just its
-  primary code length — we don't yet know which bit / secondary chip
-  we're in, so wrapping at the primary length is the most we can
-  legitimately do.
+  - If `bit_buffer.found = true`, the signal contributes
+    `primary × max(secondary_code_length, blocks_per_data_bit)` — i.e.
+    the full secondary-code period for pilots, or the full data-bit
+    period for data-bearing signals.
+  - If `bit_buffer.found = false`, the signal contributes just its
+    primary code length — we don't yet know which bit / secondary chip
+    we're in, so wrapping at the primary length is the most we can
+    legitimately do.
 
 The shared wrap is the least common multiple of the per-signal
 contributions, so it stays an integer multiple of every signal's own
@@ -319,7 +320,8 @@ silently corrupt (issue #129). For all shipped signal pairings the
 shorter wraps divide the longer ones, so the lcm coincides with the
 longest synced signal's wrap and shorter signals just ride along.
 """
-@inline current_code_wrap(signals::Tuple{Vararg{TrackedSignal}}) = _current_code_wrap(signals)
+@inline current_code_wrap(signals::Tuple{Vararg{TrackedSignal}}) =
+    _current_code_wrap(signals)
 
 # Detect whether any signal on the sat transitioned `bit_buffer.found`
 # from `false` (in `old_signals`) to `true` (in `new_signals`) during
@@ -371,8 +373,12 @@ end
 # `(primary × secondary)` length and returns
 # `(length, secondary_phase_in_chips, primary_length)` for it.
 # `(0, 0, 1)` if no signal is synced.
-@inline _find_best_secondary_anchor(::Tuple{}, best_len::Int, best_chips::Int, best_prim::Int) =
-    (best_len, best_chips, best_prim)
+@inline _find_best_secondary_anchor(
+    ::Tuple{},
+    best_len::Int,
+    best_chips::Int,
+    best_prim::Int,
+) = (best_len, best_chips, best_prim)
 @inline function _find_best_secondary_anchor(
     t::Tuple,
     best_len::Int,
@@ -384,7 +390,7 @@ end
     bb = head.bit_buffer
     if bb.found
         prim = get_code_length(sig)
-        sec  = get_secondary_code_length(sig)
+        sec = get_secondary_code_length(sig)
         total = prim * sec
         # Only signals with a non-trivial secondary code contribute
         # information about the wrap-window offset. Signals with
@@ -431,7 +437,8 @@ function TrackedSat(
     # is float-typed too; that way users may pass `200Hz` (Int) without
     # the struct constructor's `typeof(1.0Hz)` field type rejecting it.
     cdop = float(carrier_doppler)
-    cd = isnothing(code_doppler) ?
+    cd =
+        isnothing(code_doppler) ?
         cdop * get_code_center_frequency_ratio(first(tracked_signals).signal) :
         float(code_doppler)
     # Two-stage build so the estimator's `init_estimator_state` sees a real
@@ -556,7 +563,9 @@ $(SIGNATURES)
 Get the PRN (Pseudo-Random Noise) number of the satellite.
 """
 get_prn(s::TrackedSat) = s.prn
-get_num_ants(s::TrackedSat{<:Tuple{TrackedSignal{<:Any,<:Any,<:AbstractCorrelator{M}},Vararg}}) where {M} = M
+get_num_ants(
+    s::TrackedSat{<:Tuple{TrackedSignal{<:Any,<:Any,<:AbstractCorrelator{M}},Vararg}},
+) where {M} = M
 
 """
 $(SIGNATURES)
@@ -624,9 +633,12 @@ get_doppler_estimator_state(s::TrackedSat) = s.doppler_estimator_state
 #
 # Type-based selection walks the signals tuple recursively and folds at
 # compile time when the sat's `Signals` type is concrete.
-@noinline _throw_needs_signal_selector() = throw(ArgumentError(
-    "satellite tracks multiple signals — pass a signal selector " *
-    "(integer index or signal type) to address one of them."))
+@noinline _throw_needs_signal_selector() = throw(
+    ArgumentError(
+        "satellite tracks multiple signals — pass a signal selector " *
+        "(integer index or signal type) to address one of them.",
+    ),
+)
 @inline _find_signal(s::Tuple{TrackedSignal}) = s[1]
 @inline _find_signal(::Tuple) = _throw_needs_signal_selector()
 @inline _find_signal(s::Tuple, i::Integer) = s[i]
@@ -644,11 +656,15 @@ end
     end
     _find_signal_by_type(Base.tail(t), T)
 end
-@inline _assert_no_more_of_type(::Tuple{}, ::Type{T}) where {T<:AbstractGNSSSignal} = nothing
+@inline _assert_no_more_of_type(::Tuple{}, ::Type{T}) where {T<:AbstractGNSSSignal} =
+    nothing
 @inline function _assert_no_more_of_type(t::Tuple, ::Type{T}) where {T<:AbstractGNSSSignal}
-    first(t).signal isa T && throw(ArgumentError(
-        "signal type $T matches more than one signal on this satellite — " *
-        "use an integer index to disambiguate (e.g. `get_signals(sat)[i]`)."))
+    first(t).signal isa T && throw(
+        ArgumentError(
+            "signal type $T matches more than one signal on this satellite — " *
+            "use an integer index to disambiguate (e.g. `get_signals(sat)[i]`).",
+        ),
+    )
     _assert_no_more_of_type(Base.tail(t), T)
 end
 
@@ -658,9 +674,12 @@ get_last_fully_integrated_correlator(s::TrackedSat, sel...) =
     get_last_fully_integrated_correlator(_find_signal(s.signals, sel...))
 get_last_fully_integrated_filtered_prompt(s::TrackedSat, sel...) =
     get_last_fully_integrated_filtered_prompt(_find_signal(s.signals, sel...))
-get_filtered_prompts(s::TrackedSat, sel...) = get_filtered_prompts(_find_signal(s.signals, sel...))
-get_post_corr_filter(s::TrackedSat, sel...) = get_post_corr_filter(_find_signal(s.signals, sel...))
-get_cn0_estimator(s::TrackedSat, sel...) = get_cn0_estimator(_find_signal(s.signals, sel...))
+get_filtered_prompts(s::TrackedSat, sel...) =
+    get_filtered_prompts(_find_signal(s.signals, sel...))
+get_post_corr_filter(s::TrackedSat, sel...) =
+    get_post_corr_filter(_find_signal(s.signals, sel...))
+get_cn0_estimator(s::TrackedSat, sel...) =
+    get_cn0_estimator(_find_signal(s.signals, sel...))
 get_bit_buffer(s::TrackedSat, sel...) = get_bit_buffer(_find_signal(s.signals, sel...))
 get_bits(s::TrackedSat, sel...) = get_bits(_find_signal(s.signals, sel...))
 get_soft_bits(s::TrackedSat, sel...) = get_soft_bits(_find_signal(s.signals, sel...))
@@ -760,10 +779,11 @@ signal-tuple shape, not by band — band is metadata each group carries so
 the right measurement is routed to it during `track`.
 
 Fields:
-- `band`: an `AbstractGNSSSignal` `Band` instance (`L1()`, `L5()`, …)
-- `satellites`: `Dictionary{Int, <:TrackedSat}` keyed by PRN
-- `signals`: the signal-instance tuple (e.g. `(GPSL1C_P(), GPSL1C_D(), GPSL1CA())`)
-- `num_ants`: the antenna count for this group's band
+
+  - `band`: an `AbstractGNSSSignal` `Band` instance (`L1()`, `L5()`, …)
+  - `satellites`: `Dictionary{Int, <:TrackedSat}` keyed by PRN
+  - `signals`: the signal-instance tuple (e.g. `(GPSL1C_P(), GPSL1C_D(), GPSL1CA())`)
+  - `num_ants`: the antenna count for this group's band
 """
 struct SignalGroup{
     B,                                             # GNSSSignals Band instance
@@ -786,7 +806,12 @@ function SignalGroup(
     satellites::Maybe{S} = nothing,
     signals::Maybe{Sigs} = nothing,
     num_ants::Maybe{NA} = nothing,
-) where {B,S<:Dictionary{<:Any,<:TrackedSat},Sigs<:Tuple{Vararg{AbstractGNSSSignal}},NA<:NumAnts}
+) where {
+    B,
+    S<:Dictionary{<:Any,<:TrackedSat},
+    Sigs<:Tuple{Vararg{AbstractGNSSSignal}},
+    NA<:NumAnts,
+}
     SignalGroup{B,S,Sigs,NA}(
         isnothing(band) ? g.band : band,
         isnothing(satellites) ? g.satellites : satellites,
@@ -811,23 +836,39 @@ function _validate_signal_group(signals::Tuple{Vararg{AbstractGNSSSignal}}, band
     driver = first(signals)
     foreach(signals) do s
         if band_key(get_band(s)) !== band_key(band)
-            throw(ArgumentError(string(
-                "All signals in a SignalGroup must be on the same RF band: `",
-                nameof(typeof(s)), "` is on band `:", band_key(get_band(s)),
-                "` but the group is on band `:", band_key(band),
-                "`. Put signals on different bands into separate groups, e.g. ",
-                "`signals = (l1 = (GPSL1CA(),), l5 = (GPSL5I(),))`.",
-            )))
+            throw(
+                ArgumentError(
+                    string(
+                        "All signals in a SignalGroup must be on the same RF band: `",
+                        nameof(typeof(s)),
+                        "` is on band `:",
+                        band_key(get_band(s)),
+                        "` but the group is on band `:",
+                        band_key(band),
+                        "`. Put signals on different bands into separate groups, e.g. ",
+                        "`signals = (l1 = (GPSL1CA(),), l5 = (GPSL5I(),))`.",
+                    ),
+                ),
+            )
         end
         if get_code_frequency(s) != get_code_frequency(driver)
-            throw(ArgumentError(string(
-                "All signals in a SignalGroup must share one chip rate: the ",
-                "shared code phase advances at the first signal's code ",
-                "frequency (`", nameof(typeof(driver)), "`: ",
-                get_code_frequency(driver), "), but `", nameof(typeof(s)),
-                "` has ", get_code_frequency(s),
-                ". Track it in its own group instead.",
-            )))
+            throw(
+                ArgumentError(
+                    string(
+                        "All signals in a SignalGroup must share one chip rate: the ",
+                        "shared code phase advances at the first signal's code ",
+                        "frequency (`",
+                        nameof(typeof(driver)),
+                        "`: ",
+                        get_code_frequency(driver),
+                        "), but `",
+                        nameof(typeof(s)),
+                        "` has ",
+                        get_code_frequency(s),
+                        ". Track it in its own group instead.",
+                    ),
+                ),
+            )
         end
     end
     nothing
@@ -875,7 +916,7 @@ function SignalGroup(
     # because doppler_estimator only affects per-sat state type, not the
     # storage's outer shape.
     template = _make_template_tracked_sat(signals, doppler_estimator, num_ants)
-    sats = Dictionary{Int, typeof(template)}(Int[], typeof(template)[])
+    sats = Dictionary{Int,typeof(template)}(Int[], typeof(template)[])
     SignalGroup(band, sats, signals, num_ants)
 end
 
@@ -958,9 +999,7 @@ end
     return nothing
 end
 
-function reset_start_sample_and_bit_buffer!(
-    groups::SignalGroups,
-)
+function reset_start_sample_and_bit_buffer!(groups::SignalGroups)
     _foreach_group!(_reset_one_group!, groups)
     return groups
 end

@@ -296,12 +296,11 @@ else
         groups_acqs = ((:gps_l1, acq_l1), (:galileo, acq_e1), (:gps_l5, acq_l5))
         nl1 = round(Int, ustrip(Hz, FS_L1) * chunk_seconds)
         nl5 = nl1 ÷ 2
-        doppler_trail = Dict(
-            (group, a.prn) => Float64[] for (group, acqs) in groups_acqs for a in acqs
-        )
+        doppler_trail =
+            Dict((group, a.prn) => Float64[] for (group, acqs) in groups_acqs for a in acqs)
         for c = 1:n_chunks
-            l1c = @view l1[((c - 1) * nl1 + 1):(c * nl1)]
-            l5c = @view l5[((c - 1) * nl5 + 1):(c * nl5)]
+            l1c = @view l1[((c-1)*nl1+1):(c*nl1)]
+            l5c = @view l5[((c-1)*nl5+1):(c*nl5)]
             track_state = track!(
                 (
                     l1 = BandMeasurement(l1c, FS_L1, IF_L1),

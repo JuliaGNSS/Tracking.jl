@@ -24,10 +24,11 @@ function calc_num_code_blocks_to_integrate(
     data_freq = get_data_frequency(signal)
     # One full symbol = one data bit for data-bearing signals, or one
     # secondary-code period for pilots (`data_frequency == 0`).
-    num_code_blocks_that_form_a_symbol = iszero(data_freq) ?
-        get_secondary_code_length(signal) :
+    num_code_blocks_that_form_a_symbol =
+        iszero(data_freq) ? get_secondary_code_length(signal) :
         Int(get_code_frequency(signal) / (get_code_length(signal) * data_freq))
-    num_code_blocks = clamp(preferred_num_code_blocks, 1, num_code_blocks_that_form_a_symbol)
+    num_code_blocks =
+        clamp(preferred_num_code_blocks, 1, num_code_blocks_that_form_a_symbol)
     while num_code_blocks_that_form_a_symbol % num_code_blocks != 0
         num_code_blocks -= 1
     end

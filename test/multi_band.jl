@@ -3,34 +3,54 @@ module MultiBandTest
 using Test: @test, @testset, @inferred, @test_throws
 using Unitful: Hz
 using GNSSSignals:
-    GPSL1CA, GPSL5I, GalileoE1B, L1, L5,
-    gen_code, get_code_frequency, get_code_center_frequency_ratio
+    GPSL1CA,
+    GPSL5I,
+    GalileoE1B,
+    L1,
+    L5,
+    gen_code,
+    get_code_frequency,
+    get_code_center_frequency_ratio
 
 using Tracking:
-    TrackState, BandMeasurement, NumAnts, SignalGroup,
-    track, track!, add_satellite!,
-    band_key, band_keys,
-    get_samples, get_sampling_frequency, get_intermediate_frequency,
-    get_carrier_doppler, get_code_doppler, get_num_ants,
+    TrackState,
+    BandMeasurement,
+    NumAnts,
+    SignalGroup,
+    track,
+    track!,
+    add_satellite!,
+    band_key,
+    band_keys,
+    get_samples,
+    get_sampling_frequency,
+    get_intermediate_frequency,
+    get_carrier_doppler,
+    get_code_doppler,
+    get_num_ants,
     _validate_equal_durations
 
 # Build a synthetic complex sample buffer for one PRN at one band, with a
 # given Doppler offset and starting code phase.
 function _make_signal(
-    ::Type{S}, prn, carrier_doppler, start_code_phase,
-    num_samples, sampling_frequency,
+    ::Type{S},
+    prn,
+    carrier_doppler,
+    start_code_phase,
+    num_samples,
+    sampling_frequency,
 ) where {S}
     s = S()
-    code_freq = carrier_doppler * get_code_center_frequency_ratio(s) +
-        get_code_frequency(s)
-    range = 0:(num_samples - 1)
+    code_freq = carrier_doppler * get_code_center_frequency_ratio(s) + get_code_frequency(s)
+    range = 0:(num_samples-1)
     cis.(2π .* carrier_doppler .* range ./ sampling_frequency) .*
-        gen_code(num_samples, s, prn, sampling_frequency, code_freq, start_code_phase)
+    gen_code(num_samples, s, prn, sampling_frequency, code_freq, start_code_phase)
 end
 
 @testset "BandMeasurement kwarg constructor and accessors" begin
     buf = zeros(ComplexF64, 100)
-    m_kw = BandMeasurement(buf; sampling_frequency = 4e6Hz, intermediate_frequency = 1.5e6Hz)
+    m_kw =
+        BandMeasurement(buf; sampling_frequency = 4e6Hz, intermediate_frequency = 1.5e6Hz)
     @test get_samples(m_kw) === buf
     @test get_sampling_frequency(m_kw) == 4e6Hz
     @test get_intermediate_frequency(m_kw) == 1.5e6Hz
@@ -98,24 +118,29 @@ end
 
     # Immutable variant.
     ts_imm = TrackState(; signal = GPSL1CA())
-    ts_imm = add_satellite!(ts_imm; prn, code_phase = start_code_phase,
-                   carrier_doppler = carrier_doppler - 20Hz)
+    ts_imm = add_satellite!(
+        ts_imm;
+        prn,
+        code_phase = start_code_phase,
+        carrier_doppler = carrier_doppler - 20Hz,
+    )
     new_ts = track(measurement, ts_imm)
     @test abs(get_carrier_doppler(new_ts, :default, prn) - carrier_doppler) < 50Hz
 
     # In-place variant.
     ts_inp = TrackState(; signal = GPSL1CA())
-    ts_inp = add_satellite!(ts_inp; prn, code_phase = start_code_phase,
-                   carrier_doppler = carrier_doppler - 20Hz)
+    ts_inp = add_satellite!(
+        ts_inp;
+        prn,
+        code_phase = start_code_phase,
+        carrier_doppler = carrier_doppler - 20Hz,
+    )
     track!(measurement, ts_inp)
     @test abs(get_carrier_doppler(ts_inp, :default, prn) - carrier_doppler) < 50Hz
 end
 
 @testset "Bare-buffer track! rejects multi-band TrackState" begin
-    ts = TrackState(; signals = (
-        gps_l1 = (GPSL1CA(),),
-        gps_l5 = (GPSL5I(),),
-    ))
+    ts = TrackState(; signals = (gps_l1 = (GPSL1CA(),), gps_l5 = (GPSL5I(),)))
     # `_single_band` must error — no single band to auto-key the buffer to.
     @test_throws ArgumentError track!(zeros(ComplexF64, 4000), ts, 4e6Hz)
 end
@@ -126,10 +151,7 @@ end
 end
 
 @testset "band_keys for multi-band TrackState" begin
-    ts = TrackState(; signals = (
-        legacy_gps_l1 = (GPSL1CA(),),
-        gps_l5        = (GPSL5I(),),
-    ))
+    ts = TrackState(; signals = (legacy_gps_l1 = (GPSL1CA(),), gps_l5 = (GPSL5I(),)))
     # Both bands appear in first-encounter order.
     @test band_keys(ts) == (:l1, :l5)
 end
@@ -153,14 +175,20 @@ end
     start_code_phase = 100.0
 
     track_state = TrackState(; signal = GPSL1CA())
-    track_state = add_satellite!(track_state;
-        prn, code_phase = start_code_phase,
+    track_state = add_satellite!(
+        track_state;
+        prn,
+        code_phase = start_code_phase,
         carrier_doppler = carrier_doppler - 20Hz,
     )
 
     signal = _make_signal(
-        GPSL1CA, prn, carrier_doppler, start_code_phase,
-        num_samples, sampling_frequency,
+        GPSL1CA,
+        prn,
+        carrier_doppler,
+        start_code_phase,
+        num_samples,
+        sampling_frequency,
     )
 
     # Bare-buffer shortcut survives the multi-band refactor.
@@ -187,23 +215,25 @@ end
     signal_l1 = _make_signal(GPSL1CA, prn_l1, cd_l1, cp_l1, n_l1, fs_l1)
     signal_l5 = _make_signal(GPSL5I, prn_l5, cd_l5, cp_l5, n_l5, fs_l5)
 
-    track_state = TrackState(; signals = (
-        legacy_gps_l1 = (GPSL1CA(),),
-        gps_l5        = (GPSL5I(),),
-    ))
-    track_state = add_satellite!(track_state;
-        prn = prn_l1, group = :legacy_gps_l1,
-        code_phase = cp_l1, carrier_doppler = cd_l1 - 20Hz,
+    track_state =
+        TrackState(; signals = (legacy_gps_l1 = (GPSL1CA(),), gps_l5 = (GPSL5I(),)))
+    track_state = add_satellite!(
+        track_state;
+        prn = prn_l1,
+        group = :legacy_gps_l1,
+        code_phase = cp_l1,
+        carrier_doppler = cd_l1 - 20Hz,
     )
-    track_state = add_satellite!(track_state;
-        prn = prn_l5, group = :gps_l5,
-        code_phase = cp_l5, carrier_doppler = cd_l5 - 20.0Hz,
+    track_state = add_satellite!(
+        track_state;
+        prn = prn_l5,
+        group = :gps_l5,
+        code_phase = cp_l5,
+        carrier_doppler = cd_l5 - 20.0Hz,
     )
 
-    measurements = (
-        l1 = BandMeasurement(signal_l1, fs_l1),
-        l5 = BandMeasurement(signal_l5, fs_l5),
-    )
+    measurements =
+        (l1 = BandMeasurement(signal_l1, fs_l1), l5 = BandMeasurement(signal_l5, fs_l5))
 
     track!(measurements, track_state)
 
@@ -222,16 +252,13 @@ end
 end
 
 @testset "Mismatched durations error (no tolerance)" begin
-    ts = TrackState(; signals = (
-        legacy_gps_l1 = (GPSL1CA(),),
-        gps_l5        = (GPSL5I(),),
-    ))
+    ts = TrackState(; signals = (legacy_gps_l1 = (GPSL1CA(),), gps_l5 = (GPSL5I(),)))
     ts = add_satellite!(ts; prn = 1, group = :legacy_gps_l1, carrier_doppler = 0Hz)
-    ts = add_satellite!(ts; prn = 1, group = :gps_l5,        carrier_doppler = 0Hz)
+    ts = add_satellite!(ts; prn = 1, group = :gps_l5, carrier_doppler = 0Hz)
 
     # L1 has 4000 samples @ 4 MHz = 1.000 ms; L5 has 25001 samples @ 25 MHz
     # ≈ 1.00004 ms. Off by one sample at L5's rate — must reject.
-    m_l1 = BandMeasurement(zeros(ComplexF64, 4000),  4e6Hz)
+    m_l1 = BandMeasurement(zeros(ComplexF64, 4000), 4e6Hz)
     m_l5 = BandMeasurement(zeros(ComplexF64, 25001), 25e6Hz)
     @test_throws ArgumentError track!((l1 = m_l1, l5 = m_l5), ts)
 end
@@ -241,13 +268,13 @@ end
     # in Float32. Identical real durations must pass the check even though
     # `4000 / 4e6Hz` (Float64) and `25000 / 25f6Hz` (Float32) are not
     # `==` after division.
-    m_l1 = BandMeasurement(zeros(ComplexF64, 4000),  4e6Hz)
-    m_l5 = BandMeasurement(zeros(ComplexF64, 25000), 25f6Hz)
+    m_l1 = BandMeasurement(zeros(ComplexF64, 4000), 4e6Hz)
+    m_l5 = BandMeasurement(zeros(ComplexF64, 25000), 25.0f6Hz)
     @test _validate_equal_durations((l1 = m_l1, l5 = m_l5)) === nothing
 
     # A genuine one-sample mismatch must still throw, and the message
     # should print durations in seconds, not Hz^-1.
-    m_bad = BandMeasurement(zeros(ComplexF64, 25001), 25f6Hz)
+    m_bad = BandMeasurement(zeros(ComplexF64, 25001), 25.0f6Hz)
     err = try
         _validate_equal_durations((l1 = m_l1, l5 = m_bad))
         nothing
@@ -269,12 +296,14 @@ end
 @testset "Per-band antenna counts via SignalGroup entries" begin
     # L1 group with 2 antennas, L5 group with 1. Constructed by passing
     # `SignalGroup` instances as `signals` entries.
-    ts = TrackState(; signals = (
-        legacy_gps_l1 = SignalGroup((GPSL1CA(),); num_ants = NumAnts(2)),
-        gps_l5        = SignalGroup((GPSL5I(),);  num_ants = NumAnts(1)),
-    ))
+    ts = TrackState(;
+        signals = (
+            legacy_gps_l1 = SignalGroup((GPSL1CA(),); num_ants = NumAnts(2)),
+            gps_l5 = SignalGroup((GPSL5I(),); num_ants = NumAnts(1)),
+        ),
+    )
     ts = add_satellite!(ts; prn = 1, group = :legacy_gps_l1, carrier_doppler = 0Hz)
-    ts = add_satellite!(ts; prn = 1, group = :gps_l5,        carrier_doppler = 0Hz)
+    ts = add_satellite!(ts; prn = 1, group = :gps_l5, carrier_doppler = 0Hz)
 
     @test get_num_ants(ts, :legacy_gps_l1, 1) == 2
     @test get_num_ants(ts, :gps_l5, 1) == 1
@@ -283,17 +312,21 @@ end
 @testset "Same band, mismatched NumAnts is rejected" begin
     # Two groups both on L1 (GPSL1CA + GalileoE1B share L1) but declaring
     # different antenna counts. Must error at TrackState construction.
-    @test_throws ArgumentError TrackState(; signals = (
-        gps     = SignalGroup((GPSL1CA(),);    num_ants = NumAnts(2)),
-        galileo = SignalGroup((GalileoE1B(),); num_ants = NumAnts(1)),
-    ))
+    @test_throws ArgumentError TrackState(;
+        signals = (
+            gps = SignalGroup((GPSL1CA(),); num_ants = NumAnts(2)),
+            galileo = SignalGroup((GalileoE1B(),); num_ants = NumAnts(1)),
+        ),
+    )
 end
 
 @testset "Two groups on the same band with matching NumAnts is fine" begin
-    ts = TrackState(; signals = (
-        gps     = SignalGroup((GPSL1CA(),);    num_ants = NumAnts(2)),
-        galileo = SignalGroup((GalileoE1B(),); num_ants = NumAnts(2)),
-    ))
+    ts = TrackState(;
+        signals = (
+            gps = SignalGroup((GPSL1CA(),); num_ants = NumAnts(2)),
+            galileo = SignalGroup((GalileoE1B(),); num_ants = NumAnts(2)),
+        ),
+    )
     @test band_keys(ts) == (:l1,)
 end
 

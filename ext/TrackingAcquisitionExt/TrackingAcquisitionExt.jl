@@ -19,7 +19,7 @@ from `acq`. Loop-filter bandwidths default to the recommended values for
 
 ```julia
 acq = acquire(GPSL1CA(), data, fs, 7)
-ts  = TrackState(acq)
+ts = TrackState(acq)
 ```
 """
 function Tracking.TrackState(acq::AcquisitionResults; kwargs...)
@@ -33,16 +33,16 @@ end
 Convenience constructor: build a [`TrackState`](@ref) pre-populated from
 a batch of acquisition results.
 
-* **Default (single-group)**: omit `signals`. All entries must share the
-  same `acq.system`; that shared signal becomes the `:default` group's
-  signal. Errors on an empty vector (no signal to infer).
-* **Multi-group**: pass `signals = (group_a = (...), group_b = (...))` as
-  in the regular [`TrackState`](@ref) constructor. Each acquisition is
-  routed to the group whose longest-primary-code signal matches
-  `acq.system` (signals tied at the maximum code length all qualify).
-  Errors on an acq whose system doesn't match any group, and on an acq
-  that matches more than one group (use `add_satellite!` with an
-  explicit `group =` instead).
+  - **Default (single-group)**: omit `signals`. All entries must share the
+    same `acq.system`; that shared signal becomes the `:default` group's
+    signal. Errors on an empty vector (no signal to infer).
+  - **Multi-group**: pass `signals = (group_a = (...), group_b = (...))` as
+    in the regular [`TrackState`](@ref) constructor. Each acquisition is
+    routed to the group whose longest-primary-code signal matches
+    `acq.system` (signals tied at the maximum code length all qualify).
+    Errors on an acq whose system doesn't match any group, and on an acq
+    that matches more than one group (use `add_satellite!` with an
+    explicit `group =` instead).
 
 Other `kwargs` (`doppler_estimator`, `num_ants`, ...) forward to the
 regular `TrackState` constructor.
@@ -50,14 +50,12 @@ regular `TrackState` constructor.
 ```julia
 # Single-signal
 acqs = acquire(GPSL1CA(), data, fs, 1:32)
-ts   = TrackState(filter(is_detected, acqs))
+ts = TrackState(filter(is_detected, acqs))
 
 # Multi-signal
-acqs = vcat(
-    acquire(GPSL1CA(), data, fs, 1:32),
-    acquire(GalileoE1B(), data, fs, 1:36),
-)
-ts = TrackState(filter(is_detected, acqs);
+acqs = vcat(acquire(GPSL1CA(), data, fs, 1:32), acquire(GalileoE1B(), data, fs, 1:36))
+ts = TrackState(
+    filter(is_detected, acqs);
     signals = (gps = (GPSL1CA(),), gal = (GalileoE1B(),)),
 )
 ```
@@ -68,18 +66,28 @@ function Tracking.TrackState(
     kwargs...,
 )
     if signals === nothing
-        isempty(acqs) && throw(ArgumentError(
-            "Cannot infer the group's signal from an empty acquisition-results " *
-            "vector. Pass `signals = (...)` to declare signals explicitly, " *
-            "or pass at least one acquisition.",
-        ))
+        isempty(acqs) && throw(
+            ArgumentError(
+                "Cannot infer the group's signal from an empty acquisition-results " *
+                "vector. Pass `signals = (...)` to declare signals explicitly, " *
+                "or pass at least one acquisition.",
+            ),
+        )
         sig = first(acqs).system
         for a in acqs
-            typeof(a.system) === typeof(sig) || throw(ArgumentError(string(
-                "All acquisition results must share the same `system`. ",
-                "Got `", typeof(sig), "` and `", typeof(a.system), "`. ",
-                "Pass `signals = (...)` to track multiple signals.",
-            )))
+            typeof(a.system) === typeof(sig) || throw(
+                ArgumentError(
+                    string(
+                        "All acquisition results must share the same `system`. ",
+                        "Got `",
+                        typeof(sig),
+                        "` and `",
+                        typeof(a.system),
+                        "`. ",
+                        "Pass `signals = (...)` to track multiple signals.",
+                    ),
+                ),
+            )
         end
         ts = Tracking.TrackState(; signal = sig, kwargs...)
         return Tracking.add_satellite!(ts, acqs)
@@ -99,10 +107,7 @@ end
 # are both 10230 chips, so either acquisition is a valid handoff).
 @inline function _acq_signal_matches(sig_tuple::Tuple, system::AbstractGNSSSignal)
     longest_len = get_code_length(_longest_code_signal(sig_tuple))
-    any(
-        s -> typeof(s) === typeof(system) && get_code_length(s) == longest_len,
-        sig_tuple,
-    )
+    any(s -> typeof(s) === typeof(system) && get_code_length(s) == longest_len, sig_tuple)
 end
 
 # Walk the TrackState's groups and return the key of the one whose
@@ -117,15 +122,32 @@ end
         k -> _acq_signal_matches(track_state.groups[k].signals, acq.system),
         keys_tuple,
     )
-    isempty(matches) && throw(ArgumentError(string(
-        "No group's longest-primary-code signal matches `acq.system::",
-        acq_type, "` (PRN ", acq.prn, "). Declared groups: ", keys_tuple, ".",
-    )))
-    length(matches) > 1 && throw(ArgumentError(string(
-        "Acquisition routing is ambiguous: `acq.system::", acq_type,
-        "` (PRN ", acq.prn, ") matches groups ", matches,
-        ". Pass `group = <key>` explicitly to pick one.",
-    )))
+    isempty(matches) && throw(
+        ArgumentError(
+            string(
+                "No group's longest-primary-code signal matches `acq.system::",
+                acq_type,
+                "` (PRN ",
+                acq.prn,
+                "). Declared groups: ",
+                keys_tuple,
+                ".",
+            ),
+        ),
+    )
+    length(matches) > 1 && throw(
+        ArgumentError(
+            string(
+                "Acquisition routing is ambiguous: `acq.system::",
+                acq_type,
+                "` (PRN ",
+                acq.prn,
+                ") matches groups ",
+                matches,
+                ". Pass `group = <key>` explicitly to pick one.",
+            ),
+        ),
+    )
     only(matches)
 end
 
@@ -185,7 +207,8 @@ end
     resolved = isnothing(group) ? _find_group_for_acq(track_state, acq) : group
     _assert_acq_matches_group(track_state, resolved, acq)
     sat = Tracking._make_default_tracked_sat_for_group(
-        track_state, resolved;
+        track_state,
+        resolved;
         prn = acq.prn,
         code_phase = acq.code_phase,
         carrier_doppler = acq.carrier_doppler,
@@ -240,20 +263,32 @@ end
 # point — feeding code_phase from a shorter signal would alias into the
 # wrong place inside the longer signal's primary code period.
 @inline function _assert_acq_matches_group(
-    track_state::TrackState, group::Symbol, acq::AcquisitionResults,
+    track_state::TrackState,
+    group::Symbol,
+    acq::AcquisitionResults,
 )
     sig_tuple = track_state.groups[group].signals
     _acq_signal_matches(sig_tuple, acq.system) && return nothing
     longest = _longest_code_signal(sig_tuple)
-    throw(ArgumentError(string(
-        "Acquisition signal type does not match a longest-code signal ",
-        "in group `:", group, "`. ",
-        "Got `acq.system::", typeof(acq.system), "` ",
-        "but the group's longest-code signal is `", typeof(longest), "`. ",
-        "Hand over an acquisition for a signal with the longest code ",
-        "length — its code phase is the only one that is unambiguous ",
-        "when the group tracks multiple signals.",
-    )))
+    throw(
+        ArgumentError(
+            string(
+                "Acquisition signal type does not match a longest-code signal ",
+                "in group `:",
+                group,
+                "`. ",
+                "Got `acq.system::",
+                typeof(acq.system),
+                "` ",
+                "but the group's longest-code signal is `",
+                typeof(longest),
+                "`. ",
+                "Hand over an acquisition for a signal with the longest code ",
+                "length — its code phase is the only one that is unambiguous ",
+                "when the group tracks multiple signals.",
+            ),
+        ),
+    )
 end
 
 # Recursive walk to find the signal with the largest primary code
@@ -270,7 +305,9 @@ end
 # equal-chip-rate invariant is ever relaxed (see issue #151), switch this
 # to compare `get_code_length(s) / get_code_frequency(s)`.
 @inline _longest_code_signal(t::Tuple{AbstractGNSSSignal}) = only(t)
-@inline function _longest_code_signal(t::Tuple{AbstractGNSSSignal,AbstractGNSSSignal,Vararg{AbstractGNSSSignal}})
+@inline function _longest_code_signal(
+    t::Tuple{AbstractGNSSSignal,AbstractGNSSSignal,Vararg{AbstractGNSSSignal}},
+)
     head = first(t)
     rest_longest = _longest_code_signal(Base.tail(t))
     get_code_length(head) >= get_code_length(rest_longest) ? head : rest_longest

@@ -2,8 +2,7 @@ module TrackInPlaceTest
 
 using Test: @test, @testset
 using Unitful: Hz
-using GNSSSignals:
-    GPSL1CA, gen_code, get_code_center_frequency_ratio, get_code_frequency
+using GNSSSignals: GPSL1CA, gen_code, get_code_center_frequency_ratio, get_code_frequency
 
 using Tracking:
     TrackedSat,
@@ -33,8 +32,7 @@ function make_signal(sampling_frequency)
     carrier_doppler = 200.0Hz
     start_code_phase = 100.0
     code_frequency =
-        carrier_doppler * get_code_center_frequency_ratio(gpsl1) +
-        get_code_frequency(gpsl1)
+        carrier_doppler * get_code_center_frequency_ratio(gpsl1) + get_code_frequency(gpsl1)
     range = 0:3999
     start_carrier_phase = π / 2
     signal_template =
@@ -51,21 +49,20 @@ end
     signal, gpsl1, carrier_doppler, start_code_phase = make_signal(sampling_frequency)
 
     sat_immutable = TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)
-    sat_mutable   = TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)
+    sat_mutable = TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)
 
     ts_immutable = TrackState(gpsl1, [sat_immutable])
-    ts_mutable   = TrackState(gpsl1, [sat_mutable])
+    ts_mutable = TrackState(gpsl1, [sat_mutable])
 
     dc = DC()
 
-    ts_immutable = track(signal, ts_immutable, sampling_frequency;
-        downconvert_and_correlator = dc)
-    track!(signal, ts_mutable, sampling_frequency;
-        downconvert_and_correlator = dc)
+    ts_immutable =
+        track(signal, ts_immutable, sampling_frequency; downconvert_and_correlator = dc)
+    track!(signal, ts_mutable, sampling_frequency; downconvert_and_correlator = dc)
 
-    @test get_code_phase(ts_immutable)    == get_code_phase(ts_mutable)
+    @test get_code_phase(ts_immutable) == get_code_phase(ts_mutable)
     @test get_carrier_phase(ts_immutable) == get_carrier_phase(ts_mutable)
-    @test get_code_doppler(ts_immutable)  == get_code_doppler(ts_mutable)
+    @test get_code_doppler(ts_immutable) == get_code_doppler(ts_mutable)
     @test get_carrier_doppler(ts_immutable) == get_carrier_doppler(ts_mutable)
     @test get_last_fully_integrated_filtered_prompt(ts_immutable) ==
           get_last_fully_integrated_filtered_prompt(ts_mutable)
@@ -76,10 +73,8 @@ end
 @testset "track! returns same TrackState identity" begin
     sampling_frequency = 4e6Hz
     signal, gpsl1, carrier_doppler, start_code_phase = make_signal(sampling_frequency)
-    track_state = TrackState(
-        gpsl1,
-        [TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)],
-    )
+    track_state =
+        TrackState(gpsl1, [TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)])
     returned = track!(signal, track_state, sampling_frequency)
     @test returned === track_state
 end
@@ -95,7 +90,7 @@ end
 # is paged in and `push!` to `filtered_prompts` has its capacity settled.
 
 function measure_reset!(track_state)
-    for _ in 1:8
+    for _ = 1:8
         reset_start_sample_and_bit_buffer!(track_state)
     end
     @allocated reset_start_sample_and_bit_buffer!(track_state)
@@ -103,26 +98,20 @@ end
 
 function measure_dc!(dc, signal, track_state, sampling_frequency)
     measurements = (l1 = BandMeasurement(signal, sampling_frequency),)
-    for _ in 1:8
-        downconvert_and_correlate!(
-            dc, measurements, track_state,
-        )
+    for _ = 1:8
+        downconvert_and_correlate!(dc, measurements, track_state)
     end
-    @allocated downconvert_and_correlate!(
-        dc, measurements, track_state,
-    )
+    @allocated downconvert_and_correlate!(dc, measurements, track_state)
 end
 
 function measure_est!(track_state, sampling_frequency)
     # Estimator only reads `sampling_frequency` off the measurement;
     # samples are unused.
     measurements = (l1 = BandMeasurement(ComplexF64[], sampling_frequency),)
-    for _ in 1:8
+    for _ = 1:8
         estimate_dopplers_and_filter_prompt!(track_state, measurements)
     end
-    @allocated estimate_dopplers_and_filter_prompt!(
-        track_state, measurements,
-    )
+    @allocated estimate_dopplers_and_filter_prompt!(track_state, measurements)
 end
 
 @testset "track! per-stage is allocation-free in steady state ($DC)" for DC in (
@@ -132,16 +121,14 @@ end
     sampling_frequency = 4e6Hz
     signal, gpsl1, carrier_doppler, start_code_phase = make_signal(sampling_frequency)
 
-    track_state = TrackState(
-        gpsl1,
-        [TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)],
-    )
+    track_state =
+        TrackState(gpsl1, [TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)])
     dc = DC()
 
     # Run the full track! several times so all stages compile, the bit
     # buffer is in its steady-state shape, and `filtered_prompts`'
     # capacity is settled (the first call grows it via `push!`).
-    for _ in 1:8
+    for _ = 1:8
         track!(signal, track_state, sampling_frequency; downconvert_and_correlator = dc)
     end
 

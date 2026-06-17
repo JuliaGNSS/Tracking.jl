@@ -33,14 +33,14 @@ using Tracking:
     # the BOC side-lobes (which would bias the DLL discriminator).
     @test @inferred(get_default_correlator(gpsl1c_d, NumAnts(1))) ==
           EarlyPromptLateCorrelator(;
-              num_ants = NumAnts(1),
-              preferred_early_late_to_prompt_code_shift = 0.1,
-          )
+        num_ants = NumAnts(1),
+        preferred_early_late_to_prompt_code_shift = 0.1,
+    )
     @test @inferred(get_default_correlator(gpsl1c_d, NumAnts(3))) ==
           EarlyPromptLateCorrelator(;
-              num_ants = NumAnts(3),
-              preferred_early_late_to_prompt_code_shift = 0.1,
-          )
+        num_ants = NumAnts(3),
+        preferred_early_late_to_prompt_code_shift = 0.1,
+    )
 
     # 10 ms primary period at BL·T ≈ 0.018 → 1.8 Hz carrier / 0.1 Hz code.
     # 10× tighter than the L1 C/A default; required for stable 10 ms tracking.

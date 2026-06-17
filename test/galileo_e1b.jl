@@ -16,8 +16,10 @@ using Tracking:
 # approximation) share primary code, code length, code rate, data rate,
 # and band — only the modulation differs. All tracking-side traits should
 # therefore behave identically; the testset is parameterised over both.
-@testset "Galileo E1B ($(nameof(typeof(galileo_e1b))))" for galileo_e1b in
-                                                            (GalileoE1B(), GalileoE1B_BOC11())
+@testset "Galileo E1B ($(nameof(typeof(galileo_e1b))))" for galileo_e1b in (
+    GalileoE1B(),
+    GalileoE1B_BOC11(),
+)
 
     # E1B broadcasts one I/NAV channel symbol per primary code period
     # (250 sym/s, 4 ms primary period; Galileo OS SIS ICD Tables 11 & 15)
