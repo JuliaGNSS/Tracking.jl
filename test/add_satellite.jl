@@ -128,6 +128,23 @@ end
     @test get_carrier_doppler(track_state, :galileo, 11) == 2000.0Hz
 end
 
+@testset "add_satellite! — single named group infers `group=` when omitted" begin
+    # A single-group state whose only group is not named `:default` must
+    # still work without an explicit `group=`.
+    track_state = TrackState(; signals = (gps = (GPSL1CA(),),))
+    track_state = add_satellite!(track_state; prn = 7, carrier_doppler = 750.0Hz)
+    @test get_prn(track_state, :gps, 7) == 7
+    @test get_carrier_doppler(track_state, :gps, 7) == 750.0Hz
+end
+
+@testset "add_satellite!/add_satellite — multi-group omitted `group=` errors" begin
+    track_state = TrackState(;
+        signals = (legacy = (GPSL1CA(),), galileo = (GalileoE1B(),)),
+    )
+    @test_throws ArgumentError add_satellite!(track_state; prn = 5)
+    @test_throws ArgumentError add_satellite(track_state; prn = 5)
+end
+
 @testset "add_satellite! — overwrites on duplicate PRN" begin
     track_state = TrackState(; signal = GPSL1CA())
     track_state = add_satellite!(track_state;

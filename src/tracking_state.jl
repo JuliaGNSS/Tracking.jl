@@ -419,10 +419,11 @@ The per-satellite doppler-estimator state is initialized via
 [`init_estimator_state`](@ref) against the `TrackState`'s configured
 estimator.
 
-`group` defaults to `:default` (matching the single-group construction
-shortcut). For multi-group `TrackState`s, pass the group key explicitly.
-If a satellite with the same `prn` already exists in that group's
-dictionary, it is overwritten.
+When `group` is omitted, a single-group `TrackState` uses its only group
+(whatever it is named); a multi-group `TrackState` requires the key and
+otherwise throws an `ArgumentError` naming the available groups. If a
+satellite with the same `prn` already exists in that group's dictionary,
+it is overwritten.
 
 The satellite dictionary is mutated in place, but callers should keep
 using the *returned* `TrackState`: when the configured estimator's
@@ -450,11 +451,12 @@ the [`TrackedSat`](@ref) yourself and call the
 function add_satellite!(
     track_state::TrackState;
     prn::Int,
-    group::Symbol = :default,
+    group::Union{Symbol,Nothing} = nothing,
     kwargs...,
 )
-    sat = _make_default_tracked_sat_for_group(track_state, group; prn, kwargs...)
-    add_satellite!(track_state, group, sat)
+    resolved = _resolve_group(track_state, group)
+    sat = _make_default_tracked_sat_for_group(track_state, resolved; prn, kwargs...)
+    add_satellite!(track_state, resolved, sat)
 end
 
 """
@@ -543,11 +545,12 @@ unchanged.
 function add_satellite(
     track_state::TrackState;
     prn::Int,
-    group::Symbol = :default,
+    group::Union{Symbol,Nothing} = nothing,
     kwargs...,
 )
-    sat = _make_default_tracked_sat_for_group(track_state, group; prn, kwargs...)
-    add_satellite(track_state, group, sat)
+    resolved = _resolve_group(track_state, group)
+    sat = _make_default_tracked_sat_for_group(track_state, resolved; prn, kwargs...)
+    add_satellite(track_state, resolved, sat)
 end
 
 function add_satellite(
@@ -579,15 +582,17 @@ the immutable [`remove_satellite`](@ref)).
 remove_satellite!(track_state; prn = 11, group = :modern_gps)
 ```
 
-`group` defaults to `:default` for single-group TrackStates.
+When `group` is omitted it is inferred the same way as
+[`add_satellite!`](@ref): a single-group TrackState uses its only group;
+a multi-group TrackState requires the key.
 Returns `track_state` unchanged (the dictionary is mutated in place).
 """
 function remove_satellite!(
     track_state::TrackState;
     prn::Int,
-    group::Symbol = :default,
+    group::Union{Symbol,Nothing} = nothing,
 )
-    dict = _dict_for_group(track_state, group)
+    dict = _dict_for_group(track_state, _resolve_group(track_state, group))
     haskey(dict, prn) || throw(KeyError(prn))
     delete!(dict, prn)
     track_state
@@ -603,9 +608,10 @@ unchanged. Errors if no satellite with the given `prn` exists.
 function remove_satellite(
     track_state::TrackState{G,DE};
     prn::Int,
-    group::Symbol = :default,
+    group::Union{Symbol,Nothing} = nothing,
 ) where {G<:SignalGroups,DE<:AbstractDopplerEstimator}
-    dict = _dict_for_group(track_state, group)
+    resolved = _resolve_group(track_state, group)
+    dict = _dict_for_group(track_state, resolved)
     haskey(dict, prn) || throw(KeyError(prn))
     # Copy-then-delete preserves the dict's concrete value type, which the
     # `map`/`filter` round-trip would otherwise leave under-specified to
@@ -613,9 +619,9 @@ function remove_satellite(
     new_dict = copy(dict)
     delete!(new_dict, prn)
     groups = track_state.groups
-    g = groups[group]
+    g = groups[resolved]
     new_group = SignalGroup(g; satellites = new_dict)
-    new_groups = @set groups[group] = new_group
+    new_groups = @set groups[resolved] = new_group
     TrackState{G,DE}(new_groups, track_state.doppler_estimator)
 end
 
@@ -625,6 +631,22 @@ end
 # unknown `group` here triggers the standard NamedTuple KeyErrors.
 @inline _dict_for_group(track_state::TrackState, group::Symbol) =
     track_state.groups[group].satellites
+
+# Resolve the `group=` keyword for the `add_satellite`/`remove_satellite`
+# entry points. `nothing` (the default) means "infer": a single-group
+# TrackState uses its only group regardless of its name; a multi-group
+# TrackState requires an explicit key and otherwise errors with the
+# candidate names (mirroring the Acquisition-handoff routing). A passed
+# Symbol is returned as-is. The single-group branch folds to a constant
+# Symbol at compile time, so it preserves the accessors' type stability.
+@inline _resolve_group(::TrackState, group::Symbol) = group
+@inline function _resolve_group(track_state::TrackState, ::Nothing)
+    g = keys(track_state.groups)
+    length(g) == 1 && return only(g)
+    throw(ArgumentError(string(
+        "track_state has ", length(g), " groups ", g,
+        "; pass `group = :one_of_them` to select one.")))
+end
 
 # Build a default-correlator, default-PCF TrackedSat whose
 # signal-tuple shape matches the group's slot in `track_state`. Reads the

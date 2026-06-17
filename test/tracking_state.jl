@@ -259,6 +259,18 @@ end
     @test get_prn(ts, :default, 5) == 5
 end
 
+@testset "remove_satellite!/remove_satellite — multi-group omitted `group=` errors" begin
+    ts = TrackState(; signals = (legacy = (GPSL1CA(),), galileo = (GalileoE1B(),)))
+    ts = add_satellite!(ts; prn = 5, group = :legacy, carrier_doppler = 100.0Hz)
+    @test_throws ArgumentError remove_satellite!(ts; prn = 5)
+    @test_throws ArgumentError remove_satellite(ts; prn = 5)
+    # A single named group still infers the group when omitted.
+    ts2 = TrackState(; signals = (gps = (GPSL1CA(),),))
+    ts2 = add_satellite!(ts2; prn = 5, carrier_doppler = 100.0Hz)
+    @test remove_satellite!(ts2; prn = 5) === ts2
+    @test isempty(get_sat_states(ts2, :gps))
+end
+
 @testset "Add and remove satellite state to and from track state" begin
     sampling_frequency = 5e6Hz
     gpsl1 = GPSL1CA()
