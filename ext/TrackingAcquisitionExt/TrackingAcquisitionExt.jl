@@ -217,6 +217,23 @@ function Tracking.add_satellite!(
     track_state
 end
 
+"""
+    add_satellite(track_state, acqs::AbstractVector{<:AcquisitionResults}; group = nothing)
+
+Immutable batch variant of [`add_satellite!`](@ref). Returns a new
+[`TrackState`](@ref) with every entry of `acqs` added; the input is left
+unchanged. Routing and validation match the mutable batch form.
+"""
+function Tracking.add_satellite(
+    track_state::TrackState,
+    acqs::AbstractVector{<:AcquisitionResults};
+    group::Union{Symbol,Nothing} = nothing,
+)
+    foldl(acqs; init = track_state) do ts, acq
+        Tracking.add_satellite(ts, acq; group)
+    end
+end
+
 # Check that `acq.system` is a longest-code signal of the group's
 # signal tuple (ties at the maximum code length all qualify). The
 # longest signals are what define the group's `max_code_length` wrap

@@ -238,6 +238,20 @@ end
     @test get_carrier_doppler(ts, :default, 2) == 200.0Hz
 end
 
+@testset "add_satellite(ts, acqs::Vector) immutable batch returns a new TrackState" begin
+    ts = TrackState(; signal = GPSL1CA())
+    acqs = [
+        _make_acq(GPSL1CA(), 1, 0.0, 100.0Hz),
+        _make_acq(GPSL1CA(), 2, 10.0, 200.0Hz),
+        _make_acq(GPSL1CA(), 3, 20.0, 300.0Hz),
+    ]
+    new_ts = add_satellite(ts, acqs)
+    @test new_ts !== ts
+    @test isempty(get_sat_states(ts, :default))            # input untouched
+    @test length(get_sat_states(new_ts, :default)) == 3
+    @test get_carrier_doppler(new_ts, :default, 2) == 200.0Hz
+end
+
 @testset "add_satellite!(ts, acq; group) — multi-group with explicit `group=`" begin
     ts = TrackState(; signals = (
         gps = (GPSL1CA(),),
