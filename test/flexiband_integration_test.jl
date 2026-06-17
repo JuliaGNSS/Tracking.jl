@@ -193,8 +193,13 @@ else
         zippath = download_capture()
         @test filesize(zippath) == ZIP_SIZE
 
-        # ~100 ms of capture: acquire on the first 40 ms, track over all of it.
-        payload = read_payload(zippath, nframes(0.100))
+        # Acquire on the first 40 ms, then track in `n_chunks` consecutive
+        # 100 ms chunks so we can confirm each loop has *settled* (its Doppler
+        # estimate stops changing), not merely that it lands near the coarse
+        # acquisition value (issue #152).
+        n_chunks = 3
+        chunk_seconds = 0.100
+        payload = read_payload(zippath, nframes(n_chunks * chunk_seconds + 0.005))
         l1 = demux_l1(payload)
         l5 = demux_l5(payload)
 
@@ -284,24 +289,56 @@ else
             track_state = add_satellite!(track_state, a; group = :gps_l5)
         end
 
-        track!(
-            (l1 = BandMeasurement(l1, FS_L1, IF_L1), l5 = BandMeasurement(l5, FS_L5, IF_L5)),
-            track_state,
+        # Track the chunks in sequence on the persistent state (each `track!`
+        # resets the hard-bit buffer, which caps at 128 bits, so the whole span
+        # cannot go through a single call). Record each satellite's carrier
+        # Doppler after every chunk so we can check it has settled.
+        groups_acqs = ((:gps_l1, acq_l1), (:galileo, acq_e1), (:gps_l5, acq_l5))
+        nl1 = round(Int, ustrip(Hz, FS_L1) * chunk_seconds)
+        nl5 = nl1 ÷ 2
+        doppler_trail = Dict(
+            (group, a.prn) => Float64[] for (group, acqs) in groups_acqs for a in acqs
         )
+        for c = 1:n_chunks
+            l1c = @view l1[((c - 1) * nl1 + 1):(c * nl1)]
+            l5c = @view l5[((c - 1) * nl5 + 1):(c * nl5)]
+            track_state = track!(
+                (
+                    l1 = BandMeasurement(l1c, FS_L1, IF_L1),
+                    l5 = BandMeasurement(l5c, FS_L5, IF_L5),
+                ),
+                track_state,
+            )
+            for (group, acqs) in groups_acqs, a in acqs
+                push!(
+                    doppler_trail[(group, a.prn)],
+                    ustrip(Hz, get_carrier_doppler(track_state, group, a.prn)),
+                )
+            end
+        end
 
-        # After tracking the whole buffer, the carrier Doppler of each
-        # satellite should stay near where acquisition put it (the loop holds
-        # lock) and the C/N0 estimate should be well above the noise floor.
-        doppler_hz(group, prn) = ustrip(Hz, get_carrier_doppler(track_state, group, prn))
-        cn0_dbhz(group, prn) = ustrip(estimate_cn0(track_state, group, prn))
-
-        # Every acquired satellite — on all three signals — must hold lock: the
-        # tracked carrier Doppler stays close to the acquired value and the
-        # C/N0 estimate sits well above the noise floor.
-        for (group, acqs) in ((:gps_l1, acq_l1), (:galileo, acq_e1), (:gps_l5, acq_l5))
+        # Every acquired satellite — on all three signals — must:
+        #
+        #   1. HOLD LOCK near acquisition. The acquired Doppler is only coarse:
+        #      the 4 ms L1 C/A and E1B coherent integration (and the 10 ms L5I
+        #      NH10 period) give a 250 Hz acquisition bin, so a correctly
+        #      tracking loop can legitimately sit up to ~125 Hz (half a bin)
+        #      from it — the tracked value is the *refinement* of acquisition,
+        #      not the other way round. A 150 Hz tolerance covers the half-bin
+        #      plus margin. (A tighter bound is meaningless here and was only
+        #      ever met on AVX-512 by a since-fixed Float32 rounding artifact —
+        #      issue #152.)
+        #   2. BE SETTLED. The last two 100 ms Doppler estimates must agree to
+        #      well within an acquisition bin, i.e. the loop has converged and
+        #      is holding — not drifting or losing lock. This is the real
+        #      "tracks correctly" check, independent of the coarse acquisition.
+        #   3. have C/N0 well above the noise floor.
+        for (group, acqs) in groups_acqs
             for a in acqs
-                @test abs(doppler_hz(group, a.prn) - ustrip(Hz, a.carrier_doppler)) < 100
-                @test cn0_dbhz(group, a.prn) > 32
+                trail = doppler_trail[(group, a.prn)]
+                @test abs(trail[end] - ustrip(Hz, a.carrier_doppler)) < 150
+                @test abs(trail[end] - trail[end-1]) < 75
+                @test ustrip(estimate_cn0(track_state, group, a.prn)) > 34
             end
         end
     end
