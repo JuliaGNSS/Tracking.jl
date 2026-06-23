@@ -129,21 +129,46 @@ const FREQBASE = 20.25e6    # Hz — base clock (XML <freqbase>)
 # Number of frames spanning `seconds` of capture.
 nframes(seconds) = ceil(Int, seconds * FREQBASE / CYCLES)
 
-# Stream the first `nblocks` frames out of the (still compressed) `.usb` entry
-# of the zip, strip the per-frame header/footer, and return the concatenated
+# Stream up to `nblocks` frames out of the (still compressed) `.usb` entry of
+# the zip, strip the per-frame header/footer, and return the concatenated
 # payload bytes. Reading only the prefix avoids inflating the full 1.9 GB file.
+#
+# The stream is *self-terminating*: only the first 1_638_984 frames (~13.68 s)
+# of this capture are well-formed. From there to the nominal ~15.7 s end the
+# `.usb` is corrupt — broken `0x55 0xAA` preambles and garbage frame counters —
+# and demuxing those bytes yields noise rather than signal. A tracking loop fed
+# that noise loses lock in the final ~2 s, which is exactly the L5 "lock loss"
+# of issue #157 (a capture-tail artifact, not a loop-robustness bug). So the
+# reader stops at the first malformed frame and returns only the valid prefix
+# instead of trusting the frame count; pass a large `nblocks` to get the whole
+# valid span. The returned length therefore caps at the valid extent.
 function read_payload(zippath, nblocks)
     reader = ZipFile.Reader(zippath)
     try
         usb = only(filter(f -> endswith(f.name, ".usb"), reader.files))
+        nblocks = min(nblocks, Int(usb.uncompressedsize ÷ BLOCK))
         payload = Vector{UInt8}(undef, nblocks * PAYLOAD)
         frame = Vector{UInt8}(undef, BLOCK)
+        valid = 0
         for b = 0:(nblocks-1)
             read!(usb, frame)
-            (frame[1] == 0x55 && frame[2] == 0xAA) || error("bad preamble at frame $b")
+            (frame[1] == 0x55 && frame[2] == 0xAA) || break
             copyto!(payload, b * PAYLOAD + 1, frame, HEADER + 1, PAYLOAD)
+            valid = b + 1
         end
-        return payload
+        return resize!(payload, valid * PAYLOAD)
+    finally
+        close(reader)
+    end
+end
+
+# Total number of frames in the `.usb` entry (well-formed or not). Used to ask
+# `read_payload` for "everything" without hard-coding the count.
+function num_usb_frames(zippath)
+    reader = ZipFile.Reader(zippath)
+    try
+        usb = only(filter(f -> endswith(f.name, ".usb"), reader.files))
+        return Int(usb.uncompressedsize ÷ BLOCK)
     finally
         close(reader)
     end
@@ -337,6 +362,133 @@ else
                 trail = doppler_trail[(group, a.prn)]
                 @test abs(trail[end] - ustrip(Hz, a.carrier_doppler)) < 150
                 @test abs(trail[end] - trail[end-1]) < 75
+                @test ustrip(estimate_cn0(track_state, group, a.prn)) > 34
+            end
+        end
+    end
+
+    # ── Full-span lock-hold regression, all signals (issue #157) ────────────
+    # Track GPS L1 C/A, Galileo E1B and GPS L5I across the *entire valid*
+    # capture in 0.2 s chunks and assert every loop holds lock the whole way.
+    #
+    # The original report was an L5 lock loss in the final ~1 s; it turned out
+    # the `.usb` stream's well-formed frames stop at ~13.68 s and the file's
+    # trailing ~2 s is corrupt. The corruption is in the band-interleaved 6-byte
+    # chunk, so it feeds *every* band noise from the same instant — L1 C/A and
+    # Galileo E1B lose lock there too (their C/N0 collapses identically; only
+    # their carrier Doppler stays nearer nominal, because the wider-band loops
+    # are not the point — C/N0 is). `read_payload` now truncates at the first
+    # malformed frame, so the span tracked here covers only valid data and every
+    # loop must stay locked across all of it; a tail-robustness regression would
+    # resurface here as a chunk that drifts or collapses.
+    #
+    # Demuxing the whole valid span at once would materialize ~13 GB of samples
+    # (81 MHz + 40.5 MHz × ComplexF32) and OOM the runner, so each band is
+    # demuxed one 0.2 s window at a time from a `@view` into the retained ~1.7 GB
+    # of packed payload bytes; only one window of samples (~0.2 GB) is live at a
+    # time.
+    @testset "All signals hold lock across the full valid capture (#157)" begin
+        zippath = download_capture()
+
+        # Read the whole valid span *once* as packed bytes (`read_payload` caps
+        # at the valid prefix, dropping the corrupt tail); demux is done
+        # per-window below to bound memory. The per-chunk lock-hold checks are
+        # the real assertions here — they confirm Tracking.jl, not the reader:
+        # if `read_payload` ever regressed and handed back the garbage tail, the
+        # C/N0 checks on those chunks would fail.
+        payload = read_payload(zippath, num_usb_frames(zippath))
+        total_cycles = length(payload) ÷ CHUNK        # base-clock cycles (6 B each)
+
+        # Acquire on the first 40 ms, demuxed from just that byte range.
+        acq_cycles = round(Int, FREQBASE * 0.040)
+        acq_bytes = @view payload[1:(acq_cycles*CHUNK)]
+        l1_acq = demux_l1(acq_bytes)
+        l5_acq = demux_l5(acq_bytes)
+        detected(acqs) = filter(a -> is_detected(a; pfa = 1e-8), acqs)
+        acq_l1 = detected(
+            acquire(
+                GPSL1CA(),
+                l1_acq,
+                FS_L1,
+                1:32;
+                interm_freq = IF_L1,
+                num_coherently_integrated_code_periods = 4,
+                num_noncoherent_accumulations = 2,
+            ),
+        )
+        acq_e1 = detected(
+            acquire(
+                GalileoE1B(),
+                l1_acq,
+                FS_L1,
+                1:36;
+                interm_freq = IF_L1,
+                num_coherently_integrated_code_periods = 1,
+                num_noncoherent_accumulations = 4,
+            ),
+        )
+        acq_l5 = detected(
+            acquire(
+                GPSL5I(),
+                l5_acq,
+                FS_L5,
+                1:32;
+                interm_freq = IF_L5,
+                num_coherently_integrated_code_periods = 10,
+                num_noncoherent_accumulations = 1,
+            ),
+        )
+        @test sort!([a.prn for a in acq_l1]) == [2, 5, 6, 12, 17, 19]
+        @test sort!([a.prn for a in acq_e1]) == [1, 7, 8, 26]
+        @test sort!([a.prn for a in acq_l5]) == [6, 9]
+
+        track_state = TrackState(;
+            signals = (
+                gps_l1 = (GPSL1CA(),),
+                galileo = (GalileoE1B(),),
+                gps_l5 = (GPSL5I(),),
+            ),
+        )
+        for a in acq_l1
+            track_state = add_satellite!(track_state, a; group = :gps_l1)
+        end
+        for a in acq_e1
+            track_state = add_satellite!(track_state, a; group = :galileo)
+        end
+        for a in acq_l5
+            track_state = add_satellite!(track_state, a; group = :gps_l5)
+        end
+
+        groups_acqs = ((:gps_l1, acq_l1), (:galileo, acq_e1), (:gps_l5, acq_l5))
+        chunk_seconds = 0.2
+        # One 6-byte cycle carries 4 L1 + 2 L5 samples, so a window expressed in
+        # whole cycles keeps both bands sample-for-sample time-aligned (the rate
+        # ratio is exactly 2:1) — required by the multi-band `track!` check.
+        cycles_per_chunk = round(Int, FREQBASE * chunk_seconds)
+        n_chunks = total_cycles ÷ cycles_per_chunk
+        # The valid span is ~13.68 s, so 0.2 s chunks give a long track.
+        @test n_chunks >= 60
+
+        # Every chunk over the whole valid span must hold lock, on every signal:
+        # Doppler within half an acquisition bin (+margin) of the coarse
+        # acquisition and C/N0 well above the noise floor. With the corrupt tail
+        # removed no chunk fails; before the `read_payload` fix the final chunks
+        # collapsed to ~20-30 dB-Hz on all three signals at once (t ≈ 13.8 s).
+        for c = 1:n_chunks
+            window =
+                @view payload[((c-1)*cycles_per_chunk*CHUNK+1):(c*cycles_per_chunk*CHUNK)]
+            l1c = demux_l1(window)
+            l5c = demux_l5(window)
+            track_state = track!(
+                (
+                    l1 = BandMeasurement(l1c, FS_L1, IF_L1),
+                    l5 = BandMeasurement(l5c, FS_L5, IF_L5),
+                ),
+                track_state,
+            )
+            for (group, acqs) in groups_acqs, a in acqs
+                doppler = ustrip(Hz, get_carrier_doppler(track_state, group, a.prn))
+                @test abs(doppler - ustrip(Hz, a.carrier_doppler)) < 150
                 @test ustrip(estimate_cn0(track_state, group, a.prn)) > 34
             end
         end
