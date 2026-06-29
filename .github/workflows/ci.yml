@@ -50,7 +50,7 @@ jobs:
       # Only on the job that actually runs the integration test.
       - name: Cache Flexiband integration-test capture
         if: matrix.os == 'ubuntu-latest' && matrix.version == '1'
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.julia/scratchspaces/10b2438b-ffd4-5096-aa58-44041d5c8f3b/flexiband_iii_7a
           key: flexiband-iii-7a-short-v1
