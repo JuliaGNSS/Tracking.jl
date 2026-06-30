@@ -55,19 +55,23 @@ end
 # (AVX2/AVX-512) only. Other backends use the exact Int32 multiply path.
 const _INT16_HAS_MADDWD = Sys.ARCH in (:x86_64, :i686) && _INT16_W in (32, 64)
 
-# Maximum |measurement component| we size the Int16 wipe against: a 12-bit ADC
-# (|m| ≤ 2^11). Pick the LARGEST Int16-safe carrier amplitude (carrier rounding
-# error is ±0.5 regardless of amplitude, so a bigger amplitude is a finer
-# carrier), capped at the Int8 storage limit; if none is safe (or no SIMD wipe),
-# fall back to the exact Int32 wipe at full Int8 amplitude. Mirrors the
-# benchmark's `choose_carrier`.
+# Maximum |measurement component| we size the carrier amplitude against: a 12-bit
+# ADC (|m| ≤ 2^11). Pick the LARGEST Int16-safe amplitude — the largest `amp` with
+# `2·max_meas·amp ≤ typemax(Int16)` — capped at the Int8 storage limit. Keeping the
+# wipe `DI = mᵣ·cos + mᵢ·sin` within Int16 serves two purposes: it enables the Int16
+# `vpmaddwd` fast path on x86, AND it bounds the per-block Int32 correlation
+# accumulator on EVERY path, so the exact-Int32 accumulate cannot overflow even for
+# multi-level CBOC code (±25) over a full block. The wipe TYPE differs by backend
+# (Int16 + vpmaddwd on x86; exact Int32 elsewhere) but the AMPLITUDE is the same —
+# using a larger Int32-only amplitude (the old behaviour) overflowed the accumulator
+# for CBOC on the scalar/NEON path. (>14-bit `max_meas`, where no amp ≥ 1 is
+# Int16-safe, falls back to full Int8 amplitude + Int32 wipe.)
 const _INT16_MAX_MEAS = 1 << 11
 function _int16_choose_carrier(max_meas::Integer)
-    _INT16_HAS_MADDWD || return (Int(typemax(Int8)), Int32)
     a = Int(typemax(Int16)) ÷ (2 * Int(max_meas))
-    a >= 1 ? (min(a, Int(typemax(Int8))), Int16) : (Int(typemax(Int8)), Int32)
+    a >= 1 || return (Int(typemax(Int8)), Int32)
+    (min(a, Int(typemax(Int8))), _INT16_HAS_MADDWD ? Int16 : Int32)
 end
-const _INT16_AMP, _INT16_WIPE_TI = _int16_choose_carrier(_INT16_MAX_MEAS)
 
 # Default strip-mine block length (samples); multiple of every backend `W`,
 # sized so the per-block L1 scratch (code + sin + cos) stays in L1.
@@ -138,30 +142,43 @@ end
 # Per-(thread) scratch: the strip-mine block code buffer (`extb`, Int8, sized
 # `blk + tap-span`) plus the carrier sin/cos blocks (`csb`/`ccb`, Int8). Grown
 # lazily and reused, so a hoisted backend is allocation-free in steady state.
-mutable struct Int16ScratchBuffers
+# `TI` is the carrier-wipe element type (Int16 on the x86 vpmaddwd fast path,
+# Int32 on the exact fallback), chosen per backend instance from the declared
+# measurement amplitude.
+# Immutable: the buffers are only ever `resize!`d / indexed in place (their fields
+# are never reassigned), so no mutability is needed.
+struct Int16ScratchBuffers{TI}
     extb::Vector{Int8}
     csb::Vector{Int8}
     ccb::Vector{Int8}
     # Shared DI/DQ tile (the carrier-wiped measurement) for the multi-signal-per-
     # sat tile-share path: filled once per block and reused across the sat's
-    # signals (one downconvert per sat, not per signal). Wipe element type.
-    dib::Vector{_INT16_WIPE_TI}
-    dqb::Vector{_INT16_WIPE_TI}
+    # signals (one downconvert per sat, not per signal). Wipe element type `TI`.
+    dib::Vector{TI}
+    dqb::Vector{TI}
 end
-Int16ScratchBuffers() =
-    Int16ScratchBuffers(Int8[], Int8[], Int8[], _INT16_WIPE_TI[], _INT16_WIPE_TI[])
+Int16ScratchBuffers{TI}() where {TI} =
+    Int16ScratchBuffers{TI}(Int8[], Int8[], Int8[], TI[], TI[])
 
 """
 $(SIGNATURES)
 
 Integer (`Complex{Int16}`) hybrid-blocked CPU downconvert + correlate backend
 (single-threaded). Opt-in alternative to [`CPUDownconvertAndCorrelator`] for
-`Complex{Int16}` (12-bit ADC) sample buffers; errors on any other sample
-element type. Construct **once outside** the `track!` loop and pass it via the
+`Complex{Int16}` sample buffers; errors on any other sample element type.
+Construct **once outside** the `track!` loop and pass it via the
 `downconvert_and_correlator` keyword for an allocation-free steady state.
+
+The carrier-replica amplitude (and the wipe arithmetic type) are chosen from
+`max_meas`, the largest expected `|real|`/`|imag|` of a measurement sample —
+the largest amplitude that keeps the carrier wipe within `Int16` (so the wipe
+can't overflow and the on-x86 `vpmaddwd` fast path applies). Pass `max_meas`
+for your front end's full-scale (default `2^11`, a 12-bit ADC); under-declaring
+it risks overflow, over-declaring only coarsens the carrier.
 """
-struct Int16DownconvertAndCorrelator{TBL<:SinCosTable} <: AbstractDownconvertAndCorrelator
-    buffers::Int16ScratchBuffers
+struct Int16DownconvertAndCorrelator{TBL<:SinCosTable,TI} <:
+       AbstractDownconvertAndCorrelator
+    buffers::Int16ScratchBuffers{TI}
     table::TBL
     blk::Int
 end
@@ -170,36 +187,41 @@ end
 $(SIGNATURES)
 
 Multi-threaded integer (`Complex{Int16}`) hybrid-blocked backend. One
-[`Int16ScratchBuffers`](@ref) per thread (indexed by `Threads.threadid()` inside
-`@batch`); the carrier `table` is immutable and shared.
+`Int16ScratchBuffers` per thread (indexed by `Threads.threadid()` inside
+`@batch`); the carrier `table` is immutable and shared. See
+[`Int16DownconvertAndCorrelator`](@ref) for the `max_meas` amplitude argument.
 """
-struct Int16ThreadedDownconvertAndCorrelator{TBL<:SinCosTable} <:
+struct Int16ThreadedDownconvertAndCorrelator{TBL<:SinCosTable,TI} <:
        AbstractDownconvertAndCorrelator
-    buffers::Vector{Int16ScratchBuffers}
+    buffers::Vector{Int16ScratchBuffers{TI}}
     table::TBL
     blk::Int
 end
 
 function Int16DownconvertAndCorrelator(;
+    max_meas::Integer = _INT16_MAX_MEAS,
     steps::Integer = 64,
-    amplitude::Integer = _INT16_AMP,
     blk::Integer = _INT16_BLK,
 )
-    Int16DownconvertAndCorrelator(
-        Int16ScratchBuffers(),
-        SinCosTable(Int8; steps, amplitude),
+    amplitude, TI = _int16_choose_carrier(max_meas)
+    table = SinCosTable(Int8; steps, amplitude)
+    Int16DownconvertAndCorrelator{typeof(table),TI}(
+        Int16ScratchBuffers{TI}(),
+        table,
         Int(blk),
     )
 end
 
 function Int16ThreadedDownconvertAndCorrelator(;
+    max_meas::Integer = _INT16_MAX_MEAS,
     steps::Integer = 64,
-    amplitude::Integer = _INT16_AMP,
     blk::Integer = _INT16_BLK,
 )
-    Int16ThreadedDownconvertAndCorrelator(
-        [Int16ScratchBuffers() for _ = 1:Threads.maxthreadid()],
-        SinCosTable(Int8; steps, amplitude),
+    amplitude, TI = _int16_choose_carrier(max_meas)
+    table = SinCosTable(Int8; steps, amplitude)
+    Int16ThreadedDownconvertAndCorrelator{typeof(table),TI}(
+        [Int16ScratchBuffers{TI}() for _ = 1:Threads.maxthreadid()],
+        table,
         Int(blk),
     )
 end
@@ -283,7 +305,7 @@ end
     num_samples::Integer,
 ) where {M,NC}
     W = _INT16_W
-    TI = _INT16_WIPE_TI
+    TI = dc.parameters[2]              # carrier-wipe element type, per backend instance
     use_madd = _INT16_HAS_MADDWD && TI === Int16
     AW = use_madd ? W ÷ 2 : W          # vpmaddwd pre-sums adjacent pairs → W÷2
     MT = TI === Int16 ? Int16 : Int32  # meas/wipe SIMD element type
@@ -598,7 +620,7 @@ end
     p_sig,
 ) where {M}
     W = _INT16_W
-    TI = _INT16_WIPE_TI
+    TI = eltype(dib)                   # DI/DQ tile element type = the wipe type
     widen = TI === Int16 ? :_wide16 : :_wide32
     passes = Expr(:block)
     for j = 1:M
@@ -660,7 +682,7 @@ end
     num_samples::Integer,
 ) where {M}
     W = _INT16_W
-    TI = _INT16_WIPE_TI
+    TI = dc.parameters[2]              # carrier-wipe element type, per backend instance
     use_madd = _INT16_HAS_MADDWD && TI === Int16
     AW = use_madd ? W ÷ 2 : W
     N = length(all_shifts.parameters)
