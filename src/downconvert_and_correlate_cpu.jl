@@ -7,7 +7,9 @@
 # on one) keeps the call sites simple. Both CPU backends share this
 # struct: the single-threaded one holds a single `ScratchBuffers`, the
 # threaded one holds a `Vector{ScratchBuffers}` (one per thread).
-mutable struct ScratchBuffers
+# Immutable: the buffers are only ever `resize!`d / `push!`ed in place (their
+# fields are never reassigned), so no mutability is needed.
+struct ScratchBuffers
     code_replica::Vector{UInt8}
     extra_code_replicas::Vector{Vector{UInt8}}
     tile_re::Vector{UInt8}

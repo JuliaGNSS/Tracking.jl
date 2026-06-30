@@ -199,6 +199,33 @@ end
         @test get_late(c1) ≈ get_late(ct)
     end
 
+    # Configurable measurement amplitude: the carrier amplitude (and wipe type)
+    # are derived from `max_meas`. For each declared amplitude, a capture scaled to
+    # that range must still correlate correctly (E/P/L ratios are amplitude-
+    # invariant, so they match the Float32 backend regardless of `max_meas`).
+    @testset "configurable max_meas = $mm" for mm in (512, 2048, 8192)
+        sig, fs = GPSL1CA(), 5e6Hz
+        nsamp = round(Int, (fs / 1Hz) * 1e-3)
+        cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0; peak = mm)
+        meas = (l1 = BandMeasurement(cap, fs, 0.0Hz),)
+        corr(dc) = first(
+            get_sat_state(
+                downconvert_and_correlate(
+                    dc,
+                    meas,
+                    TrackState(sig, [TrackedSat(sig, 1, 100.0, 200Hz)]),
+                ),
+                1,
+            ).signals,
+        ).correlator
+        cf = corr(CPUThreadedDownconvertAndCorrelator())
+        ci = corr(Int16ThreadedDownconvertAndCorrelator(; max_meas = mm))
+        @test abs(get_early(ci)) / abs(get_prompt(ci)) ≈
+              abs(get_early(cf)) / abs(get_prompt(cf)) atol = 1e-2
+        @test abs(get_late(ci)) / abs(get_prompt(ci)) ≈
+              abs(get_late(cf)) / abs(get_prompt(cf)) atol = 1e-2
+    end
+
     # Dynamic (runtime Vector) tap count: a DynShiftsCorrelator with the same
     # shifts as EPL must produce the same accumulators through the Int16 backend's
     # AbstractVector-shifts fallback as the static @generated EPL kernel.
