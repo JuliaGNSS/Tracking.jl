@@ -8,9 +8,24 @@ using GNSSSignals:
 using Tracking:
     TrackedSat, TrackState, track, downconvert_and_correlate, BandMeasurement,
     get_sat_state, get_carrier_doppler, get_prompt, get_early, get_late,
-    get_accumulators, EarlyPromptLateCorrelator, VeryEarlyPromptLateCorrelator, NumAnts,
+    get_accumulators, get_correlator_sample_shifts, update_accumulator,
+    AbstractCorrelator, EarlyPromptLateCorrelator, VeryEarlyPromptLateCorrelator, NumAnts,
     CPUThreadedDownconvertAndCorrelator, Int16DownconvertAndCorrelator,
     Int16ThreadedDownconvertAndCorrelator
+import Tracking
+
+# Dynamic-tap-count correlator: sample shifts are a runtime Vector and the
+# accumulators are a Vector (issue #126 (b) extension point), to exercise the
+# Int16 backend's AbstractVector-shifts fallback.
+struct DynShiftsCorrelator <: AbstractCorrelator{1}
+    accumulators::Vector{ComplexF64}
+    shifts::Vector{Int}
+end
+Tracking.get_accumulators(c::DynShiftsCorrelator) = c.accumulators
+Tracking.update_accumulator(c::DynShiftsCorrelator, acc) =
+    DynShiftsCorrelator(collect(acc), c.shifts)
+Tracking.get_correlator_sample_shifts(c::DynShiftsCorrelator, sampling_frequency, code_frequency) =
+    c.shifts
 
 # 12-bit-ADC-style Complex{Int16} capture: carrier × unit-normalised code, scaled
 # to a `peak` magnitude (≤ 2^11), rounded. Normalising the code keeps CBOC's
@@ -116,6 +131,28 @@ end
         @test get_prompt(c1) ≈ get_prompt(ct)
         @test get_early(c1) ≈ get_early(ct)
         @test get_late(c1) ≈ get_late(ct)
+    end
+
+    # Dynamic (runtime Vector) tap count: a DynShiftsCorrelator with the same
+    # shifts as EPL must produce the same accumulators through the Int16 backend's
+    # AbstractVector-shifts fallback as the static @generated EPL kernel.
+    @testset "dynamic Vector-shifts correlator matches static EPL" begin
+        sig, fs = GPSL1CA(), 5e6Hz
+        nsamp = round(Int, (fs / 1Hz) * 1e-3)
+        fc = 200Hz * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
+        shifts = collect(get_correlator_sample_shifts(EarlyPromptLateCorrelator(), fs, fc))
+        dc = Int16ThreadedDownconvertAndCorrelator()
+        cs = correlate_once(dc, sig, fs, nsamp, 200Hz, 100.0)                       # static EPL
+        cd = correlate_once(dc, sig, fs, nsamp, 200Hz, 100.0;
+            correlator = DynShiftsCorrelator(zeros(ComplexF64, 3), shifts))         # dynamic
+        ad = get_accumulators(cd)
+        as = get_accumulators(cs)
+        @test length(ad) == 3
+        # Same shift order ([-d, 0, +d]) and the same exact integer sums (same code,
+        # carrier, DI), so they agree element-wise to floating-point round-off.
+        for k = 1:3
+            @test ad[k] ≈ as[k] rtol = 1e-9
+        end
     end
 
     @testset "errors on non-Complex{Int16} (Float) measurement" begin
