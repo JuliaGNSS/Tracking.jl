@@ -20,7 +20,13 @@ jobs:
     strategy:
       matrix:
         version:
-          - '1.10'
+          # TEMPORARY: 1.11 instead of the package's actual 1.10 floor. This PR
+          # pulls the unregistered GNSSSignals #90 / SinCosLUT via Project.toml
+          # `[sources]`, which is a Julia 1.11+ feature — on 1.10 it is ignored
+          # and GNSSSignals resolves to the registered (pre-embedded-LUT) 2.2.2,
+          # breaking the build. Restore '1.10' once those deps are registered and
+          # `[sources]` is removed (`[compat] julia` stays at 1.10).
+          - '1.11'
           - '1'
           #- 'nightly'
         os:
