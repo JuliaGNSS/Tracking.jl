@@ -48,9 +48,7 @@ using SinCosLUT: SinCosTable, carrier_engine, carrier_state, carrier_lookup, car
 # const), mirroring the benchmark's `_CORR_W`. SinCosLUT's Int8 table and the
 # GNSSSignals Int8 code LUT use the same width per backend.
 const _INT16_W = let be = SinCosLUT.default_backend(Int8, 64)
-    be isa SinCosLUT.AVX512 ? 64 :
-    be isa SinCosLUT.AVX2 ? 32 :
-    be isa SinCosLUT.Neon ? 16 : 1
+    be isa SinCosLUT.AVX512 ? 64 : be isa SinCosLUT.AVX2 ? 32 : be isa SinCosLUT.Neon ? 16 : 1
 end
 
 # The fused widening `vpmaddwd` accumulate (Int16×Int16→Int32 pairwise) is x86
@@ -88,22 +86,42 @@ const _INT16_BLK = 8192
     @inline _madd_tile(a::SIMD.Vec{M,Int16}, ::Val{o}, ::Val{t}) where {M,o,t} =
         shufflevector(a, Val(ntuple(i -> i - 1 + o, Val(t))))
     @inline function _madd512(a::SIMD.Vec{32,Int16}, b::SIMD.Vec{32,Int16})
-        SIMD.Vec(Base.llvmcall(("""
-            declare <16 x i32> @llvm.x86.avx512.pmaddw.d.512(<32 x i16>, <32 x i16>)
-            define <16 x i32> @entry(<32 x i16> %a, <32 x i16> %b) #0 {
-              %r = call <16 x i32> @llvm.x86.avx512.pmaddw.d.512(<32 x i16> %a, <32 x i16> %b)
-              ret <16 x i32> %r }
-            attributes #0 = { alwaysinline }""", "entry"), NTuple{16,Base.VecElement{Int32}},
-            Tuple{NTuple{32,Base.VecElement{Int16}},NTuple{32,Base.VecElement{Int16}}}, a.data, b.data))
+        SIMD.Vec(
+            Base.llvmcall(
+                (
+                    """
+declare <16 x i32> @llvm.x86.avx512.pmaddw.d.512(<32 x i16>, <32 x i16>)
+define <16 x i32> @entry(<32 x i16> %a, <32 x i16> %b) #0 {
+  %r = call <16 x i32> @llvm.x86.avx512.pmaddw.d.512(<32 x i16> %a, <32 x i16> %b)
+  ret <16 x i32> %r }
+attributes #0 = { alwaysinline }""",
+                    "entry",
+                ),
+                NTuple{16,Base.VecElement{Int32}},
+                Tuple{NTuple{32,Base.VecElement{Int16}},NTuple{32,Base.VecElement{Int16}}},
+                a.data,
+                b.data,
+            ),
+        )
     end
     @inline function _madd256(a::SIMD.Vec{16,Int16}, b::SIMD.Vec{16,Int16})
-        SIMD.Vec(Base.llvmcall(("""
-            declare <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16>, <16 x i16>)
-            define <8 x i32> @entry(<16 x i16> %a, <16 x i16> %b) #0 {
-              %r = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %a, <16 x i16> %b)
-              ret <8 x i32> %r }
-            attributes #0 = { alwaysinline }""", "entry"), NTuple{8,Base.VecElement{Int32}},
-            Tuple{NTuple{16,Base.VecElement{Int16}},NTuple{16,Base.VecElement{Int16}}}, a.data, b.data))
+        SIMD.Vec(
+            Base.llvmcall(
+                (
+                    """
+declare <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16>, <16 x i16>)
+define <8 x i32> @entry(<16 x i16> %a, <16 x i16> %b) #0 {
+  %r = call <8 x i32> @llvm.x86.avx2.pmadd.wd(<16 x i16> %a, <16 x i16> %b)
+  ret <8 x i32> %r }
+attributes #0 = { alwaysinline }""",
+                    "entry",
+                ),
+                NTuple{8,Base.VecElement{Int32}},
+                Tuple{NTuple{16,Base.VecElement{Int16}},NTuple{16,Base.VecElement{Int16}}},
+                a.data,
+                b.data,
+            ),
+        )
     end
     @inline function _maddacc(a::SIMD.Vec{64,Int16}, b::SIMD.Vec{64,Int16})   # AVX-512: 2×512-bit tiles
         lo = _madd512(_madd_tile(a, Val(0), Val(32)), _madd_tile(b, Val(0), Val(32)))
@@ -186,8 +204,7 @@ function Int16ThreadedDownconvertAndCorrelator(;
     )
 end
 
-const _Int16DC =
-    Union{Int16DownconvertAndCorrelator,Int16ThreadedDownconvertAndCorrelator}
+const _Int16DC = Union{Int16DownconvertAndCorrelator,Int16ThreadedDownconvertAndCorrelator}
 
 @inline _scratch_buffers(dc::Int16DownconvertAndCorrelator) = dc.buffers
 @inline _scratch_buffers(dc::Int16ThreadedDownconvertAndCorrelator) =
@@ -218,10 +235,14 @@ const _Int16DC =
         a1, b1 = carrier_lookup(reng, s1)
         a2, b2 = carrier_lookup(reng, s2)
         a3, b3 = carrier_lookup(reng, s3)
-        vstore(a0, csb, n + 1);      vstore(b0, ccb, n + 1)
-        vstore(a1, csb, n + W + 1);  vstore(b1, ccb, n + W + 1)
-        vstore(a2, csb, n + 2W + 1); vstore(b2, ccb, n + 2W + 1)
-        vstore(a3, csb, n + 3W + 1); vstore(b3, ccb, n + 3W + 1)
+        vstore(a0, csb, n + 1);
+        vstore(b0, ccb, n + 1)
+        vstore(a1, csb, n + W + 1);
+        vstore(b1, ccb, n + W + 1)
+        vstore(a2, csb, n + 2W + 1);
+        vstore(b2, ccb, n + 2W + 1)
+        vstore(a3, csb, n + 3W + 1);
+        vstore(b3, ccb, n + 3W + 1)
         s0 = carrier_advance(reng, s0, 4)
         s1 = carrier_advance(reng, s1, 4)
         s2 = carrier_advance(reng, s2, 4)
@@ -266,10 +287,12 @@ end
     use_madd = _INT16_HAS_MADDWD && TI === Int16
     AW = use_madd ? W ÷ 2 : W          # vpmaddwd pre-sums adjacent pairs → W÷2
     MT = TI === Int16 ? Int16 : Int32  # meas/wipe SIMD element type
-    cc_load = TI === Int16 ? :(_wide16(vload(SIMD.Vec{$W,Int8}, ccb, n))) :
-              :(_wide32(vload(SIMD.Vec{$W,Int8}, ccb, n)))
-    sn_load = TI === Int16 ? :(_wide16(vload(SIMD.Vec{$W,Int8}, csb, n))) :
-              :(_wide32(vload(SIMD.Vec{$W,Int8}, csb, n)))
+    cc_load =
+        TI === Int16 ? :(_wide16(vload(SIMD.Vec{$W,Int8}, ccb, n))) :
+        :(_wide32(vload(SIMD.Vec{$W,Int8}, ccb, n)))
+    sn_load =
+        TI === Int16 ? :(_wide16(vload(SIMD.Vec{$W,Int8}, csb, n))) :
+        :(_wide32(vload(SIMD.Vec{$W,Int8}, csb, n)))
 
     init = Expr(:block)
     for k = 1:NC
@@ -282,27 +305,38 @@ end
 
     # One antenna-outer correlate pass over the current block (emitted per j).
     function antenna_pass(j)
-        blk_init = Expr(:block); flush = Expr(:block); chunk = Expr(:block); scalar = Expr(:block)
+        blk_init = Expr(:block);
+        flush = Expr(:block);
+        chunk = Expr(:block);
+        scalar = Expr(:block)
         for k = 1:NC
-            aI = Symbol("aI_$(j)_$k"); aQ = Symbol("aQ_$(j)_$k")
-            tI = Symbol("tI_$(j)_$k"); tQ = Symbol("tQ_$(j)_$k")
+            aI = Symbol("aI_$(j)_$k");
+            aQ = Symbol("aQ_$(j)_$k")
+            tI = Symbol("tI_$(j)_$k");
+            tQ = Symbol("tQ_$(j)_$k")
             offk = Symbol("off_$k")
             push!(blk_init.args, :($aI = zero(SIMD.Vec{$AW,Int32})))
             push!(blk_init.args, :($aQ = zero(SIMD.Vec{$AW,Int32})))
             push!(flush.args, :($tI += Int64(sum($aI))))
             push!(flush.args, :($tQ += Int64(sum($aQ))))
             if use_madd
-                push!(chunk.args, quote
-                    codew = _wide16(vload(SIMD.Vec{$W,Int8}, extb, n + $offk))
-                    $aI += _maddacc(codew, DI)
-                    $aQ += _maddacc(codew, DQ)
-                end)
+                push!(
+                    chunk.args,
+                    quote
+                        codew = _wide16(vload(SIMD.Vec{$W,Int8}, extb, n + $offk))
+                        $aI += _maddacc(codew, DI)
+                        $aQ += _maddacc(codew, DQ)
+                    end,
+                )
             else
-                push!(chunk.args, quote
-                    codew = _wide32(vload(SIMD.Vec{$W,Int8}, extb, n + $offk))
-                    $aI += codew * DI
-                    $aQ += codew * DQ
-                end)
+                push!(
+                    chunk.args,
+                    quote
+                        codew = _wide32(vload(SIMD.Vec{$W,Int8}, extb, n + $offk))
+                        $aI += codew * DI
+                        $aQ += codew * DQ
+                    end,
+                )
             end
             push!(scalar.args, quote
                 c = Int32(extb[n+$offk])
@@ -327,8 +361,10 @@ end
             $flush
             while n <= len
                 sig = signal[base+n-1, $j]
-                mr_s = Int32(real(sig)); mi_s = Int32(imag(sig))
-                cc_s = Int32(ccb[n]); sn_s = Int32(csb[n])
+                mr_s = Int32(real(sig));
+                mi_s = Int32(imag(sig))
+                cc_s = Int32(ccb[n]);
+                sn_s = Int32(csb[n])
                 di = mr_s * cc_s + mi_s * sn_s
                 dq = mi_s * cc_s - mr_s * sn_s
                 $scalar
@@ -346,7 +382,12 @@ end
         if M == 1
             :(complex(Float64($(Symbol("tI_1_$k"))), Float64($(Symbol("tQ_1_$k")))))
         else
-            ant = [:(complex(Float64($(Symbol("tI_$(j)_$k"))), Float64($(Symbol("tQ_$(j)_$k"))))) for j = 1:M]
+            ant = [
+                :(complex(
+                    Float64($(Symbol("tI_$(j)_$k"))),
+                    Float64($(Symbol("tQ_$(j)_$k"))),
+                )) for j = 1:M
+            ]
             :(SVector{$M,ComplexF64}(tuple($(ant...))))
         end
     end
@@ -394,8 +435,13 @@ end
 
             # 1. Fill this block's code into extb[1 .. len+span] (one-shot).
             gen_code!(
-                view(extb, 1:(len+span)), signal_type, prn,
-                sampling_frequency, code_frequency, code_phase0 + cps * blk_off, min_shift,
+                view(extb, 1:(len+span)),
+                signal_type,
+                prn,
+                sampling_frequency,
+                code_frequency,
+                code_phase0 + cps * blk_off,
+                min_shift,
             )
 
             # 2. Fill this block's carrier sin/cos (shared across antennas).
@@ -470,8 +516,13 @@ function _int16_hybrid_blocked!(
     @inbounds while blk_off < num_samples
         len = min(blk, num_samples - blk_off)
         gen_code!(
-            view(extb, 1:(len+span)), signal_type, prn,
-            sampling_frequency, code_frequency, code_phase0 + cps * blk_off, min_shift,
+            view(extb, 1:(len+span)),
+            signal_type,
+            prn,
+            sampling_frequency,
+            code_frequency,
+            code_phase0 + cps * blk_off,
+            min_shift,
         )
         _int16_fill_carrier!(csb, ccb, reng, blk_off, len, phase0, Val(W))
         base = signal_start_sample + blk_off
@@ -494,8 +545,10 @@ function _int16_hybrid_blocked!(
             end
             while n <= len
                 sig = signal[base+n-1, j]
-                mr_s = Int32(real(sig)); mi_s = Int32(imag(sig))
-                cc_s = Int32(ccb[n]); sn_s = Int32(csb[n])
+                mr_s = Int32(real(sig));
+                mi_s = Int32(imag(sig))
+                cc_s = Int32(ccb[n]);
+                sn_s = Int32(csb[n])
                 di = mr_s * cc_s + mi_s * sn_s
                 dq = mi_s * cc_s - mr_s * sn_s
                 for k = 1:NC
@@ -513,8 +566,9 @@ function _int16_hybrid_blocked!(
         return [complex(Float64(tI[1, k]), Float64(tQ[1, k])) for k = 1:NC]
     else
         return [
-            SVector{M,ComplexF64}(ntuple(j -> complex(Float64(tI[j, k]), Float64(tQ[j, k])), M))
-            for k = 1:NC
+            SVector{M,ComplexF64}(
+                ntuple(j -> complex(Float64(tI[j, k]), Float64(tQ[j, k])), M),
+            ) for k = 1:NC
         ]
     end
 end
@@ -532,35 +586,49 @@ end
 # `dib/dqb[(j-1)*len + n]` holds the carrier-wiped measurement at sample n.
 # `@generated` so the M antenna slices unroll.
 @generated function _int16_fill_ditile!(
-    dib, dqb, signal, ::NumAnts{M}, csb, ccb, base, len, num_rows, p_sig,
+    dib,
+    dqb,
+    signal,
+    ::NumAnts{M},
+    csb,
+    ccb,
+    base,
+    len,
+    num_rows,
+    p_sig,
 ) where {M}
     W = _INT16_W
     TI = _INT16_WIPE_TI
     widen = TI === Int16 ? :_wide16 : :_wide32
     passes = Expr(:block)
     for j = 1:M
-        push!(passes.args, quote
-            colbase = $(j - 1) * num_rows
-            toff = $(j - 1) * len
-            n = 1
-            while n + $W - 1 <= len
-                byte_off = (colbase + base + n - 2) * 2 * sizeof(Int16)
-                mr, mi = _deinterleave_load(SIMD.Vec{$W,$TI}, p_sig, byte_off)
-                cc = $widen(vload(SIMD.Vec{$W,Int8}, ccb, n))
-                sn = $widen(vload(SIMD.Vec{$W,Int8}, csb, n))
-                vstore(mr * cc + mi * sn, dib, toff + n)
-                vstore(mi * cc - mr * sn, dqb, toff + n)
-                n += $W
-            end
-            while n <= len
-                sig = signal[base+n-1, $j]
-                mr_s = $TI(real(sig)); mi_s = $TI(imag(sig))
-                cc_s = $TI(ccb[n]); sn_s = $TI(csb[n])
-                dib[toff+n] = mr_s * cc_s + mi_s * sn_s
-                dqb[toff+n] = mi_s * cc_s - mr_s * sn_s
-                n += 1
-            end
-        end)
+        push!(
+            passes.args,
+            quote
+                colbase = $(j - 1) * num_rows
+                toff = $(j - 1) * len
+                n = 1
+                while n + $W - 1 <= len
+                    byte_off = (colbase + base + n - 2) * 2 * sizeof(Int16)
+                    mr, mi = _deinterleave_load(SIMD.Vec{$W,$TI}, p_sig, byte_off)
+                    cc = $widen(vload(SIMD.Vec{$W,Int8}, ccb, n))
+                    sn = $widen(vload(SIMD.Vec{$W,Int8}, csb, n))
+                    vstore(mr * cc + mi * sn, dib, toff + n)
+                    vstore(mi * cc - mr * sn, dqb, toff + n)
+                    n += $W
+                end
+                while n <= len
+                    sig = signal[base+n-1, $j]
+                    mr_s = $TI(real(sig));
+                    mi_s = $TI(imag(sig))
+                    cc_s = $TI(ccb[n]);
+                    sn_s = $TI(csb[n])
+                    dib[toff+n] = mr_s * cc_s + mi_s * sn_s
+                    dqb[toff+n] = mi_s * cc_s - mr_s * sn_s
+                    n += 1
+                end
+            end,
+        )
     end
     quote
         @inbounds begin
@@ -603,13 +671,22 @@ end
     for i = 1:N
         push!(setup.args, :($(Symbol("sh_$i")) = all_shifts[$i]))
         push!(setup.args, :($(Symbol("mins_$i")) = minimum($(Symbol("sh_$i")))))
-        push!(setup.args,
-            :($(Symbol("span_$i")) = maximum($(Symbol("sh_$i"))) - $(Symbol("mins_$i"))))
-        push!(setup.args,
-            :($(Symbol("cps_$i")) = Float64(upreferred(code_freqs[$i] / Hz)) / sampling_freq))
+        push!(
+            setup.args,
+            :($(Symbol("span_$i")) = maximum($(Symbol("sh_$i"))) - $(Symbol("mins_$i"))),
+        )
+        push!(
+            setup.args,
+            :(
+                $(Symbol("cps_$i")) =
+                    Float64(upreferred(code_freqs[$i] / Hz)) / sampling_freq
+            ),
+        )
         for k = 1:NCs[i]
-            push!(setup.args,
-                :($(Symbol("off_$(i)_$k")) = $(Symbol("sh_$i"))[$k] - $(Symbol("mins_$i"))))
+            push!(
+                setup.args,
+                :($(Symbol("off_$(i)_$k")) = $(Symbol("sh_$i"))[$k] - $(Symbol("mins_$i"))),
+            )
         end
         push!(maxspan.args, Symbol("span_$i"))
         for j = 1:M, k = 1:NCs[i]
@@ -623,33 +700,51 @@ end
     function signal_corr(i)
         b = Expr(:block)
         push!(b.args, :(blk_phase = code_phases[$i] + $(Symbol("cps_$i")) * blk_off))
-        push!(b.args, :(gen_code!(
-            view(extb, 1:(len+$(Symbol("span_$i")))),
-            signal_types[$i], prn, sampling_frequency, code_freqs[$i],
-            blk_phase, $(Symbol("mins_$i")),
-        )))
+        push!(
+            b.args,
+            :(gen_code!(
+                view(extb, 1:(len+$(Symbol("span_$i")))),
+                signal_types[$i],
+                prn,
+                sampling_frequency,
+                code_freqs[$i],
+                blk_phase,
+                $(Symbol("mins_$i")),
+            )),
+        )
         for j = 1:M
-            blk_init = Expr(:block); flush = Expr(:block); chunk = Expr(:block); scalar = Expr(:block)
+            blk_init = Expr(:block);
+            flush = Expr(:block);
+            chunk = Expr(:block);
+            scalar = Expr(:block)
             for k = 1:NCs[i]
-                aI = Symbol("aI_$k"); aQ = Symbol("aQ_$k")
-                tI = Symbol("tI_$(i)_$(j)_$k"); tQ = Symbol("tQ_$(i)_$(j)_$k")
+                aI = Symbol("aI_$k");
+                aQ = Symbol("aQ_$k")
+                tI = Symbol("tI_$(i)_$(j)_$k");
+                tQ = Symbol("tQ_$(i)_$(j)_$k")
                 offk = Symbol("off_$(i)_$k")
                 push!(blk_init.args, :($aI = zero(SIMD.Vec{$AW,Int32})))
                 push!(blk_init.args, :($aQ = zero(SIMD.Vec{$AW,Int32})))
                 push!(flush.args, :($tI += Int64(sum($aI))))
                 push!(flush.args, :($tQ += Int64(sum($aQ))))
                 if use_madd
-                    push!(chunk.args, quote
-                        codew = _wide16(vload(SIMD.Vec{$W,Int8}, extb, n + $offk))
-                        $aI += _maddacc(codew, DI)
-                        $aQ += _maddacc(codew, DQ)
-                    end)
+                    push!(
+                        chunk.args,
+                        quote
+                            codew = _wide16(vload(SIMD.Vec{$W,Int8}, extb, n + $offk))
+                            $aI += _maddacc(codew, DI)
+                            $aQ += _maddacc(codew, DQ)
+                        end,
+                    )
                 else
-                    push!(chunk.args, quote
-                        codew = _wide32(vload(SIMD.Vec{$W,Int8}, extb, n + $offk))
-                        $aI += codew * DI
-                        $aQ += codew * DQ
-                    end)
+                    push!(
+                        chunk.args,
+                        quote
+                            codew = _wide32(vload(SIMD.Vec{$W,Int8}, extb, n + $offk))
+                            $aI += codew * DI
+                            $aQ += codew * DQ
+                        end,
+                    )
                 end
                 push!(scalar.args, quote
                     c = Int32(extb[n+$offk])
@@ -683,9 +778,17 @@ end
 
     function tap(i, k)
         if M == 1
-            :(complex(Float64($(Symbol("tI_$(i)_1_$k"))), Float64($(Symbol("tQ_$(i)_1_$k")))))
+            :(complex(
+                Float64($(Symbol("tI_$(i)_1_$k"))),
+                Float64($(Symbol("tQ_$(i)_1_$k"))),
+            ))
         else
-            ant = [:(complex(Float64($(Symbol("tI_$(i)_$(j)_$k"))), Float64($(Symbol("tQ_$(i)_$(j)_$k"))))) for j = 1:M]
+            ant = [
+                :(complex(
+                    Float64($(Symbol("tI_$(i)_$(j)_$k"))),
+                    Float64($(Symbol("tQ_$(i)_$(j)_$k"))),
+                )) for j = 1:M
+            ]
             :(SVector{$M,ComplexF64}(tuple($(ant...))))
         end
     end
@@ -714,7 +817,11 @@ end
         ntile = blk * $M
         length(bufs.dib) < ntile && resize!(bufs.dib, ntile)
         length(bufs.dqb) < ntile && resize!(bufs.dqb, ntile)
-        extb = bufs.extb; csb = bufs.csb; ccb = bufs.ccb; dib = bufs.dib; dqb = bufs.dqb
+        extb = bufs.extb;
+        csb = bufs.csb;
+        ccb = bufs.ccb;
+        dib = bufs.dib;
+        dqb = bufs.dqb
 
         p_sig = Ptr{Int16}(pointer(signal))
         blk_off = 0
@@ -722,7 +829,18 @@ end
             len = min(blk, num_samples - blk_off)
             _int16_fill_carrier!(csb, ccb, reng, blk_off, len, phase0, Val(W))
             base = signal_start_sample + blk_off
-            _int16_fill_ditile!(dib, dqb, signal, NumAnts{$M}(), csb, ccb, base, len, num_rows, p_sig)
+            _int16_fill_ditile!(
+                dib,
+                dqb,
+                signal,
+                NumAnts{$M}(),
+                csb,
+                ccb,
+                base,
+                len,
+                num_rows,
+                p_sig,
+            )
             $sigs
             blk_off += len
         end
@@ -749,7 +867,13 @@ end
     num_samples_signal,
 )
     params = map(signals) do head
-        _signal_replica_params(head, code_doppler, code_phase, sampling_frequency, num_samples_signal)
+        _signal_replica_params(
+            head,
+            code_doppler,
+            code_phase,
+            sampling_frequency,
+            num_samples_signal,
+        )
     end
     correlators = map(s -> s.correlator, signals)
     signal_types = map(s -> s.signal, signals)
@@ -902,7 +1026,11 @@ end
     )
 end
 
-@inline function _dc_group_loop!(dc::Int16DownconvertAndCorrelator, vals, args::Vararg{Any,4})
+@inline function _dc_group_loop!(
+    dc::Int16DownconvertAndCorrelator,
+    vals,
+    args::Vararg{Any,4},
+)
     @inbounds for i in eachindex(vals)
         vals[i] = _update_tracked_sat_correlator(vals[i], dc, args...)
     end
