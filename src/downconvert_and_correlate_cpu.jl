@@ -549,8 +549,13 @@ end
         sampling_frequency,
         num_samples_signal,
     )
+    # GNSSSignals' embedded-LUT `gen_code!` is Int8-only (the legacy fixed-point
+    # generator that emitted `get_code_type(s)` — Int16/Float32 — was removed),
+    # so the code replica buffer is `Int8`. The fused kernel reads the replica as
+    # generic `CT = eltype(code_replica)` and widens to Float32, so Int8 works
+    # unchanged; CBOC (Galileo E1B) is the Int8 integer-amplitude approximation.
     new_corr =
-        _with_code_replica_buffer(dc, get_code_type(s), p.code_replica_size) do code_replica
+        _with_code_replica_buffer(dc, Int8, p.code_replica_size) do code_replica
             _correlate_one_signal!(
                 dc,
                 code_replica,
@@ -669,7 +674,7 @@ end
             num_samples_signal,
         )
         slot = _code_replica_slot(bufs, i)
-        CT = get_code_type(s)
+        CT = Int8  # embedded-LUT `gen_code!` is Int8-only; see `_correlate_signals`
         nbytes = p.code_replica_size * sizeof(CT)
         length(slot) < nbytes && resize!(slot, nbytes)
         # The raw pointer in this view outlives this function — the caller
