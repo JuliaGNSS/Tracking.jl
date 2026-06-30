@@ -218,8 +218,16 @@ end
         # `code_phase` is anchored to the upcoming integration's NH10 chip.
         # After 10 blocks the upcoming chip equals the starting chip, so the
         # phase lands at `start_secondary_chip x primary_code_length` within
-        # the widened (primary x secondary) wrap window.
-        @test synced_code_phase == start_secondary_chip * primary_code_length
+        # the widened (primary x secondary) wrap window. The embedded-LUT
+        # generator's fixed-point DDA (~2^-30 chip) lands the phase within ~1e-6
+        # chip of the integer boundary rather than exactly on it, so compare the
+        # circular distance within a sub-sample tolerance.
+        let wrap = primary_code_length * secondary_code_length,
+            expected = start_secondary_chip * primary_code_length,
+            d = mod(synced_code_phase - expected, wrap)
+
+            @test min(d, wrap - d) < 1e-3
+        end
     end
 
     # Sub-primary-block start phase: begin tracking half a primary-code period
