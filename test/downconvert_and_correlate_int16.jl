@@ -4,14 +4,35 @@ using Test: @test, @testset, @test_throws
 using Unitful: Hz
 import GNSSSignals
 using GNSSSignals:
-    GPSL1CA, GPSL5I, GalileoE1B, gen_code, get_code_center_frequency_ratio, get_code_frequency
+    GPSL1CA,
+    GPSL5I,
+    GalileoE1B,
+    gen_code,
+    get_code_center_frequency_ratio,
+    get_code_frequency
 using Tracking:
-    TrackedSat, TrackState, track, downconvert_and_correlate, BandMeasurement,
-    get_sat_state, get_carrier_doppler, get_prompt, get_early, get_late,
-    get_accumulators, get_correlator_sample_shifts, update_accumulator,
-    AbstractCorrelator, EarlyPromptLateCorrelator, VeryEarlyPromptLateCorrelator, NumAnts,
-    TrackedSignal, DefaultPostCorrFilter, ConventionalAssistedPLLAndDLL,
-    CPUThreadedDownconvertAndCorrelator, Int16DownconvertAndCorrelator,
+    TrackedSat,
+    TrackState,
+    track,
+    downconvert_and_correlate,
+    BandMeasurement,
+    get_sat_state,
+    get_carrier_doppler,
+    get_prompt,
+    get_early,
+    get_late,
+    get_accumulators,
+    get_correlator_sample_shifts,
+    update_accumulator,
+    AbstractCorrelator,
+    EarlyPromptLateCorrelator,
+    VeryEarlyPromptLateCorrelator,
+    NumAnts,
+    TrackedSignal,
+    DefaultPostCorrFilter,
+    ConventionalAssistedPLLAndDLL,
+    CPUThreadedDownconvertAndCorrelator,
+    Int16DownconvertAndCorrelator,
     Int16ThreadedDownconvertAndCorrelator
 import Tracking
 
@@ -25,8 +46,11 @@ end
 Tracking.get_accumulators(c::DynShiftsCorrelator) = c.accumulators
 Tracking.update_accumulator(c::DynShiftsCorrelator, acc) =
     DynShiftsCorrelator(collect(acc), c.shifts)
-Tracking.get_correlator_sample_shifts(c::DynShiftsCorrelator, sampling_frequency, code_frequency) =
-    c.shifts
+Tracking.get_correlator_sample_shifts(
+    c::DynShiftsCorrelator,
+    sampling_frequency,
+    code_frequency,
+) = c.shifts
 
 # 12-bit-ADC-style Complex{Int16} capture: carrier × unit-normalised code, scaled
 # to a `peak` magnitude (≤ 2^11), rounded. Normalising the code keeps CBOC's
@@ -63,15 +87,32 @@ end
     # only by the Int8 carrier's phase quantisation (a small constant prompt-phase
     # offset, ~π/64). So compare amplitude-invariant ratios tightly and the prompt
     # phase loosely.
-    @testset "matches Float32 backend: $(nameof(typeof(sig))) @ $(fs/1e6Hz) MHz" for (sig, fs) in (
+    @testset "matches Float32 backend: $(nameof(typeof(sig))) @ $(fs/1e6Hz) MHz" for (
+        sig,
+        fs,
+    ) in (
         (GPSL1CA(), 5e6Hz),
         (GPSL1CA(), 2e6Hz),
         (GPSL5I(), 12e6Hz),
         (GalileoE1B(), 15e6Hz),
     )
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
-        cf = correlate_once(CPUThreadedDownconvertAndCorrelator(), sig, fs, nsamp, 200Hz, 100.0)
-        ci = correlate_once(Int16ThreadedDownconvertAndCorrelator(), sig, fs, nsamp, 200Hz, 100.0)
+        cf = correlate_once(
+            CPUThreadedDownconvertAndCorrelator(),
+            sig,
+            fs,
+            nsamp,
+            200Hz,
+            100.0,
+        )
+        ci = correlate_once(
+            Int16ThreadedDownconvertAndCorrelator(),
+            sig,
+            fs,
+            nsamp,
+            200Hz,
+            100.0,
+        )
         # E/P and L/P magnitude ratios match closely.
         @test abs(get_early(ci)) / abs(get_prompt(ci)) ≈
               abs(get_early(cf)) / abs(get_prompt(cf)) atol = 1e-2
@@ -89,8 +130,24 @@ end
         sig, fs = GalileoE1B(), 15e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         mk() = VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(1))
-        cf = correlate_once(CPUThreadedDownconvertAndCorrelator(), sig, fs, nsamp, 200Hz, 100.0; correlator = mk())
-        ci = correlate_once(Int16ThreadedDownconvertAndCorrelator(), sig, fs, nsamp, 200Hz, 100.0; correlator = mk())
+        cf = correlate_once(
+            CPUThreadedDownconvertAndCorrelator(),
+            sig,
+            fs,
+            nsamp,
+            200Hz,
+            100.0;
+            correlator = mk(),
+        )
+        ci = correlate_once(
+            Int16ThreadedDownconvertAndCorrelator(),
+            sig,
+            fs,
+            nsamp,
+            200Hz,
+            100.0;
+            correlator = mk(),
+        )
         af = get_accumulators(cf)
         ai = get_accumulators(ci)
         @test length(ai) == 5
@@ -111,7 +168,8 @@ end
         cap = make_capture_mat(sig, fs, nsamp, 200Hz, 100.0, M)
         meas = (l1 = BandMeasurement(cap, fs, 0.0Hz),)
         mk() = TrackState(sig, [TrackedSat(sig, 1, 100.0, 200Hz; num_ants = NumAnts(M))])
-        run(dc) = first(get_sat_state(downconvert_and_correlate(dc, meas, mk()), 1).signals).correlator
+        run(dc) =
+            first(get_sat_state(downconvert_and_correlate(dc, meas, mk()), 1).signals).correlator
         cf = run(CPUThreadedDownconvertAndCorrelator())
         ci = run(Int16ThreadedDownconvertAndCorrelator())
         ef, pf, lf = get_early(cf), get_prompt(cf), get_late(cf)   # SVector{M,Complex}
@@ -128,7 +186,14 @@ end
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         c1 = correlate_once(Int16DownconvertAndCorrelator(), sig, fs, nsamp, 200Hz, 100.0)
-        ct = correlate_once(Int16ThreadedDownconvertAndCorrelator(), sig, fs, nsamp, 200Hz, 100.0)
+        ct = correlate_once(
+            Int16ThreadedDownconvertAndCorrelator(),
+            sig,
+            fs,
+            nsamp,
+            200Hz,
+            100.0,
+        )
         @test get_prompt(c1) ≈ get_prompt(ct)
         @test get_early(c1) ≈ get_early(ct)
         @test get_late(c1) ≈ get_late(ct)
@@ -144,8 +209,15 @@ end
         shifts = collect(get_correlator_sample_shifts(EarlyPromptLateCorrelator(), fs, fc))
         dc = Int16ThreadedDownconvertAndCorrelator()
         cs = correlate_once(dc, sig, fs, nsamp, 200Hz, 100.0)                       # static EPL
-        cd = correlate_once(dc, sig, fs, nsamp, 200Hz, 100.0;
-            correlator = DynShiftsCorrelator(zeros(ComplexF64, 3), shifts))         # dynamic
+        cd = correlate_once(
+            dc,
+            sig,
+            fs,
+            nsamp,
+            200Hz,
+            100.0;
+            correlator = DynShiftsCorrelator(zeros(ComplexF64, 3), shifts),
+        )         # dynamic
         ad = get_accumulators(cd)
         as = get_accumulators(cs)
         @test length(ad) == 3
@@ -166,17 +238,34 @@ end
         meas = (l1 = BandMeasurement(cap, fs, 0.0Hz),)
         dc = Int16ThreadedDownconvertAndCorrelator()
         est = ConventionalAssistedPLLAndDLL()
-        mksig() = TrackedSignal(sig; num_ants = NumAnts(1),
+        mksig() = TrackedSignal(
+            sig;
+            num_ants = NumAnts(1),
             correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
-            post_corr_filter = DefaultPostCorrFilter())
+            post_corr_filter = DefaultPostCorrFilter(),
+        )
         # single-signal reference
-        cs = first(get_sat_state(
-            downconvert_and_correlate(dc, meas,
-                TrackState(sig, TrackedSat((mksig(),), 1, 100.0, 200Hz; doppler_estimator = est);
-                    doppler_estimator = est)), 1).signals).correlator
+        cs = first(
+            get_sat_state(
+                downconvert_and_correlate(
+                    dc,
+                    meas,
+                    TrackState(
+                        sig,
+                        TrackedSat((mksig(),), 1, 100.0, 200Hz; doppler_estimator = est);
+                        doppler_estimator = est,
+                    ),
+                ),
+                1,
+            ).signals,
+        ).correlator
         # N-signal sat
         satN = TrackedSat(ntuple(_ -> mksig(), N), 1, 100.0, 200Hz; doppler_estimator = est)
-        tsN = downconvert_and_correlate(dc, meas, TrackState(sig, satN; doppler_estimator = est))
+        tsN = downconvert_and_correlate(
+            dc,
+            meas,
+            TrackState(sig, satN; doppler_estimator = est),
+        )
         for s in get_sat_state(tsN, 1).signals
             @test get_prompt(s.correlator) ≈ get_prompt(cs)
             @test get_early(s.correlator) ≈ get_early(cs)
@@ -190,7 +279,9 @@ end
         ts = TrackState(sig, [TrackedSat(sig, 1, 100.0, 200Hz)])
         meas = (l1 = BandMeasurement(capf, fs, 0.0Hz),)
         @test_throws ArgumentError downconvert_and_correlate(
-            Int16ThreadedDownconvertAndCorrelator(), meas, ts,
+            Int16ThreadedDownconvertAndCorrelator(),
+            meas,
+            ts,
         )
     end
 
@@ -200,7 +291,12 @@ end
         nsamp = round(Int, (fs / 1Hz) * 1e-3) * 5
         cap = make_capture(sig, 1, fs, nsamp, cdopp, cphase)
         ts = TrackState(sig, [TrackedSat(sig, 1, cphase, cdopp - 20Hz)])
-        ts = track(cap, ts, fs; downconvert_and_correlator = Int16ThreadedDownconvertAndCorrelator())
+        ts = track(
+            cap,
+            ts,
+            fs;
+            downconvert_and_correlator = Int16ThreadedDownconvertAndCorrelator(),
+        )
         # Converges back toward the true Doppler from the 20 Hz initial offset.
         @test get_carrier_doppler(get_sat_state(ts, 1)) ≈ cdopp atol = 10Hz
     end
