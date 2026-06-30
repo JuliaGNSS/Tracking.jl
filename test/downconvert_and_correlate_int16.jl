@@ -226,6 +226,29 @@ end
               abs(get_late(cf)) / abs(get_prompt(cf)) atol = 1e-2
     end
 
+    # Exact-Int32 wipe fallback (used on backends without `vpmaddwd`: NEON /
+    # scalar). A `max_meas` too large for any Int16-safe amplitude forces the
+    # Int32 path even on x86, so this exercises and validates that path here.
+    @testset "Int32 wipe fallback (forced via large max_meas)" begin
+        sig, fs = GPSL1CA(), 5e6Hz
+        nsamp = round(Int, (fs / 1Hz) * 1e-3)
+        dc32 = Int16ThreadedDownconvertAndCorrelator(; max_meas = 2^15)
+        @test dc32 isa Int16ThreadedDownconvertAndCorrelator{<:Any,Int32}   # Int32 wipe selected
+        cf = correlate_once(
+            CPUThreadedDownconvertAndCorrelator(),
+            sig,
+            fs,
+            nsamp,
+            200Hz,
+            100.0,
+        )
+        ci = correlate_once(dc32, sig, fs, nsamp, 200Hz, 100.0)
+        @test abs(get_early(ci)) / abs(get_prompt(ci)) ≈
+              abs(get_early(cf)) / abs(get_prompt(cf)) atol = 1e-2
+        @test abs(get_late(ci)) / abs(get_prompt(ci)) ≈
+              abs(get_late(cf)) / abs(get_prompt(cf)) atol = 1e-2
+    end
+
     # Dynamic (runtime Vector) tap count: a DynShiftsCorrelator with the same
     # shifts as EPL must produce the same accumulators through the Int16 backend's
     # AbstractVector-shifts fallback as the static @generated EPL kernel.
