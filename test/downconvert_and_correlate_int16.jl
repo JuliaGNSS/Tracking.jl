@@ -25,6 +25,10 @@ end
 
 band_key_for(sig) = sig isa GPSL5I ? :l5 : :l1
 
+# M-antenna capture: a dense samples×M `Matrix` (same signal across antennas).
+make_capture_mat(sig, fs, nsamp, cdopp, cphase, M; peak = 2000) =
+    repeat(make_capture(sig, 1, fs, nsamp, cdopp, cphase; peak); outer = (1, M))
+
 # One downconvert+correlate step with the given backend; returns the correlator.
 function correlate_once(dc, sig, fs, nsamp, cdopp, cphase; correlator = nothing)
     cap = make_capture(sig, 1, fs, nsamp, cdopp, cphase)
@@ -80,6 +84,28 @@ end
             @test abs(ai[k]) / pii ≈ abs(af[k]) / pf atol = 1e-2
         end
         @test mod2pi(angle(get_prompt(ci)) - angle(get_prompt(cf)) + π) - π ≈ 0 atol = 0.1
+    end
+
+    # Multiple antennas: the kernel runs M antenna-outer passes over the shared
+    # code+carrier block and returns SVector{M,ComplexF64} accumulators. Compare
+    # each antenna's E/P/L magnitude ratios against the Float32 backend.
+    @testset "multiple antennas (M=$M) matches Float32" for M in (2, 4)
+        sig, fs = GPSL1CA(), 5e6Hz
+        nsamp = round(Int, (fs / 1Hz) * 1e-3)
+        cap = make_capture_mat(sig, fs, nsamp, 200Hz, 100.0, M)
+        meas = (l1 = BandMeasurement(cap, fs, 0.0Hz),)
+        mk() = TrackState(sig, [TrackedSat(sig, 1, 100.0, 200Hz; num_ants = NumAnts(M))])
+        run(dc) = first(get_sat_state(downconvert_and_correlate(dc, meas, mk()), 1).signals).correlator
+        cf = run(CPUThreadedDownconvertAndCorrelator())
+        ci = run(Int16ThreadedDownconvertAndCorrelator())
+        ef, pf, lf = get_early(cf), get_prompt(cf), get_late(cf)   # SVector{M,Complex}
+        ei, pii, li = get_early(ci), get_prompt(ci), get_late(ci)
+        @test length(pf) == M && length(pii) == M
+        for j = 1:M
+            @test abs(ei[j]) / abs(pii[j]) ≈ abs(ef[j]) / abs(pf[j]) atol = 1e-2
+            @test abs(li[j]) / abs(pii[j]) ≈ abs(lf[j]) / abs(pf[j]) atol = 1e-2
+            @test mod2pi(angle(pii[j]) - angle(pf[j]) + π) - π ≈ 0 atol = 0.1
+        end
     end
 
     @testset "single-threaded and threaded backends agree" begin

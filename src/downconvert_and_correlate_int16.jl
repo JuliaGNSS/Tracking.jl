@@ -5,7 +5,7 @@
 # ADC) sample buffers and gets its speed from an all-integer pipeline, ported
 # from the GNSSSignals integration benchmark's `correlate_epl_hybrid_blocked!`
 # (the fastest variant there) and generalised to Tracking's arbitrary correlator
-# tap count and `ComplexF64` accumulators:
+# tap count, antenna count, and `ComplexF64` accumulators:
 #
 #   * code   — Int8 ±1 (CBOC ±13/±25) replica from GNSSSignals' embedded SIMD
 #              LUT, generated per block by the value-threaded `CodeFillEngine`
@@ -23,16 +23,23 @@
 #              are flushed into Int64 totals every block so no integration length
 #              or code amplitude can overflow.
 #
+# Multiple antennas (M>1): the sample buffer is a dense `Matrix` (rows = samples,
+# columns = antennas). One code + carrier block is filled per strip-mine block
+# and shared across `M` antenna-outer correlate passes (each pass keeps only its
+# own NC tap accumulators live, mirroring the Float32 tile-share kernel), so the
+# carrier wipe-off is computed once-per-antenna against the shared code/carrier.
+#
 # Strategy is "hybrid-blocked": strip-mine the integration into `blk`-sample
 # blocks, regenerating BOTH code and carrier into small, L1-resident scratch
 # reused across blocks. See docs/plans/2026-06-30-int16-hybrid-blocked-...
 #
-# The accumulators are converted to `ComplexF64` (scaled by the constant carrier
-# amplitude) at finalize, so every downstream consumer (discriminators, C/N0,
-# bit buffer — all ratio/normalised) is unaffected.
+# Accumulators are converted to `ComplexF64` (M=1) / `SVector{M,ComplexF64}`
+# (M>1), scaled by the constant carrier amplitude, at finalize — so every
+# downstream consumer (discriminators, C/N0, bit buffer — all ratio/normalised)
+# is unaffected.
 #
-# Phase 1 scope: single antenna (M=1), one signal per sat, static correlator
-# tap counts (EPL NC=3, VEPL NC=5) — the kernel is `@generated` over NC.
+# Scope: one signal per sat, static correlator tap counts (EPL NC=3, VEPL NC=5);
+# the kernel is `@generated` over (NC, M).
 
 import SinCosLUT
 using SinCosLUT: SinCosTable, carrier_engine, carrier_state, carrier_lookup, carrier_advance
@@ -180,6 +187,9 @@ const _Int16DC =
 @inline _scratch_buffers(dc::Int16ThreadedDownconvertAndCorrelator) =
     dc.buffers[Threads.threadid()]
 
+# Type-stable `NumAnts{M}` from a correlator (M from its type parameter).
+@inline _num_ants_val(::AbstractCorrelator{M}) where {M} = NumAnts{M}()
+
 # Fill `len` carrier samples (sin→csb, cos→ccb) starting at absolute sample
 # `start`, 4-way unrolled so the permute lookups pipeline (the value engine is
 # latency-bound single-stream). Ported from the benchmark's `_epl_fill_carrier!`.
@@ -223,14 +233,17 @@ const _Int16DC =
 end
 
 # ── The integer hybrid-blocked kernel ────────────────────────────────────────
-# Returns this integration's correlation contribution as `SVector{NC,ComplexF64}`
-# (one complex sum per tap), to be added to the correlator's running accumulators.
-# `@generated` over `NC = length(sample_shifts)` so NC tap accumulators live in
-# named locals (covers EPL NC=3 and VEPL NC=5). Path (Int16 vpmaddwd vs exact
-# Int32) is chosen at generation time from the host-derived consts.
+# Returns this integration's correlation contribution: `SVector{NC,ComplexF64}`
+# (M=1) or `SVector{NC,SVector{M,ComplexF64}}` (M>1), one (multi-antenna) complex
+# sum per tap, to be added to the correlator's running accumulators. `@generated`
+# over (NC = length(sample_shifts), M = antenna count): NC tap accumulators per
+# antenna live in named locals, and the M antenna-outer correlate passes are
+# emitted explicitly (each keeps only its own NC accumulators live). Path (Int16
+# vpmaddwd vs exact Int32) is chosen at generation time from host-derived consts.
 @generated function _int16_hybrid_blocked!(
     dc::_Int16DC,
-    signal::AbstractVector{Complex{Int16}},
+    signal::AbstractVecOrMat{Complex{Int16}},
+    ::NumAnts{M},
     signal_type,
     prn::Integer,
     sample_shifts::SVector{NC},
@@ -241,72 +254,105 @@ end
     sampling_frequency,
     signal_start_sample::Integer,
     num_samples::Integer,
-) where {NC}
+) where {M,NC}
     W = _INT16_W
     TI = _INT16_WIPE_TI
     use_madd = _INT16_HAS_MADDWD && TI === Int16
-    # Lane-accumulator element width: vpmaddwd pre-sums adjacent pairs → W÷2.
-    AW = use_madd ? W ÷ 2 : W
-    MT = TI === Int16 ? Int16 : Int32      # meas/wipe SIMD element type
+    AW = use_madd ? W ÷ 2 : W          # vpmaddwd pre-sums adjacent pairs → W÷2
+    MT = TI === Int16 ? Int16 : Int32  # meas/wipe SIMD element type
+    cc_load = TI === Int16 ? :(_wide16(vload(SIMD.Vec{$W,Int8}, ccb, n))) :
+              :(_wide32(vload(SIMD.Vec{$W,Int8}, ccb, n)))
+    sn_load = TI === Int16 ? :(_wide16(vload(SIMD.Vec{$W,Int8}, csb, n))) :
+              :(_wide32(vload(SIMD.Vec{$W,Int8}, csb, n)))
 
-    # Int64 running totals (re/im) + per-block Vec{AW,Int32} lane accumulators.
     init = Expr(:block)
-    blk_init = Expr(:block)
-    flush = Expr(:block)
     for k = 1:NC
-        tI = Symbol("tI_$k"); tQ = Symbol("tQ_$k")
-        aI = Symbol("aI_$k"); aQ = Symbol("aQ_$k")
-        push!(init.args, :($tI = zero(Int64)))
-        push!(init.args, :($tQ = zero(Int64)))
-        push!(init.args, :($(Symbol("off_$k")) = sample_shifts[$k] - min_shift))  # extb read offset
-        push!(blk_init.args, :($aI = zero(SIMD.Vec{$AW,Int32})))
-        push!(blk_init.args, :($aQ = zero(SIMD.Vec{$AW,Int32})))
-        push!(flush.args, :($tI += Int64(sum($aI))))
-        push!(flush.args, :($tQ += Int64(sum($aQ))))
+        push!(init.args, :($(Symbol("off_$k")) = sample_shifts[$k] - min_shift))
+    end
+    for j = 1:M, k = 1:NC
+        push!(init.args, :($(Symbol("tI_$(j)_$k")) = zero(Int64)))
+        push!(init.args, :($(Symbol("tQ_$(j)_$k")) = zero(Int64)))
     end
 
-    # Per-W-chunk accumulate for tap k.
-    chunk = Expr(:block)
-    for k = 1:NC
-        offk = Symbol("off_$k"); aI = Symbol("aI_$k"); aQ = Symbol("aQ_$k")
-        if use_madd
-            push!(chunk.args, quote
-                codew = _wide16(vload(SIMD.Vec{$W,Int8}, extb, n + $offk))
-                $aI += _maddacc(codew, DI)
-                $aQ += _maddacc(codew, DQ)
-            end)
-        else
-            push!(chunk.args, quote
-                codew = _wide32(vload(SIMD.Vec{$W,Int8}, extb, n + $offk))
-                $aI += codew * DI
-                $aQ += codew * DQ
+    # One antenna-outer correlate pass over the current block (emitted per j).
+    function antenna_pass(j)
+        blk_init = Expr(:block); flush = Expr(:block); chunk = Expr(:block); scalar = Expr(:block)
+        for k = 1:NC
+            aI = Symbol("aI_$(j)_$k"); aQ = Symbol("aQ_$(j)_$k")
+            tI = Symbol("tI_$(j)_$k"); tQ = Symbol("tQ_$(j)_$k")
+            offk = Symbol("off_$k")
+            push!(blk_init.args, :($aI = zero(SIMD.Vec{$AW,Int32})))
+            push!(blk_init.args, :($aQ = zero(SIMD.Vec{$AW,Int32})))
+            push!(flush.args, :($tI += Int64(sum($aI))))
+            push!(flush.args, :($tQ += Int64(sum($aQ))))
+            if use_madd
+                push!(chunk.args, quote
+                    codew = _wide16(vload(SIMD.Vec{$W,Int8}, extb, n + $offk))
+                    $aI += _maddacc(codew, DI)
+                    $aQ += _maddacc(codew, DQ)
+                end)
+            else
+                push!(chunk.args, quote
+                    codew = _wide32(vload(SIMD.Vec{$W,Int8}, extb, n + $offk))
+                    $aI += codew * DI
+                    $aQ += codew * DQ
+                end)
+            end
+            push!(scalar.args, quote
+                c = Int32(extb[n+$offk])
+                $tI += Int64(c * di)
+                $tQ += Int64(c * dq)
             end)
         end
+        quote
+            $blk_init
+            colbase = $(j - 1) * num_rows         # 0-based column (antenna) offset, in samples
+            n = 1
+            while n + W - 1 <= len
+                byte_off = (colbase + base + n - 2) * 2 * sizeof(Int16)
+                mr, mi = _deinterleave_load(SIMD.Vec{W,$MT}, p_sig, byte_off)
+                cc = $cc_load
+                sn = $sn_load
+                DI = mr * cc + mi * sn
+                DQ = mi * cc - mr * sn
+                $chunk
+                n += W
+            end
+            $flush
+            while n <= len
+                sig = signal[base+n-1, $j]
+                mr_s = Int32(real(sig)); mi_s = Int32(imag(sig))
+                cc_s = Int32(ccb[n]); sn_s = Int32(csb[n])
+                di = mr_s * cc_s + mi_s * sn_s
+                dq = mi_s * cc_s - mr_s * sn_s
+                $scalar
+                n += 1
+            end
+        end
+    end
+    correlate_passes = Expr(:block)
+    for j = 1:M
+        push!(correlate_passes.args, antenna_pass(j))
     end
 
-    # Scalar remainder accumulate for tap k (Int32 arithmetic → Int64 totals).
-    scalar = Expr(:block)
-    for k = 1:NC
-        offk = Symbol("off_$k"); tI = Symbol("tI_$k"); tQ = Symbol("tQ_$k")
-        push!(scalar.args, quote
-            c = Int32(extb[n+$offk])
-            $tI += Int64(c * di)
-            $tQ += Int64(c * dq)
-        end)
+    # Finalize: one accumulator per tap — ComplexF64 (M=1) or SVector{M} (M>1).
+    function tap_expr(k)
+        if M == 1
+            :(complex(Float64($(Symbol("tI_1_$k"))), Float64($(Symbol("tQ_1_$k")))))
+        else
+            ant = [:(complex(Float64($(Symbol("tI_$(j)_$k"))), Float64($(Symbol("tQ_$(j)_$k"))))) for j = 1:M]
+            :(SVector{$M,ComplexF64}(tuple($(ant...))))
+        end
     end
-
-    result = if NC == 1
-        :(SVector(complex(Float64(tI_1), Float64(tQ_1))))
-    else
-        elems = [:(complex(Float64($(Symbol("tI_$k"))), Float64($(Symbol("tQ_$k"))))) for k = 1:NC]
-        :(SVector{$NC,ComplexF64}(tuple($(elems...))))
-    end
+    taps = [tap_expr(k) for k = 1:NC]
+    result = :(SVector{$NC}(tuple($(taps...))))
 
     quote
         W = $W
         min_shift = minimum(sample_shifts)
         max_shift = maximum(sample_shifts)
         span = max_shift - min_shift
+        num_rows = size(signal, 1)
 
         bufs = _scratch_buffers(dc)
         blk = dc.blk
@@ -350,39 +396,13 @@ end
                 cst = gen_code!(view(extb, (span+1):(span+len)), ceng, cst)
             end
 
-            # 2. Fill this block's carrier sin/cos.
+            # 2. Fill this block's carrier sin/cos (shared across antennas).
             _int16_fill_carrier!(csb, ccb, reng, blk_off, len, phase0, Val(W))
 
-            # 3. Correlate the block: wipe + per-tap accumulate, flushed per block.
-            $blk_init
-            base = signal_start_sample + blk_off            # 1-based signal index of local n=0
-            n = 1
-            while n + W - 1 <= len
-                byte_off = (base + n - 2) * 2 * sizeof(Int16)
-                mr, mi = _deinterleave_load(SIMD.Vec{W,$MT}, p_sig, byte_off)
-                cc = $(TI === Int16 ?
-                       :(_wide16(vload(SIMD.Vec{W,Int8}, ccb, n))) :
-                       :(_wide32(vload(SIMD.Vec{W,Int8}, ccb, n))))
-                sn = $(TI === Int16 ?
-                       :(_wide16(vload(SIMD.Vec{W,Int8}, csb, n))) :
-                       :(_wide32(vload(SIMD.Vec{W,Int8}, csb, n))))
-                DI = mr * cc + mi * sn
-                DQ = mi * cc - mr * sn
-                $chunk
-                n += W
-            end
-            $flush
-            # Scalar remainder.
-            while n <= len
-                idx = base + n - 1
-                sig = signal[idx]
-                mr_s = Int32(real(sig)); mi_s = Int32(imag(sig))
-                cc_s = Int32(ccb[n]); sn_s = Int32(csb[n])
-                di = mr_s * cc_s + mi_s * sn_s
-                dq = mi_s * cc_s - mr_s * sn_s
-                $scalar
-                n += 1
-            end
+            # 3. M antenna-outer correlate passes (wipe + per-tap accumulate),
+            #    flushed per block. `base` = 1-based signal row of local n=0.
+            base = signal_start_sample + blk_off
+            $correlate_passes
 
             blk_off += len
             prevlen = len
@@ -392,8 +412,8 @@ end
     end
 end
 
-# Per-signal correlate for the integer backend: single signal, single antenna
-# (M=1), static tap count. Returns the one-tuple
+# Per-signal correlate for the integer backend: single signal, static tap count,
+# any antenna count M. Returns the one-tuple
 # `((new_correlator, is_integration_completed),)` matching the Float32 backend's
 # `_correlate_signals` contract.
 @inline function _correlate_signals(
@@ -414,9 +434,6 @@ end
     head = signals[1]
     s = head.signal
     correlator = head.correlator
-    get_num_ants(correlator) == 1 || error(
-        "Int16DownconvertAndCorrelator currently supports single-antenna correlators only (got M=$(get_num_ants(correlator))).",
-    )
     p = _signal_replica_params(
         head,
         code_doppler,
@@ -427,6 +444,7 @@ end
     new_acc = _int16_hybrid_blocked!(
         dc,
         signal,
+        _num_ants_val(correlator),
         s,
         prn,
         p.sample_shifts,
