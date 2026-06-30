@@ -24,6 +24,11 @@ const GPSL1CA = isdefined(GNSSSignals, :GPSL1CA) ?
 const GPSL5I = isdefined(GNSSSignals, :GPSL5I) ?
     getfield(GNSSSignals, :GPSL5I) : getfield(GNSSSignals, :GPSL5)
 
+# Code-replica buffer element type. GNSSSignals' embedded-LUT `gen_code!` (PR #90)
+# is Int8-only; older GNSSSignals emit `get_code_type(signal)` (Int16/Float32).
+# Detect the era so this script builds against both (AirspeedVelocity diffs revs).
+_code_buf_type(sig) = isdefined(GNSSSignals, :code_engine) ? Int8 : get_code_type(sig)
+
 # Branch-portable per-system storage construction. Three flavours coexist:
 #   * Master:           `SystemSatsState(sys, ::Vector{SatState})`
 #   * Wrapper branch:   `TrackedSystem(estimator, sys, ::Vector{SatState})`
@@ -114,7 +119,7 @@ function setup_benchmark(;
         num_ants == 1 ? rand(Complex{signal_type}, num_samples) :
         rand(Complex{signal_type}, num_samples, num_ants)
 
-    code_replica = Vector{get_code_type(gnss_signal)}(
+    code_replica = Vector{_code_buf_type(gnss_signal)}(
         undef,
         num_samples + maximum(static_shifts) - minimum(static_shifts),
     )
@@ -394,7 +399,7 @@ function bench_fused_tuple_kernel(;
         n_signals,
     )
     code_replicas = ntuple(n_signals) do _
-        cr = Vector{get_code_type(gnss_signal)}(undef, code_replica_size)
+        cr = Vector{_code_buf_type(gnss_signal)}(undef, code_replica_size)
         _gen_code_replica!(
             cr, gnss_signal, code_frequency, sampling_frequency, code_phase,
             1, num_samples, sample_shifts, 1,
@@ -750,5 +755,47 @@ if _HAS_TRACKED_SIGNAL
                 $signal_ip, $ts_ip, $(5e6Hz); downconvert_and_correlator = $dc_ip,
             )
         end
+    end
+end
+
+# ── Int16 vs Float32 backend, full track! ─────────────────────────────────────
+# Head-to-head of the Float32 default (CPUThreadedDownconvertAndCorrelator) and
+# the integer Complex{Int16} backend (Int16ThreadedDownconvertAndCorrelator)
+# through the full `track!` pipeline, on the SAME Complex{Int16} (12-bit ADC)
+# capture so the comparison is apples-to-apples. Both accept Complex{Int16}: the
+# Float32 path widens to Float32; the integer path requires it (and is the point
+# of the backend). Threaded — the real-time default. Each case registers
+# "Float32" and "Int16" under `track Int16 vs Float32/<case>` so a report shows
+# them side by side. Only registered on branches with the Int16 backend (skipped
+# against master so AirspeedVelocity can still diff).
+if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
+    # Random 12-bit-ADC samples. The kernel's run time is content-independent, but
+    # the magnitude must stay within the ±2^11 range the Int16 carrier wipe assumes.
+    function _int16_capture(nsamp)
+        lim = Int16(2048)
+        complex.(rand((-lim):(lim - one(Int16)), nsamp), rand((-lim):(lim - one(Int16)), nsamp))
+    end
+
+    for (name, systems, nsats_list, sfreq, nsamp, prn_max) in (
+        ("GPSL1CA 8sat/5MHz", (GPSL1CA(),), [8], 5e6Hz, 5000, 32),
+        ("GPSL1CA 8sat/40MHz", (GPSL1CA(),), [8], 40e6Hz, 40000, 32),
+        ("GalileoE1B 4sat/25MHz", (GalileoE1B(),), [4], 25e6Hz, 25000, 50),
+    )
+        sig16 = _int16_capture(nsamp)
+        # Two independent track states (track! mutates) so each backend starts
+        # from an identical steady-state (bit_buffer.found = true) configuration.
+        ts_f, _ = _make_steady_state_track_state(;
+            systems, nsats_list, nsamp, prn_max, code_dop = 100.0)
+        ts_i, _ = _make_steady_state_track_state(;
+            systems, nsats_list, nsamp, prn_max, code_dop = 100.0)
+        dc_f = _make_cpu_threaded_dc(sfreq)
+        dc_i = Tracking.Int16ThreadedDownconvertAndCorrelator()
+        g = SUITE["track Int16 vs Float32"][name]
+        g["Float32"] = @benchmarkable Tracking.track!(
+            $sig16, $ts_f, $sfreq; downconvert_and_correlator = $dc_f,
+        )
+        g["Int16"] = @benchmarkable Tracking.track!(
+            $sig16, $ts_i, $sfreq; downconvert_and_correlator = $dc_i,
+        )
     end
 end
