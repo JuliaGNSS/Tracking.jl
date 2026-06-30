@@ -78,9 +78,19 @@ BandMeasurements
 
 ## Downconversion and correlation
 
+The default [`CPUThreadedDownconvertAndCorrelator`](@ref) runs a Float32 pipeline
+and accepts any complex sample type. For `Complex{Int16}` (integer ADC) sample
+buffers there is an opt-in integer backend,
+[`Int16ThreadedDownconvertAndCorrelator`](@ref) (and its single-threaded sibling
+[`Int16DownconvertAndCorrelator`](@ref)), which is typically ~1.3–2.9× faster.
+Select it explicitly via the `downconvert_and_correlator` keyword; it errors on a
+non-`Complex{Int16}` measurement.
+
 ```@docs
 CPUDownconvertAndCorrelator
 CPUThreadedDownconvertAndCorrelator
+Int16DownconvertAndCorrelator
+Int16ThreadedDownconvertAndCorrelator
 AbstractDownconvertAndCorrelator
 ```
 
