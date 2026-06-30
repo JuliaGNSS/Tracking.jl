@@ -145,7 +145,7 @@ end
 
     code_replica_length =
         num_samples_signal + maximum(sample_shifts) - minimum(sample_shifts)
-    code_replica = Vector{get_code_type(gpsl1)}(undef, code_replica_length)
+    code_replica = Vector{Int8}(undef, code_replica_length)
     Tracking.gen_code_replica!(
         code_replica,
         gpsl1,
@@ -245,7 +245,7 @@ end
 
     code_replica_length =
         num_samples_signal + maximum(sample_shifts) - minimum(sample_shifts)
-    code_replica = Vector{get_code_type(gpsl1)}(undef, code_replica_length)
+    code_replica = Vector{Int8}(undef, code_replica_length)
     Tracking.gen_code_replica!(
         code_replica,
         gpsl1,
@@ -331,7 +331,7 @@ end
             code_phase,
         ) .* cis.(2π * (0:(num_samples_odd-1)) * carrier_doppler / sampling_frequency)
     signal_odd = hcat(signal_odd_ant1, signal_odd_ant1 .* cis(0.3))
-    code_replica_odd = Vector{get_code_type(gpsl1)}(
+    code_replica_odd = Vector{Int8}(
         undef,
         num_samples_odd + maximum(sample_shifts) - minimum(sample_shifts),
     )
@@ -417,7 +417,7 @@ end
 
     code_replica_length =
         num_samples_signal + maximum(dynamic_shifts) - minimum(dynamic_shifts)
-    code_replica = Vector{get_code_type(gpsl1)}(undef, code_replica_length)
+    code_replica = Vector{Int8}(undef, code_replica_length)
     Tracking.gen_code_replica!(
         code_replica,
         gpsl1,
@@ -501,7 +501,7 @@ end
         code_phase + (start_sample - 1) * Float64(code_frequency / sampling_frequency)
     code_replica_length =
         start_sample - 1 + num_samples + maximum(sample_shifts) - minimum(sample_shifts)
-    code_replica = zeros(get_code_type(gpsl1), code_replica_length)
+    code_replica = zeros(Int8, code_replica_length)
     Tracking.gen_code_replica!(
         code_replica,
         gpsl1,
@@ -616,7 +616,7 @@ Tracking.get_correlator_sample_shifts(
         start_sample - 1 + num_samples + maximum(dynamic_shifts) - minimum(dynamic_shifts)
 
     # Scalar reference over the window
-    ref_code_replica = zeros(get_code_type(gpsl1), code_replica_length)
+    ref_code_replica = zeros(Int8, code_replica_length)
     Tracking.gen_code_replica!(
         ref_code_replica,
         gpsl1,
@@ -642,7 +642,7 @@ Tracking.get_correlator_sample_shifts(
     end
 
     # Public single-satellite entry point (12-arg downconvert_and_correlate!)
-    code_replica = zeros(get_code_type(gpsl1), code_replica_length)
+    code_replica = zeros(Int8, code_replica_length)
     public_result = Tracking.downconvert_and_correlate!(
         gpsl1,
         signal,
@@ -661,7 +661,7 @@ Tracking.get_correlator_sample_shifts(
 
     # Both backends' per-signal kernel
     for dc in (CPUDownconvertAndCorrelator(), CPUThreadedDownconvertAndCorrelator())
-        backend_code_replica = zeros(get_code_type(gpsl1), code_replica_length)
+        backend_code_replica = zeros(Int8, code_replica_length)
         backend_result = Tracking._correlate_one_signal!(
             dc,
             backend_code_replica,
@@ -685,7 +685,7 @@ Tracking.get_correlator_sample_shifts(
     # must route through the in-register kernel and agree with the scalar
     # reference (covers the static branch of the standalone fused dispatch).
     epl_static = EarlyPromptLateCorrelator()
-    static_code_replica = zeros(get_code_type(gpsl1), code_replica_length)
+    static_code_replica = zeros(Int8, code_replica_length)
     static_result = Tracking.downconvert_and_correlate!(
         gpsl1,
         signal,
@@ -738,7 +738,7 @@ end
         code_replica_length =
             num_samples_signal + maximum(sample_shifts_each) - minimum(sample_shifts_each)
         code_replicas = ntuple(N) do _
-            cr = Vector{get_code_type(gpsl1)}(undef, code_replica_length)
+            cr = Vector{Int8}(undef, code_replica_length)
             Tracking.gen_code_replica!(
                 cr,
                 gpsl1,
@@ -814,7 +814,7 @@ end
         code_replica_length =
             num_samples_signal + maximum(sample_shifts_each) - minimum(sample_shifts_each)
         code_replicas = ntuple(N) do _
-            cr = Vector{get_code_type(gpsl1)}(undef, code_replica_length)
+            cr = Vector{Int8}(undef, code_replica_length)
             Tracking.gen_code_replica!(
                 cr,
                 gpsl1,
