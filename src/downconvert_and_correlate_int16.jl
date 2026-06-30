@@ -375,32 +375,28 @@ end
         reng = carrier_engine(dc.table, carrier_freq / sampling_freq)
         phase0 = Float64(carrier_phase)
 
-        # Continuing code-fill engine: first emitted sample is output sample
-        # `min_shift`, so the earliest tap reads real code (no zero edge), and
-        # tap k at output n reads `extb[n + shift_k - min_shift]`.
-        ceng = code_engine(
-            signal_type, prn, sampling_frequency, code_frequency;
-            start_phase = Float64(code_phase), start_index_shift = min_shift,
-        )
-        cst = code_state(ceng)
+        # Per-block code is generated one-shot from the block's analytically
+        # advanced start phase — alloc-free, no engine build (a continuing
+        # CodeFillEngine would heap-allocate per sat per integration, which
+        # dominates at low oversampling where the kernel itself is tiny). The
+        # first emitted sample is output sample `min_shift`, so the earliest tap
+        # reads real code (no zero edge) and tap k at output n reads
+        # `extb[n + shift_k - min_shift]`.
+        cps = Float64(upreferred(code_frequency / Hz)) / sampling_freq
+        code_phase0 = Float64(code_phase)
 
         $init
         p_sig = Ptr{Int16}(pointer(signal))
 
         blk_off = 0
-        prevlen = 0
         @inbounds while blk_off < num_samples
             len = min(blk, num_samples - blk_off)
 
-            # 1. Fill this block's code into extb[1 .. len+span].
-            if prevlen == 0
-                cst = gen_code!(view(extb, 1:(len+span)), ceng, cst)
-            else
-                for i = 1:span
-                    extb[i] = extb[prevlen+i]
-                end
-                cst = gen_code!(view(extb, (span+1):(span+len)), ceng, cst)
-            end
+            # 1. Fill this block's code into extb[1 .. len+span] (one-shot).
+            gen_code!(
+                view(extb, 1:(len+span)), signal_type, prn,
+                sampling_frequency, code_frequency, code_phase0 + cps * blk_off, min_shift,
+            )
 
             # 2. Fill this block's carrier sin/cos (shared across antennas).
             _int16_fill_carrier!(csb, ccb, reng, blk_off, len, phase0, Val(W))
@@ -411,7 +407,6 @@ end
             $correlate_passes
 
             blk_off += len
-            prevlen = len
         end
 
         $result
@@ -464,28 +459,20 @@ function _int16_hybrid_blocked!(
     reng = carrier_engine(dc.table, carrier_freq / sampling_freq)
     phase0 = Float64(carrier_phase)
 
-    ceng = code_engine(
-        signal_type, prn, sampling_frequency, code_frequency;
-        start_phase = Float64(code_phase), start_index_shift = min_shift,
-    )
-    cst = code_state(ceng)
+    cps = Float64(upreferred(code_frequency / Hz)) / sampling_freq
+    code_phase0 = Float64(code_phase)
 
     tI = zeros(Int64, M, NC)
     tQ = zeros(Int64, M, NC)
     p_sig = Ptr{Int16}(pointer(signal))
 
     blk_off = 0
-    prevlen = 0
     @inbounds while blk_off < num_samples
         len = min(blk, num_samples - blk_off)
-        if prevlen == 0
-            cst = gen_code!(view(extb, 1:(len+span)), ceng, cst)
-        else
-            for i = 1:span
-                extb[i] = extb[prevlen+i]
-            end
-            cst = gen_code!(view(extb, (span+1):(span+len)), ceng, cst)
-        end
+        gen_code!(
+            view(extb, 1:(len+span)), signal_type, prn,
+            sampling_frequency, code_frequency, code_phase0 + cps * blk_off, min_shift,
+        )
         _int16_fill_carrier!(csb, ccb, reng, blk_off, len, phase0, Val(W))
         base = signal_start_sample + blk_off
         for j = 1:M
@@ -520,7 +507,6 @@ function _int16_hybrid_blocked!(
             end
         end
         blk_off += len
-        prevlen = len
     end
 
     if M == 1
