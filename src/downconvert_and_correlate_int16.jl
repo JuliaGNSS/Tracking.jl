@@ -124,8 +124,14 @@ mutable struct Int16ScratchBuffers
     extb::Vector{Int8}
     csb::Vector{Int8}
     ccb::Vector{Int8}
+    # Shared DI/DQ tile (the carrier-wiped measurement) for the multi-signal-per-
+    # sat tile-share path: filled once per block and reused across the sat's
+    # signals (one downconvert per sat, not per signal). Wipe element type.
+    dib::Vector{_INT16_WIPE_TI}
+    dqb::Vector{_INT16_WIPE_TI}
 end
-Int16ScratchBuffers() = Int16ScratchBuffers(Int8[], Int8[], Int8[])
+Int16ScratchBuffers() =
+    Int16ScratchBuffers(Int8[], Int8[], Int8[], _INT16_WIPE_TI[], _INT16_WIPE_TI[])
 
 """
 $(SIGNATURES)
@@ -525,6 +531,264 @@ function _int16_hybrid_blocked!(
             for k = 1:NC
         ]
     end
+end
+
+# ── Multi-signal-per-sat tile-share ───────────────────────────────────────────
+# A satellite carrying several signals on one carrier (e.g. GPS L1 C/A + L1C-D +
+# L1C-P) shares the carrier and therefore the per-sample carrier wipe-off. So
+# per strip-mine block we fill the carrier once and materialise the shared DI/DQ
+# tile (the carrier-wiped measurement) once — ONE downconvert per sat, not per
+# signal — then correlate each signal's own code against that tile. Mirrors the
+# Float32 `downconvert_and_correlate_fused_tuple!`, adapted to the hybrid-blocked
+# strip-mine + integer pipeline.
+
+# Fill the shared DI/DQ tile for the current block: per antenna `j`, the slice
+# `dib/dqb[(j-1)*len + n]` holds the carrier-wiped measurement at sample n.
+# `@generated` so the M antenna slices unroll.
+@generated function _int16_fill_ditile!(
+    dib, dqb, signal, ::NumAnts{M}, csb, ccb, base, len, num_rows, p_sig,
+) where {M}
+    W = _INT16_W
+    TI = _INT16_WIPE_TI
+    widen = TI === Int16 ? :_wide16 : :_wide32
+    passes = Expr(:block)
+    for j = 1:M
+        push!(passes.args, quote
+            colbase = $(j - 1) * num_rows
+            toff = $(j - 1) * len
+            n = 1
+            while n + $W - 1 <= len
+                byte_off = (colbase + base + n - 2) * 2 * sizeof(Int16)
+                mr, mi = _deinterleave_load(SIMD.Vec{$W,$TI}, p_sig, byte_off)
+                cc = $widen(vload(SIMD.Vec{$W,Int8}, ccb, n))
+                sn = $widen(vload(SIMD.Vec{$W,Int8}, csb, n))
+                vstore(mr * cc + mi * sn, dib, toff + n)
+                vstore(mi * cc - mr * sn, dqb, toff + n)
+                n += $W
+            end
+            while n <= len
+                sig = signal[base+n-1, $j]
+                mr_s = $TI(real(sig)); mi_s = $TI(imag(sig))
+                cc_s = $TI(ccb[n]); sn_s = $TI(csb[n])
+                dib[toff+n] = mr_s * cc_s + mi_s * sn_s
+                dqb[toff+n] = mi_s * cc_s - mr_s * sn_s
+                n += 1
+            end
+        end)
+    end
+    quote
+        @inbounds begin
+            $passes
+        end
+        nothing
+    end
+end
+
+# Tile-share kernel for N signals sharing a carrier. Returns a tuple of N
+# per-signal accumulators (`SVector{NCᵢ,ComplexF64}` or `…{SVector{M,…}}`).
+# `@generated` over (M, the signals tuple) so each signal's tap count NCᵢ and the
+# M antenna passes unroll. Per block: fill carrier + DI/DQ tile once, then for
+# each signal fill its code (one-shot `gen_code!` at the block's analytically
+# advanced phase, into the reused `extb`) and accumulate its taps from the tile.
+@generated function _int16_hybrid_blocked_multi!(
+    dc::_Int16DC,
+    signal::AbstractVecOrMat{Complex{Int16}},
+    ::NumAnts{M},
+    signal_types::Tuple,
+    prn::Integer,
+    all_shifts::Tuple{Vararg{SVector}},
+    code_phases::Tuple,
+    code_freqs::Tuple,
+    carrier_phase,
+    carrier_frequency,
+    sampling_frequency,
+    signal_start_sample::Integer,
+    num_samples::Integer,
+) where {M}
+    W = _INT16_W
+    TI = _INT16_WIPE_TI
+    use_madd = _INT16_HAS_MADDWD && TI === Int16
+    AW = use_madd ? W ÷ 2 : W
+    N = length(all_shifts.parameters)
+    NCs = [length(all_shifts.parameters[i]) for i = 1:N]
+
+    setup = Expr(:block)
+    maxspan = Expr(:call, :max)
+    for i = 1:N
+        push!(setup.args, :($(Symbol("sh_$i")) = all_shifts[$i]))
+        push!(setup.args, :($(Symbol("mins_$i")) = minimum($(Symbol("sh_$i")))))
+        push!(setup.args,
+            :($(Symbol("span_$i")) = maximum($(Symbol("sh_$i"))) - $(Symbol("mins_$i"))))
+        push!(setup.args,
+            :($(Symbol("cps_$i")) = Float64(upreferred(code_freqs[$i] / Hz)) / sampling_freq))
+        for k = 1:NCs[i]
+            push!(setup.args,
+                :($(Symbol("off_$(i)_$k")) = $(Symbol("sh_$i"))[$k] - $(Symbol("mins_$i"))))
+        end
+        push!(maxspan.args, Symbol("span_$i"))
+        for j = 1:M, k = 1:NCs[i]
+            push!(setup.args, :($(Symbol("tI_$(i)_$(j)_$k")) = zero(Int64)))
+            push!(setup.args, :($(Symbol("tQ_$(i)_$(j)_$k")) = zero(Int64)))
+        end
+    end
+
+    # Per-signal: one-shot code fill into `extb`, then M antenna passes that
+    # accumulate the signal's taps from the shared DI/DQ tile.
+    function signal_corr(i)
+        b = Expr(:block)
+        push!(b.args, :(blk_phase = code_phases[$i] + $(Symbol("cps_$i")) * blk_off))
+        push!(b.args, :(gen_code!(
+            view(extb, 1:(len+$(Symbol("span_$i")))),
+            signal_types[$i], prn, sampling_frequency, code_freqs[$i],
+            blk_phase, $(Symbol("mins_$i")),
+        )))
+        for j = 1:M
+            blk_init = Expr(:block); flush = Expr(:block); chunk = Expr(:block); scalar = Expr(:block)
+            for k = 1:NCs[i]
+                aI = Symbol("aI_$k"); aQ = Symbol("aQ_$k")
+                tI = Symbol("tI_$(i)_$(j)_$k"); tQ = Symbol("tQ_$(i)_$(j)_$k")
+                offk = Symbol("off_$(i)_$k")
+                push!(blk_init.args, :($aI = zero(SIMD.Vec{$AW,Int32})))
+                push!(blk_init.args, :($aQ = zero(SIMD.Vec{$AW,Int32})))
+                push!(flush.args, :($tI += Int64(sum($aI))))
+                push!(flush.args, :($tQ += Int64(sum($aQ))))
+                if use_madd
+                    push!(chunk.args, quote
+                        codew = _wide16(vload(SIMD.Vec{$W,Int8}, extb, n + $offk))
+                        $aI += _maddacc(codew, DI)
+                        $aQ += _maddacc(codew, DQ)
+                    end)
+                else
+                    push!(chunk.args, quote
+                        codew = _wide32(vload(SIMD.Vec{$W,Int8}, extb, n + $offk))
+                        $aI += codew * DI
+                        $aQ += codew * DQ
+                    end)
+                end
+                push!(scalar.args, quote
+                    c = Int32(extb[n+$offk])
+                    $tI += Int64(c * Int32(dib[toff+n]))
+                    $tQ += Int64(c * Int32(dqb[toff+n]))
+                end)
+            end
+            push!(b.args, quote
+                $blk_init
+                toff = $(j - 1) * len
+                n = 1
+                while n + $W - 1 <= len
+                    DI = vload(SIMD.Vec{$W,$TI}, dib, toff + n)
+                    DQ = vload(SIMD.Vec{$W,$TI}, dqb, toff + n)
+                    $chunk
+                    n += $W
+                end
+                $flush
+                while n <= len
+                    $scalar
+                    n += 1
+                end
+            end)
+        end
+        b
+    end
+    sigs = Expr(:block)
+    for i = 1:N
+        push!(sigs.args, signal_corr(i))
+    end
+
+    function tap(i, k)
+        if M == 1
+            :(complex(Float64($(Symbol("tI_$(i)_1_$k"))), Float64($(Symbol("tQ_$(i)_1_$k")))))
+        else
+            ant = [:(complex(Float64($(Symbol("tI_$(i)_$(j)_$k"))), Float64($(Symbol("tQ_$(i)_$(j)_$k"))))) for j = 1:M]
+            :(SVector{$M,ComplexF64}(tuple($(ant...))))
+        end
+    end
+    finals = Expr(:tuple)
+    for i = 1:N
+        taps = [tap(i, k) for k = 1:NCs[i]]
+        push!(finals.args, :(SVector{$(NCs[i])}(tuple($(taps...)))))
+    end
+
+    quote
+        W = $W
+        sampling_freq = Float64(upreferred(sampling_frequency / Hz))
+        carrier_freq = Float64(upreferred(carrier_frequency / Hz))
+        reng = carrier_engine(dc.table, carrier_freq / sampling_freq)
+        phase0 = Float64(carrier_phase)
+        num_rows = size(signal, 1)
+        $setup
+        maxspan_v = $maxspan
+
+        bufs = _scratch_buffers(dc)
+        blk = dc.blk
+        ncar = (cld(blk, W) + 4) * W
+        length(bufs.extb) < blk + maxspan_v && resize!(bufs.extb, blk + maxspan_v)
+        length(bufs.csb) < ncar && resize!(bufs.csb, ncar)
+        length(bufs.ccb) < ncar && resize!(bufs.ccb, ncar)
+        ntile = blk * $M
+        length(bufs.dib) < ntile && resize!(bufs.dib, ntile)
+        length(bufs.dqb) < ntile && resize!(bufs.dqb, ntile)
+        extb = bufs.extb; csb = bufs.csb; ccb = bufs.ccb; dib = bufs.dib; dqb = bufs.dqb
+
+        p_sig = Ptr{Int16}(pointer(signal))
+        blk_off = 0
+        @inbounds while blk_off < num_samples
+            len = min(blk, num_samples - blk_off)
+            _int16_fill_carrier!(csb, ccb, reng, blk_off, len, phase0, Val(W))
+            base = signal_start_sample + blk_off
+            _int16_fill_ditile!(dib, dqb, signal, NumAnts{$M}(), csb, ccb, base, len, num_rows, p_sig)
+            $sigs
+            blk_off += len
+        end
+        $finals
+    end
+end
+
+# Multi-signal-per-sat correlate: shares one carrier downconvert across the sat's
+# signals via the tile-share kernel. Returns the per-signal
+# `(new_correlator, is_integration_completed)` tuples.
+@inline function _correlate_signals(
+    signals::Tuple{TrackedSignal,TrackedSignal,Vararg{TrackedSignal}},
+    per_signal_completed::Tuple,
+    dc::_Int16DC,
+    signal,
+    code_doppler,
+    code_phase,
+    carrier_frequency,
+    carrier_phase,
+    sampling_frequency,
+    signal_start_sample,
+    samples_to_integrate,
+    prn,
+    num_samples_signal,
+)
+    params = map(signals) do head
+        _signal_replica_params(head, code_doppler, code_phase, sampling_frequency, num_samples_signal)
+    end
+    correlators = map(s -> s.correlator, signals)
+    signal_types = map(s -> s.signal, signals)
+    all_shifts = map(p -> p.sample_shifts, params)
+    code_phases = map(p -> p.signal_code_phase, params)
+    code_freqs = map(p -> p.code_frequency, params)
+    new_accs = _int16_hybrid_blocked_multi!(
+        dc,
+        signal,
+        _num_ants_val(correlators[1]),
+        signal_types,
+        prn,
+        all_shifts,
+        code_phases,
+        code_freqs,
+        carrier_phase,
+        carrier_frequency,
+        sampling_frequency,
+        signal_start_sample,
+        samples_to_integrate,
+    )
+    new_corrs = map(correlators, new_accs) do c, a
+        update_accumulator(c, get_accumulators(c) .+ a)
+    end
+    map(tuple, new_corrs, per_signal_completed)
 end
 
 # Per-signal correlate for the integer backend: single signal, static tap count,
