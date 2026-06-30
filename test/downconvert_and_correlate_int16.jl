@@ -10,6 +10,7 @@ using Tracking:
     get_sat_state, get_carrier_doppler, get_prompt, get_early, get_late,
     get_accumulators, get_correlator_sample_shifts, update_accumulator,
     AbstractCorrelator, EarlyPromptLateCorrelator, VeryEarlyPromptLateCorrelator, NumAnts,
+    TrackedSignal, DefaultPostCorrFilter, ConventionalAssistedPLLAndDLL,
     CPUThreadedDownconvertAndCorrelator, Int16DownconvertAndCorrelator,
     Int16ThreadedDownconvertAndCorrelator
 import Tracking
@@ -152,6 +153,34 @@ end
         # carrier, DI), so they agree element-wise to floating-point round-off.
         for k = 1:3
             @test ad[k] ≈ as[k] rtol = 1e-9
+        end
+    end
+
+    # Multi-signal-per-sat tile-share: a sat carrying N identical GPS L1 C/A
+    # signals shares one carrier downconvert. Each signal's correlator must equal
+    # the single-signal result (same code/carrier; only the downconvert is shared).
+    @testset "multi-signal-per-sat tile-share (N=$N) matches single signal" for N in (2, 3)
+        sig, fs = GPSL1CA(), 5e6Hz
+        nsamp = round(Int, (fs / 1Hz) * 1e-3)
+        cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
+        meas = (l1 = BandMeasurement(cap, fs, 0.0Hz),)
+        dc = Int16ThreadedDownconvertAndCorrelator()
+        est = ConventionalAssistedPLLAndDLL()
+        mksig() = TrackedSignal(sig; num_ants = NumAnts(1),
+            correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
+            post_corr_filter = DefaultPostCorrFilter())
+        # single-signal reference
+        cs = first(get_sat_state(
+            downconvert_and_correlate(dc, meas,
+                TrackState(sig, TrackedSat((mksig(),), 1, 100.0, 200Hz; doppler_estimator = est);
+                    doppler_estimator = est)), 1).signals).correlator
+        # N-signal sat
+        satN = TrackedSat(ntuple(_ -> mksig(), N), 1, 100.0, 200Hz; doppler_estimator = est)
+        tsN = downconvert_and_correlate(dc, meas, TrackState(sig, satN; doppler_estimator = est))
+        for s in get_sat_state(tsN, 1).signals
+            @test get_prompt(s.correlator) ≈ get_prompt(cs)
+            @test get_early(s.correlator) ≈ get_early(cs)
+            @test get_late(s.correlator) ≈ get_late(cs)
         end
     end
 
