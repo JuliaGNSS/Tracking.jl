@@ -259,28 +259,31 @@ end
     signal_temp =
         cis.(
             2π .* carrier_doppler_gps .* range ./ sampling_frequency .+ start_carrier_phase,
-        ) .* _unit_code(gen_code(
-            4000,
-            gpsl1,
-            prn,
-            sampling_frequency,
-            code_frequency_gps,
-            start_code_phase,
-        )) .+
+        ) .* _unit_code(
+            gen_code(
+                4000,
+                gpsl1,
+                prn,
+                sampling_frequency,
+                code_frequency_gps,
+                start_code_phase,
+            ),
+        ) .+
         cis.(
             2π .* carrier_doppler_gal .* range ./ sampling_frequency .+ start_carrier_phase,
-        ) .* _unit_code(gen_code(
-            4000,
-            galileo_e1b,
-            prn,
-            sampling_frequency,
-            code_frequency_gal,
-            start_code_phase,
-        ))
+        ) .* _unit_code(
+            gen_code(
+                4000,
+                galileo_e1b,
+                prn,
+                sampling_frequency,
+                code_frequency_gal,
+                start_code_phase,
+            ),
+        )
     # Scale to fill (half) the integer type's range from the (unit-amplitude) signal.
     scaling =
-        type <: Integer ?
-        fld(typemax(type), 2 * ceil(Int, maximum(abs, signal_temp))) : 1
+        type <: Integer ? fld(typemax(type), 2 * ceil(Int, maximum(abs, signal_temp))) : 1
     signal =
         type <: Integer ?
         complex.(
@@ -316,25 +319,29 @@ end
             cis.(
                 2π .* carrier_doppler_gps .* range ./ sampling_frequency .+
                 carrier_phase_gps,
-            ) .* _unit_code(gen_code(
-                4000,
-                gpsl1,
-                prn,
-                sampling_frequency,
-                code_frequency_gps,
-                code_phase_gps,
-            )) .+
+            ) .* _unit_code(
+                gen_code(
+                    4000,
+                    gpsl1,
+                    prn,
+                    sampling_frequency,
+                    code_frequency_gps,
+                    code_phase_gps,
+                ),
+            ) .+
             cis.(
                 2π .* carrier_doppler_gal .* range ./ sampling_frequency .+
                 carrier_phase_gal,
-            ) .* _unit_code(gen_code(
-                4000,
-                galileo_e1b,
-                prn,
-                sampling_frequency,
-                code_frequency_gal,
-                code_phase_gal,
-            ))
+            ) .* _unit_code(
+                gen_code(
+                    4000,
+                    galileo_e1b,
+                    prn,
+                    sampling_frequency,
+                    code_frequency_gal,
+                    code_phase_gal,
+                ),
+            )
         signal =
             type <: Integer ?
             complex.(

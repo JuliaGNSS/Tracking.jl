@@ -554,25 +554,24 @@ end
     # so the code replica buffer is `Int8`. The fused kernel reads the replica as
     # generic `CT = eltype(code_replica)` and widens to Float32, so Int8 works
     # unchanged; CBOC (Galileo E1B) is the Int8 integer-amplitude approximation.
-    new_corr =
-        _with_code_replica_buffer(dc, Int8, p.code_replica_size) do code_replica
-            _correlate_one_signal!(
-                dc,
-                code_replica,
-                s,
-                head.correlator,
-                signal,
-                p.sample_shifts,
-                p.signal_code_phase,
-                carrier_phase,
-                p.code_frequency,
-                carrier_frequency,
-                sampling_frequency,
-                signal_start_sample,
-                samples_to_integrate,
-                prn,
-            )
-        end
+    new_corr = _with_code_replica_buffer(dc, Int8, p.code_replica_size) do code_replica
+        _correlate_one_signal!(
+            dc,
+            code_replica,
+            s,
+            head.correlator,
+            signal,
+            p.sample_shifts,
+            p.signal_code_phase,
+            carrier_phase,
+            p.code_frequency,
+            carrier_frequency,
+            sampling_frequency,
+            signal_start_sample,
+            samples_to_integrate,
+            prn,
+        )
+    end
     ((new_corr, per_signal_completed[1]),)
 end
 
