@@ -7,7 +7,9 @@
 # on one) keeps the call sites simple. Both CPU backends share this
 # struct: the single-threaded one holds a single `ScratchBuffers`, the
 # threaded one holds a `Vector{ScratchBuffers}` (one per thread).
-mutable struct ScratchBuffers
+# Immutable: the buffers are only ever `resize!`d / `push!`ed in place (their
+# fields are never reassigned), so no mutability is needed.
+struct ScratchBuffers
     code_replica::Vector{UInt8}
     extra_code_replicas::Vector{Vector{UInt8}}
     tile_re::Vector{UInt8}
@@ -549,25 +551,29 @@ end
         sampling_frequency,
         num_samples_signal,
     )
-    new_corr =
-        _with_code_replica_buffer(dc, get_code_type(s), p.code_replica_size) do code_replica
-            _correlate_one_signal!(
-                dc,
-                code_replica,
-                s,
-                head.correlator,
-                signal,
-                p.sample_shifts,
-                p.signal_code_phase,
-                carrier_phase,
-                p.code_frequency,
-                carrier_frequency,
-                sampling_frequency,
-                signal_start_sample,
-                samples_to_integrate,
-                prn,
-            )
-        end
+    # GNSSSignals' embedded-LUT `gen_code!` is Int8-only (the legacy fixed-point
+    # generator that emitted `get_code_type(s)` — Int16/Float32 — was removed),
+    # so the code replica buffer is `Int8`. The fused kernel reads the replica as
+    # generic `CT = eltype(code_replica)` and widens to Float32, so Int8 works
+    # unchanged; CBOC (Galileo E1B) is the Int8 integer-amplitude approximation.
+    new_corr = _with_code_replica_buffer(dc, Int8, p.code_replica_size) do code_replica
+        _correlate_one_signal!(
+            dc,
+            code_replica,
+            s,
+            head.correlator,
+            signal,
+            p.sample_shifts,
+            p.signal_code_phase,
+            carrier_phase,
+            p.code_frequency,
+            carrier_frequency,
+            sampling_frequency,
+            signal_start_sample,
+            samples_to_integrate,
+            prn,
+        )
+    end
     ((new_corr, per_signal_completed[1]),)
 end
 
@@ -669,7 +675,7 @@ end
             num_samples_signal,
         )
         slot = _code_replica_slot(bufs, i)
-        CT = get_code_type(s)
+        CT = Int8  # embedded-LUT `gen_code!` is Int8-only; see `_correlate_signals`
         nbytes = p.code_replica_size * sizeof(CT)
         length(slot) < nbytes && resize!(slot, nbytes)
         # The raw pointer in this view outlives this function — the caller

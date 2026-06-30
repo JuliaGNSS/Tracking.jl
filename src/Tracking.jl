@@ -5,6 +5,7 @@ using DocStringExtensions
 using FastSinCos
 using GNSSSignals
 using SIMD
+using SinCosLUT
 using SpecialFunctions: erfinv
 using StaticArrays
 using TrackingLoopFilters
@@ -68,6 +69,8 @@ export get_early,
     update_estimator_on_handoff,
     CPUDownconvertAndCorrelator,
     CPUThreadedDownconvertAndCorrelator,
+    Int16DownconvertAndCorrelator,
+    Int16ThreadedDownconvertAndCorrelator,
     ConventionalPLLAndDLL,
     ConventionalAssistedPLLAndDLL,
     DefaultPostCorrFilter,
@@ -199,6 +202,7 @@ include("sample_parameters.jl")
 include("downconvert_and_correlate.jl")
 include("downconvert_and_correlate_fused.jl")
 include("downconvert_and_correlate_cpu.jl")
+include("downconvert_and_correlate_int16.jl")
 include("conventional_pll_and_dll.jl")
 include("tracking_state.jl")
 include("track.jl")
