@@ -412,6 +412,121 @@ end
     end
 end
 
+# Dynamic (runtime tap count) fallback: correlators whose sample shifts are a
+# runtime-sized `AbstractVector` (e.g. a `Vector`-accumulator correlator —
+# issue #126 (b)). Mirrors the Float32 backend's `AbstractVector`-shifts path.
+# Loops over taps/antennas at runtime and uses the exact Int32 wipe + per-chunk
+# horizontal sum, so it is not the hot path but stays correct for any tap count;
+# returns `Vector{ComplexF64}` (M=1) or `Vector{SVector{M,ComplexF64}}` (M>1).
+# `SVector` shifts are more specific and dispatch to the `@generated` method
+# above, so EPL/VEPL keep the fast unrolled kernel.
+function _int16_hybrid_blocked!(
+    dc::_Int16DC,
+    signal::AbstractVecOrMat{Complex{Int16}},
+    ::NumAnts{M},
+    signal_type,
+    prn::Integer,
+    sample_shifts::AbstractVector,
+    code_phase,
+    carrier_phase,
+    code_frequency,
+    carrier_frequency,
+    sampling_frequency,
+    signal_start_sample::Integer,
+    num_samples::Integer,
+) where {M}
+    W = _INT16_W
+    NC = length(sample_shifts)
+    min_shift = minimum(sample_shifts)
+    max_shift = maximum(sample_shifts)
+    span = max_shift - min_shift
+    offs = [Int(sample_shifts[k]) - min_shift for k = 1:NC]   # extb read offsets
+    num_rows = size(signal, 1)
+
+    bufs = _scratch_buffers(dc)
+    blk = dc.blk
+    ncar = (cld(blk, W) + 4) * W
+    length(bufs.extb) < blk + span && resize!(bufs.extb, blk + span)
+    length(bufs.csb) < ncar && resize!(bufs.csb, ncar)
+    length(bufs.ccb) < ncar && resize!(bufs.ccb, ncar)
+    extb = bufs.extb
+    csb = bufs.csb
+    ccb = bufs.ccb
+
+    carrier_freq = Float64(upreferred(carrier_frequency / Hz))
+    sampling_freq = Float64(upreferred(sampling_frequency / Hz))
+    reng = carrier_engine(dc.table, carrier_freq / sampling_freq)
+    phase0 = Float64(carrier_phase)
+
+    ceng = code_engine(
+        signal_type, prn, sampling_frequency, code_frequency;
+        start_phase = Float64(code_phase), start_index_shift = min_shift,
+    )
+    cst = code_state(ceng)
+
+    tI = zeros(Int64, M, NC)
+    tQ = zeros(Int64, M, NC)
+    p_sig = Ptr{Int16}(pointer(signal))
+
+    blk_off = 0
+    prevlen = 0
+    @inbounds while blk_off < num_samples
+        len = min(blk, num_samples - blk_off)
+        if prevlen == 0
+            cst = gen_code!(view(extb, 1:(len+span)), ceng, cst)
+        else
+            for i = 1:span
+                extb[i] = extb[prevlen+i]
+            end
+            cst = gen_code!(view(extb, (span+1):(span+len)), ceng, cst)
+        end
+        _int16_fill_carrier!(csb, ccb, reng, blk_off, len, phase0, Val(W))
+        base = signal_start_sample + blk_off
+        for j = 1:M
+            colbase = (j - 1) * num_rows
+            n = 1
+            while n + W - 1 <= len
+                byte_off = (colbase + base + n - 2) * 2 * sizeof(Int16)
+                mr, mi = _deinterleave_load(SIMD.Vec{W,Int32}, p_sig, byte_off)
+                cc = _wide32(vload(SIMD.Vec{W,Int8}, ccb, n))
+                sn = _wide32(vload(SIMD.Vec{W,Int8}, csb, n))
+                DI = mr * cc + mi * sn
+                DQ = mi * cc - mr * sn
+                for k = 1:NC
+                    codev = _wide32(vload(SIMD.Vec{W,Int8}, extb, n + offs[k]))
+                    tI[j, k] += Int64(sum(codev * DI))
+                    tQ[j, k] += Int64(sum(codev * DQ))
+                end
+                n += W
+            end
+            while n <= len
+                sig = signal[base+n-1, j]
+                mr_s = Int32(real(sig)); mi_s = Int32(imag(sig))
+                cc_s = Int32(ccb[n]); sn_s = Int32(csb[n])
+                di = mr_s * cc_s + mi_s * sn_s
+                dq = mi_s * cc_s - mr_s * sn_s
+                for k = 1:NC
+                    c = Int32(extb[n+offs[k]])
+                    tI[j, k] += Int64(c * di)
+                    tQ[j, k] += Int64(c * dq)
+                end
+                n += 1
+            end
+        end
+        blk_off += len
+        prevlen = len
+    end
+
+    if M == 1
+        return [complex(Float64(tI[1, k]), Float64(tQ[1, k])) for k = 1:NC]
+    else
+        return [
+            SVector{M,ComplexF64}(ntuple(j -> complex(Float64(tI[j, k]), Float64(tQ[j, k])), M))
+            for k = 1:NC
+        ]
+    end
+end
+
 # Per-signal correlate for the integer backend: single signal, static tap count,
 # any antenna count M. Returns the one-tuple
 # `((new_correlator, is_integration_completed),)` matching the Float32 backend's
