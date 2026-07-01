@@ -12,7 +12,7 @@ using Tracking:
     default_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     get_bit_edge_or_secondary_code_tolerance,
-    EarlyPromptLateCorrelator,
+    VeryEarlyPromptLateCorrelator,
     NumAnts,
     SyncResult
 
@@ -41,18 +41,13 @@ const L1C_P_MAX_ERRORS =
         )
     ).found == false
 
-    # TMBOC(6,1,4/33): narrow 0.1-chip early-late spacing keeps the taps on
-    # the BOC main peak rather than the side-lobes (see get_default_correlator).
+    # TMBOC(6,1,4/33): the default is the VeryEarlyPromptLate correlator, whose
+    # very-early/very-late taps feed the VEML discriminator that mitigates the
+    # BOC side-peak false locks — same as the Galileo E1 signals.
     @test @inferred(get_default_correlator(gpsl1c_p, NumAnts(1))) ==
-          EarlyPromptLateCorrelator(;
-        num_ants = NumAnts(1),
-        preferred_early_late_to_prompt_code_shift = 0.1,
-    )
+          VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(1))
     @test @inferred(get_default_correlator(gpsl1c_p, NumAnts(3))) ==
-          EarlyPromptLateCorrelator(;
-        num_ants = NumAnts(3),
-        preferred_early_late_to_prompt_code_shift = 0.1,
-    )
+          VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
     # 10 ms primary period at BL·T ≈ 0.018 → 1.8 Hz carrier / 0.1 Hz code.
     @test @inferred(default_carrier_loop_filter_bandwidth(gpsl1c_p)) ≈ 1.8Hz

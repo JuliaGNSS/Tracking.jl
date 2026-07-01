@@ -55,10 +55,16 @@ Per-signal contract. *Min-to-fire* is the smallest `num_code_blocks` the detecto
 | GPS L1 C/A | 40 blocks | `UInt64` (40 bits used) | bit-edge `0xfffff` (20+20) | 1 error (2.5 %) | 0 | 20 |
 | Galileo E1B | n/a | `UInt8` (unused) | trivial (1 block per symbol) | n/a | 0 | 1 |
 | GPS L5I | 10 blocks | `UInt32` (low 10 bits used) | NH10 `0x035` (rotation search) | 0 errors (2.5 % → exact match) | `0..9` | 10 (secondary code) |
+| GPS L5Q | 20 blocks | `UInt32` (low 20 bits used) | NH20 (rotation search) | 0 errors (2.5 % → exact match) | `0..19` | 20 (secondary code, pilot) |
 | GPS L1C-D | n/a | `UInt8` (unused) | trivial (1 block per symbol) | n/a | 0 | 1 |
 | GPS L1C-P | 1800 blocks | `UInt1800` (exact width) | per-PRN overlay (rotation search) | 45 errors (2.5 %) | `0..1799` | n/a (pilot) |
+| GPS L2CM | n/a | `UInt8` (unused) | trivial (1 block per symbol) | n/a | 0 | 1 |
+| GPS L2CL | never fires | `UInt8` (unused) | none (dataless pilot, no secondary code) | n/a | 0 | n/a (pilot) |
+| Galileo E1C | 25 blocks | `UInt32` (low 25 bits used) | CS25 (rotation search) | 0 errors (2.5 % → exact match) | `0..24` | 25 (secondary code, pilot) |
+| Galileo E5a-I | 20 blocks | `UInt32` (low 20 bits used) | CS20 (rotation search) | 0 errors (2.5 % → exact match) | `0..19` | 20 (secondary code) |
+| Galileo E5a-Q | 100 blocks | `UInt128` (low 100 bits used) | per-PRN CS100 (rotation search) | 2 errors (2.5 %) | `0..99` | 100 (secondary code, pilot) |
 
-The buffer-width type threads through `BitBuffer{B}` and `TrackedSignal{Sig, B, C, PCF}` as a type parameter. The L1C-P case uses an exact-width `UInt1800` defined via `BitIntegers.@define_integers 1800`; the other signals use built-in `UInt8` / `UInt32` / `UInt64`.
+The buffer-width type threads through `BitBuffer{B}` and `TrackedSignal{Sig, B, C, PCF}` as a type parameter. The L1C-P case uses an exact-width `UInt1800` defined via `BitIntegers.@define_integers 1800`; the other signals use built-in `UInt8` / `UInt32` / `UInt64` / `UInt128`. The secondary-code signals other than GPS L5I / L1C-P get their packed reference from the generic `_packed_secondary_code(::Type{B}, ::AbstractGNSSSignal, prn)`, which derives it directly from `get_secondary_code(signal)` — so a new secondary-coded signal needs no bespoke template, only a wide enough `get_code_block_buffer_type`.
 
 The 2.5 % tolerance is a package-wide default and adjustable per-signal via dispatch:
 

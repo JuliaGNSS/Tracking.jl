@@ -20,7 +20,8 @@ using Tracking:
     get_num_bits,
     get_soft_bits,
     has_bit_or_secondary_code_been_found,
-    set_preferred_num_code_blocks_to_integrate!
+    set_preferred_num_code_blocks_to_integrate!,
+    EarlyPromptLateCorrelator
 
 @testset "Bit detection integration test" begin
     gpsl1 = GPSL1CA()
@@ -384,7 +385,20 @@ end
     secondary_code_length = get_secondary_code_length(gpsl1c_p)  # 1800
     period_samples = round(Int, 13e6 / 100)                    # 10 ms = one primary period
 
-    track_state = TrackState(gpsl1c_p, [TrackedSat(gpsl1c_p, prn, 0.0, 0.0Hz)])
+    track_state = TrackState(
+        gpsl1c_p,
+        [
+            TrackedSat(
+                gpsl1c_p,
+                prn,
+                0.0,
+                0.0Hz;
+                correlator = EarlyPromptLateCorrelator(;
+                    preferred_early_late_to_prompt_code_shift = 0.1,
+                ),
+            ),
+        ],
+    )
     synced_at_block = -1
     synced_code_phase = NaN
     for index = 1:(secondary_code_length+5)

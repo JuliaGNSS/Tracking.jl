@@ -48,8 +48,8 @@ end
     x
 end
 
-# `get_default_correlator(::GPSL1C_P)` — the narrow-spacing BOC default —
-# is defined jointly with GPS L1C-D in `gpsl1c_d.jl` (one `Union` method).
+# `get_default_correlator(::GPSL1C_P)` — the VeryEarlyPromptLate BOC default —
+# is defined jointly with GPS L1C-D in `l1c_d.jl` (one `Union` method).
 
 # 1800-chip overlay search needs an exact-width 1800-bit container. The
 # `UInt1800` alias is defined in the top-level Tracking module via
