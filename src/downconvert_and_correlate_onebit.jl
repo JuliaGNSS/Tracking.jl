@@ -22,8 +22,8 @@
 # trade for bit-wise speed and 1-bit memory bandwidth. Accumulators are converted to
 # `ComplexF64` (M=1) / `SVector{M,ComplexF64}` (M>1) at finalize; every downstream
 # consumer (discriminators, C/N0, bit buffer) is ratio/normalised, so the absolute 1-bit
-# scale is immaterial. Scope mirrors the integer backend: one signal per correlate call
-# (a multi-signal sat correlates its signals in turn), static tap counts, any antenna M.
+# scale is immaterial. Scope mirrors the integer backend: static tap counts, any antenna M. A
+# multi-signal sat shares one carrier + measurement downconvert across its signals (tile-share).
 
 import SinCosLUT
 using SinCosLUT: generate_carrier_signs!
