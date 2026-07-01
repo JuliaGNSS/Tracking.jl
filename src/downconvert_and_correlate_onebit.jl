@@ -30,18 +30,39 @@
 const _ONEBIT_BLK = 8192
 
 # ── sign-mask helpers: pack the sign bit of 64 lanes into a UInt64 (bit j ⇔ lane j < 0) ──
-@inline _ob_mm(v::SIMD.Vec{64,Int8}) = Base.llvmcall(("""
-    define i64 @entry(<64 x i8> %v) #0 { %c = icmp slt <64 x i8> %v, zeroinitializer
-      %m = bitcast <64 x i1> %c to i64 ret i64 %m } attributes #0={alwaysinline}""", "entry"),
-    UInt64, Tuple{NTuple{64,Base.VecElement{Int8}}}, v.data)
-@inline _ob_mm(v::SIMD.Vec{64,Int16}) = Base.llvmcall(("""
-    define i64 @entry(<64 x i16> %v) #0 { %c = icmp slt <64 x i16> %v, zeroinitializer
-      %m = bitcast <64 x i1> %c to i64 ret i64 %m } attributes #0={alwaysinline}""", "entry"),
-    UInt64, Tuple{NTuple{64,Base.VecElement{Int16}}}, v.data)
-@inline _ob_mm32(v::SIMD.Vec{64,UInt32}) = Base.llvmcall(("""
-    define i64 @entry(<64 x i32> %v) #0 { %c = icmp slt <64 x i32> %v, zeroinitializer
-      %m = bitcast <64 x i1> %c to i64 ret i64 %m } attributes #0={alwaysinline}""", "entry"),
-    UInt64, Tuple{NTuple{64,Base.VecElement{Int32}}}, reinterpret(SIMD.Vec{64,Int32}, v).data)
+@inline _ob_mm(v::SIMD.Vec{64,Int8}) = Base.llvmcall(
+    (
+        """
+define i64 @entry(<64 x i8> %v) #0 { %c = icmp slt <64 x i8> %v, zeroinitializer
+  %m = bitcast <64 x i1> %c to i64 ret i64 %m } attributes #0={alwaysinline}""",
+        "entry",
+    ),
+    UInt64,
+    Tuple{NTuple{64,Base.VecElement{Int8}}},
+    v.data,
+)
+@inline _ob_mm(v::SIMD.Vec{64,Int16}) = Base.llvmcall(
+    (
+        """
+define i64 @entry(<64 x i16> %v) #0 { %c = icmp slt <64 x i16> %v, zeroinitializer
+  %m = bitcast <64 x i1> %c to i64 ret i64 %m } attributes #0={alwaysinline}""",
+        "entry",
+    ),
+    UInt64,
+    Tuple{NTuple{64,Base.VecElement{Int16}}},
+    v.data,
+)
+@inline _ob_mm32(v::SIMD.Vec{64,UInt32}) = Base.llvmcall(
+    (
+        """
+define i64 @entry(<64 x i32> %v) #0 { %c = icmp slt <64 x i32> %v, zeroinitializer
+  %m = bitcast <64 x i1> %c to i64 ret i64 %m } attributes #0={alwaysinline}""",
+        "entry",
+    ),
+    UInt64,
+    Tuple{NTuple{64,Base.VecElement{Int32}}},
+    reinterpret(SIMD.Vec{64,Int32}, v).data,
+)
 
 @inline @generated _ob_iota() =
     :(SIMD.Vec{64,UInt32}($(Expr(:tuple, (UInt32(j) for j = 0:63)...))))
@@ -229,15 +250,15 @@ const _OneBitDC =
     # one XOR + count_ones per (tap, product).
     body = Expr(:block)
     for j = 1:M
-        push!(body.args, :(mr = mrb[$(j - 1) * wpb + w]))
-        push!(body.args, :(mi = mib[$(j - 1) * wpb + w]))
+        push!(body.args, :(mr = mrb[$(j-1)*wpb+w]))
+        push!(body.args, :(mi = mib[$(j-1)*wpb+w]))
         push!(body.args, :(prc = mr ⊻ cosv))
         push!(body.args, :(pis = mi ⊻ sinv))
         push!(body.args, :(pic = mi ⊻ cosv))
         push!(body.args, :(prs = mr ⊻ sinv))
         for k = 1:NC
             # tap offset is baked into the packed plane (see _ob_pack_code!); index by (k-1)·wpb+w
-            push!(body.args, :(cw = codeb[$(k - 1) * wpb + w]))
+            push!(body.args, :(cw = codeb[$(k-1)*wpb+w]))
             push!(body.args, :($(Symbol("A_$(j)_$k")) += count_ones(cw ⊻ prc)))
             push!(body.args, :($(Symbol("B_$(j)_$k")) += count_ones(cw ⊻ pis)))
             push!(body.args, :($(Symbol("C_$(j)_$k")) += count_ones(cw ⊻ pic)))
@@ -271,7 +292,9 @@ const _OneBitDC =
             ArgumentError(
                 string(
                     "OneBitDownconvertAndCorrelator supports BPSK (±1 integer code) signals ",
-                    "only; got ", typeof(signal_type), " with code type ",
+                    "only; got ",
+                    typeof(signal_type),
+                    " with code type ",
                     get_code_type(signal_type),
                     ". Bit-wise correlation is awkward for non-binary (CBOC/BOC) modulations.",
                 ),
@@ -323,13 +346,42 @@ const _OneBitDC =
                 code_phase0 + cps_code * blk_off,
                 min_shift,
             )
-            $(Expr(:block, (:(_ob_pack_code!(codeb, ($k - 1) * wpb, extb, $(Symbol("off_$k")), nwb, r)) for k = 1:NC)...))
+            $(Expr(
+                :block,
+                (
+                    :(_ob_pack_code!(
+                        codeb,
+                        ($k - 1) * wpb,
+                        extb,
+                        $(Symbol("off_$k")),
+                        nwb,
+                        r,
+                    )) for k = 1:NC
+                )...,
+            ))
             # carrier sign planes (shared across antennas & taps)
             base0 = phase0 + fw * UInt32(blk_off)
             _ob_fill_carrier!(sinw, cosw, base0, fw, nwb, r)
             # measurement sign planes, per antenna
             base = signal_start_sample + blk_off
-            $(Expr(:block, (:(_ob_pack_meas!(mrb, mib, $(j - 1) * wpb, signal, $j, p_sig, $(j - 1) * num_rows, base, len, nwb, r)) for j = 1:M)...))
+            $(Expr(
+                :block,
+                (
+                    :(_ob_pack_meas!(
+                        mrb,
+                        mib,
+                        $(j - 1) * wpb,
+                        signal,
+                        $j,
+                        p_sig,
+                        $(j - 1) * num_rows,
+                        base,
+                        len,
+                        nwb,
+                        r,
+                    )) for j = 1:M
+                )...,
+            ))
             # XOR + popcount accumulate
             for w = 1:nwb
                 cosv = cosw[w];
@@ -360,13 +412,30 @@ end
     num_samples_signal,
 )
     head = signals[1]
-    p = _signal_replica_params(head, code_doppler, code_phase, sampling_frequency, num_samples_signal)
-    new_acc = _onebit_hybrid_blocked!(
-        dc, signal, _ob_num_ants_val(head.correlator), head.signal, prn,
-        p.sample_shifts, p.signal_code_phase, carrier_phase, p.code_frequency,
-        carrier_frequency, sampling_frequency, signal_start_sample, samples_to_integrate,
+    p = _signal_replica_params(
+        head,
+        code_doppler,
+        code_phase,
+        sampling_frequency,
+        num_samples_signal,
     )
-    new_corr = update_accumulator(head.correlator, get_accumulators(head.correlator) .+ new_acc)
+    new_acc = _onebit_hybrid_blocked!(
+        dc,
+        signal,
+        _ob_num_ants_val(head.correlator),
+        head.signal,
+        prn,
+        p.sample_shifts,
+        p.signal_code_phase,
+        carrier_phase,
+        p.code_frequency,
+        carrier_frequency,
+        sampling_frequency,
+        signal_start_sample,
+        samples_to_integrate,
+    )
+    new_corr =
+        update_accumulator(head.correlator, get_accumulators(head.correlator) .+ new_acc)
     ((new_corr, per_signal_completed[1]),)
 end
 
@@ -388,11 +457,27 @@ end
     num_samples_signal,
 )
     new_corrs = map(signals) do head
-        p = _signal_replica_params(head, code_doppler, code_phase, sampling_frequency, num_samples_signal)
+        p = _signal_replica_params(
+            head,
+            code_doppler,
+            code_phase,
+            sampling_frequency,
+            num_samples_signal,
+        )
         new_acc = _onebit_hybrid_blocked!(
-            dc, signal, _ob_num_ants_val(head.correlator), head.signal, prn,
-            p.sample_shifts, p.signal_code_phase, carrier_phase, p.code_frequency,
-            carrier_frequency, sampling_frequency, signal_start_sample, samples_to_integrate,
+            dc,
+            signal,
+            _ob_num_ants_val(head.correlator),
+            head.signal,
+            prn,
+            p.sample_shifts,
+            p.signal_code_phase,
+            carrier_phase,
+            p.code_frequency,
+            carrier_frequency,
+            sampling_frequency,
+            signal_start_sample,
+            samples_to_integrate,
         )
         update_accumulator(head.correlator, get_accumulators(head.correlator) .+ new_acc)
     end
@@ -408,20 +493,44 @@ function _update_tracked_sat_correlator(
     intermediate_frequency,
 )
     samples_to_integrate, per_signal_completed = _calc_min_samples_and_completed(
-        sat.signals, sat.signal_start_sample, sampling_frequency,
-        sat.code_doppler, sat.code_phase, num_samples_signal,
+        sat.signals,
+        sat.signal_start_sample,
+        sampling_frequency,
+        sat.code_doppler,
+        sat.code_phase,
+        num_samples_signal,
     )
     samples_to_integrate == 0 && return sat
     carrier_frequency = sat.carrier_doppler + intermediate_frequency
     new_signals_data = _correlate_signals(
-        sat.signals, per_signal_completed, dc, signal, sat.code_doppler, sat.code_phase,
-        carrier_frequency, sat.carrier_phase, sampling_frequency, sat.signal_start_sample,
-        samples_to_integrate, sat.prn, num_samples_signal,
+        sat.signals,
+        per_signal_completed,
+        dc,
+        signal,
+        sat.code_doppler,
+        sat.code_phase,
+        carrier_frequency,
+        sat.carrier_phase,
+        sampling_frequency,
+        sat.signal_start_sample,
+        samples_to_integrate,
+        sat.prn,
+        num_samples_signal,
     )
-    update(sat, samples_to_integrate, intermediate_frequency, sampling_frequency, new_signals_data)
+    update(
+        sat,
+        samples_to_integrate,
+        intermediate_frequency,
+        sampling_frequency,
+        new_signals_data,
+    )
 end
 
-@inline function _dc_one_group!(g::SignalGroup, dc::_OneBitDC, measurements::BandMeasurements)
+@inline function _dc_one_group!(
+    g::SignalGroup,
+    dc::_OneBitDC,
+    measurements::BandMeasurements,
+)
     vals = g.satellites.values
     isempty(vals) && return nothing
     m = measurements[band_key(g.band)]
@@ -429,17 +538,27 @@ end
         ArgumentError(
             string(
                 "OneBitDownconvertAndCorrelator requires `Complex{Int16}` measurement ",
-                "samples (12-bit ADC); got element type ", eltype(m.samples),
+                "samples (12-bit ADC); got element type ",
+                eltype(m.samples),
                 ". Use a CPU(Threaded)DownconvertAndCorrelator for floating-point samples.",
             ),
         ),
     )
     _dc_group_loop!(
-        dc, vals, m.samples, get_num_samples(m), m.sampling_frequency, m.intermediate_frequency,
+        dc,
+        vals,
+        m.samples,
+        get_num_samples(m),
+        m.sampling_frequency,
+        m.intermediate_frequency,
     )
 end
 
-@inline function _dc_group_loop!(dc::OneBitDownconvertAndCorrelator, vals, args::Vararg{Any,4})
+@inline function _dc_group_loop!(
+    dc::OneBitDownconvertAndCorrelator,
+    vals,
+    args::Vararg{Any,4},
+)
     @inbounds for i in eachindex(vals)
         vals[i] = _update_tracked_sat_correlator(vals[i], dc, args...)
     end
