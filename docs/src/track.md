@@ -86,11 +86,23 @@ buffers there is an opt-in integer backend,
 Select it explicitly via the `downconvert_and_correlator` keyword; it errors on a
 non-`Complex{Int16}` measurement.
 
+For an even faster **bit-wise** option on `Complex{Int16}` captures of **BPSK**
+signals, [`OneBitThreadedDownconvertAndCorrelator`](@ref) (and its single-threaded
+sibling [`OneBitDownconvertAndCorrelator`](@ref)) hard-limits the measurement,
+carrier and code to a single sign bit, so downconversion becomes XOR and the tap
+accumulate becomes popcount — measured ~1.5–5.6× faster than the Float32 backend
+(the gap grows with sampling rate). It trades ≈2–3 dB of SNR for that speed; since
+the discriminators, C/N0 and bit buffer are ratio-normalised, the coarse amplitude
+is immaterial. Bit-wise correlation is awkward for non-binary modulations, so this
+backend is BPSK-only and errors on CBOC/BOC code types.
+
 ```@docs
 CPUDownconvertAndCorrelator
 CPUThreadedDownconvertAndCorrelator
 Int16DownconvertAndCorrelator
 Int16ThreadedDownconvertAndCorrelator
+OneBitDownconvertAndCorrelator
+OneBitThreadedDownconvertAndCorrelator
 AbstractDownconvertAndCorrelator
 ```
 

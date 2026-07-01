@@ -797,5 +797,16 @@ if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
         g["Int16"] = @benchmarkable Tracking.track!(
             $sig16, $ts_i, $sfreq; downconvert_and_correlator = $dc_i,
         )
+        # One-bit (bit-wise) backend, same capture. BPSK-only (it errors on CBOC), so
+        # register it only for the non-Galileo cases. Guarded for base revs without it.
+        if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
+           !(first(systems) isa GalileoE1B)
+            ts_b, _ = _make_steady_state_track_state(;
+                systems, nsats_list, nsamp, prn_max, code_dop = 100.0)
+            dc_b = Tracking.OneBitThreadedDownconvertAndCorrelator()
+            g["OneBit"] = @benchmarkable Tracking.track!(
+                $sig16, $ts_b, $sfreq; downconvert_and_correlator = $dc_b,
+            )
+        end
     end
 end
