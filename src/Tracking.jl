@@ -175,8 +175,12 @@ include("post_corr_filter.jl")
 include("gpsl1ca.jl")
 include("gpsl1c_d.jl")
 include("gpsl1c_p.jl")
+include("gpsl2c.jl")
 include("gpsl5i.jl")
+include("gpsl5q.jl")
 include("galileo_e1b.jl")
+include("galileo_e1c.jl")
+include("galileo_e5a.jl")
 include("sat_state.jl")
 
 """

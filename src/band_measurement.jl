@@ -116,6 +116,7 @@ must extend this for the multi-band `track` call to find them.
 """
 function band_key end
 @inline band_key(::GNSSSignals.L1) = :l1
+@inline band_key(::GNSSSignals.L2) = :l2
 @inline band_key(::GNSSSignals.L5) = :l5
 # Fallback for bands without a `band_key` method: a raw `MethodError` deep
 # inside the multi-band machinery would be opaque, so point the caller at

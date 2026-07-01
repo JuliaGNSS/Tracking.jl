@@ -427,6 +427,33 @@ exactly one period ending on its last chip, `received & mask == reference` (see 
 """
 function _packed_secondary_code end
 
+# Generic packer: derive the reference directly from the signal's
+# `SecondaryCode` (`get_secondary_code`), setting bit `N - 1 - k` iff
+# secondary chip `k` is positive. Works for both `SharedSecondaryCode`
+# (GPS L5Q's NH20, Galileo E1C's CS25 / E5aI's CS20) and
+# `PerPRNSecondaryCode` (Galileo E5aQ's per-PRN CS100), so a new
+# secondary-coded signal needs no bespoke method — it only picks a wide
+# enough `get_code_block_buffer_type`. The rotation search in
+# [`_secondary_code_search`](@ref) tries both polarities, so the absolute
+# ±1 → bit convention here only sets the reported `polarity` sign, not
+# whether the lock is found. GPS L5I and L1C-P keep their own (more
+# specific) methods, which win dispatch.
+@inline function _packed_secondary_code(
+    ::Type{B},
+    signal::AbstractGNSSSignal,
+    prn::Integer,
+) where {B<:Unsigned}
+    secondary_code = get_secondary_code(signal)
+    N = get_secondary_code_length(signal)
+    packed = zero(B)
+    @inbounds for k = 0:(N-1)
+        if GNSSSignals.secondary_value(secondary_code, prn, k) > 0
+            packed |= one(B) << (N - 1 - k)
+        end
+    end
+    packed
+end
+
 """
 $(SIGNATURES)
 
@@ -551,13 +578,19 @@ primary-code-block signs against a per-signal template. This trait
 picks the smallest integer width that holds one full search horizon for
 that signal:
 
-| Signal      | Returns    | Window                                       |
-|:----------- |:---------- |:-------------------------------------------- |
-| GPS L1 C/A  | `UInt64`   | 40 blocks (2 × 20 blocks/symbol)             |
-| Galileo E1B | `UInt8`    | 8 blocks (2 × 4 blocks/symbol)               |
-| GPS L5I     | `UInt32`   | 20 blocks (2 × NH10 length)                  |
-| GPS L1C-D   | `UInt8`    | n/a — symbol = primary period, buffer unused |
-| GPS L1C-P   | `UInt1800` | 1800-chip overlay (added in step 4)          |
+| Signal        | Returns    | Window                                       |
+|:------------- |:---------- |:-------------------------------------------- |
+| GPS L1 C/A    | `UInt64`   | 40 blocks (2 × 20 blocks/symbol)             |
+| Galileo E1B   | `UInt8`    | 8 blocks (2 × 4 blocks/symbol)               |
+| GPS L5I       | `UInt32`   | 20 blocks (2 × NH10 length)                  |
+| GPS L5Q       | `UInt32`   | 20-chip NH20 secondary code                  |
+| GPS L1C-D     | `UInt8`    | n/a — symbol = primary period, buffer unused |
+| GPS L1C-P     | `UInt1800` | 1800-chip overlay (added in step 4)          |
+| GPS L2CM      | `UInt8`    | n/a — symbol = primary period, buffer unused |
+| GPS L2CL      | `UInt8`    | n/a — dataless pilot, no sync, buffer unused |
+| Galileo E1C   | `UInt32`   | 25-chip CS25 secondary code                  |
+| Galileo E5a-I | `UInt32`   | 20-chip CS20 secondary code                  |
+| Galileo E5a-Q | `UInt128`  | 100-chip per-PRN CS100 secondary code        |
 
 The default for any signal not specialized below is `UInt64`. The width
 flows through `BitBuffer{B}` and `TrackedSignal{Sig, B, C, PCF}` so the
@@ -579,12 +612,18 @@ at its call site: `max_errors = floor(Int, tolerance × window_size)`.
 
 Default is `0.025` (2.5 %), which discretizes per-signal as:
 
-| Signal      | Window (blocks) | Effective `max_errors` |
-|:----------- |:--------------- |:---------------------- |
-| GPS L5I     | 10              | 0 (exact match)        |
-| GPS L1C-P   | 1800            | 45                     |
-| Galileo E1B | n/a — trivial   | unused                 |
-| GPS L1C-D   | n/a — trivial   | unused                 |
+| Signal        | Window (blocks) | Effective `max_errors` |
+|:------------- |:--------------- |:---------------------- |
+| GPS L5I       | 10              | 0 (exact match)        |
+| GPS L5Q       | 20              | 0 (exact match)        |
+| GPS L1C-P     | 1800            | 45                     |
+| Galileo E1C   | 25              | 0 (exact match)        |
+| Galileo E5a-I | 20              | 0 (exact match)        |
+| Galileo E5a-Q | 100             | 2                      |
+| Galileo E1B   | n/a — trivial   | unused                 |
+| GPS L1C-D     | n/a — trivial   | unused                 |
+| GPS L2CM      | n/a — trivial   | unused                 |
+| GPS L2CL      | n/a — no sync   | unused                 |
 
 GPS L1 C/A does **not** use this trait: its bit-edge detector is the
 soft-decision, confidence-driven [`_detect_bit_edge_cfar`](@ref), tuned

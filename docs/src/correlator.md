@@ -93,8 +93,10 @@ The default correlator depends on the GNSS signal type and is returned by
 [`get_default_correlator`](@ref):
 
 - [`EarlyPromptLateCorrelator`](@ref) for GPS L1 C/A, GPS L1C-D, GPS L1C-P,
-  GPS L5I (BPSK / TMBOC modulation)
-- [`VeryEarlyPromptLateCorrelator`](@ref) for Galileo E1B (BOC modulation)
+  GPS L2CM, GPS L2CL, GPS L5I, GPS L5Q, Galileo E5a-I, Galileo E5a-Q
+  (BPSK / TMBOC modulation)
+- [`VeryEarlyPromptLateCorrelator`](@ref) for Galileo E1B and Galileo E1C
+  (CBOC / BOC modulation)
 
 ```@docs
 get_default_correlator

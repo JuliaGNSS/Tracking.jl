@@ -21,8 +21,14 @@ Multi-signal tracking is supported: a single satellite can be tracked on several
 - GPS L1 C/A
 - GPS L1C-D (data)
 - GPS L1C-P (pilot, with 1800-chip overlay-code sync)
+- GPS L2CM (data)
+- GPS L2CL (pilot, dataless — no secondary code)
 - GPS L5I
-- Galileo E1B
+- GPS L5Q (pilot, with NH20 secondary-code sync)
+- Galileo E1B (and its BOC(1,1) approximation)
+- Galileo E1C (pilot, with CS25 secondary-code sync; and its BOC(1,1) approximation)
+- Galileo E5a-I (data, with CS20 secondary-code sync)
+- Galileo E5a-Q (pilot, with per-PRN CS100 secondary-code sync)
 
 ```@contents
 Pages = [
