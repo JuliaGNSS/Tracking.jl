@@ -68,6 +68,8 @@ export get_early,
     update_estimator_on_handoff,
     CPUDownconvertAndCorrelator,
     CPUThreadedDownconvertAndCorrelator,
+    OneBitDownconvertAndCorrelator,
+    OneBitThreadedDownconvertAndCorrelator,
     ConventionalPLLAndDLL,
     ConventionalAssistedPLLAndDLL,
     DefaultPostCorrFilter,
@@ -199,6 +201,7 @@ include("sample_parameters.jl")
 include("downconvert_and_correlate.jl")
 include("downconvert_and_correlate_fused.jl")
 include("downconvert_and_correlate_cpu.jl")
+include("downconvert_and_correlate_onebit.jl")
 include("conventional_pll_and_dll.jl")
 include("tracking_state.jl")
 include("track.jl")

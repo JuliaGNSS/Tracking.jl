@@ -78,9 +78,20 @@ BandMeasurements
 
 ## Downconversion and correlation
 
+The default `CPU(Threaded)DownconvertAndCorrelator` works with any sample element type
+(floating-point or integer). For `Complex{Int16}` (12-bit ADC) captures of BPSK signals,
+[`OneBitDownconvertAndCorrelator`](@ref) is an opt-in bit-wise backend: it hard-limits the
+measurement, carrier and code to a single sign bit and correlates with XOR + popcount. It
+trades ≈2–3 dB of SNR for bit-wise speed; downstream consumers are ratio-normalised, so the
+coarse amplitude is immaterial. Bit-wise correlation is awkward for non-binary modulations
+(CBOC/BOC), so this backend is BPSK-only (GPS L1 C/A, L5, …) — it errors on other code types.
+Like the CPU backends, hoist it outside the tracking loop for an allocation-free steady state.
+
 ```@docs
 CPUDownconvertAndCorrelator
 CPUThreadedDownconvertAndCorrelator
+OneBitDownconvertAndCorrelator
+OneBitThreadedDownconvertAndCorrelator
 AbstractDownconvertAndCorrelator
 ```
 

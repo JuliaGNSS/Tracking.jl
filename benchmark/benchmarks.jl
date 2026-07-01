@@ -309,6 +309,27 @@ SUITE["downconvert and correlate"]["CPU"]["Float32 4ant"] =
 SUITE["downconvert and correlate"]["CPU"]["Int16 4ant"] =
     bench_downconvert_and_correlate(; signal_type = Int16, num_ants = 4)
 
+# One-bit bit-wise backend (Complex{Int16} samples, hard-limited). Guarded so benchpkg
+# still runs against a base rev without the type. Keyed the same as the CPU rows so the
+# comparison table lines them up.
+if isdefined(Tracking, :OneBitDownconvertAndCorrelator)
+    function bench_onebit_dc(; num_samples = 2000, sampling_frequency = 5e6Hz,
+                             gnss_signal = GPSL1CA(), num_ants = 1)
+        dc = Tracking.OneBitThreadedDownconvertAndCorrelator()
+        track_state = TrackState(
+            gnss_signal,
+            [_make_initial_sat_with_num_ants(gnss_signal, 1, 10.5, 1000.0Hz, NumAnts(num_ants))],
+        )
+        signal =
+            num_ants == 1 ? rand(Complex{Int16}, num_samples) :
+            rand(Complex{Int16}, num_samples, num_ants)
+        measurements = (l1 = Tracking.BandMeasurement(signal, sampling_frequency, 0.0Hz),)
+        @benchmarkable Tracking.downconvert_and_correlate($dc, $measurements, $track_state)
+    end
+    SUITE["downconvert and correlate"]["OneBit"]["Int16"] = bench_onebit_dc()
+    SUITE["downconvert and correlate"]["OneBit"]["Int16 4ant"] = bench_onebit_dc(; num_ants = 4)
+end
+
 # Full pipeline: track
 function bench_track(;
     signal_type = Float32,
