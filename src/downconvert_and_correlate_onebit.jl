@@ -79,43 +79,6 @@ define i64 @entry(<64 x i16> %v) #0 { %c = icmp slt <64 x i16> %v, zeroinitializ
     nothing
 end
 
-# Pack one antenna's measurement sign planes (sign(real)→mrb, sign(imag)→mib). Full
-# 64-sample words via a deinterleaving vector load; a scalar tail for the last < 64.
-@inline function _ob_pack_meas!(
-    mrb::Vector{UInt64},
-    mib::Vector{UInt64},
-    joff::Int,
-    signal,
-    j::Int,
-    p_sig::Ptr{Int16},
-    colbase::Int,
-    base::Int,
-    len::Int,
-    nwb::Int,
-    r::Int,
-)
-    full = fld(len, 64)
-    @inbounds for w = 0:(full-1)
-        n = (w << 6) + 1
-        byte_off = (colbase + base + n - 2) * 2 * sizeof(Int16)
-        re, im = _deinterleave_load(SIMD.Vec{64,Int16}, p_sig, byte_off)
-        mrb[joff+w+1] = _ob_mm(re);
-        mib[joff+w+1] = _ob_mm(im)
-    end
-    if r != 0
-        wr = zero(UInt64);
-        wi = zero(UInt64)
-        @inbounds for i = 0:(r-1)
-            sig = signal[base+(full<<6)+i, j]
-            (real(sig) < 0) && (wr |= UInt64(1) << i)
-            (imag(sig) < 0) && (wi |= UInt64(1) << i)
-        end
-        mrb[joff+full+1] = wr;
-        mib[joff+full+1] = wi
-    end
-    nothing
-end
-
 # Derive Early/Late tap planes from the prompt-extended plane by a funnel bit-shift, instead of a
 # separate movemask per tap: `dst[w] = pe[w+off]` in bit terms (off < 64). One movemask of the
 # whole code block then feeds all NC taps.
@@ -173,6 +136,92 @@ end
 OneBitScratchBuffers() =
     OneBitScratchBuffers(Int8[], UInt64[], UInt64[], UInt64[], UInt64[], UInt64[], UInt64[])
 
+# `sign(measurement)` is identical for every satellite on a band, so pack the whole band's
+# measurement sign planes ONCE per group (`M` planes each, aligned to sample 1, one pad word for
+# the funnel realign) and share them across sats. Each sat then funnel-shifts its slice into its
+# thread-local block buffer instead of re-deinterleaving/movemasking the Int16 samples. Filled
+# serially in `_dc_one_group!` before the per-sat (`@batch`) loop, then read-only across threads.
+struct OneBitBandBuffers
+    mrband::Vector{UInt64}
+    miband::Vector{UInt64}
+end
+OneBitBandBuffers() = OneBitBandBuffers(UInt64[], UInt64[])
+
+# Pack the band's `M` measurement sign planes over all `num_samples` samples. Plane `j` occupies
+# `stride` words at offset `(j-1)*stride`; the last word of each plane is the zero funnel pad.
+function _ob_pack_band!(
+    band::OneBitBandBuffers,
+    signal,
+    num_samples::Int,
+    M::Int,
+    p_sig::Ptr{Int16},
+    num_rows::Int,
+)
+    nwb = cld(num_samples, 64)
+    stride = nwb + 2                                # 2 funnel-pad words (realign reads past nwb)
+    length(band.mrband) < M * stride && resize!(band.mrband, M * stride)
+    length(band.miband) < M * stride && resize!(band.miband, M * stride)
+    r = num_samples & 63
+    full = fld(num_samples, 64)
+    @inbounds for j = 1:M
+        off = (j - 1) * stride
+        colbase = (j - 1) * num_rows
+        for w = 0:(full-1)
+            byte_off = (colbase + w * 64) * 2 * sizeof(Int16)
+            re, im = _deinterleave_load(SIMD.Vec{64,Int16}, p_sig, byte_off)
+            band.mrband[off+w+1] = _ob_mm(re)
+            band.miband[off+w+1] = _ob_mm(im)
+        end
+        if r != 0
+            wr = zero(UInt64);
+            wi = zero(UInt64)
+            for i = 0:(r-1)
+                sig = signal[full*64+i+1, j]
+                (real(sig) < 0) && (wr |= UInt64(1) << i)
+                (imag(sig) < 0) && (wi |= UInt64(1) << i)
+            end
+            band.mrband[off+full+1] = wr;
+            band.miband[off+full+1] = wi
+        end
+        band.mrband[off+nwb+1] = 0;
+        band.miband[off+nwb+1] = 0     # funnel pad
+        band.mrband[off+nwb+2] = 0;
+        band.miband[off+nwb+2] = 0
+    end
+    nothing
+end
+
+# Funnel-realign antenna `j`'s block (`len` samples starting at 1-based absolute sample `base`)
+# from the shared band plane into the thread-local `mrb`/`mib` at word-offset `moff`.
+@inline function _ob_realign_meas!(
+    mrb::Vector{UInt64},
+    mib::Vector{UInt64},
+    moff::Int,
+    band::OneBitBandBuffers,
+    jbase::Int,
+    base::Int,
+    nwb::Int,
+)
+    b0 = base - 1                                  # 0-based absolute start bit
+    sw = b0 >> 6
+    bit = b0 & 63
+    @inbounds if bit == 0
+        for w = 1:nwb
+            mrb[moff+w] = band.mrband[jbase+sw+w]
+            mib[moff+w] = band.miband[jbase+sw+w]
+        end
+    else
+        hi = 64 - bit
+        for w = 1:nwb
+            mrb[moff+w] =
+                (band.mrband[jbase+sw+w] >> bit) | (band.mrband[jbase+sw+w+1] << hi)
+            mib[moff+w] =
+                (band.miband[jbase+sw+w] >> bit) | (band.miband[jbase+sw+w+1] << hi)
+        end
+    end
+    nothing
+end
+
 """
 $(SIGNATURES)
 
@@ -187,6 +236,7 @@ amplitude is immaterial.
 """
 struct OneBitDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator
     buffers::OneBitScratchBuffers
+    band::OneBitBandBuffers
     blk::Int
 end
 
@@ -199,15 +249,17 @@ Multi-threaded one-bit bit-wise backend. One `OneBitScratchBuffers` per thread
 """
 struct OneBitThreadedDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator
     buffers::Vector{OneBitScratchBuffers}
+    band::OneBitBandBuffers
     blk::Int
 end
 
 OneBitDownconvertAndCorrelator(; blk::Integer = _ONEBIT_BLK) =
-    OneBitDownconvertAndCorrelator(OneBitScratchBuffers(), Int(blk))
+    OneBitDownconvertAndCorrelator(OneBitScratchBuffers(), OneBitBandBuffers(), Int(blk))
 
 OneBitThreadedDownconvertAndCorrelator(; blk::Integer = _ONEBIT_BLK) =
     OneBitThreadedDownconvertAndCorrelator(
         [OneBitScratchBuffers() for _ = 1:Threads.maxthreadid()],
+        OneBitBandBuffers(),
         Int(blk),
     )
 
@@ -322,7 +374,8 @@ const _OneBitDC =
         cps_code = Float64(upreferred(code_frequency / Hz)) / sampling_freq
         code_phase0 = Float64(code_phase)
         num_rows = size(signal, 1)
-        p_sig = Ptr{Int16}(pointer(signal))
+        band = dc.band                              # band-shared measurement sign planes
+        bandstride = cld(num_rows, 64) + 2          # per-antenna plane stride in `band` (see _ob_pack_band!)
 
         bufs = _ob_scratch(dc)
         blk = dc.blk
@@ -389,27 +442,24 @@ const _OneBitDC =
             )
             _ob_zeropad!(sinw, 0, nwb, nwv)
             _ob_zeropad!(cosw, 0, nwb, nwv)
-            # measurement sign planes, per antenna
+            # measurement sign planes, per antenna — funnel-realigned from the band-shared
+            # planes (packed once per group in _dc_one_group!), not re-packed per sat.
             base = signal_start_sample + blk_off
             $(Expr(
                 :block,
                 (
                     quote
-                        _ob_pack_meas!(
+                        _ob_realign_meas!(
                             mrb,
                             mib,
                             $(j - 1) * wpbv,
-                            signal,
-                            $j,
-                            p_sig,
-                            $(j - 1) * num_rows,
+                            band,
+                            $(j - 1) * bandstride,
                             base,
-                            len,
                             nwb,
-                            r,
                         )
-                        _ob_zeropad!(mrb, $(j - 1) * wpbv, nwb, nwv)
-                        _ob_zeropad!(mib, $(j - 1) * wpbv, nwb, nwv)
+                        _ob_finish!(mrb, $(j - 1) * wpbv, nwb, nwv, r)
+                        _ob_finish!(mib, $(j - 1) * wpbv, nwb, nwv, r)
                     end for j = 1:M
                 )...,
             ))
@@ -576,6 +626,19 @@ end
                 ". Use a CPU(Threaded)DownconvertAndCorrelator for floating-point samples.",
             ),
         ),
+    )
+    # Pack the band's measurement sign planes ONCE (shared across all sats on this band).
+    samples = m.samples
+    nsamp = get_num_samples(m)
+    M = samples isa AbstractMatrix ? size(samples, 2) : 1
+    num_rows = samples isa AbstractMatrix ? size(samples, 1) : length(samples)
+    GC.@preserve samples _ob_pack_band!(
+        dc.band,
+        samples,
+        nsamp,
+        M,
+        Ptr{Int16}(pointer(samples)),
+        num_rows,
     )
     _dc_group_loop!(
         dc,
