@@ -120,6 +120,43 @@ end
     nothing
 end
 
+# Per-sat measurement sign packing (used only for a single-sat group, where band-sharing +
+# realign would add a copy the direct pack avoids). sign(real)→mrb, sign(imag)→mib; full
+# 64-sample words via a deinterleaving vector load, scalar tail for the last < 64.
+@inline function _ob_pack_meas!(
+    mrb::Vector{UInt64},
+    mib::Vector{UInt64},
+    joff::Int,
+    signal,
+    j::Int,
+    p_sig::Ptr{Int16},
+    colbase::Int,
+    base::Int,
+    len::Int,
+    nwb::Int,
+    r::Int,
+)
+    full = fld(len, 64)
+    @inbounds for w = 0:(full-1)
+        byte_off = (colbase + base + (w << 6) - 1) * 2 * sizeof(Int16)
+        re, im = _deinterleave_load(SIMD.Vec{64,Int16}, p_sig, byte_off)
+        mrb[joff+w+1] = _ob_mm(re)
+        mib[joff+w+1] = _ob_mm(im)
+    end
+    if r != 0
+        wr = zero(UInt64);
+        wi = zero(UInt64)
+        @inbounds for i = 0:(r-1)
+            sig = signal[base+(full<<6)+i, j]
+            (real(sig) < 0) && (wr |= UInt64(1) << i)
+            (imag(sig) < 0) && (wi |= UInt64(1) << i)
+        end
+        mrb[joff+full+1] = wr;
+        mib[joff+full+1] = wi
+    end
+    nothing
+end
+
 # Scratch: block code buffer `extb` (Int8), the packed prompt-extended code plane `peb`, carrier
 # sign planes, per-tap code sign planes (`codeb`, NC·wpbv), per-antenna measurement sign planes
 # (`mrb`/`mib`, M·wpbv). Grown lazily and reused, so a hoisted backend is allocation-free in steady
@@ -374,7 +411,9 @@ const _OneBitDC =
         cps_code = Float64(upreferred(code_frequency / Hz)) / sampling_freq
         code_phase0 = Float64(code_phase)
         num_rows = size(signal, 1)
-        band = dc.band                              # band-shared measurement sign planes
+        p_sig = Ptr{Int16}(pointer(signal))
+        band = dc.band                              # band-shared measurement sign planes (>1 sat)
+        band_shared = !isempty(band.mrband)         # pre-packed once per group when it pays off
         bandstride = cld(num_rows, 64) + 2          # per-antenna plane stride in `band` (see _ob_pack_band!)
 
         bufs = _ob_scratch(dc)
@@ -442,27 +481,52 @@ const _OneBitDC =
             )
             _ob_zeropad!(sinw, 0, nwb, nwv)
             _ob_zeropad!(cosw, 0, nwb, nwv)
-            # measurement sign planes, per antenna — funnel-realigned from the band-shared
-            # planes (packed once per group in _dc_one_group!), not re-packed per sat.
+            # measurement sign planes, per antenna. >1 sat: funnel-realign from the band-shared
+            # planes (packed once per group). 1 sat: pack directly (no realign copy).
             base = signal_start_sample + blk_off
-            $(Expr(
-                :block,
-                (
-                    quote
-                        _ob_realign_meas!(
-                            mrb,
-                            mib,
-                            $(j - 1) * wpbv,
-                            band,
-                            $(j - 1) * bandstride,
-                            base,
-                            nwb,
-                        )
-                        _ob_finish!(mrb, $(j - 1) * wpbv, nwb, nwv, r)
-                        _ob_finish!(mib, $(j - 1) * wpbv, nwb, nwv, r)
-                    end for j = 1:M
-                )...,
-            ))
+            if band_shared
+                $(Expr(
+                    :block,
+                    (
+                        quote
+                            _ob_realign_meas!(
+                                mrb,
+                                mib,
+                                $(j - 1) * wpbv,
+                                band,
+                                $(j - 1) * bandstride,
+                                base,
+                                nwb,
+                            )
+                            _ob_finish!(mrb, $(j - 1) * wpbv, nwb, nwv, r)
+                            _ob_finish!(mib, $(j - 1) * wpbv, nwb, nwv, r)
+                        end for j = 1:M
+                    )...,
+                ))
+            else
+                $(Expr(
+                    :block,
+                    (
+                        quote
+                            _ob_pack_meas!(
+                                mrb,
+                                mib,
+                                $(j - 1) * wpbv,
+                                signal,
+                                $j,
+                                p_sig,
+                                $(j - 1) * num_rows,
+                                base,
+                                len,
+                                nwb,
+                                r,
+                            )
+                            _ob_finish!(mrb, $(j - 1) * wpbv, nwb, nwv, r)
+                            _ob_finish!(mib, $(j - 1) * wpbv, nwb, nwv, r)
+                        end for j = 1:M
+                    )...,
+                ))
+            end
             # XOR + popcount accumulate over whole VW chunks
             i = 1
             while i <= nwv
@@ -627,19 +691,26 @@ end
             ),
         ),
     )
-    # Pack the band's measurement sign planes ONCE (shared across all sats on this band).
+    # Pack the band's measurement sign planes ONCE, shared across sats — but only for >1 sat:
+    # for a single sat the shared pack + per-sat realign copy is slower than packing that one sat
+    # directly, so empty the band buffer to select the kernel's per-sat path.
     samples = m.samples
-    nsamp = get_num_samples(m)
-    M = samples isa AbstractMatrix ? size(samples, 2) : 1
-    num_rows = samples isa AbstractMatrix ? size(samples, 1) : length(samples)
-    GC.@preserve samples _ob_pack_band!(
-        dc.band,
-        samples,
-        nsamp,
-        M,
-        Ptr{Int16}(pointer(samples)),
-        num_rows,
-    )
+    if length(vals) > 1
+        nsamp = get_num_samples(m)
+        M = samples isa AbstractMatrix ? size(samples, 2) : 1
+        num_rows = samples isa AbstractMatrix ? size(samples, 1) : length(samples)
+        GC.@preserve samples _ob_pack_band!(
+            dc.band,
+            samples,
+            nsamp,
+            M,
+            Ptr{Int16}(pointer(samples)),
+            num_rows,
+        )
+    else
+        resize!(dc.band.mrband, 0)
+        resize!(dc.band.miband, 0)
+    end
     _dc_group_loop!(
         dc,
         vals,
