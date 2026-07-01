@@ -90,11 +90,23 @@ sample can take, e.g. `2^11` for a 12-bit ADC) — from which it sizes the carri
 replica so the integer carrier wipe cannot overflow. There is no default: see
 [`Int16DownconvertAndCorrelator`](@ref) for why under-declaring it is catastrophic.
 
+For an even faster **bit-wise** option on `Complex{Int16}` captures of **BPSK**
+signals, [`OneBitThreadedDownconvertAndCorrelator`](@ref) (and its single-threaded
+sibling [`OneBitDownconvertAndCorrelator`](@ref)) hard-limits the measurement,
+carrier and code to a single sign bit, so downconversion becomes XOR and the tap
+accumulate becomes popcount — measured ~1.5–5.6× faster than the Float32 backend
+(the gap grows with sampling rate). It trades ≈2–3 dB of SNR for that speed; since
+the discriminators, C/N0 and bit buffer are ratio-normalised, the coarse amplitude
+is immaterial. Bit-wise correlation is awkward for non-binary modulations, so this
+backend is BPSK-only and errors on CBOC/BOC code types.
+
 ```@docs
 CPUDownconvertAndCorrelator
 CPUThreadedDownconvertAndCorrelator
 Int16DownconvertAndCorrelator
 Int16ThreadedDownconvertAndCorrelator
+OneBitDownconvertAndCorrelator
+OneBitThreadedDownconvertAndCorrelator
 AbstractDownconvertAndCorrelator
 ```
 
