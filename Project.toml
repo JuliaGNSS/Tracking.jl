@@ -33,7 +33,7 @@ TrackingAcquisitionExt = ["Acquisition"]
 # a branch-name rev lets Pkg reuse a stale cached clone without re-fetching.
 # feat/signal-embedded-lut HEAD (GNSSSignals #90) and SinCosLUT main, respectively.
 GNSSSignals = {url = "https://github.com/JuliaGNSS/GNSSSignals.jl", rev = "2468144b6f60ca4991ab43af35e4c285e9e7f1e6"}
-SinCosLUT = {url = "https://github.com/JuliaGNSS/SinCosLUT.jl", rev = "8614e12633b4781287470d841b7cbacdb053bacc"}
+SinCosLUT = {url = "https://github.com/JuliaGNSS/SinCosLUT.jl", rev = "5b4267c1cb3ef766875bab30db0439b85774c695"}
 
 [compat]
 Accessors = "0.1"
