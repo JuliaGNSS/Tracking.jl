@@ -32,6 +32,11 @@ using SinCosLUT: generate_carrier_signs!
 # whole number of UInt64 words.
 const _ONEBIT_BLK = 8192
 
+# UInt64 lanes per SIMD popcount step (`count_ones(::Vec{VW,UInt64})` → VPOPCNTQ on AVX-512,
+# a movemask/popcount sequence elsewhere). Block planes are padded to a multiple of VW words
+# and the pad is zeroed, so the correlate loop runs whole VW chunks with no scalar tail.
+const _OB_VW = 8
+
 # ── sign-mask helpers: pack the sign bit of 64 lanes into a UInt64 (bit j ⇔ lane j < 0) ──
 @inline _ob_mm(v::SIMD.Vec{64,Int8}) = Base.llvmcall(
     (
@@ -111,11 +116,54 @@ end
     nothing
 end
 
-# Scratch: block code buffer `extb` (Int8), carrier sign planes, per-tap code sign planes
-# (`codeb`, NC·wpb), per-antenna measurement sign planes (`mrb`/`mib`, M·wpb). Grown lazily
-# and reused, so a hoisted backend is allocation-free in steady state.
+# Derive Early/Late tap planes from the prompt-extended plane by a funnel bit-shift, instead of a
+# separate movemask per tap: `dst[w] = pe[w+off]` in bit terms (off < 64). One movemask of the
+# whole code block then feeds all NC taps.
+@inline function _ob_shift_plane!(
+    dst::Vector{UInt64},
+    doff::Int,
+    pe::Vector{UInt64},
+    off::Int,
+    nwb::Int,
+)
+    if off == 0
+        @inbounds for w = 1:nwb
+            dst[doff+w] = pe[w]
+        end
+    else
+        lo = off;
+        hi = 64 - off
+        @inbounds for w = 1:nwb
+            dst[doff+w] = (pe[w] >> lo) | (pe[w+1] << hi)
+        end
+    end
+    nothing
+end
+
+# Mask the last valid word to `r` bits (if partial) and zero the VW-pad words [nwb+1, nwv], so a
+# whole-VW-chunk correlate sees zeros (which contribute nothing) past the real samples.
+@inline function _ob_finish!(buf::Vector{UInt64}, off::Int, nwb::Int, nwv::Int, r::Int)
+    @inbounds (r != 0) && (buf[off+nwb] &= (UInt64(1) << r) - UInt64(1))
+    @inbounds for w = (nwb+1):nwv
+        buf[off+w] = 0
+    end
+    nothing
+end
+# The packer already masked the last word; just zero the VW pad.
+@inline function _ob_zeropad!(buf::Vector{UInt64}, off::Int, nwb::Int, nwv::Int)
+    @inbounds for w = (nwb+1):nwv
+        buf[off+w] = 0
+    end
+    nothing
+end
+
+# Scratch: block code buffer `extb` (Int8), the packed prompt-extended code plane `peb`, carrier
+# sign planes, per-tap code sign planes (`codeb`, NC·wpbv), per-antenna measurement sign planes
+# (`mrb`/`mib`, M·wpbv). Grown lazily and reused, so a hoisted backend is allocation-free in steady
+# state. Plane word-strides are padded to a multiple of `_OB_VW` (`wpbv`).
 struct OneBitScratchBuffers
     extb::Vector{Int8}
+    peb::Vector{UInt64}
     sinw::Vector{UInt64}
     cosw::Vector{UInt64}
     codeb::Vector{UInt64}
@@ -123,7 +171,7 @@ struct OneBitScratchBuffers
     mib::Vector{UInt64}
 end
 OneBitScratchBuffers() =
-    OneBitScratchBuffers(Int8[], UInt64[], UInt64[], UInt64[], UInt64[], UInt64[])
+    OneBitScratchBuffers(Int8[], UInt64[], UInt64[], UInt64[], UInt64[], UInt64[], UInt64[])
 
 """
 $(SIGNATURES)
@@ -199,42 +247,47 @@ const _OneBitDC =
     end
     for j = 1:M, k = 1:NC
         for s in ("A", "B", "C", "E")
-            push!(init.args, :($(Symbol("$(s)_$(j)_$k")) = zero(Int64)))
+            push!(init.args, :($(Symbol("$(s)_$(j)_$k")) = zero(SIMD.Vec{_OB_VW,UInt64})))
         end
     end
 
-    # Per-word unrolled accumulate: shared sample⊻carrier products per antenna, then
-    # one XOR + count_ones per (tap, product).
+    # Per-VW-chunk unrolled accumulate: shared sample⊻carrier products per antenna, then one
+    # XOR + `count_ones` (VPOPCNTQ) per (tap, product), accumulated into Vec lane counters.
     body = Expr(:block)
     for j = 1:M
-        push!(body.args, :(mr = mrb[$(j-1)*wpb+w]))
-        push!(body.args, :(mi = mib[$(j-1)*wpb+w]))
-        push!(body.args, :(prc = mr ⊻ cosv))
-        push!(body.args, :(pis = mi ⊻ sinv))
-        push!(body.args, :(pic = mi ⊻ cosv))
-        push!(body.args, :(prs = mr ⊻ sinv))
+        push!(body.args, :(MR = vload(SIMD.Vec{_OB_VW,UInt64}, mrb, $(j - 1) * wpbv + i)))
+        push!(body.args, :(MI = vload(SIMD.Vec{_OB_VW,UInt64}, mib, $(j - 1) * wpbv + i)))
+        push!(body.args, :(prc = MR ⊻ CCv))
+        push!(body.args, :(pis = MI ⊻ CSv))
+        push!(body.args, :(pic = MI ⊻ CCv))
+        push!(body.args, :(prs = MR ⊻ CSv))
         for k = 1:NC
-            # tap offset is baked into the packed plane (see _ob_pack_code!); index by (k-1)·wpb+w
-            push!(body.args, :(cw = codeb[$(k-1)*wpb+w]))
-            push!(body.args, :($(Symbol("A_$(j)_$k")) += count_ones(cw ⊻ prc)))
-            push!(body.args, :($(Symbol("B_$(j)_$k")) += count_ones(cw ⊻ pis)))
-            push!(body.args, :($(Symbol("C_$(j)_$k")) += count_ones(cw ⊻ pic)))
-            push!(body.args, :($(Symbol("E_$(j)_$k")) += count_ones(cw ⊻ prs)))
+            push!(
+                body.args,
+                :(CW = vload(SIMD.Vec{_OB_VW,UInt64}, codeb, $(k - 1) * wpbv + i)),
+            )
+            push!(body.args, :($(Symbol("A_$(j)_$k")) += count_ones(CW ⊻ prc)))
+            push!(body.args, :($(Symbol("B_$(j)_$k")) += count_ones(CW ⊻ pis)))
+            push!(body.args, :($(Symbol("C_$(j)_$k")) += count_ones(CW ⊻ pic)))
+            push!(body.args, :($(Symbol("E_$(j)_$k")) += count_ones(CW ⊻ prs)))
         end
     end
 
-    # Finalize: Iₓ = 2N − 2(A+B); Qₓ = 2(E − C).
+    # Finalize: reduce lane counters, then Iₓ = 2N − 2(A+B); Qₓ = 2(E − C).
+    s(sym) = :(Int64(sum($sym)))
     function tapval(k)
         if M == 1
             :(complex(
-                Float64(2 * N - 2 * ($(Symbol("A_1_$k")) + $(Symbol("B_1_$k")))),
-                Float64(2 * ($(Symbol("E_1_$k")) - $(Symbol("C_1_$k")))),
+                Float64(2 * N - 2 * ($(s(Symbol("A_1_$k"))) + $(s(Symbol("B_1_$k"))))),
+                Float64(2 * ($(s(Symbol("E_1_$k"))) - $(s(Symbol("C_1_$k"))))),
             ))
         else
             ant = [
                 :(complex(
-                    Float64(2 * N - 2 * ($(Symbol("A_$(j)_$k")) + $(Symbol("B_$(j)_$k")))),
-                    Float64(2 * ($(Symbol("E_$(j)_$k")) - $(Symbol("C_$(j)_$k")))),
+                    Float64(
+                        2 * N - 2 * ($(s(Symbol("A_$(j)_$k"))) + $(s(Symbol("B_$(j)_$k")))),
+                    ),
+                    Float64(2 * ($(s(Symbol("E_$(j)_$k"))) - $(s(Symbol("C_$(j)_$k"))))),
                 )) for j = 1:M
             ]
             :(SVector{$M,ComplexF64}(tuple($(ant...))))
@@ -273,14 +326,18 @@ const _OneBitDC =
 
         bufs = _ob_scratch(dc)
         blk = dc.blk
-        wpb = cld(blk, 64)                      # UInt64 words per block plane
+        wpb = cld(blk, 64)                          # words per block plane
+        wpbv = cld(wpb, _OB_VW) * _OB_VW            # …padded to a whole number of VW chunks
+        pewords = cld(blk + span, 64) + _OB_VW      # extended prompt plane (+1 word for the shift)
         length(bufs.extb) < blk + span + 64 && resize!(bufs.extb, blk + span + 64)
-        length(bufs.sinw) < wpb && resize!(bufs.sinw, wpb)
-        length(bufs.cosw) < wpb && resize!(bufs.cosw, wpb)
-        length(bufs.codeb) < $NC * wpb && resize!(bufs.codeb, $NC * wpb)
-        length(bufs.mrb) < $M * wpb && resize!(bufs.mrb, $M * wpb)
-        length(bufs.mib) < $M * wpb && resize!(bufs.mib, $M * wpb)
+        length(bufs.peb) < pewords && resize!(bufs.peb, pewords)
+        length(bufs.sinw) < wpbv && resize!(bufs.sinw, wpbv)
+        length(bufs.cosw) < wpbv && resize!(bufs.cosw, wpbv)
+        length(bufs.codeb) < $NC * wpbv && resize!(bufs.codeb, $NC * wpbv)
+        length(bufs.mrb) < $M * wpbv && resize!(bufs.mrb, $M * wpbv)
+        length(bufs.mib) < $M * wpbv && resize!(bufs.mib, $M * wpbv)
         extb = bufs.extb;
+        peb = bufs.peb;
         sinw = bufs.sinw;
         cosw = bufs.cosw
         codeb = bufs.codeb;
@@ -291,8 +348,10 @@ const _OneBitDC =
         @inbounds while blk_off < N
             len = min(blk, N - blk_off)
             nwb = cld(len, 64)
+            nwv = cld(nwb, _OB_VW) * _OB_VW
             r = len & 63
-            # code (Int8 ±1) for samples [min_shift, len+span), then per-tap sign planes
+            # code (Int8 ±1) for samples [min_shift, len+span); pack the extended plane ONCE, then
+            # derive each tap by a funnel bit-shift.
             gen_code!(
                 view(extb, 1:(len+span)),
                 signal_type,
@@ -302,17 +361,22 @@ const _OneBitDC =
                 code_phase0 + cps_code * blk_off,
                 min_shift,
             )
+            nwe = cld(len + span, 64)
+            _ob_pack_code!(peb, 0, extb, 0, nwe, (len + span) & 63)
+            peb[nwe+1] = 0                              # the funnel shift reads one word past nwb
             $(Expr(
                 :block,
                 (
-                    :(_ob_pack_code!(
-                        codeb,
-                        ($k - 1) * wpb,
-                        extb,
-                        $(Symbol("off_$k")),
-                        nwb,
-                        r,
-                    )) for k = 1:NC
+                    quote
+                        _ob_shift_plane!(
+                            codeb,
+                            $(k - 1) * wpbv,
+                            peb,
+                            $(Symbol("off_$k")),
+                            nwb,
+                        )
+                        _ob_finish!(codeb, $(k - 1) * wpbv, nwb, nwv, r)
+                    end for k = 1:NC
                 )...,
             ))
             # carrier sign planes (shared across antennas & taps) — SinCosLUT's 1-bit NCO
@@ -323,31 +387,39 @@ const _OneBitDC =
                 cps_car;
                 phase = carphase + cps_car * blk_off,
             )
+            _ob_zeropad!(sinw, 0, nwb, nwv)
+            _ob_zeropad!(cosw, 0, nwb, nwv)
             # measurement sign planes, per antenna
             base = signal_start_sample + blk_off
             $(Expr(
                 :block,
                 (
-                    :(_ob_pack_meas!(
-                        mrb,
-                        mib,
-                        $(j - 1) * wpb,
-                        signal,
-                        $j,
-                        p_sig,
-                        $(j - 1) * num_rows,
-                        base,
-                        len,
-                        nwb,
-                        r,
-                    )) for j = 1:M
+                    quote
+                        _ob_pack_meas!(
+                            mrb,
+                            mib,
+                            $(j - 1) * wpbv,
+                            signal,
+                            $j,
+                            p_sig,
+                            $(j - 1) * num_rows,
+                            base,
+                            len,
+                            nwb,
+                            r,
+                        )
+                        _ob_zeropad!(mrb, $(j - 1) * wpbv, nwb, nwv)
+                        _ob_zeropad!(mib, $(j - 1) * wpbv, nwb, nwv)
+                    end for j = 1:M
                 )...,
             ))
-            # XOR + popcount accumulate
-            for w = 1:nwb
-                cosv = cosw[w];
-                sinv = sinw[w]
+            # XOR + popcount accumulate over whole VW chunks
+            i = 1
+            while i <= nwv
+                CCv = vload(SIMD.Vec{_OB_VW,UInt64}, cosw, i)
+                CSv = vload(SIMD.Vec{_OB_VW,UInt64}, sinw, i)
                 $body
+                i += _OB_VW
             end
             blk_off += len
         end
