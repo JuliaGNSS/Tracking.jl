@@ -14,3 +14,11 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 TrackingLoopFilters = "0814aff9-93cb-554c-9fff-9bf1cfdb5efa"
 Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 ZipFile = "a5390f91-8eb1-5f08-bee0-b1d1ffed6cea"
+
+# TEMPORARY: the registered Acquisition (≤ 2.5.3) is capped at `GNSSSignals = "2"`,
+# which is unsatisfiable now that Tracking requires GNSSSignals 3. Pin to the
+# `bump-gnsssignals` branch (adds `GNSSSignals = "3"`) until that release is
+# registered, then drop this `[sources]` block (and restore the 1.10 CI floor —
+# `[sources]` needs Julia 1.11+). Pinned to an exact commit for deterministic CI.
+[sources]
+Acquisition = {url = "https://github.com/JuliaGNSS/Acquisition.jl", rev = "5499566d3005b7aefab589269eff197c4bf9c5f6"}
