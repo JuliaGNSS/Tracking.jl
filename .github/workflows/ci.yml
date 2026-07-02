@@ -20,14 +20,7 @@ jobs:
     strategy:
       matrix:
         version:
-          # TEMPORARY: 1.11 instead of the package's actual 1.10 floor. The test
-          # env pins Acquisition to its unreleased GNSSSignals-3 bump via
-          # `test/Project.toml` `[sources]`, which is a Julia 1.11+ feature — on
-          # 1.10 it is ignored and Acquisition resolves to the registered
-          # (GNSSSignals-2-only) 2.5.3, making the test env unsatisfiable.
-          # Restore '1.10' once Acquisition's GNSSSignals-3 release is registered
-          # and the `[sources]` pin is removed (`[compat] julia` stays at 1.10).
-          - '1.11'
+          - '1.10'
           - '1'
           #- 'nightly'
         os:
