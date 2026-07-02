@@ -1,125 +1,102 @@
 name: Benchmark this PR
+
+# Compares the PR head against the PR's *base* branch with AirspeedVelocity's `benchpkg`,
+# but reports the **minimum** time per benchmark instead of its built-in median table (the
+# minimum is far more robust to noisy-neighbour contention on shared GitHub runners, so it
+# doesn't manufacture phantom regressions when the head build lands on a busier window). The
+# custom table (`.github/scripts/bench_table.jl`) also pairs the Int16 and Float32 `track!`
+# backends into one Int16-vs-Float32 speedup row — the integer backend is new on the PR and
+# has no base counterpart, so a plain base-vs-head diff can't show its speedup.
+#
+# Runs on both x86 (Ubuntu) and ARM (Apple Silicon, macos-14) so the NEON code path gets
+# benchmarked on real Apple-Silicon hardware, not just the x86 AVX2/AVX-512 paths.
+#
+# Security: runs as pull_request_target so the comment-posting token has write access. The
+# repo is checked out at the *base* (trusted) ref — which provides bench_table.jl — and
+# benchpkg benchmarks the PR's own benchmark/benchmarks.jl via --bench-on=<head sha>.
+# GITHUB_TOKEN is blanked for every step that builds/executes benchmark code; only the
+# comment steps see the token.
+#
+# NOTE: for pull_request_target GitHub reads this workflow from the PR's BASE branch, so a
+# rewrite only takes effect for PRs whose base already contains it — it must be merged to
+# master (and to any feature branch used as a base) to apply there.
 on:
   pull_request_target:
-    branches: [ '**' ]
+
+# Key the concurrency group on the PR number: a new push to a PR cancels that PR's own
+# in-flight run, but PRs sharing a base branch don't cancel each other.
+concurrency:
+  group: ${{ github.workflow }}-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   pull-requests: write
+  contents: read
 
 jobs:
-  bench:
-    runs-on: ubuntu-latest
+  benchmark:
+    # Run on both x86 (Ubuntu) and ARM (Apple Silicon: macos-14 is M-series).
+    # fail-fast: false so a flake on one platform doesn't cancel the other's results.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.runner }}
     steps:
+      # Base (trusted) checkout — provides .github/scripts/bench_table.jl. The PR's own
+      # code is fetched separately by benchpkg via --url, not checked out here.
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
-          fetch-depth: 0
 
       - uses: julia-actions/setup-julia@v3
         env:
           GITHUB_TOKEN: ""
         with:
           version: '1'
-
-      - uses: julia-actions/cache@v3
+      - uses: julia-actions/cache@v5
         env:
           GITHUB_TOKEN: ""
 
-      - name: Install AirspeedVelocity
+      - name: Install benchpkg + JSON3
         env:
           GITHUB_TOKEN: ""
         run: |
-          # Use fork with [sources] fix until upstream merges it
-          julia -e '
-            ENV["JULIA_PKG_PRECOMPILE_AUTO"]=0
-            using Pkg
-            Pkg.add(url="https://github.com/zsoerenm/AirspeedVelocity.jl", rev="ss/fix-sources-resolution")
-            Pkg.build("AirspeedVelocity")
-          '
+          export JULIA_PKG_PRECOMPILE_AUTO=0
+          julia -e 'import Pkg; Pkg.add(name="AirspeedVelocity", version="0.6"); Pkg.add("JSON3")'
+          julia -e 'import Pkg; Pkg.build("AirspeedVelocity")'
+          echo "$HOME/.julia/bin" >> "$GITHUB_PATH"
 
-      - name: Run benchmarks
+      - name: Run benchmarks (base vs PR head, using the PR's benchmark suite)
         env:
           GITHUB_TOKEN: ""
-          JULIA_NUM_THREADS: auto
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          export PATH="$HOME/.julia/bin:$PATH"
-          mkdir results
-          if [ "$BASE_REF" = "master" ]; then
-            REVS="master,$HEAD_SHA"
-          else
-            REVS="master,$BASE_REF,$HEAD_SHA"
-          fi
+          mkdir -p results
           benchpkg Tracking \
-            --rev=$REVS \
             --url=${{ github.event.repository.clone_url }} \
-            --bench-on=$HEAD_SHA \
+            --rev=${{ github.event.pull_request.base.sha }},${{ github.event.pull_request.head.sha }} \
+            --bench-on=${{ github.event.pull_request.head.sha }} \
+            --add=GNSSSignals,Unitful,StaticArrays \
             --output-dir=results/ \
-            --add=GNSSSignals,Unitful,StaticArrays
+            --tune
 
-      - name: Create comment body
+      - name: Build minimum-time comparison table
         env:
           GITHUB_TOKEN: ""
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          export PATH="$HOME/.julia/bin:$PATH"
-          echo "## Benchmark Results" > body.md
-          echo "" >> body.md
-          if [ "$BASE_REF" = "master" ]; then
-            for m in time memory; do
-              {
-                echo "<details><summary>${m^} benchmarks</summary>"
-                echo ""
-                benchpkgtable Tracking \
-                  --input-dir=results/ \
-                  --rev=master,$HEAD_SHA \
-                  --mode=$m \
-                  --ratio
-                echo ""
-                echo "</details>"
-                echo ""
-              } >> body.md
-            done
-          else
-            for m in time memory; do
-              {
-                echo "<details><summary>${m^} benchmarks (vs base branch)</summary>"
-                echo ""
-                benchpkgtable Tracking \
-                  --input-dir=results/ \
-                  --rev=$BASE_REF,$HEAD_SHA \
-                  --mode=$m \
-                  --ratio
-                echo ""
-                echo "</details>"
-                echo ""
-              } >> body.md
-            done
-            for m in time memory; do
-              {
-                echo "<details><summary>${m^} benchmarks (vs master)</summary>"
-                echo ""
-                benchpkgtable Tracking \
-                  --input-dir=results/ \
-                  --rev=master,$HEAD_SHA \
-                  --mode=$m \
-                  --ratio
-                echo ""
-                echo "</details>"
-                echo ""
-              } >> body.md
-            done
-          fi
+          julia .github/scripts/bench_table.jl results Tracking \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}" \
+            "${{ matrix.runner }}" > body.md
+          cat body.md
 
-      - name: Find comment
+      - name: Find existing benchmark comment
         uses: peter-evans/find-comment@v4
         id: find
         with:
           issue-number: ${{ github.event.pull_request.number }}
           comment-author: 'github-actions[bot]'
-          body-includes: "Benchmark Results"
+          body-includes: "Benchmark Results (minimum time) — ${{ matrix.runner }}"
 
       - name: Create or update comment
         uses: peter-evans/create-or-update-comment@v5
