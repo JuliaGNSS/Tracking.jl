@@ -765,9 +765,10 @@ end
 # capture so the comparison is apples-to-apples. Both accept Complex{Int16}: the
 # Float32 path widens to Float32; the integer path requires it (and is the point
 # of the backend). Threaded — the real-time default. Each case registers
-# "Float32" and "Int16" under `track Int16 vs Float32/<case>` so a report shows
-# them side by side. Only registered on branches with the Int16 backend (skipped
-# against master so AirspeedVelocity can still diff).
+# "Float32" and "Int16" under `track! Int16 vs Float32/<case>` so the benchmark
+# comment can pair them into one Int16-vs-Float32 speedup row. Only registered on
+# branches with the Int16 backend (skipped against master so AirspeedVelocity can
+# still diff).
 if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
     # Random 12-bit-ADC samples. The kernel's run time is content-independent, but
     # the magnitude must stay within the ±2^11 range the Int16 carrier wipe assumes.
@@ -776,10 +777,15 @@ if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
         complex.(rand((-lim):(lim - one(Int16)), nsamp), rand((-lim):(lim - one(Int16)), nsamp))
     end
 
+    # Self-explanatory scenario names (system · sat count · sampling rate). NO
+    # "/" in a name — the benchmark-table script keys leaves by "/"-joined path,
+    # so a slash would be read as an extra nesting level. Each scenario registers
+    # a "Float32" and an "Int16" leaf under the same parent, so they sort
+    # adjacently and the table pairs them into one Int16-vs-Float32 speedup row.
     for (name, systems, nsats_list, sfreq, nsamp, prn_max) in (
-        ("GPSL1CA 8sat/5MHz", (GPSL1CA(),), [8], 5e6Hz, 5000, 32),
-        ("GPSL1CA 8sat/40MHz", (GPSL1CA(),), [8], 40e6Hz, 40000, 32),
-        ("GalileoE1B 4sat/25MHz", (GalileoE1B(),), [4], 25e6Hz, 25000, 50),
+        ("GPS L1CA, 8 sats @ 5 MHz", (GPSL1CA(),), [8], 5e6Hz, 5000, 32),
+        ("GPS L1CA, 8 sats @ 40 MHz", (GPSL1CA(),), [8], 40e6Hz, 40000, 32),
+        ("Galileo E1B, 4 sats @ 25 MHz", (GalileoE1B(),), [4], 25e6Hz, 25000, 50),
     )
         sig16 = _int16_capture(nsamp)
         # Two independent track states (track! mutates) so each backend starts
@@ -790,7 +796,7 @@ if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
             systems, nsats_list, nsamp, prn_max, code_dop = 100.0)
         dc_f = _make_cpu_threaded_dc(sfreq)
         dc_i = Tracking.Int16ThreadedDownconvertAndCorrelator()
-        g = SUITE["track Int16 vs Float32"][name]
+        g = SUITE["track! Int16 vs Float32"][name]
         g["Float32"] = @benchmarkable Tracking.track!(
             $sig16, $ts_f, $sfreq; downconvert_and_correlator = $dc_f,
         )
