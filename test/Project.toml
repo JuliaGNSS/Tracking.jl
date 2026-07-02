@@ -14,6 +14,3 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 TrackingLoopFilters = "0814aff9-93cb-554c-9fff-9bf1cfdb5efa"
 Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 ZipFile = "a5390f91-8eb1-5f08-bee0-b1d1ffed6cea"
-
-[sources]
-Acquisition = {rev = "0b993ad6985dce8b35dd2583552ce810d6599a00", url = "https://github.com/JuliaGNSS/Acquisition.jl"}
