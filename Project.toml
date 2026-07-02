@@ -25,16 +25,6 @@ Acquisition = "d4bbf60b-102b-5ffb-8f97-a7ea5817e69f"
 [extensions]
 TrackingAcquisitionExt = ["Acquisition"]
 
-# Temporary: build against the unmerged/unregistered LUT-based code + carrier
-# generators. Revert to registered versions once GNSSSignals #90 is merged and
-# SinCosLUT is registered.
-[sources]
-# Pinned to exact commits (not branch names) so CI resolves deterministically —
-# a branch-name rev lets Pkg reuse a stale cached clone without re-fetching.
-# feat/signal-embedded-lut HEAD (GNSSSignals #90) and SinCosLUT main, respectively.
-GNSSSignals = {url = "https://github.com/JuliaGNSS/GNSSSignals.jl", rev = "2468144b6f60ca4991ab43af35e4c285e9e7f1e6"}
-SinCosLUT = {url = "https://github.com/JuliaGNSS/SinCosLUT.jl", rev = "8614e12633b4781287470d841b7cbacdb053bacc"}
-
 [compat]
 Accessors = "0.1"
 Acquisition = "0.1.1, 0.2, 0.3, 1, 2"
@@ -42,7 +32,7 @@ BitIntegers = "0.3"
 Dictionaries = "0.4.1"
 DocStringExtensions = "0.6, 0.7, 0.8, 0.9"
 FastSinCos = "1"
-GNSSSignals = "2.2.2"
+GNSSSignals = "3"
 Polyester = "0.7.19"
 SIMD = "3"
 SinCosLUT = "3"

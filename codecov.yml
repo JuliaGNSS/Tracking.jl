@@ -1,0 +1,16 @@
+# Coverage gates. The Int16 (and fused) SIMD backends contain host-CPU-gated
+# alternate paths (the AVX-512 `llvmcall`, the exact-Int32 fallback, and the
+# non-x86 branch) — only one variant compiles/executes per machine, so a few
+# lines are structurally uncoverable on any single CI runner. The `threshold`
+# tolerances absorb that sub-percent noise while still failing on a real
+# regression (a drop larger than 1 %).
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        target: 90%
+        threshold: 1%
