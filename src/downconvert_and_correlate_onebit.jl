@@ -387,15 +387,22 @@ const _OneBitDC =
         :(SVector{M,ComplexF64}[$([tapval(k) for k = 1:NC]...)])
 
     quote
-        get_code_type(signal_type) <: Integer || throw(
+        # Bit-wise correlation keeps only the code's SIGN, so it needs a binary (±1,
+        # two-level) code — BPSK, BOC and TMBOC all qualify. CBOC is the one GNSS
+        # modulation that carries an amplitude (a multi-level weighted sum of two BOCs),
+        # so its sign discards information. Gate on the modulation, not the code element
+        # type: newer GNSSSignals code generation quantises CBOC to an *integer* replica,
+        # so a `get_code_type <: Integer` test no longer excludes it.
+        get_modulation(signal_type) isa GNSSSignals.CBOC && throw(
             ArgumentError(
                 string(
-                    "OneBitDownconvertAndCorrelator supports BPSK (±1 integer code) signals ",
-                    "only; got ",
+                    "OneBitDownconvertAndCorrelator supports binary (±1) codes only ",
+                    "(BPSK, BOC, TMBOC); got ",
                     typeof(signal_type),
-                    " with code type ",
-                    get_code_type(signal_type),
-                    ". Bit-wise correlation is awkward for non-binary (CBOC/BOC) modulations.",
+                    " with ",
+                    typeof(get_modulation(signal_type)),
+                    " modulation. Bit-wise correlation keeps only the code sign, so it ",
+                    "cannot represent CBOC — a multi-level, amplitude-carrying code.",
                 ),
             ),
         )
