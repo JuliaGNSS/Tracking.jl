@@ -376,12 +376,16 @@ end
     @test mod(get_carrier_phase(track_state, :gps, 1), π) ≈ mod(comp_carrier_phase_gps, π) atol =
         2e-2
     @test get_code_phase(track_state, :gal, 1) ≈ comp_code_phase_gal atol = 5e-3
-    # Galileo E1B carrier phase: the embedded-LUT CBOC code is an Int8 integer
-    # approximation, and at the coarsest sample type (Int16) the extra quantisation
-    # leaves ~0.006 rad (~0.4°) of residual phase — excellent tracking, but just over
-    # the original 5e-3. Match the GPS carrier tolerance (2e-2); see GNSSSignals #90.
+    # Galileo E1B carrier phase: the GNSSSignals 3 embedded-LUT CBOC code is an Int8
+    # integer approximation of the true BOC(1,1)/BOC(6,1) subcarrier mix, which leaves
+    # ~0.006 rad (~0.4°) of residual phase — excellent tracking, but just over the
+    # original 5e-3. This residual comes from the code *model*, not the input sample
+    # type: it measures identically (to <1e-7 rad) for every `type` from Int16 through
+    # Float64, so Int16 sample quantisation contributes essentially nothing (~2e-8 rad).
+    # Bound at 1e-2 — comfortably above the deterministic ~0.006 rad residual, yet tight
+    # enough to catch a real tracking regression (see GNSSSignals #90).
     @test mod(get_carrier_phase(track_state, :gal, 1), π) ≈ mod(comp_carrier_phase_gal, π) atol =
-        2e-2
+        1e-2
 end
 
 @testset "Tracking with intermediate frequency of $intermediate_frequency" for intermediate_frequency in
