@@ -125,6 +125,25 @@ function _int16_flush_len(W::Integer, max_wipe::Integer, blk::Integer)
     min(Int(blk), max(Int(W), products_per_lane * Int(W)))
 end
 
+# Reject a strip-mine block length that would hang `track!`, then apply the
+# amp = 127 fallback clamp. `blk ≤ 0` makes the strip-mine loop
+# `len = min(blk, num_samples - blk_off) = 0` never advance, so `track!` spins
+# forever (issue #169 (a); with the threaded backend it wedges the Polyester
+# workers) — rejected here. An oversized `blk` is deliberately NOT rejected: the
+# per-lane Int32 overflow it used to risk (issue #169 (b)) is bounded at run time
+# by `_int16_flush_len` (#166), and the amp = 127 wipe fallback is bounded by
+# `_int16_safe_blk` (#167, applied below) — so a large `blk` is safely clamped,
+# never corrupting.
+function _int16_validate_blk(blk::Integer, max_meas::Integer, amp::Integer)
+    blk >= 1 || throw(
+        ArgumentError(
+            "Int16 backend: blk must be ≥ 1 (got $blk); blk ≤ 0 makes the " *
+            "strip-mine loop never advance and hangs track! forever.",
+        ),
+    )
+    _int16_safe_blk(blk, max_meas, amp)   # clamp on the amp = 127 fallback (#167)
+end
+
 # ── Widening / vpmaddwd helpers (ported from the GNSSSignals benchmark) ───────
 @inline _wide32(v::SIMD.Vec{W,Int8}) where {W} = convert(SIMD.Vec{W,Int32}, v)
 @inline _wide32(v::SIMD.Vec{W,Int16}) where {W} = convert(SIMD.Vec{W,Int32}, v)
@@ -243,6 +262,12 @@ tuned for ≤12-bit sample buffers: for `max_meas ≥ 2^14` no `Int16`-safe carr
 amplitude exists, so it falls back to the exact `Int32` wipe and automatically
 shrinks the strip-mine block to keep the correlation accumulators from
 overflowing (correct, but slower on that path).
+
+The `blk` keyword sets the strip-mine block length (samples). It must be `≥ 1`,
+validated at construction — `blk ≤ 0` would make the strip-mine loop never
+advance and hang `track!` (issue #169). A `blk` larger than the overflow-safe
+block is accepted and simply clamped for the flush (see `_int16_flush_len` /
+`_int16_safe_blk`), so the correlation accumulators never wrap.
 """
 struct Int16DownconvertAndCorrelator{TBL<:SinCosTable,TI} <:
        AbstractDownconvertAndCorrelator
@@ -305,7 +330,7 @@ function Int16DownconvertAndCorrelator(;
     Int16DownconvertAndCorrelator{typeof(table),TI}(
         Int16ScratchBuffers{TI}(),
         table,
-        _int16_safe_blk(blk, max_meas, amplitude),
+        _int16_validate_blk(blk, max_meas, amplitude),
     )
 end
 
@@ -320,7 +345,7 @@ function Int16ThreadedDownconvertAndCorrelator(;
     Int16ThreadedDownconvertAndCorrelator{typeof(table),TI}(
         [Int16ScratchBuffers{TI}() for _ = 1:Threads.maxthreadid()],
         table,
-        _int16_safe_blk(blk, max_meas, amplitude),
+        _int16_validate_blk(blk, max_meas, amplitude),
     )
 end
 
