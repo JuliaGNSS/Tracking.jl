@@ -257,6 +257,39 @@ end
     @test get_prn(ts, :default, 6) == 6
 end
 
+@testset "remove_satellite(!) leaves no #undef hole → track! is safe (issue #182)" begin
+    # `Dictionaries.delete!` only rehashes/compacts once deletions cross ~1/3
+    # of the entries; a single removal from a larger group otherwise leaves a
+    # `#undef` slot in the backing `values` vector, which the tracking hot
+    # paths iterate directly (`_reset_one_group!` et al.) and dereference into
+    # an `UndefRefError`. Ten satellites keep the deletion below the rehash
+    # threshold, so the removed slot survives as a hole unless we compact.
+    signal = rand(ComplexF32, 20000)
+    build() = foldl(
+        (ts, prn) -> add_satellite!(ts; prn = prn, carrier_doppler = (100.0 * prn)Hz),
+        1:10;
+        init = TrackState(; signal = GPSL1CA()),
+    )
+
+    for remove in (
+        ts -> remove_satellite(ts; prn = 3),   # immutable variant
+        ts -> remove_satellite!(ts; prn = 3),   # in-place variant
+    )
+        ts = remove(build())
+        sats = get_sat_states(ts, :default)
+        @test length(sats) == 9
+        @test !haskey(sats, 3)
+        # No hole: the backing vector holds exactly the live entries, all
+        # assigned — the precondition the hot loops rely on.
+        vals = sats.values
+        @test length(vals) == 9
+        @test all(i -> isassigned(vals, i), eachindex(vals))
+        # The regression itself: `track` must not throw an `UndefRefError`.
+        ts2 = Tracking.track(signal, ts, 5e6Hz)
+        @test length(get_sat_states(ts2, :default)) == 9
+    end
+end
+
 @testset "remove_satellite! throws KeyError for a missing PRN" begin
     ts = TrackState(; signal = GPSL1CA())
     ts = add_satellite!(ts; prn = 5, carrier_doppler = 100.0Hz)
