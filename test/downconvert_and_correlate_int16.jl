@@ -309,6 +309,61 @@ end
         end
     end
 
+    # The AbstractVector-shifts fallback hoists its offsets/totals into the
+    # thread-local scratch and flushes per block, so in steady state it allocates
+    # only the small result `Vector` it returns — not fresh per-integration totals
+    # (which previously added an `M×NC` `tI`/`tQ` matrix pair + offset vector per
+    # ~1 ms integration). Assert the backend call allocates no more than a couple
+    # of small result vectors (the pre-fix path allocated ~3.4× more).
+    @testset "dynamic Vector-shifts fallback is scratch-reusing (bounded allocs)" begin
+        sig, fs = GPSL1CA(), 5e6Hz
+        nsamp = round(Int, (fs / 1Hz) * 1e-3)
+        fc = 200Hz * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
+        shifts = collect(get_correlator_sample_shifts(EarlyPromptLateCorrelator(), fs, fc))
+        dc = Int16DownconvertAndCorrelator()
+        cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
+        call() = Tracking._int16_hybrid_blocked!(
+            dc,
+            cap,
+            NumAnts(1),
+            sig,
+            1,
+            shifts,
+            100.0,
+            0.6,
+            fc,
+            200Hz + 0.0Hz,
+            fs,
+            1,
+            nsamp,
+        )
+        call()                                  # warm up (grow scratch once)
+        call()
+        # Result is a Vector{ComplexF64} of length 3 (~112 B here); the only
+        # steady-state allocation. Independent of integration length, so a 10×
+        # longer capture allocates the same amount.
+        allocs = @allocated call()
+        @test allocs <= 256
+        cap10 = make_capture(sig, 1, fs, 10 * nsamp, 200Hz, 100.0)
+        call10() = Tracking._int16_hybrid_blocked!(
+            dc,
+            cap10,
+            NumAnts(1),
+            sig,
+            1,
+            shifts,
+            100.0,
+            0.6,
+            fc,
+            200Hz + 0.0Hz,
+            fs,
+            1,
+            10 * nsamp,
+        )
+        call10()
+        @test (@allocated call10()) == allocs
+    end
+
     # Multi-signal-per-sat tile-share: a sat carrying N identical GPS L1 C/A
     # signals shares one carrier downconvert. Each signal's correlator must equal
     # the single-signal result (same code/carrier; only the downconvert is shared).
