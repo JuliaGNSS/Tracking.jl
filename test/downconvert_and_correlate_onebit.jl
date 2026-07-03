@@ -221,6 +221,50 @@ end
         end
     end
 
+    @testset "multi-signal-per-sat × multi-antenna (N=$N, M=$M) matches single" for N in
+                                                                                    (2, 3),
+        M in (2, 4)
+        # Exercises the tile-share kernel's M>1 path: N signals sharing one carrier +
+        # measurement, each with M antennas. The shared carrier/measurement downconvert
+        # is bit-identical, so every signal's per-antenna correlator (an SVector{M}) must
+        # equal correlating that signal alone.
+        sig, fs = GPSL1CA(), 5e6Hz
+        nsamp = round(Int, (fs / 1Hz) * 1e-3)
+        dc = OneBitThreadedDownconvertAndCorrelator()
+        cs = correlate_once(
+            dc,
+            sig,
+            fs,
+            nsamp,
+            200Hz,
+            100.0;
+            correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(M)),
+            mat = true,
+            M,
+        )
+        cap = make_capture_mat(sig, fs, nsamp, 200Hz, 100.0, M)
+        meas = (l1 = BandMeasurement(cap, fs, 0.0Hz),)
+        est = ConventionalAssistedPLLAndDLL()
+        mksig() = TrackedSignal(
+            sig;
+            num_ants = NumAnts(M),
+            correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(M)),
+            post_corr_filter = DefaultPostCorrFilter(),
+        )
+        satN = TrackedSat(ntuple(_ -> mksig(), N), 1, 100.0, 200Hz; doppler_estimator = est)
+        tsN = downconvert_and_correlate(
+            dc,
+            meas,
+            TrackState(sig, satN; doppler_estimator = est),
+        )
+        for s in get_sat_state(tsN, 1).signals
+            @test length(get_prompt(s.correlator)) == M
+            @test get_prompt(s.correlator) == get_prompt(cs)
+            @test get_early(s.correlator) == get_early(cs)
+            @test get_late(s.correlator) == get_late(cs)
+        end
+    end
+
     @testset "band-shared measurement (>1 sat) matches per-sat packing" begin
         # ≥2 sats on one band trip the pack-measurement-once-per-band path
         # (`_ob_pack_band!` + per-sat `_ob_realign_meas!`); a single sat uses the

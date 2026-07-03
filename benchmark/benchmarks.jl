@@ -853,3 +853,121 @@ if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
         end
     end
 end
+
+# ── Backend axes: multi-signal / multi-antenna / dynamic taps ─────────────────
+# More Float32 / Int16 / OneBit head-to-head rows, over the three axes the backends
+# generalise over — a satellite carrying several signals on one carrier (tile-share),
+# several antennas, and a runtime (dynamic) correlator tap count. Registered under the
+# SAME `INT16_GROUP` ("track! Int16 vs Float32") the `track!` scenarios use, so
+# `bench_table.jl` pairs each scenario into one head-to-head row (Float32 / backend > 1
+# ⇒ that backend is faster) with the base branch's existing table script — the
+# benchmark workflow runs `bench_table.jl` from the (trusted) base ref, so a NEW table
+# group would not be rendered until that script also lands on the base.
+#
+# These rows time the shared `downconvert_and_correlate` (not `track!`): multi-signal
+# and multi-antenna go through the uniform pipeline for all three backends. Dynamic
+# (runtime `AbstractVector`) tap counts are NOT reachable through the pipeline (EPL/VEPL
+# correlators only ever hand the kernel `SVector` shifts), so that row times the kernel
+# fallback directly — Float32 fused and Int16 hybrid-blocked; the one-bit backend has no
+# dynamic kernel, so its cell stays blank (matching the Float32/Int16 tile-shares, which
+# are static-only for multi-signal too). Only registered when all three backends exist.
+if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
+   isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
+    const _AXES_SIG = GPSL1CA()
+    const _AXES_FS = 5e6Hz
+    const _AXES_NSAMP = 5000
+    _int16_capture_mat(nsamp, M) = repeat(_int16_capture(nsamp); outer = (1, M))
+
+    # A multi-signal sat: N GPS L1CA signals sharing one carrier + measurement.
+    function _axes_multisignal_state(n_signals)
+        est = Tracking.ConventionalAssistedPLLAndDLL()
+        signals = ntuple(
+            _ -> Tracking.TrackedSignal(
+                _AXES_SIG;
+                num_ants = NumAnts(1),
+                correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
+                post_corr_filter = Tracking.DefaultPostCorrFilter(),
+            ),
+            n_signals,
+        )
+        sat = Tracking.TrackedSat(signals, 1, 10.5, 1000.0Hz; doppler_estimator = est)
+        TrackState(_AXES_SIG, sat; doppler_estimator = est)
+    end
+
+    # A single-signal sat with M antenna channels.
+    _axes_multiantenna_state(num_ants) = TrackState(
+        _AXES_SIG,
+        [_make_initial_sat(_AXES_SIG, 1, 10.5, 1000.0Hz; num_ants = NumAnts(num_ants))],
+    )
+
+    _axes_dc(dc, cap, ts) = let meas = (l1 = Tracking.BandMeasurement(cap, _AXES_FS, 0.0Hz),)
+        @benchmarkable Tracking.downconvert_and_correlate($dc, $meas, $ts)
+    end
+
+    # multi-signal (M=1) and multi-antenna (N=1) via the uniform pipeline.
+    for n_signals in (3,)
+        cap = _int16_capture(_AXES_NSAMP)
+        g = SUITE["track! Int16 vs Float32"]["multi-signal N=$n_signals @ 5 MHz"]
+        g["Float32"] = _axes_dc(
+            _make_cpu_threaded_dc(_AXES_FS),
+            cap,
+            _axes_multisignal_state(n_signals),
+        )
+        g["Int16"] = _axes_dc(
+            Tracking.Int16ThreadedDownconvertAndCorrelator(),
+            cap,
+            _axes_multisignal_state(n_signals),
+        )
+        g["OneBit"] = _axes_dc(
+            Tracking.OneBitThreadedDownconvertAndCorrelator(),
+            cap,
+            _axes_multisignal_state(n_signals),
+        )
+    end
+    for num_ants in (4,)
+        cap = _int16_capture_mat(_AXES_NSAMP, num_ants)
+        g = SUITE["track! Int16 vs Float32"]["$num_ants-antenna @ 5 MHz"]
+        g["Float32"] =
+            _axes_dc(_make_cpu_threaded_dc(_AXES_FS), cap, _axes_multiantenna_state(num_ants))
+        g["Int16"] = _axes_dc(
+            Tracking.Int16ThreadedDownconvertAndCorrelator(),
+            cap,
+            _axes_multiantenna_state(num_ants),
+        )
+        g["OneBit"] = _axes_dc(
+            Tracking.OneBitThreadedDownconvertAndCorrelator(),
+            cap,
+            _axes_multiantenna_state(num_ants),
+        )
+    end
+
+    # dynamic (runtime AbstractVector) tap count — kernel level, Float32 + Int16 only.
+    let g = SUITE["track! Int16 vs Float32"]["dynamic taps @ 5 MHz (kernel)"]
+        code_doppler =
+            1000.0Hz * GNSSSignals.get_code_center_frequency_ratio(_AXES_SIG)
+        code_frequency = code_doppler + get_code_frequency(_AXES_SIG)
+        correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
+        dyn_shifts =
+            collect(get_correlator_sample_shifts(correlator, _AXES_FS, code_frequency))
+        cap = _int16_capture(_AXES_NSAMP)
+        span = maximum(dyn_shifts) - minimum(dyn_shifts)
+        # Float32 fused kernel, dynamic-shifts (11-arg) path with hoisted SoA tiles.
+        code_replica_f = Vector{Int8}(undef, _AXES_NSAMP + span)
+        _gen_code_replica!(
+            code_replica_f, _AXES_SIG, code_frequency, _AXES_FS, 10.5, 1, _AXES_NSAMP,
+            dyn_shifts, 1,
+        )
+        tile_re = Vector{Float32}(undef, _AXES_NSAMP)
+        tile_im = Vector{Float32}(undef, _AXES_NSAMP)
+        g["Float32"] = @benchmarkable Tracking.downconvert_and_correlate_fused!(
+            $correlator, $cap, $code_replica_f, $dyn_shifts,
+            $(1000.0Hz + 0.0Hz), $_AXES_FS, 0.0, 1, $_AXES_NSAMP, $tile_re, $tile_im,
+        )
+        # Int16 hybrid-blocked kernel, dynamic-shifts (AbstractVector) fallback.
+        dc_i = Tracking.Int16DownconvertAndCorrelator()
+        g["Int16"] = @benchmarkable Tracking._int16_hybrid_blocked!(
+            $dc_i, $cap, NumAnts{1}(), $_AXES_SIG, 1, $dyn_shifts,
+            10.5, 0.0, $code_frequency, $(1000.0Hz + 0.0Hz), $_AXES_FS, 1, $_AXES_NSAMP,
+        )
+    end
+end

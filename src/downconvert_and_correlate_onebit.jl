@@ -548,6 +548,316 @@ const _OneBitDC =
     end
 end
 
+# ── Multi-signal-per-sat tile-share ───────────────────────────────────────────
+# A satellite carrying several signals on one carrier (e.g. GPS L1 C/A + L1C-D +
+# L1C-P) shares the carrier and the measurement — and therefore the whole carrier
+# wipe-off. So per strip-mine block we generate the carrier sign planes ONCE and
+# pack/realign the measurement sign planes ONCE (per antenna), then correlate each
+# signal's own code against them: one carrier+measurement pass per sat, not per
+# signal. Bit-identical to correlating each signal alone — the carrier and
+# measurement planes are sat-shared, so a signal sees exactly the planes the
+# single-signal kernel would build. Mirrors the integer `_int16_hybrid_blocked_multi!`
+# and the Float32 `downconvert_and_correlate_fused_tuple!`, adapted to the 1-bit
+# XOR+popcount pipeline. `@generated` over (M, the signals tuple): each signal's tap
+# count NCᵢ and the M antenna passes unroll; the per-(signal, antenna, tap) popcount
+# accumulators live in named locals. Static tap counts (SVector shifts) and any
+# antenna M — the scope of the other tile-shares; dynamic (AbstractVector) tap
+# counts are not supported here (nor by the integer/Float32 tile-shares).
+@generated function _onebit_hybrid_blocked_multi!(
+    dc::_OneBitDC,
+    signal::AbstractVecOrMat{Complex{Int16}},
+    ::NumAnts{M},
+    signal_types::Tuple,
+    prn::Integer,
+    all_shifts::Tuple{Vararg{SVector}},
+    code_phases::Tuple,
+    code_freqs::Tuple,
+    carrier_phase,
+    carrier_frequency,
+    sampling_frequency,
+    signal_start_sample::Integer,
+    num_samples::Integer,
+) where {M}
+    N = length(all_shifts.parameters)
+    NCs = [length(all_shifts.parameters[i]) for i = 1:N]
+    maxNC = maximum(NCs)
+
+    # Per-signal shift/span/offset locals + per-(signal, antenna, tap) A/B (→I) and
+    # C/E (→Q) popcount accumulators.
+    setup = Expr(:block)
+    maxspan = Expr(:call, :max)
+    for i = 1:N
+        push!(setup.args, :($(Symbol("sh_$i")) = all_shifts[$i]))
+        push!(setup.args, :($(Symbol("mins_$i")) = Int(minimum($(Symbol("sh_$i"))))))
+        push!(
+            setup.args,
+            :(
+                $(Symbol("span_$i")) =
+                    Int(maximum($(Symbol("sh_$i")))) - $(Symbol("mins_$i"))
+            ),
+        )
+        push!(
+            setup.args,
+            :(
+                $(Symbol("cpsc_$i")) =
+                    Float64(upreferred(code_freqs[$i] / Hz)) / sampling_freq
+            ),
+        )
+        push!(setup.args, :($(Symbol("cph0_$i")) = Float64(code_phases[$i])))
+        for k = 1:NCs[i]
+            push!(
+                setup.args,
+                :(
+                    $(Symbol("off_$(i)_$k")) =
+                        Int($(Symbol("sh_$i"))[$k]) - $(Symbol("mins_$i"))
+                ),
+            )
+        end
+        push!(maxspan.args, Symbol("span_$i"))
+        for j = 1:M, k = 1:NCs[i]
+            for sfx in ("A", "B", "C", "E")
+                push!(
+                    setup.args,
+                    :($(Symbol("$(sfx)_$(i)_$(j)_$k")) = zero(SIMD.Vec{_OB_VW,UInt64})),
+                )
+            end
+        end
+    end
+
+    # CBOC gate, per signal (see the single-signal kernel): bit-wise correlation
+    # keeps only the code sign, so a multi-level amplitude-carrying code is rejected.
+    gates = Expr(:block)
+    for i = 1:N
+        push!(
+            gates.args,
+            :(
+                get_modulation(signal_types[$i]) isa GNSSSignals.CBOC && throw(
+                    ArgumentError(
+                        string(
+                            "OneBitDownconvertAndCorrelator supports binary (±1) codes ",
+                            "only (BPSK, BOC, TMBOC); got ",
+                            typeof(signal_types[$i]),
+                            " with ",
+                            typeof(get_modulation(signal_types[$i])),
+                            " modulation. Bit-wise correlation keeps only the code sign, ",
+                            "so it cannot represent CBOC — a multi-level, amplitude-",
+                            "carrying code.",
+                        ),
+                    ),
+                )
+            ),
+        )
+    end
+
+    # Per antenna, measurement packing: band-shared funnel-realign (>1 sat) vs direct
+    # pack (1 sat). Filled ONCE per block, shared across the sat's signals.
+    realign = Expr(:block)
+    directpack = Expr(:block)
+    for j = 1:M
+        push!(
+            realign.args,
+            quote
+                _ob_realign_meas!(
+                    mrb,
+                    mib,
+                    $(j - 1) * wpbv,
+                    band,
+                    $(j - 1) * bandstride,
+                    base,
+                    nwb,
+                )
+                _ob_finish!(mrb, $(j - 1) * wpbv, nwb, nwv, r)
+                _ob_finish!(mib, $(j - 1) * wpbv, nwb, nwv, r)
+            end,
+        )
+        push!(
+            directpack.args,
+            quote
+                _ob_pack_meas!(
+                    mrb,
+                    mib,
+                    $(j - 1) * wpbv,
+                    signal,
+                    $j,
+                    p_sig,
+                    $(j - 1) * num_rows,
+                    base,
+                    len,
+                    nwb,
+                    r,
+                )
+                _ob_finish!(mrb, $(j - 1) * wpbv, nwb, nwv, r)
+                _ob_finish!(mib, $(j - 1) * wpbv, nwb, nwv, r)
+            end,
+        )
+    end
+
+    # Per-signal, within a block: one-shot code fill + pack into `codeb`, then the
+    # XOR+popcount correlate reading the shared carrier/measurement planes and
+    # accumulating into this signal's A/B/C/E counters.
+    function signal_block(i)
+        b = Expr(:block)
+        push!(b.args, :(nwe = cld(len + $(Symbol("span_$i")), 64)))
+        push!(
+            b.args,
+            :(gen_code!(
+                view(extb, 1:(len+$(Symbol("span_$i")))),
+                signal_types[$i],
+                prn,
+                sampling_frequency,
+                code_freqs[$i],
+                $(Symbol("cph0_$i")) + $(Symbol("cpsc_$i")) * blk_off,
+                $(Symbol("mins_$i")),
+            )),
+        )
+        push!(
+            b.args,
+            :(_ob_pack_code!(peb, 0, extb, 0, nwe, (len + $(Symbol("span_$i"))) & 63)),
+        )
+        push!(b.args, :(peb[nwe+1] = 0))
+        for k = 1:NCs[i]
+            push!(
+                b.args,
+                :(_ob_shift_plane!(
+                    codeb,
+                    $(k - 1) * wpbv,
+                    peb,
+                    $(Symbol("off_$(i)_$k")),
+                    nwb,
+                )),
+            )
+            push!(b.args, :(_ob_finish!(codeb, $(k - 1) * wpbv, nwb, nwv, r)))
+        end
+        corr = Expr(:block)
+        for j = 1:M
+            push!(
+                corr.args,
+                :(MR = vload(SIMD.Vec{_OB_VW,UInt64}, mrb, $(j - 1) * wpbv + ci)),
+            )
+            push!(
+                corr.args,
+                :(MI = vload(SIMD.Vec{_OB_VW,UInt64}, mib, $(j - 1) * wpbv + ci)),
+            )
+            push!(corr.args, :(prc = MR ⊻ CCv))
+            push!(corr.args, :(pis = MI ⊻ CSv))
+            push!(corr.args, :(pic = MI ⊻ CCv))
+            push!(corr.args, :(prs = MR ⊻ CSv))
+            for k = 1:NCs[i]
+                push!(
+                    corr.args,
+                    :(CW = vload(SIMD.Vec{_OB_VW,UInt64}, codeb, $(k - 1) * wpbv + ci)),
+                )
+                push!(corr.args, :($(Symbol("A_$(i)_$(j)_$k")) += count_ones(CW ⊻ prc)))
+                push!(corr.args, :($(Symbol("B_$(i)_$(j)_$k")) += count_ones(CW ⊻ pis)))
+                push!(corr.args, :($(Symbol("C_$(i)_$(j)_$k")) += count_ones(CW ⊻ pic)))
+                push!(corr.args, :($(Symbol("E_$(i)_$(j)_$k")) += count_ones(CW ⊻ prs)))
+            end
+        end
+        push!(b.args, quote
+            ci = 1
+            while ci <= nwv
+                CCv = vload(SIMD.Vec{_OB_VW,UInt64}, cosw, ci)
+                CSv = vload(SIMD.Vec{_OB_VW,UInt64}, sinw, ci)
+                $corr
+                ci += _OB_VW
+            end
+        end)
+        b
+    end
+    sigs = Expr(:block)
+    for i = 1:N
+        push!(sigs.args, signal_block(i))
+    end
+
+    # Finalize: per signal, a Vector of NCᵢ tap sums — Iₓ = 2N − 2(A+B), Qₓ = 2(E − C)
+    # (matching the single-signal kernel's return so `_correlate_signals` is shared).
+    function tapval(i, k)
+        A(j) = s(Symbol("A_$(i)_$(j)_$k"))
+        B(j) = s(Symbol("B_$(i)_$(j)_$k"))
+        C(j) = s(Symbol("C_$(i)_$(j)_$k"))
+        E(j) = s(Symbol("E_$(i)_$(j)_$k"))
+        s(sym) = :(Int64(sum($sym)))
+        val(j) = :(complex(
+            Float64(2 * N_samp - 2 * ($(A(j)) + $(B(j)))),
+            Float64(2 * ($(E(j)) - $(C(j)))),
+        ))
+        M == 1 ? val(1) : :(SVector{$M,ComplexF64}(tuple($([val(j) for j = 1:M]...))))
+    end
+    finals = Expr(:tuple)
+    for i = 1:N
+        taps = [tapval(i, k) for k = 1:NCs[i]]
+        push!(
+            finals.args,
+            M == 1 ? :(ComplexF64[$(taps...)]) : :(SVector{M,ComplexF64}[$(taps...)]),
+        )
+    end
+
+    quote
+        $gates
+        N_samp = Int(num_samples)
+        sampling_freq = Float64(upreferred(sampling_frequency / Hz))
+        carrier_freq = Float64(upreferred(carrier_frequency / Hz))
+        cps_car = carrier_freq / sampling_freq
+        carphase = Float64(carrier_phase)
+        num_rows = size(signal, 1)
+        p_sig = Ptr{Int16}(pointer(signal))
+        band = dc.band                              # band-shared measurement sign planes (>1 sat)
+        band_shared = !isempty(band.mrband)
+        bandstride = cld(num_rows, 64) + 2
+        $setup
+        maxspan_v = $maxspan
+
+        bufs = _ob_scratch(dc)
+        blk = dc.blk
+        wpb = cld(blk, 64)
+        wpbv = cld(wpb, _OB_VW) * _OB_VW
+        pewords = cld(blk + maxspan_v, 64) + _OB_VW
+        length(bufs.extb) < blk + maxspan_v + 64 && resize!(bufs.extb, blk + maxspan_v + 64)
+        length(bufs.peb) < pewords && resize!(bufs.peb, pewords)
+        length(bufs.sinw) < wpbv && resize!(bufs.sinw, wpbv)
+        length(bufs.cosw) < wpbv && resize!(bufs.cosw, wpbv)
+        length(bufs.codeb) < $maxNC * wpbv && resize!(bufs.codeb, $maxNC * wpbv)
+        length(bufs.mrb) < $M * wpbv && resize!(bufs.mrb, $M * wpbv)
+        length(bufs.mib) < $M * wpbv && resize!(bufs.mib, $M * wpbv)
+        extb = bufs.extb;
+        peb = bufs.peb;
+        sinw = bufs.sinw;
+        cosw = bufs.cosw
+        codeb = bufs.codeb;
+        mrb = bufs.mrb;
+        mib = bufs.mib
+
+        blk_off = 0
+        @inbounds while blk_off < N_samp
+            len = min(blk, N_samp - blk_off)
+            nwb = cld(len, 64)
+            nwv = cld(nwb, _OB_VW) * _OB_VW
+            r = len & 63
+            # carrier sign planes — shared across signals, antennas and taps
+            generate_carrier_signs!(
+                sinw,
+                cosw,
+                len,
+                cps_car;
+                phase = carphase + cps_car * blk_off,
+            )
+            _ob_zeropad!(sinw, 0, nwb, nwv)
+            _ob_zeropad!(cosw, 0, nwb, nwv)
+            # measurement sign planes — one pack per sat/block, shared across signals
+            base = signal_start_sample + blk_off
+            if band_shared
+                $realign
+            else
+                $directpack
+            end
+            # each signal: its own code, correlated against the shared planes
+            $sigs
+            blk_off += len
+        end
+        $finals
+    end
+end
+
 # ── Correlate / plumbing (mirrors the CPU/Int16 backends) ─────────────────────
 # Single signal per sat: one kernel call.
 @inline function _correlate_signals(
@@ -593,8 +903,9 @@ end
     ((new_corr, per_signal_completed[1]),)
 end
 
-# Multiple signals per sat: correlate each in turn (no carrier-share tile; correct,
-# simpler than the integer tile-share — a future optimisation).
+# Multiple signals per sat: share one carrier + measurement downconvert across the
+# sat's signals via the tile-share kernel. Returns the per-signal
+# `(new_correlator, is_integration_completed)` tuples.
 @inline function _correlate_signals(
     signals::Tuple{TrackedSignal,TrackedSignal,Vararg{TrackedSignal}},
     per_signal_completed::Tuple,
@@ -610,30 +921,37 @@ end
     prn,
     num_samples_signal,
 )
-    new_corrs = map(signals) do head
-        p = _signal_replica_params(
+    params = map(signals) do head
+        _signal_replica_params(
             head,
             code_doppler,
             code_phase,
             sampling_frequency,
             num_samples_signal,
         )
-        new_acc = _onebit_hybrid_blocked!(
-            dc,
-            signal,
-            _ob_num_ants_val(head.correlator),
-            head.signal,
-            prn,
-            p.sample_shifts,
-            p.signal_code_phase,
-            carrier_phase,
-            p.code_frequency,
-            carrier_frequency,
-            sampling_frequency,
-            signal_start_sample,
-            samples_to_integrate,
-        )
-        update_accumulator(head.correlator, get_accumulators(head.correlator) .+ new_acc)
+    end
+    correlators = map(s -> s.correlator, signals)
+    signal_types = map(s -> s.signal, signals)
+    all_shifts = map(p -> p.sample_shifts, params)
+    code_phases = map(p -> p.signal_code_phase, params)
+    code_freqs = map(p -> p.code_frequency, params)
+    new_accs = _onebit_hybrid_blocked_multi!(
+        dc,
+        signal,
+        _ob_num_ants_val(correlators[1]),
+        signal_types,
+        prn,
+        all_shifts,
+        code_phases,
+        code_freqs,
+        carrier_phase,
+        carrier_frequency,
+        sampling_frequency,
+        signal_start_sample,
+        samples_to_integrate,
+    )
+    new_corrs = map(correlators, new_accs) do c, a
+        update_accumulator(c, get_accumulators(c) .+ a)
     end
     map(tuple, new_corrs, per_signal_completed)
 end
