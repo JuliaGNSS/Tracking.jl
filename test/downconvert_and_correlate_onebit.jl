@@ -233,6 +233,23 @@ end
         )
     end
 
+    @testset "errors on CBOC (non-binary) code" begin
+        # CBOC (e.g. Galileo E1B) carries an amplitude — a multi-level weighted sum of
+        # two BOCs — so keeping only the code sign loses information; the modulation gate
+        # rejects it (regardless of whether the replica is Float or a quantised integer).
+        # Binary ±1 codes (BPSK, BOC, TMBOC) are accepted; the converging GPS L1 C/A test
+        # below covers the BPSK case. E1B's BOC(6,1) needs fs ≥ code_freq·12 = 12.276 MHz.
+        sig, fs = GalileoE1B(), 15e6Hz
+        cap = make_capture(sig, 1, fs, 5000, 200Hz, 100.0)
+        meas = (l1 = BandMeasurement(cap, fs, 0.0Hz),)
+        ts = TrackState(sig, [TrackedSat(sig, 1, 100.0, 200Hz)])
+        @test_throws ArgumentError downconvert_and_correlate(
+            OneBitThreadedDownconvertAndCorrelator(),
+            meas,
+            ts,
+        )
+    end
+
     @testset "full track converges (GPS L1 C/A)" begin
         sig, fs = GPSL1CA(), 5e6Hz
         cdopp, cphase = 300Hz, 230.0
