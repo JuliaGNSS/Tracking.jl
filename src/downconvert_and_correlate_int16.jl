@@ -58,19 +58,40 @@ const _INT16_HAS_MADDWD = Sys.ARCH in (:x86_64, :i686) && _INT16_W in (32, 64)
 # Maximum |measurement component| we size the carrier amplitude against: a 12-bit
 # ADC (|m| ≤ 2^11). Pick the LARGEST Int16-safe amplitude — the largest `amp` with
 # `2·max_meas·amp ≤ typemax(Int16)` — capped at the Int8 storage limit. Keeping the
-# wipe `DI = mᵣ·cos + mᵢ·sin` within Int16 serves two purposes: it enables the Int16
-# `vpmaddwd` fast path on x86, AND it bounds the per-block Int32 correlation
-# accumulator on EVERY path, so the exact-Int32 accumulate cannot overflow even for
-# multi-level CBOC code (±25) over a full block. The wipe TYPE differs by backend
-# (Int16 + vpmaddwd on x86; exact Int32 elsewhere) but the AMPLITUDE is the same —
-# using a larger Int32-only amplitude (the old behaviour) overflowed the accumulator
-# for CBOC on the scalar/NEON path. (>14-bit `max_meas`, where no amp ≥ 1 is
-# Int16-safe, falls back to full Int8 amplitude + Int32 wipe.)
+# wipe `DI = mᵣ·cos + mᵢ·sin` within Int16 enables the Int16 `vpmaddwd` fast path on
+# x86 and keeps `|DI| ≤ typemax(Int16)`. The wipe TYPE differs by backend (Int16 +
+# vpmaddwd on x86; exact Int32 elsewhere) but the AMPLITUDE is the same — using a
+# larger Int32-only amplitude (the old behaviour) overflowed the accumulator for
+# CBOC on the scalar/NEON path.
+#
+# For `max_meas ≥ 2^14` no amp ≥ 1 keeps the wipe within Int16, so we fall back to
+# full Int8 amplitude + Int32 wipe. That fallback voids the `|DI| ≤ typemax(Int16)`
+# premise (`|DI|` can reach `2·max_meas·127`), so the per-block Σ codeₓ·DI can wrap
+# the Int32 lane accumulators — see `_int16_safe_blk`, which shrinks the strip-mine
+# block on the fallback path to keep that accumulate bounded (#167).
 const _INT16_MAX_MEAS = 1 << 11
 function _int16_choose_carrier(max_meas::Integer)
     a = Int(typemax(Int16)) ÷ (2 * Int(max_meas))
     a >= 1 || return (Int(typemax(Int8)), Int32)
     (min(a, Int(typemax(Int8))), _INT16_HAS_MADDWD ? Int16 : Int32)
+end
+
+# Largest multi-level code sub-carrier magnitude the correlate accumulate must
+# tolerate (Galileo E1B CBOC ±25); used to bound the per-block Int32 accumulator.
+const _INT16_MAX_CODE = 25
+
+# Per-instance safe strip-mine block length. Each SIMD lane sums the per-sample
+# products `codeₓ·DI` (|code| ≤ `_INT16_MAX_CODE`, |DI| ≤ 2·max_meas·amp) over one
+# block into an Int32 accumulator before the per-block Int64 flush, and the flush
+# reduces those lanes in Int32. On the Int16-safe amplitude path this stays bounded
+# at the default block, so `blk` is returned unchanged; on the `max_meas ≥ 2^14`
+# fallback (amp = 127, Int32 wipe) the block is shrunk so the whole-block sum still
+# fits Int32 — trading throughput for correctness on that rare full-scale path (#167).
+function _int16_safe_blk(blk::Integer, max_meas::Integer, amp::Integer)
+    di_max = 2 * Int(max_meas) * Int(amp)                     # |DI| = |mᵣ·cos + mᵢ·sin|
+    di_max <= Int(typemax(Int16)) && return Int(blk)          # Int16-safe path: unchanged
+    safe = Int(typemax(Int32)) ÷ (_INT16_MAX_CODE * di_max)   # samples/block keeping Σ within Int32
+    min(Int(blk), max(1, safe))
 end
 
 # Default strip-mine block length (samples); multiple of every backend `W`,
@@ -174,7 +195,11 @@ The carrier-replica amplitude (and the wipe arithmetic type) are chosen from
 the largest amplitude that keeps the carrier wipe within `Int16` (so the wipe
 can't overflow and the on-x86 `vpmaddwd` fast path applies). Pass `max_meas`
 for your front end's full-scale (default `2^11`, a 12-bit ADC); under-declaring
-it risks overflow, over-declaring only coarsens the carrier.
+it risks overflow, over-declaring only coarsens the carrier. This backend is
+tuned for ≤12-bit sample buffers: for `max_meas ≥ 2^14` no `Int16`-safe carrier
+amplitude exists, so it falls back to the exact `Int32` wipe and automatically
+shrinks the strip-mine block to keep the correlation accumulators from
+overflowing (correct, but slower on that path).
 """
 struct Int16DownconvertAndCorrelator{TBL<:SinCosTable,TI} <:
        AbstractDownconvertAndCorrelator
@@ -208,7 +233,7 @@ function Int16DownconvertAndCorrelator(;
     Int16DownconvertAndCorrelator{typeof(table),TI}(
         Int16ScratchBuffers{TI}(),
         table,
-        Int(blk),
+        _int16_safe_blk(blk, max_meas, amplitude),
     )
 end
 
@@ -222,7 +247,7 @@ function Int16ThreadedDownconvertAndCorrelator(;
     Int16ThreadedDownconvertAndCorrelator{typeof(table),TI}(
         [Int16ScratchBuffers{TI}() for _ = 1:Threads.maxthreadid()],
         table,
-        Int(blk),
+        _int16_safe_blk(blk, max_meas, amplitude),
     )
 end
 

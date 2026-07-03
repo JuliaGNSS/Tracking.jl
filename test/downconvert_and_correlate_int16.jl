@@ -249,6 +249,37 @@ end
               abs(get_late(cf)) / abs(get_prompt(cf)) atol = 1e-2
     end
 
+    # #167: a full-scale 16-bit `max_meas` must not silently overflow the
+    # correlation accumulators. The large-`max_meas` fallback picks the exact
+    # Int32 wipe with amp = 127, so the `|DI| ≤ typemax(Int16)` invariant no
+    # longer holds; with near-full-scale samples and multi-level CBOC code (±25)
+    # the per-block Σ codeₓ·DI runs ~25× past typemax(Int32) unless the block
+    # length is shrunk to keep it bounded. Feed near-full-scale Galileo E1B and
+    # check the E/P/L ratios still match the Float32 backend (they are garbage if
+    # the Int32 accumulators wrapped).
+    @testset "full-scale max_meas = 2^15 does not overflow (#167)" begin
+        sig, fs = GalileoE1B(), 15e6Hz
+        nsamp = round(Int, (fs / 1Hz) * 1e-3)
+        cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0; peak = 2^15 - 1)
+        meas = (l1 = BandMeasurement(cap, fs, 0.0Hz),)
+        corr(dc) = first(
+            get_sat_state(
+                downconvert_and_correlate(
+                    dc,
+                    meas,
+                    TrackState(sig, [TrackedSat(sig, 1, 100.0, 200Hz)]),
+                ),
+                1,
+            ).signals,
+        ).correlator
+        cf = corr(CPUThreadedDownconvertAndCorrelator())
+        ci = corr(Int16ThreadedDownconvertAndCorrelator(; max_meas = 2^15))
+        @test abs(get_early(ci)) / abs(get_prompt(ci)) ≈
+              abs(get_early(cf)) / abs(get_prompt(cf)) atol = 1e-2
+        @test abs(get_late(ci)) / abs(get_prompt(ci)) ≈
+              abs(get_late(cf)) / abs(get_prompt(cf)) atol = 1e-2
+    end
+
     # Dynamic (runtime Vector) tap count: a DynShiftsCorrelator with the same
     # shifts as EPL must produce the same accumulators through the Int16 backend's
     # AbstractVector-shifts fallback as the static @generated EPL kernel.
