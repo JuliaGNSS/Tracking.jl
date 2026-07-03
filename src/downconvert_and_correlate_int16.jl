@@ -64,10 +64,15 @@ const _INT16_HAS_MADDWD = Sys.ARCH in (:x86_64, :i686) && _INT16_W in (32, 64)
 # larger Int32-only amplitude (the old behaviour) overflowed the accumulator for
 # CBOC on the scalar/NEON path.
 #
+# Each SIMD LANE of the per-block Σ codeₓ·DI accumulator stays within Int32 on this
+# Int16-safe path, but the horizontal reduction ACROSS lanes at flush is the full
+# block total, which can exceed typemax(Int32); it is widened to Int64 first — see
+# `_wide64` (#165).
+#
 # For `max_meas ≥ 2^14` no amp ≥ 1 keeps the wipe within Int16, so we fall back to
 # full Int8 amplitude + Int32 wipe. That fallback voids the `|DI| ≤ typemax(Int16)`
-# premise (`|DI|` can reach `2·max_meas·127`), so the per-block Σ codeₓ·DI can wrap
-# the Int32 lane accumulators — see `_int16_safe_blk`, which shrinks the strip-mine
+# premise (`|DI|` can reach `2·max_meas·127`), so even a single lane's per-block
+# Σ codeₓ·DI can wrap Int32 — see `_int16_safe_blk`, which shrinks the strip-mine
 # block on the fallback path to keep that accumulate bounded (#167).
 const _INT16_MAX_MEAS = 1 << 11
 function _int16_choose_carrier(max_meas::Integer)
@@ -102,6 +107,13 @@ const _INT16_BLK = 8192
 @inline _wide32(v::SIMD.Vec{W,Int8}) where {W} = convert(SIMD.Vec{W,Int32}, v)
 @inline _wide32(v::SIMD.Vec{W,Int16}) where {W} = convert(SIMD.Vec{W,Int32}, v)
 @inline _wide16(v::SIMD.Vec{W,Int8}) where {W} = convert(SIMD.Vec{W,Int16}, v)
+# Widen the Int32 lane accumulator to Int64 BEFORE the block-flush horizontal `sum`.
+# The per-lane bound keeps each Int32 lane safe, but the reduction ACROSS lanes is the
+# full block total (up to ~2.7×typemax(Int32) for a strong, code-aligned, full-scale
+# CBOC capture at default settings), which wraps if summed in Int32 (#165). Widening
+# first makes the reduction and the running Int64 total exact. Cost is negligible: the
+# flush runs once per block.
+@inline _wide64(v::SIMD.Vec{W,Int32}) where {W} = convert(SIMD.Vec{W,Int64}, v)
 
 # vpmaddwd: Int16×Int16 → Int32 pairwise-add — the dot-product primitive for the
 # code accumulate Σ codeₓ·DI. Native 512-/256-bit intrinsics tiled to width W;
@@ -394,8 +406,8 @@ end
             offk = Symbol("off_$k")
             push!(blk_init.args, :($aI = zero(SIMD.Vec{$AW,Int32})))
             push!(blk_init.args, :($aQ = zero(SIMD.Vec{$AW,Int32})))
-            push!(flush.args, :($tI += Int64(sum($aI))))
-            push!(flush.args, :($tQ += Int64(sum($aQ))))
+            push!(flush.args, :($tI += sum(_wide64($aI))))
+            push!(flush.args, :($tQ += sum(_wide64($aQ))))
             if use_madd
                 push!(
                     chunk.args,
@@ -802,8 +814,8 @@ end
                 offk = Symbol("off_$(i)_$k")
                 push!(blk_init.args, :($aI = zero(SIMD.Vec{$AW,Int32})))
                 push!(blk_init.args, :($aQ = zero(SIMD.Vec{$AW,Int32})))
-                push!(flush.args, :($tI += Int64(sum($aI))))
-                push!(flush.args, :($tQ += Int64(sum($aQ))))
+                push!(flush.args, :($tI += sum(_wide64($aI))))
+                push!(flush.args, :($tQ += sum(_wide64($aQ))))
                 if use_madd
                     push!(
                         chunk.args,
