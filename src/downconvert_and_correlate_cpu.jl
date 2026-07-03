@@ -330,9 +330,9 @@ end
 end
 
 # Per-sat downconvert+correlate. Pure: returns the updated TrackedSat. Shared
-# by `downconvert_and_correlate` and `downconvert_and_correlate!` across both
-# CPU backends; the per-backend differences (kernel choice) are dispatched
-# via `_correlate_one_signal!`.
+# by `downconvert_and_correlate` and `downconvert_and_correlate!` across every
+# backend (`AbstractDownconvertAndCorrelator`); the per-backend differences
+# (kernel choice) are dispatched via `_correlate_signals` / `_correlate_one_signal!`.
 #
 # For multi-signal sats, the iteration window is the MIN samples-to-next-
 # boundary across all signals (or buffer end, whichever is sooner). Each
@@ -342,7 +342,7 @@ end
 # replica buffer, and per-signal code phase differ.
 function _update_tracked_sat_correlator(
     sat::TrackedSat,
-    dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
+    dc::AbstractDownconvertAndCorrelator,
     signal,
     num_samples_signal,
     sampling_frequency,
@@ -740,7 +740,7 @@ code-replica scratch comes from the correlator's (per-thread)
 per-call allocation is the slot-value copy.
 """
 function downconvert_and_correlate(
-    dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
+    dc::AbstractDownconvertAndCorrelator,
     measurements::BandMeasurements,
     track_state::TrackState,
 )
@@ -759,7 +759,7 @@ synchronization is needed. Returns the same `track_state`.
 Allocation-free in steady state — see [`track!`](@ref).
 """
 function downconvert_and_correlate!(
-    dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
+    dc::AbstractDownconvertAndCorrelator,
     measurements::BandMeasurements,
     track_state::TrackState,
 )
@@ -767,20 +767,29 @@ function downconvert_and_correlate!(
     return track_state
 end
 
-# Per-group body shared by both CPU backends. Pulled out so
-# `_foreach_group!` can call it on each `SignalGroup` in the (possibly
-# heterogeneous) `groups` tuple without dynamic dispatch / boxing.
-# Routes to this group's band's `BandMeasurement` for the signal buffer and
-# front-end metadata; the serial-vs-`@batch` loop choice is dispatched
-# per backend in `_dc_group_loop!`.
+# Optional per-backend sample-type check, run once per group before the
+# per-sat loop. No-op by default; the integer backends override it to reject
+# non-`Complex{Int16}` sample buffers with a helpful `ArgumentError` (see
+# `downconvert_and_correlate_int16.jl`). Named distinctly from the top-level
+# `_validate_measurements` (band-set/shape/duration check in `track`).
+@inline _check_sample_type(::AbstractDownconvertAndCorrelator, m) = nothing
+
+# Per-group body shared by every backend. Pulled out so `_foreach_group!` can
+# call it on each `SignalGroup` in the (possibly heterogeneous) `groups` tuple
+# without dynamic dispatch / boxing. Routes to this group's band's
+# `BandMeasurement` for the signal buffer and front-end metadata; the
+# serial-vs-`@batch` loop choice is dispatched via `_threading` in
+# `_dc_group_loop!`, and any backend-specific sample-type check runs in
+# `_check_sample_type`.
 @inline function _dc_one_group!(
     g::SignalGroup,
-    dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
+    dc::AbstractDownconvertAndCorrelator,
     measurements::BandMeasurements,
 )
     vals = g.satellites.values
     isempty(vals) && return nothing
     m = measurements[band_key(g.band)]
+    _check_sample_type(dc, m)
     _dc_group_loop!(
         dc,
         vals,
@@ -791,18 +800,28 @@ end
     )
 end
 
-@inline function _dc_group_loop!(dc::CPUDownconvertAndCorrelator, vals, args::Vararg{Any,4})
+# Threading strategy for the per-sat group loop. Each backend declares one via
+# `_threading`; `_dc_group_loop!` then keeps exactly two bodies (serial and
+# Polyester `@batch`) shared across every backend, instead of one loop per
+# concrete correlator type.
+struct _SerialLoop end
+struct _BatchLoop end
+
+# Serial by default; only the multi-threaded backends opt into `@batch`.
+@inline _threading(::AbstractDownconvertAndCorrelator) = _SerialLoop()
+@inline _threading(::CPUThreadedDownconvertAndCorrelator) = _BatchLoop()
+
+@inline _dc_group_loop!(dc::AbstractDownconvertAndCorrelator, vals, args::Vararg{Any,4}) =
+    _dc_group_loop!(_threading(dc), dc, vals, args...)
+
+@inline function _dc_group_loop!(::_SerialLoop, dc, vals, args::Vararg{Any,4})
     @inbounds for i in eachindex(vals)
         vals[i] = _update_tracked_sat_correlator(vals[i], dc, args...)
     end
     return nothing
 end
 
-@inline function _dc_group_loop!(
-    dc::CPUThreadedDownconvertAndCorrelator,
-    vals,
-    args::Vararg{Any,4},
-)
+@inline function _dc_group_loop!(::_BatchLoop, dc, vals, args::Vararg{Any,4})
     @batch for i = 1:length(vals)
         @inbounds vals[i] = _update_tracked_sat_correlator(vals[i], dc, args...)
     end
