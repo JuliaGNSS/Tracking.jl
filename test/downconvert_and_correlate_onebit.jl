@@ -221,6 +221,41 @@ end
         end
     end
 
+    @testset "band-shared measurement (>1 sat) matches per-sat packing" begin
+        # ≥2 sats on one band trip the pack-measurement-once-per-band path
+        # (`_ob_pack_band!` + per-sat `_ob_realign_meas!`); a single sat uses the
+        # per-sat pack. The shared pack is bit-identical, so every sat's correlator
+        # must exactly equal correlating that PRN alone.
+        sig, fs = GPSL1CA(), 5e6Hz
+        nsamp = round(Int, (fs / 1Hz) * 1e-3)
+        cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
+        meas = (l1 = BandMeasurement(cap, fs, 0.0Hz),)
+        dc = OneBitThreadedDownconvertAndCorrelator()
+
+        prns = (1, 5, 12)
+        tsN = downconvert_and_correlate(
+            dc,
+            meas,
+            TrackState(sig, [TrackedSat(sig, prn, 100.0, 200Hz) for prn in prns]),
+        )
+        for prn in prns
+            alone = first(
+                get_sat_state(
+                    downconvert_and_correlate(
+                        dc,
+                        meas,
+                        TrackState(sig, [TrackedSat(sig, prn, 100.0, 200Hz)]),
+                    ),
+                    prn,
+                ).signals,
+            ).correlator
+            shared = first(get_sat_state(tsN, prn).signals).correlator
+            @test get_prompt(shared) == get_prompt(alone)
+            @test get_early(shared) == get_early(alone)
+            @test get_late(shared) == get_late(alone)
+        end
+    end
+
     @testset "errors on non-Complex{Int16} (Float) measurement" begin
         sig, fs = GPSL1CA(), 5e6Hz
         capf = Complex{Float32}.(make_capture(sig, 1, fs, 5000, 200Hz, 100.0))
