@@ -64,16 +64,19 @@ const _INT16_HAS_MADDWD = Sys.ARCH in (:x86_64, :i686) && _INT16_W in (32, 64)
 # larger Int32-only amplitude (the old behaviour) overflowed the accumulator for
 # CBOC on the scalar/NEON path.
 #
-# Each SIMD LANE of the per-block Σ codeₓ·DI accumulator stays within Int32 on this
-# Int16-safe path, but the horizontal reduction ACROSS lanes at flush is the full
-# block total, which can exceed typemax(Int32); it is widened to Int64 first — see
-# `_wide64` (#165).
-#
-# For `max_meas ≥ 2^14` no amp ≥ 1 keeps the wipe within Int16, so we fall back to
-# full Int8 amplitude + Int32 wipe. That fallback voids the `|DI| ≤ typemax(Int16)`
-# premise (`|DI|` can reach `2·max_meas·127`), so even a single lane's per-block
-# Σ codeₓ·DI can wrap Int32 — see `_int16_safe_blk`, which shrinks the strip-mine
-# block on the fallback path to keep that accumulate bounded (#167).
+# Three guards keep the per-block Σ codeₓ·DI within Int32 (the horizontal reduce is
+# widened to Int64, and two block-length caps bound the lanes themselves):
+#   * The horizontal reduction ACROSS lanes at flush is the full block total, which
+#     can exceed typemax(Int32) on this Int16-safe path even though each lane stays
+#     within Int32 — it is widened to Int64 first (see `_wide64`, #165).
+#   * For `max_meas ≥ 2^14` no amp ≥ 1 keeps the wipe within Int16, so we fall back
+#     to full Int8 amplitude + Int32 wipe. That voids the `|DI| ≤ typemax(Int16)`
+#     premise (`|DI|` can reach `2·max_meas·127`), so even a single lane's per-block
+#     Σ can wrap Int32; `_int16_safe_blk` shrinks the strip-mine block on that path
+#     to keep the whole-block sum bounded (#167).
+#   * On the SinCosLUT `Portable` backend (`_INT16_W == 1`) a single Int32 lane sums
+#     a whole block, so `_int16_flush_len` shrinks the block by the SIMD width so no
+#     lane can wrap (#166); a no-op for W ≥ 16, so the hot path is unchanged.
 const _INT16_MAX_MEAS = 1 << 11
 function _int16_choose_carrier(max_meas::Integer)
     a = Int(typemax(Int16)) ÷ (2 * Int(max_meas))
@@ -102,6 +105,25 @@ end
 # Default strip-mine block length (samples); multiple of every backend `W`,
 # sized so the per-block L1 scratch (code + sin + cos) stays in L1.
 const _INT16_BLK = 8192
+
+# Strip-mine block length that keeps the per-block Int32 lane accumulator from
+# overflowing on narrow-SIMD hosts. Each Int32 lane sums the `code·DI` products of
+# its own samples before the per-block Int64 flush: `fld(L, W)` products on the
+# exact-Int32 path, twice that on the x86 `vpmaddwd` path (adjacent pairs are
+# pre-summed). With the Int16-safe amplitude the wipe `|DI| ≤ typemax(Int16)` and
+# the code peaks at CBOC ±25, so a lane sums at most `2·fld(L,W)·(_INT16_MAX_CODE·
+# max_wipe)`, which must stay within `typemax(Int32)`. Solving for L gives the cap
+# below. On wide-SIMD hosts (`W ≥ 16`) it exceeds the default block, so the block —
+# and thus the hot path — is unchanged; on the SinCosLUT `Portable` fallback
+# (`W == 1`: non-AVX2 x86, non-x86/aarch64 arches) it shrinks the block so a single
+# Int32 lane can no longer accumulate a whole block and wrap (issue #166). Composed
+# with `_int16_safe_blk` (which shrinks `dc.blk` on the amp = 127 path, #167) by
+# `min`, so both overflow axes are covered.
+function _int16_flush_len(W::Integer, max_wipe::Integer, blk::Integer)
+    max_product = _INT16_MAX_CODE * Int(max_wipe)
+    products_per_lane = Int(typemax(Int32)) ÷ (2 * max_product)   # 2× covers the vpmaddwd path
+    min(Int(blk), max(Int(W), products_per_lane * Int(W)))
+end
 
 # ── Widening / vpmaddwd helpers (ported from the GNSSSignals benchmark) ───────
 @inline _wide32(v::SIMD.Vec{W,Int8}) where {W} = convert(SIMD.Vec{W,Int32}, v)
@@ -500,7 +522,9 @@ end
         num_rows = size(signal, 1)
 
         bufs = _scratch_buffers(dc)
-        blk = dc.blk
+        # Cap the block so a single Int32 lane can't overflow before its per-block
+        # Int64 flush (issue #166: the `W == 1` Portable path). No-op for W ≥ 16.
+        blk = _int16_flush_len(W, typemax(Int16), dc.blk)
         ncar = (cld(blk, W) + 4) * W            # room for the 4-way carrier fill tail
         length(bufs.extb) < blk + span && resize!(bufs.extb, blk + span)
         length(bufs.csb) < ncar && resize!(bufs.csb, ncar)
@@ -962,7 +986,9 @@ end
         maxspan_v = $maxspan
 
         bufs = _scratch_buffers(dc)
-        blk = dc.blk
+        # Cap the block so a single Int32 lane can't overflow before its per-block
+        # Int64 flush (issue #166: the `W == 1` Portable path). No-op for W ≥ 16.
+        blk = _int16_flush_len(W, typemax(Int16), dc.blk)
         ncar = (cld(blk, W) + 4) * W
         length(bufs.extb) < blk + maxspan_v && resize!(bufs.extb, blk + maxspan_v)
         length(bufs.csb) < ncar && resize!(bufs.csb, ncar)
