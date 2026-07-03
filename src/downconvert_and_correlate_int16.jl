@@ -198,6 +198,34 @@ struct Int16ThreadedDownconvertAndCorrelator{TBL<:SinCosTable,TI} <:
     blk::Int
 end
 
+# The kernels stride the sample buffer by the compile-time constant `_INT16_W`
+# (the Int8 LUT SIMD width at the default `steps = 64`), but the carrier engine's
+# actual chunk width is set by the table's backend, which SinCosLUT selects from
+# `steps`. A `steps` that yields a different width desynchronises the carrier fill
+# from the kernel stride and silently corrupts the carrier replica (#168), so
+# reject it at construction. The width is checked against the engine the kernel
+# actually builds (`carrier_engine(table, …)`), so `steps` values that happen to
+# keep the same backend width (e.g. `steps = 128` on an AVX-512 host) are allowed.
+function _int16_assert_engine_width(table::SinCosTable)
+    W = SinCosLUT.carrier_width(carrier_engine(table, 0))
+    W == _INT16_W || throw(
+        ArgumentError(
+            string(
+                "Int16DownconvertAndCorrelator: the carrier table's SIMD engine ",
+                "width (",
+                W,
+                ") does not match the kernel stride `_INT16_W` (",
+                _INT16_W,
+                "). This happens when `steps` selects a different ",
+                "SinCosLUT backend than the default `steps = 64` on this host; a ",
+                "mismatched width would silently corrupt the carrier replica. ",
+                "Use `steps = 64`.",
+            ),
+        ),
+    )
+    return nothing
+end
+
 function Int16DownconvertAndCorrelator(;
     max_meas::Integer = _INT16_MAX_MEAS,
     steps::Integer = 64,
@@ -205,6 +233,7 @@ function Int16DownconvertAndCorrelator(;
 )
     amplitude, TI = _int16_choose_carrier(max_meas)
     table = SinCosTable(Int8; steps, amplitude)
+    _int16_assert_engine_width(table)
     Int16DownconvertAndCorrelator{typeof(table),TI}(
         Int16ScratchBuffers{TI}(),
         table,
@@ -219,6 +248,7 @@ function Int16ThreadedDownconvertAndCorrelator(;
 )
     amplitude, TI = _int16_choose_carrier(max_meas)
     table = SinCosTable(Int8; steps, amplitude)
+    _int16_assert_engine_width(table)
     Int16ThreadedDownconvertAndCorrelator{typeof(table),TI}(
         [Int16ScratchBuffers{TI}() for _ = 1:Threads.maxthreadid()],
         table,
