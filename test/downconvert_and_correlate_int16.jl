@@ -335,6 +335,22 @@ end
         )
     end
 
+    @testset "rejects a `steps` that changes the engine width (#168)" begin
+        # The kernels stride by the compile-time `_INT16_W`; a `steps` whose
+        # SinCosLUT backend has a different SIMD width would silently corrupt the
+        # carrier. `steps = 48` is never a supported permute size → Portable
+        # (width 1), so on any non-portable host it mismatches and must be
+        # rejected at construction rather than producing garbage correlations.
+        if Tracking._INT16_W != 1
+            @test_throws ArgumentError Int16DownconvertAndCorrelator(steps = 48)
+            @test_throws ArgumentError Int16ThreadedDownconvertAndCorrelator(steps = 48)
+        end
+        # The default `steps = 64` always matches the kernel stride.
+        @test Int16DownconvertAndCorrelator(steps = 64) isa Int16DownconvertAndCorrelator
+        @test Int16ThreadedDownconvertAndCorrelator(steps = 64) isa
+              Int16ThreadedDownconvertAndCorrelator
+    end
+
     @testset "full track converges (GPS L1 C/A)" begin
         sig, fs = GPSL1CA(), 5e6Hz
         cdopp, cphase = 300Hz, 230.0
