@@ -500,6 +500,52 @@ end
         @test Tracking._int16_flush_len(32, max_wipe, blk) == blk
     end
 
+    @testset "blk ≤ 0 is rejected at construction (issue #169)" begin
+        # blk ≤ 0 makes the strip-mine loop `len = min(blk, num_samples) = 0`
+        # never advance → track! hangs the calling thread(s) forever (with the
+        # threaded backend, the Polyester workers). Reject it at construction.
+        for bad in (0, -1, -8192)
+            @test_throws ArgumentError Int16DownconvertAndCorrelator(; blk = bad)
+            @test_throws ArgumentError Int16ThreadedDownconvertAndCorrelator(; blk = bad)
+        end
+
+        # A positive blk is accepted and stored verbatim (default and custom).
+        @test Int16DownconvertAndCorrelator().blk == 8192
+        @test Int16ThreadedDownconvertAndCorrelator().blk == 8192
+        @test Int16DownconvertAndCorrelator(; blk = 4096).blk == 4096
+
+        # A large blk is NOT rejected: the per-lane Int32 overflow it once risked
+        # is bounded at run time by `_int16_flush_len` (#166) and `_int16_safe_blk`
+        # (#167), which cap the effective block. So construction succeeds and the
+        # correlators stay correct — the E/P·L/P triangle matches the default-blk
+        # result (it would be garbage if a lane had wrapped).
+        @test Int16DownconvertAndCorrelator(; blk = 200_000).blk == 200_000
+        @test Int16ThreadedDownconvertAndCorrelator(; blk = 200_000).blk == 200_000
+        let sig = GalileoE1B(), fs = 15e6Hz
+            nsamp = round(Int, (fs / 1Hz) * 1e-3)
+            cbig = correlate_once(
+                Int16DownconvertAndCorrelator(; blk = 200_000),
+                sig,
+                fs,
+                nsamp,
+                200Hz,
+                100.0,
+            )
+            cdef = correlate_once(
+                Int16DownconvertAndCorrelator(),
+                sig,
+                fs,
+                nsamp,
+                200Hz,
+                100.0,
+            )
+            @test abs(get_early(cbig)) / abs(get_prompt(cbig)) ≈
+                  abs(get_early(cdef)) / abs(get_prompt(cdef)) atol = 1e-2
+            @test abs(get_late(cbig)) / abs(get_prompt(cbig)) ≈
+                  abs(get_late(cdef)) / abs(get_prompt(cdef)) atol = 1e-2
+        end
+    end
+
     @testset "full track converges (GPS L1 C/A)" begin
         sig, fs = GPSL1CA(), 5e6Hz
         cdopp, cphase = 300Hz, 230.0
