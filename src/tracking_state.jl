@@ -629,6 +629,16 @@ function remove_satellite!(
     dict = _dict_for_group(track_state, _resolve_group(track_state, group))
     haskey(dict, prn) || throw(KeyError(prn))
     delete!(dict, prn)
+    # `delete!` may leave a `#undef` hole (see `_satellites_without`); rebuild in
+    # place only when it did. In place, and not by swapping in a fresh dict,
+    # because the `SignalGroup.satellites` field is immutable.
+    if length(dict) != length(dict.values)
+        keys_kept, sats_kept = _satellites_without(dict, prn)
+        empty!(dict)
+        for (key, sat) in zip(keys_kept, sats_kept)
+            insert!(dict, key, sat)
+        end
+    end
     track_state
 end
 
@@ -647,16 +657,36 @@ function remove_satellite(
     resolved = _resolve_group(track_state, group)
     dict = _dict_for_group(track_state, resolved)
     haskey(dict, prn) || throw(KeyError(prn))
-    # Copy-then-delete preserves the dict's concrete value type, which the
-    # `map`/`filter` round-trip would otherwise leave under-specified to
-    # `Dictionary{<:Any,<:TrackedSat}` from the type system's perspective.
-    new_dict = copy(dict)
-    delete!(new_dict, prn)
+    # `Dictionary` adopts the value vector without copying, so wrapping the
+    # surviving entries is a single allocation (no copy-then-delete round trip).
+    new_dict = Dictionary(_satellites_without(dict, prn)...)
     groups = track_state.groups
     g = groups[resolved]
     new_group = SignalGroup(g; satellites = new_dict)
     new_groups = @set groups[resolved] = new_group
     TrackState{G,DE}(new_groups, track_state.doppler_estimator)
+end
+
+# Collect the `(keys, values)` of every satellite except `prn` into fresh,
+# concretely-typed vectors — the hole-free basis both removal paths rebuild from.
+#
+# Removal must be hole-free (issue #182): `Dictionaries.delete!` only compacts
+# the backing `values` vector once deletions force a rehash; below that threshold
+# it leaves a `#undef` slot that the tracking hot paths (`_reset_one_group!`,
+# `_dc_group_loop!`, `_est_one_group!`) iterate straight into an `UndefRefError`
+# on the next `track!`. The explicit `Vector{I}`/`Vector{T}` (not a `map`/`filter`
+# round trip) keeps the value type concrete, so the result stays type-stable.
+function _satellites_without(dict::Dictionary{I,T}, prn) where {I,T}
+    keys_kept = Vector{I}(undef, 0)
+    sats_kept = Vector{T}(undef, 0)
+    sizehint!(keys_kept, length(dict) - 1)
+    sizehint!(sats_kept, length(dict) - 1)
+    for (key, sat) in pairs(dict)
+        key == prn && continue
+        push!(keys_kept, key)
+        push!(sats_kept, sat)
+    end
+    return keys_kept, sats_kept
 end
 
 # Compile-time dispatch helper: hand back the dictionary slot for the
