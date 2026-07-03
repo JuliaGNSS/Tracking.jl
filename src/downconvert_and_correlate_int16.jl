@@ -101,6 +101,7 @@ const _INT16_BLK = 8192
 # ── Widening / vpmaddwd helpers (ported from the GNSSSignals benchmark) ───────
 @inline _wide32(v::SIMD.Vec{W,Int8}) where {W} = convert(SIMD.Vec{W,Int32}, v)
 @inline _wide32(v::SIMD.Vec{W,Int16}) where {W} = convert(SIMD.Vec{W,Int32}, v)
+@inline _wide32(v::SIMD.Vec{W,Int32}) where {W} = v   # already widened (Int32 wipe tile)
 @inline _wide16(v::SIMD.Vec{W,Int8}) where {W} = convert(SIMD.Vec{W,Int16}, v)
 
 # vpmaddwd: Int16×Int16 → Int32 pairwise-add — the dot-product primitive for the
@@ -177,9 +178,14 @@ struct Int16ScratchBuffers{TI}
     # signals (one downconvert per sat, not per signal). Wipe element type `TI`.
     dib::Vector{TI}
     dqb::Vector{TI}
+    # Int64 tap totals (`M·NC`, flattened) for the runtime `AbstractVector`-shifts
+    # fallback, hoisted here so that path allocates only its result vector (not
+    # fresh totals) per integration. Unused by the `@generated` static path.
+    tsumI::Vector{Int64}
+    tsumQ::Vector{Int64}
 end
 Int16ScratchBuffers{TI}() where {TI} =
-    Int16ScratchBuffers{TI}(Int8[], Int8[], Int8[], TI[], TI[])
+    Int16ScratchBuffers{TI}(Int8[], Int8[], Int8[], TI[], TI[], Int64[], Int64[])
 
 """
 $(SIGNATURES)
@@ -188,7 +194,10 @@ Integer (`Complex{Int16}`) hybrid-blocked CPU downconvert + correlate backend
 (single-threaded). Opt-in alternative to [`CPUDownconvertAndCorrelator`] for
 `Complex{Int16}` sample buffers; errors on any other sample element type.
 Construct **once outside** the `track!` loop and pass it via the
-`downconvert_and_correlator` keyword for an allocation-free steady state.
+`downconvert_and_correlator` keyword for an allocation-free steady state on the
+static correlator path (EPL/VEPL and any `SVector`-shifts correlator). The
+runtime `AbstractVector`-shifts fallback additionally allocates the small
+`Vector` it returns each integration, but reuses the same thread-local scratch.
 
 The carrier-replica amplitude (and the wipe arithmetic type) are chosen from
 `max_meas`, the largest expected `|real|`/`|imag|` of a measurement sample —
@@ -538,12 +547,17 @@ end
 
 # Dynamic (runtime tap count) fallback: correlators whose sample shifts are a
 # runtime-sized `AbstractVector` (e.g. a `Vector`-accumulator correlator —
-# issue #126 (b)). Mirrors the Float32 backend's `AbstractVector`-shifts path.
-# Loops over taps/antennas at runtime and uses the exact Int32 wipe + per-chunk
-# horizontal sum, so it is not the hot path but stays correct for any tap count;
-# returns `Vector{ComplexF64}` (M=1) or `Vector{SVector{M,ComplexF64}}` (M>1).
-# `SVector` shifts are more specific and dispatch to the `@generated` method
-# above, so EPL/VEPL keep the fast unrolled kernel.
+# issue #126 (b)). `SVector` shifts are more specific and dispatch to the
+# `@generated` method above, so EPL/VEPL keep the fast unrolled kernel; this
+# path stays correct for any runtime tap count. It mirrors that kernel's
+# structure so it is not gratuitously slow: per block it fills the shared DI/DQ
+# tile once (`_int16_fill_ditile!`), then for each antenna/tap accumulates into a
+# register `Vec{W,Int32}` lane accumulator flushed into Int64 totals once per
+# block — no per-chunk horizontal reduction. The totals live in the thread-local
+# scratch, so the only per-call allocation is the returned result vector:
+# `Vector{ComplexF64}` (M=1) or `Vector{SVector{M,ComplexF64}}` (M>1). The exact
+# Int32 accumulate (widening the `TI` tile) is used regardless of backend — the
+# `vpmaddwd` fast path is reserved for the `@generated` hot path.
 function _int16_hybrid_blocked!(
     dc::_Int16DC,
     signal::AbstractVecOrMat{Complex{Int16}},
@@ -564,18 +578,30 @@ function _int16_hybrid_blocked!(
     min_shift = minimum(sample_shifts)
     max_shift = maximum(sample_shifts)
     span = max_shift - min_shift
-    offs = [Int(sample_shifts[k]) - min_shift for k = 1:NC]   # extb read offsets
     num_rows = size(signal, 1)
 
     bufs = _scratch_buffers(dc)
     blk = dc.blk
     ncar = (cld(blk, W) + 4) * W
+    ntile = blk * M
     length(bufs.extb) < blk + span && resize!(bufs.extb, blk + span)
     length(bufs.csb) < ncar && resize!(bufs.csb, ncar)
     length(bufs.ccb) < ncar && resize!(bufs.ccb, ncar)
+    length(bufs.dib) < ntile && resize!(bufs.dib, ntile)
+    length(bufs.dqb) < ntile && resize!(bufs.dqb, ntile)
+    length(bufs.tsumI) < M * NC && resize!(bufs.tsumI, M * NC)
+    length(bufs.tsumQ) < M * NC && resize!(bufs.tsumQ, M * NC)
     extb = bufs.extb
     csb = bufs.csb
     ccb = bufs.ccb
+    dib = bufs.dib
+    dqb = bufs.dqb
+    tI = bufs.tsumI
+    tQ = bufs.tsumQ
+    @inbounds for i = 1:(M*NC)
+        tI[i] = zero(Int64)
+        tQ[i] = zero(Int64)
+    end
 
     carrier_freq = Float64(upreferred(carrier_frequency / Hz))
     sampling_freq = Float64(upreferred(sampling_frequency / Hz))
@@ -585,8 +611,6 @@ function _int16_hybrid_blocked!(
     cps = Float64(upreferred(code_frequency / Hz)) / sampling_freq
     code_phase0 = Float64(code_phase)
 
-    tI = zeros(Int64, M, NC)
-    tQ = zeros(Int64, M, NC)
     p_sig = Ptr{Int16}(pointer(signal))
 
     blk_off = 0
@@ -603,48 +627,53 @@ function _int16_hybrid_blocked!(
         )
         _int16_fill_carrier!(csb, ccb, reng, blk_off, len, phase0, Val(W))
         base = signal_start_sample + blk_off
+        _int16_fill_ditile!(
+            dib,
+            dqb,
+            signal,
+            NumAnts{M}(),
+            csb,
+            ccb,
+            base,
+            len,
+            num_rows,
+            p_sig,
+        )
         for j = 1:M
-            colbase = (j - 1) * num_rows
-            n = 1
-            while n + W - 1 <= len
-                byte_off = (colbase + base + n - 2) * 2 * sizeof(Int16)
-                mr, mi = _deinterleave_load(SIMD.Vec{W,Int32}, p_sig, byte_off)
-                cc = _wide32(vload(SIMD.Vec{W,Int8}, ccb, n))
-                sn = _wide32(vload(SIMD.Vec{W,Int8}, csb, n))
-                DI = mr * cc + mi * sn
-                DQ = mi * cc - mr * sn
-                for k = 1:NC
-                    codev = _wide32(vload(SIMD.Vec{W,Int8}, extb, n + offs[k]))
-                    tI[j, k] += Int64(sum(codev * DI))
-                    tQ[j, k] += Int64(sum(codev * DQ))
+            toff = (j - 1) * len
+            for k = 1:NC
+                offk = Int(sample_shifts[k]) - min_shift
+                idx = (j - 1) * NC + k
+                aI = zero(SIMD.Vec{W,Int32})
+                aQ = zero(SIMD.Vec{W,Int32})
+                n = 1
+                while n + W - 1 <= len
+                    DI = _wide32(vload(SIMD.Vec{W,eltype(dib)}, dib, toff + n))
+                    DQ = _wide32(vload(SIMD.Vec{W,eltype(dqb)}, dqb, toff + n))
+                    codev = _wide32(vload(SIMD.Vec{W,Int8}, extb, n + offk))
+                    aI += codev * DI
+                    aQ += codev * DQ
+                    n += W
                 end
-                n += W
-            end
-            while n <= len
-                sig = signal[base+n-1, j]
-                mr_s = Int32(real(sig));
-                mi_s = Int32(imag(sig))
-                cc_s = Int32(ccb[n]);
-                sn_s = Int32(csb[n])
-                di = mr_s * cc_s + mi_s * sn_s
-                dq = mi_s * cc_s - mr_s * sn_s
-                for k = 1:NC
-                    c = Int32(extb[n+offs[k]])
-                    tI[j, k] += Int64(c * di)
-                    tQ[j, k] += Int64(c * dq)
+                tI[idx] += Int64(sum(aI))
+                tQ[idx] += Int64(sum(aQ))
+                while n <= len
+                    c = Int32(extb[n+offk])
+                    tI[idx] += Int64(c * Int32(dib[toff+n]))
+                    tQ[idx] += Int64(c * Int32(dqb[toff+n]))
+                    n += 1
                 end
-                n += 1
             end
         end
         blk_off += len
     end
 
     if M == 1
-        return [complex(Float64(tI[1, k]), Float64(tQ[1, k])) for k = 1:NC]
+        return [complex(Float64(tI[k]), Float64(tQ[k])) for k = 1:NC]
     else
         return [
             SVector{M,ComplexF64}(
-                ntuple(j -> complex(Float64(tI[j, k]), Float64(tQ[j, k])), M),
+                ntuple(j -> complex(Float64(tI[(j-1)*NC+k]), Float64(tQ[(j-1)*NC+k])), M),
             ) for k = 1:NC
         ]
     end
