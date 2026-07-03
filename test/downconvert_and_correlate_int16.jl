@@ -475,6 +475,31 @@ end
               abs(get_late(cf)) / abs(get_prompt(cf)) atol = 1e-2
     end
 
+    # Per-block Int32 lane-accumulator overflow guard (issue #166). On the
+    # SinCosLUT `Portable` backend (`_INT16_W == 1`: non-AVX2 x86, non-x86/aarch64
+    # arches) a single Int32 lane would otherwise accumulate a whole strip-mine
+    # block of `code·DI` products before the per-block Int64 flush and wrap on a
+    # strong CBOC (±25) capture. `_int16_flush_len` caps the block so no lane can
+    # exceed `typemax(Int32)` at any host SIMD width.
+    @testset "flush cadence bounds the Int32 accumulator (issue #166)" begin
+        max_code = 25                       # Galileo E1B CBOC sub-carrier peak
+        max_wipe = Int(typemax(Int16))      # Int16-safe wipe bound (|DI| ≤ typemax(Int16))
+        max_product = max_code * max_wipe
+        blk = Tracking._INT16_BLK
+        for W in (1, 16, 32, 64)
+            L = Tracking._int16_flush_len(W, max_wipe, blk)
+            @test 0 < L <= blk
+            # A lane sums fld(L, W) products (exact-Int32) or 2·fld(L, W) (vpmaddwd);
+            # the 2× worst case must still fit in Int32.
+            @test 2 * cld(L, W) * max_product <= typemax(Int32)
+        end
+        # The Portable (W == 1) path must flush before a full default block …
+        @test Tracking._int16_flush_len(1, max_wipe, blk) < blk
+        # … while wide-SIMD hosts are unaffected (no benchmark impact).
+        @test Tracking._int16_flush_len(16, max_wipe, blk) == blk
+        @test Tracking._int16_flush_len(32, max_wipe, blk) == blk
+    end
+
     @testset "full track converges (GPS L1 C/A)" begin
         sig, fs = GPSL1CA(), 5e6Hz
         cdopp, cphase = 300Hz, 230.0
