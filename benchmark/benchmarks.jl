@@ -788,30 +788,45 @@ if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
         ("Galileo E1B, 4 sats @ 25 MHz", (GalileoE1B(),), [4], 25e6Hz, 25000, 50),
     )
         sig16 = _int16_capture(nsamp)
-        # Two independent track states (track! mutates) so each backend starts
-        # from an identical steady-state (bit_buffer.found = true) configuration.
-        ts_f, _ = _make_steady_state_track_state(;
-            systems, nsats_list, nsamp, prn_max, code_dop = 100.0)
-        ts_i, _ = _make_steady_state_track_state(;
-            systems, nsats_list, nsamp, prn_max, code_dop = 100.0)
         dc_f = _make_cpu_threaded_dc(sfreq)
         dc_i = Tracking.Int16ThreadedDownconvertAndCorrelator()
         g = SUITE["track! Int16 vs Float32"][name]
-        g["Float32"] = @benchmarkable Tracking.track!(
-            $sig16, $ts_f, $sfreq; downconvert_and_correlator = $dc_f,
+        # `track!` mutates its state, and tracking these random (non-signal) samples
+        # drifts the loop filter — after enough iterations to a NaN doppler, which then
+        # throws `InexactError` when the next iteration rounds a sample count. `tune!`/
+        # `run` call the kernel hundreds of times, and the fast backends run the most, so
+        # a plain reuse-and-mutate benchmark diverges nondeterministically. Rebuild a
+        # fresh steady-state (`bit_buffer.found = true`) state per sample via `setup` and
+        # pin `evals = 1`: every measured call then starts from the same valid state and
+        # runs exactly once. `setup` isn't timed, so the reported min time is unaffected.
+        g["Float32"] = @benchmarkable(
+            Tracking.track!($sig16, ts, $sfreq; downconvert_and_correlator = $dc_f),
+            setup = (ts = first(_make_steady_state_track_state(;
+                systems = $systems, nsats_list = $nsats_list, nsamp = $nsamp,
+                prn_max = $prn_max, code_dop = 100.0,
+            ))),
+            evals = 1,
         )
-        g["Int16"] = @benchmarkable Tracking.track!(
-            $sig16, $ts_i, $sfreq; downconvert_and_correlator = $dc_i,
+        g["Int16"] = @benchmarkable(
+            Tracking.track!($sig16, ts, $sfreq; downconvert_and_correlator = $dc_i),
+            setup = (ts = first(_make_steady_state_track_state(;
+                systems = $systems, nsats_list = $nsats_list, nsamp = $nsamp,
+                prn_max = $prn_max, code_dop = 100.0,
+            ))),
+            evals = 1,
         )
         # One-bit (bit-wise) backend, same capture. BPSK-only (it errors on CBOC), so
         # register it only for the non-Galileo cases. Guarded for base revs without it.
         if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
            !(first(systems) isa GalileoE1B)
-            ts_b, _ = _make_steady_state_track_state(;
-                systems, nsats_list, nsamp, prn_max, code_dop = 100.0)
             dc_b = Tracking.OneBitThreadedDownconvertAndCorrelator()
-            g["OneBit"] = @benchmarkable Tracking.track!(
-                $sig16, $ts_b, $sfreq; downconvert_and_correlator = $dc_b,
+            g["OneBit"] = @benchmarkable(
+                Tracking.track!($sig16, ts, $sfreq; downconvert_and_correlator = $dc_b),
+                setup = (ts = first(_make_steady_state_track_state(;
+                    systems = $systems, nsats_list = $nsats_list, nsamp = $nsamp,
+                    prn_max = $prn_max, code_dop = 100.0,
+                ))),
+                evals = 1,
             )
         end
     end
