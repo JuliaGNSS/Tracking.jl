@@ -438,6 +438,43 @@ end
               Int16ThreadedDownconvertAndCorrelator
     end
 
+    # Block-flush horizontal sum must not wrap in Int32 (#165). The per-lane Int32
+    # bound holds on the fast path, but the block-flush reduction ACROSS lanes is the
+    # full block total, which for a strong, code-aligned, full-scale CBOC capture at
+    # DEFAULT settings exceeds typemax(Int32). If that reduction happens in Int32 the
+    # prompt wraps and the E/P·L/P triangle is destroyed. Worst case from the issue:
+    # full-scale (|m| = max_meas on every sample) real signal carrying the E1B code
+    # sign, zero Doppler → Σ code·DI is same-sign across the whole 8192-sample block.
+    @testset "block-flush accumulator does not wrap in Int32 (#165)" begin
+        sig, fs = GalileoE1B(), 15e6Hz
+        nsamp = round(Int, (fs / 1Hz) * 1e-3)   # 15000 > 8192-sample block
+        cphase = 0.0
+        code = gen_code(nsamp, sig, 1, fs, get_code_frequency(sig), cphase)
+        cap = complex.(round.(Int16, 2048 .* sign.(real.(code))), zero(Int16))
+        meas = (l1 = BandMeasurement(cap, fs, 0.0Hz),)
+        corr(dc) = first(
+            get_sat_state(
+                downconvert_and_correlate(
+                    dc,
+                    meas,
+                    TrackState(sig, [TrackedSat(sig, 1, cphase, 0.0Hz)]),
+                ),
+                1,
+            ).signals,
+        ).correlator
+        cf = corr(CPUThreadedDownconvertAndCorrelator())
+        ci = corr(Int16ThreadedDownconvertAndCorrelator())
+        # The capture is strong enough that the integer prompt total exceeds
+        # typemax(Int32): this is exactly what wraps an Int32 block-flush reduction.
+        @test abs(get_prompt(ci)) > typemax(Int32)
+        # Amplitude-invariant E/P and L/P ratios still match the (overflow-free)
+        # Float32 backend — they would be garbage if the prompt had wrapped.
+        @test abs(get_early(ci)) / abs(get_prompt(ci)) ≈
+              abs(get_early(cf)) / abs(get_prompt(cf)) atol = 1e-2
+        @test abs(get_late(ci)) / abs(get_prompt(ci)) ≈
+              abs(get_late(cf)) / abs(get_prompt(cf)) atol = 1e-2
+    end
+
     @testset "full track converges (GPS L1 C/A)" begin
         sig, fs = GPSL1CA(), 5e6Hz
         cdopp, cphase = 300Hz, 230.0
