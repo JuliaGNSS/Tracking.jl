@@ -148,6 +148,15 @@ $(SIGNATURES)
 Abstract downconverter and correlator type. Structs for
 downconversion and correlation must have this abstract type as a
 parent.
+
+The per-sat correlation loop, per-group body, and public
+`downconvert_and_correlate(!)` entry points are defined once on this abstract
+type (see `downconvert_and_correlate_cpu.jl`); a subtype customises behaviour by
+overriding the dispatch hooks it needs — `_correlate_signals` / `_scratch_buffers`
+(kernel + scratch), `_threading` (serial vs. Polyester `@batch`, default serial),
+and `_check_sample_type` (per-backend sample-type check, default no-op). A
+subtype that overrides none inherits the single-threaded CPU plumbing rather
+than getting a `MethodError`.
 """
 abstract type AbstractDownconvertAndCorrelator end
 

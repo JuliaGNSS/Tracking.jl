@@ -328,6 +328,13 @@ end
         capf = Complex{Float32}.(make_capture(sig, 1, fs, 5000, 200Hz, 100.0))
         ts = TrackState(sig, [TrackedSat(sig, 1, 100.0, 200Hz)])
         meas = (l1 = BandMeasurement(capf, fs, 0.0Hz),)
+        # Both integer backends run the sample-type check through the shared
+        # `_check_sample_type` hook, so both must reject Float samples.
+        @test_throws ArgumentError downconvert_and_correlate(
+            Int16DownconvertAndCorrelator(),
+            meas,
+            ts,
+        )
         @test_throws ArgumentError downconvert_and_correlate(
             Int16ThreadedDownconvertAndCorrelator(),
             meas,
