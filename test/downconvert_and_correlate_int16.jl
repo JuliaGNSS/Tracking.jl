@@ -280,18 +280,21 @@ end
 
     # The AbstractVector-shifts fallback hoists its offsets/totals into the
     # thread-local scratch and flushes per block, so in steady state it allocates
-    # only the small result `Vector` it returns — not fresh per-integration totals
-    # (which previously added an `M×NC` `tI`/`tQ` matrix pair + offset vector per
-    # ~1 ms integration). Assert the backend call allocates no more than a couple
-    # of small result vectors (the pre-fix path allocated ~3.4× more).
+    # only the length-NC result `Vector` it returns — not fresh per-integration
+    # totals (the pre-fix path also built an `M×NC` `tI`/`tQ` matrix pair + an
+    # offset vector, i.e. four arrays per ~1 ms integration). The two structural
+    # claims we assert (both platform-independent, `minimum` over repeats to strip
+    # GC-sampling noise): the per-call allocation is small (just the result
+    # vector, not the pre-fix four-array scratch) and does NOT grow with
+    # integration length (no per-block allocation — the bug that a bare-`W`,
+    # non-`Val` kernel would reintroduce by boxing the SIMD accumulators).
     @testset "dynamic Vector-shifts fallback is scratch-reusing (bounded allocs)" begin
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         fc = 200Hz * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
         shifts = collect(get_correlator_sample_shifts(EarlyPromptLateCorrelator(), fs, fc))
         dc = Int16DownconvertAndCorrelator()
-        cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
-        call() = Tracking._int16_hybrid_blocked!(
+        runN(cap, ns) = Tracking._int16_hybrid_blocked!(
             dc,
             cap,
             NumAnts(1),
@@ -304,33 +307,24 @@ end
             200Hz + 0.0Hz,
             fs,
             1,
-            nsamp,
+            ns,
         )
-        call()                                  # warm up (grow scratch once)
-        call()
-        # Result is a Vector{ComplexF64} of length 3 (~112 B here); the only
-        # steady-state allocation. Independent of integration length, so a 10×
-        # longer capture allocates the same amount.
-        allocs = @allocated call()
-        @test allocs <= 256
-        cap10 = make_capture(sig, 1, fs, 10 * nsamp, 200Hz, 100.0)
-        call10() = Tracking._int16_hybrid_blocked!(
-            dc,
-            cap10,
-            NumAnts(1),
-            sig,
-            1,
-            shifts,
-            100.0,
-            0.6,
-            fc,
-            200Hz + 0.0Hz,
-            fs,
-            1,
-            10 * nsamp,
-        )
-        call10()
-        @test (@allocated call10()) == allocs
+        # min over repeats: @allocated is GC-sampling-noisy per call, but the
+        # structural allocation is the stable floor.
+        function minalloc(mult)
+            ns = mult * nsamp
+            cap = make_capture(sig, 1, fs, ns, 200Hz, 100.0)
+            runN(cap, ns)
+            runN(cap, ns)                       # warm up (grow scratch once)
+            minimum(@allocated(runN(cap, ns)) for _ = 1:8)
+        end
+        a1 = minalloc(1)                        # 1 strip-mine block
+        a13 = minalloc(20)                      # ~13 strip-mine blocks
+        # Only the result vector allocates — well under the pre-fix four-array
+        # scratch (which measured ~576 B for a single block on CI).
+        @test a1 <= 256
+        # No per-block allocation: 13× the blocks allocates the same amount.
+        @test a13 == a1
     end
 
     # Multi-signal-per-sat tile-share: a sat carrying N identical GPS L1 C/A

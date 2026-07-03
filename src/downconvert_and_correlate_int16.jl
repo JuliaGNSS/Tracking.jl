@@ -490,6 +490,55 @@ end
     end
 end
 
+# One block's correlate for the dynamic fallback: accumulate every antenna/tap
+# from the shared DI/DQ tile into the Int64 `tI`/`tQ` totals, flushing the
+# `Vec{W,Int32}` lane accumulator once per (block, antenna, tap). Split out as a
+# `Val{W}`-parameterized barrier — like `_int16_fill_carrier!` — so `W` and the
+# tile element type `TIw` are compile-time constants in the SIMD type positions
+# (a bare local `W` is not reliably const-folded into `SIMD.Vec{W,…}` on every
+# Julia version, which would box the accumulators and allocate per block).
+@inline function _int16_dyn_accumulate_block!(
+    tI::Vector{Int64},
+    tQ::Vector{Int64},
+    dib::Vector{TIw},
+    dqb::Vector{TIw},
+    extb::Vector{Int8},
+    sample_shifts::AbstractVector,
+    min_shift::Integer,
+    ::NumAnts{M},
+    len::Int,
+    ::Val{W},
+) where {TIw,M,W}
+    NC = length(sample_shifts)
+    @inbounds for j = 1:M
+        toff = (j - 1) * len
+        for k = 1:NC
+            offk = Int(sample_shifts[k]) - min_shift
+            idx = (j - 1) * NC + k
+            aI = zero(SIMD.Vec{W,Int32})
+            aQ = zero(SIMD.Vec{W,Int32})
+            n = 1
+            while n + W - 1 <= len
+                DI = _wide32(vload(SIMD.Vec{W,TIw}, dib, toff + n))
+                DQ = _wide32(vload(SIMD.Vec{W,TIw}, dqb, toff + n))
+                codev = _wide32(vload(SIMD.Vec{W,Int8}, extb, n + offk))
+                aI += codev * DI
+                aQ += codev * DQ
+                n += W
+            end
+            tI[idx] += Int64(sum(aI))
+            tQ[idx] += Int64(sum(aQ))
+            while n <= len
+                c = Int32(extb[n+offk])
+                tI[idx] += Int64(c * Int32(dib[toff+n]))
+                tQ[idx] += Int64(c * Int32(dqb[toff+n]))
+                n += 1
+            end
+        end
+    end
+    nothing
+end
+
 # Dynamic (runtime tap count) fallback: correlators whose sample shifts are a
 # runtime-sized `AbstractVector` (e.g. a `Vector`-accumulator correlator —
 # issue #126 (b)). `SVector` shifts are more specific and dispatch to the
@@ -584,32 +633,18 @@ function _int16_hybrid_blocked!(
             num_rows,
             p_sig,
         )
-        for j = 1:M
-            toff = (j - 1) * len
-            for k = 1:NC
-                offk = Int(sample_shifts[k]) - min_shift
-                idx = (j - 1) * NC + k
-                aI = zero(SIMD.Vec{W,Int32})
-                aQ = zero(SIMD.Vec{W,Int32})
-                n = 1
-                while n + W - 1 <= len
-                    DI = _wide32(vload(SIMD.Vec{W,eltype(dib)}, dib, toff + n))
-                    DQ = _wide32(vload(SIMD.Vec{W,eltype(dqb)}, dqb, toff + n))
-                    codev = _wide32(vload(SIMD.Vec{W,Int8}, extb, n + offk))
-                    aI += codev * DI
-                    aQ += codev * DQ
-                    n += W
-                end
-                tI[idx] += Int64(sum(aI))
-                tQ[idx] += Int64(sum(aQ))
-                while n <= len
-                    c = Int32(extb[n+offk])
-                    tI[idx] += Int64(c * Int32(dib[toff+n]))
-                    tQ[idx] += Int64(c * Int32(dqb[toff+n]))
-                    n += 1
-                end
-            end
-        end
+        _int16_dyn_accumulate_block!(
+            tI,
+            tQ,
+            dib,
+            dqb,
+            extb,
+            sample_shifts,
+            min_shift,
+            NumAnts{M}(),
+            len,
+            Val(_INT16_W),
+        )
         blk_off += len
     end
 
