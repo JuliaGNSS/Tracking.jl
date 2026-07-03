@@ -310,22 +310,25 @@ end
     end
 
     # The AbstractVector-shifts fallback hoists its offsets/totals into the
-    # thread-local scratch and flushes per block, so in steady state it allocates
-    # only the length-NC result `Vector` it returns — not fresh per-integration
-    # totals (the pre-fix path also built an `M×NC` `tI`/`tQ` matrix pair + an
-    # offset vector, i.e. four arrays per ~1 ms integration). The two structural
-    # claims we assert (both platform-independent, `minimum` over repeats to strip
-    # GC-sampling noise): the per-call allocation is small (just the result
-    # vector, not the pre-fix four-array scratch) and does NOT grow with
-    # integration length (no per-block allocation — the bug that a bare-`W`,
-    # non-`Val` kernel would reintroduce by boxing the SIMD accumulators).
-    @testset "dynamic Vector-shifts fallback is scratch-reusing (bounded allocs)" begin
+    # thread-local scratch and flushes per block, so its only per-call allocation
+    # is the length-NC result `Vector` it returns — the pre-fix path also built an
+    # `M×NC` `tI`/`tQ` matrix pair + an offset vector (four arrays per ~1 ms
+    # integration). We measure the fallback (`Vector` shifts) *against* the static
+    # `@generated` path (`SVector` shifts): both call `gen_code!`/`fill_carrier!`
+    # the same number of times per block, so the difference cancels that shared,
+    # per-block cost (which itself allocates on some Julia versions) and isolates
+    # the fallback's own per-call scratch. After the fix that gap is just the
+    # result vector (~48 B, and constant in block count); the pre-fix four-array
+    # scratch made it ~6× larger (~288 B). `minimum` over repeats strips
+    # GC-sampling noise.
+    @testset "dynamic Vector-shifts fallback adds no per-call scratch vs static path" begin
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         fc = 200Hz * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
-        shifts = collect(get_correlator_sample_shifts(EarlyPromptLateCorrelator(), fs, fc))
+        shifts_s = get_correlator_sample_shifts(EarlyPromptLateCorrelator(), fs, fc)  # SVector → @generated
+        shifts_v = collect(shifts_s)                                                  # Vector → fallback
         dc = Int16DownconvertAndCorrelator()
-        runN(cap, ns) = Tracking._int16_hybrid_blocked!(
+        runN(shifts, cap, ns) = Tracking._int16_hybrid_blocked!(
             dc,
             cap,
             NumAnts(1),
@@ -340,22 +343,19 @@ end
             1,
             ns,
         )
-        # min over repeats: @allocated is GC-sampling-noisy per call, but the
-        # structural allocation is the stable floor.
-        function minalloc(mult)
+        function minalloc(shifts, mult)
             ns = mult * nsamp
             cap = make_capture(sig, 1, fs, ns, 200Hz, 100.0)
-            runN(cap, ns)
-            runN(cap, ns)                       # warm up (grow scratch once)
-            minimum(@allocated(runN(cap, ns)) for _ = 1:8)
+            runN(shifts, cap, ns)
+            runN(shifts, cap, ns)               # warm up (grow scratch once)
+            minimum(@allocated(runN(shifts, cap, ns)) for _ = 1:8)
         end
-        a1 = minalloc(1)                        # 1 strip-mine block
-        a13 = minalloc(20)                      # ~13 strip-mine blocks
-        # Only the result vector allocates — well under the pre-fix four-array
-        # scratch (which measured ~576 B for a single block on CI).
-        @test a1 <= 256
-        # No per-block allocation: 13× the blocks allocates the same amount.
-        @test a13 == a1
+        # 1 vs ~13 strip-mine blocks: the fallback's over-allocation vs the static
+        # path must be small AND must not grow with the number of blocks.
+        for mult in (1, 13)
+            gap = minalloc(shifts_v, mult) - minalloc(shifts_s, mult)
+            @test gap <= 128
+        end
     end
 
     # Multi-signal-per-sat tile-share: a sat carrying N identical GPS L1 C/A
