@@ -6,12 +6,14 @@
 #
 # The comment has two parts:
 #
-#   1. **Int16 vs Float32** — a head-to-head of the two `track!` backends. The
-#      integer backend is NEW on the PR (no base counterpart), so a plain
-#      base-vs-head diff can't show its speedup. Instead we pair each scenario's
-#      `Float32` and `Int16` leaves — registered side by side under
-#      `track! Int16 vs Float32/<scenario>/{Float32,Int16}` — into one row and
-#      report Float32 / Int16 (>1 ⇒ the integer backend is faster).
+#   1. **Backends vs Float32** — a head-to-head of the alternative `track!`
+#      backends (integer `Int16`, and the bit-wise `OneBit`) against the Float32
+#      default. These backends are NEW on the PR (no base counterpart), so a plain
+#      base-vs-head diff can't show their speedup. Instead we pair each scenario's
+#      `Float32`, `Int16` and `OneBit` leaves — registered side by side under
+#      `track! Int16 vs Float32/<scenario>/{Float32,Int16,OneBit}` — into one row
+#      and report Float32 / backend (>1 ⇒ that backend is faster). The one-bit
+#      backend is BPSK-only, so it has no cell for CBOC (Galileo E1B) scenarios.
 #
 #   2. **Regression table** — every other benchmark, base rev vs PR head, the
 #      usual "did this PR get slower?" view.
@@ -53,8 +55,8 @@ end
 fmt_mem(node) = string(round(Int, node["allocs"]), " allocs: ", round(Int, node["memory"]), " B")
 
 # Ratio cell with a fast/slow marker. `faster_when` picks which direction is good:
-# for regressions base/head (>1 ⇒ PR faster); for Int16-vs-Float32 Float32/Int16
-# (>1 ⇒ Int16 faster). ✅ ≥ 5 % faster, ⚠️ ≥ 5 % slower.
+# for regressions base/head (>1 ⇒ PR faster); for backends-vs-Float32 Float32/backend
+# (>1 ⇒ that backend faster). ✅ ≥ 5 % faster, ⚠️ ≥ 5 % slower.
 function fmt_ratio(r)
     s = string(round(r; sigdigits = 3))
     r >= 1.05 ? "$s ✅" : r <= 0.95 ? "$s ⚠️" : s
@@ -97,21 +99,25 @@ for k in sort(collect(keys(head)))
 end
 
 if !isempty(order)
-    println(io, "### Int16 vs Float32 backend (`track!`, PR head)")
+    println(io, "### Alternative backends vs Float32 (`track!`, PR head)")
     println(io)
-    println(io, "Ratio = Float32 / Int16: **>1 means the integer backend is faster**. ",
-                "✅ ≥ 5 % faster, ⚠️ ≥ 5 % slower.")
+    println(io, "Ratio = Float32 / backend: **>1 means that backend is faster**. ",
+                "✅ ≥ 5 % faster, ⚠️ ≥ 5 % slower. The one-bit backend is BPSK-only, ",
+                "so its cells are blank for CBOC (Galileo E1B) scenarios.")
     println(io)
-    println(io, "| Scenario | Float32 | Int16 | Float32 / Int16 |")
-    println(io, "|:--|--:|--:|--:|")
+    println(io, "| Scenario | Float32 | Int16 | OneBit | Float32 / Int16 | Float32 / OneBit |")
+    println(io, "|:--|--:|--:|--:|--:|--:|")
     for scenario in order
         d = pairs[scenario]
         f = get(d, "Float32", nothing)
         i = get(d, "Int16", nothing)
+        b = get(d, "OneBit", nothing)
         fcell = f === nothing ? "" : fmt_time(mintime(f))
         icell = i === nothing ? "" : fmt_time(mintime(i))
-        rcell = (f !== nothing && i !== nothing) ? fmt_ratio(mintime(f) / mintime(i)) : ""
-        println(io, "| $scenario | $fcell | $icell | $rcell |")
+        bcell = b === nothing ? "" : fmt_time(mintime(b))
+        ircell = (f !== nothing && i !== nothing) ? fmt_ratio(mintime(f) / mintime(i)) : ""
+        brcell = (f !== nothing && b !== nothing) ? fmt_ratio(mintime(f) / mintime(b)) : ""
+        println(io, "| $scenario | $fcell | $icell | $bcell | $ircell | $brcell |")
     end
     println(io)
 end
