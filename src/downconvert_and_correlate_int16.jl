@@ -972,62 +972,17 @@ end
     ((new_corr, per_signal_completed[1]),)
 end
 
-# Per-sat downconvert+correlate for the integer backend. Mirrors the Float32
-# backend, reusing the shared boundary / completion / update helpers; only
-# `_correlate_signals` (the kernel) differs.
-function _update_tracked_sat_correlator(
-    sat::TrackedSat,
-    dc::_Int16DC,
-    signal,
-    num_samples_signal,
-    sampling_frequency,
-    intermediate_frequency,
-)
-    samples_to_integrate, per_signal_completed = _calc_min_samples_and_completed(
-        sat.signals,
-        sat.signal_start_sample,
-        sampling_frequency,
-        sat.code_doppler,
-        sat.code_phase,
-        num_samples_signal,
-    )
-    if samples_to_integrate == 0
-        return sat
-    end
-    carrier_frequency = sat.carrier_doppler + intermediate_frequency
-    new_signals_data = _correlate_signals(
-        sat.signals,
-        per_signal_completed,
-        dc,
-        signal,
-        sat.code_doppler,
-        sat.code_phase,
-        carrier_frequency,
-        sat.carrier_phase,
-        sampling_frequency,
-        sat.signal_start_sample,
-        samples_to_integrate,
-        sat.prn,
-        num_samples_signal,
-    )
-    update(
-        sat,
-        samples_to_integrate,
-        intermediate_frequency,
-        sampling_frequency,
-        new_signals_data,
-    )
-end
+# ── Group/measurement plumbing ────────────────────────────────────────────────
+# The per-sat loop (`_update_tracked_sat_correlator`), the group body
+# (`_dc_one_group!`), and the public `downconvert_and_correlate(!)` entry points
+# are all backend-agnostic and inherited from the CPU backend
+# (`downconvert_and_correlate_cpu.jl`) via `AbstractDownconvertAndCorrelator` —
+# the integer-specific work already routes through `_correlate_signals` and
+# `_scratch_buffers` dispatch. This backend only supplies the two hooks the
+# shared plumbing dispatches on: a sample-type check and a threading trait.
 
-# ── Group/measurement plumbing (parallels the Float32 backend) ────────────────
-@inline function _dc_one_group!(
-    g::SignalGroup,
-    dc::_Int16DC,
-    measurements::BandMeasurements,
-)
-    vals = g.satellites.values
-    isempty(vals) && return nothing
-    m = measurements[band_key(g.band)]
+# Reject non-`Complex{Int16}` sample buffers up front (12-bit ADC contract).
+@inline _check_sample_type(::_Int16DC, m) =
     eltype(m.samples) === Complex{Int16} || throw(
         ArgumentError(
             string(
@@ -1038,66 +993,5 @@ end
             ),
         ),
     )
-    _dc_group_loop!(
-        dc,
-        vals,
-        m.samples,
-        get_num_samples(m),
-        m.sampling_frequency,
-        m.intermediate_frequency,
-    )
-end
 
-@inline function _dc_group_loop!(
-    dc::Int16DownconvertAndCorrelator,
-    vals,
-    args::Vararg{Any,4},
-)
-    @inbounds for i in eachindex(vals)
-        vals[i] = _update_tracked_sat_correlator(vals[i], dc, args...)
-    end
-    return nothing
-end
-
-@inline function _dc_group_loop!(
-    dc::Int16ThreadedDownconvertAndCorrelator,
-    vals,
-    args::Vararg{Any,4},
-)
-    @batch for i = 1:length(vals)
-        @inbounds vals[i] = _update_tracked_sat_correlator(vals[i], dc, args...)
-    end
-    return nothing
-end
-
-"""
-$(SIGNATURES)
-
-Downconvert and correlate all satellites with the integer (`Complex{Int16}`)
-backend. Detaches the per-sat slot values from the input (shares the key set),
-then writes new values in place — see the Float32 backend's `downconvert_and_correlate`.
-"""
-function downconvert_and_correlate(
-    dc::_Int16DC,
-    measurements::BandMeasurements,
-    track_state::TrackState,
-)
-    new_track_state =
-        TrackState(track_state; groups = _copy_groups_slot_vectors(track_state.groups))
-    downconvert_and_correlate!(dc, measurements, new_track_state)
-end
-
-"""
-$(SIGNATURES)
-
-In-place integer (`Complex{Int16}`) downconvert and correlate. Returns the same
-`track_state`.
-"""
-function downconvert_and_correlate!(
-    dc::_Int16DC,
-    measurements::BandMeasurements,
-    track_state::TrackState,
-)
-    _foreach_group!(_dc_one_group!, track_state.groups, dc, measurements)
-    return track_state
-end
+@inline _threading(::Int16ThreadedDownconvertAndCorrelator) = _BatchLoop()
