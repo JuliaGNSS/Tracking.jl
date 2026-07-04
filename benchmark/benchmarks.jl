@@ -856,9 +856,11 @@ if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
 end
 
 # ── Backend axes: multi-signal / multi-antenna / dynamic taps ─────────────────
-# More Float32 / Int16 / OneBit head-to-head rows, over the three axes the backends
-# generalise over — a satellite carrying several signals on one carrier (tile-share),
-# several antennas, and a runtime (dynamic) correlator tap count. Registered under the
+# More Float32 / Int16 / OneBit (and, where supported, TwoBit / TwoBitC2) head-to-head rows,
+# over the three axes the backends generalise over — a satellite carrying several signals on one
+# carrier (tile-share), several antennas, and a runtime (dynamic) correlator tap count. The
+# two-bit backend covers multi-signal and multi-antenna but has no dynamic-tap fallback, so it is
+# absent from the dynamic-taps row. Registered under the
 # SAME `INT16_GROUP` ("track! Int16 vs Float32") the `track!` scenarios use, so
 # `bench_table.jl` pairs each scenario into one head-to-head row (Float32 / backend > 1
 # ⇒ that backend is faster) with the base branch's existing table script — the
@@ -923,6 +925,20 @@ if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
             cap,
             _axes_multisignal_state(n_signals),
         )
+        # TwoBit registers only when present (AirspeedVelocity runs this suite against the
+        # base rev too, which has no two-bit backend).
+        if isdefined(Tracking, :TwoBitThreadedDownconvertAndCorrelator)
+            g["TwoBit"] = _axes_dc(
+                Tracking.TwoBitThreadedDownconvertAndCorrelator(; carrier_bits = 1),
+                cap,
+                _axes_multisignal_state(n_signals),
+            )
+            g["TwoBitC2"] = _axes_dc(
+                Tracking.TwoBitThreadedDownconvertAndCorrelator(; carrier_bits = 2),
+                cap,
+                _axes_multisignal_state(n_signals),
+            )
+        end
     end
     for num_ants in (4,)
         cap = _int16_capture_mat(_AXES_NSAMP, num_ants)
@@ -939,6 +955,18 @@ if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
             cap,
             _axes_multiantenna_state(num_ants),
         )
+        if isdefined(Tracking, :TwoBitThreadedDownconvertAndCorrelator)
+            g["TwoBit"] = _axes_dc(
+                Tracking.TwoBitThreadedDownconvertAndCorrelator(; carrier_bits = 1),
+                cap,
+                _axes_multiantenna_state(num_ants),
+            )
+            g["TwoBitC2"] = _axes_dc(
+                Tracking.TwoBitThreadedDownconvertAndCorrelator(; carrier_bits = 2),
+                cap,
+                _axes_multiantenna_state(num_ants),
+            )
+        end
     end
 
     # dynamic (runtime AbstractVector) tap count — kernel level, all three backends.
@@ -975,5 +1003,8 @@ if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
             $dc_b, $cap, NumAnts{1}(), $_AXES_SIG, 1, $dyn_shifts,
             10.5, 0.0, $code_frequency, $(1000.0Hz + 0.0Hz), $_AXES_FS, 1, $_AXES_NSAMP,
         )
+        # No TwoBit row here: the two-bit backend has no dynamic (AbstractVector) tap-count
+        # fallback (static EPL/VEPL only), so its kernel can't be driven with `dyn_shifts`.
+        # Its `2b`/`2c` cells are therefore blank for this one kernel-level row.
     end
 end
