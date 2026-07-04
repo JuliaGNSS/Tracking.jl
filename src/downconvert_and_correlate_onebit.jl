@@ -22,8 +22,9 @@
 # trade for bit-wise speed and 1-bit memory bandwidth. Accumulators are converted to
 # `ComplexF64` (M=1) / `SVector{M,ComplexF64}` (M>1) at finalize; every downstream
 # consumer (discriminators, C/N0, bit buffer) is ratio/normalised, so the absolute 1-bit
-# scale is immaterial. Scope mirrors the integer backend: static tap counts, any antenna M. A
-# multi-signal sat shares one carrier + measurement downconvert across its signals (tile-share).
+# scale is immaterial. Scope mirrors the integer backend: static tap counts (with a
+# runtime/dynamic tap-count fallback), any antenna M. A multi-signal sat shares one
+# carrier + measurement downconvert across its signals (tile-share).
 
 import SinCosLUT
 using SinCosLUT: generate_carrier_signs!
@@ -545,6 +546,199 @@ const _OneBitDC =
             blk_off += len
         end
         $ret
+    end
+end
+
+# Dynamic (runtime tap count) fallback: correlators whose sample shifts are a
+# runtime-sized `AbstractVector` (e.g. a `Vector`-accumulator correlator — issue
+# #126 (b)). Mirrors the integer backend's `_int16_hybrid_blocked!` AbstractVector
+# method: same block pipeline (pack the extended code plane once, funnel-shift each
+# tap, carrier + measurement sign planes, XOR + popcount), but loops taps/antennas
+# at runtime and horizontally sums each popcount chunk into per-(antenna, tap) Int64
+# totals. Not the hot path (it allocates the offset/total scratch and sums per chunk),
+# but bit-identical to the `@generated` kernel: `sum` over chunks of `sum(count_ones)`
+# equals `sum(count_ones)` over all chunks. Returns `Vector{ComplexF64}` (M=1) or
+# `Vector{SVector{M,ComplexF64}}` (M>1). `SVector` shifts are more specific and
+# dispatch to the `@generated` method above, so EPL/VEPL keep the fast unrolled path.
+function _onebit_hybrid_blocked!(
+    dc::_OneBitDC,
+    signal::AbstractVecOrMat{Complex{Int16}},
+    ::NumAnts{M},
+    signal_type,
+    prn::Integer,
+    sample_shifts::AbstractVector,
+    code_phase,
+    carrier_phase,
+    code_frequency,
+    carrier_frequency,
+    sampling_frequency,
+    signal_start_sample::Integer,
+    num_samples::Integer,
+) where {M}
+    get_modulation(signal_type) isa GNSSSignals.CBOC && throw(
+        ArgumentError(
+            string(
+                "OneBitDownconvertAndCorrelator supports binary (±1) codes only ",
+                "(BPSK, BOC, TMBOC); got ",
+                typeof(signal_type),
+                " with ",
+                typeof(get_modulation(signal_type)),
+                " modulation. Bit-wise correlation keeps only the code sign, so it ",
+                "cannot represent CBOC — a multi-level, amplitude-carrying code.",
+            ),
+        ),
+    )
+    NC = length(sample_shifts)
+    N = Int(num_samples)
+    min_shift = Int(minimum(sample_shifts))
+    span = Int(maximum(sample_shifts)) - min_shift
+    offs = [Int(sample_shifts[k]) - min_shift for k = 1:NC]
+
+    sampling_freq = Float64(upreferred(sampling_frequency / Hz))
+    carrier_freq = Float64(upreferred(carrier_frequency / Hz))
+    cps_car = carrier_freq / sampling_freq
+    carphase = Float64(carrier_phase)
+    cps_code = Float64(upreferred(code_frequency / Hz)) / sampling_freq
+    code_phase0 = Float64(code_phase)
+    num_rows = size(signal, 1)
+    p_sig = Ptr{Int16}(pointer(signal))
+    band = dc.band                              # band-shared measurement sign planes (>1 sat)
+    band_shared = !isempty(band.mrband)
+    bandstride = cld(num_rows, 64) + 2
+
+    bufs = _ob_scratch(dc)
+    blk = dc.blk
+    wpb = cld(blk, 64)
+    wpbv = cld(wpb, _OB_VW) * _OB_VW
+    pewords = cld(blk + span, 64) + _OB_VW
+    length(bufs.extb) < blk + span + 64 && resize!(bufs.extb, blk + span + 64)
+    length(bufs.peb) < pewords && resize!(bufs.peb, pewords)
+    length(bufs.sinw) < wpbv && resize!(bufs.sinw, wpbv)
+    length(bufs.cosw) < wpbv && resize!(bufs.cosw, wpbv)
+    length(bufs.codeb) < NC * wpbv && resize!(bufs.codeb, NC * wpbv)
+    length(bufs.mrb) < M * wpbv && resize!(bufs.mrb, M * wpbv)
+    length(bufs.mib) < M * wpbv && resize!(bufs.mib, M * wpbv)
+    extb = bufs.extb
+    peb = bufs.peb
+    sinw = bufs.sinw
+    cosw = bufs.cosw
+    codeb = bufs.codeb
+    mrb = bufs.mrb
+    mib = bufs.mib
+
+    A = zeros(Int64, M, NC)
+    B = zeros(Int64, M, NC)
+    C = zeros(Int64, M, NC)
+    E = zeros(Int64, M, NC)
+
+    blk_off = 0
+    @inbounds while blk_off < N
+        len = min(blk, N - blk_off)
+        nwb = cld(len, 64)
+        nwv = cld(nwb, _OB_VW) * _OB_VW
+        r = len & 63
+        gen_code!(
+            view(extb, 1:(len+span)),
+            signal_type,
+            prn,
+            sampling_frequency,
+            code_frequency,
+            code_phase0 + cps_code * blk_off,
+            min_shift,
+        )
+        nwe = cld(len + span, 64)
+        _ob_pack_code!(peb, 0, extb, 0, nwe, (len + span) & 63)
+        peb[nwe+1] = 0
+        for k = 1:NC
+            _ob_shift_plane!(codeb, (k - 1) * wpbv, peb, offs[k], nwb)
+            _ob_finish!(codeb, (k - 1) * wpbv, nwb, nwv, r)
+        end
+        generate_carrier_signs!(
+            sinw,
+            cosw,
+            len,
+            cps_car;
+            phase = carphase + cps_car * blk_off,
+        )
+        _ob_zeropad!(sinw, 0, nwb, nwv)
+        _ob_zeropad!(cosw, 0, nwb, nwv)
+        base = signal_start_sample + blk_off
+        if band_shared
+            for j = 1:M
+                _ob_realign_meas!(
+                    mrb,
+                    mib,
+                    (j - 1) * wpbv,
+                    band,
+                    (j - 1) * bandstride,
+                    base,
+                    nwb,
+                )
+                _ob_finish!(mrb, (j - 1) * wpbv, nwb, nwv, r)
+                _ob_finish!(mib, (j - 1) * wpbv, nwb, nwv, r)
+            end
+        else
+            for j = 1:M
+                _ob_pack_meas!(
+                    mrb,
+                    mib,
+                    (j - 1) * wpbv,
+                    signal,
+                    j,
+                    p_sig,
+                    (j - 1) * num_rows,
+                    base,
+                    len,
+                    nwb,
+                    r,
+                )
+                _ob_finish!(mrb, (j - 1) * wpbv, nwb, nwv, r)
+                _ob_finish!(mib, (j - 1) * wpbv, nwb, nwv, r)
+            end
+        end
+        ci = 1
+        while ci <= nwv
+            CCv = vload(SIMD.Vec{_OB_VW,UInt64}, cosw, ci)
+            CSv = vload(SIMD.Vec{_OB_VW,UInt64}, sinw, ci)
+            for j = 1:M
+                MR = vload(SIMD.Vec{_OB_VW,UInt64}, mrb, (j - 1) * wpbv + ci)
+                MI = vload(SIMD.Vec{_OB_VW,UInt64}, mib, (j - 1) * wpbv + ci)
+                prc = MR ⊻ CCv
+                pis = MI ⊻ CSv
+                pic = MI ⊻ CCv
+                prs = MR ⊻ CSv
+                for k = 1:NC
+                    CW = vload(SIMD.Vec{_OB_VW,UInt64}, codeb, (k - 1) * wpbv + ci)
+                    A[j, k] += Int64(sum(count_ones(CW ⊻ prc)))
+                    B[j, k] += Int64(sum(count_ones(CW ⊻ pis)))
+                    C[j, k] += Int64(sum(count_ones(CW ⊻ pic)))
+                    E[j, k] += Int64(sum(count_ones(CW ⊻ prs)))
+                end
+            end
+            ci += _OB_VW
+        end
+        blk_off += len
+    end
+
+    if M == 1
+        return [
+            complex(
+                Float64(2 * N - 2 * (A[1, k] + B[1, k])),
+                Float64(2 * (E[1, k] - C[1, k])),
+            ) for k = 1:NC
+        ]
+    else
+        return [
+            SVector{M,ComplexF64}(
+                ntuple(
+                    j -> complex(
+                        Float64(2 * N - 2 * (A[j, k] + B[j, k])),
+                        Float64(2 * (E[j, k] - C[j, k])),
+                    ),
+                    M,
+                ),
+            ) for k = 1:NC
+        ]
     end
 end
 
