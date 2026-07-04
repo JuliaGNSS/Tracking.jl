@@ -1,5 +1,33 @@
 # Changelog
 
+# [2.1.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v2.0.1...v2.1.0) (2026-07-04)
+
+
+### Bug Fixes
+
+* **int16:** cap strip-mine block so single Int32 lane can't overflow ([#166](https://github.com/JuliaGNSS/Tracking.jl/issues/166)) ([76701a1](https://github.com/JuliaGNSS/Tracking.jl/commit/76701a1e24a59418e85444c3858314e39052e8a6))
+* **int16:** reject `steps` that changes the carrier engine width ([#168](https://github.com/JuliaGNSS/Tracking.jl/issues/168)) ([79ceddb](https://github.com/JuliaGNSS/Tracking.jl/commit/79ceddb50f2766f7ddbdf47ee2405d913b69bc0b))
+* **int16:** shrink strip-mine block on large-max_meas fallback to bound Int32 accumulator ([#167](https://github.com/JuliaGNSS/Tracking.jl/issues/167)) ([6b8f8cb](https://github.com/JuliaGNSS/Tracking.jl/commit/6b8f8cbd068a94fa71dccfcbd589b6b91d7b1145))
+* **int16:** Val{W} barrier for dynamic fallback so W const-folds (no per-block alloc) ([62e858a](https://github.com/JuliaGNSS/Tracking.jl/commit/62e858aeb9613f091a626cf4b7c8caae9d6d6304))
+* **int16:** validate blk kwarg at construction ([#169](https://github.com/JuliaGNSS/Tracking.jl/issues/169)) ([adb1bb4](https://github.com/JuliaGNSS/Tracking.jl/commit/adb1bb481158d37e81fe6815f967c9608e81e049))
+* **int16:** widen block-flush accumulator to Int64 before horizontal sum ([#165](https://github.com/JuliaGNSS/Tracking.jl/issues/165)) ([3cf1c95](https://github.com/JuliaGNSS/Tracking.jl/commit/3cf1c95b95cff60148787220391fb45e6e6fde56))
+* **test:** repin Acquisition to the reachable 2.6.0 release commit ([b4fcb22](https://github.com/JuliaGNSS/Tracking.jl/commit/b4fcb224f481685232d40ea9c767c99c44b62d36))
+
+
+### Features
+
+* **int16:** dynamic (runtime) correlator tap count (Phase 3) ([fd0cca2](https://github.com/JuliaGNSS/Tracking.jl/commit/fd0cca2657c2903b5cb1b8abf62c7d827b4a46e4)), closes [#126](https://github.com/JuliaGNSS/Tracking.jl/issues/126)
+* **int16:** integer hybrid-blocked downconvert+correlate backend (Phases 0–2) ([028ef11](https://github.com/JuliaGNSS/Tracking.jl/commit/028ef11d741db74c2d0546e71609f77773f58e23)), closes [#90](https://github.com/JuliaGNSS/Tracking.jl/issues/90)
+* **int16:** multi-signal-per-sat tile-share kernel ([b87e8ac](https://github.com/JuliaGNSS/Tracking.jl/commit/b87e8acf4f76da0af2d71a682ac070b795a17837))
+* **int16:** multiple antenna channels (Phase 4) ([5cfb2d7](https://github.com/JuliaGNSS/Tracking.jl/commit/5cfb2d79c22c6befe31237253d3241fa16641ca2))
+* **int16:** user-configurable measurement amplitude; fix CBOC Int32 overflow ([638bb61](https://github.com/JuliaGNSS/Tracking.jl/commit/638bb61ff4594dbf0ba8f9938faebea613405acc))
+
+
+### Performance Improvements
+
+* **int16:** make dynamic-shifts fallback scratch-reusing with per-block flush ([002a415](https://github.com/JuliaGNSS/Tracking.jl/commit/002a415a56a2846bd98acb57ceaded48bf410f99))
+* **int16:** one-shot per-block code gen (alloc-free) — fixes low-OSR tie ([e1ee142](https://github.com/JuliaGNSS/Tracking.jl/commit/e1ee142351188f4bb0f623bfaab77196de215ab5))
+
 ## [2.0.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v2.0.0...v2.0.1) (2026-07-04)
 
 
