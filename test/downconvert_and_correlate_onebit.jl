@@ -1,7 +1,8 @@
 module DownconvertAndCorrelateOneBitTest
 
 using Test: @test, @testset, @test_throws
-using Unitful: Hz
+using Random: MersenneTwister
+using Unitful: Hz, ustrip
 import GNSSSignals
 using GNSSSignals:
     GPSL1CA,
@@ -18,6 +19,7 @@ using Tracking:
     BandMeasurement,
     get_sat_state,
     get_carrier_doppler,
+    estimate_cn0,
     get_prompt,
     get_early,
     get_late,
@@ -88,6 +90,52 @@ function correlate_once(
     ts2 = downconvert_and_correlate(dc, meas, ts)
     first(get_sat_state(ts2, 1).signals).correlator
 end
+
+# Track a noisy GPS L1CA capture at a known C/N0 with backend `dc`, returning the
+# post-settle carrier-Doppler samples and the final C/N0 estimate. Carrier and code
+# phase run continuously across 1 ms epochs; the capture is Complex{Int16} so the
+# Float32 and one-bit backends see the identical bits. `amp`/`noise_std` follow the
+# C/N0 recipe of the CN0-estimation tests (signal ×10^(C/N0/20), noise ×√fs).
+function _track_noisy(
+    dc,
+    cn0_dbhz,
+    seed;
+    fs = 5e6Hz,
+    cdopp = 300Hz,
+    nepoch = 110,
+    settle = 10,
+)
+    gpsl1 = GPSL1CA()
+    nsamp = round(Int, (fs / 1Hz) * 1e-3)
+    prn = 1
+    cfreq = cdopp * get_code_center_frequency_ratio(gpsl1) + get_code_frequency(gpsl1)
+    range = 0:(nsamp-1)
+    start_code_phase = 100.0
+    start_carrier_phase = π / 2
+    amp = 10^(cn0_dbhz / 20)
+    noise_std = sqrt(fs / 1Hz)
+    rng = MersenneTwister(seed)
+    ts = TrackState(gpsl1, [TrackedSat(gpsl1, prn, start_code_phase, cdopp)])
+    dopplers = Float64[]
+    for i = 0:(nepoch-1)
+        carrier_phase = 2π * (cdopp / 1Hz) * nsamp * i / (fs / 1Hz) + start_carrier_phase
+        code_phase = mod((cfreq / 1Hz) * nsamp * i / (fs / 1Hz) + start_code_phase, 1023)
+        clean =
+            cis.(2π .* (cdopp / 1Hz) .* range ./ (fs / 1Hz) .+ carrier_phase) .*
+            gen_code(nsamp, gpsl1, prn, fs, cfreq, code_phase) .* amp
+        noisy = clean .+ randn(rng, ComplexF64, nsamp) .* noise_std
+        cap = complex.(
+            round.(Int16, clamp.(real.(noisy), -32000, 32000)),
+            round.(Int16, clamp.(imag.(noisy), -32000, 32000)),
+        )
+        ts = track(cap, ts, fs; downconvert_and_correlator = dc)
+        i >= settle && push!(dopplers, get_carrier_doppler(ts) / Hz)
+    end
+    (; dopplers, cn0 = ustrip(estimate_cn0(ts)))
+end
+
+_mean(x) = sum(x) / length(x)
+_std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
 
 @testset "One-bit downconvert and correlate" begin
     # The code is ±1 in both the float and 1-bit pipelines, so the E/P·L/P magnitude
@@ -443,6 +491,30 @@ end
             meas,
             ts,
         )
+    end
+
+    @testset "1-bit SNR loss vs Float32: tracking jitter and C/N0" begin
+        # At a fixed 45 dB-Hz C/N0, the one-bit backend locks the same true Doppler as the
+        # Float32 backend but with more jitter and a lower C/N0 estimate — the ≈2–3 dB cost
+        # of 1-bit quantisation (≈2 dB measurement + ≈1 dB square-wave carrier). Pin the
+        # *bounded* degradation (a fixed seed keeps it deterministic), not exact numbers.
+        cn0_in = 45.0
+        f = _track_noisy(CPUThreadedDownconvertAndCorrelator(), cn0_in, 1234)
+        b = _track_noisy(OneBitThreadedDownconvertAndCorrelator(), cn0_in, 1234)
+
+        # Both lock to the true 300 Hz Doppler — the 1-bit loss is jitter, not a bias.
+        @test abs(_mean(f.dopplers) - 300) < 3
+        @test abs(_mean(b.dopplers) - 300) < 3
+
+        # One-bit carrier-Doppler jitter is worse but bounded (measured ≈1.55×; assert <3×).
+        jitter_ratio = _std(b.dopplers) / _std(f.dopplers)
+        @test 1.0 < jitter_ratio < 3.0
+
+        # Float32 recovers the input C/N0; the one-bit estimate is biased low by the
+        # quantisation loss (measured ≈2.5–2.9 dB), not wildly off.
+        @test abs(f.cn0 - cn0_in) < 2.0
+        @test b.cn0 < f.cn0
+        @test 1.0 < (f.cn0 - b.cn0) < 5.0
     end
 
     @testset "full track converges (GPS L1 C/A)" begin
