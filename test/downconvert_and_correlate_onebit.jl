@@ -22,6 +22,8 @@ using Tracking:
     get_early,
     get_late,
     get_accumulators,
+    get_correlator_sample_shifts,
+    AbstractCorrelator,
     EarlyPromptLateCorrelator,
     VeryEarlyPromptLateCorrelator,
     NumAnts,
@@ -31,6 +33,25 @@ using Tracking:
     CPUThreadedDownconvertAndCorrelator,
     OneBitDownconvertAndCorrelator,
     OneBitThreadedDownconvertAndCorrelator
+import Tracking
+using StaticArrays: SVector
+
+# Dynamic-tap-count correlator: sample shifts are a runtime Vector and the
+# accumulators are a Vector (issue #126 (b) extension point), to exercise the
+# one-bit backend's AbstractVector-shifts fallback. Parametric over the antenna
+# count M so both the M=1 and M>1 fallback branches can be tested.
+struct DynShiftsCorrelator{M} <: AbstractCorrelator{M}
+    accumulators::Vector
+    shifts::Vector{Int}
+end
+Tracking.get_accumulators(c::DynShiftsCorrelator) = c.accumulators
+Tracking.update_accumulator(c::DynShiftsCorrelator{M}, acc) where {M} =
+    DynShiftsCorrelator{M}(collect(acc), c.shifts)
+Tracking.get_correlator_sample_shifts(
+    c::DynShiftsCorrelator,
+    sampling_frequency,
+    code_frequency,
+) = c.shifts
 
 # 12-bit-ADC-style Complex{Int16} capture (carrier × unit-normalised code, scaled to `peak`).
 function make_capture(sig, prn, fs, nsamp, cdopp, cphase; peak = 2000)
@@ -262,6 +283,101 @@ end
             @test get_prompt(s.correlator) == get_prompt(cs)
             @test get_early(s.correlator) == get_early(cs)
             @test get_late(s.correlator) == get_late(cs)
+        end
+    end
+
+    @testset "dynamic Vector-shifts correlator matches static EPL" begin
+        # A DynShiftsCorrelator with the same shifts as EPL must produce identical
+        # accumulators through the one-bit backend's AbstractVector-shifts fallback as
+        # the static @generated EPL kernel — the fallback sums each popcount chunk into
+        # Int64 totals, which is bit-exact with the @generated kernel's Vec-then-sum.
+        sig, fs = GPSL1CA(), 5e6Hz
+        nsamp = round(Int, (fs / 1Hz) * 1e-3)
+        fc = 200Hz * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
+        shifts = collect(get_correlator_sample_shifts(EarlyPromptLateCorrelator(), fs, fc))
+        dc = OneBitThreadedDownconvertAndCorrelator()
+
+        # M=1: dynamic fallback == static @generated kernel, exactly.
+        cs = correlate_once(dc, sig, fs, nsamp, 200Hz, 100.0)
+        cd = correlate_once(
+            dc,
+            sig,
+            fs,
+            nsamp,
+            200Hz,
+            100.0;
+            correlator = DynShiftsCorrelator{1}(zeros(ComplexF64, 3), shifts),
+        )
+        @test length(get_accumulators(cd)) == 3
+        @test get_accumulators(cd) == get_accumulators(cs)
+
+        # M=2: multi-antenna dynamic fallback matches the static EPL M=2 kernel.
+        csm = correlate_once(
+            dc,
+            sig,
+            fs,
+            nsamp,
+            200Hz,
+            100.0;
+            correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(2)),
+            mat = true,
+            M = 2,
+        )
+        cdm = correlate_once(
+            dc,
+            sig,
+            fs,
+            nsamp,
+            200Hz,
+            100.0;
+            correlator = DynShiftsCorrelator{2}(
+                fill(zero(SVector{2,ComplexF64}), 3),
+                shifts,
+            ),
+            mat = true,
+            M = 2,
+        )
+        @test get_accumulators(cdm) == get_accumulators(csm)
+    end
+
+    @testset "dynamic Vector-shifts, band-shared (>1 sat) matches per-sat" begin
+        # ≥2 sats with dynamic correlators trip the band-shared measurement path in the
+        # AbstractVector fallback (`_ob_realign_meas!`); the shared pack is bit-identical,
+        # so each sat must equal correlating that PRN alone (1 sat → direct pack).
+        sig, fs = GPSL1CA(), 5e6Hz
+        nsamp = round(Int, (fs / 1Hz) * 1e-3)
+        fc = 200Hz * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
+        shifts = collect(get_correlator_sample_shifts(EarlyPromptLateCorrelator(), fs, fc))
+        cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
+        meas = (l1 = BandMeasurement(cap, fs, 0.0Hz),)
+        dc = OneBitThreadedDownconvertAndCorrelator()
+        mkcorr() = DynShiftsCorrelator{1}(zeros(ComplexF64, 3), shifts)
+
+        prns = (1, 5, 12)
+        tsN = downconvert_and_correlate(
+            dc,
+            meas,
+            TrackState(
+                sig,
+                [TrackedSat(sig, prn, 100.0, 200Hz; correlator = mkcorr()) for prn in prns],
+            ),
+        )
+        for prn in prns
+            alone = first(
+                get_sat_state(
+                    downconvert_and_correlate(
+                        dc,
+                        meas,
+                        TrackState(
+                            sig,
+                            [TrackedSat(sig, prn, 100.0, 200Hz; correlator = mkcorr())],
+                        ),
+                    ),
+                    prn,
+                ).signals,
+            ).correlator
+            shared = first(get_sat_state(tsN, prn).signals).correlator
+            @test get_accumulators(shared) == get_accumulators(alone)
         end
     end
 
