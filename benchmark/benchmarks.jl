@@ -829,6 +829,29 @@ if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
                 evals = 1,
             )
         end
+        # Two-bit (sign+magnitude) backend, same capture. BPSK-only, like one-bit.
+        # `TwoBit` = 1-bit carrier (the speed/SNR sweet spot); `TwoBitC2` = 2-bit carrier.
+        if isdefined(Tracking, :TwoBitThreadedDownconvertAndCorrelator) &&
+           !(first(systems) isa GalileoE1B)
+            dc_t1 = Tracking.TwoBitThreadedDownconvertAndCorrelator(; carrier_bits = 1)
+            dc_t2 = Tracking.TwoBitThreadedDownconvertAndCorrelator(; carrier_bits = 2)
+            g["TwoBit"] = @benchmarkable(
+                Tracking.track!($sig16, ts, $sfreq; downconvert_and_correlator = $dc_t1),
+                setup = (ts = first(_make_steady_state_track_state(;
+                    systems = $systems, nsats_list = $nsats_list, nsamp = $nsamp,
+                    prn_max = $prn_max, code_dop = 100.0,
+                ))),
+                evals = 1,
+            )
+            g["TwoBitC2"] = @benchmarkable(
+                Tracking.track!($sig16, ts, $sfreq; downconvert_and_correlator = $dc_t2),
+                setup = (ts = first(_make_steady_state_track_state(;
+                    systems = $systems, nsats_list = $nsats_list, nsamp = $nsamp,
+                    prn_max = $prn_max, code_dop = 100.0,
+                ))),
+                evals = 1,
+            )
+        end
     end
 end
 
