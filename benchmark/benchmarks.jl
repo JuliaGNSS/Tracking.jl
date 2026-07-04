@@ -868,9 +868,8 @@ end
 # and multi-antenna go through the uniform pipeline for all three backends. Dynamic
 # (runtime `AbstractVector`) tap counts are NOT reachable through the pipeline (EPL/VEPL
 # correlators only ever hand the kernel `SVector` shifts), so that row times the kernel
-# fallback directly — Float32 fused and Int16 hybrid-blocked; the one-bit backend has no
-# dynamic kernel, so its cell stays blank (matching the Float32/Int16 tile-shares, which
-# are static-only for multi-signal too). Only registered when all three backends exist.
+# fallback directly — Float32 fused, Int16 hybrid-blocked, and the one-bit dynamic
+# fallback — all three backends. Only registered when all three backends exist.
 if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
    isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
     const _AXES_SIG = GPSL1CA()
@@ -941,7 +940,7 @@ if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
         )
     end
 
-    # dynamic (runtime AbstractVector) tap count — kernel level, Float32 + Int16 only.
+    # dynamic (runtime AbstractVector) tap count — kernel level, all three backends.
     let g = SUITE["track! Int16 vs Float32"]["dynamic taps @ 5 MHz (kernel)"]
         code_doppler =
             1000.0Hz * GNSSSignals.get_code_center_frequency_ratio(_AXES_SIG)
@@ -967,6 +966,12 @@ if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
         dc_i = Tracking.Int16DownconvertAndCorrelator()
         g["Int16"] = @benchmarkable Tracking._int16_hybrid_blocked!(
             $dc_i, $cap, NumAnts{1}(), $_AXES_SIG, 1, $dyn_shifts,
+            10.5, 0.0, $code_frequency, $(1000.0Hz + 0.0Hz), $_AXES_FS, 1, $_AXES_NSAMP,
+        )
+        # One-bit bit-wise kernel, dynamic-shifts (AbstractVector) fallback.
+        dc_b = Tracking.OneBitDownconvertAndCorrelator()
+        g["OneBit"] = @benchmarkable Tracking._onebit_hybrid_blocked!(
+            $dc_b, $cap, NumAnts{1}(), $_AXES_SIG, 1, $dyn_shifts,
             10.5, 0.0, $code_frequency, $(1000.0Hz + 0.0Hz), $_AXES_FS, 1, $_AXES_NSAMP,
         )
     end
