@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v2.0.0...v2.0.1) (2026-07-04)
+
+
+### Bug Fixes
+
+* **remove_satellite:** keep the satellite Dictionary hole-free so track! is safe ([#182](https://github.com/JuliaGNSS/Tracking.jl/issues/182)) ([f6c4c53](https://github.com/JuliaGNSS/Tracking.jl/commit/f6c4c53a55a690543a5c78481c9b1499be2f24d6))
+
 # [2.0.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v1.5.0...v2.0.0) (2026-06-17)
 
 
