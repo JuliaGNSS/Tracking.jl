@@ -840,7 +840,7 @@ function _validate_signal_group(signals::Tuple{Vararg{AbstractGNSSSignal}}, band
                 ArgumentError(
                     string(
                         "All signals in a SignalGroup must be on the same RF band: `",
-                        nameof(typeof(s)),
+                        get_signal_id(s),
                         "` is on band `:",
                         band_key(get_band(s)),
                         "` but the group is on band `:",
@@ -858,11 +858,11 @@ function _validate_signal_group(signals::Tuple{Vararg{AbstractGNSSSignal}}, band
                         "All signals in a SignalGroup must share one chip rate: the ",
                         "shared code phase advances at the first signal's code ",
                         "frequency (`",
-                        nameof(typeof(driver)),
+                        get_signal_id(driver),
                         "`: ",
                         get_code_frequency(driver),
                         "), but `",
-                        nameof(typeof(s)),
+                        get_signal_id(s),
                         "` has ",
                         get_code_frequency(s),
                         ". Track it in its own group instead.",
