@@ -1,5 +1,12 @@
 # Changelog
 
+# [2.2.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v2.1.0...v2.2.0) (2026-07-05)
+
+
+### Features
+
+* **signals:** support GPS L2CM/L2CL/L5Q and Galileo E1C/E5a ([8e03224](https://github.com/JuliaGNSS/Tracking.jl/commit/8e03224c1f7d1b8317530dc558faac15b3e7ab72))
+
 # [2.1.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v2.0.1...v2.1.0) (2026-07-04)
 
 
