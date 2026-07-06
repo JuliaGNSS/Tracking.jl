@@ -328,8 +328,8 @@ else
             l5c = @view l5[((c-1)*nl5+1):(c*nl5)]
             track_state = track!(
                 (
-                    l1 = BandMeasurement(l1c, FS_L1, IF_L1),
-                    l5 = BandMeasurement(l5c, FS_L5, IF_L5),
+                    L1 = BandMeasurement(l1c, FS_L1, IF_L1),
+                    L5 = BandMeasurement(l5c, FS_L5, IF_L5),
                 ),
                 track_state,
             )
@@ -481,8 +481,8 @@ else
             l5c = demux_l5(window)
             track_state = track!(
                 (
-                    l1 = BandMeasurement(l1c, FS_L1, IF_L1),
-                    l5 = BandMeasurement(l5c, FS_L5, IF_L5),
+                    L1 = BandMeasurement(l1c, FS_L1, IF_L1),
+                    L5 = BandMeasurement(l5c, FS_L5, IF_L5),
                 ),
                 track_state,
             )

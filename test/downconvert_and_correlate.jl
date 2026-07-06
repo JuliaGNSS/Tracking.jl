@@ -53,7 +53,7 @@ end
         ) .* cis.(2π * (0:(num_samples_signal-1)) * 1000.0Hz / sampling_frequency)
 
     measurements =
-        (l1 = BandMeasurement(signal, sampling_frequency, intermediate_frequency),)
+        (L1 = BandMeasurement(signal, sampling_frequency, intermediate_frequency),)
     next_track_state = @inferred downconvert_and_correlate(
         downconvert_and_correlator,
         measurements,
@@ -73,7 +73,7 @@ end
         ) .* cis.(2π * (0:(num_samples_signal-1)) * 500.0Hz / sampling_frequency)
 
     measurements =
-        (l1 = BandMeasurement(signal, sampling_frequency, intermediate_frequency),)
+        (L1 = BandMeasurement(signal, sampling_frequency, intermediate_frequency),)
     next_track_state = @inferred downconvert_and_correlate(
         downconvert_and_correlator,
         measurements,
@@ -102,7 +102,7 @@ end
     downconvert_and_correlator = DC()
 
     measurements =
-        (l1 = BandMeasurement(signal, sampling_frequency, intermediate_frequency),)
+        (L1 = BandMeasurement(signal, sampling_frequency, intermediate_frequency),)
 
     # Immutable form
     result_skip =

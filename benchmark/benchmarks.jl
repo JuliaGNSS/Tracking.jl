@@ -211,7 +211,19 @@ function bench_downconvert_and_correlate(;
         measurement_type =
             isdefined(Tracking, :BandMeasurement) ? Tracking.BandMeasurement :
             Tracking.Measurement
-        measurements = (l1 = measurement_type(signal, sampling_frequency, 0.0Hz),)
+        # Measurement NamedTuple key = the running revision's band id. benchpkg
+        # runs HEAD's script against every rev, and the key spelling is a
+        # breaking change: Tracking ≤ 2.3 keyed by its own `Tracking.band_key`
+        # (`:l1`), HEAD keys by `GNSSSignals.get_band_id` (`:L1`). Derive it from
+        # whichever accessor the loaded Tracking has so both revs resolve.
+        band = get_band(gnss_signal)
+        @static if isdefined(Tracking, :band_key)
+            band_id = Tracking.band_key(band)
+        else
+            band_id = get_band_id(band)
+        end
+        measurements =
+            NamedTuple{(band_id,)}((measurement_type(signal, sampling_frequency, 0.0Hz),))
         if hasmethod(
             Tracking.downconvert_and_correlate,
             Tuple{typeof(downconvert_and_correlator),typeof(measurements),typeof(track_state)},

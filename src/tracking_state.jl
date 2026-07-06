@@ -143,7 +143,7 @@ end
 @inline _check_same_band_num_ants(::Tuple{}, ::Tuple) = nothing
 @inline function _check_same_band_num_ants(t::Tuple, seen::Tuple)
     g = first(t)
-    bk = band_key(g.band)
+    bk = get_band_id(g.band)
     for (sk, sna) in seen
         if sk === bk && sna !== g.num_ants
             throw(
@@ -1021,13 +1021,13 @@ end
 reset_loop_filters!(track_state::TrackState{<:SignalGroups{1}}, sat_id) =
     reset_loop_filters!(track_state, 1, sat_id)
 
-# Recursive tuple walk that folds the set of distinct `band_key`s across
-# a `groups` tuple. Returns an `NTuple{N,Symbol}` of unique keys, in
-# first-encounter order. Concrete-typed input → fully unrolled at compile
-# time, no allocation.
+# Recursive tuple walk that folds the set of distinct band ids
+# (`GNSSSignals.get_band_id`) across a `groups` tuple. Returns an
+# `NTuple{N,Symbol}` of unique ids, in first-encounter order.
+# Concrete-typed input → fully unrolled at compile time, no allocation.
 @inline _band_keys_in_groups(::Tuple{}, acc::Tuple{Vararg{Symbol}}) = acc
 @inline function _band_keys_in_groups(t::Tuple, acc::Tuple{Vararg{Symbol}})
-    k = band_key(first(t).band)
+    k = get_band_id(first(t).band)
     new_acc = k in acc ? acc : (acc..., k)
     _band_keys_in_groups(Base.tail(t), new_acc)
 end
@@ -1035,13 +1035,14 @@ end
 """
 $(SIGNATURES)
 
-The set of distinct band keys used across all groups in `track_state`,
-returned as a tuple of Symbols in first-encounter order. Resolves at
-compile time when the groups type is known.
+The set of distinct band ids (`GNSSSignals.get_band_id`) used across all
+groups in `track_state`, returned as a tuple of Symbols in first-encounter
+order. These are the keys a multi-band measurements NamedTuple must use.
+Resolves at compile time when the groups type is known.
 
 ```julia
 ts = TrackState(; signals = (legacy_gps = (GPSL1CA(),), gps_l5 = (GPSL5I(),)))
-band_keys(ts) == (:l1, :l5)
+band_keys(ts) == (:L1, :L5)
 ```
 """
 @inline band_keys(track_state::TrackState) =
@@ -1129,7 +1130,7 @@ end
     measurements::BandMeasurements,
 )
     g = first(groups)
-    m = measurements[band_key(g.band)]
+    m = measurements[get_band_id(g.band)]
     _assert_antenna_shape(g, m)
     _validate_antenna_shapes_walk(Base.tail(groups), measurements)
 end
@@ -1144,7 +1145,7 @@ end
         ArgumentError(
             string(
                 "Antenna shape mismatch for band `:",
-                band_key(g.band),
+                get_band_id(g.band),
                 "`. Group declares NumAnts(",
                 M,
                 ") but the measurement's ",

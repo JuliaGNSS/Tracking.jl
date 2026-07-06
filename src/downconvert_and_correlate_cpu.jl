@@ -788,7 +788,7 @@ end
 )
     vals = g.satellites.values
     isempty(vals) && return nothing
-    m = measurements[band_key(g.band)]
+    m = measurements[get_band_id(g.band)]
     _check_sample_type(dc, m)
     _dc_group_loop!(
         dc,

@@ -46,7 +46,7 @@ One band's incoming sample buffer plus the front-end metadata needed to process 
 
 For single-band tracking, the bare-buffer form `track!(buf, state, fs)` and the single-`BandMeasurement` form `track!(BandMeasurement(buf, fs), state)` both auto-wrap into a one-entry NamedTuple internally — see the [Quick start](index.md#Quick-start) for the bare-buffer form.
 
-For multi-band tracking, build one `BandMeasurement` per band and pass them as a NamedTuple keyed by [`band_key`](@ref):
+For multi-band tracking, build one `BandMeasurement` per band and pass them as a NamedTuple keyed by the band's `GNSSSignals.get_band_id` (e.g. `:L1`, `:L5`):
 
 ```jldoctest multi_band_call
 julia> using Tracking, GNSSSignals
@@ -65,8 +65,8 @@ julia> buf_l1 = zeros(ComplexF64, 4000);   # 1 ms at  4 MHz
 
 julia> buf_l5 = zeros(ComplexF64, 25000);  # 1 ms at 25 MHz
 
-julia> track!((l1 = BandMeasurement(buf_l1, 4e6Hz),
-               l5 = BandMeasurement(buf_l5, 25e6Hz)), track_state);
+julia> track!((L1 = BandMeasurement(buf_l1, 4e6Hz),
+               L5 = BandMeasurement(buf_l5, 25e6Hz)), track_state);
 ```
 
 See [Multi-band tracking](tracking_state.md#Multi-band-tracking) for the full setup (group declaration, per-band antenna counts, duration matching).

@@ -2,14 +2,13 @@ module GPSL2CTest
 
 using Test: @test, @testset, @inferred
 using Unitful: Hz
-using GNSSSignals: GPSL2CM, GPSL2CL, get_band
+using GNSSSignals: GPSL2CM, GPSL2CL, get_band, get_band_id
 using Tracking:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
     default_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
-    band_key,
     EarlyPromptLateCorrelator,
     NumAnts
 
@@ -41,10 +40,10 @@ using Tracking:
     # type is still required.
     @test @inferred(get_code_block_buffer_type(gpsl2cm)) === UInt8
 
-    # L2C introduces the L2 band; band_key maps it into the multi-band
+    # L2C introduces the L2 band; get_band_id maps it into the multi-band
     # `track` measurement keys.
-    @test band_key(get_band(gpsl2cm)) == :l2
-    @test band_key(get_band(GPSL2CL())) == :l2
+    @test get_band_id(get_band(gpsl2cm)) == :L2
+    @test get_band_id(get_band(GPSL2CL())) == :L2
 end
 
 @testset "GPS L2CL" begin

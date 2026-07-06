@@ -8,6 +8,7 @@ using GNSSSignals:
     GPSL5I,
     GalileoE1B,
     gen_code,
+    get_band_id,
     get_code_center_frequency_ratio,
     get_code_frequency
 using Tracking:
@@ -63,7 +64,7 @@ function make_capture(sig, prn, fs, nsamp, cdopp, cphase; peak = 2000)
     complex.(round.(Int16, real.(s) .* peak), round.(Int16, imag.(s) .* peak))
 end
 
-band_key_for(sig) = sig isa GPSL5I ? :l5 : :l1
+band_key_for(sig) = get_band_id(sig)
 
 # M-antenna capture: a dense samples×M `Matrix` (same signal across antennas).
 make_capture_mat(sig, fs, nsamp, cdopp, cphase, M; peak = 2000) =
@@ -166,7 +167,7 @@ end
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         cap = make_capture_mat(sig, fs, nsamp, 200Hz, 100.0, M)
-        meas = (l1 = BandMeasurement(cap, fs, 0.0Hz),)
+        meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
         mk() = TrackState(sig, [TrackedSat(sig, 1, 100.0, 200Hz; num_ants = NumAnts(M))])
         run(dc) =
             first(get_sat_state(downconvert_and_correlate(dc, meas, mk()), 1).signals).correlator
@@ -207,7 +208,7 @@ end
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0; peak = mm)
-        meas = (l1 = BandMeasurement(cap, fs, 0.0Hz),)
+        meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
         corr(dc) = first(
             get_sat_state(
                 downconvert_and_correlate(
@@ -261,7 +262,7 @@ end
         sig, fs = GalileoE1B(), 15e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0; peak = 2^15 - 1)
-        meas = (l1 = BandMeasurement(cap, fs, 0.0Hz),)
+        meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
         corr(dc) = first(
             get_sat_state(
                 downconvert_and_correlate(
@@ -365,7 +366,7 @@ end
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
-        meas = (l1 = BandMeasurement(cap, fs, 0.0Hz),)
+        meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
         dc = Int16ThreadedDownconvertAndCorrelator()
         est = ConventionalAssistedPLLAndDLL()
         mksig() = TrackedSignal(
@@ -407,7 +408,7 @@ end
         sig, fs = GPSL1CA(), 5e6Hz
         capf = Complex{Float32}.(make_capture(sig, 1, fs, 5000, 200Hz, 100.0))
         ts = TrackState(sig, [TrackedSat(sig, 1, 100.0, 200Hz)])
-        meas = (l1 = BandMeasurement(capf, fs, 0.0Hz),)
+        meas = (L1 = BandMeasurement(capf, fs, 0.0Hz),)
         # Both integer backends run the sample-type check through the shared
         # `_check_sample_type` hook, so both must reject Float samples.
         @test_throws ArgumentError downconvert_and_correlate(
@@ -451,7 +452,7 @@ end
         cphase = 0.0
         code = gen_code(nsamp, sig, 1, fs, get_code_frequency(sig), cphase)
         cap = complex.(round.(Int16, 2048 .* sign.(real.(code))), zero(Int16))
-        meas = (l1 = BandMeasurement(cap, fs, 0.0Hz),)
+        meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
         corr(dc) = first(
             get_sat_state(
                 downconvert_and_correlate(
