@@ -80,7 +80,7 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
    `TrackState{<:Any, <:MyEstimator}`. This is where the actual update
    logic runs, once per integration completion. It walks each group in
    `track_state.groups`, reads the band's `BandMeasurement` from the
-   `measurements::BandMeasurements` NamedTuple via `band_key(group.band)`,
+   `measurements::BandMeasurements` NamedTuple via `get_band_id(group.band)`,
    and produces new `TrackedSat`s with updated
    `carrier_doppler`/`code_doppler` and updated per-sat estimator state.
 
@@ -101,7 +101,7 @@ the actual algorithm, but the *structure* — five methods, two structs
 julia> using Tracking, GNSSSignals
 
 julia> using Tracking: AbstractDopplerEstimator, TrackedSat, TrackState,
-                       SignalGroup, BandMeasurements, band_key
+                       SignalGroup, BandMeasurements, get_band_id
 
 julia> # 1. Estimator type — config + any shared state
        struct MyEstimator <: AbstractDopplerEstimator end

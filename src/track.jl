@@ -8,15 +8,15 @@ estimation for all satellites in the track state. Returns an updated
 
 Three input shapes for the first positional argument:
 
-| Argument                                | Meaning                                                                  |
-|:--------------------------------------- |:------------------------------------------------------------------------ |
-| `AbstractVecOrMat`                      | Bare sample buffer. Single-band TrackState only.                         |
-| `BandMeasurement`                       | One band's bundled buffer + sample rate. Single-band TrackState.         |
-| `NamedTuple{...}` of `BandMeasurement`s | Multi-band: one `BandMeasurement` per band key (see [`band_key`](@ref)). |
+| Argument                                | Meaning                                                                        |
+|:--------------------------------------- |:------------------------------------------------------------------------------ |
+| `AbstractVecOrMat`                      | Bare sample buffer. Single-band TrackState only.                               |
+| `BandMeasurement`                       | One band's bundled buffer + sample rate. Single-band TrackState.               |
+| `NamedTuple{...}` of `BandMeasurement`s | Multi-band: one `BandMeasurement` per band id (see `GNSSSignals.get_band_id`). |
 
 The bare-buffer form `track(buf, state, fs; intermediate_frequency = ...)`
 is preserved as a thin wrapper that builds a single-entry
-`NamedTuple{(band_key(state),)}` internally. The two-phase inner loop
+`NamedTuple{(get_band_id(band),)}` internally. The two-phase inner loop
 (downconvert+correlate across all groups, then estimate across the whole
 TrackState) is the same shape regardless of how many measurements are
 passed.
@@ -93,7 +93,7 @@ end
     measurement::BandMeasurement,
     track_state::TrackState,
 )
-    key = band_key(_single_band(track_state))
+    key = get_band_id(_single_band(track_state))
     NamedTuple{(key,)}((measurement,))
 end
 
@@ -191,7 +191,7 @@ end
 @inline _check_all_groups_at_end(::Tuple{}, ::BandMeasurements) = true
 @inline function _check_all_groups_at_end(t::Tuple, measurements::BandMeasurements)
     g = first(t)
-    m = measurements[band_key(g.band)]
+    m = measurements[get_band_id(g.band)]
     target = get_num_samples(m) + 1
     @inbounds for sat in g.satellites.values
         sat.signal_start_sample == target || return false

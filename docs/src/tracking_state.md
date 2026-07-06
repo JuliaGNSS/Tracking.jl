@@ -349,7 +349,7 @@ Four groups, two distinct bands — the first three groups all sit on L1 (GPS L1
 
 ### Tracking against multiple measurements
 
-For multi-band tracking, build one [`BandMeasurement`](@ref) per band — bundling sample buffer and front-end metadata — and pass them as a NamedTuple keyed by [`band_key`](@ref):
+For multi-band tracking, build one [`BandMeasurement`](@ref) per band — bundling sample buffer and front-end metadata — and pass them as a NamedTuple keyed by the band's `GNSSSignals.get_band_id` (e.g. `:L1`, `:L5`):
 
 ```jldoctest multi_band_track; filter = r"[0-9]+\.[0-9]+" => "***"
 julia> using Tracking, GNSSSignals
@@ -377,14 +377,14 @@ julia> buf_l1 = make_signal(GPSL1CA(),  1, 200Hz,  4000,  4e6Hz);  # 1 ms at 4 M
 
 julia> buf_l5 = make_signal(GPSL5I(),   1, -150Hz, 25000, 25e6Hz); # 1 ms at 25 MHz
 
-julia> track!((l1 = BandMeasurement(buf_l1, 4e6Hz),
-               l5 = BandMeasurement(buf_l5, 25e6Hz)), track_state);
+julia> track!((L1 = BandMeasurement(buf_l1, 4e6Hz),
+               L5 = BandMeasurement(buf_l5, 25e6Hz)), track_state);
 
 julia> get_carrier_doppler(track_state, :legacy_gps_l1, 1)
 200.00000359633913 Hz
 ```
 
-The keys (`:l1`, `:l5`) come from `band_key(L1())` and `band_key(L5())`. All measurements must cover the **exact same observation duration** — `num_samples / sampling_frequency` must compare equal across bands. An L1 chunk of 4000 samples at 4 MHz and an L5 chunk of 25000 samples at 25 MHz both cover 1 ms, so they're compatible; an L5 chunk of 25001 samples is rejected.
+The keys (`:L1`, `:L5`) come from `GNSSSignals.get_band_id(L1())` and `GNSSSignals.get_band_id(L5())` — `nameof` of the band type, so any band (including user-defined ones) has a key without Tracking-side registration. All measurements must cover the **exact same observation duration** — `num_samples / sampling_frequency` must compare equal across bands. An L1 chunk of 4000 samples at 4 MHz and an L5 chunk of 25000 samples at 25 MHz both cover 1 ms, so they're compatible; an L5 chunk of 25001 samples is rejected.
 
 ### Per-band antenna counts
 
@@ -428,10 +428,9 @@ SignalGroups
 
 ### Band routing
 
-The mapping between GNSSSignals `Band` instances and the `Symbol` keys used in multi-band measurement collections (see [`BandMeasurement`](@ref)).
+The `Symbol` keys used in multi-band measurement collections (see [`BandMeasurement`](@ref)) are the bands' ids as reported by `GNSSSignals.get_band_id`; [`band_keys`](@ref) lists the ids a given `TrackState` expects.
 
 ```@docs
-band_key
 band_keys
 ```
 

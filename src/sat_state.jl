@@ -830,23 +830,23 @@ end
 #     at `signals[1]`'s code frequency (see `update` in
 #     downconvert_and_correlate.jl), so a signal with a different chip
 #     rate would silently mistrack.
-# Bands compare by `band_key` (not instance) so a user-defined band that
-# aliases an existing measurement key still validates.
+# Bands compare by id (`GNSSSignals.get_band_id`, not instance) so a
+# user-defined band that aliases an existing measurement key still validates.
 function _validate_signal_group(signals::Tuple{Vararg{AbstractGNSSSignal}}, band)
     driver = first(signals)
     foreach(signals) do s
-        if band_key(get_band(s)) !== band_key(band)
+        if get_band_id(get_band(s)) !== get_band_id(band)
             throw(
                 ArgumentError(
                     string(
                         "All signals in a SignalGroup must be on the same RF band: `",
                         get_signal_id(s),
                         "` is on band `:",
-                        band_key(get_band(s)),
+                        get_band_id(get_band(s)),
                         "` but the group is on band `:",
-                        band_key(band),
+                        get_band_id(band),
                         "`. Put signals on different bands into separate groups, e.g. ",
-                        "`signals = (l1 = (GPSL1CA(),), l5 = (GPSL5I(),))`.",
+                        "`signals = (gps_l1 = (GPSL1CA(),), gps_l5 = (GPSL5I(),))`.",
                     ),
                 ),
             )

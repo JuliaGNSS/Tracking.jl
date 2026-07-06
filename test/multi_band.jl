@@ -9,6 +9,7 @@ using GNSSSignals:
     L1,
     L5,
     gen_code,
+    get_band_id,
     get_code_frequency,
     get_code_center_frequency_ratio
 
@@ -20,7 +21,6 @@ using Tracking:
     track,
     track!,
     add_satellite!,
-    band_key,
     band_keys,
     get_samples,
     get_sampling_frequency,
@@ -102,9 +102,9 @@ end
     @test_throws ArgumentError BandMeasurement(transpose(buf), 4e6Hz)
 end
 
-@testset "band_key for L1 and L5" begin
-    @test @inferred(band_key(L1())) === :l1
-    @test @inferred(band_key(L5())) === :l5
+@testset "get_band_id for L1 and L5" begin
+    @test @inferred(get_band_id(L1())) === :L1
+    @test @inferred(get_band_id(L5())) === :L5
 end
 
 @testset "Single-BandMeasurement track/track! shortcut on single-band TrackState" begin
@@ -147,13 +147,13 @@ end
 
 @testset "band_keys for single-band TrackState" begin
     ts = TrackState(; signal = GPSL1CA())
-    @test band_keys(ts) == (:l1,)
+    @test band_keys(ts) == (:L1,)
 end
 
 @testset "band_keys for multi-band TrackState" begin
     ts = TrackState(; signals = (legacy_gps_l1 = (GPSL1CA(),), gps_l5 = (GPSL5I(),)))
     # Both bands appear in first-encounter order.
-    @test band_keys(ts) == (:l1, :l5)
+    @test band_keys(ts) == (:L1, :L5)
 end
 
 @testset "Two groups sharing a band yield one band key" begin
@@ -163,7 +163,7 @@ end
         # to prove dedup, and avoids pulling in another signal.
         another_l1 = (GPSL1CA(),),
     ))
-    @test band_keys(ts) == (:l1,)
+    @test band_keys(ts) == (:L1,)
 end
 
 @testset "Single-band track! still accepts bare buffer" begin
@@ -233,7 +233,7 @@ end
     )
 
     measurements =
-        (l1 = BandMeasurement(signal_l1, fs_l1), l5 = BandMeasurement(signal_l5, fs_l5))
+        (L1 = BandMeasurement(signal_l1, fs_l1), L5 = BandMeasurement(signal_l5, fs_l5))
 
     track!(measurements, track_state)
 
@@ -246,9 +246,9 @@ end
 
 @testset "BandMeasurement keys mismatch errors" begin
     ts = TrackState(; signal = GPSL1CA())
-    # Wrong key: TrackState has band L1 (key :l1) but we pass :l5.
+    # Wrong key: TrackState has band L1 (key :L1) but we pass :L5.
     m = BandMeasurement(zeros(ComplexF64, 4000), 4e6Hz)
-    @test_throws ArgumentError track!((l5 = m,), ts)
+    @test_throws ArgumentError track!((L5 = m,), ts)
 end
 
 @testset "Mismatched durations error (no tolerance)" begin
@@ -260,7 +260,7 @@ end
     # ≈ 1.00004 ms. Off by one sample at L5's rate — must reject.
     m_l1 = BandMeasurement(zeros(ComplexF64, 4000), 4e6Hz)
     m_l5 = BandMeasurement(zeros(ComplexF64, 25001), 25e6Hz)
-    @test_throws ArgumentError track!((l1 = m_l1, l5 = m_l5), ts)
+    @test_throws ArgumentError track!((L1 = m_l1, L5 = m_l5), ts)
 end
 
 @testset "Equal durations across mixed Float32/Float64 sampling rates" begin
@@ -270,13 +270,13 @@ end
     # `==` after division.
     m_l1 = BandMeasurement(zeros(ComplexF64, 4000), 4e6Hz)
     m_l5 = BandMeasurement(zeros(ComplexF64, 25000), 25.0f6Hz)
-    @test _validate_equal_durations((l1 = m_l1, l5 = m_l5)) === nothing
+    @test _validate_equal_durations((L1 = m_l1, L5 = m_l5)) === nothing
 
     # A genuine one-sample mismatch must still throw, and the message
     # should print durations in seconds, not Hz^-1.
     m_bad = BandMeasurement(zeros(ComplexF64, 25001), 25.0f6Hz)
     err = try
-        _validate_equal_durations((l1 = m_l1, l5 = m_bad))
+        _validate_equal_durations((L1 = m_l1, L5 = m_bad))
         nothing
     catch e
         e
@@ -290,7 +290,7 @@ end
     ts = add_satellite!(ts; prn = 1, carrier_doppler = 0Hz)
     # 2-antenna group expects a Matrix with 2 columns; pass a Vector.
     m = BandMeasurement(zeros(ComplexF64, 4000), 4e6Hz)
-    @test_throws ArgumentError track!((l1 = m,), ts)
+    @test_throws ArgumentError track!((L1 = m,), ts)
 end
 
 @testset "Per-band antenna counts via SignalGroup entries" begin
@@ -327,7 +327,7 @@ end
             galileo = SignalGroup((GalileoE1B(),); num_ants = NumAnts(2)),
         ),
     )
-    @test band_keys(ts) == (:l1,)
+    @test band_keys(ts) == (:L1,)
 end
 
 end # module

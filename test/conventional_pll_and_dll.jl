@@ -27,11 +27,11 @@ using Tracking:
     get_default_correlator,
     merge_sats
 
-# Build a stub `(l1 = BandMeasurement(...),)` NamedTuple to pass to the
+# Build a stub `(L1 = BandMeasurement(...),)` NamedTuple to pass to the
 # estimator. Samples are unused by `estimate_dopplers_and_filter_prompt`
 # (it only reads `sampling_frequency` per group), so an empty buffer
 # suffices.
-_meas_l1(fs) = (l1 = BandMeasurement(ComplexF64[], fs),)
+_meas_l1(fs) = (L1 = BandMeasurement(ComplexF64[], fs),)
 
 @testset "Doppler aiding" begin
     gpsl1 = GPSL1CA()

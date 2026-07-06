@@ -106,41 +106,10 @@ end
 """
 $(SIGNATURES)
 
-Map a GNSSSignals `Band` instance to the `Symbol` used as the
-NamedTuple key in a multi-band measurements collection. Singleton
-dispatch — fold to a compile-time constant when `band` has a concrete
-type, so the per-call NamedTuple lookup is free.
-
-Concrete bands define one method each. New bands added downstream
-must extend this for the multi-band `track` call to find them.
-"""
-function band_key end
-@inline band_key(::GNSSSignals.L1) = :l1
-@inline band_key(::GNSSSignals.L2) = :l2
-@inline band_key(::GNSSSignals.L5) = :l5
-# Fallback for bands without a `band_key` method: a raw `MethodError` deep
-# inside the multi-band machinery would be opaque, so point the caller at
-# the fix.
-band_key(band::GNSSSignals.Band) = throw(
-    ArgumentError(
-        string(
-            "No `band_key` method for band `",
-            band,
-            "` (",
-            typeof(band),
-            "). ",
-            "Define `Tracking.band_key(::",
-            typeof(band),
-            ") = :some_symbol` so the ",
-            "multi-band `track` call can key its measurements by this band.",
-        ),
-    ),
-)
-
-"""
-$(SIGNATURES)
-
 Type alias for a NamedTuple of `BandMeasurement`s — the multi-band input
-shape of `track` / `track!`. Keys are band symbols (see [`band_key`](@ref)).
+shape of `track` / `track!`. Keys are the bands' `GNSSSignals.get_band_id`
+symbols (e.g. `:L1`, `:L5`) — `nameof` of the band type, folding to a
+compile-time constant, so the per-call NamedTuple lookup is free and new
+bands work without any Tracking-side registration.
 """
 const BandMeasurements = NamedTuple{<:Any,<:Tuple{Vararg{BandMeasurement}}}

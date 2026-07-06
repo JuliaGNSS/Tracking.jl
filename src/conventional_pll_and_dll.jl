@@ -521,7 +521,7 @@ allocation-free in steady state when [`track!`](@ref)'s preconditions are met.
 @inline function _est_one_group!(g::SignalGroup, measurements::BandMeasurements)
     vals = g.satellites.values
     isempty(vals) && return nothing
-    sampling_frequency = measurements[band_key(g.band)].sampling_frequency
+    sampling_frequency = measurements[get_band_id(g.band)].sampling_frequency
     @inbounds for i in eachindex(vals)
         vals[i] = _update_tracked_sat_doppler(vals[i], sampling_frequency)
     end

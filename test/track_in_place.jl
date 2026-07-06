@@ -97,7 +97,7 @@ function measure_reset!(track_state)
 end
 
 function measure_dc!(dc, signal, track_state, sampling_frequency)
-    measurements = (l1 = BandMeasurement(signal, sampling_frequency),)
+    measurements = (L1 = BandMeasurement(signal, sampling_frequency),)
     for _ = 1:8
         downconvert_and_correlate!(dc, measurements, track_state)
     end
@@ -107,7 +107,7 @@ end
 function measure_est!(track_state, sampling_frequency)
     # Estimator only reads `sampling_frequency` off the measurement;
     # samples are unused.
-    measurements = (l1 = BandMeasurement(ComplexF64[], sampling_frequency),)
+    measurements = (L1 = BandMeasurement(ComplexF64[], sampling_frequency),)
     for _ = 1:8
         estimate_dopplers_and_filter_prompt!(track_state, measurements)
     end
