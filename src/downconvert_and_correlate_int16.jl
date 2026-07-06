@@ -274,6 +274,11 @@ struct Int16DownconvertAndCorrelator{TBL<:SinCosTable,TI} <:
     buffers::Int16ScratchBuffers{TI}
     table::TBL
     blk::Int
+    # Peak amplitude of the Int8 carrier replica (`_int16_choose_carrier`). The wipe
+    # `DI = mᵣ·cos + mᵢ·sin` scales the correlation by this factor, so the finalize
+    # divides it back out — the Float32 backend's carrier is unit-amplitude, so this
+    # keeps the two backends' absolute magnitudes equal (not just their ratios).
+    carrier_amplitude::Int
 end
 
 """
@@ -289,6 +294,9 @@ struct Int16ThreadedDownconvertAndCorrelator{TBL<:SinCosTable,TI} <:
     buffers::Vector{Int16ScratchBuffers{TI}}
     table::TBL
     blk::Int
+    # Peak amplitude of the Int8 carrier replica; divided out at finalize. See
+    # [`Int16DownconvertAndCorrelator`](@ref).
+    carrier_amplitude::Int
 end
 
 # The kernels stride the sample buffer by the compile-time constant `_INT16_W`
@@ -331,6 +339,7 @@ function Int16DownconvertAndCorrelator(;
         Int16ScratchBuffers{TI}(),
         table,
         _int16_validate_blk(blk, max_meas, amplitude),
+        amplitude,
     )
 end
 
@@ -346,6 +355,7 @@ function Int16ThreadedDownconvertAndCorrelator(;
         [Int16ScratchBuffers{TI}() for _ = 1:Threads.maxthreadid()],
         table,
         _int16_validate_blk(blk, max_meas, amplitude),
+        amplitude,
     )
 end
 
@@ -523,14 +533,19 @@ end
     end
 
     # Finalize: one accumulator per tap — ComplexF64 (M=1) or SVector{M} (M>1).
+    # `carrier_amp` (defined in the returned quote) divides out the Int8 carrier's
+    # peak amplitude so the magnitude matches the unit-carrier Float32 backend.
     function tap_expr(k)
         if M == 1
-            :(complex(Float64($(Symbol("tI_1_$k"))), Float64($(Symbol("tQ_1_$k")))))
+            :(complex(
+                Float64($(Symbol("tI_1_$k"))) / carrier_amp,
+                Float64($(Symbol("tQ_1_$k"))) / carrier_amp,
+            ))
         else
             ant = [
                 :(complex(
-                    Float64($(Symbol("tI_$(j)_$k"))),
-                    Float64($(Symbol("tQ_$(j)_$k"))),
+                    Float64($(Symbol("tI_$(j)_$k"))) / carrier_amp,
+                    Float64($(Symbol("tQ_$(j)_$k"))) / carrier_amp,
                 )) for j = 1:M
             ]
             :(SVector{$M,ComplexF64}(tuple($(ant...))))
@@ -541,6 +556,7 @@ end
 
     quote
         W = $W
+        carrier_amp = Float64(dc.carrier_amplitude)
         min_shift = minimum(sample_shifts)
         max_shift = maximum(sample_shifts)
         span = max_shift - min_shift
@@ -764,12 +780,22 @@ function _int16_hybrid_blocked!(
         blk_off += len
     end
 
+    # Divide out the Int8 carrier's peak amplitude (see the @generated kernel).
+    carrier_amp = Float64(dc.carrier_amplitude)
     if M == 1
-        return [complex(Float64(tI[k]), Float64(tQ[k])) for k = 1:NC]
+        return [
+            complex(Float64(tI[k]) / carrier_amp, Float64(tQ[k]) / carrier_amp) for k = 1:NC
+        ]
     else
         return [
             SVector{M,ComplexF64}(
-                ntuple(j -> complex(Float64(tI[(j-1)*NC+k]), Float64(tQ[(j-1)*NC+k])), M),
+                ntuple(
+                    j -> complex(
+                        Float64(tI[(j-1)*NC+k]) / carrier_amp,
+                        Float64(tQ[(j-1)*NC+k]) / carrier_amp,
+                    ),
+                    M,
+                ),
             ) for k = 1:NC
         ]
     end
@@ -978,17 +1004,19 @@ end
         push!(sigs.args, signal_corr(i))
     end
 
+    # `carrier_amp` (defined in the returned quote) divides out the Int8 carrier's
+    # peak amplitude so the magnitude matches the unit-carrier Float32 backend.
     function tap(i, k)
         if M == 1
             :(complex(
-                Float64($(Symbol("tI_$(i)_1_$k"))),
-                Float64($(Symbol("tQ_$(i)_1_$k"))),
+                Float64($(Symbol("tI_$(i)_1_$k"))) / carrier_amp,
+                Float64($(Symbol("tQ_$(i)_1_$k"))) / carrier_amp,
             ))
         else
             ant = [
                 :(complex(
-                    Float64($(Symbol("tI_$(i)_$(j)_$k"))),
-                    Float64($(Symbol("tQ_$(i)_$(j)_$k"))),
+                    Float64($(Symbol("tI_$(i)_$(j)_$k"))) / carrier_amp,
+                    Float64($(Symbol("tQ_$(i)_$(j)_$k"))) / carrier_amp,
                 )) for j = 1:M
             ]
             :(SVector{$M,ComplexF64}(tuple($(ant...))))
@@ -1002,6 +1030,7 @@ end
 
     quote
         W = $W
+        carrier_amp = Float64(dc.carrier_amplitude)
         sampling_freq = Float64(upreferred(sampling_frequency / Hz))
         carrier_freq = Float64(upreferred(carrier_frequency / Hz))
         reng = carrier_engine(dc.table, carrier_freq / sampling_freq)

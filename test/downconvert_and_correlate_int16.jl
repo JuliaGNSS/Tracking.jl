@@ -119,6 +119,12 @@ end
               abs(get_early(cf)) / abs(get_prompt(cf)) atol = 1e-2
         @test abs(get_late(ci)) / abs(get_prompt(ci)) ≈
               abs(get_late(cf)) / abs(get_prompt(cf)) atol = 1e-2
+        # ABSOLUTE magnitude agrees too: the finalize divides out the Int8 carrier's
+        # peak amplitude, so the integer backend lands on the same scale as the
+        # unit-carrier Float32 backend (not just the same ratios). Without that
+        # division `ci` would be ~carrier_amplitude× (e.g. 7×) too large. The residual
+        # is the Int8 carrier's amplitude quantisation, well under 5%.
+        @test abs(get_prompt(ci)) ≈ abs(get_prompt(cf)) rtol = 0.05
         # Prompt phase agrees up to the Int8 carrier quantisation.
         @test mod2pi(angle(get_prompt(ci)) - angle(get_prompt(cf)) + π) - π ≈ 0 atol = 0.1
     end
@@ -463,11 +469,14 @@ end
                 1,
             ).signals,
         ).correlator
+        ci_dc = Int16ThreadedDownconvertAndCorrelator()
         cf = corr(CPUThreadedDownconvertAndCorrelator())
-        ci = corr(Int16ThreadedDownconvertAndCorrelator())
-        # The capture is strong enough that the integer prompt total exceeds
+        ci = corr(ci_dc)
+        # The capture is strong enough that the raw Int64 block-flush total exceeds
         # typemax(Int32): this is exactly what wraps an Int32 block-flush reduction.
-        @test abs(get_prompt(ci)) > typemax(Int32)
+        # The finalize divides that raw total by the carrier amplitude, so multiply it
+        # back to recover the accumulator magnitude the overflow guard must survive.
+        @test abs(get_prompt(ci)) * ci_dc.carrier_amplitude > typemax(Int32)
         # Amplitude-invariant E/P and L/P ratios still match the (overflow-free)
         # Float32 backend — they would be garbage if the prompt had wrapped.
         @test abs(get_early(ci)) / abs(get_prompt(ci)) ≈
