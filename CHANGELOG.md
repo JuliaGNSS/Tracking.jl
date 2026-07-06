@@ -1,5 +1,12 @@
 # Changelog
 
+# [2.3.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v2.2.0...v2.3.0) (2026-07-06)
+
+
+### Features
+
+* **deps:** require GNSSSignals 3.3 and adopt its get_signal_id accessor ([823ba8b](https://github.com/JuliaGNSS/Tracking.jl/commit/823ba8b60ca71e9b7bf95bf407577daafe216a42))
+
 # [2.2.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v2.1.0...v2.2.0) (2026-07-05)
 
 
