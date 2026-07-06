@@ -1,5 +1,21 @@
 # Changelog
 
+# [3.0.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v2.3.0...v3.0.0) (2026-07-06)
+
+
+* feat(bands)!: key multi-band measurements by GNSSSignals.get_band_id ([3d9a984](https://github.com/JuliaGNSS/Tracking.jl/commit/3d9a9844bb7572953dfdc74c4e157d9050e8b5ff))
+
+
+### BREAKING CHANGES
+
+* multi-band `track`/`track!` measurement NamedTuples are
+now keyed by `GNSSSignals.get_band_id` (`:L1`, `:L2`, `:L5`) instead of
+Tracking's lowercase `band_key` (`:l1`, `:l2`, `:l5`). `Tracking.band_key`
+is removed — use `GNSSSignals.get_band_id`. `band_keys` now returns the
+capitalized ids.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
 # [2.3.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v2.2.0...v2.3.0) (2026-07-06)
 
 
