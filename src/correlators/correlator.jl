@@ -127,10 +127,15 @@ end
 """
 $(SIGNATURES)
 
-Normalize the correlator
+Normalize the correlator by the number of `integrated_samples` and, optionally,
+the `code_amplitude` (the RMS amplitude of the sampled code replica; see
+[`get_code_amplitude`](@ref)). For a ±1 code `code_amplitude` is `1` and this is
+just the per-sample average; for a multi-level code (CBOC) dividing by
+`code_amplitude` additionally undoes the code's integer scale so the normalized
+prompt is independent of modulation.
 """
-function normalize(correlator::AbstractCorrelator, integrated_samples)
-    apply(x -> x / integrated_samples, correlator)
+function normalize(correlator::AbstractCorrelator, integrated_samples, code_amplitude = 1)
+    apply(x -> x / (integrated_samples * code_amplitude), correlator)
 end
 
 function calc_preferred_code_shift_to_sample_shift(

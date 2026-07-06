@@ -358,8 +358,11 @@ end
         tracked_signal.preferred_num_code_blocks_to_integrate,
         has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
     )
-    normalized_correlator =
-        normalize(tracked_signal.correlator, tracked_signal.integrated_samples)
+    normalized_correlator = normalize(
+        tracked_signal.correlator,
+        tracked_signal.integrated_samples,
+        get_code_amplitude(signal),
+    )
     post_corr_filter =
         update(tracked_signal.post_corr_filter, get_prompt(normalized_correlator))
     filtered_correlator = apply(post_corr_filter, normalized_correlator)
