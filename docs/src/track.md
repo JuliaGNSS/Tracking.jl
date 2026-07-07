@@ -84,7 +84,11 @@ buffers there is an opt-in integer backend,
 [`Int16ThreadedDownconvertAndCorrelator`](@ref) (and its single-threaded sibling
 [`Int16DownconvertAndCorrelator`](@ref)), which is typically ~1.3–2.9× faster.
 Select it explicitly via the `downconvert_and_correlator` keyword; it errors on a
-non-`Complex{Int16}` measurement.
+non-`Complex{Int16}` measurement. Its constructor takes one **required** positional
+argument, `max_meas` — your front end's full-scale (the largest `|real|`/`|imag|` a
+sample can take, e.g. `2^11` for a 12-bit ADC) — from which it sizes the carrier
+replica so the integer carrier wipe cannot overflow. There is no default: see
+[`Int16DownconvertAndCorrelator`](@ref) for why under-declaring it is catastrophic.
 
 ```@docs
 CPUDownconvertAndCorrelator

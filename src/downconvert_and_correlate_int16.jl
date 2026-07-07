@@ -55,14 +55,22 @@ end
 # (AVX2/AVX-512) only. Other backends use the exact Int32 multiply path.
 const _INT16_HAS_MADDWD = Sys.ARCH in (:x86_64, :i686) && _INT16_W in (32, 64)
 
-# Maximum |measurement component| we size the carrier amplitude against: a 12-bit
-# ADC (|m| ≤ 2^11). Pick the LARGEST Int16-safe amplitude — the largest `amp` with
-# `2·max_meas·amp ≤ typemax(Int16)` — capped at the Int8 storage limit. Keeping the
-# wipe `DI = mᵣ·cos + mᵢ·sin` within Int16 enables the Int16 `vpmaddwd` fast path on
-# x86 and keeps `|DI| ≤ typemax(Int16)`. The wipe TYPE differs by backend (Int16 +
-# vpmaddwd on x86; exact Int32 elsewhere) but the AMPLITUDE is the same — using a
-# larger Int32-only amplitude (the old behaviour) overflowed the accumulator for
-# CBOC on the scalar/NEON path.
+# Choose the carrier-replica amplitude (and wipe arithmetic type) from `max_meas`,
+# the caller-declared largest `|real|`/`|imag|` of a measurement sample (e.g. 2^11
+# for a 12-bit ADC). Pick the LARGEST Int16-safe amplitude — the largest `amp` with
+# `2·max_meas·amp ≤ typemax(Int16)` — capped at the Int8 storage limit. The factor
+# of 2 is NOT slack: the carrier wipe is a COMPLEX multiply `DI = mᵣ·cos + mᵢ·sin`,
+# `DQ = mᵢ·cos − mᵣ·sin` — two products SUMMED per output — so `|DI| ≤ |mᵣ·cos| +
+# |mᵢ·sin| ≤ 2·max_meas·amp`; sizing against that keeps BOTH the intermediate
+# products and their sum within Int16. Keeping the wipe within Int16 enables the
+# Int16 `vpmaddwd` fast path on x86 and keeps `|DI| ≤ typemax(Int16)`. The wipe TYPE
+# differs by backend (Int16 + vpmaddwd on x86; exact Int32 elsewhere) but the
+# AMPLITUDE is the same — using a larger Int32-only amplitude (the old behaviour)
+# overflowed the accumulator for CBOC on the scalar/NEON path.
+#
+# `max_meas` is a required positional argument of both constructors (no default):
+# under-declaring it silently overflows the Int16 wipe and corrupts the correlation
+# catastrophically, so the caller must state their front end's full-scale.
 #
 # Three guards keep the per-block Σ codeₓ·DI within Int32 (the horizontal reduce is
 # widened to Int64, and two block-length caps bound the lanes themselves):
@@ -77,7 +85,6 @@ const _INT16_HAS_MADDWD = Sys.ARCH in (:x86_64, :i686) && _INT16_W in (32, 64)
 #   * On the SinCosLUT `Portable` backend (`_INT16_W == 1`) a single Int32 lane sums
 #     a whole block, so `_int16_flush_len` shrinks the block by the SIMD width so no
 #     lane can wrap (#166); a no-op for W ≥ 16, so the hot path is unchanged.
-const _INT16_MAX_MEAS = 1 << 11
 function _int16_choose_carrier(max_meas::Integer)
     a = Int(typemax(Int16)) ÷ (2 * Int(max_meas))
     a >= 1 || return (Int(typemax(Int8)), Int32)
@@ -252,16 +259,29 @@ static correlator path (EPL/VEPL and any `SVector`-shifts correlator). The
 runtime `AbstractVector`-shifts fallback additionally allocates the small
 `Vector` it returns each integration, but reuses the same thread-local scratch.
 
-The carrier-replica amplitude (and the wipe arithmetic type) are chosen from
-`max_meas`, the largest expected `|real|`/`|imag|` of a measurement sample —
-the largest amplitude that keeps the carrier wipe within `Int16` (so the wipe
-can't overflow and the on-x86 `vpmaddwd` fast path applies). Pass `max_meas`
-for your front end's full-scale (default `2^11`, a 12-bit ADC); under-declaring
-it risks overflow, over-declaring only coarsens the carrier. This backend is
-tuned for ≤12-bit sample buffers: for `max_meas ≥ 2^14` no `Int16`-safe carrier
-amplitude exists, so it falls back to the exact `Int32` wipe and automatically
-shrinks the strip-mine block to keep the correlation accumulators from
-overflowing (correct, but slower on that path).
+# Arguments
+
+`max_meas` (the first positional argument, **required — no default**) is the
+largest `|real|`/`|imag|` any measurement sample will take, i.e. your front end's
+full-scale (e.g. `2^11` for a 12-bit ADC). From it the constructor picks the
+LARGEST carrier-replica amplitude whose carrier wipe still fits `Int16`, and the
+wipe arithmetic type (`Int16` on the fast path, else `Int32`). The carrier
+wipe is a **complex** multiply `DI = mᵣ·cos + mᵢ·sin`, `DQ = mᵢ·cos − mᵣ·sin` —
+two products summed per output — so the amplitude is sized against
+`2·max_meas·amplitude ≤ typemax(Int16)`, bounding both the products and their sum.
+There is deliberately no default: **under-declaring `max_meas` silently overflows
+the `Int16` wipe and corrupts the correlation catastrophically**, so you must
+state it explicitly. Over-declaring is safe and only coarsens the carrier
+quantisation.
+
+!!! note "Performance: keep `max_meas < 2^14`"
+
+    For `max_meas ≥ 2^14` no `Int16`-safe carrier amplitude `≥ 1` exists, so the
+    backend falls back to an exact `Int32` carrier wipe — the on-x86 `vpmaddwd`
+    Int16 fast path no longer applies — and shrinks the strip-mine block to keep
+    the correlation accumulators from overflowing. This stays correct but is
+    measurably slower. This backend is tuned for ≤12-bit sample buffers; keep
+    `max_meas` below `2^14` to stay on the fast path.
 
 The `blk` keyword sets the strip-mine block length (samples). It must be `≥ 1`,
 validated at construction — `blk ≤ 0` would make the strip-mine loop never
@@ -327,8 +347,8 @@ function _int16_assert_engine_width(table::SinCosTable)
     return nothing
 end
 
-function Int16DownconvertAndCorrelator(;
-    max_meas::Integer = _INT16_MAX_MEAS,
+function Int16DownconvertAndCorrelator(
+    max_meas::Integer;
     steps::Integer = 64,
     blk::Integer = _INT16_BLK,
 )
@@ -343,8 +363,8 @@ function Int16DownconvertAndCorrelator(;
     )
 end
 
-function Int16ThreadedDownconvertAndCorrelator(;
-    max_meas::Integer = _INT16_MAX_MEAS,
+function Int16ThreadedDownconvertAndCorrelator(
+    max_meas::Integer;
     steps::Integer = 64,
     blk::Integer = _INT16_BLK,
 )
