@@ -181,6 +181,45 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         @test abs(mod2pi(angle(get_prompt(cb)) - angle(get_prompt(cf)) + π) - π) < 0.6
     end
 
+    @testset "high sampling rate: tap span ≥ 64 words uncorrupted (regression)" begin
+        # At high fs the early/late sample-shift offset exceeds 64 (one UInt64 word), so
+        # deriving a tap plane from the prompt-extended plane needs a whole-word + sub-word
+        # funnel shift. A single-word-only shift silently corrupted any tap with offset ≥ 64
+        # (right-shift ≥ 64 clamps to 0; the compensating left-shift wraps negative). Verify
+        # every tap matches Float32 and E/L symmetry holds, in that ≥ 64 regime.
+        sig, fs = GPSL1CA(), 100e6Hz
+        nsamp = round(Int, (fs / 1Hz) * 1e-3)
+        fc = 200Hz * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
+        shifts = get_correlator_sample_shifts(
+            EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
+            fs,
+            fc,
+        )
+        @test maximum(shifts) - minimum(shifts) ≥ 64        # the regime the bug lived in
+        cf = correlate_once(
+            CPUThreadedDownconvertAndCorrelator(),
+            sig,
+            fs,
+            nsamp,
+            200Hz,
+            100.0,
+        )
+        cb = correlate_once(
+            OneBitThreadedDownconvertAndCorrelator(),
+            sig,
+            fs,
+            nsamp,
+            200Hz,
+            100.0,
+        )
+        @test abs(get_early(cb)) / abs(get_prompt(cb)) ≈
+              abs(get_early(cf)) / abs(get_prompt(cf)) atol = 3e-2
+        @test abs(get_late(cb)) / abs(get_prompt(cb)) ≈
+              abs(get_late(cf)) / abs(get_prompt(cf)) atol = 3e-2
+        # early and late are symmetric about the peak → equal magnitude
+        @test abs(get_early(cb)) / abs(get_late(cb)) ≈ 1 atol = 5e-2
+    end
+
     @testset "VeryEarlyPromptLateCorrelator (NC=5)" begin
         sig, fs = GPSL5I(), 12e6Hz          # BPSK (Int8 code); the 1-bit backend is BPSK-only
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
