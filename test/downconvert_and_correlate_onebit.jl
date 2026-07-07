@@ -9,6 +9,7 @@ using GNSSSignals:
     GPSL5I,
     GalileoE1B,
     gen_code,
+    get_band_id,
     get_code_center_frequency_ratio,
     get_code_frequency
 using Tracking:
@@ -64,7 +65,7 @@ function make_capture(sig, prn, fs, nsamp, cdopp, cphase; peak = 2000)
     complex.(round.(Int16, real.(s) .* peak), round.(Int16, imag.(s) .* peak))
 end
 
-band_key_for(sig) = sig isa GPSL5I ? :l5 : :l1
+band_key_for(sig) = get_band_id(sig)
 make_capture_mat(sig, fs, nsamp, cdopp, cphase, M; peak = 2000) =
     repeat(make_capture(sig, 1, fs, nsamp, cdopp, cphase; peak); outer = (1, M))
 
@@ -254,7 +255,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
-        meas = (l1 = BandMeasurement(cap, fs, 0.0Hz),)
+        meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
         dc = OneBitThreadedDownconvertAndCorrelator()
         est = ConventionalAssistedPLLAndDLL()
         mksig() = TrackedSignal(
@@ -312,7 +313,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             M,
         )
         cap = make_capture_mat(sig, fs, nsamp, 200Hz, 100.0, M)
-        meas = (l1 = BandMeasurement(cap, fs, 0.0Hz),)
+        meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
         est = ConventionalAssistedPLLAndDLL()
         mksig() = TrackedSignal(
             sig;
@@ -397,7 +398,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         fc = 200Hz * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
         shifts = collect(get_correlator_sample_shifts(EarlyPromptLateCorrelator(), fs, fc))
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
-        meas = (l1 = BandMeasurement(cap, fs, 0.0Hz),)
+        meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
         dc = OneBitThreadedDownconvertAndCorrelator()
         mkcorr() = DynShiftsCorrelator{1}(zeros(ComplexF64, 3), shifts)
 
@@ -437,7 +438,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
-        meas = (l1 = BandMeasurement(cap, fs, 0.0Hz),)
+        meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
         dc = OneBitThreadedDownconvertAndCorrelator()
 
         prns = (1, 5, 12)
@@ -468,7 +469,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         sig, fs = GPSL1CA(), 5e6Hz
         capf = Complex{Float32}.(make_capture(sig, 1, fs, 5000, 200Hz, 100.0))
         ts = TrackState(sig, [TrackedSat(sig, 1, 100.0, 200Hz)])
-        meas = (l1 = BandMeasurement(capf, fs, 0.0Hz),)
+        meas = (L1 = BandMeasurement(capf, fs, 0.0Hz),)
         @test_throws ArgumentError downconvert_and_correlate(
             OneBitThreadedDownconvertAndCorrelator(),
             meas,
@@ -484,7 +485,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         # below covers the BPSK case. E1B's BOC(6,1) needs fs ≥ code_freq·12 = 12.276 MHz.
         sig, fs = GalileoE1B(), 15e6Hz
         cap = make_capture(sig, 1, fs, 5000, 200Hz, 100.0)
-        meas = (l1 = BandMeasurement(cap, fs, 0.0Hz),)
+        meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
         ts = TrackState(sig, [TrackedSat(sig, 1, 100.0, 200Hz)])
         @test_throws ArgumentError downconvert_and_correlate(
             OneBitThreadedDownconvertAndCorrelator(),

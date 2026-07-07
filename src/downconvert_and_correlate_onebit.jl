@@ -1199,7 +1199,7 @@ end
 )
     vals = g.satellites.values
     isempty(vals) && return nothing
-    m = measurements[band_key(g.band)]
+    m = measurements[get_band_id(g.band)]
     eltype(m.samples) === Complex{Int16} || throw(
         ArgumentError(
             string(
