@@ -1,5 +1,14 @@
 # Changelog
 
+## [3.0.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v3.0.0...v3.0.1) (2026-07-07)
+
+
+### Bug Fixes
+
+* **int16:** normalize the Int8 carrier amplitude out of the correlator ([cfe553b](https://github.com/JuliaGNSS/Tracking.jl/commit/cfe553b0d68a034ba101193add4739c97e1a0f2d)), closes [#165](https://github.com/JuliaGNSS/Tracking.jl/issues/165)
+* **normalize:** divide out code amplitude for multi-level CBOC codes ([96c008e](https://github.com/JuliaGNSS/Tracking.jl/commit/96c008e9357f9b5e92b8bb8918853fef94b43391))
+* **normalize:** source code amplitude from GNSSSignals.get_code_amplitude ([0fba2ee](https://github.com/JuliaGNSS/Tracking.jl/commit/0fba2ee86009d5e1cc498d53fc03fc90f1d30294))
+
 # [3.0.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v2.3.0...v3.0.0) (2026-07-06)
 
 
