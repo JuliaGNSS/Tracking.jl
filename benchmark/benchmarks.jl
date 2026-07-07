@@ -789,6 +789,15 @@ if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
         complex.(rand((-lim):(lim - one(Int16)), nsamp), rand((-lim):(lim - one(Int16)), nsamp))
     end
 
+    # Branch-portable Int16 backend construction. `max_meas` (the front end's
+    # full-scale) became a required positional argument; older Tracking took it
+    # only as a keyword with a default. AirspeedVelocity benches HEAD's suite
+    # against every rev, so dispatch on which signature the loaded Tracking has.
+    _make_int16_threaded_dc(max_meas) =
+        applicable(Tracking.Int16ThreadedDownconvertAndCorrelator, max_meas) ?
+        Tracking.Int16ThreadedDownconvertAndCorrelator(max_meas) :
+        Tracking.Int16ThreadedDownconvertAndCorrelator(; max_meas)
+
     # Self-explanatory scenario names (system · sat count · sampling rate). NO
     # "/" in a name — the benchmark-table script keys leaves by "/"-joined path,
     # so a slash would be read as an extra nesting level. Each scenario registers
@@ -807,7 +816,8 @@ if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
         ts_i, _ = _make_steady_state_track_state(;
             systems, nsats_list, nsamp, prn_max, code_dop = 100.0)
         dc_f = _make_cpu_threaded_dc(sfreq)
-        dc_i = Tracking.Int16ThreadedDownconvertAndCorrelator()
+        # max_meas = 2^11 matches the ±2048 full-scale of `_int16_capture` above.
+        dc_i = _make_int16_threaded_dc(2^11)
         g = SUITE["track! Int16 vs Float32"][name]
         g["Float32"] = @benchmarkable Tracking.track!(
             $sig16, $ts_f, $sfreq; downconvert_and_correlator = $dc_f,
