@@ -797,6 +797,10 @@ if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
         applicable(Tracking.Int16ThreadedDownconvertAndCorrelator, max_meas) ?
         Tracking.Int16ThreadedDownconvertAndCorrelator(max_meas) :
         Tracking.Int16ThreadedDownconvertAndCorrelator(; max_meas)
+    _make_int16_dc(max_meas) =
+        applicable(Tracking.Int16DownconvertAndCorrelator, max_meas) ?
+        Tracking.Int16DownconvertAndCorrelator(max_meas) :
+        Tracking.Int16DownconvertAndCorrelator(; max_meas)
 
     # Self-explanatory scenario names (system · sat count · sampling rate). NO
     # "/" in a name — the benchmark-table script keys leaves by "/"-joined path,
@@ -899,9 +903,15 @@ if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
         [_make_initial_sat(_AXES_SIG, 1, 10.5, 1000.0Hz; num_ants = NumAnts(num_ants))],
     )
 
-    _axes_dc(dc, cap, ts) = let meas = (l1 = Tracking.BandMeasurement(cap, _AXES_FS, 0.0Hz),)
-        @benchmarkable Tracking.downconvert_and_correlate($dc, $meas, $ts)
-    end
+    # This block only registers when the one-bit backend exists (HEAD rev), which is
+    # the `GNSSSignals.get_band_id` era — key the measurement by it (`:L1`), not the
+    # old lowercase `Tracking.band_key` (`:l1`).
+    _axes_dc(dc, cap, ts) =
+        let meas = NamedTuple{(get_band_id(_AXES_SIG),)}((
+                Tracking.BandMeasurement(cap, _AXES_FS, 0.0Hz),
+            ))
+            @benchmarkable Tracking.downconvert_and_correlate($dc, $meas, $ts)
+        end
 
     # multi-signal (M=1) and multi-antenna (N=1) via the uniform pipeline.
     for n_signals in (3,)
@@ -913,7 +923,7 @@ if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
             _axes_multisignal_state(n_signals),
         )
         g["Int16"] = _axes_dc(
-            Tracking.Int16ThreadedDownconvertAndCorrelator(),
+            _make_int16_threaded_dc(2^11),
             cap,
             _axes_multisignal_state(n_signals),
         )
@@ -929,7 +939,7 @@ if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
         g["Float32"] =
             _axes_dc(_make_cpu_threaded_dc(_AXES_FS), cap, _axes_multiantenna_state(num_ants))
         g["Int16"] = _axes_dc(
-            Tracking.Int16ThreadedDownconvertAndCorrelator(),
+            _make_int16_threaded_dc(2^11),
             cap,
             _axes_multiantenna_state(num_ants),
         )
@@ -963,7 +973,7 @@ if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
             $(1000.0Hz + 0.0Hz), $_AXES_FS, 0.0, 1, $_AXES_NSAMP, $tile_re, $tile_im,
         )
         # Int16 hybrid-blocked kernel, dynamic-shifts (AbstractVector) fallback.
-        dc_i = Tracking.Int16DownconvertAndCorrelator()
+        dc_i = _make_int16_dc(2^11)
         g["Int16"] = @benchmarkable Tracking._int16_hybrid_blocked!(
             $dc_i, $cap, NumAnts{1}(), $_AXES_SIG, 1, $dyn_shifts,
             10.5, 0.0, $code_frequency, $(1000.0Hz + 0.0Hz), $_AXES_FS, 1, $_AXES_NSAMP,
