@@ -233,6 +233,19 @@ import Tracking
             ),
             0.5,
         )
+
+        # The optional third argument additionally divides out the code amplitude
+        # (`GNSSSignals.get_code_amplitude`), so a multi-level (CBOC) correlator lands on
+        # the same unit-power scale as a ±1 one. Divisor is integrated_samples · amplitude.
+        correlator = EarlyPromptLateCorrelator(
+            SVector(20.0 + 0.0im, 20.0 + 0.0im, 20.0 + 0.0im),
+            0.5,
+        )
+        normalized_correlator = @inferred normalize(correlator, 10, 20.0)
+        @test normalized_correlator ==
+              EarlyPromptLateCorrelator(SVector(0.1 + 0.0im, 0.1 + 0.0im, 0.1 + 0.0im), 0.5)
+        # Default code amplitude of 1 leaves the 2-arg behaviour unchanged.
+        @test normalize(correlator, 10, 1) == normalize(correlator, 10)
     end
 end
 
