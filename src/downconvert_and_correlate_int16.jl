@@ -55,6 +55,18 @@ end
 # (AVX2/AVX-512) only. Other backends use the exact Int32 multiply path.
 const _INT16_HAS_MADDWD = Sys.ARCH in (:x86_64, :i686) && _INT16_W in (32, 64)
 
+# Whether to run the carrier wipe in Int16 (vs. exact Int32). An Int16 wipe halves
+# both the wipe's SIMD op count (8 Int16 lanes per 128-bit register vs. 4 Int32)
+# and the DI/DQ memory traffic, and it lets the code accumulate `Σ codeₓ·DI` use a
+# widening multiply-accumulate: x86 gets the pairwise `vpmaddwd`, and aarch64 gets
+# NEON `SMLAL`/`SMLAL2` — LLVM auto-selects the latter from a `sext(i16)·sext(i16)`
+# accumulate (verified in @code_native), so no intrinsic is needed there. Both need
+# `2·max_meas·amp ≤ typemax(Int16)` (the `a ≥ 1` case in `_int16_choose_carrier`) to
+# keep the wipe from overflowing Int16. On other arches / narrow-SIMD hosts the
+# Int16 wipe would gain nothing (no widening-MAC lowering), so keep the exact Int32
+# path there.
+const _INT16_WIDE_WIPE = _INT16_HAS_MADDWD || Sys.ARCH === :aarch64
+
 # Choose the carrier-replica amplitude (and wipe arithmetic type) from `max_meas`,
 # the caller-declared largest `|real|`/`|imag|` of a measurement sample (e.g. 2^11
 # for a 12-bit ADC). Pick the LARGEST Int16-safe amplitude — the largest `amp` with
@@ -63,10 +75,11 @@ const _INT16_HAS_MADDWD = Sys.ARCH in (:x86_64, :i686) && _INT16_W in (32, 64)
 # `DQ = mᵢ·cos − mᵣ·sin` — two products SUMMED per output — so `|DI| ≤ |mᵣ·cos| +
 # |mᵢ·sin| ≤ 2·max_meas·amp`; sizing against that keeps BOTH the intermediate
 # products and their sum within Int16. Keeping the wipe within Int16 enables the
-# Int16 `vpmaddwd` fast path on x86 and keeps `|DI| ≤ typemax(Int16)`. The wipe TYPE
-# differs by backend (Int16 + vpmaddwd on x86; exact Int32 elsewhere) but the
-# AMPLITUDE is the same — using a larger Int32-only amplitude (the old behaviour)
-# overflowed the accumulator for CBOC on the scalar/NEON path.
+# widening-MAC fast path (`vpmaddwd` on x86, `SMLAL` on aarch64; see
+# `_INT16_WIDE_WIPE`) and keeps `|DI| ≤ typemax(Int16)`. The wipe TYPE differs by
+# backend (Int16 on the wide-wipe arches; exact Int32 elsewhere) but the AMPLITUDE
+# is the same — using a larger Int32-only amplitude (the old behaviour) overflowed
+# the accumulator for CBOC on the scalar path.
 #
 # `max_meas` is a required positional argument of both constructors (no default):
 # under-declaring it silently overflows the Int16 wipe and corrupts the correlation
@@ -88,7 +101,7 @@ const _INT16_HAS_MADDWD = Sys.ARCH in (:x86_64, :i686) && _INT16_W in (32, 64)
 function _int16_choose_carrier(max_meas::Integer)
     a = Int(typemax(Int16)) ÷ (2 * Int(max_meas))
     a >= 1 || return (Int(typemax(Int8)), Int32)
-    (min(a, Int(typemax(Int8))), _INT16_HAS_MADDWD ? Int16 : Int32)
+    (min(a, Int(typemax(Int8))), _INT16_WIDE_WIPE ? Int16 : Int32)
 end
 
 # Largest multi-level code sub-carrier magnitude the correlate accumulate must
@@ -460,6 +473,10 @@ end
     W = _INT16_W
     TI = dc.parameters[2]              # carrier-wipe element type, per backend instance
     use_madd = _INT16_HAS_MADDWD && TI === Int16
+    # aarch64 Int16-wipe accumulate: widen code+DI to Int32 and MAC — LLVM lowers
+    # the `sext(i16)·sext(i16)` accumulate to NEON `SMLAL`/`SMLAL2` (no pairwise
+    # pre-sum, so `AW = W`, unlike x86's `vpmaddwd`).
+    use_smlal = TI === Int16 && !use_madd
     AW = use_madd ? W ÷ 2 : W          # vpmaddwd pre-sums adjacent pairs → W÷2
     MT = TI === Int16 ? Int16 : Int32  # meas/wipe SIMD element type
     cc_load =
@@ -501,6 +518,15 @@ end
                         codew = _wide16(vload(SIMD.Vec{$W,Int8}, extb, n + $offk))
                         $aI += _maddacc(codew, DI)
                         $aQ += _maddacc(codew, DQ)
+                    end,
+                )
+            elseif use_smlal
+                push!(
+                    chunk.args,
+                    quote
+                        codew = _wide16(vload(SIMD.Vec{$W,Int8}, extb, n + $offk))
+                        $aI += _wide32(codew) * _wide32(DI)
+                        $aQ += _wide32(codew) * _wide32(DQ)
                     end,
                 )
             else
@@ -671,9 +697,16 @@ end
             aQ = zero(SIMD.Vec{W,Int32})
             n = 1
             while n + W - 1 <= len
+                # When the tile is Int16 (wide-wipe arches) widen code through Int16
+                # so the `sext(i16)·sext(i16)` MAC lowers to NEON SMLAL; the `TIw`
+                # branch is a compile-time constant. Int32 tiles keep the exact path.
+                if TIw === Int16
+                    codev = _wide32(_wide16(vload(SIMD.Vec{W,Int8}, extb, n + offk)))
+                else
+                    codev = _wide32(vload(SIMD.Vec{W,Int8}, extb, n + offk))
+                end
                 DI = _wide32(vload(SIMD.Vec{W,TIw}, dib, toff + n))
                 DQ = _wide32(vload(SIMD.Vec{W,TIw}, dqb, toff + n))
-                codev = _wide32(vload(SIMD.Vec{W,Int8}, extb, n + offk))
                 aI += codev * DI
                 aQ += codev * DQ
                 n += W
@@ -910,6 +943,7 @@ end
     W = _INT16_W
     TI = dc.parameters[2]              # carrier-wipe element type, per backend instance
     use_madd = _INT16_HAS_MADDWD && TI === Int16
+    use_smlal = TI === Int16 && !use_madd   # aarch64 widening MAC (SMLAL); see the single-signal kernel
     AW = use_madd ? W ÷ 2 : W
     N = length(all_shifts.parameters)
     NCs = [length(all_shifts.parameters[i]) for i = 1:N]
@@ -982,6 +1016,15 @@ end
                             codew = _wide16(vload(SIMD.Vec{$W,Int8}, extb, n + $offk))
                             $aI += _maddacc(codew, DI)
                             $aQ += _maddacc(codew, DQ)
+                        end,
+                    )
+                elseif use_smlal
+                    push!(
+                        chunk.args,
+                        quote
+                            codew = _wide16(vload(SIMD.Vec{$W,Int8}, extb, n + $offk))
+                            $aI += _wide32(codew) * _wide32(DI)
+                            $aQ += _wide32(codew) * _wide32(DQ)
                         end,
                     )
                 else
