@@ -80,9 +80,12 @@ define i64 @entry(<64 x i16> %v) #0 { %c = icmp slt <64 x i16> %v, zeroinitializ
     nothing
 end
 
-# Derive Early/Late tap planes from the prompt-extended plane by a funnel bit-shift, instead of a
-# separate movemask per tap: `dst[w] = pe[w+off]` in bit terms (off < 64). One movemask of the
-# whole code block then feeds all NC taps.
+# Derive each tap plane from the prompt-extended plane by a funnel bit-shift, instead of a
+# separate movemask per tap: `dst[w] = pe[w+off]` in bit terms, for ANY `off ≥ 0`. One movemask
+# of the whole code block then feeds all NC taps. `off` splits into a whole-word shift
+# `wsh = off ÷ 64` and a sub-word shift `bit = off mod 64`; a tap output word combines source
+# words `pe[w+wsh]` and `pe[w+wsh+1]`. The caller must size/zero `pe` so `pe[nwb+wsh+1]` is a
+# valid (zero) pad word (see the per-kernel `pepad`).
 @inline function _ob_shift_plane!(
     dst::Vector{UInt64},
     doff::Int,
@@ -90,15 +93,17 @@ end
     off::Int,
     nwb::Int,
 )
-    if off == 0
+    wsh = off >> 6
+    bit = off & 63
+    if bit == 0
         @inbounds for w = 1:nwb
-            dst[doff+w] = pe[w]
+            dst[doff+w] = pe[w+wsh]
         end
     else
-        lo = off;
-        hi = 64 - off
+        lo = bit;
+        hi = 64 - bit
         @inbounds for w = 1:nwb
-            dst[doff+w] = (pe[w] >> lo) | (pe[w+1] << hi)
+            dst[doff+w] = (pe[w+wsh] >> lo) | (pe[w+wsh+1] << hi)
         end
     end
     nothing
@@ -428,7 +433,8 @@ const _OneBitDC =
         blk = dc.blk
         wpb = cld(blk, 64)                          # words per block plane
         wpbv = cld(wpb, _OB_VW) * _OB_VW            # …padded to a whole number of VW chunks
-        pewords = cld(blk + span, 64) + _OB_VW      # extended prompt plane (+1 word for the shift)
+        pepad = (span >> 6) + 1                     # zero pad words the funnel shift reads past nwe
+        pewords = cld(blk + span, 64) + pepad + _OB_VW   # extended prompt plane + funnel pad
         length(bufs.extb) < blk + span + 64 && resize!(bufs.extb, blk + span + 64)
         length(bufs.peb) < pewords && resize!(bufs.peb, pewords)
         length(bufs.sinw) < wpbv && resize!(bufs.sinw, wpbv)
@@ -463,7 +469,9 @@ const _OneBitDC =
             )
             nwe = cld(len + span, 64)
             _ob_pack_code!(peb, 0, extb, 0, nwe, (len + span) & 63)
-            peb[nwe+1] = 0                              # the funnel shift reads one word past nwb
+            for _pw = 1:pepad                           # zero the words the funnel shift reads past nwe
+                peb[nwe+_pw] = 0
+            end
             $(Expr(
                 :block,
                 (
@@ -610,7 +618,8 @@ function _onebit_hybrid_blocked!(
     blk = dc.blk
     wpb = cld(blk, 64)
     wpbv = cld(wpb, _OB_VW) * _OB_VW
-    pewords = cld(blk + span, 64) + _OB_VW
+    pepad = (span >> 6) + 1                     # zero pad words the funnel shift reads past nwe
+    pewords = cld(blk + span, 64) + pepad + _OB_VW
     length(bufs.extb) < blk + span + 64 && resize!(bufs.extb, blk + span + 64)
     length(bufs.peb) < pewords && resize!(bufs.peb, pewords)
     length(bufs.sinw) < wpbv && resize!(bufs.sinw, wpbv)
@@ -648,7 +657,9 @@ function _onebit_hybrid_blocked!(
         )
         nwe = cld(len + span, 64)
         _ob_pack_code!(peb, 0, extb, 0, nwe, (len + span) & 63)
-        peb[nwe+1] = 0
+        for _pw = 1:pepad
+            peb[nwe+_pw] = 0
+        end
         for k = 1:NC
             _ob_shift_plane!(codeb, (k - 1) * wpbv, peb, offs[k], nwb)
             _ob_finish!(codeb, (k - 1) * wpbv, nwb, nwv, r)
@@ -908,7 +919,11 @@ end
             b.args,
             :(_ob_pack_code!(peb, 0, extb, 0, nwe, (len + $(Symbol("span_$i"))) & 63)),
         )
-        push!(b.args, :(peb[nwe+1] = 0))
+        push!(b.args, :(
+            for _pw = 1:(($(Symbol("span_$i"))>>6)+1)   # zero the funnel-shift read pad
+                peb[nwe+_pw] = 0
+            end
+        ))
         for k = 1:NCs[i]
             push!(
                 b.args,
@@ -1005,7 +1020,7 @@ end
         blk = dc.blk
         wpb = cld(blk, 64)
         wpbv = cld(wpb, _OB_VW) * _OB_VW
-        pewords = cld(blk + maxspan_v, 64) + _OB_VW
+        pewords = cld(blk + maxspan_v, 64) + (maxspan_v >> 6) + 1 + _OB_VW   # + funnel-shift pad
         length(bufs.extb) < blk + maxspan_v + 64 && resize!(bufs.extb, blk + maxspan_v + 64)
         length(bufs.peb) < pewords && resize!(bufs.peb, pewords)
         length(bufs.sinw) < wpbv && resize!(bufs.sinw, wpbv)
