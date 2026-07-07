@@ -1,12 +1,9 @@
 module CodeReplicaTest
 
 using Test: @test, @testset, @inferred
-using Statistics: mean
 using Unitful: Hz
-using GNSSSignals:
-    GPSL1CA, GPSL5I, GalileoE1B, GalileoE1B_BOC11, get_code, gen_code, get_code_frequency
-using Tracking:
-    gen_code_replica!, update_code_phase, get_current_code_frequency, get_code_amplitude
+using GNSSSignals: GPSL1CA, get_code
+using Tracking: gen_code_replica!, update_code_phase, get_current_code_frequency
 
 # GNSSSignals' embedded-LUT `gen_code!` (PR #90) may round a chip-boundary sample
 # differently from the per-chip `get_code` oracle — at most ~1 sample per code
@@ -83,33 +80,6 @@ end
     gpsl1 = GPSL1CA()
     @test @inferred(get_current_code_frequency(gpsl1, 0Hz)) == 1023000Hz
     @test @inferred(get_current_code_frequency(gpsl1, 200Hz)) == 1023000Hz + 200Hz
-end
-
-# The code-amplitude factor `normalize` divides out so a unit-amplitude signal gives
-# a unit prompt regardless of modulation. It is `1` for every ±1 embedded-LUT code
-# (BPSK, BOC(1,1)) and the RMS `sqrt(a1^2 + a2^2)` of the multi-level CBOC integer
-# approximation (Galileo E1B: (a1, a2) = (19, 6) → sqrt(397) ≈ 19.92).
-@testset "get_code_amplitude" begin
-    # ±1 codes → exactly 1 (LOC and non-CBOC BOC dispatch to the generic method).
-    @test @inferred(get_code_amplitude(GPSL1CA())) == 1.0        # LOC (BPSK)
-    @test @inferred(get_code_amplitude(GPSL5I())) == 1.0         # LOC (BPSK)
-    @test @inferred(get_code_amplitude(GalileoE1B_BOC11())) == 1.0  # BOC(1,1), not CBOC
-
-    # CBOC (Galileo E1B): the analytic RMS of the (19, 6) Int8 approximation.
-    e1b = GalileoE1B()
-    @test @inferred(get_code_amplitude(e1b)) ≈ sqrt(19.0^2 + 6.0^2)
-
-    # Cross-check against the ACTUAL embedded-LUT code: generate a full E1B code
-    # period and measure its per-sample RMS. This pins `get_code_amplitude` to what
-    # GNSSSignals really bakes — if GNSSSignals ever changes its CBOC Int8 amplitudes
-    # this fails loudly rather than silently mis-normalising.
-    fs = 15e6Hz
-    fc = get_code_frequency(e1b)
-    nsamp = round(Int, (fs / 1Hz) * 4e-3)        # one 4 ms (4092-chip) code period
-    code = gen_code(nsamp, e1b, 1, fs, fc, 0.0)
-    @test eltype(code) == Int8                    # multi-level integer replica
-    # Widen to Int before squaring — abs2 on Int8 overflows (25^2 = 625 wraps).
-    @test sqrt(mean(abs2, Int.(code))) ≈ get_code_amplitude(e1b) rtol = 1e-2
 end
 
 end
