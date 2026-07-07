@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.0.2](https://github.com/JuliaGNSS/Tracking.jl/compare/v3.0.1...v3.0.2) (2026-07-07)
+
+
+### Bug Fixes
+
+* **int16:** require max_meas to size the carrier amplitude ([333ccd0](https://github.com/JuliaGNSS/Tracking.jl/commit/333ccd0b9b062254a5d42fe212528fcc3cbed092))
+
 ## [3.0.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v3.0.0...v3.0.1) (2026-07-07)
 
 

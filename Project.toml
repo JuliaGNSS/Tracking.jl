@@ -1,6 +1,6 @@
 name = "Tracking"
 uuid = "10b2438b-ffd4-5096-aa58-44041d5c8f3b"
-version = "3.0.1"
+version = "3.0.2"
 authors = ["Soeren Schoenbrod <soeren.schoenbrod@nav.rwth-aachen.de>", "Michael Niestroj <michael.niestroj@nav.rwth-aachen.de>"]
 
 [deps]
