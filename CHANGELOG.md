@@ -1,5 +1,30 @@
 # Changelog
 
+# [3.1.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v3.0.2...v3.1.0) (2026-07-07)
+
+
+### Bug Fixes
+
+* **bench:** rebuild track! state per sample so the loop can't drift to NaN ([ca4f0d7](https://github.com/JuliaGNSS/Tracking.jl/commit/ca4f0d74c673af917f64bddaccd3e4949e1c484b))
+* **onebit:** adapt to master's get_band_id + required Int16 max_meas ([50b86ff](https://github.com/JuliaGNSS/Tracking.jl/commit/50b86ff8cd5fda3b7ae3baf217d775633920e245))
+* **onebit:** correct tap funnel shift for sample-shift offset ≥ 64 ([2f7998c](https://github.com/JuliaGNSS/Tracking.jl/commit/2f7998cf08d7ce503ef16c2470a05a7e2c40cbb1))
+* **onebit:** gate on modulation, not code element type, to reject CBOC ([1e92533](https://github.com/JuliaGNSS/Tracking.jl/commit/1e92533a20dd1b1f63cfe88f16528075f2b5ec82))
+* **onebit:** gate shared-measurement packing to >1 sat (no single-sat regression) ([0280dd7](https://github.com/JuliaGNSS/Tracking.jl/commit/0280dd7fa41eafcdfefb8b615b20e4190f9081ad)), closes [#1](https://github.com/JuliaGNSS/Tracking.jl/issues/1) [3/#4](https://github.com/JuliaGNSS/Tracking.jl/issues/4)
+
+
+### Features
+
+* one-bit (bit-wise) downconvert + correlate backend ([e5f3eaa](https://github.com/JuliaGNSS/Tracking.jl/commit/e5f3eaaafa695b6e10c83921716ebf42e87ca8ed)), closes [#69](https://github.com/JuliaGNSS/Tracking.jl/issues/69) [90/#69](https://github.com/JuliaGNSS/Tracking.jl/issues/69)
+* **onebit:** dynamic (runtime tap-count) correlator support ([e84e3eb](https://github.com/JuliaGNSS/Tracking.jl/commit/e84e3eb5195f9a0731bbc74b6ffb94ffb15e2e95)), closes [#126](https://github.com/JuliaGNSS/Tracking.jl/issues/126)
+
+
+### Performance Improvements
+
+* **onebit:** multi-signal-per-sat carrier+measurement tile-share ([f7a329e](https://github.com/JuliaGNSS/Tracking.jl/commit/f7a329ef64f336a75be1c89a48fc968b4a627e44))
+* **onebit:** pack measurement sign planes once per band, share across sats ([3b1f53b](https://github.com/JuliaGNSS/Tracking.jl/commit/3b1f53ba59d3803b904360fa6bbe671afcbf3235))
+* **onebit:** real multi-signal-per-sat carrier+measurement tile-share ([0ec6722](https://github.com/JuliaGNSS/Tracking.jl/commit/0ec67225453c5d9614ab9a783102b502e050ee3a))
+* **onebit:** SIMD VPOPCNTQ correlation + pack-once code plane ([21ad38d](https://github.com/JuliaGNSS/Tracking.jl/commit/21ad38d683b241391b818d2918d96b5fe511174d))
+
 ## [3.0.2](https://github.com/JuliaGNSS/Tracking.jl/compare/v3.0.1...v3.0.2) (2026-07-07)
 
 
