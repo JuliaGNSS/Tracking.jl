@@ -748,9 +748,14 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
     end
 
     @testset "2-bit SNR vs Float32 and one-bit: tracking jitter and C/N0" begin
-        # At a fixed 45 dB-Hz C/N0, all backends lock the same true Doppler; the two-bit
-        # backend's C/N0 estimate sits between Float32 (no loss) and one-bit (≈3 dB loss),
-        # and its jitter is at most the one-bit backend's. Fixed seed → deterministic.
+        # At a fixed 45 dB-Hz C/N0, all backends lock the same true Doppler; the losses
+        # show up as C/N0-estimate bias and Doppler jitter. Measured over 8 seeds (at 45
+        # and 40 dB-Hz alike): one-bit loses ≈2.8–2.9 dB of C/N0, two-bit only ≈0.85 dB
+        # (theory: 0.55 dB from the 2-bit measurement + 0.25 dB from the 2-bit carrier)
+        # — a ≈2 dB recovery; Doppler jitter ≈1.55× Float32 for one-bit vs ≈1.16× for
+        # two-bit. Pin the *bounded* degradation and the ≥1 dB recovery over one-bit
+        # with a fixed seed (this seed measures: two-bit loss 0.74 dB, one-bit loss
+        # 2.76 dB, recovery 2.02 dB, jitter ratio 1.15×), not exact numbers.
         cn0_in = 45.0
         f = _track_noisy(CPUThreadedDownconvertAndCorrelator(), cn0_in, 1234)
         b1 = _track_noisy(OneBitThreadedDownconvertAndCorrelator(), cn0_in, 1234)
@@ -765,13 +770,14 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
 
         # two-bit jitter: worse than Float32 but bounded, and no worse than one-bit
         jitter_ratio = _std(b2.dopplers) / _std(f.dopplers)
-        @test 1.0 < jitter_ratio < 2.5
+        @test 1.0 < jitter_ratio < 2.0
         @test _std(b2.dopplers) <= _std(b1.dopplers) * 1.1
 
-        # C/N0 estimate: biased low by ≲1.5 dB (vs ≈2.5–3 dB for one-bit)
+        # C/N0 estimate: biased low by ≲1.5 dB (vs ≈2.5–3 dB for one-bit), recovering
+        # at least 1 dB of the one-bit backend's quantisation loss
         @test b2.cn0 < f.cn0
-        @test (f.cn0 - b2.cn0) < 1.8
-        @test b2.cn0 > b1.cn0
+        @test (f.cn0 - b2.cn0) < 1.5
+        @test (b2.cn0 - b1.cn0) > 1.0
     end
 
     @testset "full track converges (GPS L1 C/A)" begin
