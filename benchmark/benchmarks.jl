@@ -986,3 +986,42 @@ if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
         )
     end
 end
+
+# ── Int16 / OneBit `track!` in the base-vs-head regression table ───────────────
+# The `track! Int16 vs Float32` group above is rendered head-only (a Float32-relative
+# table), so it can't reveal an Int16/OneBit *kernel* speedup against the base branch.
+# Register a few `track!` benchmarks with those backends under the plain `track` group
+# instead: `bench_table.jl` diffs every non-`track! Int16 vs Float32` leaf base-vs-head,
+# so these land in the regression table next to the Float32 `track!` rows and a backend
+# speedup shows directly. Unlike a new *table* group, this needs no `bench_table.jl`
+# change — the base ref's script (which the workflow runs) already diffs this group. Same
+# rebuild-state-per-eval pattern as the head-to-head group (random samples drift `track!`
+# to a NaN doppler otherwise).
+if isdefined(Tracking, :Int16DownconvertAndCorrelator) && isdefined(Tracking, :track!)
+    for (key, systems, nsats_list, sfreq, nsamp, prn_max, onebit) in (
+        ("2. L1 8sat/5K", (GPSL1CA(),), [8], 5e6Hz, 5000, 32, true),
+        ("3. E1B 4sat/25K", (GalileoE1B(),), [4], 25e6Hz, 25000, 50, false),
+    )
+        sig16 = _int16_capture(nsamp)
+        dc_i = _make_int16_dc(2^11)   # max_meas = 2^11 matches _int16_capture's ±2048
+        SUITE["track"]["$key – track! Int16"] = @benchmarkable(
+            Tracking.track!($sig16, ts, $sfreq; downconvert_and_correlator = $dc_i),
+            setup = (ts = first(_make_steady_state_track_state(;
+                systems = $systems, nsats_list = $nsats_list, nsamp = $nsamp,
+                prn_max = $prn_max, code_dop = 100.0,
+            ))),
+            evals = 1,
+        )
+        if onebit && isdefined(Tracking, :OneBitDownconvertAndCorrelator)
+            dc_b = Tracking.OneBitDownconvertAndCorrelator()
+            SUITE["track"]["$key – track! OneBit"] = @benchmarkable(
+                Tracking.track!($sig16, ts, $sfreq; downconvert_and_correlator = $dc_b),
+                setup = (ts = first(_make_steady_state_track_state(;
+                    systems = $systems, nsats_list = $nsats_list, nsamp = $nsamp,
+                    prn_max = $prn_max, code_dop = 100.0,
+                ))),
+                evals = 1,
+            )
+        end
+    end
+end
