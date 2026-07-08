@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.1.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v3.1.0...v3.1.1) (2026-07-08)
+
+
+### Performance Improvements
+
+* **int16:** NEON SMLAL widening accumulate on aarch64 ([9394948](https://github.com/JuliaGNSS/Tracking.jl/commit/9394948975603e70bdb729aba89ea5823ccdf223))
+* **onebit:** faster NEON sign-mask via addp tree on aarch64 ([dd3d599](https://github.com/JuliaGNSS/Tracking.jl/commit/dd3d5995f8137c1ea104eefdf7e03a3e08bafa9e))
+
 # [3.1.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v3.0.2...v3.1.0) (2026-07-07)
 
 
