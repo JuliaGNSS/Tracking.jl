@@ -635,11 +635,17 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         end
     end
 
-    @testset "band-shared measurement (>1 sat) matches per-sat packing" begin
+    @testset "band-shared measurement (>1 sat) matches per-sat packing @ $(fs/1e6Hz) MHz" for fs in
+                                                                                              (
+        5e6Hz,      # small capture → serial band pack
+        40e6Hz,     # ≥ _TB_BAND_PAR_MIN full words → the band pack itself runs threaded
+    )
         # ≥2 sats on one band trip the pack-measurement-once-per-band path
         # (`_tb_pack_band!` + per-sat `_tb_realign_meas!`, sign AND magnitude planes);
-        # each sat's correlator must exactly equal correlating that PRN alone.
-        sig, fs = GPSL1CA(), 5e6Hz
+        # each sat's correlator must exactly equal correlating that PRN alone (which
+        # packs directly, always serially) — for the threaded backend this also pins
+        # the chunked threaded band pack against the serial one.
+        sig = GPSL1CA()
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
         meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
