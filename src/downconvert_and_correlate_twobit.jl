@@ -398,15 +398,7 @@ function _tb_pack_band!(
         # Bundle the loop parameters into ONE isbits capture: Polyester passes captured
         # variables through a fixed-size task buffer, and past a handful of captures it
         # falls back to a true-closure `@cfunction` — unsupported on aarch64 (NEON).
-        prm = (;
-            per = cld(full, nch),
-            full,
-            M,
-            stride,
-            num_rows,
-            moff,
-            mlim,
-        )
+        prm = (; per = cld(full, nch), full, M, stride, num_rows, moff, mlim)
         @batch for c = 1:nch
             wlo = (c - 1) * prm.per
             whi = min(c * prm.per, prm.full) - 1
