@@ -1,6 +1,7 @@
 module TrackInPlaceTest
 
 using Test: @test, @testset
+using Random: MersenneTwister
 using Unitful: Hz
 using GNSSSignals: GPSL1CA, gen_code, get_code_center_frequency_ratio, get_code_frequency
 
@@ -143,6 +144,56 @@ end
         @test measure_dc!(dc, signal, track_state, sampling_frequency) == 0
     else
         @test measure_dc!(dc, signal, track_state, sampling_frequency) <= 1024
+    end
+end
+
+# Acquisition (pre-sync) allocation guard. Before bit sync, `track!` runs the
+# per-code-block bit-edge search (`_buffer_find_bit`) once per code block. A
+# regression there — e.g. a closure-capture `Core.Box` + boxed `SyncResult`
+# (~80 B/block) — makes `track!` allocate in proportion to the signal length
+# instead of staying allocation-free after the first (buffer-seating) call. The
+# per-stage test above does NOT catch it: it tracks a real signal that reaches
+# bit sync within the warmup, so by the time it measures it exercises only the
+# post-sync path, where `_buffer_find_bit` is no longer called.
+#
+# Feed noise instead — its prompts never form a consistent energy peak, so the
+# CFAR bit-edge detector never locks and the pre-sync search runs on every code
+# block. After one warmup call (which seats the per-satellite buffers), a warm
+# call must allocate nothing, at any signal length. Measuring both a short and a
+# long chunk makes a per-block leak fail loudly: with the box it allocated ~80 B
+# per block (160 B at 2 blocks, 1600 B at 20), so the 20-block assertion below
+# would have caught it. Single-threaded backend so the assertion is a clean
+# `== 0` (the threaded backend keeps a small Polyester residual — see above).
+#
+# Gated to Julia ≥ 1.11. On 1.10 the compiler leaves a per-block allocation in
+# the pre-sync soft-bit path (~770 B/block — measured 2144 B at 2 blocks vs
+# 15968 B at 20; unrelated to the box, which was ~80 B/block) that 1.11+ elides,
+# so `== 0` only holds on 1.11+. The box regression this guards against still
+# shows up on 1.11+ (and in the benchmark suite's memory table, which runs on
+# the release Julia), so the guard is not lost.
+if VERSION >= v"1.11"
+    @testset "track! is allocation-free during acquisition (pre-sync bit search)" begin
+        sampling_frequency = 5e6Hz
+        samples_per_block = 5000               # 1 ms GPS L1CA code period @ 5 MHz
+        # Build a fresh pre-sync tracker, warm it once, then measure one more call.
+        # `nblocks` sets the chunk length (and thus the pre-sync loop-iteration
+        # count); the RNG is seeded per length so the signal is deterministic.
+        function measure_track_alloc(nblocks)
+            gpsl1 = GPSL1CA()
+            track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 10.5, 1000.0Hz)])
+            dc = CPUDownconvertAndCorrelator()
+            signal = rand(MersenneTwister(nblocks), ComplexF32, samples_per_block * nblocks)
+            call() = track!(
+                signal,
+                track_state,
+                sampling_frequency;
+                downconvert_and_correlator = dc,
+            )
+            call()                             # warmup: seat buffers, compile
+            @allocated call()
+        end
+        @test measure_track_alloc(2) == 0
+        @test measure_track_alloc(20) == 0
     end
 end
 
