@@ -770,6 +770,60 @@ if _HAS_TRACKED_SIGNAL
     end
 end
 
+# ── Multi-code-period allocation guard (track!) ───────────────────────────────
+# `track!`'s inner loop runs once per coherent integration, so a signal spanning
+# many primary-code blocks iterates it many times. The steady-state contract is
+# that `track!` allocates only on its FIRST call (one-time buffer seating) and is
+# per-iteration allocation-free thereafter — so `memory` (in the memory table)
+# must stay flat as the block count grows. A per-iteration allocation — e.g. a
+# closure-capture `Core.Box` / boxed `SyncResult` on the pre-sync bit-edge search
+# path — instead makes `memory` scale with the block count. Registering a short
+# and a long length side by side turns that scaling into a visible jump: with the
+# leak, `20 blk` allocates ~10× the per-iteration bytes of `2 blk`; without it,
+# both sit at the same one-time-seed floor.
+#
+# Two states per length: `presync` (bit not yet found — exercises the
+# per-code-block bit-edge search every iteration, the path that regressed) and
+# `synced` (`bit_buffer.found = true` — the post-sync steady state). To measure
+# the STEADY-STATE (not the one-time-seed) allocation, `setup` builds a fresh
+# state AND warms it with one `track!` call, so the *measured* call is the second
+# call on that state — cold-call buffer seating is already done, and a warm call
+# must be allocation-free at any length. `evals = 1` pins one measured call per
+# sample; with the fresh+warm state rebuilt every sample, tracking these random
+# samples can't drift the loop filter to a NaN across evals (same reasoning as
+# the Int16-vs-Float32 rows above).
+if _HAS_TRACKED_SIGNAL && isdefined(Tracking, :track!)
+    let sfreq = 5e6Hz, gpsl1 = GPSL1CA()
+        samples_per_block = 5000               # 1 ms GPS L1CA code period @ 5 MHz
+        for n_blocks in (2, 20)
+            nsamp = samples_per_block * n_blocks
+            sig = rand(ComplexF32, nsamp)
+            dc = _make_cpu_dc(sfreq)
+            SUITE["track"]["8. L1CA presync $(n_blocks) blk – track!"] = @benchmarkable(
+                Tracking.track!($sig, ts, $sfreq; downconvert_and_correlator = $dc),
+                setup = (
+                    ts = first(_make_multi_sat_state(;
+                        systems = ($gpsl1,), nsats_list = [1], nsamp = $nsamp,
+                    ));
+                    Tracking.track!($sig, ts, $sfreq; downconvert_and_correlator = $dc)
+                ),
+                evals = 1,
+            )
+            SUITE["track"]["8. L1CA synced $(n_blocks) blk – track!"] = @benchmarkable(
+                Tracking.track!($sig, ts, $sfreq; downconvert_and_correlator = $dc),
+                setup = (
+                    ts = first(_make_steady_state_track_state(;
+                        systems = ($gpsl1,), nsats_list = [1], nsamp = $nsamp,
+                        prn_max = 32, code_dop = 1000.0,
+                    ));
+                    Tracking.track!($sig, ts, $sfreq; downconvert_and_correlator = $dc)
+                ),
+                evals = 1,
+            )
+        end
+    end
+end
+
 # ── Int16 vs Float32 backend, full track! ─────────────────────────────────────
 # Head-to-head of the Float32 default (CPUThreadedDownconvertAndCorrelator) and
 # the integer Complex{Int16} backend (Int16ThreadedDownconvertAndCorrelator)
