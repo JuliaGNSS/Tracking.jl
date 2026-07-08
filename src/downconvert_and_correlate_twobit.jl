@@ -395,20 +395,31 @@ function _tb_pack_band!(
     full = fld(num_samples, 64)
     if threaded && M * full >= _TB_BAND_PAR_MIN
         nch = min(Threads.nthreads(), cld(M * full, _TB_BAND_PAR_MIN))
-        per = cld(full, nch)
+        # Bundle the loop parameters into ONE isbits capture: Polyester passes captured
+        # variables through a fixed-size task buffer, and past a handful of captures it
+        # falls back to a true-closure `@cfunction` — unsupported on aarch64 (NEON).
+        prm = (;
+            per = cld(full, nch),
+            full,
+            M,
+            stride,
+            num_rows,
+            moff,
+            mlim,
+        )
         @batch for c = 1:nch
-            wlo = (c - 1) * per
-            whi = min(c * per, full) - 1
-            for j = 1:M
+            wlo = (c - 1) * prm.per
+            whi = min(c * prm.per, prm.full) - 1
+            for j = 1:prm.M
                 _tb_pack_band_words!(
                     band,
                     p_sig,
-                    (j - 1) * stride,
-                    (j - 1) * num_rows,
+                    (j - 1) * prm.stride,
+                    (j - 1) * prm.num_rows,
                     wlo,
                     whi,
-                    moff,
-                    mlim,
+                    prm.moff,
+                    prm.mlim,
                 )
             end
         end
