@@ -45,3 +45,5 @@ For usage examples and detailed documentation, see the [stable docs](https://Jul
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+<!-- ci probe (temporary): does base pass Julia 1.10 with today's deps? -->
