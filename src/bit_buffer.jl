@@ -860,12 +860,18 @@ function _buffer_find_bit(
         div(code_block_buffer_length, num_code_blocks_that_form_a_bit),
         div(sizeof(code_block_buffer) * 8, num_code_blocks_that_form_a_bit),
     )
+    # Hoist the one field the closure needs (`sync.polarity`) into a plain
+    # local so the closure below does not capture `sync` itself. `sync` is
+    # assigned in two branches above (the soft vs. hard detector), and
+    # capturing a variable that is assigned in more than one place forces
+    # Julia to box it: a per-call `Core.Box` plus heap-boxing of each
+    # `SyncResult`. That fires on every code block until sync, so it shows up
+    # as a per-code-block allocation on the pre-sync hot path (~80 B/block),
+    # making `track!` allocate in proportion to the signal length instead of
+    # staying allocation-free after warmup. Capturing the plain `Int` keeps
+    # `sync` unboxed.
+    sync_polarity = Int(sync.polarity)
     bits = reduce(num_bits:-1:1; init = UInt128(0)) do bits, bit_index
-        # Don't shadow the outer `integrated_code_blocks` argument here:
-        # because this closure reassigns its own local of the same name,
-        # Julia conservatively boxes the outer parameter even though this
-        # closure path does not always run, leading to a per-call
-        # Core.Box allocation.
         # Apply the lock polarity to the buffered pre-sync bits as well, so
         # they map symbol levels to bit values the same way as every
         # post-sync bit (which is sign-flipped via `bit_buffer.polarity` in
@@ -876,7 +882,7 @@ function _buffer_find_bit(
                 buffer_code_block_index =
                     (bit_index - 1) * num_code_blocks_that_form_a_bit + code_block_index
                 ((code_block_buffer & (one(B) << buffer_code_block_index)) > 0) * 2 - 1
-            end * Int(sync.polarity)
+            end * sync_polarity
         # The pre-sync window only stores prompt signs, so `bit_sum` is a
         # ±1-per-block vote count (already polarity-corrected above). Scale it
         # by the sync-time prompt magnitude (the best available amplitude
