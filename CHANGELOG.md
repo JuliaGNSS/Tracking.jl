@@ -1,5 +1,22 @@
 # Changelog
 
+# [3.2.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v3.1.1...v3.2.0) (2026-07-08)
+
+
+### Bug Fixes
+
+* **twobit:** keep the threaded band pack off Polyester's closure fallback ([f453bbf](https://github.com/JuliaGNSS/Tracking.jl/commit/f453bbfdef7d01f2be629f7b02529e1826b73404))
+
+
+### Features
+
+* **tracking:** two-bit downconvert + correlate on SinCosLUT's native 2-bit NCO ([732d61c](https://github.com/JuliaGNSS/Tracking.jl/commit/732d61cd758a5d5a9b2db7d42635447b711eabdb)), closes [#162](https://github.com/JuliaGNSS/Tracking.jl/issues/162) [#160](https://github.com/JuliaGNSS/Tracking.jl/issues/160)
+
+
+### Performance Improvements
+
+* **twobit:** NEON addp-tree lowering for the sign and magnitude masks ([213ece9](https://github.com/JuliaGNSS/Tracking.jl/commit/213ece9729dd10fa6b906fdb88f3abcea8dd8650))
+
 ## [3.1.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v3.1.0...v3.1.1) (2026-07-08)
 
 
