@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v3.2.0...v3.2.1) (2026-07-08)
+
+
+### Performance Improvements
+
+* **bit-buffer:** fix pre-sync per-code-block allocation in _buffer_find_bit ([a892769](https://github.com/JuliaGNSS/Tracking.jl/commit/a8927694793220cc8f71bf4ba796e002987e7e0e))
+
 # [3.2.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v3.1.1...v3.2.0) (2026-07-08)
 
 
