@@ -855,6 +855,19 @@ if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
                 evals = 1,
             )
         end
+        # Two-bit (sign+magnitude bit-wise) backend, same capture and BPSK-only gate.
+        if isdefined(Tracking, :TwoBitThreadedDownconvertAndCorrelator) &&
+           !(first(systems) isa GalileoE1B)
+            dc_t = Tracking.TwoBitThreadedDownconvertAndCorrelator()
+            g["TwoBit"] = @benchmarkable(
+                Tracking.track!($sig16, ts, $sfreq; downconvert_and_correlator = $dc_t),
+                setup = (ts = first(_make_steady_state_track_state(;
+                    systems = $systems, nsats_list = $nsats_list, nsamp = $nsamp,
+                    prn_max = $prn_max, code_dop = 100.0,
+                ))),
+                evals = 1,
+            )
+        end
     end
 end
 
@@ -932,6 +945,13 @@ if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
             cap,
             _axes_multisignal_state(n_signals),
         )
+        if isdefined(Tracking, :TwoBitThreadedDownconvertAndCorrelator)
+            g["TwoBit"] = _axes_dc(
+                Tracking.TwoBitThreadedDownconvertAndCorrelator(),
+                cap,
+                _axes_multisignal_state(n_signals),
+            )
+        end
     end
     for num_ants in (4,)
         cap = _int16_capture_mat(_AXES_NSAMP, num_ants)
@@ -948,6 +968,13 @@ if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
             cap,
             _axes_multiantenna_state(num_ants),
         )
+        if isdefined(Tracking, :TwoBitThreadedDownconvertAndCorrelator)
+            g["TwoBit"] = _axes_dc(
+                Tracking.TwoBitThreadedDownconvertAndCorrelator(),
+                cap,
+                _axes_multiantenna_state(num_ants),
+            )
+        end
     end
 
     # dynamic (runtime AbstractVector) tap count — kernel level, all three backends.
@@ -984,6 +1011,14 @@ if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
             $dc_b, $cap, NumAnts{1}(), $_AXES_SIG, 1, $dyn_shifts,
             10.5, 0.0, $code_frequency, $(1000.0Hz + 0.0Hz), $_AXES_FS, 1, $_AXES_NSAMP,
         )
+        # Two-bit bit-wise kernel, dynamic-shifts (AbstractVector) fallback.
+        if isdefined(Tracking, :TwoBitDownconvertAndCorrelator)
+            dc_t = Tracking.TwoBitDownconvertAndCorrelator()
+            g["TwoBit"] = @benchmarkable Tracking._twobit_hybrid_blocked!(
+                $dc_t, $cap, NumAnts{1}(), $_AXES_SIG, 1, $dyn_shifts,
+                10.5, 0.0, $code_frequency, $(1000.0Hz + 0.0Hz), $_AXES_FS, 1, $_AXES_NSAMP,
+            )
+        end
     end
 end
 

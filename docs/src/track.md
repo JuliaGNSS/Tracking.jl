@@ -100,6 +100,20 @@ the discriminators, C/N0 and bit buffer are ratio-normalised, the coarse amplitu
 is immaterial. Bit-wise correlation is awkward for non-binary modulations, so this
 backend is BPSK-only and errors on CBOC/BOC code types.
 
+Between the two sits [`TwoBitThreadedDownconvertAndCorrelator`](@ref) (and its
+single-threaded sibling [`TwoBitDownconvertAndCorrelator`](@ref)): the same
+bit-plane XOR + popcount machinery, but with a second **magnitude** bit for the
+measurement and the carrier, making both 4-level `{±1, ±3}` quantities (the
+carrier's sign and magnitude bit planes come straight off SinCosLUT's 2-bit NCO).
+That recovers ≈2 dB of the one-bit backend's SNR loss (leaving only ≈0.8 dB vs
+Float32) at roughly Int16 speed — so pick **one-bit** when raw speed matters most,
+**two-bit** when you want near-Int16 sensitivity with the bit-wise memory/layout
+advantages, and **Int16** when quantisation loss must be negligible. The `threshold`
+keyword sets the measurement's magnitude split point in ADC counts (≈1σ of the
+front end's input is the classic near-optimal choice; the default 512 suits a
+properly-AGC'd 12-bit capture). Same scope as one-bit: `Complex{Int16}` samples,
+binary (BPSK) codes only.
+
 ```@docs
 CPUDownconvertAndCorrelator
 CPUThreadedDownconvertAndCorrelator
@@ -107,6 +121,8 @@ Int16DownconvertAndCorrelator
 Int16ThreadedDownconvertAndCorrelator
 OneBitDownconvertAndCorrelator
 OneBitThreadedDownconvertAndCorrelator
+TwoBitDownconvertAndCorrelator
+TwoBitThreadedDownconvertAndCorrelator
 AbstractDownconvertAndCorrelator
 ```
 

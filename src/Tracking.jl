@@ -73,6 +73,8 @@ export get_early,
     Int16ThreadedDownconvertAndCorrelator,
     OneBitDownconvertAndCorrelator,
     OneBitThreadedDownconvertAndCorrelator,
+    TwoBitDownconvertAndCorrelator,
+    TwoBitThreadedDownconvertAndCorrelator,
     ConventionalPLLAndDLL,
     ConventionalAssistedPLLAndDLL,
     DefaultPostCorrFilter,
@@ -218,6 +220,7 @@ include("downconvert_and_correlate_fused.jl")
 include("downconvert_and_correlate_cpu.jl")
 include("downconvert_and_correlate_int16.jl")
 include("downconvert_and_correlate_onebit.jl")
+include("downconvert_and_correlate_twobit.jl")
 include("conventional_pll_and_dll.jl")
 include("tracking_state.jl")
 include("track.jl")
