@@ -90,6 +90,27 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
    both — the mutating version walks each group's
    `satellites.values::Vector{TrackedSat}` and reassigns slots in place.
 
+6. **A [`carrier_doppler_pull_in_range`](@ref) method**, if your estimator
+   is meant to accept freshly-acquired satellites. It reports the largest
+   absolute carrier-Doppler error a satellite handed over from acquisition
+   can carry and still be pulled into carrier lock:
+
+   ```julia
+   Tracking.carrier_doppler_pull_in_range(::MyEstimator, signal) = ...  # a frequency in Hz
+   ```
+
+   It is given the estimator (its carrier-loop configuration) and the
+   estimator-driver signal. Rather than assume a fixed integration length,
+   it should derive the start-of-tracking coherent integration time via
+   `handover_coherent_integration_time` — which asks the same machinery the
+   loop uses (`calc_num_code_blocks_to_integrate` in the pre-sync state) — so
+   it stays correct if the pre-sync integration policy changes, and needs only
+   the signal. A GNSS receiver uses this to pick the smallest
+   Acquisition.jl coherent integration time whose Doppler resolution still
+   lands every acquired satellite inside the loop's pull-in range. The
+   conventional FLL-assisted estimator returns `1/(4·T)` — the range over
+   which its FLL `atan` discriminator is unambiguous.
+
 ## Skeleton
 
 The skeleton below is the smallest possible working estimator: every
@@ -177,4 +198,5 @@ estimator the `TrackState` was built with.
 AbstractDopplerEstimator
 init_estimator_state
 update_estimator_on_handoff
+carrier_doppler_pull_in_range
 ```

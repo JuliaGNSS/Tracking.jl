@@ -195,6 +195,86 @@ end
 """
 $(SIGNATURES)
 
+Carrier-Doppler pull-in range of the **FLL-assisted** conventional PLL/DLL
+(the [`ConventionalAssistedPLLAndDLL`](@ref) default), whose carrier loop uses a
+`ThirdOrderAssistedBilinearLF`.
+
+Pull-in of a frequency (Doppler) error is provided by the FLL discriminator
+`fll_disc`, `atan(cross / dot) / (2π·T)`. Because it is a *two-quadrant*
+`atan`, the carrier phase advanced between the two consecutive prompts it
+compares, `Δφ = 2π·Δf·T`, is recovered unambiguously only within `±π/2`. Beyond
+that the discriminator folds and drives the loop the wrong way, so the loop can
+only pull in a Doppler error satisfying `2π·|Δf|·T ≤ π/2`, i.e.
+
+```
+|Δf| ≤ 1 / (4·T)
+```
+
+where `T` is the start-of-tracking coherent integration time from
+`handover_coherent_integration_time`. As long as the pre-sync search
+integrates single code blocks, `T` is one primary-code period and this gives
+250 Hz for GPS L1 C/A and GPS L5I (T = 1 ms), 62.5 Hz for Galileo E1B (T = 4 ms),
+and 25 Hz for GPS L1C-D / L1C-P (T = 10 ms) — but should that policy change, the
+pull-in range follows automatically.
+"""
+function carrier_doppler_pull_in_range(
+    ::ConventionalPLLAndDLL{<:ThirdOrderAssistedBilinearLF},
+    signal::AbstractGNSSSignal,
+)
+    T = handover_coherent_integration_time(signal)
+    # FLL atan(cross/dot) is unambiguous over ±π/2 of inter-prompt phase
+    # (2π·Δf·T ≤ π/2) → pull-in = 1 / (4·T).
+    uconvert(Hz, 1 / (4 * T))
+end
+
+"""
+$(SIGNATURES)
+
+Approximate carrier-Doppler pull-in range of a **pure-PLL** conventional
+PLL/DLL — any [`ConventionalPLLAndDLL`](@ref) whose carrier loop filter is *not*
+FLL-assisted (i.e. not a `ThirdOrderAssistedBilinearLF`).
+
+A pure PLL has no frequency discriminator: `pll_disc` measures phase, whose
+loop-averaged response to a constant Doppler offset is zero, so there is no
+static frequency pull-in like the FLL-assisted case. Pull-in instead happens
+through the loop's transient dynamics and is governed by the carrier loop
+bandwidth `B_L`. This returns the *fast lock-in* approximation (Gardner,
+"Phaselock Techniques"; Best, "Phase-Locked Loops") — the offset a 2nd/3rd-order
+loop locks within roughly one beat cycle:
+
+```
+|Δf| ≈ min(B_L, 1 / (2·T))
+```
+
+`B_L` is the estimator's `carrier_loop_filter_bandwidth`, or — when that is
+`nothing` (auto) — [`default_carrier_loop_filter_bandwidth`](@ref) for `signal`,
+matching how [`init_estimator_state`](@ref) seeds each satellite. It is
+referenced to one primary-code period, which is exactly the pre-sync integration
+length, so no `1/N` scaling applies at handover. The result is capped by the
+coherent-integration decorrelation limit `1/(2·T)` (`T` = start-of-tracking
+integration time): beyond that the prompt correlation nulls out regardless of
+loop bandwidth.
+
+This is an order-of-magnitude estimate, not the crisp discriminator bound of the
+FLL-assisted method above. Slow "pull-in" (as opposed to fast lock-in) can
+acquire larger offsets given many loop time constants; for robust wide-range
+fresh-acquisition lock prefer [`ConventionalAssistedPLLAndDLL`](@ref).
+"""
+function carrier_doppler_pull_in_range(
+    estimator::ConventionalPLLAndDLL{CA},
+    signal::AbstractGNSSSignal,
+) where {CA<:AbstractLoopFilter}
+    B_L = something(
+        estimator.carrier_loop_filter_bandwidth,
+        default_carrier_loop_filter_bandwidth(signal),
+    )
+    T = handover_coherent_integration_time(signal)
+    uconvert(Hz, min(B_L, 1 / (2 * T)))
+end
+
+"""
+$(SIGNATURES)
+
 Build the per-satellite estimator state stored in a [`TrackedSat`](@ref) for a
 satellite tracked under [`ConventionalPLLAndDLL`](@ref).
 

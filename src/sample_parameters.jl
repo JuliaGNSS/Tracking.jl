@@ -38,6 +38,26 @@ end
 """
 $(SIGNATURES)
 
+Coherent integration time at the acquisition→tracking handover, before any
+bit/secondary-code sync. Asks [`calc_num_code_blocks_to_integrate`](@ref) in the
+pre-sync state (`secondary_code_or_bit_found = false`) and multiplies the
+resulting block count by the primary-code period. In that pre-sync state the
+`preferred_num_code_blocks` argument is not consulted (the bit/secondary search
+always integrates single code blocks), so a placeholder `1` suffices and only the
+signal is needed. This is one primary-code period today, but is derived rather
+than assumed so it tracks any change to the pre-sync integration policy.
+
+Used by Doppler estimators to size their [`carrier_doppler_pull_in_range`](@ref)
+from the start-of-tracking integration length.
+"""
+function handover_coherent_integration_time(signal::AbstractGNSSSignal)
+    num_code_blocks = calc_num_code_blocks_to_integrate(signal, 1, false)
+    num_code_blocks * get_code_length(signal) / get_code_frequency(signal)
+end
+
+"""
+$(SIGNATURES)
+
 Number of primary code blocks to credit the bit-buffer accumulator with for a
 just-completed integration.
 

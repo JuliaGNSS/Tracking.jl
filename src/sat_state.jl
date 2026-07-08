@@ -727,6 +727,39 @@ function init_estimator_state end
 """
 $(SIGNATURES)
 
+Maximum absolute carrier-Doppler error (a frequency, in `Hz`) that a satellite
+handed over from acquisition can carry and still be pulled into carrier lock by
+this Doppler estimator.
+
+Returned one-sided and as a **hard ceiling**: at exactly
+`±carrier_doppler_pull_in_range` the loop sits on the edge of lock with no
+margin. It bounds the tolerable *post-acquisition Doppler residual*, so an
+acquisition Doppler-bin *width* of `2·carrier_doppler_pull_in_range` (whose
+worst-case residual is exactly the ceiling) is the theoretical maximum, **not**
+a safe target — size the bin narrower to leave margin.
+
+This is an extension point a GNSS receiver can use to pick the smallest satellite
+acquisition Doppler resolution required to lock in with the chosen Doppler
+estimator.
+
+**Required interface function**: a custom [`AbstractDopplerEstimator`](@ref) that
+is meant to accept freshly-acquired satellites must define this method for its
+type (unimplemented estimators raise a `MethodError`, as with
+[`init_estimator_state`](@ref)). It is given the estimator (its carrier-loop
+configuration) and the estimator-driver signal, and should derive the
+start-of-tracking coherent integration time from the signal via
+`handover_coherent_integration_time` (which asks the loop's own
+`calc_num_code_blocks_to_integrate` in the pre-sync state), so only the
+signal is needed.
+
+See the [`ConventionalPLLAndDLL`](@ref) methods for the FLL-assisted default
+(a crisp `1/(4·T)` discriminator bound) and the pure-PLL approximation.
+"""
+function carrier_doppler_pull_in_range end
+
+"""
+$(SIGNATURES)
+
 Optionally update an estimator's cross-satellite or cross-system shared state
 when new satellites enter the track set. Called once per handoff entry point
 ([`merge_sats`](@ref), [`add_satellite`](@ref), [`add_satellite!`](@ref))

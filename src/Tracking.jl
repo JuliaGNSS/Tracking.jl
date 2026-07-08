@@ -67,6 +67,7 @@ export get_early,
     AbstractDopplerEstimator,
     init_estimator_state,
     update_estimator_on_handoff,
+    carrier_doppler_pull_in_range,
     CPUDownconvertAndCorrelator,
     CPUThreadedDownconvertAndCorrelator,
     Int16DownconvertAndCorrelator,
@@ -143,6 +144,10 @@ Abstract supertype for doppler estimators. Concrete subtypes carry estimator
 configuration (and any cross-satellite or cross-system shared state). The
 per-satellite state used by the estimator lives in each [`TrackedSat`](@ref)
 wrapper — see [`init_estimator_state`](@ref) for the extension point.
+
+An estimator that accepts freshly-acquired satellites must also define
+[`carrier_doppler_pull_in_range`](@ref), reporting the largest acquisition
+Doppler error it can still pull into carrier lock.
 """
 abstract type AbstractDopplerEstimator end
 

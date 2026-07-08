@@ -1,8 +1,14 @@
 module ConventionalPLLAndDLLTest
 
 using Test: @test, @testset, @inferred, @test_throws
-using Unitful: Hz
-using GNSSSignals: GPSL1CA, get_code_center_frequency_ratio
+using Unitful: Hz, uconvert
+using GNSSSignals:
+    GPSL1CA,
+    GPSL5I,
+    GalileoE1B,
+    get_code_center_frequency_ratio,
+    get_code_length,
+    get_code_frequency
 using TrackingLoopFilters: ThirdOrderBilinearLF, SecondOrderBilinearLF
 using StaticArrays: SVector
 using Dictionaries: Dictionary
@@ -25,7 +31,14 @@ using Tracking:
     get_sat_states,
     update_accumulator,
     get_default_correlator,
-    merge_sats
+    merge_sats,
+    ConventionalAssistedPLLAndDLL,
+    carrier_doppler_pull_in_range,
+    AbstractDopplerEstimator
+
+# Estimator with no carrier_doppler_pull_in_range method — exercises the
+# required-interface fallback on AbstractDopplerEstimator.
+struct _PullInStubEstimator <: AbstractDopplerEstimator end
 
 # Build a stub `(L1 = BandMeasurement(...),)` NamedTuple to pass to the
 # estimator. Samples are unused by `estimate_dopplers_and_filter_prompt`
@@ -304,6 +317,44 @@ end
     # different concrete state type than the TrackState's estimator.
     bad_sat = TrackedSat(gpsl1, 2, 0.25, 200.0Hz)
     @test_throws ArgumentError merge_sats(track_state, bad_sat)
+end
+
+@testset "Carrier Doppler pull-in range (FLL-assisted default)" begin
+    estimator = ConventionalAssistedPLLAndDLL()
+
+    # ±1/(4T) with T from calc_num_code_blocks_to_integrate (pre-sync ⇒ 1
+    # block ⇒ one primary-code period): 1 ms → 250 Hz, 4 ms → 62.5 Hz. FLL
+    # atan(cross/dot) unambiguous over ±π/2 of inter-prompt phase.
+    @test @inferred(carrier_doppler_pull_in_range(estimator, GPSL1CA())) ≈ 250.0Hz
+    @test carrier_doppler_pull_in_range(estimator, GPSL5I()) ≈ 250.0Hz
+    @test carrier_doppler_pull_in_range(estimator, GalileoE1B()) ≈ 62.5Hz
+
+    # Consistent with the general 1/(4·primary-code-period) formula.
+    for signal in (GPSL1CA(), GPSL5I(), GalileoE1B())
+        T = get_code_length(signal) / get_code_frequency(signal)
+        @test carrier_doppler_pull_in_range(estimator, signal) ≈ uconvert(Hz, 1 / (4 * T))
+    end
+end
+
+@testset "Carrier Doppler pull-in range (pure PLL approximation)" begin
+    # Plain ConventionalPLLAndDLL() carrier loop is a pure PLL (no FLL assist):
+    # ≈ min(B_L, 1/(2T)). Auto bandwidth for GPS L1 C/A is 18 Hz, well under
+    # the 1/(2·1ms) = 500 Hz coherent-integration decorrelation cap.
+    pure_pll = ConventionalPLLAndDLL()
+    @test @inferred(carrier_doppler_pull_in_range(pure_pll, GPSL1CA())) ≈ 18.0Hz
+
+    # A very wide configured bandwidth is capped by 1/(2T) = 500 Hz (T = 1 ms).
+    wide = ConventionalPLLAndDLL(; carrier_loop_filter_bandwidth = 600.0Hz)
+    @test carrier_doppler_pull_in_range(wide, GPSL1CA()) ≈ 500.0Hz
+end
+
+@testset "carrier_doppler_pull_in_range is a required interface" begin
+    # An estimator without its own method has no applicable method (bare stub,
+    # like init_estimator_state) → MethodError rather than a wrong answer.
+    @test_throws MethodError carrier_doppler_pull_in_range(
+        _PullInStubEstimator(),
+        GPSL1CA(),
+    )
 end
 
 end
