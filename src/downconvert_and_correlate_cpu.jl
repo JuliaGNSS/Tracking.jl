@@ -65,13 +65,53 @@ CPUDownconvertAndCorrelator() = CPUDownconvertAndCorrelator(ScratchBuffers())
 """
 $(SIGNATURES)
 
-Multi-threaded CPU downconvert and correlate. Holds one
-`ScratchBuffers` per thread, indexed by `Threads.threadid()`
-inside `@batch` (which pins each iteration to a fixed thread). Buffers
-grow lazily on first use and are reused thereafter, so a hoisted
-instance has near-zero allocations per `track!` call in steady state
-(Polyester's `@batch` keeps a small irreducible per-call closure
-allocation).
+Multi-threaded CPU downconvert and correlate, parallelized over the
+satellites (PRNs) of each group. Holds one `ScratchBuffers` per thread,
+indexed by `Threads.threadid()` inside `@batch` (which pins each iteration
+to a fixed thread). Buffers grow lazily on first use and are reused
+thereafter, so a hoisted instance's scratch is allocation-free in steady
+state.
+
+One `@batch` is launched per code block (once per `downconvert_and_correlate!`
+call inside `track!`'s inner loop). When the process runs with more than one
+thread *and* the group has more than one satellite, each launch keeps a small
+Polyester allocation (~64 B), so the total scales with the number of completed
+code blocks in the chunk rather than staying flat per `track!` call. With a
+single thread, a single satellite, or the single-threaded
+`CPUDownconvertAndCorrelator`, there is no such residual.
+
+Why it allocates at all — Polyester's `@batch` roots only *bare* `Array`s and
+`isbits` values into its worker tasks for free (that is why a `Vector{Float64}`
+kernel allocates nothing). It pays a small per-launch allocation to root any
+**non-`isbits` struct** referenced inside the region — and it is the struct-ness
+that costs, not the contents: capturing even a plain struct whose only fields
+are `Matrix`es and isbits scalars measures the same ~64 B/launch, whereas
+capturing those same bare arrays measures 0. The culprit here is the GNSS
+**signal**: `GPSL1CA`, for instance, is not `isbits` — it wraps a `Matrix{Int16}`
+code table and a (also non-`isbits`) `SignalLUT`. Each satellite's code-replica
+generation needs its signal, so every `@batch` launch touches that non-`isbits`
+object once. (The per-satellite `TrackedSat` is likewise non-`isbits` — it
+carries the signal plus the CN0/bit buffers — and the loop reaches the signal
+through it, so iterating `Vector{TrackedSat}` is not free the way iterating a
+`Vector{Float64}` is.)
+
+Note that merely *hoisting* the `SignalLUT` out of the signal does not help — a
+`SignalLUT` is itself a non-`isbits` struct (it wraps `Matrix{Int8}` fields), so
+capturing it costs the same as capturing the whole `GPSL1CA`. What removes the
+cost entirely is a code-generation entry point that takes the LUT's bare arrays
+and isbits fields as *separate arguments* (`padded`, `secondary`,
+`subchip_factor`, …) rather than a struct: the `@batch` closure then captures
+only bare `Array`s and isbits values, which Polyester roots for free. A
+prototype of exactly this — generating from the raw `padded` matrix, done
+*inside* the parallel loop — is bit-faithful and measures **0 B/launch**, and
+because generation stays in the `@batch` region it keeps the full parallel
+throughput. Realizing it needs a GNSSSignals-side API that threads the bare
+arrays down to the resample kernel without re-wrapping them in a struct inside
+the region (reconstructing one there sends the generator dynamic and allocates
+far more). Absent that, the only in-tree way to reach 0 is a serial code-gen
+pre-pass, which is allocation-free but serializes ~30 % of the work and slows
+the threaded pipeline — the inferior fallback. Neither is currently worth
+~64 B/block, which is bounded per call and dwarfed by the caller's input buffer.
 
 For real-time loops, construct the correlator **once outside** the
 `track!` loop and pass it via the `downconvert_and_correlator` keyword

@@ -151,7 +151,13 @@ end
 # per-code-block bit-edge search (`_buffer_find_bit`) once per code block. A
 # regression there — e.g. a closure-capture `Core.Box` + boxed `SyncResult`
 # (~80 B/block) — makes `track!` allocate in proportion to the signal length
-# instead of staying allocation-free after the first (buffer-seating) call. The
+# instead of staying allocation-free after the first (buffer-seating) call.
+# This is exactly the "allocates per completed integration, scales with signal
+# length" symptom reported in #198: measuring at two chunk lengths and asserting
+# both are 0 pins the allocation flat across completion counts (a per-block leak
+# would grow 10× from 2 to 20 blocks). The box shows up at any runtime thread
+# count on the single-threaded backend, so this single-threaded `== 0` catches
+# it on CI without needing a multi-threaded run. The
 # per-stage test above does NOT catch it: it tracks a real signal that reaches
 # bit sync within the warmup, so by the time it measures it exercises only the
 # post-sync path, where `_buffer_find_bit` is no longer called.
