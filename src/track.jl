@@ -122,9 +122,33 @@ In-place version of [`track`](@ref). Mutates `track_state` by overwriting the
 immutable wrappers. Returns the same `track_state` object.
 
 After one warmup call (which seats each satellite's `filtered_prompts`
-buffer capacity), the single-threaded path is fully allocation-free; the
-threaded path keeps an irreducible Polyester `@batch` closure-capture
-allocation of about 160 B per GNSS system per call.
+buffer capacity), the single-threaded path is fully allocation-free.
+
+The threaded path (`CPUThreadedDownconvertAndCorrelator`) keeps a small
+residual — about 64 B per **completed code-block integration** per group —
+but only when the process runs with more than one thread *and* the group
+holds more than one satellite (so Polyester's `@batch` actually distributes
+work). `track!` launches one `@batch` per code block, so this residual
+scales with the chunk length rather than staying flat per call; for a
+real-time loop with fixed-size chunks it is bounded per call and, in
+practice, dwarfed by the input sample buffer the caller allocates each
+chunk. The single-threaded backend has none of it.
+
+The root cause is not the per-satellite state per se — it is that the
+GNSS **signal** object is not an `isbits` type: `GPSL1CA`, for example, holds
+a `Matrix{Int16}` code table and a (also non-`isbits`) `SignalLUT`. Polyester
+roots bare `Array`s and `isbits` values into its worker tasks for free (that
+is why a `Vector{Float64}` kernel is allocation-free), but it pays a small
+per-launch allocation to root any *other* non-`isbits` object touched inside
+the `@batch` region. Each satellite's `downconvert_and_correlate` reaches its
+signal (for code-replica generation), so the parallel loop touches that
+non-`isbits` object once per launch. It could be removed by generating the code
+from the LUT's *bare arrays* (a prototype doing so inside the loop measures 0 B
+at full parallel throughput) — which needs a GNSSSignals-side bare-array
+`gen_code!` — or, in-tree, by a serial code-gen pre-pass (allocation-free but
+slower, since it serializes ~30 % of the work). Neither is currently worth
+~64 B/block. See [`CPUThreadedDownconvertAndCorrelator`](@ref) for the full
+analysis.
 
 For real-time loops, **construct the correlator once outside the loop**
 and pass it via the `downconvert_and_correlator` keyword argument:
