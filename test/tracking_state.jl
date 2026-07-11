@@ -27,7 +27,7 @@ using Tracking:
     get_post_corr_filter,
     get_cn0_estimator,
     get_bit_buffer,
-    get_bits,
+    get_soft_bits,
     get_num_bits,
     has_bit_or_secondary_code_been_found,
     estimate_cn0,
@@ -615,7 +615,7 @@ end
     @inferred get_post_corr_filter(track_state, 1)
     @inferred get_cn0_estimator(track_state, 1)
     @inferred get_bit_buffer(track_state, 1)
-    @inferred get_bits(track_state, 1)
+    @inferred get_soft_bits(track_state, 1)
     @inferred get_num_bits(track_state, 1)
     @inferred has_bit_or_secondary_code_been_found(track_state, 1)
     @inferred estimate_cn0(track_state, 1)
@@ -674,7 +674,7 @@ end
 @testset "get_filtered_prompts TrackState accessor (issue #134)" begin
     ts = TrackState(; signal = GPSL1CA())
     ts = add_satellite!(ts; prn = 1)
-    # Sibling of `get_bits(ts, 1)` — must resolve through the same
+    # Sibling of `get_soft_bits(ts, 1)` — must resolve through the same
     # accessor ladder instead of throwing a MethodError.
     @test get_filtered_prompts(ts, 1) isa Vector{ComplexF64}
     @test isempty(get_filtered_prompts(ts, 1))

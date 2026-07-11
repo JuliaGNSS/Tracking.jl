@@ -476,7 +476,7 @@ The trailing `sig` selector is either:
 | `get_post_corr_filter` | The post-correlation filter. |
 | `get_cn0_estimator` | The CN0 estimator. |
 | `estimate_cn0` | CN0 estimate in dB-Hz. |
-| `get_bit_buffer` / `get_bits` / `get_num_bits` | Bit buffer, decoded bits, bit count. |
+| `get_bit_buffer` / `get_soft_bits` / `get_num_bits` | Bit buffer, decoded complex soft bits, bit count. |
 | `get_integrated_samples` | Number of samples accumulated into the current integration so far. |
 | `has_bit_or_secondary_code_been_found` | `true` once bit/secondary-code synchronization has been achieved. |
 
@@ -497,11 +497,11 @@ julia> track_state = add_satellite!(track_state; prn = 11, group = :modern_gps,
 julia> get_carrier_doppler(track_state, :modern_gps, 11)  # sat-level: same for all signals
 1234.0 Hz
 
-julia> get_bits(track_state, :modern_gps, 11, 1)  # per-signal by index (estimator-driver signal)
-0x00000000000000000000000000000000
+julia> get_soft_bits(track_state, :modern_gps, 11, 1)  # per-signal by index (estimator-driver signal)
+ComplexF32[]
 
-julia> get_bits(track_state, :modern_gps, 11, GPSL1CA)  # per-signal by type
-0x00000000000000000000000000000000
+julia> get_soft_bits(track_state, :modern_gps, 11, GPSL1CA)  # per-signal by type
+ComplexF32[]
 ```
 
 ### Group accessors
@@ -553,4 +553,4 @@ dedicated page: [Bit and Secondary-Code Sync](bit_sync.md).
 
 For day-to-day use, the only thing most users need is
 `has_bit_or_secondary_code_been_found` (per signal) to gate calls to
-`get_bits` — both are listed in the [per-signal accessor table](#What-you-can-read).
+`get_soft_bits` — both are listed in the [per-signal accessor table](#What-you-can-read).

@@ -170,7 +170,6 @@ get_filtered_prompts(t::TrackedSignal) = t.filtered_prompts
 get_post_corr_filter(t::TrackedSignal) = t.post_corr_filter
 get_cn0_estimator(t::TrackedSignal) = t.cn0_estimator
 get_bit_buffer(t::TrackedSignal) = t.bit_buffer
-get_bits(t::TrackedSignal) = get_bits(t.bit_buffer)
 get_soft_bits(t::TrackedSignal) = get_soft_bits(t.bit_buffer)
 get_num_bits(t::TrackedSignal) = length(t.bit_buffer)
 has_bit_or_secondary_code_been_found(t::TrackedSignal) =
@@ -681,7 +680,6 @@ get_post_corr_filter(s::TrackedSat, sel...) =
 get_cn0_estimator(s::TrackedSat, sel...) =
     get_cn0_estimator(_find_signal(s.signals, sel...))
 get_bit_buffer(s::TrackedSat, sel...) = get_bit_buffer(_find_signal(s.signals, sel...))
-get_bits(s::TrackedSat, sel...) = get_bits(_find_signal(s.signals, sel...))
 get_soft_bits(s::TrackedSat, sel...) = get_soft_bits(_find_signal(s.signals, sel...))
 get_num_bits(s::TrackedSat, sel...) = get_num_bits(_find_signal(s.signals, sel...))
 has_bit_or_secondary_code_been_found(s::TrackedSat, sel...) =

@@ -314,10 +314,10 @@ else
             track_state = add_satellite!(track_state, a; group = :gps_l5)
         end
 
-        # Track the chunks in sequence on the persistent state (each `track!`
-        # resets the hard-bit buffer, which caps at 128 bits, so the whole span
-        # cannot go through a single call). Record each satellite's carrier
-        # Doppler after every chunk so we can check it has settled.
+        # Track the chunks in sequence on the persistent state (the bit buffer
+        # is flushed on every `track!`, so the decoded bits are read per chunk).
+        # Record each satellite's carrier Doppler after every chunk so we can
+        # check it has settled.
         groups_acqs = ((:gps_l1, acq_l1), (:galileo, acq_e1), (:gps_l5, acq_l5))
         nl1 = round(Int, ustrip(Hz, FS_L1) * chunk_seconds)
         nl5 = nl1 ÷ 2

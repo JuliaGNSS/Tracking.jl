@@ -35,7 +35,6 @@ using Tracking:
     get_post_corr_filter,
     get_cn0_estimator,
     get_bit_buffer,
-    get_bits,
     get_num_bits,
     get_integrated_samples,
     get_carrier_doppler,
@@ -276,7 +275,6 @@ end
         @test get_cn0_estimator(track_state, :modern_gps, 11, GPSL1C_D) isa
               MomentsCN0Estimator
         @test get_bit_buffer(track_state, :modern_gps, 11, 3) isa BitBuffer
-        @test get_bits(track_state, :modern_gps, 11, GPSL1CA) == 0
         @test estimate_cn0(track_state, :modern_gps, 11, 1) == 0.0dBHz
         @test estimate_cn0(track_state, :modern_gps, 11, GPSL1CA) == 0.0dBHz
     end

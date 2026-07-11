@@ -464,8 +464,8 @@ width `B` is chosen per signal by [`get_code_block_buffer_type`](@ref) so
 that a single integer can hold the entire pre-sync search horizon (one
 NH10 period for GPS L5I, 40 primary blocks for GPS L1 C/A, 1800 chips
 for the GPS L1C-P overlay, etc.). After sync the field is dead state and
-the decoded navigation bits accumulate in the fixed-width
-`buffer::UInt128` instead.
+the decoded navigation bits accumulate as the coherently summed complex
+prompt of each completed bit in [`soft_bits`](@ref get_soft_bits) instead.
 
 The `phase_acc` field holds the incremental per-phase bin statistics
 ([`PhaseAccumulators`](@ref)) consumed by the soft bit-edge detector
@@ -480,11 +480,9 @@ struct BitBuffer{B<:Unsigned}
     found::Bool
     secondary_phase::Int      # 0 until found; secondary-chip offset post-sync
     polarity::Int8            # +1 or -1 once found; 0 before sync
-    buffer::UInt128
-    length::Int
     prompt_accumulator::ComplexF64
     prompt_accumulator_integrated_code_blocks::Int
-    soft_bits::Vector{Float32}
+    soft_bits::Vector{ComplexF32}
     phase_acc::PhaseAccumulators
 end
 
@@ -498,11 +496,9 @@ function BitBuffer()
         false,
         0,
         Int8(0),
-        zero(UInt128),
-        0,
         complex(0.0, 0.0),
         0,
-        Float32[],
+        ComplexF32[],
         PhaseAccumulators(),
     )
 end
@@ -515,24 +511,20 @@ function BitBuffer{B}() where {B<:Unsigned}
         false,
         0,
         Int8(0),
-        zero(UInt128),
-        0,
         complex(0.0, 0.0),
         0,
-        Float32[],
+        ComplexF32[],
         PhaseAccumulators(),
     )
 end
 
-# Convenience outer constructor matching the legacy 7-arg form (no phase /
-# polarity arguments — assumed zero; soft bits default to empty). Used by test
-# code that builds a `BitBuffer` from raw integer / Complex{Int} literals.
+# Convenience outer constructor (no phase / polarity arguments — assumed zero;
+# soft bits default to empty). Used by test code that builds a `BitBuffer` from
+# raw integer / Complex{Int} literals.
 function BitBuffer(
     code_block_buffer::B,
     code_block_buffer_length::Integer,
     found::Bool,
-    buffer::Integer,
-    length::Integer,
     prompt_accumulator::Complex,
     prompt_accumulator_integrated_code_blocks::Integer,
 ) where {B<:Unsigned}
@@ -542,29 +534,33 @@ function BitBuffer(
         found,
         0,
         Int8(0),
-        UInt128(buffer),
-        Int(length),
         ComplexF64(prompt_accumulator),
         Int(prompt_accumulator_integrated_code_blocks),
-        Float32[],
+        ComplexF32[],
         PhaseAccumulators(),
     )
 end
 
-@inline get_bits(bit_buffer::BitBuffer) = bit_buffer.buffer
-@inline length(bit_buffer::BitBuffer) = bit_buffer.length
+# Number of completed navigation bits currently buffered — one per accumulated
+# soft bit.
+@inline length(bit_buffer::BitBuffer) = length(bit_buffer.soft_bits)
 @inline has_bit_or_secondary_code_been_found(bit_buffer::BitBuffer) = bit_buffer.found
 
-# Get the soft bits, i.e. the accumulated (summed) filtered prompt of each
-# completed bit. The sign of each soft bit corresponds to the respective hard
-# bit returned by `get_bits`. Bits recovered from the pre-sync sign window at
-# bit-sync time only have ±1 prompt signs available; their sign-vote sum is
-# scaled by the sync-time prompt magnitude so the magnitudes stay comparable
-# (as reliabilities) with the coherently accumulated post-sync bits. The
-# buffer is reset to length 0 at the start of each `track` call, mirroring the
-# hard bit buffer. Kept as a plain comment (not a docstring) to match the
-# sibling accessors `get_bits` / `get_num_bits`, which `checkdocs = :exports`
-# would otherwise require to appear in the manual.
+# Get the soft bits, i.e. the coherently accumulated (summed) complex filtered
+# prompt of each completed navigation bit — the sole decoded-bit output of the
+# buffer. Each entry is the *full complex* accumulation, so a downstream
+# receiver decides whether the navigation data lives in the real component, the
+# imaginary component, or a combination of both, and forms its own hard
+# decision from that. That choice is what enables L5/E5a pilot+data tracking: a
+# pilot-driven lock leaves the data 90° out of phase, so the data bits sit in
+# the quadrature (imaginary) component a real-only decision would discard. Bits
+# recovered from the pre-sync sign window at bit-sync time only have ±1 in-phase
+# prompt signs available (imaginary part zero); their sign-vote sum is scaled by
+# the sync-time prompt magnitude so the magnitudes stay comparable (as
+# reliabilities) with the coherently accumulated post-sync bits. The buffer is
+# reset to length 0 at the start of each `track` call. Kept as a plain comment
+# (not a docstring) to match the sibling accessor `get_num_bits`, which
+# `checkdocs = :exports` would otherwise require to appear in the manual.
 @inline get_soft_bits(bit_buffer::BitBuffer) = bit_buffer.soft_bits
 
 """
@@ -752,39 +748,21 @@ function buffer(
         bit_buffer.prompt_accumulator_integrated_code_blocks + integrated_code_blocks
 
     if prompt_accumulator_integrated_code_blocks == num_code_blocks_that_form_a_bit
-        # The hard-bit storage is a fixed-width UInt128; pushing a 129th bit
-        # would silently shift the oldest bit out while `get_num_bits` keeps
-        # counting. Fail loudly instead — the buffer is reset at the start of
-        # each `track` call, so this only triggers when a single call spans
-        # more than 128 bits of signal.
-        length(bit_buffer) == 8 * sizeof(bit_buffer.buffer) && throw(
-            ArgumentError(
-                string(
-                    "The hard-bit buffer is full (",
-                    8 * sizeof(bit_buffer.buffer),
-                    " bits). Bits are reset at the start of each `track` call — ",
-                    "process the signal in shorter chunks to read out the bits ",
-                    "more often.",
-                ),
-            ),
-        )
-        # Flip the decoded bit if the detector locked at negative polarity:
-        # the prompt accumulator's real-part sign is then inverted relative
-        # to the data symbol's "0/1" convention.
-        bit_acc =
-            bit_buffer.polarity < 0 ? -real(prompt_accumulator) : real(prompt_accumulator)
-        bit = bit_acc > 0
-        # Store the polarity-corrected accumulation so the soft bit's sign
-        # matches the decoded hard bit.
-        push!(bit_buffer.soft_bits, Float32(bit_acc))
+        # Apply the lock polarity to the whole complex accumulation: a
+        # negative-polarity lock is a 180° phase ambiguity, so derotate both
+        # quadratures together. The full complex soft bit is emitted so a
+        # downstream receiver can read whichever component (real, imaginary, or
+        # a combination) carries the navigation data — an L5/E5a pilot-driven
+        # lock leaves the data 90° out of phase, in the quadrature component.
+        prompt_accumulator_corrected =
+            bit_buffer.polarity < 0 ? -prompt_accumulator : prompt_accumulator
+        push!(bit_buffer.soft_bits, ComplexF32(prompt_accumulator_corrected))
         return BitBuffer{B}(
             bit_buffer.code_block_buffer,
             bit_buffer.code_block_buffer_length,
             true,
             bit_buffer.secondary_phase,
             bit_buffer.polarity,
-            (get_bits(bit_buffer) << 1) + UInt64(bit),
-            length(bit_buffer) + 1,
             zero(prompt_accumulator),
             0,
             bit_buffer.soft_bits,
@@ -797,8 +775,6 @@ function buffer(
             true,
             bit_buffer.secondary_phase,
             bit_buffer.polarity,
-            bit_buffer.buffer,
-            bit_buffer.length,
             prompt_accumulator,
             prompt_accumulator_integrated_code_blocks,
             bit_buffer.soft_bits,
@@ -860,8 +836,6 @@ function _buffer_find_bit(
             false,
             0,
             Int8(0),
-            zero(UInt128),
-            0,
             complex(0.0, 0.0),
             0,
             bit_buffer.soft_bits,
@@ -887,8 +861,6 @@ function _buffer_find_bit(
             true,
             sync.phase,
             sync.polarity,
-            zero(UInt128),
-            0,
             complex(0.0, 0.0),
             sync.phase,
             bit_buffer.soft_bits,
@@ -899,20 +871,17 @@ function _buffer_find_bit(
         div(code_block_buffer_length, num_code_blocks_that_form_a_bit),
         div(sizeof(code_block_buffer) * 8, num_code_blocks_that_form_a_bit),
     )
-    # Hoist the one field the closure needs (`sync.polarity`) into a plain
-    # local so the closure below does not capture `sync` itself. `sync` is
+    # Hoist the one field the loop needs (`sync.polarity`) into a plain local
+    # so the `sum` closure below cannot capture `sync` itself. `sync` is
     # assigned in two branches above (the soft vs. hard detector), and
-    # capturing a variable that is assigned in more than one place forces
-    # Julia to box it: a per-call `Core.Box` plus heap-boxing of each
-    # `SyncResult`. That fires on every code block until sync, so it shows up
-    # as a per-code-block allocation on the pre-sync hot path (~80 B/block),
-    # making `track!` allocate in proportion to the signal length instead of
-    # staying allocation-free after warmup. Capturing the plain `Int` keeps
-    # `sync` unboxed.
+    # capturing a variable that is assigned in more than one place forces Julia
+    # to box it: a per-call `Core.Box` plus heap-boxing of each `SyncResult`,
+    # which would show up as a per-code-block allocation on the pre-sync hot
+    # path. Reading the plain `Int` keeps `sync` unboxed.
     sync_polarity = Int(sync.polarity)
-    bits = reduce(num_bits:-1:1; init = UInt128(0)) do bits, bit_index
+    for bit_index = num_bits:-1:1
         # Apply the lock polarity to the buffered pre-sync bits as well, so
-        # they map symbol levels to bit values the same way as every
+        # they map symbol levels to soft-bit signs the same way as every
         # post-sync bit (which is sign-flipped via `bit_buffer.polarity` in
         # `buffer`). Otherwise a negative-polarity lock would invert only
         # the post-sync part of the bit stream (issue #127).
@@ -922,13 +891,16 @@ function _buffer_find_bit(
                     (bit_index - 1) * num_code_blocks_that_form_a_bit + code_block_index
                 ((code_block_buffer & (one(B) << buffer_code_block_index)) > 0) * 2 - 1
             end * sync_polarity
-        # The pre-sync window only stores prompt signs, so `bit_sum` is a
-        # ±1-per-block vote count (already polarity-corrected above). Scale it
-        # by the sync-time prompt magnitude (the best available amplitude
+        # The pre-sync window only stores in-phase prompt signs, so `bit_sum`
+        # is a ±1-per-block vote count (already polarity-corrected above). Scale
+        # it by the sync-time prompt magnitude (the best available amplitude
         # estimate) so these recovered soft bits live in the same
-        # coherent-amplitude-sum units as the bits accumulated post-sync.
-        push!(bit_buffer.soft_bits, Float32(bit_sum * abs(prompt)))
-        (bits << 1) + (bit_sum > 0)
+        # coherent-amplitude-sum units as the bits accumulated post-sync. Only
+        # the real (in-phase) component is known here, so the quadrature part is
+        # zero — this sign path is used by in-phase signals (GPS L1 C/A);
+        # pilot-driven signals whose data is in the quadrature use the
+        # secondary-code sync path above and never recover pre-sync bits.
+        push!(bit_buffer.soft_bits, ComplexF32(bit_sum * abs(prompt)))
     end
     return BitBuffer{B}(
         code_block_buffer,
@@ -936,8 +908,6 @@ function _buffer_find_bit(
         true,
         sync.phase,
         sync.polarity,
-        bits,
-        num_bits,
         complex(0, 0),
         0,
         bit_buffer.soft_bits,
@@ -953,8 +923,6 @@ function reset(bit_buffer::BitBuffer{B}) where {B<:Unsigned}
         bit_buffer.found,
         bit_buffer.secondary_phase,
         bit_buffer.polarity,
-        zero(UInt128),
-        0,
         bit_buffer.prompt_accumulator,
         bit_buffer.prompt_accumulator_integrated_code_blocks,
         bit_buffer.soft_bits,

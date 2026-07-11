@@ -15,8 +15,9 @@ Once a satellite is being tracked, the next milestone is locking onto its
 This page is a deep dive into the mechanism. The high-level user only
 needs to know: call `has_bit_or_secondary_code_been_found` per signal
 (see the [per-signal accessor table](tracking_state.md#What-you-can-read))
-and `get_bits` once it returns `true`. The rest of the machinery is
-internal.
+and `get_soft_bits` once it returns `true` — each entry is the coherently
+accumulated complex prompt of one navigation bit, from which the receiver
+forms its own hard decision. The rest of the machinery is internal.
 
 ## Code-phase wrap period
 

@@ -16,7 +16,6 @@ using Tracking:
     track,
     get_sat_state,
     get_code_phase,
-    get_bits,
     get_num_bits,
     get_soft_bits,
     has_bit_or_secondary_code_been_found,
@@ -41,7 +40,6 @@ using Tracking:
 
         block_bits = repeat(data_bits, inner = 20)  # 20 code blocks per bit
         decoded_bits = Bool[]
-        decoded_soft_bits = Float32[]
         foreach(enumerate(block_bits)) do (index, bit)
             code_phase = (index - 1) * num_samples * code_frequency / sampling_frequency
             carrier_phase =
@@ -65,15 +63,15 @@ using Tracking:
             expected_num_bits = index == 40 ? 2 : (index > 40 && index % 20 == 0 ? 1 : 0)
             num_bits = get_num_bits(track_state)
             @test num_bits == expected_num_bits
-            bits_word = get_bits(track_state)
-            for bit_index = num_bits:-1:1
-                push!(decoded_bits, (bits_word >> (bit_index - 1)) & 1 == 1)
-            end
             soft_bits = get_soft_bits(track_state)
-            # There is exactly one soft bit (Float32 accumulation) per hard bit
-            @test eltype(soft_bits) == Float32
+            @test eltype(soft_bits) == ComplexF32
             @test length(soft_bits) == num_bits
-            append!(decoded_soft_bits, soft_bits)
+            # Hard-decide each bit from the in-phase (real) sign of its complex
+            # soft bit — the decoder's job now that the buffer emits only soft
+            # bits. In-phase data (L1 C/A) lives in the real component.
+            for s in soft_bits
+                push!(decoded_bits, real(s) > 0)
+            end
         end
 
         @test length(decoded_bits) == length(data_bits)
@@ -81,9 +79,6 @@ using Tracking:
         # mapping: the decoded stream matches the transmitted one up to a
         # global inversion, never a mixed one (issue #127).
         @test decoded_bits == Bool.(data_bits) || decoded_bits == .!Bool.(data_bits)
-        # The sign of each soft bit must match the respective hard bit —
-        # including the soft bits recovered from the pre-sync buffer.
-        @test (decoded_soft_bits .> 0) == decoded_bits
     end
 end
 
@@ -115,8 +110,8 @@ end
     # and soft bits across calls.
     multi_bits = Bool[]
     single_bits = Bool[]
-    multi_soft = Float32[]
-    single_soft = Float32[]
+    multi_soft = ComplexF32[]
+    single_soft = ComplexF32[]
 
     bits = vcat(ones(20), zeros(20), ones(20), zeros(20), ones(20))
     foreach(enumerate(bits)) do (index, bit)
@@ -139,13 +134,17 @@ end
         expected_num_bits = index == 40 ? 2 : (index > 40 && index % 20 == 0 ? 1 : 0)
         @test get_num_bits(multi_state) == expected_num_bits
         @test get_num_bits(single_state) == expected_num_bits
-        num_bits = get_num_bits(multi_state)
-        for bit_index = (num_bits-1):-1:0
-            push!(multi_bits, (get_bits(multi_state) >> bit_index) & 1 == 1)
-            push!(single_bits, (get_bits(single_state) >> bit_index) & 1 == 1)
+        multi_call_soft = get_soft_bits(multi_state)
+        single_call_soft = get_soft_bits(single_state)
+        # Hard-decide each bit from its complex soft bit's in-phase sign.
+        for s in multi_call_soft
+            push!(multi_bits, real(s) > 0)
         end
-        append!(multi_soft, get_soft_bits(multi_state))
-        append!(single_soft, get_soft_bits(single_state))
+        for s in single_call_soft
+            push!(single_bits, real(s) > 0)
+        end
+        append!(multi_soft, multi_call_soft)
+        append!(single_soft, single_call_soft)
     end
 
     # All five data bits arrive and match the single-block reference bit for
@@ -162,7 +161,7 @@ end
     # The soft bits agree with the reference in sign; post-sync each bit is
     # the sum of five 4-block prompts (magnitude ~5) instead of twenty
     # single-block prompts.
-    @test sign.(multi_soft) == sign.(single_soft)
+    @test sign.(real.(multi_soft)) == sign.(real.(single_soft))
     @test all(x -> abs(x) ≈ 5, multi_soft[3:end])
     @test all(x -> abs(x) ≈ 20, single_soft[3:end])
 end
@@ -344,7 +343,7 @@ end
         # data bit may be left mid-integration, so compare the bits that
         # completed.
         soft_bits = get_soft_bits(track_state)
-        decoded_bits = [Int(s > 0) for s in soft_bits]
+        decoded_bits = [Int(real(s) > 0) for s in soft_bits]
         n_decoded = length(decoded_bits)
         expected = data_bits[2:(1+n_decoded)]
 
@@ -352,8 +351,8 @@ end
         @test n_decoded >= length(data_bits) - 2
         # Clean, boundary-aligned decode — up to the global polarity ambiguity.
         @test decoded_bits == expected || decoded_bits == 1 .- expected
-        # Soft-bit signs are internally consistent with the hard bits.
-        @test all((soft_bits .> 0) .== (decoded_bits .== 1))
+        # Soft-bit in-phase signs are internally consistent with the decoded bits.
+        @test all((real.(soft_bits) .> 0) .== (decoded_bits .== 1))
         # The NH code is wiped: every *full* post-sync bit (all but a possibly
         # truncated first one, when the lock lands mid data bit) sums coherently.
         # A full bit spans `secondary_code_length` primary blocks; the soft bit

@@ -102,11 +102,9 @@ end
             true,                # found
             0,
             Int8(+1),
-            zero(UInt128),
-            0,
             complex(0.0, 0.0),
             0,
-            Float32[],
+            ComplexF32[],
             Tracking.PhaseAccumulators(),
         ),
     )
@@ -163,11 +161,9 @@ GNSSSignals.get_data_frequency(::FakeWrapSignal) = 0Hz
         true,
         0,
         Int8(+1),
-        zero(UInt128),
-        0,
         complex(0.0, 0.0),
         0,
-        Float32[],
+        ComplexF32[],
         Tracking.PhaseAccumulators(),
     )
     fake_tracked_signal(code_length, secondary_length, found) = Tracking.TrackedSignal(
