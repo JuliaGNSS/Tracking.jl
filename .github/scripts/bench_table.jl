@@ -64,6 +64,18 @@ function fmt_ratio(r)
     r >= 1.05 ? "$s ✅" : r <= 0.95 ? "$s ⚠️" : s
 end
 
+# Memory ratio cell: base/head bytes allocated (>1 ⇒ the PR allocates less, same
+# "bigger is better" direction as the time ratio). Bytes are often zero for these
+# in-place `track!` benchmarks, so guard the degenerate ratios: `∞` when the PR
+# drops to zero allocations, `0` when it introduces them, `—` when both are zero.
+function fmt_mem_ratio(b, h)
+    bm = Float64(b["memory"]); hm = Float64(h["memory"])
+    bm == 0 && hm == 0 && return "—"
+    hm == 0 && return "∞ ✅"
+    bm == 0 && return "0 ⚠️"
+    fmt_ratio(bm / hm)
+end
+
 base = leaves!(Dict{String,Any}(), readrev(base_rev))
 head = leaves!(Dict{String,Any}(), readrev(head_rev))
 
@@ -163,13 +175,23 @@ println(io)
 # --- memory table ---
 println(io, "<details><summary>Memory benchmarks (base vs PR head)</summary>")
 println(io)
-println(io, "|  | $baselbl | $headlbl |")
-println(io, "|:--|--:|--:|")
+println(io, "Ratio = $baselbl / $headlbl (bytes allocated): **>1 means the PR allocates less**. ",
+            "✅ ≥ 5 % less, ⚠️ ≥ 5 % more. `∞`/`0` mark a benchmark that drops to / picks up ",
+            "allocations, `—` means both revisions allocate nothing. A blank cell means the ",
+            "benchmark exists on only one revision (🆕 = new on the PR, 🗑 = removed).")
+println(io)
+println(io, "|  | $baselbl | $headlbl | $baselbl / $headlbl |")
+println(io, "|:--|--:|--:|--:|")
 for n in names
     b = get(base, n, nothing); h = get(head, n, nothing)
     bcell = b === nothing ? "" : fmt_mem(b)
     hcell = h === nothing ? "" : fmt_mem(h)
-    println(io, "| $n | $bcell | $hcell |")
+    if b !== nothing && h !== nothing
+        rcell = fmt_mem_ratio(b, h)
+    else
+        rcell = h === nothing ? "🗑" : "🆕"
+    end
+    println(io, "| $n | $bcell | $hcell | $rcell |")
 end
 println(io)
 println(io, "</details>")
