@@ -292,10 +292,28 @@ function _update_tracked_sat_doppler(sat::TrackedSat, sampling_frequency)
     head = first(sat.signals)
     tail_signals = Base.tail(sat.signals)
 
-    new_head, new_doppler_estimator_state, new_carrier_doppler, new_code_doppler =
-        _process_estimator_driver_signal(head, sat, pll_and_dll_state, sampling_frequency)
+    # The loops lock the driver (`signals[1]`) onto the real axis; every signal's
+    # bit-buffer prompt is de-rotated by its carrier-phase offset from the driver
+    # so a quadrature component (QPSK data/pilot, e.g. GPS L5 / Galileo E5a) does
+    # not decode off the collapsed real part. The per-signal carrier phase comes
+    # from `get_carrier_phase_offset`.
+    driver_carrier_phase = get_carrier_phase_offset(head.signal)
 
-    new_tail = _process_passenger_signals(tail_signals, sat.prn, sampling_frequency)
+    new_head, new_doppler_estimator_state, new_carrier_doppler, new_code_doppler =
+        _process_estimator_driver_signal(
+            head,
+            sat,
+            pll_and_dll_state,
+            sampling_frequency,
+            driver_carrier_phase,
+        )
+
+    new_tail = _process_passenger_signals(
+        tail_signals,
+        sat.prn,
+        sampling_frequency,
+        driver_carrier_phase,
+    )
 
     # Phase-snap fallback chain. Picks the synced signal with the
     # longest `(primary × secondary)` code length, and uses its
@@ -331,6 +349,19 @@ function _update_tracked_sat_doppler(sat::TrackedSat, sampling_frequency)
     )
 end
 
+# De-rotation applied to a component's bit-buffer prompt so its own energy is
+# real again, given the loops lock the driver onto the real axis. The rotation
+# is `cis(driver_carrier_phase − get_carrier_phase(signal))`, where the
+# per-signal carrier phase (radians, relative to the band's in-phase reference)
+# comes from `get_carrier_phase_offset`.
+# For an in-phase component (co-phased with the driver, or the driver itself)
+# the difference is 0 and `cis(0) === 1 + 0im`, a bit-identical no-op; a
+# quadrature component (GPS L5 / Galileo E5a I-vs-Q) rotates by `±90°` onto the
+# real axis, where the navigation decoder resolves the residual sign via its
+# preamble.
+@inline _carrier_phase_derotation(driver_carrier_phase::Real, signal) =
+    cis(driver_carrier_phase - get_carrier_phase_offset(signal))
+
 # Shared per-signal advance applied after a completed integration —
 # identical for the estimator-driver signal and the passenger signals:
 # normalize the correlator, update/apply the post-corr filter, record the
@@ -351,6 +382,7 @@ end
     tracked_signal::TrackedSignal,
     prn::Integer,
     sampling_frequency,
+    driver_carrier_phase::Real = 0.0,
 )
     signal = tracked_signal.signal
     integrated_code_blocks = calc_num_code_blocks_to_integrate(
@@ -375,7 +407,12 @@ end
         sampling_frequency,
         has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
     )
-    bit_buffer = buffer(signal, prn, tracked_signal.bit_buffer, bit_block_count, prompt)
+    # De-rotate the prompt onto the driver's (real) phase frame before both the
+    # secondary/bit sync search and the coherent bit accumulation inside
+    # `buffer`, so a quadrature component's data lands on the real axis it is
+    # decided on. No-op for the driver and for co-phased pairs.
+    bit_prompt = prompt * _carrier_phase_derotation(driver_carrier_phase, signal)
+    bit_buffer = buffer(signal, prn, tracked_signal.bit_buffer, bit_block_count, bit_prompt)
     new_signal = TrackedSignal(
         tracked_signal;
         integrated_samples = 0,
@@ -402,6 +439,7 @@ end
     sat::TrackedSat,
     pll_and_dll_state::SatConventionalPLLAndDLL,
     sampling_frequency,
+    driver_carrier_phase::Real = 0.0,
 )
     if !tracked_signal.is_integration_completed || tracked_signal.integrated_samples == 0
         return tracked_signal, pll_and_dll_state, sat.carrier_doppler, sat.code_doppler
@@ -411,8 +449,15 @@ end
     # signal — the shared advance overwrites it with this integration's.
     previous_prompt = get_last_fully_integrated_filtered_prompt(tracked_signal)
     integration_time = tracked_signal.integrated_samples / sampling_frequency
+    # The driver de-rotates against itself (offset 0), so this is a no-op for it;
+    # passed for symmetry with the passenger path.
     new_signal, filtered_correlator, integrated_code_blocks =
-        _advance_signal_after_integration(tracked_signal, sat.prn, sampling_frequency)
+        _advance_signal_after_integration(
+            tracked_signal,
+            sat.prn,
+            sampling_frequency,
+            driver_carrier_phase,
+        )
 
     # The configured bandwidths are referenced to a one-primary-code-period
     # integration. Coherently integrating `integrated_code_blocks` periods
@@ -456,26 +501,44 @@ end
 # Process the non-driver signals (signals[2:end]): the shared per-signal
 # advance only — no loop-filter work. Walks the tuple recursively to keep
 # type-stability and avoid boxing.
-@inline _process_passenger_signals(::Tuple{}, ::Integer, _) = ()
+@inline _process_passenger_signals(::Tuple{}, ::Integer, _, ::Real) = ()
 @inline function _process_passenger_signals(
     signals::Tuple,
     prn::Integer,
     sampling_frequency,
+    driver_carrier_phase::Real,
 )
     head = first(signals)
-    new_head = _process_one_passenger_signal(head, prn, sampling_frequency)
-    (new_head, _process_passenger_signals(Base.tail(signals), prn, sampling_frequency)...)
+    new_head =
+        _process_one_passenger_signal(head, prn, sampling_frequency, driver_carrier_phase)
+    (
+        new_head,
+        _process_passenger_signals(
+            Base.tail(signals),
+            prn,
+            sampling_frequency,
+            driver_carrier_phase,
+        )...,
+    )
 end
 
 @inline function _process_one_passenger_signal(
     tracked_signal::TrackedSignal,
     prn::Integer,
     sampling_frequency,
+    driver_carrier_phase::Real = 0.0,
 )
     if !tracked_signal.is_integration_completed || tracked_signal.integrated_samples == 0
         return tracked_signal
     end
-    first(_advance_signal_after_integration(tracked_signal, prn, sampling_frequency))
+    first(
+        _advance_signal_after_integration(
+            tracked_signal,
+            prn,
+            sampling_frequency,
+            driver_carrier_phase,
+        ),
+    )
 end
 
 """
