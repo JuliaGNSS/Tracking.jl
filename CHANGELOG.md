@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.2](https://github.com/JuliaGNSS/Tracking.jl/compare/v3.2.1...v3.2.2) (2026-07-15)
+
+
+### Bug Fixes
+
+* combined pilot+data decode for quadrature signals (GPS L5, Galileo E5a) ([32f7178](https://github.com/JuliaGNSS/Tracking.jl/commit/32f71785482c40d343f88603c044f4a03c2b7561))
+
 ## [3.2.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v3.2.0...v3.2.1) (2026-07-08)
 
 
