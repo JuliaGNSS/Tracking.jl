@@ -987,6 +987,14 @@ filter's integrator state is not portable across the change in update interval
 can drag the loop out of lock; the converged Doppler is the right seed for the
 new, longer integration.
 
+For [`VectorPLLAndDLL`](@ref) the re-seed additionally zeroes the
+externally-supplied NCO corrections (`code_freq_update` / `carrier_freq_update`)
+and the discriminator accumulators — the converged Doppler already folds in the
+last correction, so keeping it would apply it twice. A navigation filter must
+therefore **re-issue** its corrections via [`set_code_freq_updates!`](@ref) /
+[`set_carrier_freq_updates!`](@ref) after resetting a vector-loop satellite.
+The `vt_on` flag and any per-satellite bandwidth override are preserved.
+
 Addressed like the per-signal accessors — no satellite id resets every
 satellite in `track_state`; `(group, prn)` or (single-group) `prn` resets one.
 Mutates `track_state` in place and returns it. Works for any
