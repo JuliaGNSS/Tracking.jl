@@ -77,6 +77,15 @@ export get_early,
     TwoBitThreadedDownconvertAndCorrelator,
     ConventionalPLLAndDLL,
     ConventionalAssistedPLLAndDLL,
+    VectorPLLAndDLL,
+    update_vt_states!,
+    set_vt_on!,
+    reset_code_discr_acc!,
+    reset_carrier_discr_acc!,
+    mean_code_discriminator,
+    mean_carrier_discriminator,
+    set_code_freq_updates!,
+    set_carrier_freq_updates!,
     DefaultPostCorrFilter,
     TrackState,
     add_satellite!,
@@ -222,6 +231,7 @@ include("downconvert_and_correlate_int16.jl")
 include("downconvert_and_correlate_onebit.jl")
 include("downconvert_and_correlate_twobit.jl")
 include("conventional_pll_and_dll.jl")
+include("vector_pll_and_dll.jl")
 include("tracking_state.jl")
 include("track.jl")
 

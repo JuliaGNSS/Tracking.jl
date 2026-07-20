@@ -15,6 +15,7 @@ makedocs(
         "bit_sync.md",
         "loop_filter.md",
         "custom_doppler_estimator.md",
+        "vector_tracking.md",
         "correlator.md",
         "cn0_estimator.md"
     ]
