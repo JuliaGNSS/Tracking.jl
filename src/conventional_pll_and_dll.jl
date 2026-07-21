@@ -321,33 +321,46 @@ function _update_tracked_sat_doppler(sat::TrackedSat, sampling_frequency)
     # secondary-chip window.
     #
     # This is a *one-time* anchoring applied only on the iteration a
-    # signal transitions `found == false → true`. The snap aligns
-    # `code_phase` to a primary-code boundary within the secondary-code
-    # window, which is only valid when `code_phase` actually sits on
-    # such a boundary — i.e. just after a completed integration, which
-    # is exactly when sync is detected. Re-running it on later
-    # iterations would clobber the within-primary-block phase that
-    # `update` advances during a partial (chunk-bounded) integration,
-    # pinning `code_phase` to the boundary and wedging the satellite
-    # into a state where no chunk can ever complete the block again
-    # (see issue #117). After sync, `update`'s `mod(…, current_code_wrap)`
-    # maintains the secondary alignment on its own.
+    # signal transitions `found == false → true`. It preserves the
+    # within-primary-block phase (`mod(code_phase, primary)`) so the loop
+    # keeps the current chunk-bounded position; re-running it on later
+    # iterations would wedge the satellite (see issue #117). After sync,
+    # `update`'s `mod(…, current_code_wrap)` maintains the alignment.
+    #
+    # Because sync is detected in this estimate pass — *after* the whole
+    # chunk was correlated — any in-flight partial integration for this
+    # chunk was accumulated at the pre-snap code phase (and, pre-sync, with
+    # no secondary-code overlay). Once the snap jumps `code_phase` into the
+    # secondary window that partial's data is phase-inconsistent with the
+    # new alignment (for a flipped NH chip it can even cancel to zero and
+    # feed a 0/0 into the discriminators). So on the snap we also reset every
+    # signal's in-flight accumulator: the phase bookkeeping is kept, but the
+    # next chunk re-integrates cleanly from the snapped phase to the next
+    # boundary. Block-aligned starts have no residue, so this is a no-op there.
     new_signals = (new_head, new_tail...)
-    snapped_code_phase = if _any_signal_just_synced(sat.signals, new_signals)
-        _snap_code_phase_from_synced_signal(new_signals, sat.code_phase)
-    else
+    just_synced = _any_signal_just_synced(sat.signals, new_signals)
+    snapped_code_phase =
+        just_synced ? _snap_code_phase_from_synced_signal(new_signals, sat.code_phase) :
         sat.code_phase
-    end
+    final_signals =
+        just_synced ? map(_reset_inflight_integration, new_signals) : new_signals
 
     TrackedSat(
         sat;
         code_phase = snapped_code_phase,
         carrier_doppler = new_carrier_doppler,
         code_doppler = new_code_doppler,
-        signals = new_signals,
+        signals = final_signals,
         doppler_estimator_state = new_doppler_estimator_state,
     )
 end
+
+# Drop an in-flight (partial) integration: zero the accumulator and its sample
+# counter, leaving all other per-signal state intact. Used at the sync-transition
+# phase snap, where the shared `code_phase` moves and any partial accumulated at
+# the old phase must not be carried into the re-anchored window.
+@inline _reset_inflight_integration(s::TrackedSignal) =
+    TrackedSignal(s; correlator = zero(s.correlator), integrated_samples = 0)
 
 # De-rotation applied to a component's bit-buffer prompt so its own energy is
 # real again, given the loops lock the driver onto the real axis. The rotation
@@ -362,15 +375,19 @@ end
 @inline _carrier_phase_derotation(driver_carrier_phase::Real, signal) =
     cis(driver_carrier_phase - get_carrier_phase_offset(signal))
 
-# Shared per-signal advance applied after a completed integration —
-# identical for the estimator-driver signal and the passenger signals:
-# normalize the correlator, update/apply the post-corr filter, record the
-# filtered prompt, advance the CN0 estimator and bit buffer, and rebuild
-# the `TrackedSignal` with the correlator moved to
-# `last_fully_integrated_*`. Returns the rebuilt signal plus the
-# intermediate values the driver's loop-filter section needs
-# (`filtered_correlator`, `integrated_code_blocks`). Keeping this in one
-# place is what guarantees driver and passengers cannot drift (issue #133).
+# Apply one completed `CorrelatorOutput` record to a signal — shared by the
+# estimator-driver and passenger folds so they cannot drift (issue #133):
+# normalize the record's (raw) correlator by its sample count, update/apply the
+# post-corr filter, record the filtered prompt, advance the CN0 estimator and
+# bit buffer, and rebuild the `TrackedSignal` with the record moved to
+# `last_fully_integrated_*`. Returns the rebuilt signal plus the intermediate
+# values the driver's loop-filter section needs (`filtered_correlator`,
+# `integrated_code_blocks`).
+#
+# Unlike the old per-integration advance, this does NOT reset the live
+# accumulator or `integrated_samples`: the correlate phase already reset them
+# when it snapshotted this record and began (or is carrying) the next
+# integration. It consumes only the record's stored correlator.
 #
 # The bit accumulator is credited with the blocks *actually* integrated
 # (`calc_num_code_blocks_for_bit_buffer`), not the intended
@@ -378,8 +395,9 @@ end
 # land on the data-bit boundary, so crediting the intended length would
 # misalign the decoded bits (issue #125). The intended count is still
 # returned for the driver's `1/N` loop-bandwidth scaling.
-@inline function _advance_signal_after_integration(
+@inline function _apply_correlator_output(
     tracked_signal::TrackedSignal,
+    output::CorrelatorOutput,
     prn::Integer,
     sampling_frequency,
     driver_carrier_phase::Real = 0.0,
@@ -390,11 +408,8 @@ end
         tracked_signal.preferred_num_code_blocks_to_integrate,
         has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
     )
-    normalized_correlator = normalize(
-        tracked_signal.correlator,
-        tracked_signal.integrated_samples,
-        get_code_amplitude(signal),
-    )
+    normalized_correlator =
+        normalize(output.correlator, output.integrated_samples, get_code_amplitude(signal))
     post_corr_filter =
         update(tracked_signal.post_corr_filter, get_prompt(normalized_correlator))
     filtered_correlator = apply(post_corr_filter, normalized_correlator)
@@ -403,7 +418,7 @@ end
     cn0_estimator = update(get_cn0_estimator(tracked_signal), prompt)
     bit_block_count = calc_num_code_blocks_for_bit_buffer(
         signal,
-        tracked_signal.integrated_samples,
+        output.integrated_samples,
         sampling_frequency,
         has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
     )
@@ -415,25 +430,23 @@ end
     bit_buffer = buffer(signal, prn, tracked_signal.bit_buffer, bit_block_count, bit_prompt)
     new_signal = TrackedSignal(
         tracked_signal;
-        integrated_samples = 0,
-        is_integration_completed = false,
         last_fully_integrated_filtered_prompt = prompt,
         bit_buffer,
         cn0_estimator,
         post_corr_filter,
-        correlator = zero(tracked_signal.correlator),
-        last_fully_integrated_correlator = tracked_signal.correlator,
+        last_fully_integrated_correlator = output.correlator,
     )
     return new_signal, filtered_correlator, integrated_code_blocks
 end
 
-# Process the estimator-driver signal (signals[1]): if its integration
-# completed, run the PLL/DLL plus prompt filter / CN0 / bit-buffer update
-# and return new values for carrier_doppler, code_doppler, and
-# doppler_estimator_state. Otherwise return unchanged values. This is
-# where ConventionalPLLAndDLL hard-codes the "signals[1] drives the loop
-# filter" rule — a custom AbstractDopplerEstimator may use any/all
-# signals' state.
+# Process the estimator-driver signal (signals[1]): fold over every
+# `CorrelatorOutput` collected during this chunk, in order — running the PLL/DLL
+# plus prompt filter / CN0 / bit-buffer update per record and threading the loop
+# filters and FLL `previous_prompt` across them — then return the new
+# doppler_estimator_state and the *last* record's carrier/code Doppler (the NCO
+# is written once per chunk). With no outputs the Doppler holds. This is where
+# ConventionalPLLAndDLL hard-codes the "signals[1] drives the loop filter" rule —
+# a custom AbstractDopplerEstimator may use any/all signals' state.
 @inline function _process_estimator_driver_signal(
     tracked_signal::TrackedSignal,
     sat::TrackedSat,
@@ -441,61 +454,78 @@ end
     sampling_frequency,
     driver_carrier_phase::Real = 0.0,
 )
-    if !tracked_signal.is_integration_completed || tracked_signal.integrated_samples == 0
+    outputs = tracked_signal.correlator_outputs
+    if isempty(outputs)
         return tracked_signal, pll_and_dll_state, sat.carrier_doppler, sat.code_doppler
     end
     signal = tracked_signal.signal
-    # The previous fully-integrated prompt must be read off the *old*
-    # signal — the shared advance overwrites it with this integration's.
-    previous_prompt = get_last_fully_integrated_filtered_prompt(tracked_signal)
-    integration_time = tracked_signal.integrated_samples / sampling_frequency
-    # The driver de-rotates against itself (offset 0), so this is a no-op for it;
-    # passed for symmetry with the passenger path.
-    new_signal, filtered_correlator, integrated_code_blocks =
-        _advance_signal_after_integration(
-            tracked_signal,
+    ts = tracked_signal
+    carrier_loop_filter = pll_and_dll_state.carrier_loop_filter
+    code_loop_filter = pll_and_dll_state.code_loop_filter
+    carrier_doppler = sat.carrier_doppler
+    code_doppler = sat.code_doppler
+    @inbounds for k in eachindex(outputs)
+        output = outputs[k]
+        # FLL needs the previous record's filtered prompt; the first record of
+        # the chunk chains from the sat's carried-over
+        # `last_fully_integrated_filtered_prompt` (the previous chunk's last).
+        # Read it off `ts` BEFORE the advance overwrites it.
+        previous_prompt = get_last_fully_integrated_filtered_prompt(ts)
+        # Per-record integration time — the block time, NOT the chunk time.
+        integration_time = output.integrated_samples / sampling_frequency
+        # The driver de-rotates against itself (offset 0), so the derotation is a
+        # no-op for it; passed for symmetry with the passenger path.
+        ts, filtered_correlator, integrated_code_blocks = _apply_correlator_output(
+            ts,
+            output,
             sat.prn,
             sampling_frequency,
             driver_carrier_phase,
         )
 
-    # The configured bandwidths are referenced to a one-primary-code-period
-    # integration. Coherently integrating `integrated_code_blocks` periods
-    # grows the loop update interval by that factor, so scale the effective
-    # bandwidth by 1/integrated_code_blocks to hold the loop's BL·Δt stability
-    # product at its single-period value. For the N=1 path this divides by 1
-    # and is bit-identical to before.
-    carrier_bandwidth =
-        pll_and_dll_state.carrier_loop_filter_bandwidth / integrated_code_blocks
-    code_bandwidth = pll_and_dll_state.code_loop_filter_bandwidth / integrated_code_blocks
+        # The configured bandwidths are referenced to a one-primary-code-period
+        # integration. Coherently integrating `integrated_code_blocks` periods
+        # grows the loop update interval by that factor, so scale the effective
+        # bandwidth by 1/integrated_code_blocks to hold the loop's BL·Δt
+        # stability product at its single-period value. For the N=1 path this
+        # divides by 1 and is bit-identical to before.
+        carrier_bandwidth =
+            pll_and_dll_state.carrier_loop_filter_bandwidth / integrated_code_blocks
+        code_bandwidth =
+            pll_and_dll_state.code_loop_filter_bandwidth / integrated_code_blocks
 
-    carrier_freq_update, carrier_loop_filter = calculate_carrier_frequency_update(
-        signal,
-        pll_and_dll_state.carrier_loop_filter,
-        filtered_correlator,
-        previous_prompt,
-        integration_time,
-        carrier_bandwidth,
-    )
-    code_freq_update, code_loop_filter = calculate_code_frequency_update(
-        signal,
-        pll_and_dll_state.code_loop_filter,
-        filtered_correlator,
-        sat.code_doppler,
-        sampling_frequency,
-        integration_time,
-        code_bandwidth,
-    )
-    carrier_doppler, code_doppler = aid_dopplers(
-        signal,
-        pll_and_dll_state.init_carrier_doppler,
-        pll_and_dll_state.init_code_doppler,
-        carrier_freq_update,
-        code_freq_update,
-    )
+        carrier_freq_update, carrier_loop_filter = calculate_carrier_frequency_update(
+            signal,
+            carrier_loop_filter,
+            filtered_correlator,
+            previous_prompt,
+            integration_time,
+            carrier_bandwidth,
+        )
+        # `dll_disc` is fed the chunk-fixed `sat.code_doppler` — the code Doppler
+        # that actually generated this chunk's replicas — for every record;
+        # only the loop-filter *state* threads across records.
+        code_freq_update, code_loop_filter = calculate_code_frequency_update(
+            signal,
+            code_loop_filter,
+            filtered_correlator,
+            sat.code_doppler,
+            sampling_frequency,
+            integration_time,
+            code_bandwidth,
+        )
+        carrier_doppler, code_doppler = aid_dopplers(
+            signal,
+            pll_and_dll_state.init_carrier_doppler,
+            pll_and_dll_state.init_code_doppler,
+            carrier_freq_update,
+            code_freq_update,
+        )
+    end
+    empty!(outputs)
     new_doppler_estimator_state =
         SatConventionalPLLAndDLL(pll_and_dll_state; carrier_loop_filter, code_loop_filter)
-    return new_signal, new_doppler_estimator_state, carrier_doppler, code_doppler
+    return ts, new_doppler_estimator_state, carrier_doppler, code_doppler
 end
 
 # Process the non-driver signals (signals[2:end]): the shared per-signal
@@ -528,17 +558,22 @@ end
     sampling_frequency,
     driver_carrier_phase::Real = 0.0,
 )
-    if !tracked_signal.is_integration_completed || tracked_signal.integrated_samples == 0
-        return tracked_signal
+    outputs = tracked_signal.correlator_outputs
+    isempty(outputs) && return tracked_signal
+    ts = tracked_signal
+    @inbounds for k in eachindex(outputs)
+        ts = first(
+            _apply_correlator_output(
+                ts,
+                outputs[k],
+                prn,
+                sampling_frequency,
+                driver_carrier_phase,
+            ),
+        )
     end
-    first(
-        _advance_signal_after_integration(
-            tracked_signal,
-            prn,
-            sampling_frequency,
-            driver_carrier_phase,
-        ),
-    )
+    empty!(outputs)
+    ts
 end
 
 """

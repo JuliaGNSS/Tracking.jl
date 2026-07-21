@@ -422,14 +422,20 @@ end
         end
     end
 
-    # Locks after exactly one overlay cycle (1800 blocks).
-    @test synced_at_block == secondary_code_length
-    # Upcoming overlay chip after a full cycle from chip 0 is chip 0 again.
-    # The phase snap preserves the within-primary-block phase (issue #117)
-    # rather than zeroing it, so the block-aligned start lands at chip 0 up
-    # to the floating-point residual accumulated over 1800 code-phase
-    # updates (~1e-7 chips out of 10230).
-    @test synced_code_phase ≈ 0.0 atol = 1e-4
+    # Locks after one overlay cycle (1800 blocks). With the per-chunk NCO update
+    # (Doppler held fixed across a chunk and refreshed once afterwards), a code
+    # period that floating-point drift stretches one sample past the buffer
+    # occasionally skips a block; unlike the old per-completion update it is not
+    # "caught up" by a second completion in a later buffer, so sync can land up
+    # to a block late.
+    @test secondary_code_length <= synced_at_block <= secondary_code_length + 1
+    # Sync always lands on a completed integration, i.e. on a primary-code
+    # boundary. After ~one overlay cycle from chip 0 the upcoming chip is back at
+    # (or within one block of) chip 0, so the phase sits on a primary boundary up
+    # to the floating-point residual accumulated over 1800 updates.
+    let d = mod(synced_code_phase, primary_code_length)
+        @test min(d, primary_code_length - d) < 1e-3
+    end
 end
 
 end

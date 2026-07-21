@@ -78,11 +78,22 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
 
 5. **An `estimate_dopplers_and_filter_prompt` method** dispatched on
    `TrackState{<:Any, <:MyEstimator}`. This is where the actual update
-   logic runs, once per integration completion. It walks each group in
-   `track_state.groups`, reads the band's `BandMeasurement` from the
-   `measurements::BandMeasurements` NamedTuple via `get_band_id(group.band)`,
-   and produces new `TrackedSat`s with updated
+   logic runs, once per **chunk** (see [Chunked Doppler updates](track.md#Chunked-Doppler-updates)).
+   It walks each group in `track_state.groups`, reads the band's
+   `BandMeasurement` from the `measurements::BandMeasurements` NamedTuple via
+   `get_band_id(group.band)`, and produces new `TrackedSat`s with updated
    `carrier_doppler`/`code_doppler` and updated per-sat estimator state.
+
+   Each signal's correlator outputs completed during the chunk are in its
+   `correlator_outputs::Vector{`[`CorrelatorOutput`](@ref)`}` (a chunk may hold
+   zero, one, or several per signal), each carrying the raw correlator, its
+   integrated-sample count, the end sample index, and the boundary code phase.
+   Fold over them in order — threading whatever filter state you carry — and
+   write the NCO Doppler once (typically from the last output). Empty each
+   signal's `correlator_outputs` when done, and remember the NCO Doppler is held
+   fixed across the whole chunk, so a discriminator that needs the replica's
+   Doppler should read the satellite's `code_doppler`/`carrier_doppler` (the
+   value that generated the chunk), not an intermediate per-output estimate.
 
    The matching mutating method
    `estimate_dopplers_and_filter_prompt!(track_state, measurements, prefer)`

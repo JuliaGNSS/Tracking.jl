@@ -1,6 +1,36 @@
 abstract type AbstractCorrelator{M} end
 abstract type AbstractEarlyPromptLateCorrelator{M} <: AbstractCorrelator{M} end
 
+"""
+$(SIGNATURES)
+
+A single completed correlator output produced within one processing chunk.
+
+`track!` processes each measurement in fixed-size time chunks. Every time a
+signal's coherent integration completes inside a chunk, the (raw,
+un-normalized) accumulator is snapshotted into a [`CorrelatorOutput`] and
+appended to that signal's `correlator_outputs` array; the Doppler estimator
+then folds over those records after the chunk. Storing the raw correlator plus
+`integrated_samples` lets the estimator normalize it (dividing by the sample
+count) and matches `last_fully_integrated_correlator`.
+
+Fields:
+
+  - `correlator`: the raw accumulated correlator at completion (not normalized).
+  - `integrated_samples`: samples integrated into this output (for `normalize`,
+    the loop-filter `integration_time`, and the bit-buffer block count).
+  - `sample_index`: buffer-relative sample index at which this integration ended
+    (the epoch of the measurement; used by vector tracking).
+  - `code_phase`: the satellite `code_phase` at completion — on a code boundary,
+    needed to anchor the one-time phase-snap when a signal syncs mid-chunk.
+"""
+struct CorrelatorOutput{C<:AbstractCorrelator}
+    correlator::C
+    integrated_samples::Int
+    sample_index::Int
+    code_phase::Float64
+end
+
 type_for_num_ants(num_ants::NumAnts{1}) = ComplexF64
 type_for_num_ants(num_ants::NumAnts{N}) where {N} = SVector{N,ComplexF64}
 

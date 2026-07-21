@@ -385,52 +385,62 @@ function _update_tracked_sat_correlator(
     dc::AbstractDownconvertAndCorrelator,
     signal,
     num_samples_signal,
+    chunk_last_sample,
     sampling_frequency,
     intermediate_frequency,
 )
-    # MIN samples-to-next-boundary across all signals on this sat, clamped
-    # to remaining buffer. Each signal's coherent-integration length comes
-    # from its own `preferred_num_code_blocks_to_integrate` field; the
-    # signal-level boundary calc reads it per signal.
-    samples_to_integrate, per_signal_completed = _calc_min_samples_and_completed(
-        sat.signals,
-        sat.signal_start_sample,
-        sampling_frequency,
-        sat.code_doppler,
-        sat.code_phase,
-        num_samples_signal,
-    )
-    if samples_to_integrate == 0
-        return sat
+    # Integrate this sat forward through the current chunk. Each sub-step
+    # advances to the next code-block boundary of any signal (or the chunk
+    # end, whichever is nearer); `update` snapshots a `CorrelatorOutput` and
+    # resets the accumulator for every signal that just completed, so a chunk
+    # can yield 0, 1, or several outputs per signal. The NCO Doppler is
+    # untouched here, so it stays fixed for the whole chunk. A partial
+    # integration at the chunk (or buffer) boundary carries in the accumulator.
+    while sat.signal_start_sample <= chunk_last_sample
+        # MIN samples-to-next-boundary across all signals on this sat, clamped
+        # to the chunk end. Each signal's coherent-integration length comes from
+        # its own `preferred_num_code_blocks_to_integrate`; replica sizing still
+        # uses the true buffer length `num_samples_signal`.
+        samples_to_integrate, per_signal_completed = _calc_min_samples_and_completed(
+            sat.signals,
+            sat.signal_start_sample,
+            sampling_frequency,
+            sat.code_doppler,
+            sat.code_phase,
+            num_samples_signal,
+            chunk_last_sample,
+        )
+        samples_to_integrate == 0 && break
+        carrier_frequency = sat.carrier_doppler + intermediate_frequency
+        new_signals_data = _correlate_signals(
+            sat.signals,
+            per_signal_completed,
+            dc,
+            signal,
+            sat.code_doppler,
+            sat.code_phase,
+            carrier_frequency,
+            sat.carrier_phase,
+            sampling_frequency,
+            sat.signal_start_sample,
+            samples_to_integrate,
+            sat.prn,
+            num_samples_signal,
+        )
+        sat = update(
+            sat,
+            samples_to_integrate,
+            intermediate_frequency,
+            sampling_frequency,
+            new_signals_data,
+        )
     end
-    carrier_frequency = sat.carrier_doppler + intermediate_frequency
-    new_signals_data = _correlate_signals(
-        sat.signals,
-        per_signal_completed,
-        dc,
-        signal,
-        sat.code_doppler,
-        sat.code_phase,
-        carrier_frequency,
-        sat.carrier_phase,
-        sampling_frequency,
-        sat.signal_start_sample,
-        samples_to_integrate,
-        sat.prn,
-        num_samples_signal,
-    )
-    update(
-        sat,
-        samples_to_integrate,
-        intermediate_frequency,
-        sampling_frequency,
-        new_signals_data,
-    )
+    return sat
 end
 
 # Compute (samples_to_integrate, per_signal_completed_tuple) via tuple
 # recursion. Returns the MIN across all signals' samples-to-next-boundary,
-# clamped to remaining buffer samples. Per-signal `completed` flags are
+# clamped to the current chunk end. Per-signal `completed` flags are
 # derived after the MIN is known.
 @inline function _calc_min_samples_and_completed(
     signals::Tuple,
@@ -439,6 +449,7 @@ end
     code_doppler,
     code_phase,
     num_samples_signal,
+    chunk_last_sample,
 )
     per_signal_to_boundary = _per_signal_samples_to_boundary(
         signals,
@@ -449,8 +460,10 @@ end
         num_samples_signal,
     )
     samples_to_integrate = _min_of_tuple(per_signal_to_boundary)
-    signal_samples_left = num_samples_signal - signal_start_sample + 1
-    samples_to_integrate = min(samples_to_integrate, signal_samples_left)
+    # Clamp the integration to the end of the current chunk (not the buffer):
+    # the boundary calc / replica sizing above still see the true buffer length.
+    samples_left = chunk_last_sample - signal_start_sample + 1
+    samples_to_integrate = min(samples_to_integrate, samples_left)
     per_signal_completed = _flag_completed(per_signal_to_boundary, samples_to_integrate)
     return samples_to_integrate, per_signal_completed
 end
@@ -798,22 +811,42 @@ group's existing `Vector{TrackedSat}` backing storage. On the threaded
 backend, different `@batch` iterations write to disjoint slots, so no
 synchronization is needed. Returns the same `track_state`.
 Allocation-free in steady state — see [`track!`](@ref).
-
-`samples_unchanged = true` promises that every band's sample buffer holds the
-same content as on the previous call with this `dc`; backends may then reuse
-sample-derived caches (the bit-wise backends skip re-packing their shared
-band sign planes). `track!` passes it on every loop iteration after the first
-so the pack happens once per call; leave it `false` (the default) whenever
-the buffers may have been refilled.
 """
 function downconvert_and_correlate!(
     dc::AbstractDownconvertAndCorrelator,
     measurements::BandMeasurements,
     track_state::TrackState;
-    samples_unchanged::Bool = false,
+    chunk_index::Int = 0,
+    chunk_duration = nothing,
 )
-    _foreach_group!(_dc_one_group!, track_state.groups, dc, measurements, samples_unchanged)
+    _foreach_group!(
+        _dc_one_group!,
+        track_state.groups,
+        dc,
+        measurements,
+        chunk_index,
+        chunk_duration,
+    )
     return track_state
+end
+
+# Last sample index (inclusive) this satellite may integrate up to in the
+# current chunk. `chunk_duration === nothing` means "no chunking" — consume the
+# whole buffer, i.e. today's behavior and the default for direct callers. When a
+# chunk duration is given, the boundary lies on a shared per-band time grid; it
+# is re-anchored to the absolute `chunk_index` each call (not accumulated) so
+# rounding never drifts and different bands stay time-aligned to within a
+# sample.
+@inline _chunk_last_sample(::Nothing, chunk_index, sampling_frequency, num_samples) =
+    num_samples
+@inline function _chunk_last_sample(
+    chunk_duration,
+    chunk_index,
+    sampling_frequency,
+    num_samples,
+)
+    grid = uconvert(NoUnits, (chunk_index + 1) * chunk_duration * sampling_frequency)
+    min(round(Int, grid), num_samples)
 end
 
 # Optional per-backend sample-type check, run once per group before the
@@ -834,19 +867,22 @@ end
     g::SignalGroup,
     dc::AbstractDownconvertAndCorrelator,
     measurements::BandMeasurements,
-    # The float backends derive nothing from the raw samples worth caching;
-    # only the bit-wise backends act on `samples_unchanged`.
-    samples_unchanged::Bool,
+    chunk_index::Int,
+    chunk_duration,
 )
     vals = g.satellites.values
     isempty(vals) && return nothing
     m = measurements[get_band_id(g.band)]
     _check_sample_type(dc, m)
+    num_samples = get_num_samples(m)
+    chunk_last_sample =
+        _chunk_last_sample(chunk_duration, chunk_index, m.sampling_frequency, num_samples)
     _dc_group_loop!(
         dc,
         vals,
         m.samples,
-        get_num_samples(m),
+        num_samples,
+        chunk_last_sample,
         m.sampling_frequency,
         m.intermediate_frequency,
     )
@@ -863,17 +899,17 @@ struct _BatchLoop end
 @inline _threading(::AbstractDownconvertAndCorrelator) = _SerialLoop()
 @inline _threading(::CPUThreadedDownconvertAndCorrelator) = _BatchLoop()
 
-@inline _dc_group_loop!(dc::AbstractDownconvertAndCorrelator, vals, args::Vararg{Any,4}) =
+@inline _dc_group_loop!(dc::AbstractDownconvertAndCorrelator, vals, args::Vararg{Any,5}) =
     _dc_group_loop!(_threading(dc), dc, vals, args...)
 
-@inline function _dc_group_loop!(::_SerialLoop, dc, vals, args::Vararg{Any,4})
+@inline function _dc_group_loop!(::_SerialLoop, dc, vals, args::Vararg{Any,5})
     @inbounds for i in eachindex(vals)
         vals[i] = _update_tracked_sat_correlator(vals[i], dc, args...)
     end
     return nothing
 end
 
-@inline function _dc_group_loop!(::_BatchLoop, dc, vals, args::Vararg{Any,4})
+@inline function _dc_group_loop!(::_BatchLoop, dc, vals, args::Vararg{Any,5})
     @batch for i = 1:length(vals)
         @inbounds vals[i] = _update_tracked_sat_correlator(vals[i], dc, args...)
     end

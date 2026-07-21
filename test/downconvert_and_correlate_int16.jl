@@ -84,7 +84,19 @@ function correlate_once(dc, sig, fs, nsamp, cdopp, cphase; correlator = nothing)
         TrackedSat(sig, 1, cphase, cdopp; correlator)
     ts = TrackState(sig, [sat])
     ts2 = downconvert_and_correlate(dc, meas, ts)
-    first(get_sat_state(ts2, 1).signals).correlator
+    _completed_or_partial_correlator(first(get_sat_state(ts2, 1).signals))
+end
+
+# A bare `downconvert_and_correlate` treats the whole buffer as one chunk. If a
+# code period completed, its (raw) correlator was snapshotted into
+# `correlator_outputs` and the live correlator holds only the residue — return
+# the first completed integration. If the buffer was shorter than one code
+# period (e.g. Galileo E1B's 4 ms period in a 1 ms buffer) nothing completed, so
+# the live correlator holds the whole partial integration — return that. Either
+# way this matches the value the old single-step call left in the live correlator.
+function _completed_or_partial_correlator(sig)
+    outs = sig.correlator_outputs
+    isempty(outs) ? sig.correlator : first(outs).correlator
 end
 
 @testset "Int16 downconvert and correlate" begin
@@ -180,8 +192,9 @@ end
         cap = make_capture_mat(sig, fs, nsamp, 200Hz, 100.0, M)
         meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
         mk() = TrackState(sig, [TrackedSat(sig, 1, 100.0, 200Hz; num_ants = NumAnts(M))])
-        run(dc) =
-            first(get_sat_state(downconvert_and_correlate(dc, meas, mk()), 1).signals).correlator
+        run(dc) = _completed_or_partial_correlator(
+            first(get_sat_state(downconvert_and_correlate(dc, meas, mk()), 1).signals),
+        )
         cf = run(CPUThreadedDownconvertAndCorrelator())
         ci = run(Int16ThreadedDownconvertAndCorrelator(TEST_MAX_MEAS))
         ef, pf, lf = get_early(cf), get_prompt(cf), get_late(cf)   # SVector{M,Complex}

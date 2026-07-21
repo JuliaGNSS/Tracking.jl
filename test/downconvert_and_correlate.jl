@@ -17,6 +17,8 @@ using Tracking:
     downconvert_and_correlate,
     get_accumulators,
     get_correlator,
+    get_correlator_outputs,
+    get_sat_state,
     get_correlator_sample_shifts,
     update_accumulator
 
@@ -38,9 +40,17 @@ end
     num_samples_signal = 5000
     intermediate_frequency = 0.0Hz
 
-    sats = [TrackedSat(gpsl1, 1, code_phase, 1000.0Hz), TrackedSat(gpsl1, 2, 11.0, 500.0Hz)]
     downconvert_and_correlator = DC()
-    track_state = TrackState(gpsl1, sats)
+
+    # A bare `downconvert_and_correlate` (no `update_interval`) treats the whole
+    # buffer as one chunk. Here one code period (~4949 samples) completes, so it
+    # is snapshotted into `correlator_outputs`; the small residue stays in the
+    # live accumulator. The completed integration's correlator equals the old
+    # single-step value — only its location moved (from `get_correlator` to the
+    # recorded output). Each check uses its own single-sat TrackState so the
+    # (shared, reused) `correlator_outputs` buffer is not carried between calls.
+    only_output(track_state, prn) =
+        only(get_correlator_outputs(only(get_sat_state(track_state, prn).signals)))
 
     signal =
         gen_code(
@@ -52,6 +62,7 @@ end
             code_phase,
         ) .* cis.(2π * (0:(num_samples_signal-1)) * 1000.0Hz / sampling_frequency)
 
+    track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, code_phase, 1000.0Hz)])
     measurements =
         (L1 = BandMeasurement(signal, sampling_frequency, intermediate_frequency),)
     next_track_state = @inferred downconvert_and_correlate(
@@ -60,7 +71,8 @@ end
         track_state,
     )
 
-    @test real.(get_correlator(next_track_state, 1).accumulators) ≈ [2921, 4949, 2917] rtol=1e-3
+    @test real.(only_output(next_track_state, 1).correlator.accumulators) ≈
+          [2921, 4949, 2917] rtol = 1e-3
 
     signal =
         gen_code(
@@ -72,6 +84,7 @@ end
             11.0,
         ) .* cis.(2π * (0:(num_samples_signal-1)) * 500.0Hz / sampling_frequency)
 
+    track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 2, 11.0, 500.0Hz)])
     measurements =
         (L1 = BandMeasurement(signal, sampling_frequency, intermediate_frequency),)
     next_track_state = @inferred downconvert_and_correlate(
@@ -80,7 +93,8 @@ end
         track_state,
     )
 
-    @test real.(get_correlator(next_track_state, 2).accumulators) ≈ [2919, 4947, 2915] rtol=1e-3
+    @test real.(only_output(next_track_state, 2).correlator.accumulators) ≈
+          [2919, 4947, 2915] rtol = 1e-3
 end
 
 @testset "Early return when signal_start_sample past end with $DC" for DC in [

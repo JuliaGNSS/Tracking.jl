@@ -119,6 +119,17 @@ get_num_accumulators
 get_num_ants(::AbstractCorrelator)
 ```
 
+## Correlator outputs
+
+Each completed integration within a processing chunk is recorded as a
+`CorrelatorOutput`, collected per signal and consumed by the Doppler estimator
+after the chunk (see [Chunked Doppler updates](track.md#Chunked-Doppler-updates)).
+
+```@docs
+CorrelatorOutput
+get_correlator_outputs
+```
+
 ## Sample shifts
 
 The downconvert/correlate inner loop walks the incoming sample buffer once

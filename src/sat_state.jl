@@ -18,7 +18,6 @@ struct TrackedSignal{
 }
     signal::Sig
     integrated_samples::Int
-    is_integration_completed::Bool
     correlator::C
     last_fully_integrated_correlator::C
     last_fully_integrated_filtered_prompt::ComplexF64
@@ -26,6 +25,12 @@ struct TrackedSignal{
     bit_buffer::BitBuffer{B}
     post_corr_filter::PCF
     filtered_prompts::Vector{ComplexF64}
+    # Correlator outputs completed within the current processing chunk, each
+    # tagged with its end sample index and boundary code phase. Preallocated
+    # and reused (like `filtered_prompts`): the correlate phase `push!`es a
+    # record per completed integration, the Doppler estimator folds over them
+    # and `empty!`s the array. Empty at chunk boundaries; see [`CorrelatorOutput`].
+    correlator_outputs::Vector{CorrelatorOutput{C}}
     # Preferred coherent-integration length for THIS signal, in primary code
     # blocks. The actual length is capped per integration by the signal's
     # bit/secondary-code period and held at 1 until bit/secondary sync (see
@@ -98,10 +103,15 @@ function TrackedSignal(
     # Picking the type here makes `B` concrete in the resulting
     # `TrackedSignal{Sig, B, C, PCF}`.
     B = get_code_block_buffer_type(signal)
+    # Preallocate the per-chunk correlator-output buffer. A default-length
+    # chunk (= smallest code period) yields at most one record per chunk for
+    # the driver; size to a small constant so `push!` never grows it after
+    # warmup even for a moderately enlarged `update_interval`.
+    correlator_outputs = CorrelatorOutput{typeof(correlator)}[]
+    sizehint!(correlator_outputs, 4)
     TrackedSignal(
         signal,
         0,
-        false,
         correlator,
         correlator,
         complex(0.0, 0.0),
@@ -109,6 +119,7 @@ function TrackedSignal(
         BitBuffer{B}(),
         post_corr_filter,
         ComplexF64[],
+        correlator_outputs,
         preferred_num_code_blocks_to_integrate,
     )
 end
@@ -122,7 +133,6 @@ function TrackedSignal(
     t::TrackedSignal{Sig,B,C,PCF};
     signal = nothing,
     integrated_samples = nothing,
-    is_integration_completed = nothing,
     correlator::Maybe{C} = nothing,
     last_fully_integrated_correlator::Maybe{C} = nothing,
     last_fully_integrated_filtered_prompt = nothing,
@@ -130,6 +140,7 @@ function TrackedSignal(
     bit_buffer::Maybe{BitBuffer{B}} = nothing,
     post_corr_filter::Maybe{PCF} = nothing,
     filtered_prompts::Maybe{Vector{ComplexF64}} = nothing,
+    correlator_outputs::Maybe{Vector{CorrelatorOutput{C}}} = nothing,
     preferred_num_code_blocks_to_integrate = nothing,
 ) where {
     Sig<:AbstractGNSSSignal,
@@ -145,8 +156,6 @@ function TrackedSignal(
     TrackedSignal{Sig,B,C,PCF}(
         isnothing(signal) ? t.signal : signal,
         isnothing(integrated_samples) ? t.integrated_samples : integrated_samples,
-        isnothing(is_integration_completed) ? t.is_integration_completed :
-        is_integration_completed,
         isnothing(correlator) ? t.correlator : correlator,
         isnothing(last_fully_integrated_correlator) ? t.last_fully_integrated_correlator :
         last_fully_integrated_correlator,
@@ -156,6 +165,7 @@ function TrackedSignal(
         isnothing(bit_buffer) ? t.bit_buffer : bit_buffer,
         isnothing(post_corr_filter) ? t.post_corr_filter : post_corr_filter,
         isnothing(filtered_prompts) ? t.filtered_prompts : filtered_prompts,
+        isnothing(correlator_outputs) ? t.correlator_outputs : correlator_outputs,
         isnothing(preferred_num_code_blocks_to_integrate) ?
         t.preferred_num_code_blocks_to_integrate : preferred_num_code_blocks_to_integrate,
     )
@@ -167,6 +177,17 @@ get_last_fully_integrated_correlator(t::TrackedSignal) = t.last_fully_integrated
 get_last_fully_integrated_filtered_prompt(t::TrackedSignal) =
     t.last_fully_integrated_filtered_prompt
 get_filtered_prompts(t::TrackedSignal) = t.filtered_prompts
+
+"""
+$(SIGNATURES)
+
+The [`CorrelatorOutput`](@ref)s this signal completed during the most recent
+processing chunk, in order. Populated by the correlate phase and consumed +
+cleared by the Doppler estimator after each chunk, so it is empty between
+`track!` calls; read it inside a custom estimator, or right after a bare
+`downconvert_and_correlate!`. See [Chunked Doppler updates](@ref).
+"""
+get_correlator_outputs(t::TrackedSignal) = t.correlator_outputs
 get_post_corr_filter(t::TrackedSignal) = t.post_corr_filter
 get_cn0_estimator(t::TrackedSignal) = t.cn0_estimator
 get_bit_buffer(t::TrackedSignal) = t.bit_buffer
@@ -702,6 +723,7 @@ end
 
 @inline function _reset_signal(t::TrackedSignal)
     empty!(t.filtered_prompts)
+    empty!(t.correlator_outputs)
     TrackedSignal(t; bit_buffer = reset(t.bit_buffer))
 end
 
