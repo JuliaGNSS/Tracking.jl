@@ -20,7 +20,7 @@ using Polyester
 # sync-detection-redesign plan in docs/plans for the comparison).
 BitIntegers.@define_integers 1800
 
-using Unitful: upreferred, uconvert, NoUnits, Hz, dBHz, ms, s
+using Unitful: upreferred, uconvert, dimension, NoUnits, Hz, dBHz, ms, s
 import Base.zero, Base.length, Base.resize!
 
 export get_early,
