@@ -87,7 +87,7 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
    Each signal's correlator outputs completed during the chunk are in its
    `correlator_outputs::Vector{`[`CorrelatorOutput`](@ref)`}` (a chunk may hold
    zero, one, or several per signal), each carrying the raw correlator, its
-   integrated-sample count, the end sample index, and the boundary code phase.
+   integrated-sample count, and the end sample index.
    Fold over them in order — threading whatever filter state you carry — and
    write the NCO Doppler once (typically from the last output). Empty each
    signal's `correlator_outputs` when done, and remember the NCO Doppler is held

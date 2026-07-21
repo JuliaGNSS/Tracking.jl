@@ -50,7 +50,7 @@ end), reusing `_calc_min_samples_and_completed` with the chunk end substituted
 for the buffer end (the true buffer length is still used for replica sizing).
 When a signal's integration completes, `update` / `_build_new_signals` snapshots
 its raw accumulator into a [`CorrelatorOutput`](@ref) — `(correlator,
-integrated_samples, sample_index, code_phase)` — appended to the reused
+integrated_samples, sample_index)` — appended to the reused
 per-signal `correlator_outputs` buffer, and resets the accumulator so the next
 integration in the chunk starts fresh. A partial integration at the chunk (or
 buffer) boundary carries in the accumulator. The NCO Doppler is untouched here,
