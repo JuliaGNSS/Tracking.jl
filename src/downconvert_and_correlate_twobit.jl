@@ -1727,48 +1727,57 @@ function _update_tracked_sat_correlator(
     dc::_TwoBitDC,
     signal,
     num_samples_signal,
+    chunk_last_sample,
     sampling_frequency,
     intermediate_frequency,
 )
-    samples_to_integrate, per_signal_completed = _calc_min_samples_and_completed(
-        sat.signals,
-        sat.signal_start_sample,
-        sampling_frequency,
-        sat.code_doppler,
-        sat.code_phase,
-        num_samples_signal,
-    )
-    samples_to_integrate == 0 && return sat
-    carrier_frequency = sat.carrier_doppler + intermediate_frequency
-    new_signals_data = _correlate_signals(
-        sat.signals,
-        per_signal_completed,
-        dc,
-        signal,
-        sat.code_doppler,
-        sat.code_phase,
-        carrier_frequency,
-        sat.carrier_phase,
-        sampling_frequency,
-        sat.signal_start_sample,
-        samples_to_integrate,
-        sat.prn,
-        num_samples_signal,
-    )
-    update(
-        sat,
-        samples_to_integrate,
-        intermediate_frequency,
-        sampling_frequency,
-        new_signals_data,
-    )
+    # Integrate this sat through the current chunk, recording every completed
+    # correlator output (see the CPU backend for the full rationale). The NCO
+    # Doppler is held fixed across the chunk.
+    while sat.signal_start_sample <= chunk_last_sample
+        samples_to_integrate, per_signal_completed = _calc_min_samples_and_completed(
+            sat.signals,
+            sat.signal_start_sample,
+            sampling_frequency,
+            sat.code_doppler,
+            sat.code_phase,
+            num_samples_signal,
+            chunk_last_sample,
+        )
+        samples_to_integrate == 0 && break
+        carrier_frequency = sat.carrier_doppler + intermediate_frequency
+        new_signals_data = _correlate_signals(
+            sat.signals,
+            per_signal_completed,
+            dc,
+            signal,
+            sat.code_doppler,
+            sat.code_phase,
+            carrier_frequency,
+            sat.carrier_phase,
+            sampling_frequency,
+            sat.signal_start_sample,
+            samples_to_integrate,
+            sat.prn,
+            num_samples_signal,
+        )
+        sat = update(
+            sat,
+            samples_to_integrate,
+            intermediate_frequency,
+            sampling_frequency,
+            new_signals_data,
+        )
+    end
+    return sat
 end
 
 @inline function _dc_one_group!(
     g::SignalGroup,
     dc::_TwoBitDC,
     measurements::BandMeasurements,
-    samples_unchanged::Bool,
+    chunk_index::Int,
+    chunk_duration,
 )
     vals = g.satellites.values
     isempty(vals) && return nothing
@@ -1787,11 +1796,7 @@ end
     # for a single sat the shared pack + per-sat realign copy is slower than packing that
     # one sat directly, so empty the band buffer to select the kernel's per-sat path.
     samples = m.samples
-    if samples_unchanged
-        # Same buffer content as the previous call with this dc (track! passes
-        # this on every loop iteration after the first): the shared band pack —
-        # or the emptied single-sat state — is still valid, keep it.
-    elseif length(vals) > 1
+    if length(vals) > 1
         nsamp = get_num_samples(m)
         M = samples isa AbstractMatrix ? size(samples, 2) : 1
         num_rows = samples isa AbstractMatrix ? size(samples, 1) : length(samples)
@@ -1811,11 +1816,15 @@ end
         resize!(dc.band.gmrband, 0)
         resize!(dc.band.gmiband, 0)
     end
+    num_samples = get_num_samples(m)
+    chunk_last_sample =
+        _chunk_last_sample(chunk_duration, chunk_index, m.sampling_frequency, num_samples)
     _dc_group_loop!(
         dc,
         vals,
         m.samples,
-        get_num_samples(m),
+        num_samples,
+        chunk_last_sample,
         m.sampling_frequency,
         m.intermediate_frequency,
     )
@@ -1824,7 +1833,7 @@ end
 @inline function _dc_group_loop!(
     dc::TwoBitDownconvertAndCorrelator,
     vals,
-    args::Vararg{Any,4},
+    args::Vararg{Any,5},
 )
     @inbounds for i in eachindex(vals)
         vals[i] = _update_tracked_sat_correlator(vals[i], dc, args...)
@@ -1835,7 +1844,7 @@ end
 @inline function _dc_group_loop!(
     dc::TwoBitThreadedDownconvertAndCorrelator,
     vals,
-    args::Vararg{Any,4},
+    args::Vararg{Any,5},
 )
     @batch for i = 1:length(vals)
         @inbounds vals[i] = _update_tracked_sat_correlator(vals[i], dc, args...)
@@ -1868,8 +1877,16 @@ function downconvert_and_correlate!(
     dc::_TwoBitDC,
     measurements::BandMeasurements,
     track_state::TrackState;
-    samples_unchanged::Bool = false,
+    chunk_index::Int = 0,
+    chunk_duration = nothing,
 )
-    _foreach_group!(_dc_one_group!, track_state.groups, dc, measurements, samples_unchanged)
+    _foreach_group!(
+        _dc_one_group!,
+        track_state.groups,
+        dc,
+        measurements,
+        chunk_index,
+        chunk_duration,
+    )
     return track_state
 end

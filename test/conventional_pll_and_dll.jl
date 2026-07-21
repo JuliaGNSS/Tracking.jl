@@ -25,6 +25,7 @@ using Tracking:
     get_sat_states,
     update_accumulator,
     get_default_correlator,
+    CorrelatorOutput,
     merge_sats
 
 # Build a stub `(L1 = BandMeasurement(...),)` NamedTuple to pass to the
@@ -32,6 +33,16 @@ using Tracking:
 # (it only reads `sampling_frequency` per group), so an empty buffer
 # suffices.
 _meas_l1(fs) = (L1 = BandMeasurement(ComplexF64[], fs),)
+
+# Build a signal carrying one completed integration as a `CorrelatorOutput`
+# record — the estimate phase folds over `correlator_outputs`. `sample_index`
+# and `code_phase` are metadata here (no sync, so no phase-snap).
+_completed_signal(sig, correlator, num_samples, code_phase) = TrackedSignal(
+    sig;
+    correlator_outputs = [
+        CorrelatorOutput(correlator, num_samples, num_samples, code_phase),
+    ],
+)
 
 @testset "Doppler aiding" begin
     gpsl1 = GPSL1CA()
@@ -141,12 +152,7 @@ end
     sat_state_after_full_integration = TrackedSat(
         sat_state;
         signals = (
-            TrackedSignal(
-                only(sat_state.signals);
-                is_integration_completed = true,
-                integrated_samples = num_samples,
-                correlator,
-            ),
+            _completed_signal(only(sat_state.signals), correlator, num_samples, code_phase),
         ),
     )
     track_state = TrackState(gpsl1, sat_state_after_full_integration; doppler_estimator)
@@ -190,22 +196,22 @@ end
     sat1 = TrackedSat(
         sat1_initial;
         signals = (
-            TrackedSignal(
-                only(sat1_initial.signals);
-                is_integration_completed = true,
-                integrated_samples = num_samples,
+            _completed_signal(
+                only(sat1_initial.signals),
                 correlator,
+                num_samples,
+                code_phase,
             ),
         ),
     )
     sat2_pre = TrackedSat(
         sat2_initial;
         signals = (
-            TrackedSignal(
-                only(sat2_initial.signals);
-                is_integration_completed = true,
-                integrated_samples = num_samples,
+            _completed_signal(
+                only(sat2_initial.signals),
                 correlator,
+                num_samples,
+                code_phase,
             ),
         ),
     )

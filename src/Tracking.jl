@@ -20,7 +20,7 @@ using Polyester
 # sync-detection-redesign plan in docs/plans for the comparison).
 BitIntegers.@define_integers 1800
 
-using Unitful: upreferred, uconvert, Hz, dBHz, ms, s
+using Unitful: upreferred, uconvert, NoUnits, Hz, dBHz, ms, s
 import Base.zero, Base.length, Base.resize!
 
 export get_early,
@@ -40,6 +40,8 @@ export get_early,
     get_last_fully_integrated_correlator,
     get_last_fully_integrated_filtered_prompt,
     get_filtered_prompts,
+    get_correlator_outputs,
+    CorrelatorOutput,
     get_bit_buffer,
     get_bits,
     get_num_bits,

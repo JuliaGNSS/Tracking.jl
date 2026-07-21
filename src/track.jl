@@ -171,13 +171,20 @@ function track!(
     measurements::BandMeasurements,
     track_state::TrackState;
     downconvert_and_correlator::AbstractDownconvertAndCorrelator = CPUThreadedDownconvertAndCorrelator(),
+    update_interval = nothing,
 )
     _validate_measurements(track_state, measurements)
     reset_start_sample_and_bit_buffer!(track_state)
-    # The measurement buffers are fixed for the whole call, so sample-derived
-    # backend caches (the bit backends' shared band pack) are built on the
-    # first iteration and reused ever after (`samples_unchanged`).
-    first_iteration = true
+    # Resolve the Doppler-update / chunk interval. `nothing` => auto: the
+    # smallest primary-code period across all tracked signals, so a default
+    # chunk holds one code period of the shortest signal. The measurement is
+    # walked chunk by chunk: each chunk correlates (collecting every completed
+    # correlator output per signal into its `correlator_outputs` buffer) with
+    # the NCO Doppler held fixed, then the estimator folds over those outputs
+    # and updates every sat's NCO once — a common epoch across all sats.
+    chunk_duration = _resolve_update_interval(update_interval, track_state)
+    _validate_update_interval(chunk_duration, measurements)
+    chunk_index = 0
     while true
         _all_groups_reached_end(track_state, measurements) && break
 
@@ -185,10 +192,11 @@ function track!(
             downconvert_and_correlator,
             measurements,
             track_state;
-            samples_unchanged = !first_iteration,
+            chunk_index,
+            chunk_duration,
         )
-        first_iteration = false
         estimate_dopplers_and_filter_prompt!(track_state, measurements)
+        chunk_index += 1
     end
     return track_state
 end
@@ -231,4 +239,53 @@ end
         sat.signal_start_sample == target || return false
     end
     _check_all_groups_at_end(Base.tail(t), measurements)
+end
+
+# Resolve the per-chunk update interval to a concrete time. `nothing` => auto:
+# the smallest primary-code period across every signal in every group, so the
+# default chunk holds exactly one code period of the shortest signal (e.g. 1 ms
+# for a GPS L1 C/A + Galileo E1B track state).
+@inline _resolve_update_interval(update_interval, ::TrackState) = update_interval
+@inline function _resolve_update_interval(::Nothing, track_state::TrackState)
+    _smallest_code_period(track_state)
+end
+
+# Primary-code period (a time) of one signal.
+@inline _code_period(signal::AbstractGNSSSignal) =
+    get_code_length(signal) / get_code_frequency(signal)
+
+@inline _min_signal_code_period(::Tuple{}, m) = m
+@inline _min_signal_code_period(signals::Tuple, m) =
+    _min_signal_code_period(Base.tail(signals), min(m, _code_period(first(signals))))
+
+@inline _min_group_code_period(::Tuple{}, m) = m
+@inline _min_group_code_period(groups::Tuple, m) = _min_group_code_period(
+    Base.tail(groups),
+    _min_signal_code_period(first(groups).signals, m),
+)
+
+function _smallest_code_period(track_state::TrackState)
+    groups = Tuple(track_state.groups)
+    # Every TrackState has at least one group and every group at least one
+    # signal, so seeding from the first signal's period is safe and keeps the
+    # reduction type-stable across heterogeneous signal tuples.
+    init = _code_period(first(first(groups).signals))
+    _min_group_code_period(groups, init)
+end
+
+# A chunk must cover at least one sample on every band, otherwise the chunk
+# grid could fail to advance and `track!` would not terminate. The default
+# (smallest code period) is always many samples; this only guards against a
+# user-supplied `update_interval` shorter than a sample period.
+function _validate_update_interval(chunk_duration, measurements::BandMeasurements)
+    for m in measurements
+        samples_per_chunk = uconvert(NoUnits, chunk_duration * m.sampling_frequency)
+        samples_per_chunk >= 1 || throw(
+            ArgumentError(
+                "update_interval $chunk_duration is shorter than one sample period " *
+                "at sampling frequency $(m.sampling_frequency); pick a longer interval.",
+            ),
+        )
+    end
+    nothing
 end

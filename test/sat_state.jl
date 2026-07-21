@@ -173,7 +173,6 @@ GNSSSignals.get_data_frequency(::FakeWrapSignal) = 0Hz
     fake_tracked_signal(code_length, secondary_length, found) = Tracking.TrackedSignal(
         FakeWrapSignal(code_length, secondary_length),
         base.integrated_samples,
-        base.is_integration_completed,
         base.correlator,
         base.last_fully_integrated_correlator,
         base.last_fully_integrated_filtered_prompt,
@@ -181,6 +180,7 @@ GNSSSignals.get_data_frequency(::FakeWrapSignal) = 0Hz
         found ? synced_buffer(base.bit_buffer) : base.bit_buffer,
         base.post_corr_filter,
         base.filtered_prompts,
+        base.correlator_outputs,
         base.preferred_num_code_blocks_to_integrate,
     )
 

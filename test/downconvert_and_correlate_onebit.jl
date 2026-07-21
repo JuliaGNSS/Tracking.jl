@@ -89,7 +89,19 @@ function correlate_once(
         TrackedSat(sig, 1, cphase, cdopp; correlator)
     ts = TrackState(sig, [sat])
     ts2 = downconvert_and_correlate(dc, meas, ts)
-    first(get_sat_state(ts2, 1).signals).correlator
+    _completed_or_partial_correlator(first(get_sat_state(ts2, 1).signals))
+end
+
+# A bare `downconvert_and_correlate` treats the whole buffer as one chunk. If a
+# code period completed, its (raw) correlator was snapshotted into
+# `correlator_outputs` and the live correlator holds only the residue — return
+# the first completed integration. If the buffer was shorter than one code
+# period (e.g. Galileo E1B's 4 ms period in a 1 ms buffer) nothing completed, so
+# the live correlator holds the whole partial integration — return that. Either
+# way this matches the value the old single-step call left in the live correlator.
+function _completed_or_partial_correlator(sig)
+    outs = sig.correlator_outputs
+    isempty(outs) ? sig.correlator : first(outs).correlator
 end
 
 # Track a noisy GPS L1CA capture at a known C/N0 with backend `dc`, returning the
@@ -367,10 +379,11 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             TrackState(sig, satN; doppler_estimator = est),
         )
         for s in get_sat_state(tsN, 1).signals
-            @test length(get_prompt(s.correlator)) == M
-            @test get_prompt(s.correlator) == get_prompt(cs)
-            @test get_early(s.correlator) == get_early(cs)
-            @test get_late(s.correlator) == get_late(cs)
+            c = _completed_or_partial_correlator(s)
+            @test length(get_prompt(c)) == M
+            @test get_prompt(c) == get_prompt(cs)
+            @test get_early(c) == get_early(cs)
+            @test get_late(c) == get_late(cs)
         end
     end
 

@@ -91,7 +91,19 @@ function correlate_once(
         TrackedSat(sig, 1, cphase, cdopp; correlator)
     ts = TrackState(sig, [sat])
     ts2 = downconvert_and_correlate(dc, meas, ts)
-    first(get_sat_state(ts2, 1).signals).correlator
+    _completed_or_partial_correlator(first(get_sat_state(ts2, 1).signals))
+end
+
+# A bare `downconvert_and_correlate` treats the whole buffer as one chunk. If a
+# code period completed, its (raw) correlator was snapshotted into
+# `correlator_outputs` and the live correlator holds only the residue — return
+# the first completed integration. If the buffer was shorter than one code
+# period (e.g. Galileo E1B's 4 ms period in a 1 ms buffer) nothing completed, so
+# the live correlator holds the whole partial integration — return that. Either
+# way this matches the value the old single-step call left in the live correlator.
+function _completed_or_partial_correlator(sig)
+    outs = sig.correlator_outputs
+    isempty(outs) ? sig.correlator : first(outs).correlator
 end
 
 # Direct (per-sample) reference of the two-bit quantised correlation: quantise the
@@ -540,10 +552,11 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             TrackState(sig, satN; doppler_estimator = est),
         )
         for s in get_sat_state(tsN, 1).signals
-            @test length(get_prompt(s.correlator)) == M
-            @test get_prompt(s.correlator) == get_prompt(cs)
-            @test get_early(s.correlator) == get_early(cs)
-            @test get_late(s.correlator) == get_late(cs)
+            c = _completed_or_partial_correlator(s)
+            @test length(get_prompt(c)) == M
+            @test get_prompt(c) == get_prompt(cs)
+            @test get_early(c) == get_early(cs)
+            @test get_late(c) == get_late(cs)
         end
     end
 
@@ -736,11 +749,18 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
                 round.(Int16, A .* imag.(s) .+ σ .* randn(N)),
             )
             meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
-            ts = TrackState(sig, [TrackedSat(sig, prn, cphase, cdopp)])
-            c1 =
-                first(get_sat_state(downconvert_and_correlate(d1, meas, ts), 1).signals).correlator
-            c2 =
-                first(get_sat_state(downconvert_and_correlate(d2, meas, ts), 1).signals).correlator
+            # Separate track states per backend: `downconvert_and_correlate`
+            # shares each signal's (reused) `correlator_outputs` buffer with its
+            # input, so running both backends on one `ts` would append d2's
+            # records after d1's and make `first(...)` return d1's for both.
+            ts1 = TrackState(sig, [TrackedSat(sig, prn, cphase, cdopp)])
+            ts2 = TrackState(sig, [TrackedSat(sig, prn, cphase, cdopp)])
+            c1 = _completed_or_partial_correlator(
+                first(get_sat_state(downconvert_and_correlate(d1, meas, ts1), 1).signals),
+            )
+            c2 = _completed_or_partial_correlator(
+                first(get_sat_state(downconvert_and_correlate(d2, meas, ts2), 1).signals),
+            )
             push!(err1, angle(get_prompt(c1)) - ref)
             push!(err2, angle(get_prompt(c2)) - ref)
         end
