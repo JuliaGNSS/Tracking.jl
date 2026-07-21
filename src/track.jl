@@ -26,11 +26,14 @@ each group's key set and slot vector are copied, so
 [`add_satellite!`](@ref) / [`remove_satellite!`](@ref) and tracking
 itself on either state never affect the other's satellites. The copy
 is shallow, however — per-satellite scratch vectors (each signal's
-`filtered_prompts`, the soft-bit buffer, and the CN0 estimator's
-prompt buffer) are shared with the input and are overwritten by the
-next `track` call on either state. Treat the input as a stale handle
-after the call; `deepcopy` it first if you need to snapshot those
-buffers.
+`filtered_prompts` and `correlator_outputs`, the soft-bit buffer, and
+the CN0 estimator's prompt buffer) are shared with the input and are
+overwritten by the next `track` call on either state. Treat the input
+as a stale handle after the call; `deepcopy` it first if you need to
+snapshot those buffers. The same applies to a bare
+[`downconvert_and_correlate`](@ref): the returned state's
+`correlator_outputs` alias the input's, so reuse of one input state
+across several calls appends to the same buffers.
 
 For real-time loops processing many chunks of signal in sequence, **construct
 the correlator once outside the loop** and pass it via the
@@ -276,8 +279,16 @@ end
 # A chunk must cover at least one sample on every band, otherwise the chunk
 # grid could fail to advance and `track!` would not terminate. The default
 # (smallest code period) is always many samples; this only guards against a
-# user-supplied `update_interval` shorter than a sample period.
+# user-supplied `update_interval` shorter than a sample period. The dimension
+# check turns a plain number (e.g. `update_interval = 1e-3`) into a clear
+# ArgumentError instead of a cryptic Unitful conversion error.
 function _validate_update_interval(chunk_duration, measurements::BandMeasurements)
+    dimension(chunk_duration) == dimension(1.0s) || throw(
+        ArgumentError(
+            "update_interval must be a time quantity, e.g. `1u\"ms\"` or `1e-3u\"s\"` " *
+            "(with `using Unitful`); got $chunk_duration.",
+        ),
+    )
     for m in measurements
         samples_per_chunk = uconvert(NoUnits, chunk_duration * m.sampling_frequency)
         samples_per_chunk >= 1 || throw(
