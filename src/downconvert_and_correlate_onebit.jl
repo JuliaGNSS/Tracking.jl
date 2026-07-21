@@ -1237,55 +1237,10 @@ end
     map(tuple, new_corrs, per_signal_completed)
 end
 
-function _update_tracked_sat_correlator(
-    sat::TrackedSat,
-    dc::_OneBitDC,
-    signal,
-    num_samples_signal,
-    chunk_last_sample,
-    sampling_frequency,
-    intermediate_frequency,
-)
-    # Integrate this sat through the current chunk, recording every completed
-    # correlator output (see the CPU backend for the full rationale). The NCO
-    # Doppler is held fixed across the chunk.
-    while sat.signal_start_sample <= chunk_last_sample
-        samples_to_integrate, per_signal_completed = _calc_min_samples_and_completed(
-            sat.signals,
-            sat.signal_start_sample,
-            sampling_frequency,
-            sat.code_doppler,
-            sat.code_phase,
-            num_samples_signal,
-            chunk_last_sample,
-        )
-        samples_to_integrate == 0 && break
-        carrier_frequency = sat.carrier_doppler + intermediate_frequency
-        new_signals_data = _correlate_signals(
-            sat.signals,
-            per_signal_completed,
-            dc,
-            signal,
-            sat.code_doppler,
-            sat.code_phase,
-            carrier_frequency,
-            sat.carrier_phase,
-            sampling_frequency,
-            sat.signal_start_sample,
-            samples_to_integrate,
-            sat.prn,
-            num_samples_signal,
-        )
-        sat = update(
-            sat,
-            samples_to_integrate,
-            intermediate_frequency,
-            sampling_frequency,
-            new_signals_data,
-        )
-    end
-    return sat
-end
+# The per-sat chunk loop is the generic
+# `_update_tracked_sat_correlator(sat, dc::AbstractDownconvertAndCorrelator, …)`
+# in downconvert_and_correlate_cpu.jl — the backend boundary is
+# `_correlate_signals`, which dispatches on `dc::_OneBitDC` above.
 
 @inline function _dc_one_group!(
     g::SignalGroup,
