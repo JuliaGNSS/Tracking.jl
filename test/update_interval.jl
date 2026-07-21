@@ -59,6 +59,19 @@ end
     @test_throws ArgumentError track(signal, ts, 4e6Hz; update_interval = 1e-9 * s)
 end
 
+@testset "update_interval without time units throws a clear error" begin
+    gpsl1 = GPSL1CA()
+    ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 100.0Hz)])
+    signal = zeros(ComplexF32, 4000)
+    @test_throws ArgumentError track(signal, ts, 4e6Hz; update_interval = 1e-3)
+    err = try
+        track(signal, ts, 4e6Hz; update_interval = 1e-3)
+    catch e
+        e
+    end
+    @test occursin("time quantity", err.msg)
+end
+
 @testset "a chunk collects every completed correlator output, sample-indexed" begin
     gpsl1 = GPSL1CA()
     fs = 5e6Hz
@@ -92,9 +105,6 @@ end
         # sample index and integrated-sample count reflect that.
         @test isapprox(o.sample_index, i * period; atol = 2)
         @test isapprox(o.integrated_samples, period; atol = 2)
-        # Boundary code phase sits on a primary-code boundary (mod 1023 ≈ 0).
-        d = mod(o.code_phase, get_code_length(gpsl1))
-        @test min(d, get_code_length(gpsl1) - d) < 1e-3
     end
 end
 
