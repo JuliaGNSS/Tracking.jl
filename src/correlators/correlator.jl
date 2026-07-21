@@ -21,14 +21,11 @@ Fields:
     the loop-filter `integration_time`, and the bit-buffer block count).
   - `sample_index`: buffer-relative sample index at which this integration ended
     (the epoch of the measurement; used by vector tracking).
-  - `code_phase`: the satellite `code_phase` at completion — on a code boundary,
-    needed to anchor the one-time phase-snap when a signal syncs mid-chunk.
 """
 struct CorrelatorOutput{C<:AbstractCorrelator}
     correlator::C
     integrated_samples::Int
     sample_index::Int
-    code_phase::Float64
 end
 
 type_for_num_ants(num_ants::NumAnts{1}) = ComplexF64

@@ -36,12 +36,10 @@ _meas_l1(fs) = (L1 = BandMeasurement(ComplexF64[], fs),)
 
 # Build a signal carrying one completed integration as a `CorrelatorOutput`
 # record — the estimate phase folds over `correlator_outputs`. `sample_index`
-# and `code_phase` are metadata here (no sync, so no phase-snap).
-_completed_signal(sig, correlator, num_samples, code_phase) = TrackedSignal(
+# is metadata here (no vector-tracking consumer).
+_completed_signal(sig, correlator, num_samples) = TrackedSignal(
     sig;
-    correlator_outputs = [
-        CorrelatorOutput(correlator, num_samples, num_samples, code_phase),
-    ],
+    correlator_outputs = [CorrelatorOutput(correlator, num_samples, num_samples)],
 )
 
 @testset "Doppler aiding" begin
@@ -151,9 +149,7 @@ end
     num_samples = 5000
     sat_state_after_full_integration = TrackedSat(
         sat_state;
-        signals = (
-            _completed_signal(only(sat_state.signals), correlator, num_samples, code_phase),
-        ),
+        signals = (_completed_signal(only(sat_state.signals), correlator, num_samples),),
     )
     track_state = TrackState(gpsl1, sat_state_after_full_integration; doppler_estimator)
 
@@ -195,25 +191,11 @@ end
     sat2_initial = TrackedSat(gpsl1, 2, code_phase, carrier_doppler; doppler_estimator)
     sat1 = TrackedSat(
         sat1_initial;
-        signals = (
-            _completed_signal(
-                only(sat1_initial.signals),
-                correlator,
-                num_samples,
-                code_phase,
-            ),
-        ),
+        signals = (_completed_signal(only(sat1_initial.signals), correlator, num_samples),),
     )
     sat2_pre = TrackedSat(
         sat2_initial;
-        signals = (
-            _completed_signal(
-                only(sat2_initial.signals),
-                correlator,
-                num_samples,
-                code_phase,
-            ),
-        ),
+        signals = (_completed_signal(only(sat2_initial.signals), correlator, num_samples),),
     )
     # Bump sat2's bandwidths by replacing its doppler estimator state with a
     # custom-configured SatConventionalPLLAndDLL.
