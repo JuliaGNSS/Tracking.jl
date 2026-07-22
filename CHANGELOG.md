@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.3](https://github.com/JuliaGNSS/Tracking.jl/compare/v3.2.2...v3.2.3) (2026-07-22)
+
+
+### Performance Improvements
+
+* **dc:** pack the bit-backend band sign planes once per track! call ([c57c926](https://github.com/JuliaGNSS/Tracking.jl/commit/c57c926e4d0652da6337487c7b5f2cbdab0a1fa0))
+
 ## [3.2.2](https://github.com/JuliaGNSS/Tracking.jl/compare/v3.2.1...v3.2.2) (2026-07-15)
 
 
