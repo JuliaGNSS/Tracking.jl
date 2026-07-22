@@ -782,11 +782,12 @@ per-call allocation is the slot-value copy.
 function downconvert_and_correlate(
     dc::AbstractDownconvertAndCorrelator,
     measurements::BandMeasurements,
-    track_state::TrackState,
+    track_state::TrackState;
+    kwargs...,
 )
     new_track_state =
         TrackState(track_state; groups = _copy_groups_slot_vectors(track_state.groups))
-    downconvert_and_correlate!(dc, measurements, new_track_state)
+    downconvert_and_correlate!(dc, measurements, new_track_state; kwargs...)
 end
 
 """
@@ -797,13 +798,21 @@ group's existing `Vector{TrackedSat}` backing storage. On the threaded
 backend, different `@batch` iterations write to disjoint slots, so no
 synchronization is needed. Returns the same `track_state`.
 Allocation-free in steady state — see [`track!`](@ref).
+
+`samples_unchanged = true` promises that every band's sample buffer holds the
+same content as on the previous call with this `dc`; backends may then reuse
+sample-derived caches (the bit-wise backends skip re-packing their shared
+band sign planes). `track!` passes it on every loop iteration after the first
+so the pack happens once per call; leave it `false` (the default) whenever
+the buffers may have been refilled.
 """
 function downconvert_and_correlate!(
     dc::AbstractDownconvertAndCorrelator,
     measurements::BandMeasurements,
-    track_state::TrackState,
+    track_state::TrackState;
+    samples_unchanged::Bool = false,
 )
-    _foreach_group!(_dc_one_group!, track_state.groups, dc, measurements)
+    _foreach_group!(_dc_one_group!, track_state.groups, dc, measurements, samples_unchanged)
     return track_state
 end
 
@@ -825,6 +834,9 @@ end
     g::SignalGroup,
     dc::AbstractDownconvertAndCorrelator,
     measurements::BandMeasurements,
+    # The float backends derive nothing from the raw samples worth caching;
+    # only the bit-wise backends act on `samples_unchanged`.
+    samples_unchanged::Bool,
 )
     vals = g.satellites.values
     isempty(vals) && return nothing
