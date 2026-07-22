@@ -395,12 +395,19 @@ end
 # land on the data-bit boundary, so crediting the intended length would
 # misalign the decoded bits (issue #125). The intended count is still
 # returned for the driver's `1/N` loop-bandwidth scaling.
+# `skip_bit_buffer = true` applies everything EXCEPT the bit-buffer update.
+# Used for records that follow a bit/secondary sync detected earlier in the
+# same fold: those records were correlated with pre-sync replicas (no
+# secondary-code wipe-off), so accumulating them as if wiped would feed
+# sign-corrupted prompts into the first post-sync bits. They re-enter cleanly
+# next chunk, correlated at the snapped phase with the overlay in the replica.
 @inline function _apply_correlator_output(
     tracked_signal::TrackedSignal,
     output::CorrelatorOutput,
     prn::Integer,
     sampling_frequency,
-    driver_carrier_phase::Real = 0.0,
+    driver_carrier_phase::Real = 0.0;
+    skip_bit_buffer::Bool = false,
 )
     signal = tracked_signal.signal
     integrated_code_blocks = calc_num_code_blocks_to_integrate(
@@ -427,7 +434,9 @@ end
     # `buffer`, so a quadrature component's data lands on the real axis it is
     # decided on. No-op for the driver and for co-phased pairs.
     bit_prompt = prompt * _carrier_phase_derotation(driver_carrier_phase, signal)
-    bit_buffer = buffer(signal, prn, tracked_signal.bit_buffer, bit_block_count, bit_prompt)
+    bit_buffer =
+        skip_bit_buffer ? tracked_signal.bit_buffer :
+        buffer(signal, prn, tracked_signal.bit_buffer, bit_block_count, bit_prompt)
     new_signal = TrackedSignal(
         tracked_signal;
         last_fully_integrated_filtered_prompt = prompt,
@@ -464,6 +473,7 @@ end
     code_loop_filter = pll_and_dll_state.code_loop_filter
     carrier_doppler = sat.carrier_doppler
     code_doppler = sat.code_doppler
+    found_before_fold = has_bit_or_secondary_code_been_found(ts.bit_buffer)
     @inbounds for k in eachindex(outputs)
         output = outputs[k]
         # FLL needs the previous record's filtered prompt; the first record of
@@ -473,6 +483,11 @@ end
         previous_prompt = get_last_fully_integrated_filtered_prompt(ts)
         # Per-record integration time — the block time, NOT the chunk time.
         integration_time = output.integrated_samples / sampling_frequency
+        # A record that follows a sync detected earlier in THIS fold was
+        # correlated with pre-sync replicas — keep it out of the bit buffer
+        # (see `_apply_correlator_output`).
+        synced_earlier_in_fold =
+            !found_before_fold && has_bit_or_secondary_code_been_found(ts.bit_buffer)
         # The driver de-rotates against itself (offset 0), so the derotation is a
         # no-op for it; passed for symmetry with the passenger path.
         ts, filtered_correlator, integrated_code_blocks = _apply_correlator_output(
@@ -480,7 +495,8 @@ end
             output,
             sat.prn,
             sampling_frequency,
-            driver_carrier_phase,
+            driver_carrier_phase;
+            skip_bit_buffer = synced_earlier_in_fold,
         )
 
         # The configured bandwidths are referenced to a one-primary-code-period
@@ -561,14 +577,20 @@ end
     outputs = tracked_signal.correlator_outputs
     isempty(outputs) && return tracked_signal
     ts = tracked_signal
+    found_before_fold = has_bit_or_secondary_code_been_found(ts.bit_buffer)
     @inbounds for k in eachindex(outputs)
+        # Same rule as the driver fold: records after a sync detected earlier
+        # in this fold stay out of the bit buffer.
+        synced_earlier_in_fold =
+            !found_before_fold && has_bit_or_secondary_code_been_found(ts.bit_buffer)
         ts = first(
             _apply_correlator_output(
                 ts,
                 outputs[k],
                 prn,
                 sampling_frequency,
-                driver_carrier_phase,
+                driver_carrier_phase;
+                skip_bit_buffer = synced_earlier_in_fold,
             ),
         )
     end
