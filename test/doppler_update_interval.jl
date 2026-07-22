@@ -25,7 +25,7 @@ using Tracking:
     CorrelatorOutput
 
 @testset "smallest-code-period default resolution" begin
-    # `nothing` update_interval => smallest primary-code period across all
+    # `nothing` doppler_update_interval => smallest primary-code period across all
     # signals in all groups. GPS L1 C/A: 1023 chips / 1.023 MHz = 1 ms.
     ts = TrackState(; signal = GPSL1CA())
     dt = Tracking._smallest_code_period(ts)
@@ -52,20 +52,20 @@ end
     @test Tracking._chunk_last_sample(nothing, 0, 5e6Hz, 12_345) == 12_345
 end
 
-@testset "update_interval shorter than a sample throws" begin
+@testset "doppler_update_interval shorter than a sample throws" begin
     gpsl1 = GPSL1CA()
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 100.0Hz)])
     signal = zeros(ComplexF32, 4000)
-    @test_throws ArgumentError track(signal, ts, 4e6Hz; update_interval = 1e-9 * s)
+    @test_throws ArgumentError track(signal, ts, 4e6Hz; doppler_update_interval = 1e-9 * s)
 end
 
-@testset "update_interval without time units throws a clear error" begin
+@testset "doppler_update_interval without time units throws a clear error" begin
     gpsl1 = GPSL1CA()
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 100.0Hz)])
     signal = zeros(ComplexF32, 4000)
-    @test_throws ArgumentError track(signal, ts, 4e6Hz; update_interval = 1e-3)
+    @test_throws ArgumentError track(signal, ts, 4e6Hz; doppler_update_interval = 1e-3)
     err = try
-        track(signal, ts, 4e6Hz; update_interval = 1e-3)
+        track(signal, ts, 4e6Hz; doppler_update_interval = 1e-3)
     catch e
         e
     end
@@ -120,7 +120,7 @@ end
     @test isempty(get_correlator_outputs(only(get_sat_state(ts, prn).signals)))
 end
 
-@testset "enlarged update_interval still converges" begin
+@testset "enlarged doppler_update_interval still converges" begin
     # A long continuous buffer with a constant true Doppler; the initial
     # estimate is offset. Both the default (per-code-period) and a 4 ms
     # (4-periods-per-chunk) update interval must pull the carrier Doppler in.
@@ -138,9 +138,9 @@ end
         gen_code(num_samples, gpsl1, prn, fs, code_frequency, start_code_phase),
     )
 
-    converged(update_interval) = begin
+    converged(doppler_update_interval) = begin
         ts = TrackState(gpsl1, [TrackedSat(gpsl1, prn, start_code_phase, true_doppler - 30Hz)])
-        ts = track(signal, ts, fs; update_interval)
+        ts = track(signal, ts, fs; doppler_update_interval)
         abs(get_carrier_doppler(ts) / Hz - true_doppler / Hz)
     end
 

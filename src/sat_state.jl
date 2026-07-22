@@ -106,7 +106,7 @@ function TrackedSignal(
     # Preallocate the per-chunk correlator-output buffer. A default-length
     # chunk (= smallest code period) yields at most one record per chunk for
     # the driver; size to a small constant so `push!` never grows it after
-    # warmup even for a moderately enlarged `update_interval`.
+    # warmup even for a moderately enlarged `doppler_update_interval`.
     correlator_outputs = CorrelatorOutput{typeof(correlator)}[]
     sizehint!(correlator_outputs, 4)
     TrackedSignal(

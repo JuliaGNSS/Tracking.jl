@@ -42,7 +42,7 @@ end
 
     downconvert_and_correlator = DC()
 
-    # A bare `downconvert_and_correlate` (no `update_interval`) treats the whole
+    # A bare `downconvert_and_correlate` (no `doppler_update_interval`) treats the whole
     # buffer as one chunk. Here one code period (~4949 samples) completes, so it
     # is snapshotted into `correlator_outputs`; the small residue stays in the
     # live accumulator. The completed integration's correlator equals the old

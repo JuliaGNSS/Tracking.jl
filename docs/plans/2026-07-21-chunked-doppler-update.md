@@ -31,7 +31,7 @@ limitations:
 
 ### Chunk grid
 
-The chunk length is the Doppler-update interval, a **time** (`update_interval`
+The chunk length is the Doppler-update interval, a **time** (`doppler_update_interval`
 kwarg on [`track`](@ref) / [`track!`](@ref)). Default `nothing` ⇒ auto = the
 smallest primary-code period across all tracked signals (`_smallest_code_period`;
 e.g. 1 ms for GPS L1 C/A, or for a mixed L1 C/A + Galileo E1B state). For band
@@ -39,7 +39,7 @@ e.g. 1 ms for GPS L1 C/A, or for a mixed L1 C/A + Galileo E1B state). For band
 `min(round((k+1)·Δt·fs_b), num_samples_b)` (`_chunk_last_sample`). The boundary
 is re-anchored to the absolute chunk index each call (not accumulated), so
 rounding never drifts and different bands stay time-aligned to within a sample.
-A one-sample floor is validated up front (`_validate_update_interval`) so the
+A one-sample floor is validated up front (`_validate_doppler_update_interval`) so the
 loop always makes progress.
 
 ### Correlate phase (records outputs, two passes per chunk)
@@ -111,7 +111,7 @@ post-sync bits. The folds detect the mid-fold `found` transition and apply
 those records with `skip_bit_buffer = true` (`_apply_correlator_output`):
 prompt filter, CN0, and loop-filter processing still run, only the bit-buffer
 update is skipped. Irrelevant at the default interval (a chunk then holds at
-most one record past the sync), it protects enlarged `update_interval`s.
+most one record past the sync), it protects enlarged `doppler_update_interval`s.
 
 ### Data model
 

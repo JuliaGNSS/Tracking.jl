@@ -174,7 +174,7 @@ function track!(
     measurements::BandMeasurements,
     track_state::TrackState;
     downconvert_and_correlator::AbstractDownconvertAndCorrelator = CPUThreadedDownconvertAndCorrelator(),
-    update_interval = nothing,
+    doppler_update_interval = nothing,
 )
     _validate_measurements(track_state, measurements)
     reset_start_sample_and_bit_buffer!(track_state)
@@ -185,8 +185,8 @@ function track!(
     # correlator output per signal into its `correlator_outputs` buffer) with
     # the NCO Doppler held fixed, then the estimator folds over those outputs
     # and updates every sat's NCO once — a common epoch across all sats.
-    chunk_duration = _resolve_update_interval(update_interval, track_state)
-    _validate_update_interval(chunk_duration, measurements)
+    chunk_duration = _resolve_doppler_update_interval(doppler_update_interval, track_state)
+    _validate_doppler_update_interval(chunk_duration, measurements)
     chunk_index = 0
     while true
         _all_groups_reached_end(track_state, measurements) && break
@@ -274,8 +274,9 @@ end
 # the smallest primary-code period across every signal in every group, so the
 # default chunk holds exactly one code period of the shortest signal (e.g. 1 ms
 # for a GPS L1 C/A + Galileo E1B track state).
-@inline _resolve_update_interval(update_interval, ::TrackState) = update_interval
-@inline function _resolve_update_interval(::Nothing, track_state::TrackState)
+@inline _resolve_doppler_update_interval(doppler_update_interval, ::TrackState) =
+    doppler_update_interval
+@inline function _resolve_doppler_update_interval(::Nothing, track_state::TrackState)
     _smallest_code_period(track_state)
 end
 
@@ -305,13 +306,13 @@ end
 # A chunk must cover at least one sample on every band, otherwise the chunk
 # grid could fail to advance and `track!` would not terminate. The default
 # (smallest code period) is always many samples; this only guards against a
-# user-supplied `update_interval` shorter than a sample period. The dimension
-# check turns a plain number (e.g. `update_interval = 1e-3`) into a clear
+# user-supplied `doppler_update_interval` shorter than a sample period. The dimension
+# check turns a plain number (e.g. `doppler_update_interval = 1e-3`) into a clear
 # ArgumentError instead of a cryptic Unitful conversion error.
-function _validate_update_interval(chunk_duration, measurements::BandMeasurements)
+function _validate_doppler_update_interval(chunk_duration, measurements::BandMeasurements)
     dimension(chunk_duration) == dimension(1.0s) || throw(
         ArgumentError(
-            "update_interval must be a time quantity, e.g. `1u\"ms\"` or `1e-3u\"s\"` " *
+            "doppler_update_interval must be a time quantity, e.g. `1u\"ms\"` or `1e-3u\"s\"` " *
             "(with `using Unitful`); got $chunk_duration.",
         ),
     )
@@ -319,7 +320,7 @@ function _validate_update_interval(chunk_duration, measurements::BandMeasurement
         samples_per_chunk = uconvert(NoUnits, chunk_duration * m.sampling_frequency)
         samples_per_chunk >= 1 || throw(
             ArgumentError(
-                "update_interval $chunk_duration is shorter than one sample period " *
+                "doppler_update_interval $chunk_duration is shorter than one sample period " *
                 "at sampling frequency $(m.sampling_frequency); pick a longer interval.",
             ),
         )
