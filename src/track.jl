@@ -203,6 +203,9 @@ function track!(
         # completed integration on a single NCO Doppler and applies each
         # correction right at the completing boundary (the pre-chunking loop
         # timing), while still estimating once per chunk at a common epoch.
+        # `samples_unchanged`: the measurement buffers are fixed for the whole
+        # call, so sample-derived backend caches (the bit backends' shared band
+        # pack) are built on the very first pass and reused ever after.
         downconvert_and_correlate!(
             downconvert_and_correlator,
             measurements,
@@ -210,6 +213,7 @@ function track!(
             chunk_index,
             chunk_duration,
             stop_before_partial = true,
+            samples_unchanged = chunk_index > 0,
         )
         estimate_dopplers_and_filter_prompt!(track_state, measurements)
         downconvert_and_correlate!(
@@ -218,6 +222,7 @@ function track!(
             track_state;
             chunk_index,
             chunk_duration,
+            samples_unchanged = true,
         )
         chunk_index += 1
     end
