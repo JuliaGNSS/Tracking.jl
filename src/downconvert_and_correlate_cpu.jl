@@ -388,14 +388,23 @@ function _update_tracked_sat_correlator(
     chunk_last_sample,
     sampling_frequency,
     intermediate_frequency,
+    stop_before_partial::Bool = false,
 )
     # Integrate this sat forward through the current chunk. Each sub-step
     # advances to the next code-block boundary of any signal (or the chunk
     # end, whichever is nearer); `update` snapshots a `CorrelatorOutput` and
     # resets the accumulator for every signal that just completed, so a chunk
     # can yield 0, 1, or several outputs per signal. The NCO Doppler is
-    # untouched here, so it stays fixed for the whole chunk. A partial
-    # integration at the chunk (or buffer) boundary carries in the accumulator.
+    # untouched here. A partial integration at the chunk (or buffer) boundary
+    # carries in the accumulator.
+    #
+    # `stop_before_partial = true` stops at the last code-block boundary inside
+    # the chunk instead of integrating the trailing partial up to the chunk
+    # end. `track!` uses this to split each chunk in two: correlate the
+    # completions, run the Doppler estimator, then integrate the residue with
+    # the *updated* NCO Doppler — so every completed integration is produced by
+    # a single Doppler and the NCO correction takes effect right at the
+    # completing boundary, like the pre-chunking per-completion update.
     while sat.signal_start_sample <= chunk_last_sample
         # MIN samples-to-next-boundary across all signals on this sat, clamped
         # to the chunk end. Each signal's coherent-integration length comes from
@@ -411,6 +420,9 @@ function _update_tracked_sat_correlator(
             chunk_last_sample,
         )
         samples_to_integrate == 0 && break
+        # A sub-step that completes no signal is exactly the chunk-clamped
+        # trailing partial — defer it to the post-estimate pass.
+        stop_before_partial && !_any_of_tuple(per_signal_completed) && break
         carrier_frequency = sat.carrier_doppler + intermediate_frequency
         new_signals_data = _correlate_signals(
             sat.signals,
@@ -518,6 +530,9 @@ end
 
 @inline _min_of_tuple(t::Tuple{Any}) = first(t)
 @inline _min_of_tuple(t::Tuple) = min(first(t), _min_of_tuple(Base.tail(t)))
+
+@inline _any_of_tuple(::Tuple{}) = false
+@inline _any_of_tuple(t::Tuple) = first(t) || _any_of_tuple(Base.tail(t))
 
 # For each signal, `is_completed = (chosen_samples == samples_to_boundary)`.
 @inline _flag_completed(::Tuple{}, _) = ()
@@ -818,6 +833,7 @@ function downconvert_and_correlate!(
     track_state::TrackState;
     chunk_index::Int = 0,
     chunk_duration = nothing,
+    stop_before_partial::Bool = false,
 )
     _foreach_group!(
         _dc_one_group!,
@@ -826,6 +842,7 @@ function downconvert_and_correlate!(
         measurements,
         chunk_index,
         chunk_duration,
+        stop_before_partial,
     )
     return track_state
 end
@@ -869,6 +886,7 @@ end
     measurements::BandMeasurements,
     chunk_index::Int,
     chunk_duration,
+    stop_before_partial::Bool,
 )
     vals = g.satellites.values
     isempty(vals) && return nothing
@@ -885,6 +903,7 @@ end
         chunk_last_sample,
         m.sampling_frequency,
         m.intermediate_frequency,
+        stop_before_partial,
     )
 end
 
@@ -899,17 +918,17 @@ struct _BatchLoop end
 @inline _threading(::AbstractDownconvertAndCorrelator) = _SerialLoop()
 @inline _threading(::CPUThreadedDownconvertAndCorrelator) = _BatchLoop()
 
-@inline _dc_group_loop!(dc::AbstractDownconvertAndCorrelator, vals, args::Vararg{Any,5}) =
+@inline _dc_group_loop!(dc::AbstractDownconvertAndCorrelator, vals, args::Vararg{Any,6}) =
     _dc_group_loop!(_threading(dc), dc, vals, args...)
 
-@inline function _dc_group_loop!(::_SerialLoop, dc, vals, args::Vararg{Any,5})
+@inline function _dc_group_loop!(::_SerialLoop, dc, vals, args::Vararg{Any,6})
     @inbounds for i in eachindex(vals)
         vals[i] = _update_tracked_sat_correlator(vals[i], dc, args...)
     end
     return nothing
 end
 
-@inline function _dc_group_loop!(::_BatchLoop, dc, vals, args::Vararg{Any,5})
+@inline function _dc_group_loop!(::_BatchLoop, dc, vals, args::Vararg{Any,6})
     @batch for i = 1:length(vals)
         @inbounds vals[i] = _update_tracked_sat_correlator(vals[i], dc, args...)
     end

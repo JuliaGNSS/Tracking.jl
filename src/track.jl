@@ -31,7 +31,7 @@ the CN0 estimator's prompt buffer) are shared with the input and are
 overwritten by the next `track` call on either state. Treat the input
 as a stale handle after the call; `deepcopy` it first if you need to
 snapshot those buffers. The same applies to a bare
-[`downconvert_and_correlate`](@ref): the returned state's
+`downconvert_and_correlate`: the returned state's
 `correlator_outputs` alias the input's, so reuse of one input state
 across several calls appends to the same buffers.
 
@@ -191,6 +191,27 @@ function track!(
     while true
         _all_groups_reached_end(track_state, measurements) && break
 
+        # Each chunk is processed in two correlate passes around one estimate:
+        #
+        #   1. correlate every completed integration inside the chunk
+        #      (`stop_before_partial` leaves the trailing partial untouched),
+        #   2. fold the collected outputs and write the new NCO Doppler,
+        #   3. integrate the residue — from the last completed boundary to the
+        #      chunk end — with the *updated* Doppler.
+        #
+        # The residue belongs to the NEXT integration, so this keeps every
+        # completed integration on a single NCO Doppler and applies each
+        # correction right at the completing boundary (the pre-chunking loop
+        # timing), while still estimating once per chunk at a common epoch.
+        downconvert_and_correlate!(
+            downconvert_and_correlator,
+            measurements,
+            track_state;
+            chunk_index,
+            chunk_duration,
+            stop_before_partial = true,
+        )
+        estimate_dopplers_and_filter_prompt!(track_state, measurements)
         downconvert_and_correlate!(
             downconvert_and_correlator,
             measurements,
@@ -198,9 +219,14 @@ function track!(
             chunk_index,
             chunk_duration,
         )
-        estimate_dopplers_and_filter_prompt!(track_state, measurements)
         chunk_index += 1
     end
+    # The residue pass integrates with the freshly updated code Doppler, which
+    # can (rarely) pull a boundary phase 1 measured as beyond the chunk back
+    # inside it and complete an integration. Mid-measurement such an output is
+    # folded by the next chunk's estimate; after the final chunk there is none,
+    # so fold once more. A no-op (per-sat early return) when nothing completed.
+    estimate_dopplers_and_filter_prompt!(track_state, measurements)
     return track_state
 end
 
