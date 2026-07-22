@@ -19,10 +19,12 @@ using StaticArrays
 # this file must work against both v1 (loaded for master's Tracking
 # 1.5.0) and v2 (loaded for HEAD's Tracking 2.0.0). Alias the v2 names
 # to v1's symbols when v2 isn't loaded.
-const GPSL1CA = isdefined(GNSSSignals, :GPSL1CA) ?
-    getfield(GNSSSignals, :GPSL1CA) : getfield(GNSSSignals, :GPSL1)
-const GPSL5I = isdefined(GNSSSignals, :GPSL5I) ?
-    getfield(GNSSSignals, :GPSL5I) : getfield(GNSSSignals, :GPSL5)
+const GPSL1CA =
+    isdefined(GNSSSignals, :GPSL1CA) ? getfield(GNSSSignals, :GPSL1CA) :
+    getfield(GNSSSignals, :GPSL1)
+const GPSL5I =
+    isdefined(GNSSSignals, :GPSL5I) ? getfield(GNSSSignals, :GPSL5I) :
+    getfield(GNSSSignals, :GPSL5)
 
 # Code-replica buffer element type. GNSSSignals' embedded-LUT `gen_code!` (PR #90)
 # is Int8-only; older GNSSSignals emit `get_code_type(signal)` (Int16/Float32).
@@ -37,12 +39,13 @@ _code_buf_type(sig) = isdefined(GNSSSignals, :code_engine) ? Int8 : get_code_typ
 # Detect at load time so the script runs unchanged across all three via
 # AirspeedVelocity's `--bench-on=$HEAD_SHA`.
 const _HAS_TRACKED_SIGNAL = isdefined(Tracking, :TrackedSignal)
-const _HAS_TRACKED_SAT    = isdefined(Tracking, :TrackedSat)
-const _HAS_SAT_STATE      = isdefined(Tracking, :SatState)
+const _HAS_TRACKED_SAT = isdefined(Tracking, :TrackedSat)
+const _HAS_SAT_STATE = isdefined(Tracking, :SatState)
 
 if !_HAS_TRACKED_SIGNAL
-    const _TrackedSystem = isdefined(Tracking, :TrackedSystem) ?
-        Tracking.TrackedSystem : Tracking.SystemSatsState
+    const _TrackedSystem =
+        isdefined(Tracking, :TrackedSystem) ? Tracking.TrackedSystem :
+        Tracking.SystemSatsState
 end
 
 # Field / property name on `TrackState` for the per-system tuple.
@@ -55,13 +58,13 @@ end
 # On the multi-band branch the bench needs a NamedTuple-of-dicts shape — derive
 # it inline from `groups` and rebuild via fresh `SignalGroup`s after the map.
 const _MULTIBAND = _HAS_TRACKED_SIGNAL
-const _SYSTEMS_FIELD = _MULTIBAND ? :groups :
-    isdefined(Tracking, :TrackedSystem) ? :satellites :
-    :multiple_system_sats_state
+const _SYSTEMS_FIELD =
+    _MULTIBAND ? :groups :
+    isdefined(Tracking, :TrackedSystem) ? :satellites : :multiple_system_sats_state
 
 @inline _get_systems(track_state) =
     _MULTIBAND ? map(g -> g.satellites, track_state.groups) :
-                 getproperty(track_state, _SYSTEMS_FIELD)
+    getproperty(track_state, _SYSTEMS_FIELD)
 
 @inline function _track_state_with_systems(track_state, systems)
     if _MULTIBAND
@@ -82,7 +85,10 @@ end
 function _make_initial_sat(sys, prn, code_phase, carrier_doppler; num_ants = NumAnts(1))
     if _HAS_TRACKED_SIGNAL
         return Tracking.TrackedSat(
-            sys, prn, code_phase, carrier_doppler;
+            sys,
+            prn,
+            code_phase,
+            carrier_doppler;
             doppler_estimator = Tracking.ConventionalAssistedPLLAndDLL(),
             num_ants,
         )
@@ -107,7 +113,8 @@ function setup_benchmark(;
 )
     code_phase = 10.5
     carrier_doppler = 1000.0Hz
-    code_doppler = carrier_doppler * GNSSSignals.get_code_center_frequency_ratio(gnss_signal)
+    code_doppler =
+        carrier_doppler * GNSSSignals.get_code_center_frequency_ratio(gnss_signal)
     code_frequency = code_doppler + get_code_frequency(gnss_signal)
 
     correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(num_ants))
@@ -165,19 +172,40 @@ _make_cpu_threaded_dc(sampling_frequency) =
     Tracking.CPUThreadedDownconvertAndCorrelator()
 
 function _gen_code_replica!(
-    code_replica, gnss_signal, code_frequency, sampling_frequency,
-    code_phase, start_sample, num_samples, sample_shifts, prn,
+    code_replica,
+    gnss_signal,
+    code_frequency,
+    sampling_frequency,
+    code_phase,
+    start_sample,
+    num_samples,
+    sample_shifts,
+    prn,
 )
     if _NEEDS_VAL
         gen_code_replica!(
-            code_replica, gnss_signal, code_frequency, sampling_frequency,
-            code_phase, start_sample, num_samples, sample_shifts, prn,
+            code_replica,
+            gnss_signal,
+            code_frequency,
+            sampling_frequency,
+            code_phase,
+            start_sample,
+            num_samples,
+            sample_shifts,
+            prn,
             Val(sampling_frequency),
         )
     else
         gen_code_replica!(
-            code_replica, gnss_signal, code_frequency, sampling_frequency,
-            code_phase, start_sample, num_samples, sample_shifts, prn,
+            code_replica,
+            gnss_signal,
+            code_frequency,
+            sampling_frequency,
+            code_phase,
+            start_sample,
+            num_samples,
+            sample_shifts,
+            prn,
         )
     end
 end
@@ -194,7 +222,15 @@ function bench_downconvert_and_correlate(;
     downconvert_and_correlator = _make_cpu_dc(sampling_frequency)
     track_state = TrackState(
         gnss_signal,
-        [_make_initial_sat_with_num_ants(gnss_signal, 1, 10.5, 1000.0Hz, NumAnts(num_ants))],
+        [
+            _make_initial_sat_with_num_ants(
+                gnss_signal,
+                1,
+                10.5,
+                1000.0Hz,
+                NumAnts(num_ants),
+            ),
+        ],
     )
     signal =
         num_ants == 1 ? rand(Complex{signal_type}, num_samples) :
@@ -226,7 +262,11 @@ function bench_downconvert_and_correlate(;
             NamedTuple{(band_id,)}((measurement_type(signal, sampling_frequency, 0.0Hz),))
         if hasmethod(
             Tracking.downconvert_and_correlate,
-            Tuple{typeof(downconvert_and_correlator),typeof(measurements),typeof(track_state)},
+            Tuple{
+                typeof(downconvert_and_correlator),
+                typeof(measurements),
+                typeof(track_state),
+            },
         )
             @benchmarkable Tracking.downconvert_and_correlate(
                 $downconvert_and_correlator,
@@ -268,23 +308,46 @@ function bench_fused_kernel(;
     # form (Bumper allocates the tiles inside the kernel); the new
     # branch requires 11 args. Detect via `hasmethod`.
     static_arg_types = Tuple{
-        typeof(s.correlator), typeof(s.signal), typeof(s.code_replica),
-        typeof(sample_shifts), typeof(s.carrier_doppler),
-        typeof(s.sampling_frequency), Float64, Int, Int,
+        typeof(s.correlator),
+        typeof(s.signal),
+        typeof(s.code_replica),
+        typeof(sample_shifts),
+        typeof(s.carrier_doppler),
+        typeof(s.sampling_frequency),
+        Float64,
+        Int,
+        Int,
     }
-    if shifts == :dynamic && !hasmethod(Tracking.downconvert_and_correlate_fused!, static_arg_types)
+    if shifts == :dynamic &&
+       !hasmethod(Tracking.downconvert_and_correlate_fused!, static_arg_types)
         # New branch: 11-arg signature with hoisted tile buffers
         tile_re = Vector{Float32}(undef, num_samples * num_ants)
         tile_im = Vector{Float32}(undef, num_samples * num_ants)
         Tracking.downconvert_and_correlate_fused!(
-            s.correlator, s.signal, s.code_replica, sample_shifts,
-            s.carrier_doppler, s.sampling_frequency, 0.0,
-            1, s.num_samples, tile_re, tile_im,
+            s.correlator,
+            s.signal,
+            s.code_replica,
+            sample_shifts,
+            s.carrier_doppler,
+            s.sampling_frequency,
+            0.0,
+            1,
+            s.num_samples,
+            tile_re,
+            tile_im,
         )
         return @benchmarkable Tracking.downconvert_and_correlate_fused!(
-            $(s.correlator), $(s.signal), $(s.code_replica), $sample_shifts,
-            $(s.carrier_doppler), $(s.sampling_frequency), 0.0,
-            1, $(s.num_samples), $tile_re, $tile_im,
+            $(s.correlator),
+            $(s.signal),
+            $(s.code_replica),
+            $sample_shifts,
+            $(s.carrier_doppler),
+            $(s.sampling_frequency),
+            0.0,
+            1,
+            $(s.num_samples),
+            $tile_re,
+            $tile_im,
         )
     end
     # Master path or static-shifts overload: 9-arg signature.
@@ -393,28 +456,36 @@ function bench_fused_tuple_kernel(;
 )
     code_phase = 10.5
     carrier_doppler = 1000.0Hz
-    code_doppler = carrier_doppler * GNSSSignals.get_code_center_frequency_ratio(gnss_signal)
+    code_doppler =
+        carrier_doppler * GNSSSignals.get_code_center_frequency_ratio(gnss_signal)
     code_frequency = code_doppler + get_code_frequency(gnss_signal)
 
     correlator_template = EarlyPromptLateCorrelator(; num_ants = NumAnts(num_ants))
-    sample_shifts =
-        get_correlator_sample_shifts(correlator_template, sampling_frequency, code_frequency)
-    code_replica_size =
-        num_samples + maximum(sample_shifts) - minimum(sample_shifts)
+    sample_shifts = get_correlator_sample_shifts(
+        correlator_template,
+        sampling_frequency,
+        code_frequency,
+    )
+    code_replica_size = num_samples + maximum(sample_shifts) - minimum(sample_shifts)
 
-    signal = num_ants == 1 ?
-        rand(Complex{signal_type}, num_samples) :
+    signal =
+        num_ants == 1 ? rand(Complex{signal_type}, num_samples) :
         rand(Complex{signal_type}, num_samples, num_ants)
 
-    correlators = ntuple(
-        _ -> EarlyPromptLateCorrelator(; num_ants = NumAnts(num_ants)),
-        n_signals,
-    )
+    correlators =
+        ntuple(_ -> EarlyPromptLateCorrelator(; num_ants = NumAnts(num_ants)), n_signals)
     code_replicas = ntuple(n_signals) do _
         cr = Vector{_code_buf_type(gnss_signal)}(undef, code_replica_size)
         _gen_code_replica!(
-            cr, gnss_signal, code_frequency, sampling_frequency, code_phase,
-            1, num_samples, sample_shifts, 1,
+            cr,
+            gnss_signal,
+            code_frequency,
+            sampling_frequency,
+            code_phase,
+            1,
+            num_samples,
+            sample_shifts,
+            1,
         )
         cr
     end
@@ -423,15 +494,23 @@ function bench_fused_tuple_kernel(;
     tile_im = Vector{Float32}(undef, num_samples * num_ants)
 
     @benchmarkable Tracking.downconvert_and_correlate_fused_tuple!(
-        $correlators, $signal, $code_replicas, $sample_shifts_tuple,
-        $(carrier_doppler + 0.0Hz), $sampling_frequency, 0.0,
-        1, $num_samples, $tile_re, $tile_im,
+        $correlators,
+        $signal,
+        $code_replicas,
+        $sample_shifts_tuple,
+        $(carrier_doppler + 0.0Hz),
+        $sampling_frequency,
+        0.0,
+        1,
+        $num_samples,
+        $tile_re,
+        $tile_im,
     )
 end
 
 # Register only on branches with the tuple kernel (multi-signal branch).
 if isdefined(Tracking, :downconvert_and_correlate_fused_tuple!)
-    for n_signals in 2:3
+    for n_signals = 2:3
         SUITE["fused tuple kernel"]["1-ant N=$n_signals"] =
             bench_fused_tuple_kernel(; num_ants = 1, n_signals)
         SUITE["fused tuple kernel"]["2-ant N=$n_signals"] =
@@ -487,8 +566,7 @@ end
 #      `phase_acc::PhaseAccumulators` (soft-decision L1CA bit-edge
 #      detector, issue #124).
 # Detect at load time via `hasfield`.
-const _HAS_PARAMETRIC_BITBUFFER =
-    _HAS_TRACKED_SIGNAL && Tracking.BitBuffer isa UnionAll
+const _HAS_PARAMETRIC_BITBUFFER = _HAS_TRACKED_SIGNAL && Tracking.BitBuffer isa UnionAll
 const _HAS_BITBUFFER_PHASE_FIELDS =
     _HAS_PARAMETRIC_BITBUFFER && hasfield(Tracking.BitBuffer, :secondary_phase)
 const _HAS_BITBUFFER_SOFT_BITS =
@@ -546,12 +624,16 @@ elseif _HAS_PARAMETRIC_BITBUFFER
     _bb_int_type(::Tracking.BitBuffer{B}) where {B<:Unsigned} = B
     @inline _make_found_bit_buffer(old_bb) = typeof(old_bb)(
         zero(_bb_int_type(old_bb)),
-        20, true, UInt128(0), 0, complex(0.0, 0.0), 0,
+        20,
+        true,
+        UInt128(0),
+        0,
+        complex(0.0, 0.0),
+        0,
     )
 elseif _HAS_TRACKED_SIGNAL
-    @inline _make_found_bit_buffer(_old_bb) = Tracking.BitBuffer(
-        UInt128(0), 20, true, UInt128(0), 0, complex(0.0, 0.0), 0,
-    )
+    @inline _make_found_bit_buffer(_old_bb) =
+        Tracking.BitBuffer(UInt128(0), 20, true, UInt128(0), 0, complex(0.0, 0.0), 0)
 end
 
 if _HAS_TRACKED_SIGNAL
@@ -560,14 +642,20 @@ if _HAS_TRACKED_SIGNAL
         new_bb = _make_found_bit_buffer(sig.bit_buffer)
         new_sig = Tracking.TrackedSignal(sig; bit_buffer = new_bb)
         Tracking.TrackedSat(
-            t.prn, t.code_phase, t.code_doppler,
-            t.carrier_phase, t.carrier_doppler,
-            t.signal_start_sample, (new_sig,), t.doppler_estimator_state,
+            t.prn,
+            t.code_phase,
+            t.code_doppler,
+            t.carrier_phase,
+            t.carrier_doppler,
+            t.signal_start_sample,
+            (new_sig,),
+            t.doppler_estimator_state,
         )
     end
 elseif _HAS_TRACKED_SAT
     _with_found_bit_buffer(t, bb) = Tracking.TrackedSat(
-        Tracking.SatState(t.sat_state; bit_buffer = bb), t.estimator_state,
+        Tracking.SatState(t.sat_state; bit_buffer = bb),
+        t.estimator_state,
     )
 else
     _with_found_bit_buffer(s, bb) = Tracking.SatState(s; bit_buffer = bb)
@@ -596,8 +684,8 @@ function _make_multi_sat_state(;
         pm = sys isa GPSL1CA ? 32 : prn_max
         cd = sys isa GPSL1CA ? 1000.0 : code_dop
         sats = [
-            _make_initial_sat(sys, mod1(i, pm), 10.5 + i * 0.1, (cd + i * 10) * Hz)
-            for i = 1:ns
+            _make_initial_sat(sys, mod1(i, pm), 10.5 + i * 0.1, (cd + i * 10) * Hz) for
+            i = 1:ns
         ]
         push!(all_sss, _build_tracked_system(sys, sats))
         total_sats += ns
@@ -623,14 +711,14 @@ end
 # on every sat, ready to feed `track` / `track!` for steady-state-style
 # benchmarks.
 function _make_steady_state_track_state(; systems, nsats_list, nsamp, prn_max, code_dop)
-    ts, signal, _ =
-        _make_multi_sat_state(; systems, nsats_list, nsamp, prn_max, code_dop)
+    ts, signal, _ = _make_multi_sat_state(; systems, nsats_list, nsamp, prn_max, code_dop)
     # Pre-multi-signal branches share a single found-true `BitBuffer`
     # across sats; the multi-signal branch builds a per-signal-typed one
     # inside `_with_found_bit_buffer` (parametric `B` per signal). Pass a
     # plain non-parametric template for the older branches and `nothing`
     # for the new one (the new path ignores its second argument).
-    found_bb = _HAS_PARAMETRIC_BITBUFFER ? nothing :
+    found_bb =
+        _HAS_PARAMETRIC_BITBUFFER ? nothing :
         BitBuffer(UInt128(0), 20, true, UInt128(0), 0, complex(0.0, 0.0), 0)
     new_mss = map(_get_systems(ts)) do sss
         new_sats = _map_sats(s -> _with_found_bit_buffer(s, found_bb), sss)
@@ -640,12 +728,17 @@ function _make_steady_state_track_state(; systems, nsats_list, nsamp, prn_max, c
 end
 
 function bench_track_steady_state(
-    inplace::Bool, threaded::Bool;
-    systems, nsats_list, sfreq, nsamp, prn_max = 32, code_dop = 1000.0,
+    inplace::Bool,
+    threaded::Bool;
+    systems,
+    nsats_list,
+    sfreq,
+    nsamp,
+    prn_max = 32,
+    code_dop = 1000.0,
 )
-    ts, signal = _make_steady_state_track_state(;
-        systems, nsats_list, nsamp, prn_max, code_dop,
-    )
+    ts, signal =
+        _make_steady_state_track_state(; systems, nsats_list, nsamp, prn_max, code_dop)
     dc = if threaded && isdefined(Tracking, :CPUThreadedDownconvertAndCorrelator)
         _make_cpu_threaded_dc(sfreq)
     else
@@ -653,11 +746,17 @@ function bench_track_steady_state(
     end
     if inplace
         @benchmarkable Tracking.track!(
-            $signal, $ts, $sfreq; downconvert_and_correlator = $dc,
+            $signal,
+            $ts,
+            $sfreq;
+            downconvert_and_correlator = $dc,
         )
     else
         @benchmarkable Tracking.track(
-            $signal, $ts, $sfreq; downconvert_and_correlator = $dc,
+            $signal,
+            $ts,
+            $sfreq;
+            downconvert_and_correlator = $dc,
         )
     end
 end
@@ -677,9 +776,32 @@ end
 # case prefix dominates the sort order.
 const _TRACK_BENCH_CASES = let gpsl1 = GPSL1CA(), gal = GalileoE1B()
     [
-        ("2. L1 8sat/5K",   (systems = (gpsl1,),     nsats_list = [8],    sfreq = 5e6Hz,  nsamp = 5000)),
-        ("3. E1B 4sat/25K", (systems = (gal,),       nsats_list = [4],    sfreq = 25e6Hz, nsamp = 25000, prn_max = 50, code_dop = 100.0)),
-        ("4. 8L1+8E1B/25K", (systems = (gpsl1, gal), nsats_list = [8, 8], sfreq = 25e6Hz, nsamp = 25000, prn_max = 50, code_dop = 100.0)),
+        (
+            "2. L1 8sat/5K",
+            (systems = (gpsl1,), nsats_list = [8], sfreq = 5e6Hz, nsamp = 5000),
+        ),
+        (
+            "3. E1B 4sat/25K",
+            (
+                systems = (gal,),
+                nsats_list = [4],
+                sfreq = 25e6Hz,
+                nsamp = 25000,
+                prn_max = 50,
+                code_dop = 100.0,
+            ),
+        ),
+        (
+            "4. 8L1+8E1B/25K",
+            (
+                systems = (gpsl1, gal),
+                nsats_list = [8, 8],
+                sfreq = 25e6Hz,
+                nsamp = 25000,
+                prn_max = 50,
+                code_dop = 100.0,
+            ),
+        ),
     ]
 end
 
@@ -688,7 +810,8 @@ for (key, kw) in _TRACK_BENCH_CASES
     SUITE["track"]["$key – track-threaded"] = bench_track_steady_state(false, true; kw...)
     if isdefined(Tracking, :track!)
         SUITE["track"]["$key – track!"] = bench_track_steady_state(true, false; kw...)
-        SUITE["track"]["$key – track!-threaded"] = bench_track_steady_state(true, true; kw...)
+        SUITE["track"]["$key – track!-threaded"] =
+            bench_track_steady_state(true, true; kw...)
     end
 end
 
@@ -724,27 +847,43 @@ if _HAS_TRACKED_SIGNAL
         # constructor (added in #133); fall back to the hand-rolled
         # bare-sat → init_estimator_state → rebuild build on revisions that
         # predate it, so this script still benchmarks the baseline.
-        sat = if hasmethod(
-            Tracking.TrackedSat,
-            Tuple{typeof(signals),Int,Float64,typeof(carrier_doppler)},
-        )
-            Tracking.TrackedSat(
-                signals, 1, 10.5, carrier_doppler;
-                doppler_estimator = estimator,
+        sat =
+            if hasmethod(
+                Tracking.TrackedSat,
+                Tuple{typeof(signals),Int,Float64,typeof(carrier_doppler)},
             )
-        else
-            code_doppler =
-                carrier_doppler * GNSSSignals.get_code_center_frequency_ratio(gpsl1)
-            bare = Tracking.TrackedSat(
-                1, 10.5, code_doppler, 0.0, carrier_doppler, 1, signals, nothing,
-            )
-            de_state = Tracking.init_estimator_state(estimator, bare)
-            Tracking.TrackedSat(
-                bare.prn, bare.code_phase, bare.code_doppler,
-                bare.carrier_phase, bare.carrier_doppler,
-                bare.signal_start_sample, bare.signals, de_state,
-            )
-        end
+                Tracking.TrackedSat(
+                    signals,
+                    1,
+                    10.5,
+                    carrier_doppler;
+                    doppler_estimator = estimator,
+                )
+            else
+                code_doppler =
+                    carrier_doppler * GNSSSignals.get_code_center_frequency_ratio(gpsl1)
+                bare = Tracking.TrackedSat(
+                    1,
+                    10.5,
+                    code_doppler,
+                    0.0,
+                    carrier_doppler,
+                    1,
+                    signals,
+                    nothing,
+                )
+                de_state = Tracking.init_estimator_state(estimator, bare)
+                Tracking.TrackedSat(
+                    bare.prn,
+                    bare.code_phase,
+                    bare.code_doppler,
+                    bare.carrier_phase,
+                    bare.carrier_doppler,
+                    bare.signal_start_sample,
+                    bare.signals,
+                    de_state,
+                )
+            end
         ts = TrackState(gpsl1, sat; doppler_estimator = estimator)
         signal = rand(Complex{Float32}, nsamp)
         ts, signal
@@ -756,15 +895,20 @@ if _HAS_TRACKED_SIGNAL
             _make_multi_signal_track_state(; n_signals, nsamp = 5000, sfreq = 5e6Hz)
         dc = _make_cpu_dc(5e6Hz)
         SUITE["track"]["$prefix – track"] = @benchmarkable Tracking.track(
-            $signal, $ts, $(5e6Hz); downconvert_and_correlator = $dc,
+            $signal,
+            $ts,
+            $(5e6Hz);
+            downconvert_and_correlator = $dc,
         )
         if isdefined(Tracking, :track!)
-            ts_ip, signal_ip = _make_multi_signal_track_state(;
-                n_signals, nsamp = 5000, sfreq = 5e6Hz,
-            )
+            ts_ip, signal_ip =
+                _make_multi_signal_track_state(; n_signals, nsamp = 5000, sfreq = 5e6Hz)
             dc_ip = _make_cpu_dc(5e6Hz)
             SUITE["track"]["$prefix – track!"] = @benchmarkable Tracking.track!(
-                $signal_ip, $ts_ip, $(5e6Hz); downconvert_and_correlator = $dc_ip,
+                $signal_ip,
+                $ts_ip,
+                $(5e6Hz);
+                downconvert_and_correlator = $dc_ip,
             )
         end
     end
@@ -802,9 +946,13 @@ if _HAS_TRACKED_SIGNAL && isdefined(Tracking, :track!)
             SUITE["track"]["8. L1CA presync $(n_blocks) blk – track!"] = @benchmarkable(
                 Tracking.track!($sig, ts, $sfreq; downconvert_and_correlator = $dc),
                 setup = (
-                    ts = first(_make_multi_sat_state(;
-                        systems = ($gpsl1,), nsats_list = [1], nsamp = $nsamp,
-                    ));
+                    ts = first(
+                        _make_multi_sat_state(;
+                            systems = ($gpsl1,),
+                            nsats_list = [1],
+                            nsamp = $nsamp,
+                        ),
+                    );
                     Tracking.track!($sig, ts, $sfreq; downconvert_and_correlator = $dc)
                 ),
                 evals = 1,
@@ -812,10 +960,15 @@ if _HAS_TRACKED_SIGNAL && isdefined(Tracking, :track!)
             SUITE["track"]["8. L1CA synced $(n_blocks) blk – track!"] = @benchmarkable(
                 Tracking.track!($sig, ts, $sfreq; downconvert_and_correlator = $dc),
                 setup = (
-                    ts = first(_make_steady_state_track_state(;
-                        systems = ($gpsl1,), nsats_list = [1], nsamp = $nsamp,
-                        prn_max = 32, code_dop = 1000.0,
-                    ));
+                    ts = first(
+                        _make_steady_state_track_state(;
+                            systems = ($gpsl1,),
+                            nsats_list = [1],
+                            nsamp = $nsamp,
+                            prn_max = 32,
+                            code_dop = 1000.0,
+                        ),
+                    );
                     Tracking.track!($sig, ts, $sfreq; downconvert_and_correlator = $dc)
                 ),
                 evals = 1,
@@ -840,7 +993,7 @@ if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
     # the magnitude must stay within the ±2^11 range the Int16 carrier wipe assumes.
     function _int16_capture(nsamp)
         lim = Int16(2048)
-        complex.(rand((-lim):(lim - one(Int16)), nsamp), rand((-lim):(lim - one(Int16)), nsamp))
+        complex.(rand((-lim):(lim-one(Int16)), nsamp), rand((-lim):(lim-one(Int16)), nsamp))
     end
 
     # Branch-portable Int16 backend construction. `max_meas` (the front end's
@@ -861,12 +1014,62 @@ if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
     # so a slash would be read as an extra nesting level. Each scenario registers
     # a "Float32" and an "Int16" leaf under the same parent, so they sort
     # adjacently and the table pairs them into one Int16-vs-Float32 speedup row.
-    for (name, systems, nsats_list, sfreq, nsamp, prn_max) in (
-        ("GPS L1CA, 8 sats @ 5 MHz", (GPSL1CA(),), [8], 5e6Hz, 5000, 32),
-        ("GPS L1CA, 8 sats @ 40 MHz", (GPSL1CA(),), [8], 40e6Hz, 40000, 32),
-        ("Galileo E1B, 4 sats @ 25 MHz", (GalileoE1B(),), [4], 25e6Hz, 25000, 50),
+    # Phase/Doppler-matched 8-PRN GPS L1CA composite capture for the long-buffer
+    # scenario below. The 1 ms scenarios can use pure noise because `setup`
+    # rebuilds a fresh state per call — but one 100 ms call runs ~100 loop
+    # updates back-to-back, and over noise the filters can drift to a NaN
+    # Doppler (InexactError on the next sample-count round) WITHIN the call.
+    # Track a real signal matching `_make_multi_sat_state`'s per-sat pattern
+    # (PRN i, code phase 10.5 + 0.1i, Doppler (1000 + 10i) Hz) so the loops
+    # stay locked. Amplitude 64/sat + noise σ=32 stays well inside the ±2048
+    # full-scale the Int16 carrier wipe assumes.
+    function _l1ca_composite_capture(nsamp, sfreq)
+        sys = GPSL1CA()
+        fsn = sfreq / Hz
+        acc = zeros(ComplexF64, nsamp)
+        for i = 1:8
+            d = 1000.0 + i * 10
+            code = gen_code(
+                nsamp,
+                sys,
+                i,
+                sfreq,
+                get_code_frequency(sys) + (d / 1540)Hz,
+                10.5 + i * 0.1,
+            )
+            acc .+= 64.0 .* code .* cis.(2π .* d .* (0:(nsamp-1)) ./ fsn)
+        end
+        acc .+= 32.0 .* randn(nsamp) .+ 32.0im .* randn(nsamp)
+        complex.(round.(Int16, real.(acc)), round.(Int16, imag.(acc)))
+    end
+
+    # The 100 ms case spans ~100 integration steps in ONE track! call: it is the
+    # post-processing-style workload where the bit backends' shared band pack
+    # must be built once per call, not once per step — a per-step repack is
+    # invisible at 1 ms (one step = one pack either way) but dominates here.
+    for (name, systems, nsats_list, sfreq, nsamp, prn_max, capture) in (
+        ("GPS L1CA, 8 sats @ 5 MHz", (GPSL1CA(),), [8], 5e6Hz, 5000, 32, _int16_capture),
+        (
+            "GPS L1CA, 8 sats @ 5 MHz, 100 ms buffer",
+            (GPSL1CA(),),
+            [8],
+            5e6Hz,
+            500_000,
+            32,
+            n -> _l1ca_composite_capture(n, 5e6Hz),
+        ),
+        ("GPS L1CA, 8 sats @ 40 MHz", (GPSL1CA(),), [8], 40e6Hz, 40000, 32, _int16_capture),
+        (
+            "Galileo E1B, 4 sats @ 25 MHz",
+            (GalileoE1B(),),
+            [4],
+            25e6Hz,
+            25000,
+            50,
+            _int16_capture,
+        ),
     )
-        sig16 = _int16_capture(nsamp)
+        sig16 = capture(nsamp)
         dc_f = _make_cpu_threaded_dc(sfreq)
         # max_meas = 2^11 matches the ±2048 full-scale of `_int16_capture` above.
         dc_i = _make_int16_threaded_dc(2^11)
@@ -881,18 +1084,32 @@ if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
         # runs exactly once. `setup` isn't timed, so the reported min time is unaffected.
         g["Float32"] = @benchmarkable(
             Tracking.track!($sig16, ts, $sfreq; downconvert_and_correlator = $dc_f),
-            setup = (ts = first(_make_steady_state_track_state(;
-                systems = $systems, nsats_list = $nsats_list, nsamp = $nsamp,
-                prn_max = $prn_max, code_dop = 100.0,
-            ))),
+            setup = (
+                ts = first(
+                    _make_steady_state_track_state(;
+                        systems = $systems,
+                        nsats_list = $nsats_list,
+                        nsamp = $nsamp,
+                        prn_max = $prn_max,
+                        code_dop = 100.0,
+                    ),
+                )
+            ),
             evals = 1,
         )
         g["Int16"] = @benchmarkable(
             Tracking.track!($sig16, ts, $sfreq; downconvert_and_correlator = $dc_i),
-            setup = (ts = first(_make_steady_state_track_state(;
-                systems = $systems, nsats_list = $nsats_list, nsamp = $nsamp,
-                prn_max = $prn_max, code_dop = 100.0,
-            ))),
+            setup = (
+                ts = first(
+                    _make_steady_state_track_state(;
+                        systems = $systems,
+                        nsats_list = $nsats_list,
+                        nsamp = $nsamp,
+                        prn_max = $prn_max,
+                        code_dop = 100.0,
+                    ),
+                )
+            ),
             evals = 1,
         )
         # One-bit (bit-wise) backend, same capture. BPSK-only (it errors on CBOC), so
@@ -902,10 +1119,17 @@ if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
             dc_b = Tracking.OneBitThreadedDownconvertAndCorrelator()
             g["OneBit"] = @benchmarkable(
                 Tracking.track!($sig16, ts, $sfreq; downconvert_and_correlator = $dc_b),
-                setup = (ts = first(_make_steady_state_track_state(;
-                    systems = $systems, nsats_list = $nsats_list, nsamp = $nsamp,
-                    prn_max = $prn_max, code_dop = 100.0,
-                ))),
+                setup = (
+                    ts = first(
+                        _make_steady_state_track_state(;
+                            systems = $systems,
+                            nsats_list = $nsats_list,
+                            nsamp = $nsamp,
+                            prn_max = $prn_max,
+                            code_dop = 100.0,
+                        ),
+                    )
+                ),
                 evals = 1,
             )
         end
@@ -915,10 +1139,17 @@ if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
             dc_t = Tracking.TwoBitThreadedDownconvertAndCorrelator()
             g["TwoBit"] = @benchmarkable(
                 Tracking.track!($sig16, ts, $sfreq; downconvert_and_correlator = $dc_t),
-                setup = (ts = first(_make_steady_state_track_state(;
-                    systems = $systems, nsats_list = $nsats_list, nsamp = $nsamp,
-                    prn_max = $prn_max, code_dop = 100.0,
-                ))),
+                setup = (
+                    ts = first(
+                        _make_steady_state_track_state(;
+                            systems = $systems,
+                            nsats_list = $nsats_list,
+                            nsamp = $nsamp,
+                            prn_max = $prn_max,
+                            code_dop = 100.0,
+                        ),
+                    )
+                ),
                 evals = 1,
             )
         end
@@ -989,11 +1220,8 @@ if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
             cap,
             _axes_multisignal_state(n_signals),
         )
-        g["Int16"] = _axes_dc(
-            _make_int16_threaded_dc(2^11),
-            cap,
-            _axes_multisignal_state(n_signals),
-        )
+        g["Int16"] =
+            _axes_dc(_make_int16_threaded_dc(2^11), cap, _axes_multisignal_state(n_signals))
         g["OneBit"] = _axes_dc(
             Tracking.OneBitThreadedDownconvertAndCorrelator(),
             cap,
@@ -1010,13 +1238,13 @@ if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
     for num_ants in (4,)
         cap = _int16_capture_mat(_AXES_NSAMP, num_ants)
         g = SUITE["track! Int16 vs Float32"]["$num_ants-antenna @ 5 MHz"]
-        g["Float32"] =
-            _axes_dc(_make_cpu_threaded_dc(_AXES_FS), cap, _axes_multiantenna_state(num_ants))
-        g["Int16"] = _axes_dc(
-            _make_int16_threaded_dc(2^11),
+        g["Float32"] = _axes_dc(
+            _make_cpu_threaded_dc(_AXES_FS),
             cap,
             _axes_multiantenna_state(num_ants),
         )
+        g["Int16"] =
+            _axes_dc(_make_int16_threaded_dc(2^11), cap, _axes_multiantenna_state(num_ants))
         g["OneBit"] = _axes_dc(
             Tracking.OneBitThreadedDownconvertAndCorrelator(),
             cap,
@@ -1033,8 +1261,7 @@ if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
 
     # dynamic (runtime AbstractVector) tap count — kernel level, all three backends.
     let g = SUITE["track! Int16 vs Float32"]["dynamic taps @ 5 MHz (kernel)"]
-        code_doppler =
-            1000.0Hz * GNSSSignals.get_code_center_frequency_ratio(_AXES_SIG)
+        code_doppler = 1000.0Hz * GNSSSignals.get_code_center_frequency_ratio(_AXES_SIG)
         code_frequency = code_doppler + get_code_frequency(_AXES_SIG)
         correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
         dyn_shifts =
@@ -1044,33 +1271,82 @@ if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
         # Float32 fused kernel, dynamic-shifts (11-arg) path with hoisted SoA tiles.
         code_replica_f = Vector{Int8}(undef, _AXES_NSAMP + span)
         _gen_code_replica!(
-            code_replica_f, _AXES_SIG, code_frequency, _AXES_FS, 10.5, 1, _AXES_NSAMP,
-            dyn_shifts, 1,
+            code_replica_f,
+            _AXES_SIG,
+            code_frequency,
+            _AXES_FS,
+            10.5,
+            1,
+            _AXES_NSAMP,
+            dyn_shifts,
+            1,
         )
         tile_re = Vector{Float32}(undef, _AXES_NSAMP)
         tile_im = Vector{Float32}(undef, _AXES_NSAMP)
         g["Float32"] = @benchmarkable Tracking.downconvert_and_correlate_fused!(
-            $correlator, $cap, $code_replica_f, $dyn_shifts,
-            $(1000.0Hz + 0.0Hz), $_AXES_FS, 0.0, 1, $_AXES_NSAMP, $tile_re, $tile_im,
+            $correlator,
+            $cap,
+            $code_replica_f,
+            $dyn_shifts,
+            $(1000.0Hz + 0.0Hz),
+            $_AXES_FS,
+            0.0,
+            1,
+            $_AXES_NSAMP,
+            $tile_re,
+            $tile_im,
         )
         # Int16 hybrid-blocked kernel, dynamic-shifts (AbstractVector) fallback.
         dc_i = _make_int16_dc(2^11)
         g["Int16"] = @benchmarkable Tracking._int16_hybrid_blocked!(
-            $dc_i, $cap, NumAnts{1}(), $_AXES_SIG, 1, $dyn_shifts,
-            10.5, 0.0, $code_frequency, $(1000.0Hz + 0.0Hz), $_AXES_FS, 1, $_AXES_NSAMP,
+            $dc_i,
+            $cap,
+            NumAnts{1}(),
+            $_AXES_SIG,
+            1,
+            $dyn_shifts,
+            10.5,
+            0.0,
+            $code_frequency,
+            $(1000.0Hz + 0.0Hz),
+            $_AXES_FS,
+            1,
+            $_AXES_NSAMP,
         )
         # One-bit bit-wise kernel, dynamic-shifts (AbstractVector) fallback.
         dc_b = Tracking.OneBitDownconvertAndCorrelator()
         g["OneBit"] = @benchmarkable Tracking._onebit_hybrid_blocked!(
-            $dc_b, $cap, NumAnts{1}(), $_AXES_SIG, 1, $dyn_shifts,
-            10.5, 0.0, $code_frequency, $(1000.0Hz + 0.0Hz), $_AXES_FS, 1, $_AXES_NSAMP,
+            $dc_b,
+            $cap,
+            NumAnts{1}(),
+            $_AXES_SIG,
+            1,
+            $dyn_shifts,
+            10.5,
+            0.0,
+            $code_frequency,
+            $(1000.0Hz + 0.0Hz),
+            $_AXES_FS,
+            1,
+            $_AXES_NSAMP,
         )
         # Two-bit bit-wise kernel, dynamic-shifts (AbstractVector) fallback.
         if isdefined(Tracking, :TwoBitDownconvertAndCorrelator)
             dc_t = Tracking.TwoBitDownconvertAndCorrelator()
             g["TwoBit"] = @benchmarkable Tracking._twobit_hybrid_blocked!(
-                $dc_t, $cap, NumAnts{1}(), $_AXES_SIG, 1, $dyn_shifts,
-                10.5, 0.0, $code_frequency, $(1000.0Hz + 0.0Hz), $_AXES_FS, 1, $_AXES_NSAMP,
+                $dc_t,
+                $cap,
+                NumAnts{1}(),
+                $_AXES_SIG,
+                1,
+                $dyn_shifts,
+                10.5,
+                0.0,
+                $code_frequency,
+                $(1000.0Hz + 0.0Hz),
+                $_AXES_FS,
+                1,
+                $_AXES_NSAMP,
             )
         end
     end
@@ -1087,28 +1363,87 @@ end
 # rebuild-state-per-eval pattern as the head-to-head group (random samples drift `track!`
 # to a NaN doppler otherwise).
 if isdefined(Tracking, :Int16DownconvertAndCorrelator) && isdefined(Tracking, :track!)
-    for (key, systems, nsats_list, sfreq, nsamp, prn_max, onebit) in (
-        ("2. L1 8sat/5K", (GPSL1CA(),), [8], 5e6Hz, 5000, 32, true),
-        ("3. E1B 4sat/25K", (GalileoE1B(),), [4], 25e6Hz, 25000, 50, false),
+    # The "7." 100 ms case spans ~100 integration steps in one call — the
+    # workload where the bit backends' shared band pack must be built once per
+    # call rather than once per step. It lives in THIS group (unlike the
+    # head-to-head-only 100 ms scenario above) so the base-vs-head ratio table
+    # tracks it across revisions. It uses the locked composite capture for the
+    # same NaN reason as above, and additionally registers a TwoBit leaf.
+    for (key, systems, nsats_list, sfreq, nsamp, prn_max, onebit, twobit, capture) in (
+        ("2. L1 8sat/5K", (GPSL1CA(),), [8], 5e6Hz, 5000, 32, true, false, _int16_capture),
+        (
+            "3. E1B 4sat/25K",
+            (GalileoE1B(),),
+            [4],
+            25e6Hz,
+            25000,
+            50,
+            false,
+            false,
+            _int16_capture,
+        ),
+        (
+            "7. L1 8sat/500K",
+            (GPSL1CA(),),
+            [8],
+            5e6Hz,
+            500_000,
+            32,
+            true,
+            true,
+            n -> _l1ca_composite_capture(n, 5e6Hz),
+        ),
     )
-        sig16 = _int16_capture(nsamp)
+        sig16 = capture(nsamp)
         dc_i = _make_int16_dc(2^11)   # max_meas = 2^11 matches _int16_capture's ±2048
         SUITE["track"]["$key – track! Int16"] = @benchmarkable(
             Tracking.track!($sig16, ts, $sfreq; downconvert_and_correlator = $dc_i),
-            setup = (ts = first(_make_steady_state_track_state(;
-                systems = $systems, nsats_list = $nsats_list, nsamp = $nsamp,
-                prn_max = $prn_max, code_dop = 100.0,
-            ))),
+            setup = (
+                ts = first(
+                    _make_steady_state_track_state(;
+                        systems = $systems,
+                        nsats_list = $nsats_list,
+                        nsamp = $nsamp,
+                        prn_max = $prn_max,
+                        code_dop = 100.0,
+                    ),
+                )
+            ),
             evals = 1,
         )
         if onebit && isdefined(Tracking, :OneBitDownconvertAndCorrelator)
             dc_b = Tracking.OneBitDownconvertAndCorrelator()
             SUITE["track"]["$key – track! OneBit"] = @benchmarkable(
                 Tracking.track!($sig16, ts, $sfreq; downconvert_and_correlator = $dc_b),
-                setup = (ts = first(_make_steady_state_track_state(;
-                    systems = $systems, nsats_list = $nsats_list, nsamp = $nsamp,
-                    prn_max = $prn_max, code_dop = 100.0,
-                ))),
+                setup = (
+                    ts = first(
+                        _make_steady_state_track_state(;
+                            systems = $systems,
+                            nsats_list = $nsats_list,
+                            nsamp = $nsamp,
+                            prn_max = $prn_max,
+                            code_dop = 100.0,
+                        ),
+                    )
+                ),
+                evals = 1,
+            )
+        end
+        if twobit && isdefined(Tracking, :TwoBitDownconvertAndCorrelator)
+            dc_t = Tracking.TwoBitDownconvertAndCorrelator()
+            SUITE["track"]["$key – track! TwoBit"] = @benchmarkable(
+                Tracking.track!($sig16, ts, $sfreq; downconvert_and_correlator = $dc_t),
+                setup = (
+                    ts = first(
+                        _make_steady_state_track_state(;
+                            systems = $systems,
+                            nsats_list = $nsats_list,
+                            nsamp = $nsamp,
+                            prn_max = $prn_max,
+                            code_dop = 100.0,
+                        ),
+                    )
+                ),
                 evals = 1,
             )
         end
