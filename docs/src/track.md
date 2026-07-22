@@ -11,7 +11,7 @@ track!
 
 - `downconvert_and_correlator` — the downconversion and correlation implementation. Defaults to `CPUThreadedDownconvertAndCorrelator()`. **For real-time loops, hoist this outside the loop** (see below).
 - `intermediate_frequency` — the IF of the signal. Defaults to `0.0Hz`. Only accepted on the bare-buffer form `track!(buf, state, fs; intermediate_frequency = ...)`; on the [`BandMeasurement`](@ref) and multi-band forms the IF lives on each `BandMeasurement`.
-- `update_interval` — the Doppler-estimation / NCO-update interval, a time (e.g. `1u"ms"`). Defaults to `nothing` ⇒ auto = the smallest primary-code period across all tracked signals (1 ms for GPS L1 C/A). Each measurement is processed in fixed-size chunks of this length: within a chunk the NCO Doppler is held fixed and every correlator output that completes is collected, then the estimator processes them in order and updates **every** satellite's NCO once, at a common epoch (see [Chunked Doppler updates](#Chunked-Doppler-updates)). Pick a longer interval to reduce Doppler-estimation cost at the expense of update rate.
+- `doppler_update_interval` — the Doppler-estimation / NCO-update interval, a time (e.g. `1u"ms"`). Defaults to `nothing` ⇒ auto = the smallest primary-code period across all tracked signals (1 ms for GPS L1 C/A). Each measurement is processed in fixed-size chunks of this length: within a chunk the NCO Doppler is held fixed and every correlator output that completes is collected, then the estimator processes them in order and updates **every** satellite's NCO once, at a common epoch (see [Chunked Doppler updates](#Chunked-Doppler-updates)). Pick a longer interval to reduce Doppler-estimation cost at the expense of update rate.
 The **coherent-integration length** is not a `track!` argument — it is a per-signal setting on each [`TrackedSignal`](@ref) (its `preferred_num_code_blocks_to_integrate` field), changed with [`set_preferred_num_code_blocks_to_integrate!`](@ref). It defaults to `1`, is capped per integration by the signal's bit/secondary-code period, and only takes effect once bit/secondary-code synchronization has been achieved. For data-bearing signals the length must evenly divide the number of code blocks that form one bit (e.g. a divisor of 20 for GPS L1 C/A, of 10 for GPS L5I) so integrations stay aligned to bit boundaries; other values throw an `ArgumentError`. With the conventional estimator the loop bandwidth auto-scales by `1/N` so longer integration stays stable without re-tuning.
 
 ```@docs
@@ -20,7 +20,7 @@ set_preferred_num_code_blocks_to_integrate!
 
 ## Chunked Doppler updates
 
-`track` / `track!` walk each measurement in fixed-size time chunks of length `update_interval` (default: the smallest code period across all signals). Each chunk runs two correlate passes around one estimate:
+`track` / `track!` walk each measurement in fixed-size time chunks of length `doppler_update_interval` (default: the smallest code period across all signals). Each chunk runs two correlate passes around one estimate:
 
 1. **Correlate the completions** — every coherent integration that completes inside the chunk is collected into that signal's `correlator_outputs` buffer, tagged with the sample index at which it ended (a [`CorrelatorOutput`](@ref); the sample index is important for vector tracking). A 1 ms-code signal in a 1 ms chunk yields 0, 1, or 2 outputs; a signal whose coherent integration is longer than the chunk yields outputs only on the chunks where it completes.
 2. **Estimate** — the Doppler estimator processes the collected outputs **in order** (threading the loop-filter state across them) and writes the resulting Doppler to the NCO **once per chunk** — all satellites' NCOs update at the same point in the processing, a common epoch.
@@ -28,7 +28,7 @@ set_preferred_num_code_blocks_to_integrate!
 
 Read the collected outputs for the most recent chunk with [`get_correlator_outputs`](@ref) (they are cleared after each chunk's estimate).
 
-Choosing a larger `update_interval` batches more correlator outputs per NCO update, trading Doppler-tracking bandwidth for lower estimation cost. At the default interval the behavior is numerically very close to updating the NCO once per code period.
+Choosing a larger `doppler_update_interval` batches more correlator outputs per NCO update, trading Doppler-tracking bandwidth for lower estimation cost. At the default interval the behavior is numerically very close to updating the NCO once per code period.
 
 ## Real-time loops
 
