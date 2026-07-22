@@ -20,11 +20,12 @@ set_preferred_num_code_blocks_to_integrate!
 
 ## Chunked Doppler updates
 
-`track` / `track!` walk each measurement in fixed-size time chunks of length `doppler_update_interval` (default: the smallest code period across all signals). Each chunk runs two correlate passes around one estimate:
+`track` / `track!` walk each measurement in fixed-size time chunks of length `doppler_update_interval` (default: the smallest code period across all signals). Each chunk runs one correlate pass and one estimate:
 
-1. **Correlate the completions** — every coherent integration that completes inside the chunk is collected into that signal's `correlator_outputs` buffer, tagged with the sample index at which it ended (a [`CorrelatorOutput`](@ref); the sample index is important for vector tracking). A 1 ms-code signal in a 1 ms chunk yields 0, 1, or 2 outputs; a signal whose coherent integration is longer than the chunk yields outputs only on the chunks where it completes.
+1. **Correlate to the last completed boundary** — each satellite integrates from wherever it stands up to its last coherent-integration boundary inside the chunk; every completed integration is collected into that signal's `correlator_outputs` buffer, tagged with the sample index at which it ended (a [`CorrelatorOutput`](@ref); the sample index is important for vector tracking). A 1 ms-code signal in a 1 ms chunk yields 0, 1, or 2 outputs; a signal whose coherent integration is longer than the chunk yields outputs only on the chunks where it completes.
 2. **Estimate** — the Doppler estimator processes the collected outputs **in order** (threading the loop-filter state across them) and writes the resulting Doppler to the NCO **once per chunk** — all satellites' NCOs update at the same point in the processing, a common epoch.
-3. **Integrate the residue** — the remaining samples of the chunk (from each satellite's last completed boundary to the chunk end) are correlated with the freshly **updated** Doppler. That residue is the head of the *next* integration, so every completed integration is produced by a single NCO Doppler and each correction takes effect right at the boundary where its integration completed — the same loop timing as a classic per-code-period update.
+
+The chunk's trailing partial — from each satellite's last completed boundary to the chunk end — is *not* integrated separately: the **next** chunk's pass starts right at that boundary, so each integration runs boundary → boundary in one kernel window, entirely at the freshly updated Doppler. Every completed integration is therefore produced by a single NCO Doppler and each correction takes effect right at the boundary where its integration completed — the same loop timing as a classic per-code-period update. A final pass after the last chunk drains the buffer's trailing partial into each satellite's live accumulator so it carries into the next `track!` call.
 
 Read the collected outputs for the most recent chunk with [`get_correlator_outputs`](@ref) (they are cleared after each chunk's estimate).
 
