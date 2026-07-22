@@ -36,6 +36,13 @@ When in doubt: it is breaking if released user code — including custom
 `downconvert_and_correlate(!)` callers — could stop compiling or change
 behavior after the release.
 
+Breaking is always judged **against the latest release**, not against earlier
+commits of the same PR: renaming or removing API that was itself introduced in
+the same (unmerged) PR is an ordinary `refactor`/`fix` commit, not a breaking
+change — either fold it into the introducing commit or say in the body that
+the touched API is unreleased. Reserve `!` + `BREAKING CHANGE:` for changes
+that affect users of a published version.
+
 ### Do not hand-maintain release artifacts
 
 The changelog and the version are produced by CI: on `master`,
