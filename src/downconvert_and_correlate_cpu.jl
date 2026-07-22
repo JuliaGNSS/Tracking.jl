@@ -400,11 +400,13 @@ function _update_tracked_sat_correlator(
     #
     # `stop_before_partial = true` stops at the last code-block boundary inside
     # the chunk instead of integrating the trailing partial up to the chunk
-    # end. `track!` uses this to split each chunk in two: correlate the
-    # completions, run the Doppler estimator, then integrate the residue with
-    # the *updated* NCO Doppler — so every completed integration is produced by
-    # a single Doppler and the NCO correction takes effect right at the
-    # completing boundary, like the pre-chunking per-completion update.
+    # end. `track!`'s per-chunk pass uses this: the residue is left for the
+    # NEXT chunk's pass, which runs boundary → boundary in one kernel window,
+    # entirely at the Doppler the estimator wrote in between — so every
+    # completed integration is produced by a single Doppler and the NCO
+    # correction takes effect right at the completing boundary, like the
+    # pre-chunking per-completion update. A final pass without the flag drains
+    # the buffer's trailing partial into the accumulator.
     while sat.signal_start_sample <= chunk_last_sample
         # MIN samples-to-next-boundary across all signals on this sat, clamped
         # to the chunk end. Each signal's coherent-integration length comes from

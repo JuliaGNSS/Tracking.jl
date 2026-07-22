@@ -187,25 +187,23 @@ function track!(
     # and updates every sat's NCO once — a common epoch across all sats.
     chunk_duration = _resolve_doppler_update_interval(doppler_update_interval, track_state)
     _validate_doppler_update_interval(chunk_duration, measurements)
+    # One correlate pass + one estimate per chunk. The pass runs each satellite
+    # from wherever it stands to its last completed code-block boundary inside
+    # the chunk (`stop_before_partial` — the chunk-clamped trailing partial is
+    # NOT integrated); the estimator then folds the collected outputs and
+    # writes the new NCO Doppler. The residue is picked up by the NEXT chunk's
+    # pass, which therefore covers boundary → boundary in a single kernel
+    # window, entirely at the just-updated Doppler. So every completed
+    # integration is produced by a single NCO Doppler and each correction takes
+    # effect right at its completing boundary (the classic per-completion loop
+    # timing), while the estimator still runs once per chunk at a common epoch
+    # — without splitting each code period into two kernel invocations.
+    #
+    # `samples_unchanged`: the measurement buffers are fixed for the whole
+    # call, so sample-derived backend caches (the bit backends' shared band
+    # pack) are built on the very first pass and reused ever after.
     chunk_index = 0
-    while true
-        _all_groups_reached_end(track_state, measurements) && break
-
-        # Each chunk is processed in two correlate passes around one estimate:
-        #
-        #   1. correlate every completed integration inside the chunk
-        #      (`stop_before_partial` leaves the trailing partial untouched),
-        #   2. fold the collected outputs and write the new NCO Doppler,
-        #   3. integrate the residue — from the last completed boundary to the
-        #      chunk end — with the *updated* Doppler.
-        #
-        # The residue belongs to the NEXT integration, so this keeps every
-        # completed integration on a single NCO Doppler and applies each
-        # correction right at the completing boundary (the pre-chunking loop
-        # timing), while still estimating once per chunk at a common epoch.
-        # `samples_unchanged`: the measurement buffers are fixed for the whole
-        # call, so sample-derived backend caches (the bit backends' shared band
-        # pack) are built on the very first pass and reused ever after.
+    while _chunks_left(chunk_duration, chunk_index, measurements)
         downconvert_and_correlate!(
             downconvert_and_correlator,
             measurements,
@@ -216,21 +214,19 @@ function track!(
             samples_unchanged = chunk_index > 0,
         )
         estimate_dopplers_and_filter_prompt!(track_state, measurements)
-        downconvert_and_correlate!(
-            downconvert_and_correlator,
-            measurements,
-            track_state;
-            chunk_index,
-            chunk_duration,
-            samples_unchanged = true,
-        )
         chunk_index += 1
     end
-    # The residue pass integrates with the freshly updated code Doppler, which
-    # can (rarely) pull a boundary phase 1 measured as beyond the chunk back
-    # inside it and complete an integration. Mid-measurement such an output is
-    # folded by the next chunk's estimate; after the final chunk there is none,
-    # so fold once more. A no-op (per-sat early return) when nothing completed.
+    # Drain the buffer: consume every satellite's trailing partial — from its
+    # last completed boundary to the buffer end — into its live accumulator (at
+    # the final chunk's Doppler), so the integration carries into the next
+    # `track!` call. A boundary landing exactly on the buffer end completes
+    # here, so fold once more; a no-op (per-sat early return) otherwise.
+    downconvert_and_correlate!(
+        downconvert_and_correlator,
+        measurements,
+        track_state;
+        samples_unchanged = chunk_index > 0,
+    )
     estimate_dopplers_and_filter_prompt!(track_state, measurements)
     return track_state
 end
@@ -252,27 +248,20 @@ function track!(measurement::BandMeasurement, track_state::TrackState; kwargs...
     track!(_single_band_measurements(measurement, track_state), track_state; kwargs...)
 end
 
-# Loop termination: every group has consumed its band's measurement to the
-# end. Each group's `signal_start_sample` advances to `num_samples + 1`
-# when that group's measurement is fully integrated; the outer `while`
-# exits once every group has reached its own band's measurement end.
-@inline function _all_groups_reached_end(
-    track_state::TrackState,
-    measurements::BandMeasurements,
-)
-    _check_all_groups_at_end(Tuple(track_state.groups), measurements)
-end
-
-# Recursive tuple-walk: each step has fully concrete types.
-@inline _check_all_groups_at_end(::Tuple{}, ::BandMeasurements) = true
-@inline function _check_all_groups_at_end(t::Tuple, measurements::BandMeasurements)
-    g = first(t)
-    m = measurements[get_band_id(g.band)]
-    target = get_num_samples(m) + 1
-    @inbounds for sat in g.satellites.values
-        sat.signal_start_sample == target || return false
+# Loop termination: the chunk grid is walked until the previous chunk's end
+# already reached the buffer end on every band (`_chunk_last_sample` clamps at
+# `num_samples`, so the count is finite and independent of per-sat progress —
+# satellites lagging behind a chunk boundary are caught up by later passes and
+# by `track!`'s final buffer-draining pass). For `chunk_index == 0` the
+# convention `_chunk_last_sample(…, -1, …) == 0` makes this "is the buffer
+# non-empty on any band".
+@inline function _chunks_left(chunk_duration, chunk_index::Int, measurements)
+    for m in measurements
+        n = get_num_samples(m)
+        _chunk_last_sample(chunk_duration, chunk_index - 1, m.sampling_frequency, n) < n &&
+            return true
     end
-    _check_all_groups_at_end(Base.tail(t), measurements)
+    false
 end
 
 # Resolve the per-chunk update interval to a concrete time. `nothing` => auto:

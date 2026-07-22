@@ -57,24 +57,29 @@ buffer) boundary carries in the accumulator. The NCO Doppler is untouched here.
 A chunk yields 0, 1, or several outputs per signal depending on code phase and
 Doppler.
 
-`track!` runs this correlate step **twice per chunk**, around the estimate:
-
-1. with `stop_before_partial = true` — integrate every completion inside the
-   chunk, but stop at the last code-block boundary instead of integrating the
-   trailing chunk-clamped partial (a sub-step that completes no signal is
-   exactly that partial);
-2. after the estimate has written the new NCO Doppler — integrate the residue
-   (last boundary → chunk end), which is the head of the *next* integration.
+`track!` runs this correlate step **once per chunk** with
+`stop_before_partial = true`: integrate every completion inside the chunk, but
+stop at the last code-block boundary instead of integrating the trailing
+chunk-clamped partial (a sub-step that completes no signal is exactly that
+partial). The estimator then writes the new NCO Doppler, and the **next**
+chunk's pass picks up from the boundary — so each integration runs boundary →
+boundary in a single kernel window, entirely at the just-updated Doppler.
+After the last chunk a final pass without the flag drains the buffer's
+trailing partial into each satellite's live accumulator (at the final chunk's
+Doppler) so it carries into the next `track!` call, followed by one trailing
+fold for the rare completion landing exactly on the buffer end.
 
 This keeps every completed integration on a single NCO Doppler and applies each
 Doppler correction right at the boundary where its integration completed — the
 same loop timing as the classic per-completion update — while still estimating
-once per chunk at a common epoch. (Without the split, the residue was
-integrated at the pre-update Doppler, which measurably tightened the FLL
-pull-in edge.) The updated code Doppler can, rarely, pull a boundary that pass
-1 measured as beyond the chunk back inside it; such an output is folded by the
-next chunk's estimate, and `track!` runs one trailing fold after the last chunk
-so nothing is dropped at the buffer end.
+once per chunk at a common epoch. (Integrating the residue at the pre-update
+Doppler instead measurably tightened the FLL pull-in edge; an interim design
+that integrated the residue in a separate per-chunk pass restored the edge but
+split each code period into two kernel invocations, costing ~20 % throughput
+on long buffers.) The outer loop walks the chunk grid itself (`_chunks_left`),
+not per-sat progress: satellites lagging behind a chunk boundary — e.g. an
+E1B sat whose 4 ms integration spans several 1 ms chunks — are caught up by
+whichever later pass contains their boundary, and finally by the drain.
 
 ### Estimate phase (folds, one NCO write)
 

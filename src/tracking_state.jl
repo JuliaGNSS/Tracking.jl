@@ -301,8 +301,8 @@ function reset_start_sample_and_bit_buffer!(track_state::TrackState)
 end
 
 # Loop-termination helper for `track`/`track!` lives in `track.jl` as
-# `_all_groups_reached_end` — it iterates the per-band measurement
-# lengths so each group can terminate against its own band's chunk.
+# `_chunks_left` — it iterates the per-band measurement lengths so the
+# chunk grid terminates against each band's own buffer end.
 
 """
 $(SIGNATURES)
