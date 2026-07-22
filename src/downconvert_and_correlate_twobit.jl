@@ -1734,6 +1734,7 @@ end
     chunk_index::Int,
     chunk_duration,
     stop_before_partial::Bool,
+    samples_unchanged::Bool,
 )
     vals = g.satellites.values
     isempty(vals) && return nothing
@@ -1752,7 +1753,11 @@ end
     # for a single sat the shared pack + per-sat realign copy is slower than packing that
     # one sat directly, so empty the band buffer to select the kernel's per-sat path.
     samples = m.samples
-    if length(vals) > 1
+    if samples_unchanged
+        # Same buffer content as the previous call with this dc (track! passes
+        # this on every chunk/pass after the first): the shared band pack — or
+        # the emptied single-sat state — is still valid, keep it.
+    elseif length(vals) > 1
         nsamp = get_num_samples(m)
         M = samples isa AbstractMatrix ? size(samples, 2) : 1
         num_rows = samples isa AbstractMatrix ? size(samples, 1) : length(samples)
@@ -1837,6 +1842,7 @@ function downconvert_and_correlate!(
     chunk_index::Int = 0,
     chunk_duration = nothing,
     stop_before_partial::Bool = false,
+    samples_unchanged::Bool = false,
 )
     _foreach_group!(
         _dc_one_group!,
@@ -1846,6 +1852,7 @@ function downconvert_and_correlate!(
         chunk_index,
         chunk_duration,
         stop_before_partial,
+        samples_unchanged,
     )
     return track_state
 end
