@@ -174,10 +174,20 @@ function track!(
 )
     _validate_measurements(track_state, measurements)
     reset_start_sample_and_bit_buffer!(track_state)
+    # The measurement buffers are fixed for the whole call, so sample-derived
+    # backend caches (the bit backends' shared band pack) are built on the
+    # first iteration and reused ever after (`samples_unchanged`).
+    first_iteration = true
     while true
         _all_groups_reached_end(track_state, measurements) && break
 
-        downconvert_and_correlate!(downconvert_and_correlator, measurements, track_state)
+        downconvert_and_correlate!(
+            downconvert_and_correlator,
+            measurements,
+            track_state;
+            samples_unchanged = !first_iteration,
+        )
+        first_iteration = false
         estimate_dopplers_and_filter_prompt!(track_state, measurements)
     end
     return track_state
