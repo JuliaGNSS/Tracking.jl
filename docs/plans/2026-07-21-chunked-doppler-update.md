@@ -42,7 +42,7 @@ rounding never drifts and different bands stay time-aligned to within a sample.
 A one-sample floor is validated up front (`_validate_update_interval`) so the
 loop always makes progress.
 
-### Correlate phase (records outputs)
+### Correlate phase (records outputs, two passes per chunk)
 
 `_update_tracked_sat_correlator` runs an inner loop over the chunk. Each
 sub-step integrates to the next code-block boundary of any signal (or the chunk
@@ -53,9 +53,28 @@ its raw accumulator into a [`CorrelatorOutput`](@ref) — `(correlator,
 integrated_samples, sample_index)` — appended to the reused
 per-signal `correlator_outputs` buffer, and resets the accumulator so the next
 integration in the chunk starts fresh. A partial integration at the chunk (or
-buffer) boundary carries in the accumulator. The NCO Doppler is untouched here,
-so it stays fixed for the whole chunk. So a chunk yields 0, 1, or several
-outputs per signal depending on code phase and Doppler.
+buffer) boundary carries in the accumulator. The NCO Doppler is untouched here.
+A chunk yields 0, 1, or several outputs per signal depending on code phase and
+Doppler.
+
+`track!` runs this correlate step **twice per chunk**, around the estimate:
+
+1. with `stop_before_partial = true` — integrate every completion inside the
+   chunk, but stop at the last code-block boundary instead of integrating the
+   trailing chunk-clamped partial (a sub-step that completes no signal is
+   exactly that partial);
+2. after the estimate has written the new NCO Doppler — integrate the residue
+   (last boundary → chunk end), which is the head of the *next* integration.
+
+This keeps every completed integration on a single NCO Doppler and applies each
+Doppler correction right at the boundary where its integration completed — the
+same loop timing as the classic per-completion update — while still estimating
+once per chunk at a common epoch. (Without the split, the residue was
+integrated at the pre-update Doppler, which measurably tightened the FLL
+pull-in edge.) The updated code Doppler can, rarely, pull a boundary that pass
+1 measured as beyond the chunk back inside it; such an output is folded by the
+next chunk's estimate, and `track!` runs one trailing fold after the last chunk
+so nothing is dropped at the buffer end.
 
 ### Estimate phase (folds, one NCO write)
 
@@ -81,7 +100,18 @@ pre-sync without a secondary overlay), the snap now also resets every signal's
 in-flight accumulator (`_reset_inflight_integration`): the phase bookkeeping is
 kept, but the next chunk re-integrates cleanly from the snapped phase. Otherwise
 a flipped overlay chip can cancel the partial to zero and feed a 0/0 into the
-discriminators.
+discriminators. (With the two-pass chunk the estimate usually runs exactly on a
+boundary, so the reset is a no-op there; it still matters for signals whose
+integration spans multiple chunks and thus carry a partial at estimate time.)
+
+Records that *follow* the syncing record within the same fold were correlated
+with pre-sync replicas (no secondary-code wipe-off), so accumulating them into
+the bit buffer as if wiped would feed sign-corrupted prompts into the first
+post-sync bits. The folds detect the mid-fold `found` transition and apply
+those records with `skip_bit_buffer = true` (`_apply_correlator_output`):
+prompt filter, CN0, and loop-filter processing still run, only the bit-buffer
+update is skipped. Irrelevant at the default interval (a chunk then holds at
+most one record past the sync), it protects enlarged `update_interval`s.
 
 ### Data model
 
@@ -100,15 +130,14 @@ call count is unchanged from before.
 
 ## Behavior compatibility
 
-At the default (chunk = smallest code period) the result is numerically very
-close to the previous per-code-period behavior, but **not** bit-identical: a
-code period straddling a chunk boundary has its leading residue integrated with
-the pre-update Doppler, and — unlike the old per-completion update — a period
-occasionally skipped by a one-sample floating-point drift is not "caught up" by
-a second completion in a later buffer. The observable effects are tiny and
-confined to convergence edges: the FLL pull-in edge tightened from ~240 Hz to
-~210 Hz for the flagship convergence test, and a 1800-block overlay sync can land
-one block late. Both are recalibrated in the test suite.
+With the two-pass chunk, every completed integration is produced by a single
+NCO Doppler and each correction takes effect at its completing boundary — the
+same loop timing as the previous per-completion update. The suite's edge
+probes match the pre-chunking behavior exactly: the FLL pull-in edge sits at
+its historical 240 Hz (converges) / 250 Hz (fails), and the 1800-block L1C-P
+overlay sync locks after exactly one overlay cycle. (An earlier single-pass
+design integrated the chunk residue at the pre-update Doppler, which tightened
+the FLL edge to ~210 Hz and could land the overlay sync one block late.)
 
 ## Deferred follow-ups
 

@@ -1248,6 +1248,7 @@ end
     measurements::BandMeasurements,
     chunk_index::Int,
     chunk_duration,
+    stop_before_partial::Bool,
 )
     vals = g.satellites.values
     isempty(vals) && return nothing
@@ -1293,13 +1294,14 @@ end
         chunk_last_sample,
         m.sampling_frequency,
         m.intermediate_frequency,
+        stop_before_partial,
     )
 end
 
 @inline function _dc_group_loop!(
     dc::OneBitDownconvertAndCorrelator,
     vals,
-    args::Vararg{Any,5},
+    args::Vararg{Any,6},
 )
     @inbounds for i in eachindex(vals)
         vals[i] = _update_tracked_sat_correlator(vals[i], dc, args...)
@@ -1310,7 +1312,7 @@ end
 @inline function _dc_group_loop!(
     dc::OneBitThreadedDownconvertAndCorrelator,
     vals,
-    args::Vararg{Any,5},
+    args::Vararg{Any,6},
 )
     @batch for i = 1:length(vals)
         @inbounds vals[i] = _update_tracked_sat_correlator(vals[i], dc, args...)
@@ -1345,6 +1347,7 @@ function downconvert_and_correlate!(
     track_state::TrackState;
     chunk_index::Int = 0,
     chunk_duration = nothing,
+    stop_before_partial::Bool = false,
 )
     _foreach_group!(
         _dc_one_group!,
@@ -1353,6 +1356,7 @@ function downconvert_and_correlate!(
         measurements,
         chunk_index,
         chunk_duration,
+        stop_before_partial,
     )
     return track_state
 end

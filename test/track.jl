@@ -206,14 +206,13 @@ end
     @test test_convergence(90Hz, false) == true
     @test test_convergence(100Hz, false) == false
 
-    # ConventionalAssistedPLLAndDLL: converges at 200Hz offset, fails at 220Hz.
-    # The FLL pull-in edge is a little tighter than the pre-chunking ~240Hz:
-    # with the per-chunk NCO update, a code period straddling a chunk boundary
-    # has its leading residue integrated at the pre-update Doppler, which the
-    # FLL discriminator is sensitive to only at the extreme pull-in edge (real
-    # acquisition hands off with a much smaller error).
-    @test test_convergence(200Hz, true) == true
-    @test test_convergence(220Hz, true) == false
+    # ConventionalAssistedPLLAndDLL: converges at 240Hz offset, fails at 250Hz.
+    # The two-pass chunk (completions → NCO update → residue at the updated
+    # Doppler) keeps every integration on a single Doppler and applies each
+    # correction at its completing boundary, so the FLL pull-in edge matches
+    # the classic per-code-period update.
+    @test test_convergence(240Hz, true) == true
+    @test test_convergence(250Hz, true) == false
 end
 
 @testset "Track multiple systems of type $type" for type in
