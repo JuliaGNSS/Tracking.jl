@@ -1,5 +1,56 @@
 # Changelog
 
+# [4.0.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v3.2.3...v4.0.0) (2026-07-23)
+
+
+* feat(track)!: per-chunk Doppler update with collected correlator outputs ([bd27c16](https://github.com/JuliaGNSS/Tracking.jl/commit/bd27c163b8c74264ee821c8c67e41a4842f4db9f))
+
+
+### Bug Fixes
+
+* **track:** clear error for update_interval without time units; document buffer sharing ([aa85595](https://github.com/JuliaGNSS/Tracking.jl/commit/aa855950b8f7301832c9468550f9c8a2f661f512))
+* **track:** keep records after a mid-fold sync out of the bit buffer ([47aace3](https://github.com/JuliaGNSS/Tracking.jl/commit/47aace3a5a3566404edc0fac6376f0a68518fbc8))
+* **track:** scale loop bandwidth by the record's actual integration length ([c8d3caf](https://github.com/JuliaGNSS/Tracking.jl/commit/c8d3cafdf9d0b21544a8fa7dfc573bfedd9ab63d)), closes [#125](https://github.com/JuliaGNSS/Tracking.jl/issues/125)
+
+
+### Documentation
+
+* add AGENTS.md with commit-message and release conventions ([483de69](https://github.com/JuliaGNSS/Tracking.jl/commit/483de694cf6def8e1988c83b1b8929804453d51c))
+
+
+### Features
+
+* **track:** two-pass chunk restores per-completion NCO timing ([11996ac](https://github.com/JuliaGNSS/Tracking.jl/commit/11996ac98d0a6041101d2df60526280d0e975408))
+
+
+### Performance Improvements
+
+* **dc:** pack the bit-backend band sign planes once per track! call ([21db33f](https://github.com/JuliaGNSS/Tracking.jl/commit/21db33f5ae67357197e7c90ae335b6eccd70ef2d))
+* **track:** merge the per-chunk residue pass into the next chunk's pass ([5d2ff87](https://github.com/JuliaGNSS/Tracking.jl/commit/5d2ff8793fbcd5fc131b7d32d887643ccc3302de))
+
+
+### BREAKING CHANGES
+
+* footer (it drives the major bump and the release
+notes), and that CHANGELOG.md and Project.toml's version are generated
+by CI (semantic-release) and must not be edited manually. Also notes
+the pinned JuliaFormatter check.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+* Custom `AbstractDopplerEstimator` implementations must now
+fold over each signal's `correlator_outputs` (a `Vector{CorrelatorOutput}`,
+to be `empty!`-ed when consumed) instead of checking the removed
+`TrackedSignal.is_integration_completed` flag and reading the live
+correlator. `TrackedSignal` lost the `is_integration_completed` field and
+gained `correlator_outputs`, so its positional constructor arity and
+copy-constructor kwargs changed. A bare `downconvert_and_correlate(!)` call
+now consumes the whole sample buffer, moving each completed accumulator into
+`correlator_outputs` and leaving only the trailing partial integration in the
+live correlator — previously one call advanced a single integration step
+whose completed accumulator remained readable via `get_correlator`.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
 ## [3.2.3](https://github.com/JuliaGNSS/Tracking.jl/compare/v3.2.2...v3.2.3) (2026-07-22)
 
 
