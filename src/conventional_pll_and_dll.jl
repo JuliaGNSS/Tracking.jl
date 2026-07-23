@@ -621,10 +621,19 @@ post correlation filter.
 In the case that the that the correlation hasn't reached the end, e.g. in the case
 the incoming signal did not provide enough samples, it will return struct with
 zeroed values.
+
+The sampling-frequency argument may be either a [`BandMeasurements`](@ref)
+NamedTuple (the `track` path, from which the per-band rate is read) or a bare
+per-band sampling-frequency source — a `NamedTuple`/`Dict` keyed by
+`get_band_id` mapping each band to its sampling frequency. The latter is
+the entry point for an **external correlator producer** (e.g. an FPGA): it needs
+no sample buffer, only the per-signal `correlator_outputs` and the rate that
+maps `integrated_samples` to an integration time. See
+[External correlator producers](@ref).
 """
 function estimate_dopplers_and_filter_prompt(
     track_state::TrackState{<:SignalGroups,<:ConventionalPLLAndDLL},
-    measurements::BandMeasurements,
+    sampling_frequencies::Union{BandMeasurements,NamedTuple,AbstractDict},
 )
     # Detach the slot *values* from the input (sharing the key set), then
     # delegate to the in-place form. This step never changes the key set, so
@@ -635,7 +644,35 @@ function estimate_dopplers_and_filter_prompt(
     # ownership differs.
     new_track_state =
         TrackState(track_state; groups = _copy_groups_slot_vectors(track_state.groups))
-    estimate_dopplers_and_filter_prompt!(new_track_state, measurements)
+    estimate_dopplers_and_filter_prompt!(new_track_state, sampling_frequencies)
+end
+
+# Per-band sampling frequency for a group, from either a `BandMeasurements`
+# NamedTuple (read the rate off the band's `BandMeasurement`) or a bare
+# per-band rate source keyed by `get_band_id` (a `NamedTuple`/`Dict`). Both are
+# looked up by the group's band id, so the estimator stays per-band and is
+# never handed a scalar (groups may sit on different bands).
+@inline _band_sampling_frequency(m::BandMeasurements, key) = m[key].sampling_frequency
+@inline _band_sampling_frequency(fs::NamedTuple, key) = fs[key]
+@inline _band_sampling_frequency(fs::AbstractDict, key) = fs[key]
+
+# Per-group body for the doppler estimator. Pulled out so
+# `_foreach_group!` can call it without boxing when the groups tuple
+# is heterogeneous (e.g. GPS L1 + Galileo E1B). The per-signal type
+# is recovered from each signal inside `_update_tracked_sat_doppler`.
+# Routes to this group's band's sampling frequency (see
+# `_band_sampling_frequency`).
+@inline function _est_one_group!(
+    g::SignalGroup,
+    sampling_frequencies::Union{BandMeasurements,NamedTuple,AbstractDict},
+)
+    vals = g.satellites.values
+    isempty(vals) && return nothing
+    sampling_frequency = _band_sampling_frequency(sampling_frequencies, get_band_id(g.band))
+    @inbounds for i in eachindex(vals)
+        vals[i] = _update_tracked_sat_doppler(vals[i], sampling_frequency)
+    end
+    return nothing
 end
 
 """
@@ -645,27 +682,21 @@ In-place version of [`estimate_dopplers_and_filter_prompt`](@ref). Walks each
 group's `Vector{TrackedSat}` backing storage and overwrites slots with the
 new immutable `TrackedSat` value. Returns the same `track_state` object —
 allocation-free in steady state when [`track!`](@ref)'s preconditions are met.
-"""
-# Per-group body for the doppler estimator. Pulled out so
-# `_foreach_group!` can call it without boxing when the groups tuple
-# is heterogeneous (e.g. GPS L1 + Galileo E1B). The per-signal type
-# is recovered from each signal inside `_update_tracked_sat_doppler`.
-# Routes to this group's band's `BandMeasurement` for sampling frequency.
-@inline function _est_one_group!(g::SignalGroup, measurements::BandMeasurements)
-    vals = g.satellites.values
-    isempty(vals) && return nothing
-    sampling_frequency = measurements[get_band_id(g.band)].sampling_frequency
-    @inbounds for i in eachindex(vals)
-        vals[i] = _update_tracked_sat_doppler(vals[i], sampling_frequency)
-    end
-    return nothing
-end
 
+As with the immutable form, the second argument is either a
+[`BandMeasurements`](@ref) NamedTuple or a bare per-band sampling-frequency
+source keyed by `get_band_id`. The estimator only reads the per-band
+sampling frequency (to turn each output's `integrated_samples` into an
+integration time and to normalize the DLL discriminator); it consumes each
+signal's `correlator_outputs` and **clears** them, whether they were produced
+by the software correlate phase or appended by an external producer via
+[`append_correlator_output!`](@ref).
+"""
 function estimate_dopplers_and_filter_prompt!(
     track_state::TrackState{<:SignalGroups,<:ConventionalPLLAndDLL},
-    measurements::BandMeasurements,
+    sampling_frequencies::Union{BandMeasurements,NamedTuple,AbstractDict},
 )
-    _foreach_group!(_est_one_group!, track_state.groups, measurements)
+    _foreach_group!(_est_one_group!, track_state.groups, sampling_frequencies)
     return track_state
 end
 

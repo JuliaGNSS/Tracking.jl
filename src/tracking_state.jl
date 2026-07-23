@@ -789,6 +789,7 @@ const _SignalSelector = Union{Integer,Type{<:AbstractGNSSSignal}}
 for fn in (
     :get_integrated_samples,
     :get_correlator,
+    :get_correlator_outputs,
     :get_last_fully_integrated_correlator,
     :get_last_fully_integrated_filtered_prompt,
     :get_filtered_prompts,
@@ -812,6 +813,32 @@ for fn in (
         ) = $fn(get_sat_state(s, group, sat_id), sig)
     end
 end
+
+"""
+$(SIGNATURES)
+
+Append an externally built [`CorrelatorOutput`](@ref) to the buffer of the
+addressed signal and return `track_state`. The `output` is followed by the same
+satellite/signal addressing forms as the per-signal accessors (e.g.
+[`get_correlator_outputs`](@ref)):
+
+  - `append_correlator_output!(track_state, output)` — one group, one sat, one signal.
+  - `append_correlator_output!(track_state, output, prn)` — one group, one signal.
+  - `append_correlator_output!(track_state, output, group, prn)` — multi-group, one signal.
+  - `append_correlator_output!(track_state, output, group, prn, sig)` — per-signal.
+
+The signal-level method (`append_correlator_output!(::TrackedSignal, output)`)
+carries the contract; see it and [External correlator producers](@ref).
+"""
+append_correlator_output!(s::TrackState, output::CorrelatorOutput, id...) =
+    (append_correlator_output!(get_sat_state(s, id...), output); s)
+append_correlator_output!(
+    s::TrackState{<:SignalGroups},
+    output::CorrelatorOutput,
+    group::Union{Symbol,Integer,Val},
+    sat_id,
+    sig::_SignalSelector,
+) = (append_correlator_output!(get_sat_state(s, group, sat_id), output, sig); s)
 
 # Resolve the index of the addressed signal within a sat's signals tuple.
 # Config-time only (not the hot path), so plain control flow is fine.

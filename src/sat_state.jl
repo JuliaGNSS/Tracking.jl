@@ -188,6 +188,30 @@ cleared by the Doppler estimator after each chunk, so it is empty between
 `downconvert_and_correlate!`. See [Chunked Doppler updates](@ref).
 """
 get_correlator_outputs(t::TrackedSignal) = t.correlator_outputs
+
+"""
+$(SIGNATURES)
+
+Append an externally built [`CorrelatorOutput`](@ref) to `signal`'s
+per-chunk `correlator_outputs` buffer and return `signal`.
+
+This is the blessed ingest path for an **external correlator producer** (e.g.
+an FPGA streaming correlator dumps): build a [`CorrelatorOutput`](@ref) from the
+producer's raw accumulator, sample count and chunk-relative end index, append it
+here per signal in `sample_index` order, then run
+[`estimate_dopplers_and_filter_prompt!`](@ref) with a per-band sampling-frequency
+source to fold the batch and update the NCOs — no sample buffer or
+`downconvert_and_correlate!` needed. The estimator consumes and **clears** the
+buffer as part of that call, so between chunks it is empty again (same contract
+as the software correlate phase). Prefer this over mutating the vector returned
+by [`get_correlator_outputs`](@ref) directly — it documents intent and is
+type-checked (the output's correlator type must match the signal's).
+
+See [External correlator producers](@ref) for the full offload contract.
+"""
+append_correlator_output!(t::TrackedSignal, output::CorrelatorOutput) =
+    (push!(t.correlator_outputs, output); t)
+
 get_post_corr_filter(t::TrackedSignal) = t.post_corr_filter
 get_cn0_estimator(t::TrackedSignal) = t.cn0_estimator
 get_bit_buffer(t::TrackedSignal) = t.bit_buffer
@@ -709,8 +733,16 @@ has_bit_or_secondary_code_been_found(s::TrackedSat, sel...) =
     has_bit_or_secondary_code_been_found(_find_signal(s.signals, sel...))
 get_integrated_samples(s::TrackedSat, sel...) =
     get_integrated_samples(_find_signal(s.signals, sel...))
+get_correlator_outputs(s::TrackedSat, sel...) =
+    get_correlator_outputs(_find_signal(s.signals, sel...))
 get_preferred_num_code_blocks_to_integrate(s::TrackedSat, sel...) =
     get_preferred_num_code_blocks_to_integrate(_find_signal(s.signals, sel...))
+
+# Append an external `CorrelatorOutput` to one signal of a sat. `output` comes
+# first so an optional trailing signal selector (integer index / signal type)
+# disambiguates a multi-signal sat, matching the per-signal accessor ladder.
+append_correlator_output!(s::TrackedSat, output::CorrelatorOutput, sel...) =
+    (append_correlator_output!(_find_signal(s.signals, sel...), output); s)
 
 # Reset the satellite's signal-start sample and per-signal bit buffer between
 # `track` calls. Per-signal `filtered_prompts` vectors are emptied in place;
