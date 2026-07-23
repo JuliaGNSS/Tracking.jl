@@ -829,6 +829,23 @@ backend, different `@batch` iterations write to disjoint slots, so no
 synchronization is needed. Returns the same `track_state`.
 Allocation-free in steady state — see [`track!`](@ref).
 
+`chunk_duration` and `chunk_index` restrict the pass to one chunk of a fixed
+per-band time grid: each satellite integrates only up to sample
+`min(round((chunk_index + 1) * chunk_duration * sampling_frequency), num_samples)`.
+The boundary is re-anchored to the absolute `chunk_index` each call (not
+accumulated), so rounding never drifts and different bands stay time-aligned.
+`chunk_duration = nothing` (the default) disables chunking — the whole buffer
+is consumed as one chunk. Every completed integration is snapshotted into its
+signal's `correlator_outputs`; only the trailing partial stays in the live
+correlator.
+
+`stop_before_partial = true` additionally stops each satellite at its last
+completed code-block boundary inside the chunk instead of integrating the
+chunk-clamped trailing partial. `track!`'s per-chunk pass uses this so the
+residue is integrated by the *next* chunk's pass, entirely at the Doppler the
+estimator writes in between; leave it `false` (the default) to consume the
+whole window.
+
 `samples_unchanged = true` promises that every band's sample buffer holds the
 same content as on the previous call with this `dc`; backends may then reuse
 sample-derived caches (the bit-wise backends skip re-packing their shared
