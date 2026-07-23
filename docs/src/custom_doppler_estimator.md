@@ -96,10 +96,21 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
    value that generated the chunk), not an intermediate per-output estimate.
 
    The matching mutating method
-   `estimate_dopplers_and_filter_prompt!(track_state, measurements, prefer)`
+   `estimate_dopplers_and_filter_prompt!(track_state, measurements)`
    is what [`track!`](@ref) calls. To support real-time loops, define
    both — the mutating version walks each group's
    `satellites.values::Vector{TrackedSat}` and reassigns slots in place.
+
+   The estimator only needs the per-band **sampling frequency** out of
+   `measurements` (to turn each output's `integrated_samples` into an
+   integration time and to normalize the DLL discriminator). The shipped
+   `ConventionalPLLAndDLL` therefore also accepts a bare per-band
+   sampling-frequency source in place of `measurements` — a `NamedTuple`/`Dict`
+   keyed by `get_band_id` — so an external correlator producer can run the
+   estimator with no sample buffer (see
+   [External correlator producers](track.md#External-correlator-producers)).
+   A custom estimator that likewise reads only the rate is encouraged to offer
+   the same overload.
 
 ## Skeleton
 
@@ -188,4 +199,6 @@ estimator the `TrackState` was built with.
 AbstractDopplerEstimator
 init_estimator_state
 update_estimator_on_handoff
+Tracking.estimate_dopplers_and_filter_prompt
+Tracking.estimate_dopplers_and_filter_prompt!
 ```

@@ -1,5 +1,9 @@
 # Track
 
+```@meta
+CurrentModule = Tracking
+```
+
 [`track`](@ref) is the main entry point: it takes an incoming measurement and a [`TrackState`](@ref), runs downconversion + correlation for every tracked satellite, drives the Doppler estimator, and returns the updated `TrackState`. [`track!`](@ref) is the in-place counterpart for hard real-time loops where GC pauses must be avoided — after one warmup call (to seat the `filtered_prompts` buffer's capacity), the single-threaded `track!` path is **fully allocation-free**; the threaded path keeps a small irreducible per-call residual from Polyester's `@batch` closure capture (160 B per GNSS system).
 
 ```@docs
@@ -54,6 +58,41 @@ end
 Both [`CPUDownconvertAndCorrelator`](@ref) and [`CPUThreadedDownconvertAndCorrelator`](@ref) hold long-lived per-thread scratch buffers that grow on first use and are reused thereafter. Relying on the default kwarg value rebuilds them on every call, which defeats the allocation-free design. This applies to both `track` (immutable) and `track!` (in-place).
 
 `track!` writes back into the existing `Vector{TrackedSat}` slots of each per-group dictionary, so the tracking loop runs without GC pressure once the sat set is steady. The first `track!` call may grow each signal's `filtered_prompts` buffer via `push!`; from the second call onwards the capacity is settled.
+
+## External correlator producers
+
+The correlate phase and the Doppler estimator are decoupled: the estimator consumes each signal's `correlator_outputs` buffer and never touches the sample buffer directly. That lets an **external producer** — e.g. an FPGA/hardware correlator that streams completed correlator dumps — supply the outputs and run only the loop filters on the host. The FPGA does downconversion + correlation; the host folds the dumps through the estimator and streams the resulting NCO Dopplers back. (The DMA transport, wire format and NCO marshaling live in [GNSSReceiver.jl](https://github.com/JuliaGNSS/GNSSReceiver.jl); this section is only the Tracking.jl-side contract.)
+
+The offload loop, per processing chunk (epoch):
+
+1. **Ingest.** For each satellite/signal, build a [`CorrelatorOutput`](@ref) from the producer's raw accumulator and append it with [`append_correlator_output!`](@ref) — appended **per signal in `sample_index` order**:
+
+   ```julia
+   append_correlator_output!(track_state, output, group, prn, sig)
+   ```
+
+   Prefer this over mutating the vector [`get_correlator_outputs`](@ref) returns: it documents intent and type-checks the correlator against the signal's.
+
+2. **Estimate.** Fold the batch and update every satellite's NCO once by calling [`estimate_dopplers_and_filter_prompt!`](@ref) with a **per-band sampling-frequency source** instead of a sample buffer — a `NamedTuple`/`Dict` keyed by the band's `get_band_id` (e.g. `:L1`, `:L5`):
+
+   ```julia
+   estimate_dopplers_and_filter_prompt!(track_state, (L1 = 25e6Hz, L5 = 25e6Hz))
+   # or: estimate_dopplers_and_filter_prompt!(track_state, Dict(:L1 => 25e6Hz))
+   ```
+
+   This skips `downconvert_and_correlate!` entirely. The rate must be **per band** (the estimator walks groups that may be on different bands); passing the original [`BandMeasurements`](@ref) works too and reads the rate off each band's `BandMeasurement`, so the CPU `track!` path is unchanged. The estimator **consumes and clears** each signal's `correlator_outputs` as part of this call — it is empty again afterwards, ready for the next chunk. This is the public contract external producers rely on.
+
+3. **Marshal** the updated `code_doppler`/`carrier_doppler` (read with [`get_code_doppler`](@ref)/[`get_carrier_doppler`](@ref)) back to the hardware NCOs.
+
+### Caller contract
+
+- `CorrelatorOutput.correlator` — the **raw** accumulator (sum-of-products over `integrated_samples`, matching what `normalize` expects). Reusing [`EarlyPromptLateCorrelator`](@ref) / `update_accumulator` on the producer side satisfies this by construction.
+- `CorrelatorOutput.integrated_samples` — the producer's true sample count for that integration.
+- `CorrelatorOutput.sample_index` — the chunk-relative end sample. The software path writes it buffer-relative (`signal_start_sample` returns to 1 each `track!`); a producer with a free-running **global** sample counter must subtract the current chunk/epoch origin so every satellite reads a consistent per-chunk time grid (the estimator itself does not read it — it is preserved for downstream vector/Kalman tracking).
+
+### Transport delay
+
+The DLL discriminator uses the satellite's **pre-update** `code_doppler` as the value in effect during the integration — correct for a one-epoch feedback pipeline (the NCO written from this chunk's estimate takes effect on the next chunk). If your hardware pipeline has deeper feedback delay, that is the caller's responsibility: tag outputs with their epoch and schedule each NCO update to a known future epoch so the loop stays consistent with when the Doppler actually reaches the correlator.
 
 ## BandMeasurement
 

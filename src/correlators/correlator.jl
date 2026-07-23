@@ -14,13 +14,30 @@ then folds over those records after the chunk. Storing the raw correlator plus
 `integrated_samples` lets the estimator normalize it (dividing by the sample
 count) and matches `last_fully_integrated_correlator`.
 
+An **external correlator producer** (e.g. an FPGA) can build these itself and
+feed them straight to the estimator with [`append_correlator_output!`](@ref);
+see [External correlator producers](@ref).
+
 Fields:
 
   - `correlator`: the raw accumulated correlator at completion (not normalized).
+    Fill it with the accumulator scaling `normalize` expects — the raw
+    sum-of-products over `integrated_samples` — which an external producer gets
+    for free by reusing [`EarlyPromptLateCorrelator`](@ref) / `update_accumulator`.
   - `integrated_samples`: samples integrated into this output (for `normalize`,
-    the loop-filter `integration_time`, and the bit-buffer block count).
-  - `sample_index`: buffer-relative sample index at which this integration ended
-    (the epoch of the measurement; used by vector tracking).
+    the loop-filter `integration_time`, and the bit-buffer block count). For an
+    external producer this is the true sample count of that integration.
+  - `sample_index`: sample index at which this integration ended, on the time
+    grid the Doppler estimator and vector tracking read. The software correlate
+    phase writes it **buffer-relative** — the end sample within the current
+    `track!` measurement (`signal_start_sample` returns to 1 at the top of every
+    `track!` call). An external producer with a free-running **global** sample
+    counter must therefore map its global timestamp onto the same per-chunk
+    origin before storing it here: subtract the sample index of the current
+    chunk/epoch origin so the value is relative to the chunk the estimator is
+    folding, keeping every satellite on one consistent time grid. The estimator
+    itself does not read `sample_index` (the loop filters key off
+    `integrated_samples`); it is preserved for downstream vector/Kalman tracking.
 """
 struct CorrelatorOutput{C<:AbstractCorrelator}
     correlator::C

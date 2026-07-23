@@ -124,10 +124,14 @@ get_num_ants(::AbstractCorrelator)
 Each completed integration within a processing chunk is recorded as a
 `CorrelatorOutput`, collected per signal and consumed by the Doppler estimator
 after the chunk (see [Chunked Doppler updates](track.md#Chunked-Doppler-updates)).
+An external correlator producer (e.g. an FPGA) can build these itself and feed
+them straight to the estimator — see
+[External correlator producers](track.md#External-correlator-producers).
 
 ```@docs
 CorrelatorOutput
 get_correlator_outputs
+append_correlator_output!
 ```
 
 ## Sample shifts
