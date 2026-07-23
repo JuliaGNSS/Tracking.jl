@@ -26,10 +26,10 @@ struct TrackedSignal{
     post_corr_filter::PCF
     filtered_prompts::Vector{ComplexF64}
     # Correlator outputs completed within the current processing chunk, each
-    # tagged with its end sample index and boundary code phase. Preallocated
-    # and reused (like `filtered_prompts`): the correlate phase `push!`es a
-    # record per completed integration, the Doppler estimator folds over them
-    # and `empty!`s the array. Empty at chunk boundaries; see [`CorrelatorOutput`].
+    # tagged with its end sample index. Preallocated and reused (like
+    # `filtered_prompts`): the correlate phase `push!`es a record per completed
+    # integration, the Doppler estimator folds over them and `empty!`s the
+    # array. Empty at chunk boundaries; see [`CorrelatorOutput`].
     correlator_outputs::Vector{CorrelatorOutput{C}}
     # Preferred coherent-integration length for THIS signal, in primary code
     # blocks. The actual length is capped per integration by the signal's
