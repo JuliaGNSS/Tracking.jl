@@ -2,6 +2,7 @@ module ConventionalPLLAndDLLTest
 
 using Test: @test, @testset, @inferred, @test_throws
 using Unitful: Hz
+import Tracking
 using GNSSSignals: GPSL1CA, get_code_center_frequency_ratio
 using TrackingLoopFilters: ThirdOrderBilinearLF, SecondOrderBilinearLF
 using StaticArrays: SVector
@@ -171,6 +172,69 @@ end
         @test length(prompts) == 1
         @test prompts[1] == 0.4 + 0.004im
     end
+end
+
+@testset "loop bandwidth follows the record's actual integration length" begin
+    # The `1/N` bandwidth scaling must pair with the blocks a record ACTUALLY
+    # covered (recovered from its sample count), not the intended integration
+    # length: a single-block record folded when the bit buffer already reports
+    # sync — a mid-fold sync detection with an enlarged
+    # `doppler_update_interval`, or the truncated first post-sync integration —
+    # must be filtered at the full single-period bandwidth. The Doppler update
+    # therefore depends only on the record itself, not on the preferred
+    # integration length or the sync state.
+    sampling_frequency = 5e6Hz
+    gpsl1 = GPSL1CA()
+    carrier_doppler = 100.0Hz
+    code_phase = 0.5
+    correlator = update_accumulator(
+        get_default_correlator(gpsl1),
+        SVector(1000.0 + 10im, 2000.0 + 20im, 750.0 + 10im),
+    )
+    doppler_estimator = ConventionalPLLAndDLL()
+
+    # Same-typed bit buffer with the bit/secondary sync already found
+    # (secondary phase 0, polarity +1).
+    synced(::Tracking.BitBuffer{B}) where {B} = Tracking.BitBuffer{B}(
+        zero(B),
+        0,
+        true,
+        0,
+        Int8(+1),
+        zero(UInt128),
+        0,
+        complex(0.0, 0.0),
+        0,
+        Float32[],
+        Tracking.PhaseAccumulators(),
+    )
+
+    doppler_after(preferred, found, integrated_samples) = begin
+        sat = TrackedSat(gpsl1, 1, code_phase, carrier_doppler; doppler_estimator)
+        base = only(sat.signals)
+        sig = TrackedSignal(
+            base;
+            bit_buffer = found ? synced(base.bit_buffer) : base.bit_buffer,
+            preferred_num_code_blocks_to_integrate = preferred,
+            correlator_outputs = [
+                CorrelatorOutput(correlator, integrated_samples, integrated_samples),
+            ],
+        )
+        ts = TrackState(gpsl1, TrackedSat(sat; signals = (sig,)); doppler_estimator)
+        get_carrier_doppler(
+            estimate_dopplers_and_filter_prompt(ts, _meas_l1(sampling_frequency)),
+        )
+    end
+
+    one_block = 5000                      # one 1 ms L1 C/A code period at 5 MHz
+    # Synced with a 20-block preferred length, but the record covered a single
+    # block: full bandwidth — exactly the plain single-block baseline. (Scaling
+    # by the intended length would divide the bandwidth by 20 here.)
+    @test doppler_after(20, true, one_block) == doppler_after(1, false, one_block)
+
+    # A record that actually covered 20 blocks is scaled by 1/20 regardless of
+    # the preferred integration length.
+    @test doppler_after(20, true, 20 * one_block) == doppler_after(1, true, 20 * one_block)
 end
 
 @testset "Per-satellite bandwidths drive the loop filters" begin

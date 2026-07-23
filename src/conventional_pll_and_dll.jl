@@ -390,11 +390,14 @@ end
 # integration. It consumes only the record's stored correlator.
 #
 # The bit accumulator is credited with the blocks *actually* integrated
-# (`calc_num_code_blocks_for_bit_buffer`), not the intended
-# `integrated_code_blocks`: post-sync the first integration is truncated to
-# land on the data-bit boundary, so crediting the intended length would
-# misalign the decoded bits (issue #125). The intended count is still
-# returned for the driver's `1/N` loop-bandwidth scaling.
+# (`calc_num_code_blocks_for_bit_buffer`), recovered from the record's sample
+# count: post-sync the first integration is truncated to land on the data-bit
+# boundary, so crediting the intended length would misalign the decoded bits
+# (issue #125). The block count returned for the driver's `1/N` loop-bandwidth
+# scaling is the same actual count (floored at 1): the bandwidth must pair with
+# the record's true integration time, so it only switches when the integration
+# actually lengthened — not already on the fold where sync was detected but the
+# records were still single-block (see `_process_estimator_driver_signal`).
 # `skip_bit_buffer = true` applies everything EXCEPT the bit-buffer update.
 # Used for records that follow a bit/secondary sync detected earlier in the
 # same fold: those records were correlated with pre-sync replicas (no
@@ -410,11 +413,6 @@ end
     skip_bit_buffer::Bool = false,
 )
     signal = tracked_signal.signal
-    integrated_code_blocks = calc_num_code_blocks_to_integrate(
-        signal,
-        tracked_signal.preferred_num_code_blocks_to_integrate,
-        has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
-    )
     normalized_correlator =
         normalize(output.correlator, output.integrated_samples, get_code_amplitude(signal))
     post_corr_filter =
@@ -429,6 +427,10 @@ end
         sampling_frequency,
         has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
     )
+    # Blocks this record actually covered, for the driver's `1/N` bandwidth
+    # scaling. The floor at 1 covers the fractional-block record right after a
+    # sync phase-snap accumulator reset, whose rounded block count can be 0.
+    integrated_code_blocks = max(1, bit_block_count)
     # De-rotate the prompt onto the driver's (real) phase frame before both the
     # secondary/bit sync search and the coherent bit accumulation inside
     # `buffer`, so a quadrature component's data lands on the real axis it is
@@ -500,10 +502,18 @@ end
         )
 
         # The configured bandwidths are referenced to a one-primary-code-period
-        # integration. Coherently integrating `integrated_code_blocks` periods
-        # grows the loop update interval by that factor, so scale the effective
-        # bandwidth by 1/integrated_code_blocks to hold the loop's BL·Δt
-        # stability product at its single-period value. For the N=1 path this
+        # integration. Coherently integrating N periods grows the loop update
+        # interval by that factor, so scale the effective bandwidth by 1/N to
+        # hold the loop's BL·Δt stability product at its single-period value.
+        # N (`integrated_code_blocks`) is the number of blocks this record
+        # ACTUALLY covered — recovered from its sample count — not the intended
+        # integration length: the bandwidth pairs with the record's true
+        # `integration_time`, so it only switches once the integrations really
+        # lengthen. Scaling by the intended length instead would under-gain the
+        # loop for single-block records folded after a mid-fold sync detection
+        # (correlated pre-sync, but the live bit buffer already reports the
+        # post-sync length) and for the first post-sync integration, which is
+        # truncated to land on the data-bit boundary. For the N=1 path this
         # divides by 1 and is bit-identical to before.
         carrier_bandwidth =
             pll_and_dll_state.carrier_loop_filter_bandwidth / integrated_code_blocks
