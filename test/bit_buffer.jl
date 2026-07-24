@@ -11,7 +11,7 @@ using Tracking:
     has_bit_or_secondary_code_been_found,
     SyncResult,
     PhaseAccumulators,
-    _norm_quantile,
+    _t_quantile,
     _detect_bit_edge_cfar,
     _seed_phase_accumulators!,
     _update_phase_accumulators!
@@ -23,15 +23,28 @@ using Tracking:
     @test r.polarity == 0
 end
 
-@testset "_norm_quantile" begin
-    # Symmetry and a few tabulated standard-normal quantiles.
-    @test _norm_quantile(0.5) ≈ 0.0 atol = 1e-9
-    @test _norm_quantile(0.975) ≈ 1.959963985 atol = 1e-6
-    @test _norm_quantile(0.025) ≈ -1.959963985 atol = 1e-6
-    @test _norm_quantile(0.999) ≈ 3.090232306 atol = 1e-6
-    @test _norm_quantile(1 - 0.999) ≈ -3.090232306 atol = 1e-6
-    # Monotonically increasing.
-    @test _norm_quantile(0.1) < _norm_quantile(0.2) < _norm_quantile(0.8)
+@testset "_t_quantile" begin
+    # Median is exactly 0 — and, as a regression guard, `probability == 0.5`
+    # must return directly rather than recurse into `_t_quantile(1 - 0.5, dof)`
+    # (which previously self-recursed forever → stack overflow).
+    @test _t_quantile(0.5, 1) === 0.0
+    @test _t_quantile(0.5, 30) === 0.0
+    # dof = 1 is the standard Cauchy, quantile(p) = tan(π(p − 0.5)).
+    @test _t_quantile(0.75, 1) ≈ 1.0 atol = 1e-6            # tan(π/4)
+    @test _t_quantile(0.9, 1) ≈ tan(pi * 0.4) atol = 1e-6   # ≈ 3.0777
+    # Symmetric about 0.
+    @test _t_quantile(0.25, 1) ≈ -_t_quantile(0.75, 1) atol = 1e-9
+    @test _t_quantile(0.001, 7) ≈ -_t_quantile(0.999, 7) atol = 1e-6
+    # Heavier tails than the normal, converging to it as dof → ∞ (no cutoff).
+    p = 1 - (1 - 0.999) / (20 - 1)   # the detector's Bonferroni-split argument, L1CA
+    normal_limit = 3.87813           # tabulated Φ⁻¹(p), the dof → ∞ limit
+    @test _t_quantile(p, 1) > _t_quantile(p, 10) > _t_quantile(p, 1000) > normal_limit
+    @test _t_quantile(p, 100_000) ≈ normal_limit atol = 1e-3
+    # The behaviour the fix relies on: at 1 d.o.f. (2 bins) the threshold is huge,
+    # so the observed z ≈ 40 reacquisition fluctuation is rejected; by ~70 bins a
+    # clean z ≈ 3.9 clears it.
+    @test _t_quantile(p, 1) > 1000
+    @test _t_quantile(p, 69) < 4.2
 end
 
 const L1CA_BLOCKS_PER_BIT = 20  # primary-code blocks per L1 C/A navigation bit
@@ -108,7 +121,7 @@ end
         # lower one, and always at a true bit boundary.
         function lock_block(confidence, seed)
             rng = MersenneTwister(seed)
-            clean = _bitstream([bit % 2 for bit = 0:9]; amp = 8.0)
+            clean = _bitstream([bit % 2 for bit = 0:39]; amp = 8.0)
             noisy = ComplexF64[prompt + complex(randn(rng), randn(rng)) for prompt in clean]
             _detect_over(noisy, confidence)
         end
@@ -132,7 +145,7 @@ end
         # NaN-threshold path did. (A noiseless edge has z = Inf and still
         # locks — genuine certainty, exercised above.)
         rng = MersenneTwister(7)
-        clean = _bitstream([bit % 2 for bit = 0:9]; amp = 3.0)
+        clean = _bitstream([bit % 2 for bit = 0:39]; amp = 3.0)
         noisy = ComplexF64[prompt + complex(randn(rng), randn(rng)) for prompt in clean]
         low_confidence_lock = _detect_over(noisy, 0.99)
         high_confidence_lock = _detect_over(noisy, 1.0)

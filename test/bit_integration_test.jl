@@ -30,12 +30,15 @@ using Tracking:
     code_frequency = get_code_frequency(gpsl1)
     carrier_doppler = 0.0Hz
 
-    # Run the same bit stream at both lock polarities: the bit-edge detector
-    # locks at block 40, where the newest 20 buffered blocks carry the second
-    # data bit — `1, 0, …` yields a negative-polarity lock, `0, 1, …` a
-    # positive one. The bits recovered from the pre-sync buffer and the bits
-    # decoded after sync must be consistent: equal to the transmitted bits up
-    # to a single *global* inversion across the whole stream (issue #127).
+    # Run the same bit stream at both lock polarities. Under the Student-t
+    # small-sample threshold this near-noiseless Float64 signal locks at block
+    # 60 (the third data-bit boundary): a 2-bin lock needs an exactly-infinite
+    # z-score (zero bin-to-bin variance), and the floating-point residual here
+    # yields a large-but-finite z that clears the threshold only once dof grows
+    # to a third bin. It still fires at a true bit boundary (the #124 property —
+    # never one block early). The bits recovered from the pre-sync buffer and
+    # the bits decoded after sync must be consistent: equal to the transmitted
+    # bits up to a single *global* inversion across the whole stream (issue #127).
     for data_bits in ([1, 0, 1, 1, 0, 0, 1], [0, 1, 0, 0, 1, 1, 0])
         track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0, carrier_doppler)];)
 
@@ -59,10 +62,11 @@ using Tracking:
                     code_phase,
                 )
             track_state = track(signal, track_state, sampling_frequency)
-            @test has_bit_or_secondary_code_been_found(track_state) == (index >= 40)
-            # Sync at block 40 recovers the 2 buffered bits; afterwards one
-            # bit completes every 20 blocks.
-            expected_num_bits = index == 40 ? 2 : (index > 40 && index % 20 == 0 ? 1 : 0)
+            @test has_bit_or_secondary_code_been_found(track_state) == (index >= 60)
+            # Sync at block 60 recovers the 3 buffered bits (the UInt64 sign
+            # window still holds all 60); afterwards one bit completes every 20
+            # blocks.
+            expected_num_bits = index == 60 ? 3 : (index > 60 && index % 20 == 0 ? 1 : 0)
             num_bits = get_num_bits(track_state)
             @test num_bits == expected_num_bits
             bits_word = get_bits(track_state)
@@ -90,9 +94,9 @@ end
 # Multi-block coherent integration: bits keep flowing with `preferred > 1`.
 #
 # Until bit sync the integration length is clamped to one code block, so the
-# preferred length can be set from the start. After sync at block 40 (one
-# full bit of each polarity plus the transition) each integration spans 4
-# code blocks, five integrations form a bit, and a hard + soft bit must be
+# preferred length can be set from the start. After sync at block 60 each
+# integration spans 4 code blocks, five integrations form a bit, and a hard +
+# soft bit must be
 # emitted at every 20-block bit boundary — with `preferred = 3` (which does
 # not divide the 20 blocks per bit and is therefore rejected since issue
 # #128) the integrations would straddle bit boundaries and bit emission
@@ -133,10 +137,11 @@ end
         )
         multi_state = track(signal, multi_state, sampling_frequency)
         single_state = track(signal, single_state, sampling_frequency)
-        @test has_bit_or_secondary_code_been_found(multi_state) == (index >= 40)
-        # Two bits are recovered from the buffered history at sync (block 40);
+        @test has_bit_or_secondary_code_been_found(multi_state) == (index >= 60)
+        # Three bits are recovered from the buffered history at sync (block 60,
+        # the near-noiseless lock latency under the t-quantile threshold);
         # afterwards exactly one bit must appear at every 20-block boundary.
-        expected_num_bits = index == 40 ? 2 : (index > 40 && index % 20 == 0 ? 1 : 0)
+        expected_num_bits = index == 60 ? 3 : (index > 60 && index % 20 == 0 ? 1 : 0)
         @test get_num_bits(multi_state) == expected_num_bits
         @test get_num_bits(single_state) == expected_num_bits
         num_bits = get_num_bits(multi_state)
@@ -149,8 +154,8 @@ end
     end
 
     # All five data bits arrive and match the single-block reference bit for
-    # bit. The two bits replayed from the buffered history at sync alternate,
-    # and so do the three streamed post-sync bits; the relative polarity
+    # bit. The three bits replayed from the buffered history at sync alternate,
+    # and so do the two streamed post-sync bits; the relative polarity
     # between the replayed and the streamed portion is a property of the
     # bit-sync polarity convention and not asserted here.
     @test length(multi_bits) == 5
@@ -161,10 +166,11 @@ end
 
     # The soft bits agree with the reference in sign; post-sync each bit is
     # the sum of five 4-block prompts (magnitude ~5) instead of twenty
-    # single-block prompts.
+    # single-block prompts. Sync at block 60 replays three pre-sync bits, so the
+    # streamed post-sync bits start at index 4.
     @test sign.(multi_soft) == sign.(single_soft)
-    @test all(x -> abs(x) ≈ 5, multi_soft[3:end])
-    @test all(x -> abs(x) ≈ 20, single_soft[3:end])
+    @test all(x -> abs(x) ≈ 5, multi_soft[4:end])
+    @test all(x -> abs(x) ≈ 20, single_soft[4:end])
 end
 
 # GPS L5I secondary-code (NH10) sync and phase recovery.
