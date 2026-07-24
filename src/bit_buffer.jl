@@ -25,13 +25,39 @@ end
 """
 $(SIGNATURES)
 
-Standard-normal quantile (inverse CDF) `Φ⁻¹(probability)` for
-`probability ∈ (0, 1)`, as `√2 · erfinv(2·probability − 1)` (`erfinv` from
-SpecialFunctions.jl). Used by [`_detect_bit_edge_cfar`](@ref) to turn a
-false-sync probability into a detection z-score threshold. Returns `±Inf`
-at `probability = 1` / `0`; callers keep the argument in the open interval.
+`probability`-quantile of a Student-t distribution with `dof` degrees of
+freedom, i.e. `t` such that `P(T ≤ t) = probability`. Used by
+[`_detect_bit_edge_cfar`](@ref) in place of a standard-normal quantile as a
+**small-sample penalty**, not because the detector's z-score is exactly
+Student-t distributed. The z-score there divides the energy gap by a standard
+error built from a variance *estimated* over `peak_bin_count` bins; a normal
+threshold treats that estimate as exact and is badly overconfident when the
+count is tiny (its ~3.9 threshold is a ~10% per-phase false alarm at one d.o.f.,
+not the intended ~1e-4), which let a variance-collapsed 1–2-bin fluctuation lock
+(JuliaGNSS/Tracking#124 fixed a 1-block hard-detector miss; this closes the soft
+detector's own few-bin false-lock). The t-quantile is the right *shape* of
+correction — it grows steeply as `dof → 1` and relaxes to the normal quantile as
+`dof → ∞` (so mature many-bin locks are unaffected, no cutoff needed) — but its
+nominal `dof = peak_bin_count − 1` is a heuristic, **not** the true degrees of
+freedom: the per-bin values are χ² (non-central) energies rather than Gaussian,
+and the competing phases share blocks (correlated), so the exact sampling
+distribution is neither normal nor Student-t and the realised false-alarm rate
+is only approximately the nominal one. It is used as a conservative,
+integration-forcing penalty, not an exact calibration.
+
+The upper tail (`probability > 0.5`) uses the regularized incomplete beta
+inverse: for `t > 0`, `P(T > t) = ½·Iₓ(dof/2, ½)` with `x = dof/(dof + t²)`, so
+`x = beta_inc_inv(dof/2, ½, 2·(1 − probability))` and `t = √(dof·(1 − x)/x)`.
+The lower tail is reflected by symmetry, and the median `t(0.5) = 0` is returned
+directly — which also avoids a `1 − 0.5` self-recursion. The sole caller passes
+`probability > 0.5` (and `dof ≥ 1`, since `peak_bin_count ≥ 2` at the call site).
 """
-@inline _norm_quantile(probability::Float64) = sqrt(2.0) * erfinv(2 * probability - 1)
+@inline function _t_quantile(probability::Float64, dof::Real)
+    probability == 0.5 && return 0.0
+    probability < 0.5 && return -_t_quantile(1 - probability, dof)
+    x = first(beta_inc_inv(dof / 2, 0.5, 2 * (1 - probability)))
+    sqrt(dof * (1 - x) / x)
+end
 
 """
 $(SIGNATURES)
@@ -171,11 +197,15 @@ signal and then mistake a tiny systematic cross-phase asymmetry for a real
 edge.) The peak is accepted only when it beats the runner-up by a margin
 significant under that spread:
 
-    z_score = energy_gap / standard_error   ≥   Φ⁻¹(1 - false_alarm_probability/(blocks_per_bit - 1))
+    z_score = energy_gap / standard_error   ≥   t⁻¹(1 - false_alarm_probability/(blocks_per_bit - 1);  ν = peak_bin_count − 1)
 
 where the standard error combines the peak phase's per-bin energy variance
 over the peak and runner-up bin counts, `false_alarm_probability = 1 - confidence` is Bonferroni-split over the `blocks_per_bit - 1` competing
-phases, and `Φ⁻¹` is [`_norm_quantile`](@ref). A real edge has a structural
+phases, and the quantile is the Student-t inverse-CDF [`_t_quantile`](@ref) at
+a nominal `ν = peak_bin_count − 1` d.o.f. — a small-sample penalty for dividing
+by a variance estimated over that few bins, not a claim that `z_score` is exactly
+Student-t (the per-bin energies are χ² and the phases correlated; see
+[`_t_quantile`](@ref)). A real edge has a structural
 gap that dwarfs the thermal bin-to-bin spread, so `z_score` grows like the
 square root of the bin count and crosses the threshold sooner at high C/N₀
 and later in noise — the detector self-paces — while a drift-only asymmetry
@@ -271,9 +301,9 @@ function _detect_bit_edge_cfar(
     # `confidence` is the (1 - false-sync probability) target, Bonferroni-
     # split over the `blocks_per_bit - 1` competing phases. Clamp the quantile
     # argument to the open interval (0, 1): otherwise `confidence = 1.0` (or
-    # the rounding of `1 - tiny/(blocks_per_bit-1)` up to 1.0) yields
-    # `Φ⁻¹(1) = NaN`, and the `z_score < threshold` gate would silently pass
-    # (NaN comparisons are false), turning "maximum confidence" into "lock
+    # the rounding of `1 - tiny/(blocks_per_bit-1)` up to 1.0) yields a
+    # `quantile(1) = NaN`, and the `z_score < threshold` gate would silently
+    # pass (NaN comparisons are false), turning "maximum confidence" into "lock
     # immediately".
     false_alarm_probability = 1 - confidence
     quantile_argument = clamp(
@@ -281,7 +311,19 @@ function _detect_bit_edge_cfar(
         nextfloat(0.0),
         prevfloat(1.0),
     )
-    z_threshold = _norm_quantile(quantile_argument)
+    # `standard_error` divides by a variance ESTIMATED from `peak_bin_count`
+    # bins, so a normal threshold is badly overconfident at 1-2 bins (its ~3.9
+    # value is a ~10% per-phase false alarm at 1 d.o.f., not the intended 1e-4),
+    # which let a variance-collapsed 2-bin fluctuation lock ~8 blocks off the true
+    # edge on a fast reacquisition — silent because <10 blocks still decodes by
+    # majority. Apply the Student-t quantile at a nominal `peak_bin_count - 1`
+    # d.o.f. as a small-sample penalty (NOT because `z_score` is exactly Student-t:
+    # the per-bin energies are χ² and the phases correlated, so the nominal d.o.f.
+    # and false-alarm rate are approximate — see `_t_quantile`). It demands z ≈ 6000
+    # at 1 d.o.f. and relaxes to the normal threshold as bins accumulate, forcing
+    # enough integration before a lock (which also lets the carrier settle) while
+    # leaving mature clean locks (many bins ⇒ t ≈ normal) unchanged.
+    z_threshold = _t_quantile(quantile_argument, peak_bin_count - 1)
     z_score < z_threshold && return SyncResult(false, 0, Int8(0))
 
     # Fire only at the winning phase's own bit boundary so the upcoming
