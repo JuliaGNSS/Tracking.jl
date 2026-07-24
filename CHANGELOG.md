@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v4.1.0...v4.1.1) (2026-07-24)
+
+
+### Bug Fixes
+
+* **gpsl1ca:** Student-t small-sample threshold in CFAR bit-edge detector ([be7c2d8](https://github.com/JuliaGNSS/Tracking.jl/commit/be7c2d89d0d218c8280642c2642d14da6f21c011)), closes [#124](https://github.com/JuliaGNSS/Tracking.jl/issues/124) [#124](https://github.com/JuliaGNSS/Tracking.jl/issues/124)
+
 # [4.1.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v4.0.0...v4.1.0) (2026-07-24)
 
 
