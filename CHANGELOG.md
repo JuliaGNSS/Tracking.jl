@@ -1,5 +1,12 @@
 # Changelog
 
+# [4.1.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v4.0.0...v4.1.0) (2026-07-24)
+
+
+### Features
+
+* **track:** external correlator-output ingest for FPGA offload ([#203](https://github.com/JuliaGNSS/Tracking.jl/issues/203)) ([8b03d86](https://github.com/JuliaGNSS/Tracking.jl/commit/8b03d86471e7a11e1b7a3371e3b6d4dea1accf31))
+
 # [4.0.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v3.2.3...v4.0.0) (2026-07-23)
 
 
