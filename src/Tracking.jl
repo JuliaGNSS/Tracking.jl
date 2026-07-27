@@ -6,7 +6,7 @@ using FastSinCos
 using GNSSSignals
 using SIMD
 using SinCosLUT
-using SpecialFunctions: beta_inc_inv
+using SpecialFunctions: erfinv
 using StaticArrays
 using TrackingLoopFilters
 using Dictionaries
