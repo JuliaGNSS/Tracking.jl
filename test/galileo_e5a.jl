@@ -53,6 +53,9 @@ rotl(x::T, r, N) where {T} =
 
     # 20-block CS20 window fits in a UInt32.
     @test @inferred(get_code_block_buffer_type(e5a_i)) === UInt32
+
+    # CS20 (20 chips) is short enough for the soft, CFAR secondary-code detector.
+    @test Tracking.uses_soft_secondary_code_detection(e5a_i) == true
 end
 
 @testset "Galileo E5a-Q" begin
@@ -91,6 +94,9 @@ end
 
     # 100-block CS100 window needs UInt128.
     @test @inferred(get_code_block_buffer_type(e5a_q)) === UInt128
+
+    # CS100 (100 chips) is at the soft CFAR secondary-code detector's length cap.
+    @test Tracking.uses_soft_secondary_code_detection(e5a_q) == true
 end
 
 end

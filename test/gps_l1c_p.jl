@@ -22,6 +22,11 @@ const L1C_P_MAX_ERRORS =
 @testset "GPS L1C-P" begin
     gpsl1c_p = GPSL1C_P()
 
+    # L1C-P's 1800-chip / 18 s overlay is far too long to integrate coherently
+    # per bin, so it stays on the hard-decision rotation sweep, not the soft
+    # CFAR secondary-code detector.
+    @test Tracking.uses_soft_secondary_code_detection(gpsl1c_p) == false
+
     # Below the 1800-block horizon, the L1C-P detector returns `found =
     # false` without running the sweep. Above it, the sweep runs against
     # the per-PRN overlay.

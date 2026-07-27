@@ -52,6 +52,9 @@ rotl(x::T, r, N) where {T} =
     # 20-block sync window (2 × NH10) fits in a UInt32.
     @test @inferred(get_code_block_buffer_type(gpsl5)) === UInt32
 
+    # NH10 (10 chips) is short enough for the soft, CFAR secondary-code detector.
+    @test Tracking.uses_soft_secondary_code_detection(gpsl5) == true
+
     @testset "Hamming tolerance" begin
         # 2.5 % ceiling over a 10-block window discretizes to "exact match"
         # (floor(0.025 × 10) = 0) — any single bit-flip rejects.
@@ -111,6 +114,9 @@ end
 
     # 20-block NH20 window fits in a UInt32.
     @test @inferred(get_code_block_buffer_type(gpsl5q)) === UInt32
+
+    # NH20 (20 chips) is short enough for the soft, CFAR secondary-code detector.
+    @test Tracking.uses_soft_secondary_code_detection(gpsl5q) == true
 end
 
 end
