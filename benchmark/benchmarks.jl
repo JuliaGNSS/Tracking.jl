@@ -926,6 +926,14 @@ end
 # leak, `20 blk` allocates ~10× the per-iteration bytes of `2 blk`; without it,
 # both sit at the same one-time-seed floor.
 #
+# The presync lengths run out to 200 blocks because the CFAR detector scores
+# nothing — and so never evaluates its Student-t threshold — until
+# `num_blocks ≥ 2 * blocks_per_bit` = 40: a leak in the scoring path is
+# invisible at 2 and 20 blocks. An allocating `beta_inc_inv` in that threshold
+# is exactly how one slipped through once. `test/track_in_place.jl`'s pre-sync
+# guard makes the same point as a hard assertion; see the comment there for the
+# `dof` ranges each length sweeps.
+#
 # Two states per length: `presync` (bit not yet found — exercises the
 # per-code-block bit-edge search every iteration, the path that regressed) and
 # `synced` (`bit_buffer.found = true` — the post-sync steady state). To measure
@@ -939,7 +947,7 @@ end
 if _HAS_TRACKED_SIGNAL && isdefined(Tracking, :track!)
     let sfreq = 5e6Hz, gpsl1 = GPSL1CA()
         samples_per_block = 5000               # 1 ms GPS L1CA code period @ 5 MHz
-        for n_blocks in (2, 20)
+        for n_blocks in (2, 20, 200)
             nsamp = samples_per_block * n_blocks
             sig = rand(ComplexF32, nsamp)
             dc = _make_cpu_dc(sfreq)
@@ -957,6 +965,9 @@ if _HAS_TRACKED_SIGNAL && isdefined(Tracking, :track!)
                 ),
                 evals = 1,
             )
+            # The synced rows stay short: post-sync there is no per-block search
+            # to leak from, so the extra length would only cost runtime.
+            n_blocks == 200 && continue
             SUITE["track"]["8. L1CA synced $(n_blocks) blk – track!"] = @benchmarkable(
                 Tracking.track!($sig, ts, $sfreq; downconvert_and_correlator = $dc),
                 setup = (
