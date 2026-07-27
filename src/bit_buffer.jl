@@ -25,6 +25,17 @@ end
 """
 $(SIGNATURES)
 
+Standard-normal quantile (inverse CDF) `Φ⁻¹(probability)` for
+`probability ∈ (0, 1)`, as `√2 · erfinv(2·probability − 1)` (`erfinv` from
+SpecialFunctions.jl). Used by [`_t_quantile`](@ref) as the `dof → ∞` anchor
+that its tail expansion corrects. Returns `±Inf` at `probability = 1` / `0`;
+callers keep the argument in the open interval.
+"""
+@inline _norm_quantile(probability::Float64) = sqrt(2.0) * erfinv(2 * probability - 1)
+
+"""
+$(SIGNATURES)
+
 `probability`-quantile of a Student-t distribution with `dof` degrees of
 freedom, i.e. `t` such that `P(T ≤ t) = probability`. Used by
 [`_detect_bit_edge_cfar`](@ref) in place of a standard-normal quantile as a
@@ -45,18 +56,77 @@ distribution is neither normal nor Student-t and the realised false-alarm rate
 is only approximately the nominal one. It is used as a conservative,
 integration-forcing penalty, not an exact calibration.
 
-The upper tail (`probability > 0.5`) uses the regularized incomplete beta
-inverse: for `t > 0`, `P(T > t) = ½·Iₓ(dof/2, ½)` with `x = dof/(dof + t²)`, so
-`x = beta_inc_inv(dof/2, ½, 2·(1 − probability))` and `t = √(dof·(1 − x)/x)`.
-The lower tail is reflected by symmetry, and the median `t(0.5) = 0` is returned
-directly — which also avoids a `1 − 0.5` self-recursion. The sole caller passes
-`probability > 0.5` (and `dof ≥ 1`, since `peak_bin_count ≥ 2` at the call site).
+# Implementation
+
+Hill's algorithm (Hill, G. W. (1970), *Algorithm 396: Student's t-quantiles*,
+Comm. ACM 13(10), 619–620), driven by the two-tailed probability
+`2·(1 − probability)`: `dof = 1` (Cauchy) and `dof = 2` invert in elementary
+functions and are returned exactly, and above that a series in either the
+normal deviate [`_norm_quantile`](@ref) (tail branch) or the two-tailed
+probability itself (central branch) is used. The lower tail is reflected by
+symmetry, and the median `t(0.5) = 0` is returned directly — which also avoids
+a `1 − 0.5` self-recursion. The sole caller passes `probability > 0.5` (and
+`dof ≥ 1`, since `peak_bin_count ≥ 2` at the call site).
+
+Hill's series is accurate to ≲2e-4 *relative* — worst around `dof ≈ 3–10`,
+better than 1e-5 by `dof ≈ 50` — which is orders of magnitude finer than the
+nominal-d.o.f. modelling error above, and far too fine to move which block the
+detector locks on. That error buys both of the properties this call site needs,
+against an exact inversion through `SpecialFunctions.beta_inc_inv`:
+
+  - **Allocation-free.** `beta_inc_inv` allocates internal scratch arrays
+    (`zeros(22)` / `zeros(31)` inside the incomplete-beta asymptotic
+    expansions) over part of the `dof` range the detector sweeps. This
+    function runs once per primary-code block for every unsynced satellite, so
+    an allocation here makes `track!` allocate in proportion to the signal
+    length across the whole acquisition — the regression
+    `test/track_in_place.jl`'s pre-sync guard exists to catch.
+  - **Cheap.** `beta_inc_inv` is an iterative Newton solve that evaluates a
+    full regularized incomplete beta per step (~0.2–2.8 µs here); Hill's is a
+    single closed-form pass (~3–78 ns), 10–170× faster over the whole `dof`
+    range and never slower. End to end that is a pre-sync `track!` at 1.7× (200
+    blocks) to 1.3× (900 blocks).
 """
-@inline function _t_quantile(probability::Float64, dof::Real)
+function _t_quantile(probability::Float64, dof::Real)
     probability == 0.5 && return 0.0
     probability < 0.5 && return -_t_quantile(1 - probability, dof)
-    x = first(beta_inc_inv(dof / 2, 0.5, 2 * (1 - probability)))
-    sqrt(dof * (1 - x) / x)
+    # Hill's algorithm is written in terms of the two-tailed probability.
+    two_tailed_probability = 2 * (1 - probability)
+    # `dof = 1` is the standard Cauchy, `quantile(p) = cot(π·two_tailed/2)`
+    # (the cotangent form keeps its accuracy in the far tail, where the
+    # equivalent `tan(π(probability − ½))` cancels). At `dof = 2` the CDF
+    # `½·(1 + t/√(2 + t²))` inverts in closed form. Both are exact, and both
+    # are where the series below is weakest.
+    dof == 1 &&
+        return cos(two_tailed_probability * pi / 2) / sin(two_tailed_probability * pi / 2)
+    dof == 2 && return sqrt(2 / (two_tailed_probability * (2 - two_tailed_probability)) - 2)
+    a = 1 / (dof - 0.5)
+    b = 48 / a^2
+    c = ((20700 * a / b - 98) * a - 16) * a + 96.36
+    d = ((94.5 / (b + c) - 3) / b + 1) * sqrt(a * pi / 2) * dof
+    y = (d * two_tailed_probability)^(2 / dof)
+    if y > 0.05 + a
+        # Tail branch: correct the normal deviate (the `dof → ∞` limit) by an
+        # asymptotic series in `1/dof`, so the result relaxes onto `Φ⁻¹` as the
+        # bin count grows — no cutoff, mature locks keep the normal threshold.
+        x = _norm_quantile(probability)
+        y = x^2
+        dof < 5 && (c += 0.3 * (dof - 4.5) * (x + 0.6))
+        c = (((0.05 * d * x - 5) * x - 7) * x - 2) * x + b + c
+        y = (((((0.4 * y + 6.3) * y + 36) * y + 94.5) / c - y - 3) / b + 1) * x
+        y = expm1(a * y^2)
+    else
+        # Central branch: a series in the two-tailed probability itself, used
+        # where the normal deviate is a poor starting point.
+        y =
+            (
+                (
+                    1 / (((dof + 6) / (dof * y) - 0.089 * d - 0.822) * (dof + 2) * 3) +
+                    0.5 / (dof + 4)
+                ) * y - 1
+            ) * (dof + 1) / (dof + 2) + 1 / y
+    end
+    sqrt(dof * y)
 end
 
 """

@@ -11,6 +11,7 @@ using Tracking:
     has_bit_or_secondary_code_been_found,
     SyncResult,
     PhaseAccumulators,
+    _norm_quantile,
     _t_quantile,
     _detect_bit_edge_cfar,
     _seed_phase_accumulators!,
@@ -22,6 +23,23 @@ using Tracking:
     @test r.phase == 0
     @test r.polarity == 0
 end
+
+@testset "_norm_quantile" begin
+    @test _norm_quantile(0.5) == 0.0
+    @test _norm_quantile(0.975) ≈ 1.959964 atol = 1e-6     # tabulated Φ⁻¹
+    @test _norm_quantile(0.999) ≈ 3.090232 atol = 1e-6
+    @test _norm_quantile(0.025) ≈ -_norm_quantile(0.975) atol = 1e-12
+    # The open-interval contract: `_t_quantile` clamps before calling in, so
+    # the ±Inf endpoints are documented behaviour rather than an error.
+    @test _norm_quantile(1.0) == Inf
+    @test _norm_quantile(0.0) == -Inf
+end
+
+# `@allocated` at module scope picks up boxing from untyped global lookups, so
+# the measurement goes through a typed function — the same reason
+# `test/track_in_place.jl` measures inside helpers.
+_measure_t_quantile_alloc(probability::Float64, dof::Int) =
+    (_t_quantile(probability, dof); @allocated _t_quantile(probability, dof))
 
 @testset "_t_quantile" begin
     # Median is exactly 0 — and, as a regression guard, `probability == 0.5`
@@ -35,6 +53,22 @@ end
     # Symmetric about 0.
     @test _t_quantile(0.25, 1) ≈ -_t_quantile(0.75, 1) atol = 1e-9
     @test _t_quantile(0.001, 7) ≈ -_t_quantile(0.999, 7) atol = 1e-6
+    # Accuracy against standard Student-t tables. `dof = 1` (Cauchy) and
+    # `dof = 2` are closed forms and land on the exact value; above that Hill's
+    # series carries a small relative error (worst ~2e-4 around dof 3–10),
+    # which is still orders of magnitude finer than the nominal-d.o.f.
+    # modelling error the threshold is built on — and far too fine to move
+    # which block the detector locks on.
+    # (The two closed forms are pinned at the precision of the table literal
+    # itself, 7 significant digits — they agree with the exact value to ~1e-16.)
+    @test _t_quantile(0.975, 1) ≈ 12.706205 rtol = 1e-7
+    @test _t_quantile(0.975, 2) ≈ 4.302653 rtol = 1e-7
+    @test _t_quantile(0.995, 3) ≈ 5.840909 rtol = 1e-4
+    @test _t_quantile(0.95, 5) ≈ 2.015048 rtol = 1e-4
+    @test _t_quantile(0.975, 10) ≈ 2.228139 rtol = 1e-4
+    @test _t_quantile(0.999, 20) ≈ 3.551808 rtol = 1e-4
+    @test _t_quantile(0.975, 30) ≈ 2.042272 rtol = 1e-4
+    @test _t_quantile(0.975, 120) ≈ 1.979930 rtol = 1e-4
     # Heavier tails than the normal, converging to it as dof → ∞ (no cutoff).
     p = 1 - (1 - 0.999) / (20 - 1)   # the detector's Bonferroni-split argument, L1CA
     normal_limit = 3.87813           # tabulated Φ⁻¹(p), the dof → ∞ limit
@@ -45,6 +79,23 @@ end
     # clean z ≈ 3.9 clears it.
     @test _t_quantile(p, 1) > 1000
     @test _t_quantile(p, 69) < 4.2
+    # Monotone in dof over the whole range the detector sweeps — no branch seam
+    # between the closed forms (dof ≤ 2) and Hill's two series.
+    @test issorted([_t_quantile(p, dof) for dof = 1:400]; rev = true)
+    # Allocation-free at every dof. The detector calls this once per
+    # primary-code block for every unsynced satellite, so an allocating
+    # quantile makes `track!` allocate in proportion to the signal length
+    # (the exact `SpecialFunctions.beta_inc_inv` inversion did, via internal
+    # `zeros(31)` scratch, from ~12 d.o.f. upwards). `test/track_in_place.jl`
+    # guards the same property end-to-end; this pins it per dof, where the
+    # allocating stretches of the range are unmissable.
+    @test all(_measure_t_quantile_alloc(p, dof) == 0 for dof = 1:400)
+    @test _measure_t_quantile_alloc(0.25, 7) == 0    # the reflected branch too
+    # The detector clamps its argument to the open interval; the endpoint must
+    # still produce a finite (huge) threshold rather than NaN, or the
+    # `z_score < threshold` gate would silently pass.
+    @test isfinite(_t_quantile(prevfloat(1.0), 1))
+    @test isfinite(_t_quantile(prevfloat(1.0), 40))
 end
 
 const L1CA_BLOCKS_PER_BIT = 20  # primary-code blocks per L1 C/A navigation bit
