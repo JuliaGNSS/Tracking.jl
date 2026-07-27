@@ -56,3 +56,11 @@ end
 # `BitIntegers.@define_integers 1800` and is what `BitBuffer{B}` carries
 # for L1C-P throughout the tracker.
 @inline get_code_block_buffer_type(::GPSL1C_P) = UInt1800
+
+# L1C-P keeps the hard-decision rotation sweep: its 1800-chip / 18 s overlay is
+# far too long to integrate coherently per bin (the soft CFAR detector's model),
+# and a 1800-chip code at the 45-error budget is not false-lock-prone anyway.
+# The `uses_soft_secondary_code_detection` default already excludes it (N = 1800
+# exceeds the 100-chip cap); this makes the intent explicit and keeps L1C-P on
+# the hard path even if that default cap were ever widened.
+@inline uses_soft_secondary_code_detection(::GPSL1C_P) = false

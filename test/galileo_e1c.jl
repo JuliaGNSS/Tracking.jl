@@ -62,6 +62,9 @@ rotl(x::T, r, N) where {T} =
 
     # 25-block CS25 window fits in a UInt32.
     @test @inferred(get_code_block_buffer_type(galileo_e1c)) === UInt32
+
+    # CS25 (25 chips) is short enough for the soft, CFAR secondary-code detector.
+    @test Tracking.uses_soft_secondary_code_detection(galileo_e1c) == true
 end
 
 end

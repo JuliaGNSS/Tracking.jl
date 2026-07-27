@@ -3,7 +3,8 @@ module TrackInPlaceTest
 using Test: @test, @testset
 using Random: MersenneTwister
 using Unitful: Hz
-using GNSSSignals: GPSL1CA, gen_code, get_code_center_frequency_ratio, get_code_frequency
+using GNSSSignals:
+    GPSL1CA, GPSL5I, gen_code, get_code_center_frequency_ratio, get_code_frequency
 
 using Tracking:
     TrackedSat,
@@ -222,6 +223,38 @@ if VERSION >= v"1.11"
         # threshold are actually scored on every block (see above).
         @test measure_track_alloc(200) == 0
         @test measure_track_alloc(900) == 0
+    end
+
+    # Same guard for the soft *secondary-code* detector (GPS L5I: NH10, 10
+    # blocks/period), which shares `_cfar_decide` / `_t_quantile` but has its own
+    # per-rotation accumulator update `_update_secondary_accumulators!` and
+    # front-end `_detect_secondary_code_cfar`. A `rand` signal carries no real
+    # NH10 structure, so the soft detector never locks (it rejects noise) and the
+    # tracker stays in the pre-sync search, scoring every block past `2 × N`. Both
+    # lengths are past `2 × 10`, so the scoring path (overlay-wiped energy folding,
+    # Welford update, peak/runner-up scan, Student-t threshold) runs on every
+    # block — where an allocation would otherwise hide. `dof = peak_bin_count − 1`
+    # sweeps ≈ 9…19 (200) and ≈ 44…89 (900), the same stretches that caught the
+    # allocating quantile for L1 C/A above.
+    @testset "track! is allocation-free during acquisition (pre-sync secondary-code search)" begin
+        sampling_frequency = 25e6Hz
+        samples_per_block = 25000              # 1 ms GPS L5I code period @ 25 MHz
+        function measure_track_alloc_l5i(nblocks)
+            gpsl5i = GPSL5I()
+            track_state = TrackState(gpsl5i, [TrackedSat(gpsl5i, 1, 10.5, 1000.0Hz)])
+            dc = CPUDownconvertAndCorrelator()
+            signal = rand(MersenneTwister(nblocks), ComplexF32, samples_per_block * nblocks)
+            call() = track!(
+                signal,
+                track_state,
+                sampling_frequency;
+                downconvert_and_correlator = dc,
+            )
+            call()                             # warmup: seat buffers, compile
+            @allocated call()
+        end
+        @test measure_track_alloc_l5i(200) == 0
+        @test measure_track_alloc_l5i(900) == 0
     end
 end
 

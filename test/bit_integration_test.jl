@@ -175,14 +175,16 @@ end
 
 # GPS L5I secondary-code (NH10) sync and phase recovery.
 #
-# The L5I detector runs the generic rotation search over NH10, so it locks
-# after a single NH10 period (10 blocks) in the worst case — regardless of
-# where in the NH10 cycle tracking started — and recovers the true
+# The L5I detector runs the soft, maximum-energy CFAR rotation search over NH10
+# (`_detect_secondary_code_cfar`): it accumulates per-rotation overlay-wiped
+# period energies, needs at least two NH10 periods before it can decide, and
+# fires only at the winning rotation's own period boundary — recovering the true
 # secondary-code phase. This test starts the signal at every NH10 phase and
 # checks that:
-#   * sync fires exactly at the 10th block (1x the secondary period), and
-#   * `code_phase` is anchored to the *upcoming* integration's NH10 chip,
-#     which — after exactly 10 blocks — equals the starting chip.
+#   * sync never fires before two NH10 periods (20 blocks),
+#   * it fires on a true NH10 boundary (the just-completed block is chip 9), so
+#     the recovered phase is the actual absolute alignment, and
+#   * `code_phase` is anchored to the upcoming integration's chip 0.
 @testset "GPS L5I secondary-code sync and phase recovery" begin
     gpsl5 = GPSL5I()
     prn = 1
@@ -218,20 +220,29 @@ end
             end
         end
 
-        # Sync locks after exactly one NH10 period (10 blocks), no matter the
-        # starting phase — the rotation search does not wait for a boundary.
-        @test synced_at_block == secondary_code_length
+        # The soft maximum-energy CFAR detector needs at least two completed NH10
+        # periods before a runner-up (and thus a decision) exists, so it never
+        # locks before the 20th block.
+        @test synced_at_block >= 2 * secondary_code_length
 
-        # `code_phase` is anchored to the upcoming integration's NH10 chip.
-        # After 10 blocks the upcoming chip equals the starting chip, so the
-        # phase lands at `start_secondary_chip x primary_code_length` within
-        # the widened (primary x secondary) wrap window. The embedded-LUT
+        # It fires only at the winning rotation's own period boundary, i.e. when
+        # the just-completed block is the last NH10 chip (absolute chip 9), so the
+        # *upcoming* integration starts a fresh NH10 period (absolute chip 0). The
+        # generated block `synced_at_block` carries absolute chip
+        # `(start_secondary_chip + synced_at_block - 1) % 10`; boundary firing
+        # demands that be chip 9 — this is the load-bearing check that the true
+        # secondary-code phase was recovered (the absolute alignment), not merely
+        # that *some* lock happened.
+        @test (start_secondary_chip + synced_at_block - 1) % secondary_code_length ==
+              secondary_code_length - 1
+
+        # Because it fires at that true boundary, `code_phase` is anchored to the
+        # upcoming integration's chip 0 (`SyncResult.phase == 0`). The embedded-LUT
         # generator's fixed-point DDA (~2^-30 chip) lands the phase within ~1e-6
-        # chip of the integer boundary rather than exactly on it, so compare the
-        # circular distance within a sub-sample tolerance.
+        # chip of the integer boundary, so compare the circular distance within a
+        # sub-sample tolerance.
         let wrap = primary_code_length * secondary_code_length,
-            expected = start_secondary_chip * primary_code_length,
-            d = mod(synced_code_phase - expected, wrap)
+            d = mod(synced_code_phase, wrap)
 
             @test min(d, wrap - d) < 1e-3
         end
@@ -278,15 +289,14 @@ end
 
 # GPS L5I post-sync data-bit decoding (issue #125).
 #
-# The NH10 rotation search locks at *any* secondary chip, so the post-sync bit
-# decoder must (a) wipe the NH code from each prompt — at the default 1-block
-# integration the replica covers a single primary period and has to bake the
-# correct NH chip, otherwise a 10-block "bit" sum collapses to
+# The soft NH10 CFAR search fires on an NH10 = data-bit boundary, so the
+# post-sync bit decoder must (a) wipe the NH code from each prompt — at the
+# default 1-block integration the replica covers a single primary period and has
+# to bake the correct NH chip, otherwise a 10-block "bit" sum collapses to
 # `data x Σ(NH signs)` and loses ~14 dB of decision margin — and (b) start its
-# accumulation grid at the recovered secondary phase rather than at the lock
-# instant, so bits are emitted on the NH10 / data-bit boundary. This decodes a
-# known bit sequence through boundary and non-boundary locks at both the default
-# 1-block and a 10-block coherent integration.
+# accumulation grid on that boundary, so bits are emitted on the NH10 / data-bit
+# boundary. This decodes a known bit sequence at several starting chips and at
+# both the default 1-block and a 10-block coherent integration.
 #
 # Note on polarity: locking onto a periodic secondary code carries an inherent
 # ±1 data-polarity ambiguity (the rotation search cannot tell a data "1" period
@@ -344,31 +354,48 @@ end
 
         @test has_bit_or_secondary_code_been_found(track_state)
 
-        # The pre-sync rotation search consumes the first NH10 period (the lead
-        # of the lock data bit); decoding then begins with the remainder of that
-        # same data bit (`data_bits[2]`) and proceeds bit-by-bit. The trailing
-        # data bit may be left mid-integration, so compare the bits that
-        # completed.
+        # The soft CFAR detector is deterministic on this noiseless signal, so the
+        # exact first decoded bit is derivable (no "matches at some offset"
+        # slack). `_cfar_decide` needs ≥ 2 NH10 periods before a runner-up exists,
+        # then `_detect_secondary_code_cfar` fires at the winning rotation's own
+        # period boundary. The winning rotation is `d* = mod(N − start, N)` (the
+        # one whose overlay wipe is coherent), so the lock lands at the smallest
+        # block count `≥ 2N` with `count % N == d*`; the upcoming integration then
+        # starts at absolute chip 0, i.e. data-bit `div(start + lock, N)`.
+        N = secondary_code_length
+        d_star = mod(N - start_secondary_chip, N)
+        lock_block = let m = 2N
+            while m % N != d_star
+                m += 1
+            end
+            m
+        end
+        first_bit = div(start_secondary_chip + lock_block, N) + 1  # 1-based data-bit index
+        expected_from_lock = data_bits[first_bit:end]              # decoded run, in order
+
         soft_bits = get_soft_bits(track_state)
         decoded_bits = [Int(s > 0) for s in soft_bits]
         n_decoded = length(decoded_bits)
-        expected = data_bits[2:(1+n_decoded)]
 
-        # At least every full data bit but the last must have decoded.
-        @test n_decoded >= length(data_bits) - 2
-        # Clean, boundary-aligned decode — up to the global polarity ambiguity.
+        # Every bit from the lock boundary to the end decodes, except at most the
+        # final one (its integration can still be in flight when `track` returns).
+        @test n_decoded in (length(expected_from_lock) - 1, length(expected_from_lock))
+        # Exact, boundary-aligned decode at the derived offset — up to the single
+        # global ±1 polarity ambiguity inherent to secondary-code lock.
+        expected = expected_from_lock[1:n_decoded]
         @test decoded_bits == expected || decoded_bits == 1 .- expected
         # Soft-bit signs are internally consistent with the hard bits.
         @test all((soft_bits .> 0) .== (decoded_bits .== 1))
-        # The NH code is wiped: every *full* post-sync bit (all but a possibly
-        # truncated first one, when the lock lands mid data bit) sums coherently.
-        # A full bit spans `secondary_code_length` primary blocks; the soft bit
-        # sums one unit-magnitude prompt per `preferred_blocks`-block integration,
-        # so its magnitude is ≈ `secondary_code_length / preferred_blocks`. Left
-        # in, the NH signs would nearly cancel (≈2 for NH10 at 1-block), so this
-        # half-of-nominal floor is the load-bearing assertion of the fix.
+        # The NH code is wiped: every post-sync bit sums coherently. A full bit
+        # spans `secondary_code_length` primary blocks; the soft bit sums one
+        # unit-magnitude prompt per `preferred_blocks`-block integration, so its
+        # magnitude is ≈ `secondary_code_length / preferred_blocks`. Because the
+        # detector fires exactly on the data-bit boundary there is no truncated
+        # first bit — *every* emitted bit is full. Left in, the NH signs would
+        # nearly cancel (≈2 for NH10 at 1-block), so this near-nominal floor is
+        # the load-bearing assertion of the fix.
         full_bit_magnitude = secondary_code_length / preferred_blocks
-        @test all(>(0.5 * full_bit_magnitude), abs.(soft_bits[2:end]))
+        @test all(>(0.9 * full_bit_magnitude), abs.(soft_bits))
     end
 end
 

@@ -2,7 +2,8 @@ module BitBufferTest
 
 using Test: @test, @testset, @inferred, @test_throws
 using Random: MersenneTwister
-using GNSSSignals: GPSL1CA
+using GNSSSignals:
+    GPSL1CA, GPSL5I, get_secondary_code, secondary_value, get_secondary_code_length
 using Tracking:
     BitBuffer,
     buffer,
@@ -13,9 +14,13 @@ using Tracking:
     PhaseAccumulators,
     _norm_quantile,
     _t_quantile,
+    _cfar_decide,
     _detect_bit_edge_cfar,
+    _detect_secondary_code_cfar,
     _seed_phase_accumulators!,
-    _update_phase_accumulators!
+    _update_phase_accumulators!,
+    _update_secondary_accumulators!,
+    _secondary_code_search
 
 @testset "SyncResult" begin
     r = @inferred SyncResult(false, 0, Int8(0))
@@ -225,6 +230,194 @@ end
             end
         end
         @test !found
+    end
+end
+
+@testset "_cfar_decide" begin
+    # The shared CFAR decision core: peak vs. runner-up, Welford noise scale,
+    # Student-t threshold. `period` is the bin length = hypothesis count.
+    period = 5
+
+    @testset "Needs two bins on some hypothesis" begin
+        # num_blocks < 2 * period ⇒ no runner-up can exist yet.
+        mean = [10.0, 1.0, 1.0, 1.0, 1.0]
+        m2 = zeros(5)
+        @test _cfar_decide(mean, m2, 2 * period - 1, period, 0.999) == (false, -1, 0)
+    end
+
+    @testset "Noiseless separation locks at the peak" begin
+        mean = [10.0, 1.0, 1.0, 1.0, 1.0]
+        m2 = zeros(5)                              # zero variance ⇒ z = Inf
+        accepted, peak, count = _cfar_decide(mean, m2, 2 * period, period, 0.999)
+        @test accepted
+        @test peak == 0                            # hypothesis 0 (0-based) is the peak
+        @test count == 2                           # div(10 - 0, 5)
+    end
+
+    @testset "No separation never locks" begin
+        mean = fill(5.0, 5)                         # every hypothesis equal
+        m2 = zeros(5)
+        accepted, _, _ = _cfar_decide(mean, m2, 2 * period, period, 0.999)
+        @test !accepted
+    end
+
+    @testset "A large peak variance suppresses the lock" begin
+        # Same energy gap, but the peak's own bin-to-bin spread is huge, so the
+        # z-score stays below threshold and it does not lock.
+        mean = [10.0, 1.0, 1.0, 1.0, 1.0]
+        quiet = zeros(5)
+        loud = [1.0e6, 0.0, 0.0, 0.0, 0.0]         # M₂ only on the peak
+        @test _cfar_decide(mean, quiet, 2 * period, period, 0.999)[1]
+        @test !_cfar_decide(mean, loud, 2 * period, period, 0.999)[1]
+    end
+end
+
+# --- Soft secondary-code CFAR detector (GPS L5I NH10 and friends) ------------
+
+# The ±1 secondary chips in time order for `signal`/`prn`.
+_secondary_chips(signal, prn) = [
+    Int(secondary_value(get_secondary_code(signal), prn, k)) for
+    k = 0:(get_secondary_code_length(signal)-1)
+]
+
+# NH10 packed newest-first, as the hard detector references it (see l5.jl).
+_packed_l5i() = UInt32(0x035)
+
+# Build a prompt stream for a secondary-coded signal: block `i` (0-based) carries
+# secondary chip `(i + start_chip) % N` times a per-period data symbol (constant
+# over each period, flipped pseudo-randomly at period boundaries) times `amp`,
+# plus optional complex Gaussian noise.
+function _secondary_stream(
+    signal,
+    prn,
+    nblocks;
+    start_chip = 0,
+    amp = 5.0,
+    noise = 0.0,
+    seed = 1,
+)
+    N = get_secondary_code_length(signal)
+    chips = _secondary_chips(signal, prn)
+    rng = MersenneTwister(seed)
+    data = 1
+    prompts = ComplexF64[]
+    for i = 0:(nblocks-1)
+        chip = mod(i + start_chip, N)
+        chip == 0 && (data = rand(rng, (-1, 1)))
+        p = ComplexF64(amp * data * chips[chip+1])
+        noise > 0 && (p += noise * complex(randn(rng), randn(rng)))
+        push!(prompts, p)
+    end
+    prompts
+end
+
+# Fold a prompt stream into fresh secondary accumulators (mirrors what
+# `_buffer_find_bit` does) and run the detector after each block. `upto = 0`
+# returns the 1-based block index of the first lock (0 if never); otherwise it
+# returns the SyncResult after exactly `upto` blocks.
+function _secondary_detect_over(prompts, signal, prn, confidence; upto = 0)
+    N = get_secondary_code_length(signal)
+    accumulators = PhaseAccumulators()
+    _seed_phase_accumulators!(accumulators, N)
+    local result
+    for (block_number, prompt) in enumerate(prompts)
+        _update_secondary_accumulators!(
+            accumulators,
+            ComplexF64(prompt),
+            block_number - 1,
+            N,
+            signal,
+            prn,
+        )
+        result = _detect_secondary_code_cfar(accumulators, N, confidence, block_number)
+        upto == 0 && result.found && return block_number
+        upto == block_number && return result
+    end
+    return upto == 0 ? 0 : result
+end
+
+@testset "_update_secondary_accumulators!" begin
+    # Feed two clean NH10 periods aligned to chip 0. The correct rotation wipes
+    # the overlay so its bin sums coherently (energy ≈ (N·amp)²); every other
+    # rotation straddles the fixed NH transitions and loses energy.
+    signal = GPSL5I()
+    prn = 1
+    N = get_secondary_code_length(signal)          # 10
+    amp = 5.0
+    accumulators = PhaseAccumulators()
+    _seed_phase_accumulators!(accumulators, N)
+    prompts = _secondary_stream(signal, prn, 2N; amp)   # data constant per period
+    for (i, p) in enumerate(prompts)
+        _update_secondary_accumulators!(accumulators, ComplexF64(p), i - 1, N, signal, prn)
+    end
+    energies = accumulators.mean_bin_energy
+    peak = argmax(energies) - 1                    # 0-based winning rotation
+    # Aligned to chip 0 ⇒ the winning rotation is 0.
+    @test peak == 0
+    @test energies[peak+1] ≈ (N * amp)^2
+    # The peak dwarfs every competitor by a wide margin.
+    runner_up = maximum(energies[2:end])
+    @test energies[1] > 20 * runner_up
+end
+
+@testset "_detect_secondary_code_cfar" begin
+    signal = GPSL5I()
+    prn = 1
+    N = get_secondary_code_length(signal)          # 10
+
+    @testset "Needs at least two periods" begin
+        prompts = _secondary_stream(signal, prn, 2N - 1; amp = 8.0)
+        @test _secondary_detect_over(prompts, signal, prn, 0.999; upto = 2N - 1).found ==
+              false
+    end
+
+    @testset "Clean lock fires at the period boundary with phase 0" begin
+        for start_chip = 0:(N-1)
+            prompts = _secondary_stream(signal, prn, 4N; start_chip, amp = 8.0)
+            synced = _secondary_detect_over(prompts, signal, prn, 0.999)
+            @test synced >= 2N                     # never before two periods
+            # Fires only at a true NH10 boundary: the just-processed block is the
+            # last (chip N-1) of the winning rotation's period.
+            @test (start_chip + synced - 1) % N == N - 1
+            res = _secondary_detect_over(prompts, signal, prn, 0.999; upto = synced)
+            @test res.found
+            @test res.phase == 0                   # upcoming integration at chip 0
+        end
+    end
+
+    @testset "Polarity follows the winning period's sign" begin
+        chips = _secondary_chips(signal, prn)
+        # A period that is exactly +overlay locks at +1; the negated overlay at −1.
+        pos = ComplexF64[8.0 * c for c in chips]
+        neg = ComplexF64[-8.0 * c for c in chips]
+        @test _secondary_detect_over(vcat(pos, pos, pos), signal, prn, 0.999; upto = 3N).polarity ==
+              +1
+        @test _secondary_detect_over(vcat(neg, neg, neg), signal, prn, 0.999; upto = 3N).polarity ==
+              -1
+    end
+
+    @testset "No false lock on pure noise (the TEX-CUP PRN 8 symptom)" begin
+        # The hard sign-template match (NH10, exact-match budget) accepts a random
+        # 10-bit window whenever noise happens to align it with one of the ~20
+        # rotation×polarity templates — a ~2 % per-window chance that accumulates
+        # into false locks over a long pre-lock stretch. The soft CFAR detector,
+        # feeding on the same noise, requires a significant energy gap over many
+        # periods, so it does not lock on noise.
+        hard_false_locks = 0
+        soft_locks = 0
+        for seed = 1:200
+            rng = MersenneTwister(1000 + seed)
+            # Soft: 40 blocks of pure complex-Gaussian noise (no signal).
+            noise = ComplexF64[complex(randn(rng), randn(rng)) for _ = 1:4N]
+            _secondary_detect_over(noise, signal, prn, 0.999) != 0 && (soft_locks += 1)
+            # Hard: a random 10-bit sign window through the rotation sweep.
+            window = rand(rng, UInt32) & UInt32((1 << N) - 1)
+            _secondary_code_search(window, _packed_l5i(), N, 0).found &&
+                (hard_false_locks += 1)
+        end
+        @test soft_locks == 0
+        # Sanity: the hard exact-match detector really is noise-prone here.
+        @test hard_false_locks > 0
     end
 end
 

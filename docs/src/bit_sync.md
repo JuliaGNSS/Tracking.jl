@@ -48,46 +48,52 @@ current_code_wrap
 
 Each per-signal `BitBuffer` runs an `detect_bit_or_secondary_code_sync` detector against the running buffer of primary-code-block signs. The detector returns a `SyncResult` containing whether sync was found, the secondary-code phase (chip offset within the secondary code, used for code-phase seeding — see below), and the locked polarity (±1).
 
-Per-signal contract. *Min-to-fire* is the smallest `num_code_blocks` the detector accepts before it tries a match (smaller windows return `SyncResult(false, …)` without searching). *Buffer width* is the sliding window's container type, picked by `get_code_block_buffer_type(signal)`. The GPS L1 C/A bit-edge detector needs `2 × symbol` (40 blocks) so a full bit can slide past either polarity; the secondary-code signals (GPS L5I, GPS L1C-P) only need **one** full secondary period, because their rotation search (`_secondary_code_search`) matches at any alignment and recovers the phase — so they lock in `1 ×` the period worst case, not `2 ×`.
+There are three detector families:
 
-| Signal | Min-to-fire | Buffer width | Template | Tolerance | Phase | Blocks per symbol |
-|--------|-------------|--------------|----------|-----------|-------|---------------------|
-| GPS L1 C/A | 40 blocks | `UInt64` (40 bits used) | bit-edge `0xfffff` (20+20) | 1 error (2.5 %) | 0 | 20 |
-| Galileo E1B | n/a | `UInt8` (unused) | trivial (1 block per symbol) | n/a | 0 | 1 |
-| GPS L5I | 10 blocks | `UInt32` (low 10 bits used) | NH10 `0x035` (rotation search) | 0 errors (2.5 % → exact match) | `0..9` | 10 (secondary code) |
-| GPS L5Q | 20 blocks | `UInt32` (low 20 bits used) | NH20 (rotation search) | 0 errors (2.5 % → exact match) | `0..19` | 20 (secondary code, pilot) |
-| GPS L1C-D | n/a | `UInt8` (unused) | trivial (1 block per symbol) | n/a | 0 | 1 |
-| GPS L1C-P | 1800 blocks | `UInt1800` (exact width) | per-PRN overlay (rotation search) | 45 errors (2.5 %) | `0..1799` | n/a (pilot) |
-| GPS L2CM | n/a | `UInt8` (unused) | trivial (1 block per symbol) | n/a | 0 | 1 |
-| GPS L2CL | never fires | `UInt8` (unused) | none (dataless pilot, no secondary code) | n/a | 0 | n/a (pilot) |
-| Galileo E1C | 25 blocks | `UInt32` (low 25 bits used) | CS25 (rotation search) | 0 errors (2.5 % → exact match) | `0..24` | 25 (secondary code, pilot) |
-| Galileo E5a-I | 20 blocks | `UInt32` (low 20 bits used) | CS20 (rotation search) | 0 errors (2.5 % → exact match) | `0..19` | 20 (secondary code) |
-| Galileo E5a-Q | 100 blocks | `UInt128` (low 100 bits used) | per-PRN CS100 (rotation search) | 2 errors (2.5 %) | `0..99` | 100 (secondary code, pilot) |
+- **Soft, maximum-energy CFAR** — GPS L1 C/A (bit-edge, `_detect_bit_edge_cfar`) and the short-secondary-code signals GPS L5I/L5Q and Galileo E1C/E5a-I/E5a-Q (overlay-rotation, `_detect_secondary_code_cfar`). These accumulate per-hypothesis, coherently-summed bin energy in `PhaseAccumulators` and lock when the peak hypothesis beats its runner-up with a Student-t confidence (`get_bit_edge_detection_confidence`, default `0.999`). They self-pace with C/N₀ and fire only at the winning hypothesis's own boundary — so they report **`phase = 0`** (the upcoming integration starts a fresh data bit / secondary-code period). Selected by `uses_soft_bit_edge_detection` / `uses_soft_secondary_code_detection`.
+- **Hard-decision rotation/Hamming sweep** (`_secondary_code_search`) — among the currently implemented signals, GPS L1C-P alone. It matches packed prompt *signs* against the known overlay at every rotation, accepting the best within `get_bit_edge_or_secondary_code_tolerance`; it locks in **one** full period worst case (matches at any alignment) and reports the recovered secondary-chip `phase`.
+- **Trivial / none** — Galileo E1B, GPS L1C-D and GPS L2CM broadcast one channel symbol per primary period, so their detector returns `SyncResult(true, 0, +1)` immediately; GPS L2CL is a dataless pilot with no sync.
 
-The buffer-width type threads through `BitBuffer{B}` and `TrackedSignal{Sig, B, C, PCF}` as a type parameter. The L1C-P case uses an exact-width `UInt1800` defined via `BitIntegers.@define_integers 1800`; the other signals use built-in `UInt8` / `UInt32` / `UInt64` / `UInt128`. The secondary-code signals other than GPS L5I / L1C-P get their packed reference from the generic `_packed_secondary_code(::Type{B}, ::AbstractGNSSSignal, prn)`, which derives it directly from `get_secondary_code(signal)` — so a new secondary-coded signal needs no bespoke template, only a wide enough `get_code_block_buffer_type`.
+*Min-to-fire* is the smallest `num_code_blocks` the detector accepts before it can lock. The soft CFAR detectors need `2 × period` blocks before a runner-up (and hence a decision) exists, then fire at the next winning-hypothesis boundary; the hard sweep needs `1 × period`. *Buffer width* is `get_code_block_buffer_type(signal)`; note it sizes the packed prompt-sign buffer that **only the hard sweep consults** — the soft detectors read `PhaseAccumulators` instead, so for them the packed buffer is vestigial.
 
-The 2.5 % tolerance is a package-wide default and adjustable per-signal via dispatch:
+| Signal | Detector | Min-to-fire | Buffer width | Accept rule | Phase | Blocks per symbol |
+|--------|----------|-------------|--------------|-------------|-------|---------------------|
+| GPS L1 C/A | soft bit-edge CFAR | 40 blocks (2 × 20) | `UInt64` (vestigial) | confidence 0.999 | 0 | 20 |
+| Galileo E1B | trivial | n/a | `UInt8` (unused) | always | 0 | 1 |
+| GPS L5I | soft secondary CFAR | 20 blocks (2 × NH10) | `UInt32` (vestigial) | confidence 0.999 | 0 | 10 |
+| GPS L5Q | soft secondary CFAR | 40 blocks (2 × NH20) | `UInt32` (vestigial) | confidence 0.999 | 0 | 20 (pilot) |
+| GPS L1C-D | trivial | n/a | `UInt8` (unused) | always | 0 | 1 |
+| GPS L1C-P | **hard** rotation sweep | 1800 blocks | `UInt1800` (exact width) | 45 errors (2.5 %) | `0..1799` | n/a (pilot) |
+| GPS L2CM | trivial | n/a | `UInt8` (unused) | always | 0 | 1 |
+| GPS L2CL | never fires | `UInt8` (unused) | none (dataless pilot) | n/a | 0 | n/a (pilot) |
+| Galileo E1C | soft secondary CFAR | 50 blocks (2 × CS25) | `UInt32` (vestigial) | confidence 0.999 | 0 | 25 (pilot) |
+| Galileo E5a-I | soft secondary CFAR | 40 blocks (2 × CS20) | `UInt32` (vestigial) | confidence 0.999 | 0 | 20 |
+| Galileo E5a-Q | soft secondary CFAR | 200 blocks (2 × CS100) | `UInt128` (vestigial) | confidence 0.999 | 0 | 100 (pilot) |
+
+The buffer-width type threads through `BitBuffer{B}` and `TrackedSignal{Sig, B, C, PCF}` as a type parameter. The L1C-P case uses an exact-width `UInt1800` defined via `BitIntegers.@define_integers 1800`. The soft secondary CFAR detectors take the ±1 overlay chip directly from `get_secondary_code(signal)` per rotation, so a new short-secondary-code signal needs no bespoke template — only for `uses_soft_secondary_code_detection` to return `true` (secondary length `1 < N ≤ 100`).
+
+The soft CFAR confidence is package-wide and adjustable per signal via `get_bit_edge_detection_confidence`; the hard-sweep Hamming tolerance is adjustable per (hard-path) signal via `get_bit_edge_or_secondary_code_tolerance`:
 
 ```jldoctest tolerance_override
 julia> using Tracking, GNSSSignals
 
-julia> Tracking.get_bit_edge_or_secondary_code_tolerance(GPSL1CA())  # default
+julia> Tracking.get_bit_edge_or_secondary_code_tolerance(GPSL1C_P())  # default
 0.025
 
-julia> # Loosen the L1 C/A ceiling to 5 % (= 2 errors over 40 blocks) for low-C/N₀ work.
-       Tracking.get_bit_edge_or_secondary_code_tolerance(::GPSL1CA) = 0.05;
+julia> # Loosen the L1C-P ceiling to 5 % (= 90 errors over 1800 blocks) for low-C/N₀ work.
+       Tracking.get_bit_edge_or_secondary_code_tolerance(::GPSL1C_P) = 0.05;
 
-julia> Tracking.get_bit_edge_or_secondary_code_tolerance(GPSL1CA())  # after override
+julia> Tracking.get_bit_edge_or_secondary_code_tolerance(GPSL1C_P())  # after override
 0.05
 ```
 
-Each detector reads the trait at its call site and converts to an integer error budget via `floor(Int, tolerance × window_size)`, so the override picks up the next time `detect_bit_or_secondary_code_sync` runs — no `TrackState` rebuild needed. Galileo E1B and GPS L1C-D have trivially-true detectors and ignore the trait.
+The hard sweep reads the tolerance at its call site and converts to an integer error budget via `floor(Int, tolerance × window_size)`, so the override picks up the next time `detect_bit_or_secondary_code_sync` runs — no `TrackState` rebuild needed. It has no effect on the soft-detector signals (tune their confidence instead); the trivial detectors ignore both.
 
 ### Lifecycle of a `BitBuffer`
 
 Two distinct phases, separated by the `found::Bool` flag:
 
-1. **Pre-sync search** (`found = false`). Each completed integration shifts one bit (the sign of the prompt's real part) into `code_block_buffer::B`. `detect_bit_or_secondary_code_sync` is called on every shift; while it returns `SyncResult(false, ...)` the loop keeps integrating one primary code period at a time. The **bit-edge** detector (GPS L1 C/A) only matches at a true bit boundary, so the call that flips `found` lands exactly on the edge between two data symbols and reports `phase = 0`. The **secondary-code** detectors (GPS L5I, GPS L1C-P) instead lock as soon as one full secondary period has been buffered — at *any* alignment — and report the recovered `phase` (the upcoming integration's secondary chip); the integration cadence then re-aligns to the secondary-code boundary (see below).
+1. **Pre-sync search** (`found = false`). Each completed integration folds the prompt into the running state and the detector is called; while it returns `SyncResult(false, ...)` the loop keeps integrating one primary code period at a time. The **soft CFAR** detectors (GPS L1 C/A bit-edge; GPS L5I/L5Q and Galileo E1C/E5a-I/E5a-Q overlay) fold each prompt into `PhaseAccumulators` and lock only at the winning hypothesis's own boundary — so the call that flips `found` lands exactly on a data-bit / secondary-code-period boundary and reports `phase = 0` (the upcoming integration starts a fresh period). The **hard rotation-sweep** detector (GPS L1C-P) instead shifts each prompt sign into `code_block_buffer::B` and locks as soon as one full overlay period has been buffered — at *any* alignment — reporting the recovered `phase` (the upcoming integration's secondary chip); the integration cadence then re-aligns to that boundary (see below).
 
 2. **Post-sync accumulation** (`found = true`). The post-sync branch in `Tracking.buffer` ignores `code_block_buffer` and instead accumulates the complex prompt into `prompt_accumulator`. (Pilot signals such as GPS L1C-P carry no data bits, so for them this branch is a no-op — the buffer just retains `found` / `secondary_phase` / `polarity`.) Because each post-sync integration spans to the next secondary-code (data-bit) boundary, bit decoding stays aligned even when sync fired mid-period. Each integration also bumps `prompt_accumulator_integrated_code_blocks`. Once that counter reaches the per-signal "blocks per symbol" value above — `_calc_num_code_blocks_that_form_a_bit(signal) = get_code_frequency(signal) / (get_code_length(signal) * get_data_frequency(signal))` — one decoded bit is committed to `buffer::UInt128` and the accumulator resets to zero. For Galileo E1B and GPS L1C-D the counter is `1`, so one symbol commits per integration; for GPS L1 C/A it's `20`, so the loop counts 20 primary-code periods (≈ 20 × 1023 chips = 20460 chips of `code_phase` advance, modulo wrap) per data bit; for GPS L5I it's `10`. The polarity flag flips the accumulator's sign at commit time when the detector locked at negative polarity, so downstream consumers always see `1 = data symbol 0`.
 
@@ -95,7 +101,7 @@ Pilot signals (`get_data_frequency = 0 Hz`, e.g. GPS L1C-P) never enter the post
 
 ### Code-phase seeding from the secondary-code phase
 
-When a signal whose detector exposes a `secondary_phase` syncs — GPS L5I and GPS L1C-P — that phase is used to seed `TrackedSat.code_phase` so subsequent wrap-mod-[`current_code_wrap`](@ref) arithmetic gives the absolute position in the longest secondary-code cycle. The seeding follows a fallback chain: the synced signal with the largest `(primary × secondary)` code length wins.
+When a signal with a secondary code (`secondary_code_length > 1`) syncs — GPS L5I/L5Q, Galileo E1C/E5a-I/E5a-Q, or GPS L1C-P — its `secondary_phase` seeds `TrackedSat.code_phase` so subsequent wrap-mod-[`current_code_wrap`](@ref) arithmetic gives the absolute position in the longest secondary-code cycle. The seeding follows a fallback chain: the synced signal with the largest `(primary × secondary)` code length wins. For the soft-CFAR signals `secondary_phase` is always `0` (they fire on a period boundary, so the upcoming integration is at chip 0); for the hard-sweep L1C-P it is the recovered chip offset. Either way it is a multiple-of-primary snap into the correct secondary window.
 
 Signals with `secondary_code_length == 1` (bit-edge only, e.g. GPS L1 C/A) do **not** carry an explicit `secondary_phase` to snap — there's no per-PRN overlay to recover a chip offset from. Instead, their post-sync bit-edge alignment is captured by **two complementary mechanisms**:
 
