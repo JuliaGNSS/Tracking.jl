@@ -171,6 +171,24 @@ end
 # would have caught it. Single-threaded backend so the assertion is a clean
 # `== 0` (the threaded backend keeps a small Polyester residual — see above).
 #
+# The chunk lengths have to straddle the detector's own arming point, not just
+# `_buffer_find_bit`'s. `_detect_bit_edge_cfar` returns before scoring anything
+# while `num_blocks < 2 * blocks_per_bit` (40 for L1 C/A), so at 2 and 20 blocks
+# the statistic — and with it the threshold quantile — is never reached: a leak
+# in the *scoring* path is invisible there. That is exactly how an allocating
+# `SpecialFunctions.beta_inc_inv` in the Student-t threshold shipped past this
+# guard once. It allocated internal `zeros(31)` scratch inside the
+# incomplete-beta asymptotic expansions, ~600 B per code block — but only over
+# parts of the `dof = peak_bin_count - 1` range it was called at: around
+# `dof = 11`, then continuously from `dof ≈ 42` up.
+#
+# The measured call is the *second* one, so `measure_track_alloc(n)` sweeps
+# blocks `n+1 … 2n`, i.e. `dof ≈ n/20 … n/10`. The two lengths below are picked
+# to land in those two stretches: 200 blocks sweeps `dof ≈ 9…19` (catching the
+# `dof = 11` spike, ~8 kB) and 900 blocks sweeps `dof ≈ 44…89` (catching the
+# whole upper stretch, ~3.5 MB). Both were verified to fail against the
+# allocating implementation. They cost ~5 ms / ~40 ms.
+#
 # Gated to Julia ≥ 1.11. On 1.10 the compiler leaves a per-block allocation in
 # the pre-sync soft-bit path (~770 B/block — measured 2144 B at 2 blocks vs
 # 15968 B at 20; unrelated to the box, which was ~80 B/block) that 1.11+ elides,
@@ -200,6 +218,10 @@ if VERSION >= v"1.11"
         end
         @test measure_track_alloc(2) == 0
         @test measure_track_alloc(20) == 0
+        # Past `2 * blocks_per_bit`, so the CFAR statistic and its Student-t
+        # threshold are actually scored on every block (see above).
+        @test measure_track_alloc(200) == 0
+        @test measure_track_alloc(900) == 0
     end
 end
 
