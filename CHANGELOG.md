@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.2](https://github.com/JuliaGNSS/Tracking.jl/compare/v4.1.1...v4.1.2) (2026-07-27)
+
+
+### Performance Improvements
+
+* **bit-buffer:** allocation-free Student-t quantile via Hill's algorithm ([ba57474](https://github.com/JuliaGNSS/Tracking.jl/commit/ba574743dbb1e298680aefc91f734737f8d0c5d6)), closes [#208](https://github.com/JuliaGNSS/Tracking.jl/issues/208) [#208](https://github.com/JuliaGNSS/Tracking.jl/issues/208)
+
 ## [4.1.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v4.1.0...v4.1.1) (2026-07-24)
 
 
