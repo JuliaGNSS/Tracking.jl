@@ -1,5 +1,12 @@
 # Changelog
 
+# [4.3.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v4.2.0...v4.3.0) (2026-07-28)
+
+
+### Features
+
+* **track:** add VectorPLLAndDLL vector-tracking Doppler estimator ([79f25f8](https://github.com/JuliaGNSS/Tracking.jl/commit/79f25f8a6357ef57db4ba39606534fa72f1be216))
+
 # [4.2.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v4.1.2...v4.2.0) (2026-07-28)
 
 
