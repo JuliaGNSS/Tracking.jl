@@ -1,5 +1,12 @@
 # Changelog
 
+# [4.2.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v4.1.2...v4.2.0) (2026-07-28)
+
+
+### Features
+
+* **track:** soft-decision CFAR secondary-code detection ([59f2d53](https://github.com/JuliaGNSS/Tracking.jl/commit/59f2d53a9ddea99ec6c01a0e634ff3e9066b5695)), closes [#149](https://github.com/JuliaGNSS/Tracking.jl/issues/149)
+
 ## [4.1.2](https://github.com/JuliaGNSS/Tracking.jl/compare/v4.1.1...v4.1.2) (2026-07-27)
 
 
