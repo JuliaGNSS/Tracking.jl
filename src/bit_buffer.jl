@@ -1085,44 +1085,124 @@ function buffer(
     # for code-phase anchoring and longer coherent integration).
     num_code_blocks_that_form_a_bit == 0 && return bit_buffer
 
-    prompt_accumulator = bit_buffer.prompt_accumulator + prompt
-    prompt_accumulator_integrated_code_blocks =
-        bit_buffer.prompt_accumulator_integrated_code_blocks + integrated_code_blocks
+    prompt_accumulator, prompt_accumulator_integrated_code_blocks = _complete_bits!(
+        bit_buffer.soft_bits,
+        bit_buffer.prompt_accumulator + prompt,
+        bit_buffer.prompt_accumulator_integrated_code_blocks + integrated_code_blocks,
+        num_code_blocks_that_form_a_bit,
+        bit_buffer.polarity,
+    )
+    return BitBuffer{B}(
+        bit_buffer.code_block_buffer,
+        bit_buffer.code_block_buffer_length,
+        true,
+        bit_buffer.secondary_phase,
+        bit_buffer.polarity,
+        prompt_accumulator,
+        prompt_accumulator_integrated_code_blocks,
+        bit_buffer.soft_bits,
+        bit_buffer.phase_acc,
+    )
+end
 
-    if prompt_accumulator_integrated_code_blocks == num_code_blocks_that_form_a_bit
+# Emit every bit the accumulated block count has completed, and return what is
+# left over. Returns `(accumulator, blocks)` for the still-open bit.
+#
+# The loop is a `while`, not an `if count == blocks_per_bit`, because the block
+# count must never be able to *step over* the boundary: once it does, an
+# equality test never fires again and the satellite stops producing navigation
+# bits for the rest of its lock. The only cost of the general form is that a
+# record longer than one bit — or a stream gap credited through
+# [`advance_bit_clock`](@ref) — completes as many bits as it spans instead of
+# derailing the clock.
+@inline function _complete_bits!(
+    soft_bits::Vector{Float32},
+    accumulator,
+    blocks::Int,
+    num_code_blocks_that_form_a_bit::Int,
+    polarity,
+)
+    while blocks >= num_code_blocks_that_form_a_bit
         # Flip the decoded bit if the detector locked at negative polarity:
         # the prompt accumulator's real-part sign is then inverted relative
         # to the data symbol's "0/1" convention.
-        bit_acc =
-            bit_buffer.polarity < 0 ? -real(prompt_accumulator) : real(prompt_accumulator)
+        bit_acc = polarity < 0 ? -real(accumulator) : real(accumulator)
         # The polarity-corrected accumulation IS the bit: its sign is the hard
         # decision, its magnitude the confidence. The vector grows without a
         # ceiling — the caller decides how often to read bits out and `reset`.
-        push!(bit_buffer.soft_bits, Float32(bit_acc))
+        push!(soft_bits, Float32(bit_acc))
+        accumulator = zero(accumulator)
+        blocks -= num_code_blocks_that_form_a_bit
+    end
+    accumulator, blocks
+end
+
+"""
+$(SIGNATURES)
+
+Advance the bit clock across `num_code_blocks` primary-code periods for which no
+usable prompt exists, and return the updated buffer.
+
+A satellite's navigation bit boundary is defined by *elapsed code blocks*, and
+[`buffer`](@ref) can only count the blocks it is handed. Anywhere the correlator
+record stream can lose a record — an FPGA correlator whose dumps are drained
+over a lossy transport, a gated or gapped input — the blocks a lost record
+covered would otherwise never be counted, and the bit boundary would move
+permanently by that much. Tracking, C/N0 and bit sync all stay healthy while
+that happens; only the decoder notices, and only as "a valid preamble never
+appears again". Crediting the gap keeps the accumulation on the data-bit grid at
+the cost of the energy the missing blocks would have contributed: the bit
+straddling the gap comes out weak (and may well be wrong), but the ones after it
+are aligned, so the decoder loses a subframe instead of the satellite.
+
+Before sync the credit goes to the search window and the detector's block index
+instead, for the same reason: the CFAR hypotheses are indexed by the running
+block count, so skipping blocks silently rotates the bit-edge phase estimate.
+"""
+function advance_bit_clock(
+    signal::AbstractGNSSSignal,
+    bit_buffer::BitBuffer{B},
+    num_code_blocks::Integer,
+) where {B<:Unsigned}
+    num_code_blocks <= 0 && return bit_buffer
+    if !bit_buffer.found
+        # Shift the missing blocks through the hard-decision search window as
+        # zeros and advance its length, so both the sliding-window search and
+        # the CFAR phase index stay on the true block grid. `<<` past the
+        # window width saturates to zero, which is what a gap that long means.
         return BitBuffer{B}(
-            bit_buffer.code_block_buffer,
-            bit_buffer.code_block_buffer_length,
-            true,
-            bit_buffer.secondary_phase,
-            bit_buffer.polarity,
-            zero(prompt_accumulator),
+            bit_buffer.code_block_buffer << num_code_blocks,
+            bit_buffer.code_block_buffer_length + Int(num_code_blocks),
+            false,
             0,
-            bit_buffer.soft_bits,
-            bit_buffer.phase_acc,
-        )
-    else
-        return BitBuffer{B}(
-            bit_buffer.code_block_buffer,
-            bit_buffer.code_block_buffer_length,
-            true,
-            bit_buffer.secondary_phase,
-            bit_buffer.polarity,
-            prompt_accumulator,
-            prompt_accumulator_integrated_code_blocks,
+            Int8(0),
+            bit_buffer.prompt_accumulator,
+            bit_buffer.prompt_accumulator_integrated_code_blocks,
             bit_buffer.soft_bits,
             bit_buffer.phase_acc,
         )
     end
+    num_code_blocks_that_form_a_bit = _calc_num_code_blocks_that_form_a_bit(signal)
+    # Pilots decode nothing, so there is no bit clock to keep.
+    num_code_blocks_that_form_a_bit == 0 && return bit_buffer
+    prompt_accumulator, blocks = _complete_bits!(
+        bit_buffer.soft_bits,
+        bit_buffer.prompt_accumulator,
+        bit_buffer.prompt_accumulator_integrated_code_blocks + Int(num_code_blocks),
+        num_code_blocks_that_form_a_bit,
+        bit_buffer.polarity,
+    )
+    BitBuffer{B}(
+        bit_buffer.code_block_buffer,
+        bit_buffer.code_block_buffer_length,
+        true,
+        bit_buffer.secondary_phase,
+        bit_buffer.polarity,
+        prompt_accumulator,
+        blocks,
+        bit_buffer.soft_bits,
+        bit_buffer.phase_acc,
+    )
 end
 
 function _buffer_find_bit(

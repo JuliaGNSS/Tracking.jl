@@ -467,6 +467,13 @@ end
 # the one point both fold paths pass through: a guard further downstream cannot
 # distinguish "no signal" from "bad record", and one further upstream would have
 # to be repeated by every correlator backend.
+#
+# Skipped for the *estimators* — but not for the bit clock. Two of the three
+# still say "this many samples of signal time went by", and the navigation bit
+# boundary is defined by elapsed code blocks, so dropping them outright would
+# move the boundary permanently (see [`advance_bit_clock`](@ref)). A producer
+# that has lost records can therefore report the hole as a zeroed record
+# spanning it, and the fold keeps the bit stream on its grid.
 _is_degenerate_record(output::CorrelatorOutput) =
     output.integrated_samples == 0 ||
     iszero(get_prompt(output.correlator)) ||
@@ -476,6 +483,27 @@ _is_degenerate_record(output::CorrelatorOutput) =
 # static vectors for several.
 _all_finite(x::Number) = isfinite(x)
 _all_finite(x) = all(_all_finite, x)
+
+# Credit a degenerate record's elapsed code blocks to the bit clock and nothing
+# else. `integrated_samples == 0` is the one case with no time to credit.
+@inline function _skip_record(
+    tracked_signal::TrackedSignal,
+    output::CorrelatorOutput,
+    sampling_frequency,
+)
+    output.integrated_samples == 0 && return tracked_signal
+    signal = tracked_signal.signal
+    num_code_blocks = round(
+        Int,
+        output.integrated_samples * get_code_frequency(signal) /
+        (get_code_length(signal) * sampling_frequency),
+    )
+    num_code_blocks == 0 && return tracked_signal
+    TrackedSignal(
+        tracked_signal;
+        bit_buffer = advance_bit_clock(signal, tracked_signal.bit_buffer, num_code_blocks),
+    )
+end
 
 # Process the estimator-driver signal (signals[1]): fold over every
 # `CorrelatorOutput` collected during this chunk, in order — running the PLL/DLL
@@ -506,8 +534,12 @@ _all_finite(x) = all(_all_finite, x)
     @inbounds for k in eachindex(outputs)
         output = outputs[k]
         # Nothing to learn from a degenerate record, and folding one poisons
-        # both loop filters with NaN (see `_is_degenerate_record`).
-        _is_degenerate_record(output) && continue
+        # both loop filters with NaN (see `_is_degenerate_record`) — but the
+        # time it spans still has to reach the bit clock.
+        if _is_degenerate_record(output)
+            ts = _skip_record(ts, output, sampling_frequency)
+            continue
+        end
         # FLL needs the previous record's filtered prompt; the first record of
         # the chunk chains from the sat's carried-over
         # `last_fully_integrated_filtered_prompt` (the previous chunk's last).
@@ -618,8 +650,11 @@ end
     ts = tracked_signal
     found_before_fold = has_bit_or_secondary_code_been_found(ts.bit_buffer)
     @inbounds for k in eachindex(outputs)
-        # Degenerate records — same skip as the driver fold.
-        _is_degenerate_record(outputs[k]) && continue
+        # Degenerate records — same skip as the driver fold, bit clock included.
+        if _is_degenerate_record(outputs[k])
+            ts = _skip_record(ts, outputs[k], sampling_frequency)
+            continue
+        end
         # Same rule as the driver fold: records after a sync detected earlier
         # in this fold stay out of the bit buffer.
         synced_earlier_in_fold =

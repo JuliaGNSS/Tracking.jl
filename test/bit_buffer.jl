@@ -11,6 +11,7 @@ using Tracking:
     get_bits,
     get_soft_bits,
     has_bit_or_secondary_code_been_found,
+    advance_bit_clock,
     SyncResult,
     PhaseAccumulators,
     _norm_quantile,
@@ -700,6 +701,87 @@ end
         @test all(>(0), get_soft_bits(bit_buffer))
         @test get_bits(bit_buffer) == ~UInt128(0)
     end
+end
+
+
+@testset "advance_bit_clock keeps the bit boundary on the code-block grid" begin
+    signal = GPSL1CA()
+
+    @testset "Credited blocks complete bits with the energy that did arrive" begin
+        # 19 real blocks, then one block for which no record exists. The bit
+        # must still complete on the 20th block — a bit boundary is defined by
+        # elapsed code blocks, not by how many records happened to arrive.
+        bit_buffer = BitBuffer(UInt128(0), 0, true, 0, 0, complex(0.0, 0.0), 0)
+        for _ = 1:19
+            bit_buffer = buffer(signal, 1, bit_buffer, 1, 1.0 + 0.0im)
+        end
+        @test length(bit_buffer) == 0
+        bit_buffer = advance_bit_clock(signal, bit_buffer, 1)
+        @test length(bit_buffer) == 1
+        # The missing block contributed no energy, so the bit is 19/20 strong —
+        # weaker, but on the grid and with the right sign.
+        @test get_soft_bits(bit_buffer)[1] ≈ 19.0f0
+        @test bit_buffer.prompt_accumulator_integrated_code_blocks == 0
+
+        # And the next bit starts clean, so the stream stays aligned.
+        for _ = 1:20
+            bit_buffer = buffer(signal, 1, bit_buffer, 1, 1.0 + 0.0im)
+        end
+        @test length(bit_buffer) == 2
+        @test get_soft_bits(bit_buffer)[2] ≈ 20.0f0
+    end
+
+    @testset "A gap longer than a bit completes every bit it spans" begin
+        bit_buffer = BitBuffer(UInt128(0), 0, true, 0, 0, complex(0.0, 0.0), 0)
+        bit_buffer = advance_bit_clock(signal, bit_buffer, 45)
+        # 45 blocks = two whole bits plus five: two (empty) bits emitted, five
+        # blocks carried. Emitting them keeps the 20 ms grid; swallowing them
+        # would move it by 45 blocks for the rest of the lock.
+        @test length(bit_buffer) == 2
+        @test all(iszero, get_soft_bits(bit_buffer))
+        @test bit_buffer.prompt_accumulator_integrated_code_blocks == 5
+    end
+
+    @testset "Before sync the credit goes to the search window" begin
+        # The CFAR hypotheses are indexed by the running block count, so a gap
+        # has to advance that count or the bit-edge phase estimate rotates.
+        bit_buffer = BitBuffer()
+        for _ = 1:7
+            bit_buffer = buffer(signal, 1, bit_buffer, 1, 1.0 + 0.0im)
+        end
+        len_before = bit_buffer.code_block_buffer_length
+        bit_buffer = advance_bit_clock(signal, bit_buffer, 3)
+        @test bit_buffer.code_block_buffer_length == len_before + 3
+        @test !has_bit_or_secondary_code_been_found(bit_buffer)
+        @test isempty(get_soft_bits(bit_buffer))
+    end
+
+    @testset "Nothing to credit is a no-op" begin
+        bit_buffer = BitBuffer(UInt128(0), 0, true, 0, 0, complex(1.0, 0.0), 3)
+        @test advance_bit_clock(signal, bit_buffer, 0) === bit_buffer
+        @test advance_bit_clock(signal, bit_buffer, -1) === bit_buffer
+    end
+end
+
+@testset "An overshooting block count cannot stall the bit clock" begin
+    # The completion test is `>=`, not `==`: a record covering more blocks than
+    # the open bit has left must complete it (and carry the rest) rather than
+    # step over the boundary, after which an equality test would never fire
+    # again and the satellite would stop producing bits for the rest of its
+    # lock.
+    signal = GPSL1CA()
+    bit_buffer = BitBuffer(UInt128(0), 0, true, 0, 0, complex(0.0, 0.0), 0)
+    for _ = 1:19
+        bit_buffer = buffer(signal, 1, bit_buffer, 1, 1.0 + 0.0im)
+    end
+    bit_buffer = buffer(signal, 1, bit_buffer, 3, 1.0 + 0.0im)
+    @test length(bit_buffer) == 1
+    @test bit_buffer.prompt_accumulator_integrated_code_blocks == 2
+    # Still producing one bit per 20 blocks afterwards.
+    for _ = 1:18
+        bit_buffer = buffer(signal, 1, bit_buffer, 1, 1.0 + 0.0im)
+    end
+    @test length(bit_buffer) == 2
 end
 
 end
