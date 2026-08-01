@@ -446,6 +446,8 @@ end
         cn0_estimator,
         post_corr_filter,
         last_fully_integrated_correlator = output.correlator,
+        # What the CN0 estimator's newest prompt was integrated over.
+        last_fully_integrated_num_code_blocks = integrated_code_blocks,
     )
     return new_signal, filtered_correlator, integrated_code_blocks
 end

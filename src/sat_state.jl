@@ -37,6 +37,16 @@ struct TrackedSignal{
     # `calc_num_code_blocks_to_integrate`). Defaults to 1; change it with
     # [`set_preferred_num_code_blocks_to_integrate!`](@ref).
     preferred_num_code_blocks_to_integrate::Int
+    # Primary-code blocks the most recently folded record actually spanned. The
+    # CN0 estimator buffers *sample-normalized* prompts, so a record covering N
+    # blocks arrives with N times the SNR of a one-block record; without knowing
+    # N, `estimate_cn0` would divide that SNR by one code period and over-report
+    # C/N₀ by 10·log₁₀(N) — 13 dB at a full GPS L1 C/A bit. Set by
+    # `_apply_correlator_output` from the record's own sample count, so it is
+    # right whether the records were lengthened by the correlate step
+    # (`preferred_num_code_blocks_to_integrate`) or by an external producer
+    # summing dumps. Starts at 1, the pre-sync length.
+    last_fully_integrated_num_code_blocks::Int
 end
 
 # Reject a preferred coherent-integration length that cannot work for this
@@ -121,6 +131,7 @@ function TrackedSignal(
         ComplexF64[],
         correlator_outputs,
         preferred_num_code_blocks_to_integrate,
+        1,
     )
 end
 
@@ -142,6 +153,7 @@ function TrackedSignal(
     filtered_prompts::Maybe{Vector{ComplexF64}} = nothing,
     correlator_outputs::Maybe{Vector{CorrelatorOutput{C}}} = nothing,
     preferred_num_code_blocks_to_integrate = nothing,
+    last_fully_integrated_num_code_blocks = nothing,
 ) where {
     Sig<:AbstractGNSSSignal,
     B<:Unsigned,
@@ -168,6 +180,8 @@ function TrackedSignal(
         isnothing(correlator_outputs) ? t.correlator_outputs : correlator_outputs,
         isnothing(preferred_num_code_blocks_to_integrate) ?
         t.preferred_num_code_blocks_to_integrate : preferred_num_code_blocks_to_integrate,
+        isnothing(last_fully_integrated_num_code_blocks) ?
+        t.last_fully_integrated_num_code_blocks : last_fully_integrated_num_code_blocks,
     )
 end
 
@@ -1080,9 +1094,14 @@ get_sat_state(sats::Dictionary{<:Any,<:TrackedSat}) = only(sats)
 
 function estimate_cn0(tsig::TrackedSignal)
     signal = get_signal(tsig)
+    # The estimator's buffered prompts are sample-normalized, so their SNR is
+    # that of a whole record — the integration time it must be divided by is the
+    # record's, not one code period. See
+    # `TrackedSignal.last_fully_integrated_num_code_blocks`.
     estimate_cn0(
         get_cn0_estimator(tsig),
-        get_code_length(signal) / get_code_frequency(signal),
+        tsig.last_fully_integrated_num_code_blocks * get_code_length(signal) /
+        get_code_frequency(signal),
     )
 end
 
