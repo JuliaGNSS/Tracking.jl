@@ -271,6 +271,14 @@ function aid_dopplers(
     carrier_freq_update,
     code_freq_update,
 )
+    # TEMPORARY DEBUG (hwfix): identify the source of NaN dopplers on live data.
+    if !isfinite(carrier_freq_update) || !isfinite(code_freq_update)
+        error(
+            "NaN loop update: carrier_freq_update=$carrier_freq_update " *
+            "code_freq_update=$code_freq_update init_carrier=$init_carrier_doppler " *
+            "init_code=$init_code_doppler",
+        )
+    end
     carrier_doppler = carrier_freq_update
     code_doppler =
         code_freq_update + carrier_doppler * get_code_center_frequency_ratio(signal)
@@ -478,6 +486,13 @@ end
     found_before_fold = has_bit_or_secondary_code_been_found(ts.bit_buffer)
     @inbounds for k in eachindex(outputs)
         output = outputs[k]
+        # A degenerate record poisons the loop with NaN discriminators:
+        # zero-length records normalize to 0/0, and all-zero accumulators (a
+        # stretch of zeroed input samples — a gated RX datapath or a recording
+        # gap) put atan(0/0) into both the PLL and DLL discriminators. Neither
+        # carries any information; skip them.
+        output.integrated_samples == 0 && continue
+        iszero(get_prompt(output.correlator)) && continue
         # FLL needs the previous record's filtered prompt; the first record of
         # the chunk chains from the sat's carried-over
         # `last_fully_integrated_filtered_prompt` (the previous chunk's last).
@@ -500,6 +515,17 @@ end
             driver_carrier_phase;
             skip_bit_buffer = synced_earlier_in_fold,
         )
+        # TEMPORARY DEBUG (hwfix): find where NaN enters the loop inputs.
+        let p = get_prompt(filtered_correlator)
+            if !isfinite(real(p)) || !isfinite(imag(p))
+                error(
+                    "NaN prompt: raw_acc=$(get_accumulators(output.correlator)) " *
+                    "n=$(output.integrated_samples) prev=$previous_prompt " *
+                    "code_phase=$(sat.code_phase) carrier_phase=$(sat.carrier_phase) " *
+                    "synced_earlier=$synced_earlier_in_fold k=$k of $(length(outputs))",
+                )
+            end
+        end
 
         # The configured bandwidths are referenced to a one-primary-code-period
         # integration. Coherently integrating N periods grows the loop update
@@ -589,6 +615,10 @@ end
     ts = tracked_signal
     found_before_fold = has_bit_or_secondary_code_been_found(ts.bit_buffer)
     @inbounds for k in eachindex(outputs)
+        # Degenerate records (zero-length or all-zero) — same skip as the
+        # driver fold.
+        outputs[k].integrated_samples == 0 && continue
+        iszero(get_prompt(outputs[k].correlator)) && continue
         # Same rule as the driver fold: records after a sync detected earlier
         # in this fold stay out of the bit buffer.
         synced_earlier_in_fold =
