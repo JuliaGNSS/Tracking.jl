@@ -271,14 +271,6 @@ function aid_dopplers(
     carrier_freq_update,
     code_freq_update,
 )
-    # TEMPORARY DEBUG (hwfix): identify the source of NaN dopplers on live data.
-    if !isfinite(carrier_freq_update) || !isfinite(code_freq_update)
-        error(
-            "NaN loop update: carrier_freq_update=$carrier_freq_update " *
-            "code_freq_update=$code_freq_update init_carrier=$init_carrier_doppler " *
-            "init_code=$init_code_doppler",
-        )
-    end
     carrier_doppler = carrier_freq_update
     code_doppler =
         code_freq_update + carrier_doppler * get_code_center_frequency_ratio(signal)
@@ -458,6 +450,33 @@ end
     return new_signal, filtered_correlator, integrated_code_blocks
 end
 
+# Is this record unusable — i.e. would folding it put a NaN into the loop
+# filters rather than information?
+#
+#   * `integrated_samples == 0` — the normalisation is 0/0.
+#   * an all-zero prompt — a stretch of zeroed input samples (a gated RX
+#     datapath, a recording gap, a device dumping an empty integration) puts
+#     `atan(0/0)` into both the PLL and the DLL discriminator.
+#   * a non-finite accumulator — nothing downstream can recover from it, and a
+#     single NaN prompt is enough to drive the sat's Doppler to NaN, from where
+#     the next correlate phase throws `InexactError` and takes the whole
+#     receiver task with it.
+#
+# None of the three carries any information about the signal, so they are
+# skipped rather than folded. This is deliberately checked on the *record*, at
+# the one point both fold paths pass through: a guard further downstream cannot
+# distinguish "no signal" from "bad record", and one further upstream would have
+# to be repeated by every correlator backend.
+_is_degenerate_record(output::CorrelatorOutput) =
+    output.integrated_samples == 0 ||
+    iszero(get_prompt(output.correlator)) ||
+    !_all_finite(get_accumulators(output.correlator))
+
+# `isfinite` over an accumulator set: complex scalars for one antenna, nested
+# static vectors for several.
+_all_finite(x::Number) = isfinite(x)
+_all_finite(x) = all(_all_finite, x)
+
 # Process the estimator-driver signal (signals[1]): fold over every
 # `CorrelatorOutput` collected during this chunk, in order — running the PLL/DLL
 # plus prompt filter / CN0 / bit-buffer update per record and threading the loop
@@ -486,13 +505,9 @@ end
     found_before_fold = has_bit_or_secondary_code_been_found(ts.bit_buffer)
     @inbounds for k in eachindex(outputs)
         output = outputs[k]
-        # A degenerate record poisons the loop with NaN discriminators:
-        # zero-length records normalize to 0/0, and all-zero accumulators (a
-        # stretch of zeroed input samples — a gated RX datapath or a recording
-        # gap) put atan(0/0) into both the PLL and DLL discriminators. Neither
-        # carries any information; skip them.
-        output.integrated_samples == 0 && continue
-        iszero(get_prompt(output.correlator)) && continue
+        # Nothing to learn from a degenerate record, and folding one poisons
+        # both loop filters with NaN (see `_is_degenerate_record`).
+        _is_degenerate_record(output) && continue
         # FLL needs the previous record's filtered prompt; the first record of
         # the chunk chains from the sat's carried-over
         # `last_fully_integrated_filtered_prompt` (the previous chunk's last).
@@ -515,18 +530,6 @@ end
             driver_carrier_phase;
             skip_bit_buffer = synced_earlier_in_fold,
         )
-        # TEMPORARY DEBUG (hwfix): find where NaN enters the loop inputs.
-        let p = get_prompt(filtered_correlator)
-            if !isfinite(real(p)) || !isfinite(imag(p))
-                error(
-                    "NaN prompt: raw_acc=$(get_accumulators(output.correlator)) " *
-                    "n=$(output.integrated_samples) prev=$previous_prompt " *
-                    "code_phase=$(sat.code_phase) carrier_phase=$(sat.carrier_phase) " *
-                    "synced_earlier=$synced_earlier_in_fold k=$k of $(length(outputs))",
-                )
-            end
-        end
-
         # The configured bandwidths are referenced to a one-primary-code-period
         # integration. Coherently integrating N periods grows the loop update
         # interval by that factor, so scale the effective bandwidth by 1/N to
@@ -615,10 +618,8 @@ end
     ts = tracked_signal
     found_before_fold = has_bit_or_secondary_code_been_found(ts.bit_buffer)
     @inbounds for k in eachindex(outputs)
-        # Degenerate records (zero-length or all-zero) — same skip as the
-        # driver fold.
-        outputs[k].integrated_samples == 0 && continue
-        iszero(get_prompt(outputs[k].correlator)) && continue
+        # Degenerate records — same skip as the driver fold.
+        _is_degenerate_record(outputs[k]) && continue
         # Same rule as the driver fold: records after a sync detected earlier
         # in this fold stay out of the bit buffer.
         synced_earlier_in_fold =

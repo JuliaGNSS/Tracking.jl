@@ -20,14 +20,6 @@ function calc_num_code_blocks_to_integrate(
     preferred_num_code_blocks::Int,
     secondary_code_or_bit_found::Bool,
 )
-    # HWFIX: keep coherent integration at ONE code block always, including
-    # post-bit-sync. The hardware correlator dumps fixed 1 ms records and the
-    # post-sync integration extension interacts badly with the dump-feedback
-    # latency (accelerating carrier-loop divergence observed live starting at
-    # bit sync). The bit buffer still accumulates a full data bit of prompts
-    # for the decoder, which is sufficient at the CN0s in play.
-    return 1
-    #= disabled post-sync extension:
     secondary_code_or_bit_found || return 1
     data_freq = get_data_frequency(signal)
     # One full symbol = one data bit for data-bearing signals, or one
@@ -41,7 +33,6 @@ function calc_num_code_blocks_to_integrate(
         num_code_blocks -= 1
     end
     num_code_blocks
-    =#
 end
 
 """

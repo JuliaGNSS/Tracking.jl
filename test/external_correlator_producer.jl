@@ -122,6 +122,48 @@ end
     @test isempty(get_correlator_outputs(ts))
 end
 
+@testset "degenerate records are skipped instead of poisoning the loop" begin
+    # An external producer (an FPGA correlator, a recording with a gap) can
+    # deliver records that carry no information: a zero-length integration, an
+    # integration over zeroed samples, or — with a broken device or a NaN in the
+    # input stream — a non-finite accumulator. Folding any of them puts NaN into
+    # both discriminators, from where the sat's Doppler never recovers and the
+    # next correlate phase throws `InexactError`. They must be skipped.
+    fs = 4e6Hz
+    corr = get_default_correlator(GPSL1CA(), NumAnts(1))
+    shift = corr.preferred_early_late_to_prompt_code_shift
+    epl(l, p, e) = EarlyPromptLateCorrelator(SVector(complex(l), complex(p), complex(e)), shift)
+    period = 4000
+
+    for (name, output) in (
+        ("zero-length", CorrelatorOutput(epl(1500.0, 3000.0, 1500.0), 0, period - 1)),
+        ("all-zero", CorrelatorOutput(epl(0.0, 0.0, 0.0), period, period - 1)),
+        ("NaN prompt", CorrelatorOutput(epl(1500.0, NaN, 1500.0), period, period - 1)),
+        ("NaN early", CorrelatorOutput(epl(1500.0, 3000.0, NaN), period, period - 1)),
+    )
+        ts = TrackState(; signal = GPSL1CA())
+        ts = Tracking.add_satellite!(ts; prn = 3, code_phase = 0.0, carrier_doppler = 50.0Hz)
+        append_correlator_output!(ts, output, 3)
+        ts = estimate_dopplers_and_filter_prompt!(ts, (L1 = fs,))
+        # Consumed (the buffer is always cleared) but not folded: the Doppler
+        # holds at its seed and stays finite.
+        @test isempty(get_correlator_outputs(ts, 3))
+        @test get_carrier_doppler(ts, 3) == 50.0Hz
+        @test isfinite(get_code_doppler(ts, 3) / Hz)
+        @test iszero(get_last_fully_integrated_filtered_prompt(ts, 3))
+
+        # A good record right after a degenerate one still closes the loop.
+        append_correlator_output!(
+            ts,
+            CorrelatorOutput(epl(1500.0, 3000.0, 1500.0), period, 2 * period - 1),
+            3,
+        )
+        ts = estimate_dopplers_and_filter_prompt!(ts, (L1 = fs,))
+        @test isfinite(get_carrier_doppler(ts, 3) / Hz)
+        @test !iszero(get_last_fully_integrated_filtered_prompt(ts, 3))
+    end
+end
+
 @testset "external-producer standalone estimate (no downconvert_and_correlate!)" begin
     # Emulate an FPGA: build outputs by hand, append per signal in sample_index
     # order, then fold them through the estimator with only a per-band rate.
