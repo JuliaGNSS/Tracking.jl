@@ -846,7 +846,7 @@ end
 @inline function get_bits(bit_buffer::BitBuffer)
     soft_bits = bit_buffer.soft_bits
     bits = zero(UInt128)
-    @inbounds for k = max(1, Base.length(soft_bits) - 127):Base.length(soft_bits)
+    @inbounds for k = max(1, Base.length(soft_bits)-127):Base.length(soft_bits)
         bits = (bits << 1) + (soft_bits[k] > 0)
     end
     bits
