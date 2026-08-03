@@ -748,12 +748,12 @@ NH10 period for GPS L5I, 40 primary blocks for GPS L1 C/A, 1800 chips
 for the GPS L1C-P overlay, etc.). After sync the field is dead state and
 the decoded navigation bits accumulate as **soft bits** in `soft_bits`
 (one polarity-corrected coherent prompt sum per bit, sign = the hard
-bit). Soft bits are the primary product — decoders take them directly
+bit). Soft bits are the only bit store — decoders take them directly
 (soft-decision Viterbi for Galileo E1B, LDPC for GPS L1C-D, confidence
-weighting everywhere else); the packed hard bits of [`get_bits`](@ref)
-are derived from their signs on demand. Because the store is a growable
-vector rather than the fixed `UInt128` it used to be, there is no limit
-on how many bits may accumulate between resets.
+weighting everywhere else), and a hard decision is just `soft_bit > 0`.
+Because the store is a growable vector rather than the fixed `UInt128`
+it used to be, there is no limit on how many bits may accumulate between
+resets.
 
 The `phase_acc` field holds the incremental per-hypothesis bin statistics
 ([`PhaseAccumulators`](@ref)) consumed by whichever soft CFAR sync detector the
@@ -809,23 +809,19 @@ function BitBuffer{B}() where {B<:Unsigned}
     )
 end
 
-# Convenience outer constructor matching the legacy 7-arg form (no phase /
-# polarity arguments — assumed zero). Used by test code that builds a
-# `BitBuffer` from raw integer / Complex{Int} literals. The hard bits are
-# stored as synthesized ±1 soft bits, so `get_bits`/`length` reproduce the
-# given `buffer`/`length` exactly.
+# Convenience outer constructor for the pre-sync / post-sync search state
+# without the phase / polarity arguments (assumed zero). Used by test and
+# benchmark code that builds a `BitBuffer` from raw integer / Complex{Int}
+# literals. `soft_bits` seeds the decoded-bit store; it is aliased, not
+# copied, so the caller can observe in-place pushes.
 function BitBuffer(
     code_block_buffer::B,
     code_block_buffer_length::Integer,
     found::Bool,
-    buffer::Integer,
-    length::Integer,
     prompt_accumulator::Complex,
     prompt_accumulator_integrated_code_blocks::Integer,
+    soft_bits::Vector{Float32} = Float32[],
 ) where {B<:Unsigned}
-    soft_bits = Float32[
-        (UInt128(buffer) >> (length - k)) & 1 == 1 ? 1.0f0 : -1.0f0 for k = 1:length
-    ]
     BitBuffer{B}(
         code_block_buffer,
         Int(code_block_buffer_length),
@@ -839,31 +835,19 @@ function BitBuffer(
     )
 end
 
-# The packed hard bits, derived from the soft bits' signs (newest bit in the
-# least-significant position, matching the historical shift-register layout).
-# Only the newest 128 bits fit the `UInt128`; consumers that can want the
-# older history should read `get_soft_bits`, which is unbounded.
-@inline function get_bits(bit_buffer::BitBuffer)
-    soft_bits = bit_buffer.soft_bits
-    bits = zero(UInt128)
-    @inbounds for k = max(1, Base.length(soft_bits)-127):Base.length(soft_bits)
-        bits = (bits << 1) + (soft_bits[k] > 0)
-    end
-    bits
-end
 @inline length(bit_buffer::BitBuffer) = Base.length(bit_buffer.soft_bits)
 @inline has_bit_or_secondary_code_been_found(bit_buffer::BitBuffer) = bit_buffer.found
 
 # Get the soft bits, i.e. the accumulated (summed) filtered prompt of each
-# completed bit. The sign of each soft bit corresponds to the respective hard
-# bit returned by `get_bits`. Bits recovered from the pre-sync sign window at
+# completed bit. This is the only decoded-bit store; a hard decision is the
+# sign, `soft_bit > 0`. Bits recovered from the pre-sync sign window at
 # bit-sync time only have ±1 prompt signs available; their sign-vote sum is
 # scaled by the sync-time prompt magnitude so the magnitudes stay comparable
 # (as reliabilities) with the coherently accumulated post-sync bits. The
-# buffer is reset to length 0 at the start of each `track` call, mirroring the
-# hard bit buffer. Kept as a plain comment (not a docstring) to match the
-# sibling accessors `get_bits` / `get_num_bits`, which `checkdocs = :exports`
-# would otherwise require to appear in the manual.
+# buffer is reset to length 0 at the start of each `track` call. Kept as a
+# plain comment (not a docstring) to match the sibling accessor
+# `get_num_bits`, which `checkdocs = :exports` would otherwise require to
+# appear in the manual.
 @inline get_soft_bits(bit_buffer::BitBuffer) = bit_buffer.soft_bits
 
 """
