@@ -20,6 +20,7 @@ using Tracking:
     TrackState,
     add_satellite!,
     get_cn0_estimator,
+    get_last_fully_integrated_integration_time,
     track
 
 @testset "Moments CN0 estimator" begin
@@ -188,6 +189,28 @@ end
     same_prompts_1 = linear_cn0(cn0_at(1, one_block))
     same_prompts_20 = linear_cn0(cn0_at(20, one_block))
     @test 10 * log10(same_prompts_1 / same_prompts_20) ≈ 10 * log10(20) atol = 0.01
+
+    # `estimate_cn0` and `get_last_fully_integrated_integration_time` are the two
+    # halves of one contract: C/N₀ is per-Hz and says nothing on its own about
+    # whether a record's peak clears the noise. Their product does — it is the
+    # post-integration SNR — so a consumer gating on detectability multiplies
+    # them. Same buffered prompts at 1 and 20 blocks: C/N₀ moves by 10·log₁₀(20)
+    # and T moves by 20, so the SNR is unchanged.
+    function snr_at(num_blocks, prompts)
+        tsig = Tracking.TrackedSignal(gpsl1)
+        estimator = get_cn0_estimator(tsig)
+        for p in prompts
+            estimator = update(estimator, p)
+        end
+        tsig = Tracking.TrackedSignal(
+            tsig;
+            cn0_estimator = estimator,
+            last_fully_integrated_num_code_blocks = num_blocks,
+        )
+        cn0 = ustrip(Hz, Unitful.linear(estimate_cn0(tsig)))
+        cn0 * ustrip(Unitful.s, get_last_fully_integrated_integration_time(tsig))
+    end
+    @test snr_at(20, one_block) ≈ snr_at(1, one_block) rtol = 1e-9
 end
 
 end

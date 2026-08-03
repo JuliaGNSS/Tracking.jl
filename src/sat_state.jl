@@ -190,6 +190,29 @@ get_correlator(t::TrackedSignal) = t.correlator
 get_last_fully_integrated_correlator(t::TrackedSignal) = t.last_fully_integrated_correlator
 get_last_fully_integrated_filtered_prompt(t::TrackedSignal) =
     t.last_fully_integrated_filtered_prompt
+get_last_fully_integrated_num_code_blocks(t::TrackedSignal) =
+    t.last_fully_integrated_num_code_blocks
+
+"""
+$(SIGNATURES)
+
+The integration time of the most recently completed record: its primary-code
+block count times one code period.
+
+This is the `T` the last correlator output was accumulated over, and the
+quantity [`estimate_cn0`](@ref) divides its sample-normalized prompts by. C/N₀
+itself is processing-independent, so anything asking a *detectability* question
+of that record — is the peak still above the noise, is the bit decision
+trustworthy — needs this `T` too: the post-integration SNR is `C/N₀ · T`, not
+C/N₀ alone.
+
+Do not confuse it with `get_integrated_samples`, which counts the record
+currently being accumulated and resets to zero each time one completes.
+"""
+get_last_fully_integrated_integration_time(t::TrackedSignal) =
+    get_last_fully_integrated_num_code_blocks(t) * get_code_length(get_signal(t)) /
+    get_code_frequency(get_signal(t))
+
 get_filtered_prompts(t::TrackedSignal) = t.filtered_prompts
 
 """
@@ -732,6 +755,10 @@ get_last_fully_integrated_correlator(s::TrackedSat, sel...) =
     get_last_fully_integrated_correlator(_find_signal(s.signals, sel...))
 get_last_fully_integrated_filtered_prompt(s::TrackedSat, sel...) =
     get_last_fully_integrated_filtered_prompt(_find_signal(s.signals, sel...))
+get_last_fully_integrated_num_code_blocks(s::TrackedSat, sel...) =
+    get_last_fully_integrated_num_code_blocks(_find_signal(s.signals, sel...))
+get_last_fully_integrated_integration_time(s::TrackedSat, sel...) =
+    get_last_fully_integrated_integration_time(_find_signal(s.signals, sel...))
 get_filtered_prompts(s::TrackedSat, sel...) =
     get_filtered_prompts(_find_signal(s.signals, sel...))
 get_post_corr_filter(s::TrackedSat, sel...) =
@@ -1091,16 +1118,11 @@ get_sat_state(sats::Dictionary{<:Any,<:TrackedSat}, identifier) = sats[identifie
 get_sat_state(sats::Dictionary{<:Any,<:TrackedSat}) = only(sats)
 
 function estimate_cn0(tsig::TrackedSignal)
-    signal = get_signal(tsig)
     # The estimator's buffered prompts are sample-normalized, so their SNR is
     # that of a whole record — the integration time it must be divided by is the
     # record's, not one code period. See
-    # `TrackedSignal.last_fully_integrated_num_code_blocks`.
-    estimate_cn0(
-        get_cn0_estimator(tsig),
-        tsig.last_fully_integrated_num_code_blocks * get_code_length(signal) /
-        get_code_frequency(signal),
-    )
+    # [`get_last_fully_integrated_integration_time`](@ref).
+    estimate_cn0(get_cn0_estimator(tsig), get_last_fully_integrated_integration_time(tsig))
 end
 
 # Per-signal selectors handled by `_find_signal` (no selector → only-fold;
