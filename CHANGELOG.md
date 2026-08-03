@@ -1,5 +1,12 @@
 # Changelog
 
+# [5.1.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v5.0.0...v5.1.0) (2026-08-03)
+
+
+### Features
+
+* **sat_state:** expose the last record's integration time ([3573c45](https://github.com/JuliaGNSS/Tracking.jl/commit/3573c45c8c85f3ad9aaa653837a980b71fcb3207)), closes [JuliaGNSS/GNSSReceiver.jl#107](https://github.com/JuliaGNSS/GNSSReceiver.jl/issues/107)
+
 # [5.0.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v4.4.0...v5.0.0) (2026-08-03)
 
 
