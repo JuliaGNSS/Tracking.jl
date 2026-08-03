@@ -1,5 +1,12 @@
 # Changelog
 
+# [4.4.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v4.3.0...v4.4.0) (2026-08-03)
+
+
+### Features
+
+* **track:** merge the VT membership managers into enable_vt! / disable_vt! ([f7ae64d](https://github.com/JuliaGNSS/Tracking.jl/commit/f7ae64d98870f4ee43669ceff6824f08c9952b3f))
+
 # [4.3.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v4.2.0...v4.3.0) (2026-07-28)
 
 
