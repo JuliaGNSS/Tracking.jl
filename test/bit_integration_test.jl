@@ -16,7 +16,6 @@ using Tracking:
     track,
     get_sat_state,
     get_code_phase,
-    get_bits,
     get_num_bits,
     get_soft_bits,
     has_bit_or_secondary_code_been_found,
@@ -69,14 +68,12 @@ using Tracking:
             expected_num_bits = index == 60 ? 3 : (index > 60 && index % 20 == 0 ? 1 : 0)
             num_bits = get_num_bits(track_state)
             @test num_bits == expected_num_bits
-            bits_word = get_bits(track_state)
-            for bit_index = num_bits:-1:1
-                push!(decoded_bits, (bits_word >> (bit_index - 1)) & 1 == 1)
-            end
             soft_bits = get_soft_bits(track_state)
-            # There is exactly one soft bit (Float32 accumulation) per hard bit
+            # One soft bit (Float32 accumulation) per decoded bit; the hard
+            # decision is its sign.
             @test eltype(soft_bits) == Float32
             @test length(soft_bits) == num_bits
+            append!(decoded_bits, soft_bits .> 0)
             append!(decoded_soft_bits, soft_bits)
         end
 
@@ -85,8 +82,8 @@ using Tracking:
         # mapping: the decoded stream matches the transmitted one up to a
         # global inversion, never a mixed one (issue #127).
         @test decoded_bits == Bool.(data_bits) || decoded_bits == .!Bool.(data_bits)
-        # The sign of each soft bit must match the respective hard bit —
-        # including the soft bits recovered from the pre-sync buffer.
+        # The hard decisions are the soft-bit signs by construction —
+        # including for the bits recovered from the pre-sync buffer.
         @test (decoded_soft_bits .> 0) == decoded_bits
     end
 end
@@ -144,11 +141,8 @@ end
         expected_num_bits = index == 60 ? 3 : (index > 60 && index % 20 == 0 ? 1 : 0)
         @test get_num_bits(multi_state) == expected_num_bits
         @test get_num_bits(single_state) == expected_num_bits
-        num_bits = get_num_bits(multi_state)
-        for bit_index = (num_bits-1):-1:0
-            push!(multi_bits, (get_bits(multi_state) >> bit_index) & 1 == 1)
-            push!(single_bits, (get_bits(single_state) >> bit_index) & 1 == 1)
-        end
+        append!(multi_bits, get_soft_bits(multi_state) .> 0)
+        append!(single_bits, get_soft_bits(single_state) .> 0)
         append!(multi_soft, get_soft_bits(multi_state))
         append!(single_soft, get_soft_bits(single_state))
     end
