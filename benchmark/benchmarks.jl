@@ -565,6 +565,8 @@ end
 #   5. Parametric, 11 fields with a further trailing
 #      `phase_acc::PhaseAccumulators` (soft-decision L1CA bit-edge
 #      detector, issue #124).
+#   6. Parametric, 9 fields: the hard-bit `buffer::UInt128` / `length::Int`
+#      pair is gone, soft bits being the single store.
 # Detect at load time via `hasfield`.
 const _HAS_PARAMETRIC_BITBUFFER = _HAS_TRACKED_SIGNAL && Tracking.BitBuffer isa UnionAll
 const _HAS_BITBUFFER_PHASE_FIELDS =
@@ -573,12 +575,28 @@ const _HAS_BITBUFFER_SOFT_BITS =
     _HAS_PARAMETRIC_BITBUFFER && hasfield(Tracking.BitBuffer, :soft_bits)
 const _HAS_BITBUFFER_PHASE_ACC =
     _HAS_PARAMETRIC_BITBUFFER && hasfield(Tracking.BitBuffer, :phase_acc)
+# Layout 6 drops the packed hard-bit pair; `soft_bits` is the only store.
+const _HAS_BITBUFFER_HARD_BITS =
+    _HAS_PARAMETRIC_BITBUFFER && hasfield(Tracking.BitBuffer, :buffer)
 
 # Rebuild a `found = true` BitBuffer matching the existing buffer's
 # layout. On parametric branches we pull `B` off the live buffer; on the
 # non-parametric branch the type is just `BitBuffer` and the integer
 # fields default to `UInt128`.
-if _HAS_BITBUFFER_PHASE_ACC
+if _HAS_BITBUFFER_PHASE_ACC && !_HAS_BITBUFFER_HARD_BITS
+    _bb_int_type(::Tracking.BitBuffer{B}) where {B<:Unsigned} = B
+    @inline _make_found_bit_buffer(old_bb) = typeof(old_bb)(
+        zero(_bb_int_type(old_bb)),        # code_block_buffer::B
+        20,                                # code_block_buffer_length
+        true,                              # found
+        0,                                 # secondary_phase
+        Int8(0),                           # polarity
+        complex(0.0, 0.0),                 # prompt_accumulator
+        0,                                 # prompt_accumulator_integrated_code_blocks
+        Float32[],                         # soft_bits
+        Tracking.PhaseAccumulators(),      # phase_acc
+    )
+elseif _HAS_BITBUFFER_PHASE_ACC
     _bb_int_type(::Tracking.BitBuffer{B}) where {B<:Unsigned} = B
     @inline _make_found_bit_buffer(old_bb) = typeof(old_bb)(
         zero(_bb_int_type(old_bb)),        # code_block_buffer::B
