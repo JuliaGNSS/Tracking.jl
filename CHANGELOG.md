@@ -1,5 +1,50 @@
 # Changelog
 
+# [5.0.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v4.4.0...v5.0.0) (2026-08-03)
+
+
+* feat(bit_buffer)!: drop get_bits, soft bits are the only bit store ([4f0c508](https://github.com/JuliaGNSS/Tracking.jl/commit/4f0c5083def6257cd5a3a911e63ef9dea04a535b))
+* feat(bit_buffer)!: store decoded bits as soft bits only, unbounded ([a86a561](https://github.com/JuliaGNSS/Tracking.jl/commit/a86a561d6f7443228bc1f955cb35af4ead3f4ac6)), closes [GNSSReceiver.jl#107](https://github.com/GNSSReceiver.jl/issues/107)
+* fix(cn0)!: divide by the record's real integration time, not one code period ([dc81782](https://github.com/JuliaGNSS/Tracking.jl/commit/dc8178286cd60d258c92628dac674f3b19632111)), closes [JuliaGNSS/GNSSReceiver.jl#107](https://github.com/JuliaGNSS/GNSSReceiver.jl/issues/107)
+
+
+### BREAKING CHANGES
+
+* the exported `get_bits` accessor is removed — on `BitBuffer`,
+`TrackedSignal`, `TrackedSat` and `TrackState`. Read `get_soft_bits` and take
+the sign instead: `soft_bit > 0` is the hard bit, and unlike `get_bits` it is
+not capped at 128 bits. `get_num_bits` and `get_soft_bits` are unchanged. The
+internal convenience constructor drops its two hard-bit arguments, becoming
+`BitBuffer(code_block_buffer, code_block_buffer_length, found,
+prompt_accumulator, prompt_accumulator_integrated_code_blocks[, soft_bits])`.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+* `BitBuffer` loses its `buffer::UInt128` and `length::Int`
+fields, so its internal positional constructor goes from eleven arguments to
+nine. The type is not exported, but code that constructs it positionally or
+reads those two fields must be updated — this repo's own
+`benchmark/benchmarks.jl` did, and it carries per-layout shims precisely because
+it is run against every revision.
+
+The exported surface is unaffected: `get_bits` is bit-identical to the old packed
+buffer for every history that previously did not throw (and now returns a value
+where it used to throw past 128 bits), `get_num_bits` / `length` can no longer
+disagree with `soft_bits`, `get_soft_bits` is unchanged, and the legacy 7-argument
+`BitBuffer` constructor still works by synthesizing ±1 soft bits.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+* `TrackedSignal`, which is exported, gains a
+`last_fully_integrated_num_code_blocks::Int` field, so constructing one
+positionally takes one more argument. Code using the keyword constructor is
+unaffected; code building `TrackedSignal`s positionally must be updated, as
+this repo's own `test/sat_state.jl` was.
+
+`estimate_cn0` also returns different numbers: any signal whose records span N
+primary-code blocks now reads 10*log10(N) dB lower, which is the correction, but
+downstream thresholds calibrated against the inflated figure need retuning.
+Records of one code block — everything before bit sync, and the default
+configuration — are unchanged.
+
 # [4.4.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v4.3.0...v4.4.0) (2026-08-03)
 
 
