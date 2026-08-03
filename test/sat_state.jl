@@ -1,7 +1,7 @@
 module SatStateTest
 
 using Test: @test, @testset, @inferred
-using Unitful: Hz
+using Unitful: Hz, ms, upreferred
 using Dictionaries: dictionary
 using GNSSSignals:
     GNSSSignals,
@@ -9,7 +9,9 @@ using GNSSSignals:
     GPSL1CA,
     GPSL1C_D,
     GPSL1C_P,
-    get_code_center_frequency_ratio
+    get_code_center_frequency_ratio,
+    get_code_length,
+    get_code_frequency
 using Acquisition: Acquisition, AcquisitionResults
 import Tracking
 using Tracking:
@@ -24,6 +26,9 @@ using Tracking:
     get_correlator,
     get_last_fully_integrated_correlator,
     get_last_fully_integrated_filtered_prompt,
+    get_last_fully_integrated_num_code_blocks,
+    get_last_fully_integrated_integration_time,
+    TrackState,
     get_signals,
     get_sat_state,
     has_bit_or_secondary_code_been_found,
@@ -240,6 +245,51 @@ end
     @test get_code_doppler(sat_kw) == -0.3Hz
     @test sat_kw.doppler_estimator_state.carrier_loop_filter_bandwidth ==
           Tracking.default_carrier_loop_filter_bandwidth(GPSL1C_P())
+end
+
+@testset "Last fully integrated integration time" begin
+    # C/N₀ is processing-independent, so a consumer asking a *detectability*
+    # question of the last record — is the peak still above the noise? — needs
+    # the record's own integration time, because post-integration SNR is
+    # C/N₀ · T. Before these accessors that number was only reachable as a
+    # private field, and the obvious public stand-in is a trap: see the
+    # `get_integrated_samples` check below.
+    gpsl1 = GPSL1CA()
+    code_period = get_code_length(gpsl1) / get_code_frequency(gpsl1)
+    @test upreferred(code_period) ≈ 1ms
+
+    tsig = Tracking.TrackedSignal(gpsl1)
+    # A fresh signal has completed nothing, so it reports one block — the
+    # divisor `estimate_cn0` used before it knew any better.
+    @test get_last_fully_integrated_num_code_blocks(tsig) == 1
+    @test get_last_fully_integrated_integration_time(tsig) ≈ code_period
+
+    for num_blocks in (1, 2, 20)
+        t = Tracking.TrackedSignal(tsig; last_fully_integrated_num_code_blocks = num_blocks)
+        @test get_last_fully_integrated_num_code_blocks(t) == num_blocks
+        @test get_last_fully_integrated_integration_time(t) ≈ num_blocks * code_period
+    end
+
+    # A full GPS L1 C/A bit is 20 blocks = 20 ms.
+    twenty = Tracking.TrackedSignal(tsig; last_fully_integrated_num_code_blocks = 20)
+    @test upreferred(get_last_fully_integrated_integration_time(twenty)) ≈ 20ms
+
+    # Not the same thing as `get_integrated_samples`, which counts the record
+    # *currently* accumulating and is reset to zero whenever one completes — so
+    # at the moment a consumer reads a completed record it is not the length of
+    # anything.
+    @test get_integrated_samples(twenty) == 0
+
+    # Forwarded at the satellite and track-state levels like its siblings.
+    sat = TrackedSat(gpsl1, 1, 10.0, 500.0Hz)
+    @test get_last_fully_integrated_num_code_blocks(sat) == 1
+    @test get_last_fully_integrated_integration_time(sat) ≈ code_period
+    @test get_last_fully_integrated_num_code_blocks(sat, 1) == 1
+    @test get_last_fully_integrated_integration_time(sat, 1) ≈ code_period
+
+    track_state = TrackState(gpsl1, [sat])
+    @test get_last_fully_integrated_num_code_blocks(track_state, 1) == 1
+    @test get_last_fully_integrated_integration_time(track_state, 1) ≈ code_period
 end
 
 end

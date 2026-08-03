@@ -792,6 +792,8 @@ for fn in (
     :get_correlator_outputs,
     :get_last_fully_integrated_correlator,
     :get_last_fully_integrated_filtered_prompt,
+    :get_last_fully_integrated_num_code_blocks,
+    :get_last_fully_integrated_integration_time,
     :get_filtered_prompts,
     :get_post_corr_filter,
     :get_cn0_estimator,

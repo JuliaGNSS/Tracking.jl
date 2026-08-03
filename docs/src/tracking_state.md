@@ -473,6 +473,8 @@ The trailing `sig` selector is either:
 | `get_correlator` | The working correlator (in-flight accumulator). |
 | `get_last_fully_integrated_correlator` | Correlator value from the last completed integration. |
 | `get_last_fully_integrated_filtered_prompt` | Filtered prompt value from the last completed integration. |
+| `get_last_fully_integrated_num_code_blocks` | Primary-code block count of the last completed integration. |
+| `get_last_fully_integrated_integration_time` | Integration time `T` of the last completed integration. Post-integration SNR is `estimate_cn0` × this; C/N₀ alone is processing-independent. |
 | `get_post_corr_filter` | The post-correlation filter. |
 | `get_cn0_estimator` | The CN0 estimator. |
 | `estimate_cn0` | CN0 estimate in dB-Hz. |
@@ -536,6 +538,7 @@ get_doppler_estimator_state(::TrackedSat)
 
 ```@docs
 TrackedSignal
+get_last_fully_integrated_integration_time(::TrackedSignal)
 ```
 
 The per-signal accessors in the table under [Addressing satellites and signals](#Addressing-satellites-and-signals) all dispatch directly on a `TrackedSignal` too. Additionally:
