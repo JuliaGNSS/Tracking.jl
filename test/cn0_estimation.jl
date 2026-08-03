@@ -2,7 +2,8 @@ module CN0EstimationTest
 
 using Test: @test, @testset, @inferred
 using Random: Random
-using Unitful: kHz, MHz, Hz, ms, dBHz
+using Unitful: kHz, MHz, Hz, ms, dBHz, ustrip
+import Unitful
 using StaticArrays: SVector
 using GNSSSignals: GPSL1CA, get_code
 import Tracking
@@ -18,6 +19,7 @@ using Tracking:
     TrackedSat,
     TrackState,
     add_satellite!,
+    get_cn0_estimator,
     track
 
 @testset "Moments CN0 estimator" begin
@@ -134,6 +136,58 @@ end
     ts = add_satellite!(ts; prn = 1, carrier_doppler = 0Hz)
     @test estimate_cn0(ts, :default, 1) == 0.0dBHz
     @test estimate_cn0(ts, 1) == 0.0dBHz
+end
+
+@testset "estimate_cn0 divides by the record's real integration time" begin
+    # C/N₀ has units of Hz and belongs to the signal, not to how long the
+    # correlate step chose to integrate. The estimator buffers *sample-normalized*
+    # prompts, so a record spanning N code blocks arrives with N times the SNR of
+    # a one-block record; `estimate_cn0` therefore has to divide by N × the code
+    # period, not by the code period alone. It used to do the latter, which
+    # over-reported by 10·log₁₀(N) — 13 dB at a full GPS L1 C/A bit — for anything
+    # driven above one block by `set_preferred_num_code_blocks_to_integrate!` or
+    # by an external correlator producer handing over longer records.
+    gpsl1 = GPSL1CA()
+    prn = 1
+
+    # A prompt whose amplitude is fixed and whose noise shrinks as √N is exactly
+    # what a longer coherent integration delivers after sample normalization, so
+    # feeding the same shape at two different block counts must report the same
+    # C/N₀ once the divisor is right.
+    function cn0_at(num_blocks, prompts)
+        tsig = Tracking.TrackedSignal(gpsl1)
+        estimator = get_cn0_estimator(tsig)
+        for p in prompts
+            estimator = update(estimator, p)
+        end
+        tsig = Tracking.TrackedSignal(
+            tsig;
+            cn0_estimator = estimator,
+            last_fully_integrated_num_code_blocks = num_blocks,
+        )
+        estimate_cn0(tsig)
+    end
+
+    Random.seed!(4321)
+    amplitude = 1.0
+    noise_1 = 0.2
+    one_block = [amplitude + noise_1 * randn(ComplexF64) for _ = 1:100]
+    # 20 blocks: same signal amplitude, noise down by √20.
+    twenty_blocks = [amplitude + noise_1 / sqrt(20) * randn(ComplexF64) for _ = 1:100]
+
+    cn0_1 = cn0_at(1, one_block)
+    cn0_20 = cn0_at(20, twenty_blocks)
+    # The 20-block record's SNR is 20× (13 dB) better and it spans 20× the time,
+    # so the C/N₀ must come out the same.
+    @test cn0_20 ≈ cn0_1 atol = 1.5dBHz
+
+    # And the divisor is actually used: the same buffered prompts reported at a
+    # different block count must move by exactly 10·log₁₀(N). Compared on the
+    # linear values, since subtracting two logarithmic `Level`s is awkward.
+    linear_cn0(x) = ustrip(Hz, Unitful.linear(x))
+    same_prompts_1 = linear_cn0(cn0_at(1, one_block))
+    same_prompts_20 = linear_cn0(cn0_at(20, one_block))
+    @test 10 * log10(same_prompts_1 / same_prompts_20) ≈ 10 * log10(20) atol = 0.01
 end
 
 end
