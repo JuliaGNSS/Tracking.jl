@@ -18,8 +18,8 @@ vector-tracking (VT) interface to an external navigation filter
     filter respectively.
   - `vt_on`: whether the navigation filter controls this satellite's NCOs.
     While `false` the satellite runs a conventional (scalar) PLL/DLL as a
-    fallback and nothing is accumulated. Promoted by [`update_vt_states!`](@ref)
-    / [`set_vt_on!`](@ref).
+    fallback and nothing is accumulated. Set by [`enable_vt!`](@ref) /
+    [`disable_vt!`](@ref).
 """
 @kwdef struct SatVectorPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     init_carrier_doppler::typeof(1.0Hz)
@@ -111,7 +111,7 @@ integration:
     filter's `carrier_freq_update` (a vector delay / frequency lock loop)
     while the PLL branch still runs on the satellite's own discriminator.
   - Satellites with `vt_on` unset (fresh from acquisition, before
-    [`update_vt_states!`](@ref) promotes them) run a conventional scalar
+    [`enable_vt!`](@ref) puts them in the loop) run a conventional scalar
     PLL/DLL as a fallback.
 
 Type parameters `CA` and `CO` select the carrier and code loop filter types.
@@ -166,8 +166,7 @@ on the estimator) are resolved here, per satellite, from the sat's
 estimator-driver signal (`signals[1]`).
 
 New satellites start with `vt_on = false` — the scalar fallback loop —
-until [`update_vt_states!`](@ref) (or [`set_vt_on!`](@ref)) promotes them
-into the vector loop.
+until [`enable_vt!`](@ref) puts them into the vector loop.
 """
 function init_estimator_state(
     estimator::VectorPLLAndDLL{CA,CO},
@@ -414,11 +413,12 @@ end
 # `_map_vt_states!` walks every group; `_map_vt_states_in_group!` walks only the
 # addressed group (Symbol / Integer / Val). Keeping them as distinct names —
 # rather than one function overloaded on the group position — is what lets a
-# threaded `Symbol`/`Integer` argument not be mistaken for a group selector;
-# `Bool <: Integer` makes that a real hazard for `set_vt_on!`. The group-scoped
-# form is what makes the managers usable in a multi-constellation receiver,
-# where PRNs alone are ambiguous (GPS PRN 5 and Galileo PRN 5 are different
-# satellites in different groups).
+# threaded `Symbol`/`Integer` argument not be mistaken for a group selector.
+# `Bool <: Integer` makes that a real hazard for the `vt_on` flag `enable_vt!` /
+# `disable_vt!` thread through, which is precisely why that flag never appears
+# in a public signature. The group-scoped form is what makes the managers usable
+# in a multi-constellation receiver, where PRNs alone are ambiguous (GPS PRN 5
+# and Galileo PRN 5 are different satellites in different groups).
 @inline function _map_vt_states!(
     f::F,
     track_state::TrackState{<:SignalGroups,<:VectorPLLAndDLL},
@@ -454,83 +454,91 @@ end
     return nothing
 end
 
-# The per-satellite promotion rule of `update_vt_states!`. Promotion is
-# one-directional: a satellite whose PRN is in lock and is not yet in the
-# vector loop joins it; nothing is ever demoted here (use `set_vt_on!` to drop
-# a satellite).
-_update_vt_membership(sat, state, prns_in_lock) =
-    !state.vt_on && sat.prn in prns_in_lock ? SatVectorPLLAndDLL(state; vt_on = true) :
-    state
-
-"""
-$(SIGNATURES)
-
-Promote every satellite whose PRN is in `prns_in_lock` (the set the receiver
-currently considers usable, e.g. from a carrier-to-noise-density threshold)
-into the vector loop by setting its `vt_on` flag; a satellite keeps running
-the scalar fallback loop until it appears here. Promotion is one-directional —
-a satellite already in the vector loop is left untouched, and none is ever
-demoted (use [`set_vt_on!`](@ref) to drop one).
-
-The two-argument form walks every group; pass a `group` (Symbol or index) to
-address a single group — required in a multi-constellation receiver, where a
-PRN alone is ambiguous across groups.
-
-Mutates `track_state` in place and returns it.
-"""
-function update_vt_states!(
-    track_state::TrackState{<:SignalGroups,<:VectorPLLAndDLL},
-    prns_in_lock,
-)
-    _map_vt_states!(_update_vt_membership, track_state, prns_in_lock)
-end
-
-function update_vt_states!(
-    track_state::TrackState{<:SignalGroups,<:VectorPLLAndDLL},
-    group::Union{Symbol,Integer,Val},
-    prns_in_lock,
-)
-    _map_vt_states_in_group!(_update_vt_membership, track_state, group, prns_in_lock)
-end
-
-"""
-$(SIGNATURES)
-
-Set the `vt_on` flag to `vt_on` for every satellite whose PRN is in `prns` —
-the manual override for [`update_vt_states!`](@ref)'s automatic promotion.
-Walks every group, or only `group` when one is given (the unambiguous form
-for multi-constellation receivers). Mutates `track_state` in place and
-returns it.
-"""
-function set_vt_on!(
-    track_state::TrackState{<:SignalGroups,<:VectorPLLAndDLL},
-    vt_on::Bool,
-    prns,
-)
-    _map_vt_states!(_set_sat_vt_on, track_state, vt_on, prns)
-end
-
-function set_vt_on!(
-    track_state::TrackState{<:SignalGroups,<:VectorPLLAndDLL},
-    group::Union{Symbol,Integer,Val},
-    vt_on::Bool,
-    prns,
-)
-    _map_vt_states_in_group!(_set_sat_vt_on, track_state, group, vt_on, prns)
-end
-
+# The per-satellite membership rule shared by `enable_vt!` / `disable_vt!`:
+# write `vt_on` to the addressed PRNs, leave every other satellite as it is.
+# The flag is a plain field write, so re-issuing the same membership every
+# cycle is a no-op for satellites already in that state.
 _set_sat_vt_on(sat, state, vt_on, prns) =
     sat.prn in prns ? SatVectorPLLAndDLL(state; vt_on) : state
 
 """
 $(SIGNATURES)
 
+Put every satellite whose PRN is in `prns` into the vector loop by setting its
+`vt_on` flag: from the next integration on, the navigation filter's NCO
+corrections drive its loops ([`set_code_freq_updates!`](@ref) /
+[`set_carrier_freq_updates!`](@ref)) and its DLL/FLL discriminators are
+accumulated for the filter to read. Satellites outside `prns` are left
+untouched, and re-enabling one already in the loop changes nothing — pass the
+currently usable set (e.g. the satellites in lock) every cycle rather than
+only the newly eligible ones.
+
+The two-argument form walks every group; pass a `group` (Symbol or index) to
+address a single group — required in a multi-constellation receiver, where a
+PRN alone is ambiguous across groups.
+
+Mutates `track_state` in place and returns it. [`disable_vt!`](@ref) is the
+inverse.
+"""
+function enable_vt!(track_state::TrackState{<:SignalGroups,<:VectorPLLAndDLL}, prns)
+    _map_vt_states!(_set_sat_vt_on, track_state, true, prns)
+end
+
+function enable_vt!(
+    track_state::TrackState{<:SignalGroups,<:VectorPLLAndDLL},
+    group::Union{Symbol,Integer,Val},
+    prns,
+)
+    _map_vt_states_in_group!(_set_sat_vt_on, track_state, group, true, prns)
+end
+
+"""
+$(SIGNATURES)
+
+Take every satellite whose PRN is in `prns` out of the vector loop by clearing
+its `vt_on` flag — the inverse of [`enable_vt!`](@ref), for satellites the
+navigation filter drops (unhealthy, diverged, no longer visible). Each falls
+back to its own scalar PLL/DLL, whose loop filters still carry their
+pre-vector state and whose Doppler now contains the navigation filter's last
+NCO correction; follow up with [`reset_loop_filters!`](@ref) to re-seed the
+scalar loop from the current Doppler and make the handoff transient-free.
+
+Addressed exactly like [`enable_vt!`](@ref): every group, or only `group` when
+one is given. Mutates `track_state` in place and returns it.
+"""
+function disable_vt!(track_state::TrackState{<:SignalGroups,<:VectorPLLAndDLL}, prns)
+    _map_vt_states!(_set_sat_vt_on, track_state, false, prns)
+end
+
+function disable_vt!(
+    track_state::TrackState{<:SignalGroups,<:VectorPLLAndDLL},
+    group::Union{Symbol,Integer,Val},
+    prns,
+)
+    _map_vt_states_in_group!(_set_sat_vt_on, track_state, group, false, prns)
+end
+
+"""
+$(SIGNATURES)
+
 Reset the code (DLL) discriminator accumulator of every satellite in the
 vector loop — called by the navigation filter after it has consumed the
-accumulated values. Mutates `track_state` in place and returns it.
+accumulated values via [`mean_code_discr`](@ref). Satellites outside
+the vector loop are left untouched (they accumulate nothing).
+
+The one-argument form walks every group; pass a `group` (Symbol or index) to
+reset a single group's satellites. Mutates `track_state` in place and returns
+it.
 """
 function reset_code_discr_acc!(track_state::TrackState{<:SignalGroups,<:VectorPLLAndDLL})
     _map_vt_states!(_reset_sat_code_discr_acc, track_state)
+end
+
+function reset_code_discr_acc!(
+    track_state::TrackState{<:SignalGroups,<:VectorPLLAndDLL},
+    group::Union{Symbol,Integer,Val},
+)
+    _map_vt_states_in_group!(_reset_sat_code_discr_acc, track_state, group)
 end
 
 _reset_sat_code_discr_acc(_sat, state) =
@@ -541,10 +549,19 @@ $(SIGNATURES)
 
 Reset the carrier (FLL) discriminator accumulator of every satellite in the
 vector loop — called by the navigation filter after it has consumed the
-accumulated values. Mutates `track_state` in place and returns it.
+accumulated values via [`mean_carrier_discr`](@ref). Addressed exactly
+like [`reset_code_discr_acc!`](@ref): every group, or only `group` when
+one is given. Mutates `track_state` in place and returns it.
 """
 function reset_carrier_discr_acc!(track_state::TrackState{<:SignalGroups,<:VectorPLLAndDLL})
     _map_vt_states!(_reset_sat_carrier_discr_acc, track_state)
+end
+
+function reset_carrier_discr_acc!(
+    track_state::TrackState{<:SignalGroups,<:VectorPLLAndDLL},
+    group::Union{Symbol,Integer,Val},
+)
+    _map_vt_states_in_group!(_reset_sat_carrier_discr_acc, track_state, group)
 end
 
 _reset_sat_carrier_discr_acc(_sat, state) =
@@ -560,7 +577,7 @@ single place the accumulator's averaging convention lives — read it here
 rather than dividing `code_discr_acc` by hand, so a change to how the
 accumulator is stored can't silently diverge between consumers.
 """
-function mean_code_discriminator(state::SatVectorPLLAndDLL)
+function mean_code_discr(state::SatVectorPLLAndDLL)
     count, discr_sum = state.code_discr_acc
     count == 0 ? nothing : discr_sum / count
 end
@@ -571,9 +588,9 @@ $(SIGNATURES)
 Mean FLL (carrier) discriminator accumulated on `state` since the last
 [`reset_carrier_discr_acc!`](@ref), in Hz, or `nothing` if nothing has been
 accumulated yet (`count == 0`). The carrier counterpart to
-[`mean_code_discriminator`](@ref).
+[`mean_code_discr`](@ref).
 """
-function mean_carrier_discriminator(state::SatVectorPLLAndDLL)
+function mean_carrier_discr(state::SatVectorPLLAndDLL)
     count, discr_sum = state.carrier_discr_acc
     count == 0 ? nothing : discr_sum / count
 end

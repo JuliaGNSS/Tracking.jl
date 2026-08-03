@@ -20,18 +20,19 @@ using Tracking:
     get_carrier_doppler,
     get_code_doppler,
     get_sat_state,
+    get_sat_states,
     add_satellite!,
     get_doppler_estimator_state,
     get_default_correlator,
     update_accumulator,
     dll_disc,
     pll_disc,
-    update_vt_states!,
-    set_vt_on!,
+    enable_vt!,
+    disable_vt!,
     reset_code_discr_acc!,
     reset_carrier_discr_acc!,
-    mean_code_discriminator,
-    mean_carrier_discriminator,
+    mean_code_discr,
+    mean_carrier_discr,
     set_code_freq_updates!,
     set_carrier_freq_updates!,
     reset_loop_filters!
@@ -184,7 +185,7 @@ end
     init_code_doppler = get_code_doppler(sat)
     sat = _with_full_integration(sat, accumulators, num_samples)
     track_state = TrackState(gpsl1, sat; doppler_estimator)
-    set_vt_on!(track_state, true, (prn,))
+    enable_vt!(track_state, (prn,))
     set_carrier_freq_updates!(track_state, dictionary((prn => nav_carrier_freq_update,)))
     set_code_freq_updates!(track_state, dictionary((prn => nav_code_freq_update,)))
 
@@ -226,8 +227,8 @@ end
     @test state.code_discr_acc == (1, dll_discriminator)
     @test state.carrier_discr_acc == (1, 0.0Hz)
     # The mean accessors divide sum by count (one sample here).
-    @test mean_code_discriminator(state) == dll_discriminator
-    @test mean_carrier_discriminator(state) == 0.0Hz
+    @test mean_code_discr(state) == dll_discriminator
+    @test mean_carrier_discr(state) == 0.0Hz
     # The navigation filter's corrections survive the update untouched.
     @test state.code_freq_update == nav_code_freq_update
     @test state.carrier_freq_update == nav_carrier_freq_update
@@ -239,8 +240,8 @@ end
     @test state.code_discr_acc == (0, 0.0)
     @test state.carrier_discr_acc == (0, 0.0Hz)
     # With count == 0 the mean accessors return `nothing`.
-    @test mean_code_discriminator(state) === nothing
-    @test mean_carrier_discriminator(state) === nothing
+    @test mean_code_discr(state) === nothing
+    @test mean_carrier_discr(state) === nothing
 end
 
 @testset "Vector tracking state management" begin
@@ -254,23 +255,29 @@ end
     _state(prn) = get_doppler_estimator_state(get_sat_state(track_state, prn))
 
     # PRN 1 in lock joins the vector loop; PRN 2 keeps the scalar fallback.
-    update_vt_states!(track_state, (1,))
+    enable_vt!(track_state, (1,))
     @test _state(1).vt_on == true
     @test _state(2).vt_on == false
 
-    # Promotion is one-directional: PRN 1 dropping out of the lock set does
-    # NOT demote it — the navigation filter keeps steering it.
-    update_vt_states!(track_state, ())
+    # Satellites outside the addressed set are left as they are — an empty set
+    # drops nobody, so a satellite in an outage keeps being steered until it is
+    # explicitly disabled.
+    enable_vt!(track_state, ())
     @test _state(1).vt_on == true
     @test _state(2).vt_on == false
 
-    # PRN 2 joins once in lock; PRN 1 stays in.
-    update_vt_states!(track_state, (1, 2))
+    # PRN 2 joins once in lock; re-enabling PRN 1 is a no-op.
+    enable_vt!(track_state, (1, 2))
     @test _state(1).vt_on == true
     @test _state(2).vt_on == true
 
-    # Manual demotion via set_vt_on!.
-    set_vt_on!(track_state, false, (1,))
+    # `disable_vt!` is the inverse and equally addressed.
+    disable_vt!(track_state, (1,))
+    @test _state(1).vt_on == false
+    @test _state(2).vt_on == true
+
+    # Disabling a satellite that is already out is a no-op too.
+    disable_vt!(track_state, (1,))
     @test _state(1).vt_on == false
     @test _state(2).vt_on == true
 
@@ -309,14 +316,14 @@ end
     )
     _state(group) = get_doppler_estimator_state(get_sat_state(track_state, group, 5))
 
-    # Promotion only reaches the addressed group.
-    update_vt_states!(track_state, :gps, (5,))
+    # Enabling only reaches the addressed group.
+    enable_vt!(track_state, :gps, (5,))
     @test _state(:gps).vt_on == true
     @test _state(:galileo).vt_on == false
 
     # Group-scoped NCO corrections: the other group's dictionary is never
     # consulted (no KeyError for its vt-on sats) and its state is untouched.
-    update_vt_states!(track_state, :galileo, (5,))
+    enable_vt!(track_state, :galileo, (5,))
     set_code_freq_updates!(track_state, :gps, dictionary((5 => 1.0Hz,)))
     set_carrier_freq_updates!(track_state, :gps, dictionary((5 => 10.0Hz,)))
     @test _state(:gps).code_freq_update == 1.0Hz
@@ -325,16 +332,36 @@ end
     @test _state(:galileo).carrier_freq_update == 0.0Hz
 
     # Membership changes are group-scoped too.
-    set_vt_on!(track_state, :gps, false, (5,))
+    disable_vt!(track_state, :gps, (5,))
     @test _state(:gps).vt_on == false
     @test _state(:galileo).vt_on == true
 
-    # Promoting the same PRN in one group must not touch the other group's
+    # Enabling the same PRN in one group must not touch the other group's
     # membership.
-    set_vt_on!(track_state, :galileo, false, (5,))
-    update_vt_states!(track_state, :gps, (5,))
+    disable_vt!(track_state, :galileo, (5,))
+    enable_vt!(track_state, :gps, (5,))
     @test _state(:gps).vt_on == true
     @test _state(:galileo).vt_on == false
+
+    # Group-scoped accumulator resets: only the addressed group is cleared.
+    enable_vt!(track_state, :galileo, (5,))
+    for group in (:gps, :galileo)
+        sats = get_sat_states(track_state, group)
+        sats[5] = _with_state(
+            sats[5],
+            SatVectorPLLAndDLL(
+                get_doppler_estimator_state(sats[5]);
+                code_discr_acc = (2, 0.5),
+                carrier_discr_acc = (2, 4.0Hz),
+            ),
+        )
+    end
+    reset_code_discr_acc!(track_state, :gps)
+    reset_carrier_discr_acc!(track_state, :gps)
+    @test _state(:gps).code_discr_acc == (0, 0.0)
+    @test _state(:gps).carrier_discr_acc == (0, 0.0Hz)
+    @test _state(:galileo).code_discr_acc == (2, 0.5)
+    @test _state(:galileo).carrier_discr_acc == (2, 4.0Hz)
 end
 
 @testset "reset_loop_filters! preserves VT flags and zeroes corrections" begin

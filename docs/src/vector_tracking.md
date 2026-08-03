@@ -29,8 +29,8 @@ satellite's estimator-driver signal (`signals[1]`) completes an integration,
     FLL-assisted PLL and DLL, identical to
     [`ConventionalAssistedPLLAndDLL`](@ref) (same default loop-filter types
     and the same auto-sized loop bandwidths). This is the pull-in mode a
-    freshly acquired satellite tracks in until it is promoted into the
-    vector loop.
+    freshly acquired satellite tracks in until [`enable_vt!`](@ref) puts it
+    into the vector loop.
 
   - **`vt_on = true` — vector closure.** The navigation filter drives the
     NCOs instead of the local loop filters:
@@ -61,10 +61,10 @@ managers. A typical iteration, after [`track!`](@ref) has produced new
 correlations:
 
 ```julia
-# 1. Promote satellites that have pulled in, and flag the ones currently
-#    in an outage. `prns_in_lock` is whatever the receiver decides is
-#    usable (e.g. a C/N0 threshold).
-update_vt_states!(track_state, prns_in_lock)
+# 1. Put the satellites that have pulled in into the vector loop.
+#    `prns_in_lock` is whatever the receiver decides is usable (e.g. a
+#    C/N0 threshold); re-issuing the same set every iteration is a no-op.
+enable_vt!(track_state, prns_in_lock)
 
 # 2. Read the accumulated discriminator outputs the estimator collected
 #    for each vector-loop satellite, then reset the accumulators so the
@@ -72,8 +72,8 @@ update_vt_states!(track_state, prns_in_lock)
 for (prn, sat) in pairs(get_sat_states(track_state))
     state = get_doppler_estimator_state(sat)
     state.vt_on || continue
-    code_err = mean_code_discriminator(state)      # chips, or `nothing` if no data
-    carrier_err = mean_carrier_discriminator(state) # Hz, or `nothing` if no data
+    code_err = mean_code_discr(state)      # chips, or `nothing` if no data
+    carrier_err = mean_carrier_discr(state) # Hz, or `nothing` if no data
     # … feed the mean measurements into the navigation filter …
 end
 reset_code_discr_acc!(track_state)
@@ -88,7 +88,7 @@ set_carrier_freq_updates!(track_state, carrier_freq_updates)
 ```
 
 The accumulators are stored as `(count, sum)` tuples;
-[`mean_code_discriminator`](@ref) / [`mean_carrier_discriminator`](@ref) apply
+[`mean_code_discr`](@ref) / [`mean_carrier_discr`](@ref) apply
 the averaging convention (`sum / count`, returning `nothing` when nothing has
 accumulated) in one place, so consumers don't each re-implement the divide and
 the `count == 0` guard. Reading and resetting are deliberately separate calls
@@ -101,7 +101,7 @@ takes a group selector (`Symbol`, `Integer`, or `Val`) as its first argument
 after `track_state`:
 
 ```julia
-update_vt_states!(track_state, :gps, gps_prns_in_lock)
+enable_vt!(track_state, :gps, gps_prns_in_lock)
 set_code_freq_updates!(track_state, :galileo, galileo_code_updates)
 ```
 
@@ -110,13 +110,18 @@ Galileo PRN 5 are different satellites in different groups — so address each
 constellation's group explicitly. The all-groups form matches a PRN in every
 group and is only unambiguous for a single-group `TrackState`.
 
-Promotion is one-directional: [`update_vt_states!`](@ref) only ever *joins*
-satellites to the vector loop. A satellite in an outage keeps being steered by
-the navigation filter from the shared solution; deciding whether its (now
-uninformative) discriminator outputs should feed the measurement update is the
-navigation filter's responsibility, tracked on the receiver side rather than
-on the estimator state. Use [`set_vt_on!`](@ref) to force loop membership on
-or off manually.
+### Loop membership
+
+[`enable_vt!`](@ref) and [`disable_vt!`](@ref) are the only way loop membership
+changes; the estimator never joins or drops a satellite on its own. Membership
+is not a lock indicator: a satellite in an outage stays in the loop and keeps
+being steered by the navigation filter from the shared solution. Deciding
+whether its (now uninformative) discriminator outputs should feed the
+measurement update is the navigation filter's responsibility, tracked on the
+receiver side rather than on the estimator state — [`disable_vt!`](@ref) is for
+satellites the filter gives up on entirely, and wants handed back to their own
+scalar loop (follow it with [`reset_loop_filters!`](@ref) for a
+transient-free handoff).
 
 ## Resetting
 
@@ -134,13 +139,13 @@ the next vector-closed integration.
 
 ```@docs
 VectorPLLAndDLL
-Tracking.SatVectorPLLAndDLL
-update_vt_states!
-set_vt_on!
+SatVectorPLLAndDLL
+enable_vt!
+disable_vt!
 set_code_freq_updates!
 set_carrier_freq_updates!
 reset_code_discr_acc!
 reset_carrier_discr_acc!
-mean_code_discriminator
-mean_carrier_discriminator
+mean_code_discr
+mean_carrier_discr
 ```
