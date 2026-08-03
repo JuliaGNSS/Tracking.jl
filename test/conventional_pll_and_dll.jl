@@ -201,8 +201,6 @@ end
         true,
         0,
         Int8(+1),
-        zero(UInt128),
-        0,
         complex(0.0, 0.0),
         0,
         Float32[],

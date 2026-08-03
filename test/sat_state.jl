@@ -102,8 +102,6 @@ end
             true,                # found
             0,
             Int8(+1),
-            zero(UInt128),
-            0,
             complex(0.0, 0.0),
             0,
             Float32[],
@@ -163,8 +161,6 @@ GNSSSignals.get_data_frequency(::FakeWrapSignal) = 0Hz
         true,
         0,
         Int8(+1),
-        zero(UInt128),
-        0,
         complex(0.0, 0.0),
         0,
         Float32[],

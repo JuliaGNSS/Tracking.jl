@@ -8,6 +8,7 @@ using Tracking:
     BitBuffer,
     buffer,
     reset,
+    get_bits,
     get_soft_bits,
     has_bit_or_secondary_code_been_found,
     SyncResult,
@@ -463,8 +464,8 @@ end
         @test has_bit_or_secondary_code_been_found(bit_buffer) == false
         @test bit_buffer.secondary_phase == 0
         @test bit_buffer.polarity == 0
-        @test bit_buffer.buffer == 0
-        @test bit_buffer.length == 0
+        @test get_bits(bit_buffer) == 0
+        @test length(bit_buffer) == 0
         @test bit_buffer.prompt_accumulator == complex(0, 0)
         @test bit_buffer.prompt_accumulator_integrated_code_blocks == 0
     end
@@ -487,8 +488,8 @@ end
         signal = GPSL1CA()
 
         next_bit_buffer = @inferred buffer(signal, 1, bit_buffer, 1, 2 + 0im)
-        @test next_bit_buffer.length == 0
-        @test next_bit_buffer.buffer == 0
+        @test length(next_bit_buffer) == 0
+        @test get_bits(next_bit_buffer) == 0
         @test next_bit_buffer.code_block_buffer == 1
         @test next_bit_buffer.code_block_buffer_length == 1
     end
@@ -506,8 +507,8 @@ end
         @test found_at == 60
         @test bit_buffer.found == true
         @test bit_buffer.polarity == -1
-        @test bit_buffer.length == 3
-        @test bit_buffer.buffer == 1
+        @test length(bit_buffer) == 3
+        @test get_bits(bit_buffer) == 1
         @test bit_buffer.code_block_buffer_length == 60
         soft = get_soft_bits(bit_buffer)
         @test length(soft) == 3
@@ -526,8 +527,8 @@ end
         @test found_at == 60
         @test bit_buffer.found == true
         @test bit_buffer.polarity == +1
-        @test bit_buffer.length == 3
-        @test bit_buffer.buffer == 1
+        @test length(bit_buffer) == 3
+        @test get_bits(bit_buffer) == 1
         @test bit_buffer.code_block_buffer_length == 60
         soft = get_soft_bits(bit_buffer)
         @test length(soft) == 3
@@ -549,8 +550,8 @@ end
         signal = GPSL1CA()
 
         next_bit_buffer = @inferred buffer(signal, 1, bit_buffer, 1, -2 + 0im)
-        @test next_bit_buffer.buffer == 0
-        @test next_bit_buffer.length == 0
+        @test get_bits(next_bit_buffer) == 0
+        @test length(next_bit_buffer) == 0
         @test next_bit_buffer.prompt_accumulator == -3 + 0im
         @test next_bit_buffer.prompt_accumulator_integrated_code_blocks == 2
     end
@@ -570,8 +571,8 @@ end
         signal = GPSL1CA()
 
         next_bit_buffer = @inferred buffer(signal, 1, bit_buffer, 1, -2 + 0im)
-        @test next_bit_buffer.buffer == 2
-        @test next_bit_buffer.length == 3
+        @test get_bits(next_bit_buffer) == 2
+        @test length(next_bit_buffer) == 3
         @test next_bit_buffer.prompt_accumulator == 0 + 0im
         @test next_bit_buffer.prompt_accumulator_integrated_code_blocks == 0
     end
@@ -591,8 +592,8 @@ end
         signal = GPSL1CA()
 
         next_bit_buffer = @inferred buffer(signal, 1, bit_buffer, 10, 10 + 1im)
-        @test next_bit_buffer.buffer == 7
-        @test next_bit_buffer.length == 3
+        @test get_bits(next_bit_buffer) == 7
+        @test length(next_bit_buffer) == 3
         @test next_bit_buffer.prompt_accumulator == 0 + 0im
         @test next_bit_buffer.prompt_accumulator_integrated_code_blocks == 0
     end
@@ -618,12 +619,15 @@ end
             )
             signal = GPSL1CA()
 
-            # 20th code block completes the bit; soft bit = real of the sum
+            # 20th code block completes the bit; soft bit = real of the sum.
+            # The two hard bits (0b10) the legacy constructor was seeded with
+            # exist as synthesized ±1 soft bits — hard and soft counts can no
+            # longer disagree — so the completed bit lands after them.
             next_bit_buffer = buffer(signal, 1, bit_buffer, 1, -2 + 0im)
-            @test get_soft_bits(next_bit_buffer) == Float32[-12.0]
+            @test get_soft_bits(next_bit_buffer) == Float32[-1.0, 1.0, -12.0]
             @test eltype(get_soft_bits(next_bit_buffer)) == Float32
             # The hard bit sign matches the soft bit sign
-            @test next_bit_buffer.buffer == 2
+            @test get_bits(next_bit_buffer) == 0b010
         end
 
         @testset "No soft bit is stored before a bit completes" begin
@@ -655,7 +659,7 @@ end
             found_at, bit_buffer =
                 _feed_prompts([fill(2.0 + 0.0im, 40); fill(-2.0 + 0.0im, 20)])
             @test found_at == 60
-            @test bit_buffer.length == 3
+            @test length(bit_buffer) == 3
             soft = get_soft_bits(bit_buffer)
             # 20 sign votes × |prompt| (2) = magnitude 40; signs match the
             # decoded hard bits (0,0,1 → soft -,-,+, as in the polarity test).
@@ -680,21 +684,21 @@ end
         end
     end
 
-    @testset "Hard-bit buffer overflows loudly past 128 bits (issue #134)" begin
-        # The hard bits live in a fixed UInt128. Pushing a 129th bit used to
-        # silently shift the oldest bit out while `get_num_bits` kept
-        # counting — now it must throw a descriptive error instead.
+    @testset "Bit accumulation is unbounded; get_bits packs the newest 128" begin
+        # Bits accumulate as soft bits with no ceiling (the fixed UInt128 that
+        # used to overflow at 128 bits — issue #134 — is gone; the packed hard
+        # bits are derived from the soft bits' signs on demand). A fold that
+        # spans more than 128 bits must keep counting instead of throwing, and
+        # `get_bits` returns the newest 128 of them, newest in the LSB.
         signal = GPSL1CA()
         bit_buffer = BitBuffer(UInt128(0), 0, true, 0, 0, complex(0.0, 0.0), 0)
-        for _ = 1:(128*20)
+        for _ = 1:(200*20)
             bit_buffer = buffer(signal, 1, bit_buffer, 1, 1.0 + 0.0im)
         end
-        @test bit_buffer.length == 128
-        # 19 more blocks are fine; the block completing the 129th bit throws.
-        for _ = 1:19
-            bit_buffer = buffer(signal, 1, bit_buffer, 1, 1.0 + 0.0im)
-        end
-        @test_throws "hard-bit buffer is full" buffer(signal, 1, bit_buffer, 1, 1.0 + 0.0im)
+        @test length(bit_buffer) == 200
+        @test length(get_soft_bits(bit_buffer)) == 200
+        @test all(>(0), get_soft_bits(bit_buffer))
+        @test get_bits(bit_buffer) == ~UInt128(0)
     end
 end
 
