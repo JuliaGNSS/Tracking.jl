@@ -1,7 +1,7 @@
 module BitDetectionIntegrationTest
 
 using Test: @test, @testset
-using Unitful: Hz
+using Unitful: Hz, s
 using GNSSSignals:
     GPSL1CA,
     GPSL5I,
@@ -171,6 +171,65 @@ end
     @test sign.(multi_soft) == sign.(single_soft)
     @test all(x -> abs(x) ≈ 5, multi_soft[4:end])
     @test all(x -> abs(x) ≈ 20, single_soft[4:end])
+end
+
+# Mid-fold bit sync: the accumulation window must stay on the bit grid.
+#
+# With a `doppler_update_interval` longer than one code period a chunk's fold
+# covers several records, so bit sync is generally detected on a record that is
+# NOT the last of its fold. The records behind it were correlated with pre-sync
+# replicas — their prompt may be unusable — but the code blocks they cover are
+# real: dropping them from the accumulator's block count slides every following
+# bit window `k` blocks off the navigation-bit grid, where `k` is the number of
+# trailing records, permanently (issue #219).
+#
+# The data bit flips every 20 blocks here, so a window `k` blocks off the grid
+# sums 20 − k blocks of its own bit against k of the neighbour's and lands at
+# magnitude 20 − 2k instead of 20 — the misalignment is read straight off the
+# soft bits, with no dependence on where the detector happened to lock.
+@testset "mid-fold bit sync keeps the accumulation on the bit grid" begin
+    gpsl1 = GPSL1CA()
+    sampling_frequency = 5e6Hz
+    num_samples = 5000
+    code_frequency = get_code_frequency(gpsl1)
+    num_blocks = 140
+
+    signal = ComplexF32[]
+    for index = 1:num_blocks
+        # ±1 data bit, flipping every 20 code blocks.
+        data_bit_sign = iseven(div(index - 1, 20)) ? 1.0 : -1.0
+        code_phase = (index - 1) * num_samples * code_frequency / sampling_frequency
+        append!(
+            signal,
+            ComplexF32.(
+                data_bit_sign .* gen_code(
+                    num_samples,
+                    gpsl1,
+                    1,
+                    sampling_frequency,
+                    code_frequency,
+                    code_phase,
+                ),
+            ),
+        )
+    end
+
+    # 1 ms: one record per fold, so no record can ever trail the syncing one —
+    # the baseline. 7 ms / 13 ms: this near-noiseless signal locks at block 60,
+    # which is the 4th of the 57..63 fold and the 8th of the 53..65 fold, so 3
+    # respectively 5 records trail it. Before the fix those runs lost a bit and
+    # decoded the rest at magnitude 14 / 10.
+    for doppler_update_interval in (1e-3s, 3e-3s, 7e-3s, 13e-3s)
+        track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0, 0.0Hz)])
+        track_state =
+            track(signal, track_state, sampling_frequency; doppler_update_interval)
+        soft_bits = get_soft_bits(track_state, 1)
+        # 3 bits replayed from the pre-sync sign window at the block-60 lock
+        # plus one per completed 20-block bit for the rest of the run.
+        @test length(soft_bits) == 3 + div(num_blocks - 60, 20)
+        # Every bit sums a full, unstraddled 20 blocks.
+        @test all(x -> abs(x) ≈ 20, soft_bits)
+    end
 end
 
 # GPS L5I secondary-code (NH10) sync and phase recovery.
