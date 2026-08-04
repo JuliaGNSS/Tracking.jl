@@ -398,19 +398,25 @@ end
 # the record's true integration time, so it only switches when the integration
 # actually lengthened — not already on the fold where sync was detected but the
 # records were still single-block (see `_process_estimator_driver_signal`).
-# `skip_bit_buffer = true` applies everything EXCEPT the bit-buffer update.
-# Used for records that follow a bit/secondary sync detected earlier in the
-# same fold: those records were correlated with pre-sync replicas (no
-# secondary-code wipe-off), so accumulating them as if wiped would feed
-# sign-corrupted prompts into the first post-sync bits. They re-enter cleanly
-# next chunk, correlated at the snapped phase with the overlay in the replica.
+# `correlated_pre_sync = true` marks a record that follows a bit/secondary sync
+# detected earlier in the same fold, i.e. one that was correlated with a
+# pre-sync replica. Its *prompt* is only unusable where sync changed the replica
+# — the secondary-code wipe-off, whose absence would feed sign-corrupted prompts
+# into the first post-sync bits — so it is dropped from the coherent bit
+# accumulation for secondary-coded signals only; a signal without a secondary
+# code (GPS L1 C/A) correlates identically either side of the sync instant and
+# keeps its prompt. The code blocks such a record covers are real either way and
+# are always credited to the accumulator's block count: dropping the count
+# slides the bit window one block off the navigation-bit grid for the rest of
+# the run, which costs ~0.9 dB of bit-decision SNR and makes every coherent
+# window that follows the grid straddle a bit flip (issue #219).
 @inline function _apply_correlator_output(
     tracked_signal::TrackedSignal,
     output::CorrelatorOutput,
     prn::Integer,
     sampling_frequency,
     driver_carrier_phase::Real = 0.0;
-    skip_bit_buffer::Bool = false,
+    correlated_pre_sync::Bool = false,
 )
     signal = tracked_signal.signal
     normalized_correlator =
@@ -436,9 +442,17 @@ end
     # `buffer`, so a quadrature component's data lands on the real axis it is
     # decided on. No-op for the driver and for co-phased pairs.
     bit_prompt = prompt * _carrier_phase_derotation(driver_carrier_phase, signal)
-    bit_buffer =
-        skip_bit_buffer ? tracked_signal.bit_buffer :
-        buffer(signal, prn, tracked_signal.bit_buffer, bit_block_count, bit_prompt)
+    # Keep a pre-sync-correlated record's prompt out of the coherent sum where
+    # the sync changed the replica under it (secondary-code wipe-off), but
+    # always let it advance the accumulator's block count — see above.
+    drop_prompt = correlated_pre_sync && get_secondary_code_length(signal) > 1
+    bit_buffer = buffer(
+        signal,
+        prn,
+        tracked_signal.bit_buffer,
+        bit_block_count,
+        drop_prompt ? zero(bit_prompt) : bit_prompt,
+    )
     new_signal = TrackedSignal(
         tracked_signal;
         last_fully_integrated_filtered_prompt = prompt,
@@ -486,8 +500,9 @@ end
         # Per-record integration time — the block time, NOT the chunk time.
         integration_time = output.integrated_samples / sampling_frequency
         # A record that follows a sync detected earlier in THIS fold was
-        # correlated with pre-sync replicas — keep it out of the bit buffer
-        # (see `_apply_correlator_output`).
+        # correlated with pre-sync replicas — its blocks still count towards the
+        # bit, only its prompt may have to be dropped (see
+        # `_apply_correlator_output`).
         synced_earlier_in_fold =
             !found_before_fold && has_bit_or_secondary_code_been_found(ts.bit_buffer)
         # The driver de-rotates against itself (offset 0), so the derotation is a
@@ -498,7 +513,7 @@ end
             sat.prn,
             sampling_frequency,
             driver_carrier_phase;
-            skip_bit_buffer = synced_earlier_in_fold,
+            correlated_pre_sync = synced_earlier_in_fold,
         )
 
         # The configured bandwidths are referenced to a one-primary-code-period
@@ -600,7 +615,7 @@ end
                 prn,
                 sampling_frequency,
                 driver_carrier_phase;
-                skip_bit_buffer = synced_earlier_in_fold,
+                correlated_pre_sync = synced_earlier_in_fold,
             ),
         )
     end

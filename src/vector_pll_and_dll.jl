@@ -298,7 +298,7 @@ end
             sat.prn,
             sampling_frequency,
             driver_carrier_phase;
-            skip_bit_buffer = synced_earlier_in_fold,
+            correlated_pre_sync = synced_earlier_in_fold,
         )
 
         # Same 1/N effective-bandwidth scaling as the conventional estimator —
