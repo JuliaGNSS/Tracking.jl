@@ -85,9 +85,16 @@ TrackedSat(
     carrier_phase         = 0.0,
     code_doppler          = carrier_doppler * get_code_center_frequency_ratio(signal),
     num_prompts_for_cn0_estimation = 100,
+    cn0_estimator         = MomentsCN0Estimator(num_prompts_for_cn0_estimation),
     post_corr_filter      = DefaultPostCorrFilter(),
 )
 ```
+
+`cn0_estimator` takes any [`AbstractCN0Estimator`](@ref) — unlike the correlator
+and the post-corr filter it *is* free to change the sat's concrete type, since it
+is a type parameter of [`TrackedSignal`](@ref). See
+[CN0 Estimator](cn0_estimator.md) for the estimators that ship with Tracking and
+for writing your own.
 
 A worked example combining a narrower-than-default correlator, a custom
 post-correlation filter (beamformer), and a larger CN0 buffer. The

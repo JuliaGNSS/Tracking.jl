@@ -113,9 +113,37 @@ You can implement your own estimator by creating a subtype of
 - `Tracking.update(cn0_estimator::MyCN0Estimator, prompt)` — return a new
   estimator with the latest prompt added (immutable update).
 - `estimate_cn0(cn0_estimator::MyCN0Estimator, integration_time)` —
-  return the CN0 estimate as a `dB-Hz` quantity.
+  return the CN0 estimate as a `dB-Hz` quantity. `integration_time` is the
+  integration time of the *record* the last prompt came from, i.e.
+  [`get_last_fully_integrated_integration_time`](@ref).
 
-To plug your custom estimator into a satellite, build a
-[`TrackedSignal`](@ref) with your `cn0_estimator`, splice it into a fresh
-[`TrackedSat`](@ref), and add it via the escape-hatch overload — see the
-[`TrackedSat`](@ref) docstring for the full constructor surface.
+Plug it in with the `cn0_estimator` keyword of [`TrackedSignal`](@ref) or
+[`TrackedSat`](@ref) — the estimator is a type parameter of `TrackedSignal`, so
+your type is stored as is:
+
+```jldoctest custom_cn0
+julia> using Tracking, GNSSSignals
+
+julia> using Tracking: Hz
+
+julia> struct MyCN0Estimator <: Tracking.AbstractCN0Estimator end
+
+julia> Tracking.update(estimator::MyCN0Estimator, prompt) = estimator;
+
+julia> Tracking.estimate_cn0(::MyCN0Estimator, integration_time) = 42.0 * Tracking.dBHz;
+
+julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz; cn0_estimator = MyCN0Estimator());
+
+julia> estimate_cn0(sat)
+42.0 dB-Hz
+```
+
+Each signal needs its **own** estimator instance — they typically buffer into a
+vector, so sharing one between two signals of a satellite corrupts both. The
+multi-signal `TrackedSat` constructor therefore takes a tuple, one estimator per
+signal:
+
+```julia
+TrackedSat((GPSL1C_P(), GPSL1CA()), prn, code_phase, carrier_doppler;
+           cn0_estimator = (MyCN0Estimator(), MomentsCN0Estimator(100)))
+```
