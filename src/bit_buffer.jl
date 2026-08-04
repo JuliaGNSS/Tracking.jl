@@ -882,7 +882,7 @@ the returned width and — for the hard path — the horizon it must hold:
 | Galileo E5a-Q | `UInt128`  | soft secondary CFAR — packed buffer vestigial       |
 
 The default for any signal not specialized below is `UInt64`. The width
-flows through `BitBuffer{B}` and `TrackedSignal{Sig, B, C, PCF}` so the
+flows through `BitBuffer{B}` and `TrackedSignal{Sig, B, C, PCF, CN0}` so the
 parameter chain stays type-stable at construction.
 """
 @inline get_code_block_buffer_type(::AbstractGNSSSignal) = UInt64

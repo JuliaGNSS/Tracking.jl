@@ -15,13 +15,14 @@ struct TrackedSignal{
     B<:Unsigned,
     C<:AbstractCorrelator,
     PCF<:AbstractPostCorrFilter,
+    CN0<:AbstractCN0Estimator,
 }
     signal::Sig
     integrated_samples::Int
     correlator::C
     last_fully_integrated_correlator::C
     last_fully_integrated_filtered_prompt::ComplexF64
-    cn0_estimator::MomentsCN0Estimator
+    cn0_estimator::CN0
     bit_buffer::BitBuffer{B}
     post_corr_filter::PCF
     filtered_prompts::Vector{ComplexF64}
@@ -89,9 +90,17 @@ end
 """
 $(SIGNATURES)
 
-Construct a fresh [`TrackedSignal`](@ref) for `signal`. The correlator and
-post-corr filter default to the signal's recommended values; pass
-`correlator` and `post_corr_filter` explicitly to override.
+Construct a fresh [`TrackedSignal`](@ref) for `signal`. The correlator,
+post-corr filter and CN0 estimator default to the signal's recommended values;
+pass `correlator`, `post_corr_filter` and `cn0_estimator` explicitly to
+override.
+
+`cn0_estimator` accepts any [`AbstractCN0Estimator`](@ref) — it is a type
+parameter of the returned `TrackedSignal`, so a custom estimator is stored as
+is instead of being converted to the default's type. The default is a
+`MomentsCN0Estimator(num_prompts_for_cn0_estimation)`. Each signal needs its
+**own** estimator instance: they buffer into a shared vector, so handing one
+instance to two signals corrupts both.
 
 Throws an `ArgumentError` if `preferred_num_code_blocks_to_integrate` is
 invalid for `signal` (see
@@ -102,6 +111,9 @@ function TrackedSignal(
     num_ants::NumAnts = NumAnts(1),
     correlator::AbstractCorrelator = get_default_correlator(signal, num_ants),
     num_prompts_for_cn0_estimation::Int = 100,
+    cn0_estimator::AbstractCN0Estimator = MomentsCN0Estimator(
+        num_prompts_for_cn0_estimation,
+    ),
     post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),
     preferred_num_code_blocks_to_integrate::Int = 1,
 )
@@ -111,7 +123,7 @@ function TrackedSignal(
     )
     # Per-signal sync-search buffer width — see `get_code_block_buffer_type`.
     # Picking the type here makes `B` concrete in the resulting
-    # `TrackedSignal{Sig, B, C, PCF}`.
+    # `TrackedSignal{Sig, B, C, PCF, CN0}`.
     B = get_code_block_buffer_type(signal)
     # Preallocate the per-chunk correlator-output buffer. A default-length
     # chunk (= smallest code period) yields at most one record per chunk for
@@ -125,7 +137,7 @@ function TrackedSignal(
         correlator,
         correlator,
         complex(0.0, 0.0),
-        MomentsCN0Estimator(num_prompts_for_cn0_estimation),
+        cn0_estimator,
         BitBuffer{B}(),
         post_corr_filter,
         ComplexF64[],
@@ -140,6 +152,13 @@ end
 # `Maybe{C}` / `Maybe{PCF}` to keep `nothing` distinguishable from a real
 # value, since the user might legitimately want to set them to anything of
 # the same type.
+#
+# `cn0_estimator` is deliberately NOT pinned to `t`'s estimator type: swapping
+# the estimator on an existing signal is one of the documented ways to plug a
+# custom one in, so the result's `CN0` parameter follows the passed value. Every
+# call site passes either the literal default `nothing` or a concretely typed
+# estimator, so the resulting type is inferred and the per-record rebuild in
+# `_apply_correlator_output` stays allocation-free.
 function TrackedSignal(
     t::TrackedSignal{Sig,B,C,PCF};
     signal = nothing,
@@ -147,7 +166,7 @@ function TrackedSignal(
     correlator::Maybe{C} = nothing,
     last_fully_integrated_correlator::Maybe{C} = nothing,
     last_fully_integrated_filtered_prompt = nothing,
-    cn0_estimator = nothing,
+    cn0_estimator::Maybe{AbstractCN0Estimator} = nothing,
     bit_buffer::Maybe{BitBuffer{B}} = nothing,
     post_corr_filter::Maybe{PCF} = nothing,
     filtered_prompts::Maybe{Vector{ComplexF64}} = nothing,
@@ -165,7 +184,8 @@ function TrackedSignal(
             isnothing(signal) ? t.signal : signal,
             preferred_num_code_blocks_to_integrate,
         )
-    TrackedSignal{Sig,B,C,PCF}(
+    new_cn0_estimator = isnothing(cn0_estimator) ? t.cn0_estimator : cn0_estimator
+    TrackedSignal{Sig,B,C,PCF,typeof(new_cn0_estimator)}(
         isnothing(signal) ? t.signal : signal,
         isnothing(integrated_samples) ? t.integrated_samples : integrated_samples,
         isnothing(correlator) ? t.correlator : correlator,
@@ -173,7 +193,7 @@ function TrackedSignal(
         last_fully_integrated_correlator,
         isnothing(last_fully_integrated_filtered_prompt) ?
         t.last_fully_integrated_filtered_prompt : last_fully_integrated_filtered_prompt,
-        isnothing(cn0_estimator) ? t.cn0_estimator : cn0_estimator,
+        new_cn0_estimator,
         isnothing(bit_buffer) ? t.bit_buffer : bit_buffer,
         isnothing(post_corr_filter) ? t.post_corr_filter : post_corr_filter,
         isnothing(filtered_prompts) ? t.filtered_prompts : filtered_prompts,
@@ -559,6 +579,11 @@ Each signal is wrapped in a [`TrackedSignal`](@ref) with its recommended
 default correlator. The first signal is the estimator-driver signal. Further
 kwargs (`doppler_estimator`, `carrier_phase`, `code_doppler`) forward to the
 `TrackedSignal`-tuple core constructor above.
+
+`cn0_estimator` takes a **tuple** of estimators here — one per signal, in the
+same order — since each signal needs its own instance (see
+[`TrackedSignal`](@ref)). A single estimator is accepted only for a
+single-signal tuple.
 """
 function TrackedSat(
     signals::Tuple{AbstractGNSSSignal,Vararg{AbstractGNSSSignal}},
@@ -567,19 +592,66 @@ function TrackedSat(
     carrier_doppler;
     num_ants::NumAnts = NumAnts(1),
     num_prompts_for_cn0_estimation::Int = 100,
+    cn0_estimator = nothing,
     post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),
     kwargs...,
 )
-    tracked_signals = map(signals) do sig
+    cn0_estimators =
+        _per_signal_cn0_estimators(signals, cn0_estimator, num_prompts_for_cn0_estimation)
+    tracked_signals = map(signals, cn0_estimators) do sig, estimator
         TrackedSignal(
             sig;
             num_ants,
             correlator = get_default_correlator(sig, num_ants),
-            num_prompts_for_cn0_estimation,
+            cn0_estimator = estimator,
             post_corr_filter,
         )
     end
     TrackedSat(tracked_signals, prn, code_phase, carrier_doppler; kwargs...)
+end
+
+# Resolve the `cn0_estimator` kwarg of the multi-signal constructors into one
+# estimator per signal. `nothing` builds the per-signal default; a tuple is
+# taken as is (length-checked); a single estimator is only allowed for a
+# single-signal sat, because the estimators buffer into a shared vector and two
+# signals folding their prompts into the same buffer would corrupt both.
+@inline _per_signal_cn0_estimators(
+    signals::Tuple{Vararg{AbstractGNSSSignal}},
+    ::Nothing,
+    num_prompts_for_cn0_estimation::Int,
+) = map(_ -> MomentsCN0Estimator(num_prompts_for_cn0_estimation), signals)
+
+@inline _per_signal_cn0_estimators(
+    ::Tuple{AbstractGNSSSignal},
+    cn0_estimator::AbstractCN0Estimator,
+    ::Int,
+) = (cn0_estimator,)
+
+@noinline _per_signal_cn0_estimators(
+    signals::Tuple{Vararg{AbstractGNSSSignal}},
+    ::AbstractCN0Estimator,
+    ::Int,
+) = throw(
+    ArgumentError(
+        "a single cn0_estimator cannot be shared by the $(length(signals)) signals " *
+        "of this satellite — the estimators buffer into a vector they would then " *
+        "both write to. Pass one estimator per signal as a tuple, e.g. " *
+        "`cn0_estimator = ($(join(fill("MomentsCN0Estimator(100)", length(signals)), ", ")))`.",
+    ),
+)
+
+@inline function _per_signal_cn0_estimators(
+    signals::Tuple{Vararg{AbstractGNSSSignal}},
+    cn0_estimators::Tuple{Vararg{AbstractCN0Estimator}},
+    ::Int,
+)
+    length(cn0_estimators) == length(signals) || throw(
+        ArgumentError(
+            "got $(length(cn0_estimators)) cn0_estimators for $(length(signals)) " *
+            "signals — pass exactly one estimator per signal, in the same order.",
+        ),
+    )
+    cn0_estimators
 end
 
 """
@@ -597,16 +669,14 @@ function TrackedSat(
     num_ants::NumAnts = NumAnts(1),
     correlator::AbstractCorrelator = get_default_correlator(signal, num_ants),
     num_prompts_for_cn0_estimation::Int = 100,
+    cn0_estimator::AbstractCN0Estimator = MomentsCN0Estimator(
+        num_prompts_for_cn0_estimation,
+    ),
     post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),
     kwargs...,
 )
-    tracked_signal = TrackedSignal(
-        signal;
-        num_ants,
-        correlator,
-        num_prompts_for_cn0_estimation,
-        post_corr_filter,
-    )
+    tracked_signal =
+        TrackedSignal(signal; num_ants, correlator, cn0_estimator, post_corr_filter)
     TrackedSat((tracked_signal,), prn, code_phase, carrier_doppler; kwargs...)
 end
 

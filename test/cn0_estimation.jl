@@ -1,11 +1,11 @@
 module CN0EstimationTest
 
-using Test: @test, @testset, @inferred
+using Test: @test, @testset, @inferred, @test_throws
 using Random: Random
 using Unitful: kHz, MHz, Hz, ms, dBHz, ustrip
 import Unitful
 using StaticArrays: SVector
-using GNSSSignals: GPSL1CA, get_code
+using GNSSSignals: GPSL1CA, GPSL1C_P, get_code, gen_code, get_code_frequency
 import Tracking
 using Tracking:
     MomentsCN0Estimator,
@@ -16,6 +16,7 @@ using Tracking:
     get_prompt,
     get_correlator_sample_shifts,
     estimate_cn0,
+    TrackedSignal,
     TrackedSat,
     TrackState,
     add_satellite!,
@@ -125,6 +126,80 @@ end
     end
     cn0_estimate = @inferred estimate_cn0(track_state)
     @test cn0_estimate ≈ 45dBHz atol = 1.0dBHz
+end
+
+# A minimal custom estimator: it only proves that the type is stored and its
+# methods are the ones called, so it does no estimating at all.
+struct CountingCN0Estimator <: Tracking.AbstractCN0Estimator
+    num_prompts::Int
+end
+Tracking.update(estimator::CountingCN0Estimator, prompt) =
+    CountingCN0Estimator(estimator.num_prompts + 1)
+Tracking.estimate_cn0(estimator::CountingCN0Estimator, integration_time) =
+    estimator.num_prompts * dBHz
+
+@testset "custom CN0 estimator is pluggable (issue #217)" begin
+    gpsl1 = GPSL1CA()
+    # The estimator is a type parameter of `TrackedSignal`, so a custom one is
+    # stored as is instead of being converted to the default estimator's type.
+    tracked_signal = @inferred TrackedSignal(gpsl1; cn0_estimator = CountingCN0Estimator(0))
+    @test get_cn0_estimator(tracked_signal) isa CountingCN0Estimator
+    @test typeof(tracked_signal).parameters[5] === CountingCN0Estimator
+
+    # ... including when swapped onto an existing signal via the kwarg-update
+    # constructor, which is why that kwarg is not pinned to the old type.
+    swapped = TrackedSignal(TrackedSignal(gpsl1); cn0_estimator = CountingCN0Estimator(7))
+    @test get_cn0_estimator(swapped) isa CountingCN0Estimator
+    @test estimate_cn0(swapped) == 7dBHz
+
+    # ... and through both `TrackedSat` constructors into a `TrackState`.
+    sat = TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = CountingCN0Estimator(3))
+    @test estimate_cn0(sat) == 3dBHz
+    track_state = TrackState(gpsl1, [sat])
+    @test estimate_cn0(track_state, 1) == 3dBHz
+
+    multi = TrackedSat(
+        (GPSL1C_P(), GPSL1CA()),
+        1,
+        0.0,
+        0.0Hz;
+        cn0_estimator = (CountingCN0Estimator(1), MomentsCN0Estimator(10)),
+    )
+    @test estimate_cn0(multi, GPSL1C_P) == 1dBHz
+    @test get_cn0_estimator(multi, GPSL1CA) isa MomentsCN0Estimator
+    # Estimators buffer into a vector, so one instance may not be shared by two
+    # signals of the same satellite — that would corrupt both.
+    @test_throws ArgumentError TrackedSat(
+        (GPSL1C_P(), GPSL1CA()),
+        1,
+        0.0,
+        0.0Hz;
+        cn0_estimator = MomentsCN0Estimator(10),
+    )
+    @test_throws ArgumentError TrackedSat(
+        (GPSL1C_P(), GPSL1CA()),
+        1,
+        0.0,
+        0.0Hz;
+        cn0_estimator = (MomentsCN0Estimator(10),),
+    )
+
+    # The custom estimator is actually the one `track` feeds: 5 records in.
+    signal =
+        complex.(float.(gen_code(4000, gpsl1, 1, 4e6Hz, get_code_frequency(gpsl1), 0.0)))
+    track_state = TrackState(
+        gpsl1,
+        [TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = CountingCN0Estimator(0))],
+    )
+    for _ = 1:5
+        track_state = track(signal, track_state, 4e6Hz)
+    end
+    @test estimate_cn0(track_state, 1) == 5dBHz
+
+    # `num_prompts_for_cn0_estimation` still sizes the default estimator.
+    default = get_cn0_estimator(TrackedSignal(gpsl1; num_prompts_for_cn0_estimation = 40))
+    @test default isa MomentsCN0Estimator
+    @test Base.length(get_prompt_buffer(default)) == 40
 end
 
 @testset "estimate_cn0 overloads on TrackState" begin

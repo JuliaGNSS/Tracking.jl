@@ -70,7 +70,7 @@ There are three detector families:
 | Galileo E5a-I | soft secondary CFAR | 40 blocks (2 × CS20) | `UInt32` (vestigial) | confidence 0.999 | 0 | 20 |
 | Galileo E5a-Q | soft secondary CFAR | 200 blocks (2 × CS100) | `UInt128` (vestigial) | confidence 0.999 | 0 | 100 (pilot) |
 
-The buffer-width type threads through `BitBuffer{B}` and `TrackedSignal{Sig, B, C, PCF}` as a type parameter. The L1C-P case uses an exact-width `UInt1800` defined via `BitIntegers.@define_integers 1800`. The soft secondary CFAR detectors take the ±1 overlay chip directly from `get_secondary_code(signal)` per rotation, so a new short-secondary-code signal needs no bespoke template — only for `uses_soft_secondary_code_detection` to return `true` (secondary length `1 < N ≤ 100`).
+The buffer-width type threads through `BitBuffer{B}` and `TrackedSignal{Sig, B, C, PCF, CN0}` as a type parameter. The L1C-P case uses an exact-width `UInt1800` defined via `BitIntegers.@define_integers 1800`. The soft secondary CFAR detectors take the ±1 overlay chip directly from `get_secondary_code(signal)` per rotation, so a new short-secondary-code signal needs no bespoke template — only for `uses_soft_secondary_code_detection` to return `true` (secondary length `1 < N ≤ 100`).
 
 The soft CFAR confidence is package-wide and adjustable per signal via `get_bit_edge_detection_confidence`; the hard-sweep Hamming tolerance is adjustable per (hard-path) signal via `get_bit_edge_or_secondary_code_tolerance`:
 

@@ -2,9 +2,11 @@
 $(SIGNATURES)
 
 Abstract supertype for CN0 (carrier-to-noise-density ratio) estimators.
-Each [`TrackedSignal`](@ref) holds one estimator instance. Custom
-estimators subtype this and implement `Tracking.update` and
-[`estimate_cn0`](@ref).
+Each [`TrackedSignal`](@ref) holds one estimator instance, stored in a type
+parameter — pass any subtype instance as the `cn0_estimator` keyword of
+[`TrackedSignal`](@ref) / [`TrackedSat`](@ref) to replace the default
+[`MomentsCN0Estimator`](@ref). Custom estimators subtype this and implement
+`Tracking.update` and [`estimate_cn0`](@ref).
 """
 abstract type AbstractCN0Estimator end
 
