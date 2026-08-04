@@ -1290,6 +1290,47 @@ function _buffer_find_bit(
     )
 end
 
+"""
+$(SIGNATURES)
+
+Walk a just-synced `bit_buffer`'s `secondary_phase` forward by
+`num_code_blocks` primary-code blocks (modulo the secondary-code length). No-op
+for signals without a secondary code, where the field is unused.
+
+`secondary_phase` is the secondary chip the **upcoming** integration aligns to,
+and it is read exactly once: by the code-phase snap
+([`_snap_code_phase_from_synced_signal`](@ref)), which runs after the whole
+chunk has been folded. The detector reports it for the block right after the
+syncing record, so every further record folded in the same chunk — the ones
+`_apply_correlator_output` marks `correlated_pre_sync`, correlated with the
+pre-sync (un-wiped) replica — moves that anchor along by the blocks it covers.
+Without this the snap anchors the replica `num_code_blocks` chips early, the
+post-sync replica bakes the wrong overlay chip into every block, and the
+coherent bit sum collapses to a fraction of its length — the secondary-code
+sibling of the bit-grid slip in issue #219.
+"""
+@inline function _advance_secondary_phase(
+    signal::AbstractGNSSSignal,
+    bit_buffer::BitBuffer{B},
+    num_code_blocks::Integer,
+) where {B<:Unsigned}
+    secondary_code_length = get_secondary_code_length(signal)
+    secondary_code_length > 1 || return bit_buffer
+    BitBuffer{B}(
+        bit_buffer.code_block_buffer,
+        bit_buffer.code_block_buffer_length,
+        bit_buffer.found,
+        mod(bit_buffer.secondary_phase + Int(num_code_blocks), secondary_code_length),
+        bit_buffer.polarity,
+        bit_buffer.buffer,
+        bit_buffer.length,
+        bit_buffer.prompt_accumulator,
+        bit_buffer.prompt_accumulator_integrated_code_blocks,
+        bit_buffer.soft_bits,
+        bit_buffer.phase_acc,
+    )
+end
+
 function reset(bit_buffer::BitBuffer{B}) where {B<:Unsigned}
     empty!(bit_buffer.soft_bits)
     BitBuffer{B}(
