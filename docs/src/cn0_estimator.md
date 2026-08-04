@@ -5,6 +5,24 @@ signal quality in dB-Hz. Each [`TrackedSignal`](@ref) on a
 [`TrackedSat`](@ref) holds its own CN0 estimator, so a multi-signal
 satellite produces one CN0 value per signal.
 
+!!! note "Every signal of a satellite is estimated, not just the driver"
+    The estimator of *each* signal is fed its own prompt once per completed
+    record — the [estimator-driver signal](tracking_state.md#Estimator-driver-signal)
+    has no privileged role here, and the per-signal values are not
+    interchangeable: on GPS L1C the pilot carries ~75 % of the power against the
+    data component's ~25 %, a 4.8 dB difference.
+
+    Nothing inside Tracking reads [`estimate_cn0`](@ref) — it is a reporting API,
+    so this costs only the per-record estimator update, which is well under a per
+    cent of the correlation work for that record (~40 ns against ~9 µs for a
+    two-signal satellite over 4000 samples). `estimate_cn0` itself is of the same
+    order and runs only when you call it, so a signal whose C/N₀ you never read
+    costs almost nothing either way.
+
+    The reason to switch a signal off is therefore not speed but honesty: where no
+    coherent window exists the value falls back to the moment ratio's noise floor
+    (see the warning below). [`NoCN0Estimator`](@ref) is the per-signal opt-out.
+
 ## Default Estimator
 
 The default estimator is Van Dierendonck's **narrowband/wideband power ratio**
@@ -119,7 +137,11 @@ a window closes on a single record and NWPR reports its fallback for good.
     In practice both of these are the data component of a pair whose **pilot**
     does get NWPR: L1C-D with L1C-P, E1B with E1C. Put both on one
     [`TrackedSat`](@ref) and take the lock decision from the pilot's estimate,
-    which is the component the loops track anyway.
+    which is the component the loops track anyway. To stop the data component
+    reporting a floor you must not trust, give it a
+    [`NoCN0Estimator`](@ref) — or give the whole signal an
+    `NWPRCN0Estimator(; fallback = NoCN0Estimator())`, which reports `-Inf dB-Hz`
+    exactly when no coherent window is available.
 
 The pre-sync window matters: the bit-edge detector needs seconds to lock at
 35 dB-Hz and does not lock below ~30 dB-Hz, so a strictly bit-aligned window
@@ -210,8 +232,36 @@ TrackedSat((GPSL1C_P(), GPSL1CA()), prn, code_phase, carrier_doppler;
            cn0_estimator = (NWPRCN0Estimator(), MomentsCN0Estimator(100)))
 ```
 
+### Not measuring a signal at all
+
+[`NoCN0Estimator`](@ref) keeps no state, does no per-record work and reports
+`-Inf dB-Hz`. It is the way to say *"this signal's C/N₀ is not measured"* — which
+is worth saying in two situations:
+
+```julia
+# the non-driver signal of a pair whose C/N₀ nobody reads
+TrackedSat((GPSL1C_P(), GPSL1C_D()), prn, code_phase, carrier_doppler;
+           cn0_estimator = (NWPRCN0Estimator(), NoCN0Estimator()))
+
+# NWPR with no moment-ratio floor underneath it: "no estimate" until a coherent
+# window exists, instead of the moment ratio's ~27.6 dB-Hz on noise
+NWPRCN0Estimator(; fallback = NoCN0Estimator())
+```
+
+The second is the one that changes what a receiver can trust: it turns the
+fallback's noise floor into an honest `-Inf` for every signal and phase that
+admits no coherent window (see the warning above). The per-record saving of the
+first is real but tiny — one estimator update is well under a per cent of the
+correlation work for that record — so choose it for clarity, not for speed.
+
+It reports `-Inf dB-Hz` rather than `NaN dB-Hz` deliberately: with Unitful's
+`Level` comparison, `NaN dB-Hz >= threshold` is `true` for *every* threshold, so a
+`NaN` would clear every lock detector it met. `-Inf` compares `false` against any
+finite threshold, which is the safe answer to "is this signal locked?".
+
 ```@docs
 MomentsCN0Estimator
+NoCN0Estimator
 ```
 
 ## What the estimator returns
