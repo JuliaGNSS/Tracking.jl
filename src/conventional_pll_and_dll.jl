@@ -453,6 +453,13 @@ end
         bit_block_count,
         drop_prompt ? zero(bit_prompt) : bit_prompt,
     )
+    # Such a record also moves the secondary-code anchor: the code-phase snap
+    # runs after this fold and aligns the *upcoming* integration to
+    # `bit_buffer.secondary_phase`, which the detector reported for the block
+    # right after the syncing record.
+    if correlated_pre_sync
+        bit_buffer = _advance_secondary_phase(signal, bit_buffer, bit_block_count)
+    end
     new_signal = TrackedSignal(
         tracked_signal;
         last_fully_integrated_filtered_prompt = prompt,
