@@ -97,10 +97,13 @@ override.
 
 `cn0_estimator` accepts any [`AbstractCN0Estimator`](@ref) — it is a type
 parameter of the returned `TrackedSignal`, so a custom estimator is stored as
-is instead of being converted to the default's type. The default is a
-`MomentsCN0Estimator(num_prompts_for_cn0_estimation)`. Each signal needs its
-**own** estimator instance: they buffer into a shared vector, so handing one
-instance to two signals corrupts both.
+is. The default is [`default_cn0_estimator`](@ref), an
+[`NWPRCN0Estimator`](@ref) whose pre-sync fallback holds
+`num_prompts_for_cn0_estimation` prompts; pass
+`cn0_estimator = MomentsCN0Estimator(num_prompts_for_cn0_estimation)` for the
+plain moment-ratio estimator. Each signal needs its **own** estimator instance:
+they buffer into a shared vector, so handing one instance to two signals
+corrupts both.
 
 Throws an `ArgumentError` if `preferred_num_code_blocks_to_integrate` is
 invalid for `signal` (see
@@ -111,7 +114,8 @@ function TrackedSignal(
     num_ants::NumAnts = NumAnts(1),
     correlator::AbstractCorrelator = get_default_correlator(signal, num_ants),
     num_prompts_for_cn0_estimation::Int = 100,
-    cn0_estimator::AbstractCN0Estimator = MomentsCN0Estimator(
+    cn0_estimator::AbstractCN0Estimator = default_cn0_estimator(
+        signal,
         num_prompts_for_cn0_estimation,
     ),
     post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),
@@ -619,7 +623,7 @@ end
     signals::Tuple{Vararg{AbstractGNSSSignal}},
     ::Nothing,
     num_prompts_for_cn0_estimation::Int,
-) = map(_ -> MomentsCN0Estimator(num_prompts_for_cn0_estimation), signals)
+) = map(sig -> default_cn0_estimator(sig, num_prompts_for_cn0_estimation), signals)
 
 @inline _per_signal_cn0_estimators(
     ::Tuple{AbstractGNSSSignal},
@@ -669,7 +673,8 @@ function TrackedSat(
     num_ants::NumAnts = NumAnts(1),
     correlator::AbstractCorrelator = get_default_correlator(signal, num_ants),
     num_prompts_for_cn0_estimation::Int = 100,
-    cn0_estimator::AbstractCN0Estimator = MomentsCN0Estimator(
+    cn0_estimator::AbstractCN0Estimator = default_cn0_estimator(
+        signal,
         num_prompts_for_cn0_estimation,
     ),
     post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),

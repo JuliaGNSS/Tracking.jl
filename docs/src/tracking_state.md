@@ -85,7 +85,7 @@ TrackedSat(
     carrier_phase         = 0.0,
     code_doppler          = carrier_doppler * get_code_center_frequency_ratio(signal),
     num_prompts_for_cn0_estimation = 100,
-    cn0_estimator         = MomentsCN0Estimator(num_prompts_for_cn0_estimation),
+    cn0_estimator         = Tracking.default_cn0_estimator(signal, num_prompts_for_cn0_estimation),
     post_corr_filter      = DefaultPostCorrFilter(),
 )
 ```

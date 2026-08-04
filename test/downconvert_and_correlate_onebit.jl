@@ -21,6 +21,7 @@ using Tracking:
     get_sat_state,
     get_carrier_doppler,
     estimate_cn0,
+    MomentsCN0Estimator,
     get_prompt,
     get_early,
     get_late,
@@ -128,7 +129,23 @@ function _track_noisy(
     amp = 10^(cn0_dbhz / 20)
     noise_std = sqrt(fs / 1Hz)
     rng = MersenneTwister(seed)
-    ts = TrackState(gpsl1, [TrackedSat(gpsl1, prn, start_code_phase, cdopp)])
+    # The C/N0 margins recorded below measure the *backend's* quantisation loss,
+    # so the estimator is pinned to the moment estimator instead of following
+    # the default: NWPR's coherent narrowband sum reacts to the residual phase
+    # noise the quantisation also causes, which would fold a second effect into
+    # the same number.
+    ts = TrackState(
+        gpsl1,
+        [
+            TrackedSat(
+                gpsl1,
+                prn,
+                start_code_phase,
+                cdopp;
+                cn0_estimator = MomentsCN0Estimator(100),
+            ),
+        ],
+    )
     dopplers = Float64[]
     for i = 0:(nepoch-1)
         carrier_phase = 2π * (cdopp / 1Hz) * nsamp * i / (fs / 1Hz) + start_carrier_phase

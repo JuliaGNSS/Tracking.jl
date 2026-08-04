@@ -37,7 +37,7 @@ using Tracking:
     remove_satellite!,
     remove_satellite,
     DefaultPostCorrFilter,
-    MomentsCN0Estimator,
+    NWPRCN0Estimator,
     BitBuffer,
     NumAnts,
     get_preferred_num_code_blocks_to_integrate,
@@ -97,7 +97,7 @@ end
     @test get_correlator(track_state, 1).accumulators == zeros(3)
     @test get_last_fully_integrated_correlator(track_state, 1).accumulators == zeros(3)
     @test get_post_corr_filter(track_state, 1) isa DefaultPostCorrFilter
-    @test get_cn0_estimator(track_state, 1) isa MomentsCN0Estimator
+    @test get_cn0_estimator(track_state, 1) isa NWPRCN0Estimator
     @test get_bit_buffer(track_state, 1) isa BitBuffer
 
     @test get_sat_states(track_state)[1].doppler_estimator_state.init_carrier_doppler ==

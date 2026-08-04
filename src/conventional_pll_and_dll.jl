@@ -426,7 +426,6 @@ end
     filtered_correlator = apply(post_corr_filter, normalized_correlator)
     prompt = get_prompt(filtered_correlator)
     push!(tracked_signal.filtered_prompts, prompt)
-    cn0_estimator = update(get_cn0_estimator(tracked_signal), prompt)
     bit_block_count = calc_num_code_blocks_for_bit_buffer(
         signal,
         output.integrated_samples,
@@ -446,6 +445,22 @@ end
     # the sync changed the replica under it (secondary-code wipe-off), but
     # always let it advance the accumulator's block count — see above.
     drop_prompt = correlated_pre_sync && get_secondary_code_length(signal) > 1
+    # The CN0 estimator is handed the navigation-bit state along with the prompt
+    # (`CN0UpdateContext`, built from the bit buffer as it stands *before* this
+    # record): the default `NWPRCN0Estimator` needs to know where the data-bit
+    # boundaries are to sum prompts coherently over exactly one bit — nothing a
+    # downstream consumer of `get_filtered_prompts` could reconstruct. The bit
+    # grid is trustworthy for exactly the records whose prompt is: this record's
+    # blocks are always credited to the accumulator, so a pre-sync-correlated
+    # record is only unusable where the sync changed the replica under it, and
+    # `drop_prompt` is that condition. Where it holds the context reports "no bit
+    # grid", which keeps the sign-corrupted prompt out of any coherent window and
+    # drops the window that was open — exactly what happens before sync.
+    cn0_estimator = update(
+        get_cn0_estimator(tracked_signal),
+        prompt,
+        CN0UpdateContext(signal, tracked_signal.bit_buffer, bit_block_count, !drop_prompt),
+    )
     bit_buffer = buffer(
         signal,
         prn,

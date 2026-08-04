@@ -57,7 +57,9 @@ export get_early,
     NumAnts,
     NumAccumulators,
     MomentsCN0Estimator,
+    NWPRCN0Estimator,
     AbstractCN0Estimator,
+    CN0UpdateContext,
     EarlyPromptLateCorrelator,
     VeryEarlyPromptLateCorrelator,
     AbstractPostCorrFilter,
@@ -195,8 +197,11 @@ include("band_measurement.jl")
 include("code_replica.jl")
 include("carrier_replica.jl")
 include("downconvert.jl")
-include("cn0_estimation.jl")
+# `cn0_estimation.jl` after `bit_buffer.jl`: the CN0 estimators' update context
+# carries the navigation-bit state (`BitBuffer`) and reads the signal's
+# blocks-per-bit trait from there.
 include("bit_buffer.jl")
+include("cn0_estimation.jl")
 include("correlators/correlator.jl")
 include("correlators/early_prompt_late.jl")
 include("correlators/very_early_prompt_late.jl")
