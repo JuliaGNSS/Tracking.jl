@@ -5,6 +5,7 @@ using Unitful: Hz, s
 using GNSSSignals:
     GPSL1CA,
     GPSL5I,
+    GPSL5Q,
     GPSL1C_P,
     gen_code,
     get_code_frequency,
@@ -18,6 +19,9 @@ using Tracking:
     get_code_phase,
     get_num_bits,
     get_soft_bits,
+    get_filtered_prompts,
+    get_last_fully_integrated_filtered_prompt,
+    get_last_fully_integrated_num_code_blocks,
     has_bit_or_secondary_code_been_found,
     set_preferred_num_code_blocks_to_integrate!,
     EarlyPromptLateCorrelator
@@ -449,6 +453,135 @@ end
         # the load-bearing assertion of the fix.
         full_bit_magnitude = secondary_code_length / preferred_blocks
         @test all(>(0.9 * full_bit_magnitude), abs.(soft_bits))
+    end
+end
+
+# Mid-fold secondary-code sync: the overlay anchor must travel with the fold.
+#
+# Same defect as the L1 C/A bit grid above (issue #219), on the secondary-code
+# path. With a `doppler_update_interval` longer than one code period the records
+# behind the syncing one inside its fold were correlated with the pre-sync (not
+# overlay-wiped) replica: their prompt is dropped, but they still advance both
+# the bit accumulator's block count and — because the code-phase snap runs after
+# the fold — the secondary-chip anchor it aligns the upcoming integration to.
+# Leaving the anchor where the detector reported it makes the post-sync replica
+# bake the wrong NH chip into every block, and the coherent NH10 sum collapses
+# from ~10 to ~0–2 (which is also a coin flip on every decoded bit).
+@testset "mid-fold secondary-code sync keeps the overlay anchor aligned" begin
+    gpsl5 = GPSL5I()
+    prn = 1
+    sampling_frequency = 25e6Hz
+    code_frequency = get_code_frequency(gpsl5)
+    primary_code_length = get_code_length(gpsl5)               # 10230 chips
+    secondary_code_length = get_secondary_code_length(gpsl5)   # 10 (NH10)
+    num_samples = round(Int, 25e6 / 1000)                      # 1 ms = one primary block
+    data_bits = [1, 1, 0, 1, 0, 0, 1, 1, 0, 1]
+
+    # Decode the whole run in a single `track` call at the given chunk interval.
+    function decode(doppler_update_interval, start_secondary_chip)
+        total_blocks = secondary_code_length * length(data_bits) - start_secondary_chip
+        signal = ComplexF32.(
+            gen_code(
+                total_blocks * num_samples,
+                gpsl5,
+                prn,
+                sampling_frequency,
+                code_frequency,
+                start_secondary_chip * primary_code_length,
+            ),
+        )
+        for b = 0:(total_blocks-1)
+            data_bit = data_bits[div(start_secondary_chip+b, secondary_code_length)+1]
+            @views signal[(b*num_samples+1):((b+1)*num_samples)] .*=
+                ComplexF32(2 * data_bit - 1)
+        end
+        track_state = TrackState(
+            gpsl5,
+            [TrackedSat(gpsl5, prn, start_secondary_chip * primary_code_length, 0.0Hz)],
+        )
+        get_soft_bits(
+            track(signal, track_state, sampling_frequency; doppler_update_interval),
+        )
+    end
+
+    @testset "start chip $start_secondary_chip" for start_secondary_chip in (0, 3)
+        # One record per fold: no record can trail the syncing one — the
+        # reference decode. (Magnitudes sit a few 1e-4 below the nominal NH10
+        # length, from the code-amplitude normalisation, hence the 0.99 floors.)
+        full_bit = 0.99 * secondary_code_length
+        reference = copy(decode(1e-3s, start_secondary_chip))
+        @test all(>(full_bit), abs.(reference))
+
+        for doppler_update_interval in (3e-3s, 7e-3s)
+            soft_bits = decode(doppler_update_interval, start_secondary_chip)
+            # Same bits, on the same grid, as the one-record-per-fold reference.
+            @test length(soft_bits) == length(reference)
+            @test sign.(soft_bits) == sign.(reference)
+            # Only the bit the sync lands in is short, and only by the prompts
+            # that were dropped — one block each, one such record at both
+            # intervals here. Every later bit is full. A misaligned overlay
+            # would put all of them near 0–2 instead.
+            @test all(>(full_bit), abs.(soft_bits[2:end]))
+            @test abs(soft_bits[1]) > 0.99 * (secondary_code_length - 1)
+        end
+    end
+end
+
+# Mid-fold secondary-code sync on a *pilot* (GPS L5Q, NH20).
+#
+# A pilot carries no navigation data, so the accumulator part of issue #219 does
+# not apply — `buffer` returns early for it. The overlay anchor does, and it hits
+# harder: the overlay is the only thing a pilot locks, and its whole purpose is
+# coherent integration over a full secondary-code period. Anchored to the chip
+# the detector reported for the syncing record — instead of the one the records
+# behind it moved on to — the replica wipes the wrong NH chip and a 20-block
+# coherent sum cancels toward zero instead of reaching the nominal 1. That is not
+# a degraded prompt: the discriminators then see 0/0 and the loop diverges into a
+# NaN Doppler (an `InexactError` out of the correlator's shift arithmetic), so
+# this testset *errors* rather than fails when the anchor is wrong.
+@testset "mid-fold pilot overlay anchor keeps coherent integration intact" begin
+    gpsl5q = GPSL5Q()
+    prn = 1
+    sampling_frequency = 25e6Hz
+    code_frequency = get_code_frequency(gpsl5q)
+    secondary_code_length = get_secondary_code_length(gpsl5q)   # 20 (NH20)
+    num_samples = round(Int, 25e6 / 1000)                       # 1 ms = one primary block
+    # Long enough for the NH20 detector (≥ 2 periods) plus a good run of
+    # full-period coherent integrations afterwards.
+    num_blocks = 240
+    signal = ComplexF32.(
+        gen_code(
+            num_blocks * num_samples,
+            gpsl5q,
+            prn,
+            sampling_frequency,
+            code_frequency,
+            0.0,
+        ),
+    )
+
+    # 1 ms: one record per fold, nothing can trail the syncing record. 3 / 7 ms:
+    # it can, and does.
+    for doppler_update_interval in (1e-3s, 3e-3s, 7e-3s)
+        track_state = TrackState(gpsl5q, [TrackedSat(gpsl5q, prn, 0.0, 0.0Hz)])
+        # Coherently integrate one full NH20 period — the point of a pilot lock.
+        set_preferred_num_code_blocks_to_integrate!(track_state, prn, secondary_code_length)
+        track_state =
+            track(signal, track_state, sampling_frequency; doppler_update_interval)
+
+        @test has_bit_or_secondary_code_been_found(track_state)
+        # The long integration is really in effect...
+        @test get_last_fully_integrated_num_code_blocks(track_state, prn) ==
+              secondary_code_length
+        # ...and the overlay is wiped across all 20 blocks of it, so the
+        # sample-count-normalised prompt keeps its full magnitude. A one-chip
+        # anchor error would put this near 1/20 of that.
+        @test abs(get_last_fully_integrated_filtered_prompt(track_state, prn)) > 0.99
+        # Not just the final record: every full-period integration after sync
+        # holds up. Sync needs ≥ 2 NH20 periods, so the tail of the prompt
+        # record covers post-sync integrations only.
+        prompts = get_filtered_prompts(track_state, prn)
+        @test all(>(0.99), abs.(prompts[(end-4):end]))
     end
 end
 
