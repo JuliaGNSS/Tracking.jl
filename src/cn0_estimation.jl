@@ -187,11 +187,17 @@ that only the bias is left:
 | 25 dB-Hz  | 23.6                    | 24.4    | 24.9     | 25.0                   |
 | 30 dB-Hz  | 28.9                    | 29.6    | 29.9     | 30.0                   |
 
-At the `M = 20` of the classic GPS L1 C/A configuration the two agree to
-~0.15 dB, which is why the literature's form is good enough there; the
-difference only matters at the short windows this estimator uses while the
-navigation-bit grid is unknown or the loop's coherence time is short. The
-spread is unchanged (the correction is a shift, not a variance trade), and at
+The size of the correction is a function of the window length, and **at the
+default five-block window it is small**: ~0.6 dB of the bias above is left there,
+and in the loop the two forms agree to a few tenths (+0.2 / −0.1 / +0.4 dB at a
+true 20 / 25 / 30 dB-Hz, measured from the same buffered windows). It earns its
+keep at shorter windows — +1.4 / +1.9 / +1.0 dB at a two-block one — and at the
+`M = 20` of the classic GPS L1 C/A configuration the two agree to ~0.15 dB, which
+is why the literature's form does no harm there. The reason to prefer the ratio of
+the sums anyway is that it is the consistent estimator of `μ` at *every* window
+length, so the estimate does not depend on how the window was chosen.
+
+The correction is a shift, not a variance trade: the spread is unchanged, and at
 equal false-alarm rate the ratio of the sums is the slightly better *detector*
 too — at `M = 2` and a 0.1 % false-alarm rate it detects a true 25 dB-Hz signal
 in 22.5 % of updates against the mean of the ratios' 15.0 %.
@@ -219,26 +225,53 @@ consumer of `get_filtered_prompts` does not, so the window is taken
 from the navigation-bit grid in [`CN0UpdateContext`](@ref) — that is the whole
 reason this estimator lives here rather than on top of the prompt stream:
 
-| signal state                                            | narrowband window                                       |
-|:------------------------------------------------------- |:------------------------------------------------------- |
-| bit / secondary sync found, data-bearing signal         | one navigation bit, started on a bit boundary           |
-| bit / secondary sync found, pilot (no data)             | `num_narrowband_code_blocks` (no bit grid to respect)   |
-| sync not found yet, data-bearing without secondary code | `num_presync_narrowband_code_blocks`, unaligned         |
-| sync not found yet, signal with a secondary code        | none — the unknown overlay flips sign every code block  |
-| one symbol per code block (GPS L1C-D, Galileo E1B)      | none — no coherent window longer than one record exists |
+| signal state                                            | narrowband window                                                      |
+|:------------------------------------------------------- |:---------------------------------------------------------------------- |
+| bit / secondary sync found, data-bearing signal         | `num_narrowband_code_blocks`, tiling the navigation bit from its start |
+| bit / secondary sync found, pilot (no data)             | `num_narrowband_code_blocks` (no bit grid to respect)                  |
+| sync not found yet, data-bearing without secondary code | `num_presync_narrowband_code_blocks`, unaligned                        |
+| sync not found yet, signal with a secondary code        | none — the unknown overlay flips sign every code block                 |
+| one symbol per code block (GPS L1C-D, Galileo E1B)      | none — no coherent window longer than one record exists                |
+| record at least as long as its own window               | none — a one-record window has `NBP == WBP` by construction            |
 
 The pre-sync window matters more than it may look: the CFAR bit-edge detector
 needs seconds to lock at 35 dB-Hz and does not lock at all below ~30 dB-Hz, so
 a bit-aligned window alone would leave exactly the regime this estimator exists
 for on the fallback estimator. An unaligned window of `M` records inside an
 `L`-block bit straddles a flip with probability `(M−1)/L`, which at the default
-two blocks of a 20-block GPS L1 C/A bit costs ~1 dB of bias and still removes
-the moment ratio's noise floor entirely (0 % false alarm at a 25 dB-Hz
-threshold on pure noise, against M2M4's ~80 %).
+five blocks of a 20-block GPS L1 C/A bit costs ~0.6 dB of bias below 30 dB-Hz
+(and up to ~6 dB at a strong signal, for the fraction of a second until sync is
+found) while removing the moment ratio's noise floor entirely.
+
+# The window is capped by the loop's coherence time, not by the bit period
+
+A bit-aligned window does not have to span the *whole* bit: windows of
+`num_narrowband_code_blocks` tile the bit from its start, which straddles no flip
+either and keeps the coherent sum inside the loop's coherence time. That cap is
+what the length is for — the longest flip-free window is not the best one. The
+gain from a longer window saturates quickly, because `num_records` records are
+combined either way and only their partition changes: at a true 25 dB-Hz, going
+from a 5-record to a 20-record window buys 0.8 dB of spread. The cost does not
+saturate. Residual phase noise makes the coherent sum lose power, which is a
+*bias* — the one error more averaging cannot remove. In the loop at a true
+25 dB-Hz, with the conventional PLL at 1 ms records:
+
+| window        | 2 records | 5    | 10   | 20 (one full L1 C/A bit) |
+|:------------- | ---------:| ----:| ----:| ------------------------:|
+| reported C/N₀ | 24.6      | 22.9 | 19.8 | 15.9                     |
+
+so the default cap is deliberately short (~5 ms of code blocks, see
+[`default_cn0_estimator`](@ref)). Raise it for a pilot, a narrow carrier loop or
+a signal that is never weak; the ideal-coherence estimate improves monotonically
+with it.
 
 Where no window is admissible at all the `fallback` estimator's value is
 reported instead, so such signals keep exactly the behaviour they had before
-NWPR became the default.
+NWPR became the default. That includes records that are themselves at least as
+long as the window — with
+[`set_preferred_num_code_blocks_to_integrate!`](@ref) at one navigation bit, say,
+a window closes on a single record, `NBP == WBP` identically, and the estimator
+reports its `fallback` for good.
 
 # Fields / configuration
 
@@ -246,19 +279,23 @@ NWPR became the default.
     memory of the estimator (100 by default, ~100 ms at GPS L1 C/A). The
     ring buffer of ratios is sized from it: `num_records ÷ M` ratios are
     averaged, so the memory stays put when `M` changes.
-  - `num_narrowband_code_blocks` — window length in primary-code blocks for a
-    signal with **no** navigation-bit grid: a pilot, or a bare prompt stream
-    fed through the two-argument `Tracking.update`.
+  - `num_narrowband_code_blocks` — window length in primary-code blocks: the cap
+    on the coherent sum, and the window length itself for a signal with **no**
+    navigation-bit grid (a pilot, or a bare prompt stream fed through the
+    two-argument `Tracking.update`).
   - `num_presync_narrowband_code_blocks` — window length in primary-code blocks
     used while the bit grid is still unknown (see the table above); `0`
     disables the pre-sync window and reports the `fallback` until sync.
   - `buffered_narrowband_powers`, `buffered_wideband_powers`,
-    `ratio_current_index`, `filled_ratio_length`, `num_records_per_ratio` — the
-    ring buffers of completed windows' `NBP` and `WBP` and the record count `M`
-    they were formed with. The two powers are buffered separately because the
-    estimate divides their sums; `M` enters the estimate, so a window completing
+    `ratio_current_index`, `filled_ratio_length`, `num_records_per_ratio`,
+    `ratios_are_bit_aligned` — the ring buffers of completed windows' `NBP` and
+    `WBP`, the record count `M` they were formed with, and whether they followed
+    the navigation-bit grid. The two powers are buffered separately because the
+    estimate divides their sums. `M` enters the estimate, so a window completing
     with a different record count (records lengthened at bit sync, say) restarts
-    the buffers.
+    the buffers — and so does a window completing on the other side of the sync
+    transition, since a pre-sync window may have straddled a bit flip and must
+    not be averaged together with clean bit-aligned ones.
   - `narrowband_sum`, `wideband_power`, `num_accumulated_records`,
     `num_accumulated_code_blocks` — the currently open window.
   - `fallback` — the estimator reported while no window has completed yet, and
@@ -274,6 +311,7 @@ struct NWPRCN0Estimator{F<:AbstractCN0Estimator} <: AbstractCN0Estimator
     ratio_current_index::Int
     filled_ratio_length::Int
     num_records_per_ratio::Int
+    ratios_are_bit_aligned::Bool
     narrowband_sum::ComplexF64
     wideband_power::Float64
     num_accumulated_records::Int
@@ -285,10 +323,11 @@ end
 $(SIGNATURES)
 
 Construct a fresh [`NWPRCN0Estimator`](@ref) averaging over the last
-`num_records` records. `num_narrowband_code_blocks` /
-`num_presync_narrowband_code_blocks` are the narrowband window lengths for the
-signal states that have no navigation-bit period to take them from — see
-[`NWPRCN0Estimator`](@ref) for the full table and for what the defaults cost.
+`num_records` records. `num_narrowband_code_blocks` caps the coherent window
+(and is the window length outright where there is no navigation-bit period to
+tile), `num_presync_narrowband_code_blocks` is the window length used while the
+bit grid is unknown — see [`NWPRCN0Estimator`](@ref) for the full table and for
+what the defaults cost.
 
 `fallback` is the estimator reported until the first window completes; it
 defaults to a [`MomentsCN0Estimator`](@ref) over the same `num_records`
@@ -296,8 +335,8 @@ prompts.
 """
 function NWPRCN0Estimator(;
     num_records::Int = 100,
-    num_narrowband_code_blocks::Int = 20,
-    num_presync_narrowband_code_blocks::Int = 2,
+    num_narrowband_code_blocks::Int = 5,
+    num_presync_narrowband_code_blocks::Int = 5,
     fallback::AbstractCN0Estimator = MomentsCN0Estimator(num_records),
 )
     num_records >= 2 ||
@@ -325,6 +364,7 @@ function NWPRCN0Estimator(;
         0,
         0,
         0,
+        false,
         complex(0.0, 0.0),
         0.0,
         0,
@@ -351,11 +391,11 @@ get_fallback_cn0_estimator(estimator::NWPRCN0Estimator) = estimator.fallback
     clamp(div(estimator.num_records, estimator.num_records_per_ratio), 1, capacity)
 end
 
-# Narrowband window for this record, as `(window_code_blocks, bit_code_block_index)`:
+# Narrowband window for this record, as `(window_code_blocks, window_block_index)`:
 # the window length in primary-code blocks (`0` = no admissible window, report
-# the fallback) and the record's offset inside the navigation bit when the window
-# has to follow the bit grid (`-1` = free-running, any alignment). See the table
-# in [`NWPRCN0Estimator`](@ref) for the reasoning behind each case.
+# the fallback) and the record's offset inside its window when the window has to
+# follow the bit grid (`-1` = free-running, any alignment). See the table in
+# [`NWPRCN0Estimator`](@ref) for the reasoning behind each case.
 @inline function _narrowband_window(estimator::NWPRCN0Estimator, context::CN0UpdateContext)
     num_code_blocks_per_bit = context.num_code_blocks_per_bit
     if context.bit_code_block_index < 0
@@ -376,8 +416,17 @@ end
     # Pilot: no data modulation, and post-sync the secondary code is wiped off
     # in the replica, so the window is free-running at the configured length.
     num_code_blocks_per_bit == 0 && return (estimator.num_narrowband_code_blocks, -1)
-    # Data-bearing and synced: one bit per window, aligned to the bit boundary.
-    (num_code_blocks_per_bit, context.bit_code_block_index)
+    # Data-bearing and synced: windows of `num_narrowband_code_blocks` tile the
+    # navigation bit from its start, so no window straddles a flip while none
+    # runs past the coherence cap either. The bit's trailing
+    # `num_code_blocks_per_bit % window_code_blocks` blocks are left out — a
+    # window shorter than the others would have to be inverted with a different
+    # `M`, which would restart the ring buffer every bit.
+    window_code_blocks = min(estimator.num_narrowband_code_blocks, num_code_blocks_per_bit)
+    window_start =
+        div(context.bit_code_block_index, window_code_blocks) * window_code_blocks
+    window_start + window_code_blocks > num_code_blocks_per_bit && return (0, -1)
+    (window_code_blocks, context.bit_code_block_index - window_start)
 end
 
 """
@@ -386,23 +435,24 @@ $(SIGNATURES)
 Accumulate one record's `prompt` into the open narrowband window, taking the
 window length and its alignment from the navigation-bit grid in `context` (see
 [`NWPRCN0Estimator`](@ref) for the per-signal-state table). A window that
-follows the bit grid is only started on a bit boundary, and an open window is
-dropped rather than closed whenever it is no longer admissible — no window at
+follows the bit grid is only started where a window may start — the bit's own
+boundary, or a multiple of the window length inside the bit — and an open window
+is dropped rather than closed whenever it is no longer admissible: no window at
 all applies to this record (sync lost, or never established), or the grid moved
 under it when sync was found.
 
-A closed window contributes a ratio only if it held at least two records; with
-one record `NBP == WBP` identically and the ratio carries no information.
+A closed window contributes to the estimate only if it held at least two records;
+with one record `NBP == WBP` identically and the window carries no information.
 """
 function update(estimator::NWPRCN0Estimator, prompt, context::CN0UpdateContext)
-    window_code_blocks, alignment_offset = _narrowband_window(estimator, context)
+    window_code_blocks, window_block_index = _narrowband_window(estimator, context)
     _update_nwpr(
         estimator,
         prompt,
         update(estimator.fallback, prompt, context),
         context.num_code_blocks,
         window_code_blocks,
-        alignment_offset,
+        window_block_index,
     )
 end
 
@@ -429,28 +479,27 @@ update(estimator::NWPRCN0Estimator, prompt) = _update_nwpr(
 # estimator (the caller picks the arity to advance it with), and the trailing
 # arguments describe the record and its window: the record's block count, the
 # window length in blocks (0 = no admissible window) and the record's offset
-# inside the navigation bit when the window must follow the bit grid (-1 = free
-# running).
+# inside its window when the window must follow the bit grid (-1 = free running).
 @inline function _update_nwpr(
     estimator::NWPRCN0Estimator,
     prompt,
     fallback::AbstractCN0Estimator,
     num_code_blocks::Int,
     window_code_blocks::Int,
-    bit_code_block_index::Int,
+    window_block_index::Int,
 )
     # No admissible window: drop whatever was open (its remainder would either
     # straddle the sync transition or was never coherent to begin with).
     window_code_blocks < 1 && return _with_window_state(estimator, fallback)
-    # A bit-aligned window that has accumulated `k` blocks must sit exactly `k`
-    # blocks into the bit. Anything else means the grid moved under the open
-    # window — sync was just found, so the window that was opened at the free
-    # pre-sync length is now inside a bit at an unknown offset — and its partial
-    # sum has to go. Only a record that starts a bit may then open a new window,
-    # so the coherent sum can never straddle a data-bit transition.
-    if bit_code_block_index >= 0 &&
-       bit_code_block_index != estimator.num_accumulated_code_blocks
-        bit_code_block_index == 0 || return _with_window_state(estimator, fallback)
+    # A grid-following window that has accumulated `k` blocks must sit exactly
+    # `k` blocks into its window. Anything else means the grid moved under the
+    # open window — sync was just found, so the window that was opened at the
+    # free pre-sync length is now at an unknown offset inside a bit — and its
+    # partial sum has to go. Only a record that starts a window may then open a
+    # new one, so the coherent sum can never straddle a data-bit transition.
+    if window_block_index >= 0 &&
+       window_block_index != estimator.num_accumulated_code_blocks
+        window_block_index == 0 || return _with_window_state(estimator, fallback)
         estimator = _with_window_state(estimator, fallback)
     end
     narrowband_sum = estimator.narrowband_sum + prompt
@@ -474,7 +523,9 @@ update(estimator::NWPRCN0Estimator, prompt) = _update_nwpr(
     narrowband_powers = estimator.buffered_narrowband_powers
     wideband_powers = estimator.buffered_wideband_powers
     narrowband_power = abs2(narrowband_sum)
-    if num_records == estimator.num_records_per_ratio
+    bit_aligned = window_block_index >= 0
+    if num_records == estimator.num_records_per_ratio &&
+       bit_aligned == estimator.ratios_are_bit_aligned
         num_ratios = _num_ratios(estimator)
         ratio_current_index = mod(estimator.ratio_current_index, num_ratios) + 1
         narrowband_powers[ratio_current_index] = narrowband_power
@@ -485,11 +536,15 @@ update(estimator::NWPRCN0Estimator, prompt) = _update_nwpr(
             ratio_current_index,
             filled_ratio_length = min(estimator.filled_ratio_length + 1, num_ratios),
             num_records_per_ratio = num_records,
+            ratios_are_bit_aligned = bit_aligned,
         )
     end
-    # First window at this record count: the rings' slots have to be re-zeroed,
-    # since `estimate_cn0` sums the whole buffers (and their in-use length
-    # shrinks as `M` grows).
+    # First window at this record count, or the first one on the other side of
+    # the sync transition: the rings' slots have to be re-zeroed, since
+    # `estimate_cn0` sums the whole buffers (and their in-use length shrinks as
+    # `M` grows). Dropping the pre-sync windows at sync matters even when `M` is
+    # unchanged — they were unaligned, so some of them straddled a bit flip and
+    # would drag the estimate down for a whole `num_records` after sync.
     fill!(narrowband_powers, 0.0)
     fill!(wideband_powers, 0.0)
     narrowband_powers[1] = narrowband_power
@@ -500,6 +555,7 @@ update(estimator::NWPRCN0Estimator, prompt) = _update_nwpr(
         ratio_current_index = 1,
         filled_ratio_length = 1,
         num_records_per_ratio = num_records,
+        ratios_are_bit_aligned = bit_aligned,
     )
 end
 
@@ -514,6 +570,7 @@ end
     ratio_current_index::Int = estimator.ratio_current_index,
     filled_ratio_length::Int = estimator.filled_ratio_length,
     num_records_per_ratio::Int = estimator.num_records_per_ratio,
+    ratios_are_bit_aligned::Bool = estimator.ratios_are_bit_aligned,
     narrowband_sum::ComplexF64 = complex(0.0, 0.0),
     wideband_power::Float64 = 0.0,
     num_accumulated_records::Int = 0,
@@ -527,6 +584,7 @@ end
     ratio_current_index,
     filled_ratio_length,
     num_records_per_ratio,
+    ratios_are_bit_aligned,
     narrowband_sum,
     wideband_power,
     num_accumulated_records,
@@ -578,19 +636,20 @@ The default CN0 estimator for `signal`: an [`NWPRCN0Estimator`](@ref) averaging
 over `num_prompts_for_cn0_estimation` records, with a
 `MomentsCN0Estimator(num_prompts_for_cn0_estimation)` as its fallback.
 
-The free-running narrowband window only has to be chosen here for signals that
-have no navigation-bit period to take it from (pilots — a data-bearing signal's
-window is one bit, see [`CN0UpdateContext`](@ref)). It is set to the whole code
-blocks covering about 20 ms, the GPS L1 C/A bit period, which is a reasonable
-proxy for how long a coherent sum survives typical residual Doppler: 20 blocks
-for a 1 ms code, 2 for GPS L1C-P's 10 ms code.
+The narrowband window is the whole code blocks covering about 5 ms, at least two
+of them: 5 blocks for a 1 ms code, 2 for GPS L1C-P's 10 ms code. It caps the
+coherent sum for a data-bearing signal (whose window tiles the navigation bit)
+and is the window outright for a pilot. About 5 ms is what a coherent sum
+survives with the default 18 Hz carrier loop at the low C/N₀ this estimator
+exists for; see [`NWPRCN0Estimator`](@ref) for the measurements and for when to
+raise it.
 """
 function default_cn0_estimator(
     signal::AbstractGNSSSignal,
     num_prompts_for_cn0_estimation::Int,
 )
     code_period = get_code_length(signal) / get_code_frequency(signal)
-    num_narrowband_code_blocks = max(1, round(Int, 20ms / code_period))
+    num_narrowband_code_blocks = max(2, round(Int, 5ms / code_period))
     NWPRCN0Estimator(;
         num_records = num_prompts_for_cn0_estimation,
         num_narrowband_code_blocks,
