@@ -10,8 +10,9 @@ satellite produces one CN0 value per signal.
 The default estimator is Van Dierendonck's **narrowband/wideband power ratio**
 (NWPR), implemented as [`NWPRCN0Estimator`](@ref). Per narrowband window of `M`
 records it forms the coherent power `NBP = |Σ prompt|²` and the incoherent power
-`WBP = Σ |prompt|²`, averages `NBP / WBP` over as many windows as fit in
-`num_prompts_for_cn0_estimation` records, and turns the mean ratio into a C/N₀.
+`WBP = Σ |prompt|²`, divides the sums of both over as many windows as fit in
+`num_prompts_for_cn0_estimation` records, and turns that mean power ratio into a
+C/N₀.
 
 ```@docs
 NWPRCN0Estimator
