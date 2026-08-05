@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.4.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v4.4.0...v4.4.1) (2026-08-05)
+
+
+### Bug Fixes
+
+* **track:** advance the secondary-code anchor across a mid-fold sync ([fe7f2aa](https://github.com/JuliaGNSS/Tracking.jl/commit/fe7f2aa44aaaf1454195b427364041abde2b7f04)), closes [#219](https://github.com/JuliaGNSS/Tracking.jl/issues/219) [#211](https://github.com/JuliaGNSS/Tracking.jl/issues/211)
+* **track:** credit pre-sync-correlated records to the bit accumulator ([1d05f5e](https://github.com/JuliaGNSS/Tracking.jl/commit/1d05f5e8693bfafd2fe896b0ed0d3a0e2e0eb299)), closes [#219](https://github.com/JuliaGNSS/Tracking.jl/issues/219)
+
 # [4.4.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v4.3.0...v4.4.0) (2026-08-03)
 
 
