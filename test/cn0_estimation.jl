@@ -341,6 +341,36 @@ end
     @test CN0UpdateContext(GPSL1CA(), synced_buffer, 1, false).bit_code_block_index == -1
 end
 
+@testset "NWPR CN0 estimator when a record outgrows its own window" begin
+    bit_buffer = BitBuffer{UInt64}()
+    context(num_code_blocks, bit_block_index) =
+        CN0UpdateContext(GPSL1CA(), num_code_blocks, 20, bit_block_index, bit_buffer)
+
+    # `set_preferred_num_code_blocks_to_integrate!` at a whole navigation bit
+    # closes every window on a single record, where `NBP == WBP` by construction
+    # and the window carries no information. The windows buffered before the
+    # switch have to go with it: keeping them would freeze the estimate on
+    # windows formed at the old record length for good — `estimate_cn0` consults
+    # the `fallback` only while the ring is empty — and report them against the
+    # new record's integration time on top of that.
+    rng = Xoshiro(1)
+    # A true ~35 dB-Hz at T = 1 ms, so the ring holds a finite value that is
+    # distinguishable from the fallback's.
+    noisy() = sqrt(10^3.5 * 1e-3) + randn(rng, ComplexF64)
+    estimator = NWPRCN0Estimator(; num_records = 100, num_narrowband_code_blocks = 5)
+    for _ = 1:5, bit_block_index = 0:19
+        estimator = update(estimator, noisy(), context(1, bit_block_index))
+    end
+    @test Base.length(estimator) == 20
+    @test estimator.num_records_per_ratio == 5
+    for _ = 1:20
+        estimator = update(estimator, noisy(), context(20, 0))
+    end
+    @test Base.length(estimator) == 0
+    @test estimate_cn0(estimator, 20ms) ==
+          estimate_cn0(get_fallback_cn0_estimator(estimator), 20ms)
+end
+
 @testset "CN0 estimation" begin
     Random.seed!(1234)
     carrier_doppler = 0Hz
