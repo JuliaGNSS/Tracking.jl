@@ -5,6 +5,9 @@ on:
       - master
     tags: ['*']
   pull_request:
+concurrency:
+  group: docs-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'deploy' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   docs:
     name: Documentation
