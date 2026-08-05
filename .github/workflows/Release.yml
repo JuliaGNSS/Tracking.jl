@@ -5,6 +5,10 @@ on:
   push:
     branches:
       - master
+      # Maintenance branch for 4.x backports — matches the semantic-release
+      # maintenance-branch pattern already configured below, so a fix landing
+      # here is released as the next 4.x patch version.
+      - '4.x'
 
 jobs:
   release:
