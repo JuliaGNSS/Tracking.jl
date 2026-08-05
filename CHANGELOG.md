@@ -1,5 +1,57 @@
 # Changelog
 
+# [6.0.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v5.1.1...v6.0.0) (2026-08-05)
+
+
+* feat(cn0)!: default to NWPR and forward the navigation-bit state to the estimator ([56469e5](https://github.com/JuliaGNSS/Tracking.jl/commit/56469e5e09fa1e0060d372e649278b8548927f77))
+* feat(cn0)!: make the CN0 estimator pluggable via a type parameter ([ed6c93f](https://github.com/JuliaGNSS/Tracking.jl/commit/ed6c93f32afd5162936dfe2bf59a77877893f94a))
+
+
+### Bug Fixes
+
+* **cn0:** cap NWPR's coherent window at the loop's coherence time ([b4c2fad](https://github.com/JuliaGNSS/Tracking.jl/commit/b4c2fad9c7f21094c8009bad3c0769d4e9733437))
+* **cn0:** drop the buffered windows when a record outgrows its own window ([04e7cc3](https://github.com/JuliaGNSS/Tracking.jl/commit/04e7cc382968f6898f6e1ac5928b00c9a37a4efb))
+* **cn0:** estimate the NWPR power ratio as ΣNBP/ΣWBP ([4e58670](https://github.com/JuliaGNSS/Tracking.jl/commit/4e5867082ee8c0f98b62cc8ecbceeea3b6a94fbe))
+* **cn0:** keep a record spanning no whole code block out of the window ([772d688](https://github.com/JuliaGNSS/Tracking.jl/commit/772d688c7c872131f8f203db5eb66f96a7907da7))
+
+
+### Features
+
+* **cn0:** add NoCN0Estimator for signals that should not be measured ([21644a2](https://github.com/JuliaGNSS/Tracking.jl/commit/21644a26806807e7654a742c1b5900e14e3d8b6d))
+
+
+### BREAKING CHANGES
+
+* `estimate_cn0` now returns NWPR's estimate instead of the
+moment ratio's, so its numbers change for every satellite — most visibly below
+~30 dB-Hz, where it stops reporting the moment ratio's ~27.6 dB-Hz noise floor.
+Two consequences for downstream code:
+
+  - the value can be `-Inf dB-Hz` ("no detectable signal", the limit of the
+    expression on noise). Thresholding needs no change; *averaging* the estimate
+    does;
+  - NWPR measures *coherent* C/N₀, so residual loop phase noise counts against
+    it: with the conventional PLL at 1 ms records it reads ~1.5 dB low at a true
+    35 dB-Hz and ~5 dB low at 25 dB-Hz.
+
+Pass `cn0_estimator = MomentsCN0Estimator(num_prompts_for_cn0_estimation)` to
+`TrackedSignal` / `TrackedSat` to keep the previous estimator, or
+`NWPRCN0Estimator(; num_presync_narrowband_code_blocks = 0)` to use it only
+until bit sync.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+* `TrackedSignal` gained a fifth type parameter,
+`TrackedSignal{Sig, B, C, PCF, CN0}`, holding the CN0 estimator type. Code that
+spells the type out with exactly four parameters — e.g. a method signature
+`f(::TrackedSignal{Sig,B,C,PCF})` used as a concrete type, or a stored
+`Dictionary{Int, TrackedSat{Tuple{TrackedSignal{S,B,C,P}}, D}}` slot type — must
+add the parameter or leave it off entirely (`TrackedSignal{Sig,B,C,PCF}` still
+works as a `UnionAll` in dispatch position). Field access, the accessor ladder
+(`get_cn0_estimator`, `estimate_cn0`, …) and all constructor calls are
+unaffected.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
 ## [5.1.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v5.1.0...v5.1.1) (2026-08-04)
 
 
