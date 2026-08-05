@@ -1,5 +1,12 @@
 # Changelog
 
+## [6.0.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v6.0.0...v6.0.1) (2026-08-05)
+
+
+### Bug Fixes
+
+* **ci:** serialize Documentation deploys to stop the tag/branch push race ([c60831b](https://github.com/JuliaGNSS/Tracking.jl/commit/c60831bf8eb2f779e33f24a56f4ed3438e7aef5d)), closes [#pages](https://github.com/JuliaGNSS/Tracking.jl/issues/pages)
+
 # [6.0.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v5.1.1...v6.0.0) (2026-08-05)
 
 
