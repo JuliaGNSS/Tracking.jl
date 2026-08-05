@@ -538,6 +538,13 @@ update(estimator::NWPRCN0Estimator, prompt) = _update_nwpr(
     # No admissible window: drop whatever was open (its remainder would either
     # straddle the sync transition or was never coherent to begin with).
     window_code_blocks < 1 && return _with_window_state(estimator, fallback)
+    # A record spanning no whole code block — the fractional one right after a
+    # sync phase-snap resets the accumulator — has no position on the grid: the
+    # bit accumulator does not advance over it, so folding its prompt in would
+    # leave the window holding one more record than the blocks it covers, where
+    # the inversion `(µ̂ − 1)/(M − µ̂)` assumes `M` records of one length. Skip
+    # it and leave the open window exactly as it stands.
+    num_code_blocks < 1 && return _with_open_window(estimator, fallback)
     # A grid-following window that has accumulated `k` blocks must sit exactly
     # `k` blocks into its window. Anything else means the grid moved under the
     # open window — sync was just found, so the window that was opened at the
@@ -651,6 +658,18 @@ end
     num_accumulated_code_blocks,
     fallback,
 )
+
+# Advance nothing but the fallback: the open window is carried over untouched,
+# where `_with_window_state`'s defaults would close it.
+@inline _with_open_window(estimator::NWPRCN0Estimator, fallback::AbstractCN0Estimator) =
+    _with_window_state(
+        estimator,
+        fallback;
+        narrowband_sum = estimator.narrowband_sum,
+        wideband_power = estimator.wideband_power,
+        num_accumulated_records = estimator.num_accumulated_records,
+        num_accumulated_code_blocks = estimator.num_accumulated_code_blocks,
+    )
 
 """
 $(SIGNATURES)
