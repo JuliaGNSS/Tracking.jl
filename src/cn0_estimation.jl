@@ -339,7 +339,10 @@ reports its `fallback` for good.
     with a different record count (records lengthened at bit sync, say) restarts
     the buffers — and so does a window completing on the other side of the sync
     transition, since a pre-sync window may have straddled a bit flip and must
-    not be averaged together with clean bit-aligned ones.
+    not be averaged together with clean bit-aligned ones. A window closing on a
+    single record *empties* them instead of restarting them: the records have
+    grown to the window length, so there is nothing left to average and the
+    `fallback` takes over (the last row of the table above).
   - `narrowband_sum`, `wideband_power`, `num_accumulated_records`,
     `num_accumulated_code_blocks` — the currently open window.
   - `fallback` — the estimator reported while no window has completed yet, and
@@ -558,12 +561,25 @@ update(estimator::NWPRCN0Estimator, prompt) = _update_nwpr(
         num_accumulated_records = num_records,
         num_accumulated_code_blocks = num_code_blocks_accumulated,
     )
-    # Window complete. `NBP / WBP` needs at least two records to say anything
-    # (with one, `NBP == WBP` by construction), and `M` enters the estimate, so
-    # a changed record count invalidates the powers buffered at the old one.
-    if num_records < 2 || iszero(wideband_power)
-        return _with_window_state(estimator, fallback)
-    end
+    # Window complete. `NBP / WBP` needs at least two records to say anything:
+    # with one, `NBP == WBP` by construction. A window closing on a single
+    # record means the records themselves have grown to at least the window
+    # length, which is a property of the configuration rather than a transient
+    # — so the buffered windows have to go with it. Leaving them would freeze
+    # the estimate on them for good (`estimate_cn0` only consults the
+    # `fallback` while the ring is empty), and freeze it at the *new* record's
+    # `integration_time` at that, which is not the one they were formed at.
+    num_records < 2 && return _with_window_state(
+        estimator,
+        fallback;
+        ratio_current_index = 0,
+        filled_ratio_length = 0,
+        num_records_per_ratio = 0,
+    )
+    # A window whose every prompt was exactly zero: nothing to buffer, but the
+    # ring stays. This is the division guard for a degenerate input, not a
+    # regime the estimator can settle into.
+    iszero(wideband_power) && return _with_window_state(estimator, fallback)
     narrowband_powers = estimator.buffered_narrowband_powers
     wideband_powers = estimator.buffered_wideband_powers
     narrowband_power = abs2(narrowband_sum)
