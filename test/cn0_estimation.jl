@@ -371,6 +371,31 @@ end
           estimate_cn0(get_fallback_cn0_estimator(estimator), 20ms)
 end
 
+@testset "NWPR CN0 estimator skips a record spanning no whole code block" begin
+    # The fractional record right after a sync phase-snap resets the accumulator
+    # covers no whole code block, so it has no position on the bit grid: it
+    # leaves the open window untouched rather than closing it one record over the
+    # block count the inversion assumes. Its prompt still reaches the fallback.
+    bit_buffer = BitBuffer{UInt64}()
+    context(num_code_blocks, bit_block_index) =
+        CN0UpdateContext(GPSL1CA(), num_code_blocks, 20, bit_block_index, bit_buffer)
+
+    estimator = NWPRCN0Estimator(; num_records = 100, num_narrowband_code_blocks = 5)
+    for bit_block_index = 0:2
+        estimator = update(estimator, 1.0 + 0.0im, context(1, bit_block_index))
+    end
+    @test estimator.num_accumulated_records == 3
+    estimator = update(estimator, 1.0 + 0.0im, context(0, 3))
+    @test estimator.num_accumulated_records == 3
+    @test estimator.num_accumulated_code_blocks == 3
+    for bit_block_index = 3:4
+        estimator = update(estimator, 1.0 + 0.0im, context(1, bit_block_index))
+    end
+    @test Base.length(estimator) == 1
+    @test estimator.num_records_per_ratio == 5
+    @test Base.length(get_fallback_cn0_estimator(estimator)) == 6
+end
+
 @testset "CN0 estimation" begin
     Random.seed!(1234)
     carrier_doppler = 0Hz
