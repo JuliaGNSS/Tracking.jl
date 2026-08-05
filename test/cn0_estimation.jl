@@ -600,7 +600,6 @@ end
     # median over seeds, since a single run of a low-C/N₀ estimate says little.
     fade = (; fade_to = 25.0, fade_blocks = 400)
     seeds = 1:16
-    median_of(xs) = sort(collect(xs))[div(length(xs) + 1, 2)]
     faded = [track_noisy(45.0, 1500; seed, fade...) for seed in seeds]
     full_bit = [
         track_noisy(
