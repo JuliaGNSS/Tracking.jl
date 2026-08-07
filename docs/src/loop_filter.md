@@ -16,22 +16,29 @@ The default Doppler estimator is `ConventionalAssistedPLLAndDLL` which uses:
 - `SecondOrderBilinearLF` for the code loop
 
 When [`TrackState`](@ref) builds the default estimator implicitly from a
-signal-tuple declaration, the loop bandwidths are sized **per signal** at
-`BL · T ≈ 0.018`, where `T` is the signal's primary code period — that's
-~10× margin from the `BL · T < 0.18` stability edge of the bilinear
-third-order filter. The values fall out to:
+signal-tuple declaration, the loop bandwidths are sized **per signal** from
+the signal's primary code period `T`. The carrier loop takes
+`BL · T ≈ 0.018` — ~10× margin from the `BL · T < 0.18` stability edge of
+the bilinear third-order filter. The code loop takes a flat 1 Hz reference,
+clamped by the same `BL · T` product. The values fall out to:
 
-| Signal      | Primary period | Carrier BL | Code BL  |
-|-------------|----------------|-----------:|---------:|
-| GPS L1 C/A  | 1 ms           |    18 Hz   |   1 Hz   |
-| GPS L5I     | 1 ms           |    18 Hz   |   1 Hz   |
-| Galileo E1B | 4 ms           |   4.5 Hz   |  0.25 Hz |
-| GPS L1C-D   | 10 ms          |   1.8 Hz   |  0.1 Hz  |
-| GPS L1C-P   | 10 ms          |   1.8 Hz   |  0.1 Hz  |
+| Signal      | Primary period | Carrier BL | Code BL   |
+|-------------|----------------|-----------:|----------:|
+| GPS L1 C/A  | 1 ms           |    18 Hz   |    1 Hz   |
+| GPS L5I     | 1 ms           |    18 Hz   |    1 Hz   |
+| Galileo E1B | 4 ms           |   4.5 Hz   |    1 Hz   |
+| GPS L1C-D   | 10 ms          |   1.8 Hz   |    1 Hz   |
+| GPS L1C-P   | 10 ms          |   1.8 Hz   |    1 Hz   |
+| GPS L2 CM   | 20 ms          |   0.9 Hz   |  0.9 Hz   |
+| GPS L2 CL   | 1.5 s          | 0.012 Hz   | 0.012 Hz  |
 
 The 1-ms-primary-period signals (L1 C/A, L5I) keep the historical 18 Hz /
-1 Hz default; longer-period signals get appropriately tighter loops so the
-PLL stays stable. Override per signal by defining methods of
+1 Hz default; longer-period signals get appropriately tighter carrier loops
+so the PLL stays stable. The DLL does **not** follow the carrier loop down:
+being carrier-aided it has almost no dynamic stress to track, so its
+bandwidth is a thermal-noise-versus-pull-in choice that does not scale with
+the symbol rate, and the clamp binds only for the long L2 C primaries.
+Override per signal by defining methods of
 [`default_carrier_loop_filter_bandwidth`](@ref) /
 [`default_code_loop_filter_bandwidth`](@ref), or override at construction
 time by passing your own `doppler_estimator =` to `TrackState`.

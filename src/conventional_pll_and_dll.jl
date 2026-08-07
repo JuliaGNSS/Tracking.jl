@@ -35,27 +35,50 @@ reference bandwidth once and the loop stays stable at any integration length
 — no manual `1/N` adjustment is needed.
 """
 function default_carrier_loop_filter_bandwidth(signal::AbstractGNSSSignal)
-    # T = primary_code_period_seconds. The estimator's bandwidth fields are
-    # typed `typeof(1.0Hz)`, so explicitly land on Hz (otherwise `1/s`
-    # propagates and trips the typed field assignment).
-    primary_period = get_code_length(signal) / get_code_frequency(signal)
-    uconvert(Hz, 0.018 / primary_period)
+    # The estimator's bandwidth fields are typed `typeof(1.0Hz)`, so explicitly
+    # land on Hz (otherwise `1/s` propagates and trips the typed field assignment).
+    uconvert(Hz, 0.018 / primary_code_period(signal))
 end
+
+# T, the primary code period — one code block, not the chosen coherent integration
+# length. Both loop-bandwidth defaults are sized against it.
+primary_code_period(signal::AbstractGNSSSignal) =
+    get_code_length(signal) / get_code_frequency(signal)
 
 """
 $(SIGNATURES)
 
-Recommended code-loop-filter (DLL) bandwidth for `signal`'s primary
-integration period. Picks 1/18 of [`default_carrier_loop_filter_bandwidth`](@ref)
-— the historical 18:1 carrier:code-bandwidth ratio that gives the DLL good
-noise rejection without lagging the PLL.
+Recommended code-loop-filter (DLL) bandwidth for `signal`: 1 Hz, clamped by the
+code loop's own `BL · T` stability product on the primary code period.
 
-For L1 C/A and L5I (T = 1 ms) this returns 1 Hz; for L1C-D / L1C-P
-(T = 10 ms) it returns 0.1 Hz.
-Override by defining a method for your signal type.
+```julia
+BL = min(1Hz, 0.018 / primary_code_period(signal))   # this default
+```
+
+Unlike the carrier loop, a *carrier-aided* DLL has almost no dynamic stress to
+track — the code Doppler is handed to it by the PLL (see `aid_dopplers`) — so its
+bandwidth is set by thermal noise against the time it needs to pull in the
+acquisition handoff's code-phase error, and neither of those scales with the
+symbol rate. 1 Hz is the conventional carrier-aided value and sits inside the
+0.25–2 Hz the reference software receivers use, none of which varies it by signal
+or by discriminator. The clamp only binds once the primary code period is long
+enough for the DLL's own update interval to threaten stability: it leaves L1 C/A,
+L5I, Galileo E1B/E1C and L1C at 1 Hz, and pulls L2 CM (T = 20 ms) to 0.9 Hz and
+L2 CL (T = 1.5 s) to 0.012 Hz.
+
+Sizing the DLL off the carrier default instead — the 18:1 ratio this used to
+apply — inherits the PLL's `1/T` and starves the long-primary signals: Galileo
+E1B came out at 0.25 Hz, where the weakest satellite on the Fraunhofer III-7a
+capture loses 7 dB-Hz over a ~4 s pull-in transient. At 1 Hz it stays within
+1 dB-Hz of its steady C/N0.
+
+As with the carrier bandwidth, this is the reference value for a
+one-primary-code-period integration; the estimator scales it by `1/N` when you
+integrate `N` blocks coherently. Override by defining a method for your signal
+type.
 """
 function default_code_loop_filter_bandwidth(signal::AbstractGNSSSignal)
-    default_carrier_loop_filter_bandwidth(signal) / 18
+    min(1.0Hz, uconvert(Hz, 0.018 / primary_code_period(signal)))
 end
 
 """

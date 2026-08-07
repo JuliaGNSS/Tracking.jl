@@ -36,10 +36,11 @@ using Tracking:
     @test @inferred(get_default_correlator(gpsl1c_d, NumAnts(3))) ==
           VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
-    # 10 ms primary period at BL·T ≈ 0.018 → 1.8 Hz carrier / 0.1 Hz code.
-    # 10× tighter than the L1 C/A default; required for stable 10 ms tracking.
+    # 10 ms primary period at BL·T ≈ 0.018 → 1.8 Hz carrier, 10× tighter than the
+    # L1 C/A default and required for stable 10 ms tracking. 10 ms is still short
+    # enough to leave the DLL at its unclamped 1 Hz reference.
     @test @inferred(default_carrier_loop_filter_bandwidth(gpsl1c_d)) ≈ 1.8Hz
-    @test @inferred(default_code_loop_filter_bandwidth(gpsl1c_d)) ≈ 0.1Hz
+    @test @inferred(default_code_loop_filter_bandwidth(gpsl1c_d)) ≈ 1.0Hz
 
     # 1 symbol = 1 primary period; sync buffer is dead state, but a
     # concrete type is still required.

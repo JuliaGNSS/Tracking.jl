@@ -1,16 +1,27 @@
 module DiscriminatorsTest
 
 using Test: @test, @testset, @inferred
-using GNSSSignals: GPSL1CA, get_code_frequency
+using GNSSSignals:
+    GPSL1CA,
+    GPSL1C_P,
+    GalileoE1B,
+    GalileoE1B_BOC11,
+    GalileoE1C,
+    get_code,
+    get_code_frequency,
+    get_code_length
 using StaticArrays: SVector
-using Unitful: Hz, ms
+using Unitful: Hz, MHz, ms, upreferred
 using Tracking:
     EarlyPromptLateCorrelator,
+    VeryEarlyPromptLateCorrelator,
     pll_disc,
     fll_disc,
     dll_disc,
+    get_correlator_sample_shifts,
     get_early_late_sample_spacing,
-    get_prompt
+    get_prompt,
+    update_accumulator
 
 @testset "PLL discriminator" begin
     correlator_minus60off = EarlyPromptLateCorrelator(
@@ -88,6 +99,56 @@ end
     @test @inferred(dll_disc(gpsl1, prompt_correlator, 0.0Hz, sampling_frequency)) == 0
     @test @inferred(dll_disc(gpsl1, late_correlator, 0.0Hz, sampling_frequency)) == 0.25
     @test @inferred(dll_disc(gpsl1, very_late_correlator, 0.0Hz, sampling_frequency)) == 0.5
+end
+
+# A chips-calibrated discriminator has an S-curve slope of 1 at the origin: sweep a true
+# code offset τ over the linear region, build the accumulators by correlating the
+# (noiseless) code against tap replicas at the correlator's actual sample-quantized
+# offsets, and least-squares fit `dll_disc`'s output against τ.
+function dll_disc_s_curve_slope(
+    signal,
+    correlator,
+    sampling_frequency;
+    prn = 1,
+    offsets = -0.05:0.005:0.05,
+)
+    code_frequency = get_code_frequency(signal)
+    chips_per_sample = upreferred(code_frequency / sampling_frequency)
+    samples_per_code = round(Int, get_code_length(signal) / chips_per_sample)
+    shifts = get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
+    phases = (0:(samples_per_code-1)) .* chips_per_sample
+    discriminator = map(offsets) do offset
+        incoming = get_code.(signal, phases .+ offset, prn)
+        accumulators = map(shifts) do shift
+            replica = get_code.(signal, phases .+ shift * chips_per_sample, prn)
+            complex(sum(incoming .* replica) / samples_per_code, 0.0)
+        end
+        dll_disc(
+            signal,
+            update_accumulator(correlator, SVector(accumulators)),
+            0.0Hz,
+            sampling_frequency,
+        )
+    end
+    sum(offsets .* discriminator) / sum(abs2, offsets)
+end
+
+@testset "DLL discriminator S-curve slope is 1 (calibrated in chips)" begin
+    veml = VeryEarlyPromptLateCorrelator()
+    # EPL on GPS L1 C/A: the (2 - d) / 2 normalization.
+    @test dll_disc_s_curve_slope(GPSL1CA(), EarlyPromptLateCorrelator(), 20MHz) ≈ 1.0 atol =
+        0.02
+    # VEML on BOC(1,1) — the normalization's own correlation model — at two sampling
+    # rates that quantize the taps differently (±3/±12 and ±12/±47 samples).
+    @test dll_disc_s_curve_slope(GalileoE1B_BOC11(), veml, 20MHz) ≈ 1.0 atol = 0.02
+    @test dll_disc_s_curve_slope(GalileoE1B_BOC11(), veml, 79.5MHz) ≈ 1.0 atol = 0.02
+    # VEML on the full modulations: BOC(1,1) is the modulation model the normalization
+    # assumes, so its residual gain error is the modulation mismatch — a few percent for
+    # the additive CBOC⁺ (E1B) and TMBOC (L1C pilot), more for E1C's anti-phased CBOC⁻,
+    # whose subtracted BOC(6,1) component flattens the correlation peak.
+    @test dll_disc_s_curve_slope(GalileoE1B(), veml, 20MHz) ≈ 1.0 atol = 0.1
+    @test dll_disc_s_curve_slope(GPSL1C_P(), veml, 20MHz) ≈ 1.0 atol = 0.1
+    @test dll_disc_s_curve_slope(GalileoE1C(), veml, 20MHz) ≈ 1.0 atol = 0.2
 end
 
 end
