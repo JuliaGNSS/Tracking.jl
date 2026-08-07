@@ -787,7 +787,7 @@ end
 # code phase, and assert the estimated C/N0 stays high. With the narrow default
 # spacing the loop pulls in and holds ~45 dB-Hz; with the buggy 0.5-chip spacing
 # the code walks off and C/N0 collapses to ~31 dB-Hz. A wider-than-default code
-# loop (1 Hz vs ~0.1 Hz) just makes the divergence show within ~1.3 s.
+# loop (4 Hz vs 1 Hz) just makes the divergence show within ~1.3 s.
 @testset "GPS L1C-D BOC code tracking holds lock under a code offset" begin
     Random.seed!(1234)
     signal = GPSL1C_D()
@@ -803,7 +803,7 @@ end
 
     estimator = ConventionalAssistedPLLAndDLL(;
         carrier_loop_filter_bandwidth = 1.8Hz,
-        code_loop_filter_bandwidth = 1.0Hz,
+        code_loop_filter_bandwidth = 4.0Hz,
     )
     track_state = TrackState(; signal, doppler_estimator = estimator)
     # 0.2-chip seed offset — a realistic acquisition handoff error that puts the
