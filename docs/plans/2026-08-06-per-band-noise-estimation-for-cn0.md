@@ -967,7 +967,7 @@ which is one of the three reasons the software default matches it.
 
 ## External APIs
 
-New exports: `AbstractNoiseEstimator`, `CorrelatorNoiseEstimator`,
+New exports: `AbstractNoiseEstimator`, `CorrelatorNoiseEstimator`, `requires_noise_density`,
 `NoiseObservation`, `noise_observation_from_correlator`,
 `noise_observation`, `noise_observation_from_samples`, `append_noise_observation!`,
 `get_noise_density`, `NoiseRefCN0Estimator`.
@@ -985,8 +985,47 @@ The hardware path is then symmetric with what an FPGA producer already does:
 noise, `estimate_dopplers_and_filter_prompt!` to fold.
 
 `TrackState`'s kwarg constructor (`src/tracking_state.jl:43`) gains
-`noise_estimators = nothing`, defaulting to a `CorrelatorNoiseEstimator` per
-band id found in `groups`.
+`noise_estimators = nothing`, which provisions a `CorrelatorNoiseEstimator` **only for bands
+that need one** — see below.
+
+### Provision only where a C/N₀ estimator asks for it
+
+A noise estimator is pure cost if nothing consumes its density. `MomentsCN0Estimator`,
+`NWPRCN0Estimator` and `NoCN0Estimator` never read one; only `NoiseRefCN0Estimator` does. An
+earlier draft defaulted to one per band unconditionally, which would have run a despread per
+band per chunk — O(N), ~1-3 % of correlation work — for nobody, and shown up as an
+unexplained regression in `SUITE["track"]` for anyone who kept NWPR.
+
+So the requirement becomes a trait on the C/N₀ estimator:
+
+```julia
+requires_noise_density(::AbstractCN0Estimator) = false
+requires_noise_density(::NoiseRefCN0Estimator) = true
+```
+
+`TrackState`'s constructor walks its groups' signals and provisions a `CorrelatorNoiseEstimator`
+for a band only where some signal on it returns `true`. Bands with no requiring signal get **no
+entry** in the `noise_estimators` NamedTuple, so `_update_band_noise!`'s tuple recursion does no
+work for them and the cost is exactly zero — which is the answer for anyone who deliberately
+stays on `MomentsCN0Estimator` or `NWPRCN0Estimator`.
+
+The trait belongs on the public extension point rather than being a hard-coded type check,
+because `update(::AbstractCN0Estimator, prompt, ::CN0UpdateContext)`
+(`src/cn0_estimation.jl:92`) is already documented as user-extensible: a third-party estimator
+that wants a density must be able to say so, and one that does not must not pay for it.
+
+Two consequences worth stating:
+
+- With the trait in place, the "no source configured" throw becomes reachable **only** by
+  explicitly passing `noise_estimators` that omit a band whose signals need one — i.e. exactly
+  the deliberate mistake the throw exists to catch, rather than something the defaults can
+  produce.
+- `add_satellite!` can in principle add a requiring signal to a band that had none (a band that
+  was empty, or held only non-requiring estimators). Provisioning on add would mean rebuilding
+  `TrackState`'s type; the warn-once at the skip site already diagnoses it, so leave it to that
+  and document the limitation rather than building machinery for an edge case. Post-Phase 2 it
+  is nearly unreachable anyway, since `default_cn0_estimator` returns a requiring estimator and
+  any band with satellites will already have been provisioned.
 
 ### Breaking changes
 
@@ -1184,7 +1223,7 @@ moment method`, `### The window follows the navigation bits`, …). Restructure 
 around a comparison and a decision, and add a companion page for the noise sources.
 
 **Hard gate first:** `docs/make.jl:10` sets `checkdocs = :exports`, so every new
-exported symbol needs a docstring or the docs build fails. That is 9 new exports.
+exported symbol needs a docstring or the docs build fails. That is 10 new exports.
 Add `noise_estimator.md` to the `pages` list at `docs/make.jl:11-21`.
 
 `docs/src/cn0_estimator.md` gains a comparison table up front, one row per
@@ -1313,6 +1352,10 @@ Modified:
   below ~0.01, i.e. the spacing really is ≥1 chip after `get_correlator_sample_shifts`
   rounds it to whole samples at the band's `f_s`. A regression on that rounding, not on the
   code statistics.
+- **No provisioning without a consumer**: a `TrackState` whose signals all use
+  `MomentsCN0Estimator`/`NWPRCN0Estimator`/`NoCN0Estimator` gets an empty `noise_estimators`,
+  performs no despread, and shows no change against `SUITE["track"]`. The mixed case — one band
+  requiring, another not — provisions exactly one.
 - **Configured-but-never-fed**: a band with a `CorrelatorNoiseEstimator` that is never
   appended to and never measured warns exactly once and leaves C/N₀ at `-Inf dB-Hz` without
   throwing; and the software path never emits that warning. This is the likeliest hardware
