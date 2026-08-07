@@ -50,9 +50,10 @@ satellite's estimator-driver signal (`signals[1]`) completes an integration,
     filter to read and reset.
 
 The satellite-shared carrier/code Doppler is always updated through the same
-carrier-aiding (`aid_dopplers`) used by the conventional estimator, and
-the same `1/N` loop-bandwidth scaling applies when a signal integrates `N`
-primary code blocks coherently.
+carrier-aiding (`aid_dopplers`) used by the conventional estimator, and the
+same effective-bandwidth handling applies when a signal integrates `N` primary
+code blocks coherently: `1/N` on the carrier loop, a stability cap against the
+actual integration time on the code loop.
 
 ## The receiver-side loop
 

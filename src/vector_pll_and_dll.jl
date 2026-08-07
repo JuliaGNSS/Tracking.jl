@@ -301,13 +301,18 @@ end
             correlated_pre_sync = synced_earlier_in_fold,
         )
 
-        # Same 1/N effective-bandwidth scaling as the conventional estimator —
-        # holds the loop's BL·Δt stability product at its single-period value
-        # when a record coherently integrates N primary code blocks.
+        # Same effective-bandwidth handling as the conventional estimator: the
+        # carrier's per-primary-period reference is scaled by 1/N when a record
+        # coherently integrates N primary code blocks, holding its BL·Δt
+        # stability product at the single-period value, while the DLL's absolute
+        # bandwidth is only capped by that same product against the record's
+        # actual integration time.
         carrier_bandwidth =
             pll_and_dll_state.carrier_loop_filter_bandwidth / integrated_code_blocks
-        code_bandwidth =
-            pll_and_dll_state.code_loop_filter_bandwidth / integrated_code_blocks
+        code_bandwidth = effective_code_loop_filter_bandwidth(
+            pll_and_dll_state.code_loop_filter_bandwidth,
+            integration_time,
+        )
 
         pll_discriminator = pll_disc(signal, filtered_correlator)
         fll_discriminator =

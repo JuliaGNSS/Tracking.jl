@@ -104,8 +104,9 @@ end
 # would stall forever. A single-block tracker runs alongside as the
 # reference: the multi-block tracker must decode the identical bit stream.
 # This exercises the post-sync multi-block path end to end: the widened
-# replica-code wrap, the multi-block integration boundary calculation, and
-# the `1/N` loop-bandwidth scaling.
+# replica-code wrap, the multi-block integration boundary calculation, and the
+# effective-bandwidth handling (`1/N` on the carrier loop, the stability cap on
+# the code loop).
 @testset "Bit detection with multi-block coherent integration" begin
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz

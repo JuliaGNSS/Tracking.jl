@@ -1,7 +1,7 @@
 module GPSL2CTest
 
 using Test: @test, @testset, @inferred
-using Unitful: Hz
+using Unitful: Hz, ms, s
 using GNSSSignals: GPSL2CM, GPSL2CL, get_band, get_band_id
 using Tracking:
     detect_bit_or_secondary_code_sync,
@@ -9,6 +9,7 @@ using Tracking:
     get_code_block_buffer_type,
     default_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
+    effective_code_loop_filter_bandwidth,
     EarlyPromptLateCorrelator,
     NumAnts
 
@@ -32,9 +33,17 @@ using Tracking:
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
 
     # 20 ms primary period (10230 chips at 511.5 kcps) → BL·T ≈ 0.018 gives
-    # 0.9 Hz carrier / 0.05 Hz code.
+    # 0.9 Hz carrier. The DLL default is the flat 1 Hz; the same product caps it
+    # to 0.9 Hz at filter time, against the actual integration time rather than
+    # the code period (see `effective_code_loop_filter_bandwidth`).
     @test @inferred(default_carrier_loop_filter_bandwidth(gpsl2cm)) ≈ 0.9Hz
-    @test @inferred(default_code_loop_filter_bandwidth(gpsl2cm)) ≈ 0.05Hz
+    @test @inferred(default_code_loop_filter_bandwidth(gpsl2cm)) ≈ 1.0Hz
+    @test @inferred(
+        effective_code_loop_filter_bandwidth(
+            default_code_loop_filter_bandwidth(gpsl2cm),
+            20ms,
+        )
+    ) ≈ 0.9Hz
 
     # 1 symbol = 1 primary period; sync buffer is dead state, but a concrete
     # type is still required.
@@ -62,9 +71,17 @@ end
     @test @inferred(get_default_correlator(gpsl2cl, NumAnts(1))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
 
-    # 1.5 s primary period → BL·T ≈ 0.018 gives 0.012 Hz carrier / 0.012/18 Hz code.
+    # 1.5 s primary period → BL·T ≈ 0.018 gives 0.012 Hz carrier. The DLL default
+    # stays the flat 1 Hz; its stability cap is what pulls it onto the carrier
+    # value at filter time, where the update interval is actually known.
     @test @inferred(default_carrier_loop_filter_bandwidth(gpsl2cl)) ≈ 0.012Hz
-    @test @inferred(default_code_loop_filter_bandwidth(gpsl2cl)) ≈ 0.012Hz / 18
+    @test @inferred(default_code_loop_filter_bandwidth(gpsl2cl)) ≈ 1.0Hz
+    @test @inferred(
+        effective_code_loop_filter_bandwidth(
+            default_code_loop_filter_bandwidth(gpsl2cl),
+            1.5s,
+        )
+    ) ≈ 0.012Hz
 
     # No sync feature; the search buffer is dead state but a concrete type is
     # still required.

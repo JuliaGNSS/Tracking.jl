@@ -40,9 +40,9 @@ using Tracking:
           VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
     # 4 ms primary period (4092 chips at 1.023 Mcps) → BL·T ≈ 0.018 gives
-    # 4.5 Hz carrier / 0.25 Hz code.
+    # 4.5 Hz carrier, and leaves the DLL at its unclamped 1 Hz reference.
     @test @inferred(default_carrier_loop_filter_bandwidth(galileo_e1b)) ≈ 4.5Hz
-    @test @inferred(default_code_loop_filter_bandwidth(galileo_e1b)) ≈ 0.25Hz
+    @test @inferred(default_code_loop_filter_bandwidth(galileo_e1b)) ≈ 1.0Hz
 
     # 1 symbol = 1 primary period; sync buffer is dead state, but a
     # concrete type is still required.
