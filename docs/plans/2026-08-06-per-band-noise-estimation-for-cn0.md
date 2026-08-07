@@ -288,18 +288,24 @@ They are deliberately not the same mechanism, and the docs should say so plainly
 | | `append_correlator_output!` | `append_noise_observation!` |
 |---|---|---|
 | scope | one **signal** of one satellite (`src/sat_state.jl:273`) | one **band** |
-| payload | the whole correlator: every tap (E/P/L, or VE…VL), complex, per antenna | one scalar |
+| payload | the whole correlator: every tap kept **separate**, complex, per antenna, because E, P and L drive different discriminators | the taps **pooled** into one power sum, plus `M`, the sample count and the PRN |
 | drives | code and carrier discriminators, both loop filters, bit sync, the NCO update, the C/N₀ prompt | the noise floor only — no loop, no discriminator, no bit sync |
 | timing | `sample_index` is load-bearing; vector tracking needs outputs on a common grid | none — `N₀` is slowly varying, so only "recent" matters |
 | lifetime | **drained** by the fold each chunk, buffer reused | **sliding window** bounded in time, never drained |
-| count | one per completed coherent integration per signal | `M`-weighted, any granularity the producer likes |
+| count | one per completed coherent integration per signal | any granularity the producer likes; `M` carries the weight, so a 1-dump and a 64-dump observation combine correctly |
+
+The payload row is the sharpest difference. Both traverse the same multi-tap correlator — see
+"Use every tap, spaced wide" — but for opposite reasons. The prompt path needs the taps kept
+apart because their *differences* are the code and carrier discriminants. The reference pools
+them, because at ≥1 chip spacing they are three independent looks at the same scalar and
+nothing about their relative values means anything.
 
 So a noise observation is not a degenerate `CorrelatorOutput` and does not travel through
 `TrackedSignal.correlator_outputs`. Reusing that path would mean giving the noise channel a
 PRN key in `SignalGroup.satellites`, a bit buffer, a post-corr filter and a C/N₀ estimator
 it must never use — and would surface it in `estimate_cn0` and every result accessor.
 
-### Where the state lives### Where the state lives
+### Where the state lives
 
 `TrackState` (`src/Tracking.jl:232-235`) gains a third field:
 
