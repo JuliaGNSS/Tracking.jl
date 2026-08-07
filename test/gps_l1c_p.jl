@@ -54,9 +54,10 @@ const L1C_P_MAX_ERRORS =
     @test @inferred(get_default_correlator(gpsl1c_p, NumAnts(3))) ==
           VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
-    # 10 ms primary period at BL·T ≈ 0.018 → 1.8 Hz carrier / 0.1 Hz code.
+    # 10 ms primary period at BL·T ≈ 0.018 → 1.8 Hz carrier, and short enough to
+    # leave the DLL at its unclamped 1 Hz reference.
     @test @inferred(default_carrier_loop_filter_bandwidth(gpsl1c_p)) ≈ 1.8Hz
-    @test @inferred(default_code_loop_filter_bandwidth(gpsl1c_p)) ≈ 0.1Hz
+    @test @inferred(default_code_loop_filter_bandwidth(gpsl1c_p)) ≈ 1.0Hz
 
     # 1800-chip per-PRN overlay → exact-width UInt1800.
     @test @inferred(get_code_block_buffer_type(gpsl1c_p)) === Tracking.UInt1800

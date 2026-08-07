@@ -1,7 +1,7 @@
 module ConventionalPLLAndDLLTest
 
 using Test: @test, @testset, @inferred, @test_throws
-using Unitful: Hz
+using Unitful: Hz, ms
 import Tracking
 using GNSSSignals: GPSL1CA, get_code_center_frequency_ratio
 using TrackingLoopFilters: ThirdOrderBilinearLF, SecondOrderBilinearLF
@@ -233,6 +233,70 @@ end
     # A record that actually covered 20 blocks is scaled by 1/20 regardless of
     # the preferred integration length.
     @test doppler_after(20, true, 20 * one_block) == doppler_after(1, true, 20 * one_block)
+end
+
+# The DLL bandwidth is an absolute value, not a per-primary-period reference: a
+# longer coherent integration must not narrow it, because nothing that sets it —
+# thermal noise, pull-in time, the absence of dynamic stress on a carrier-aided
+# loop — scales with the integration length. Only its own `BL·Δt` stability
+# product may cap it, and only once the update interval is long enough to
+# threaten stability. A `1/N` scaling here (which the carrier loop does want)
+# would take a 20 ms L1 C/A integration to 0.05 Hz, where stability allows
+# 0.9 Hz — the same pull-in sag that sizing the DLL off the carrier default used
+# to cause per signal, re-introduced through the integration length.
+@testset "code loop bandwidth is not narrowed by the integration length" begin
+    bw = 1.0Hz
+    l1ca_period = 1ms  # 1023 chips at 1.023 Mcps
+
+    # Single 1 ms block, and 10 ms / 20 ms coherent integrations: the cap starts
+    # binding only past 18 ms, so the first two run at the full reference.
+    @test Tracking.effective_code_loop_filter_bandwidth(bw, l1ca_period) == bw
+    @test Tracking.effective_code_loop_filter_bandwidth(bw, 10 * l1ca_period) == bw
+    @test Tracking.effective_code_loop_filter_bandwidth(bw, 20 * l1ca_period) ≈ 0.9Hz
+
+    # Where it binds it holds the stability product, not a block ratio.
+    for num_blocks in (20, 100, 1500)
+        integration_time = num_blocks * l1ca_period
+        @test Tracking.effective_code_loop_filter_bandwidth(bw, integration_time) *
+              integration_time ≈ Tracking.MAX_LOOP_BANDWIDTH_TIME_PRODUCT
+    end
+
+    # An explicit bandwidth below the cap is used verbatim, at any length.
+    @test Tracking.effective_code_loop_filter_bandwidth(0.25Hz, 20 * l1ca_period) == 0.25Hz
+
+    # End to end through the estimator, on a 4 ms (4-block) integration whose cap
+    # sits at 4.5 Hz: two configured bandwidths above the cap must produce the
+    # same code Doppler, because both saturate to it. Under a `1/N` scaling they
+    # would come out at 5/4 and 10/4 Hz and differ — so this pins "capped" rather
+    # than "scaled" through the real fold.
+    sampling_frequency = 5e6Hz
+    gpsl1 = GPSL1CA()
+    correlator = update_accumulator(
+        get_default_correlator(gpsl1),
+        SVector(1000.0 + 10im, 2000.0 + 20im, 750.0 + 10im),
+    )
+    code_doppler_after(integrated_samples, code_bandwidth) = begin
+        doppler_estimator =
+            ConventionalPLLAndDLL(; code_loop_filter_bandwidth = code_bandwidth)
+        sat = TrackedSat(gpsl1, 1, 0.5, 100.0Hz; doppler_estimator)
+        sig = TrackedSignal(
+            only(sat.signals);
+            correlator_outputs = [
+                CorrelatorOutput(correlator, integrated_samples, integrated_samples),
+            ],
+        )
+        ts = TrackState(gpsl1, TrackedSat(sat; signals = (sig,)); doppler_estimator)
+        get_code_doppler(
+            estimate_dopplers_and_filter_prompt(ts, _meas_l1(sampling_frequency)),
+        )
+    end
+    one_block = 5000
+    @test code_doppler_after(4 * one_block, 5.0Hz) ==
+          code_doppler_after(4 * one_block, 10.0Hz)
+    # Below the cap the configured value still drives the loop, so it is a cap
+    # and not a ceiling on everything.
+    @test code_doppler_after(4 * one_block, 1.0Hz) !=
+          code_doppler_after(4 * one_block, 4.0Hz)
 end
 
 @testset "Per-satellite bandwidths drive the loop filters" begin

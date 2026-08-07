@@ -880,8 +880,9 @@ signal on one satellite — the `preferred_num_code_blocks_to_integrate` field o
 the addressed [`TrackedSignal`](@ref). The actual length is still capped per
 integration by the signal's bit/secondary-code period and held at 1 until
 bit/secondary sync (see `calc_num_code_blocks_to_integrate`); with the
-conventional estimator the loop bandwidth auto-scales by `1/N` so the loop
-stays stable at any length.
+conventional estimator the carrier loop bandwidth auto-scales by `1/N` so the
+loop stays stable at any length, and the code loop bandwidth is left as
+configured unless stability caps it.
 
 For data-bearing signals the length must evenly divide the number of code
 blocks that form one bit (e.g. a divisor of 20 for GPS L1 C/A, of 10 for GPS
