@@ -476,7 +476,7 @@ const _OneBitDC =
                 string(
                     "OneBitDownconvertAndCorrelator supports binary (±1) codes only ",
                     "(BPSK, BOC, TMBOC); got ",
-                    typeof(signal_type),
+                    get_signal_name(signal_type),
                     " with ",
                     typeof(get_modulation(signal_type)),
                     " modulation. Bit-wise correlation keeps only the code sign, so it ",
@@ -660,7 +660,7 @@ function _onebit_hybrid_blocked!(
             string(
                 "OneBitDownconvertAndCorrelator supports binary (±1) codes only ",
                 "(BPSK, BOC, TMBOC); got ",
-                typeof(signal_type),
+                get_signal_name(signal_type),
                 " with ",
                 typeof(get_modulation(signal_type)),
                 " modulation. Bit-wise correlation keeps only the code sign, so it ",
@@ -913,7 +913,7 @@ end
                         string(
                             "OneBitDownconvertAndCorrelator supports binary (±1) codes ",
                             "only (BPSK, BOC, TMBOC); got ",
-                            typeof(signal_types[$i]),
+                            get_signal_name(signal_types[$i]),
                             " with ",
                             typeof(get_modulation(signal_types[$i])),
                             " modulation. Bit-wise correlation keeps only the code sign, ",

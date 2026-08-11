@@ -726,7 +726,7 @@ const _TwoBitDC =
             string(
                 "TwoBitDownconvertAndCorrelator supports binary (±1) codes only ",
                 "(BPSK, BOC, TMBOC); got ",
-                typeof(signal_type),
+                get_signal_name(signal_type),
                 " with ",
                 typeof(get_modulation(signal_type)),
                 " modulation. Bit-wise correlation keeps only the code sign, so it ",

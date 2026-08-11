@@ -1,7 +1,7 @@
 module TrackingAcquisitionExt
 
 using Acquisition: AcquisitionResults
-using GNSSSignals: AbstractGNSSSignal, get_code_length, get_signal_id
+using GNSSSignals: AbstractGNSSSignal, get_code_length, get_signal_id, get_signal_name
 using Tracking: Tracking, TrackState, TrackedSat
 
 function Tracking.TrackedSat(acq::AcquisitionResults; args...)
@@ -82,11 +82,11 @@ function Tracking.TrackState(
                 ArgumentError(
                     string(
                         "All acquisition results must share the same `system`. ",
-                        "Got `",
-                        typeof(sig),
-                        "` and `",
-                        typeof(a.system),
-                        "`. ",
+                        "Got ",
+                        get_signal_name(sig),
+                        " and ",
+                        get_signal_name(a.system),
+                        ". ",
                         "Pass `signals = (...)` to track multiple signals.",
                     ),
                 ),
@@ -125,7 +125,7 @@ end
 # footgun when two groups share a signature.
 @inline function _find_group_for_acq(track_state::TrackState, acq::AcquisitionResults)
     keys_tuple = keys(track_state.groups)
-    acq_type = typeof(acq.system)
+    acq_name = get_signal_name(acq.system)
     matches = filter(
         k -> _acq_signal_matches(track_state.groups[k].signals, acq.system),
         keys_tuple,
@@ -133,9 +133,9 @@ end
     isempty(matches) && throw(
         ArgumentError(
             string(
-                "No group's longest-primary-code signal matches `acq.system::",
-                acq_type,
-                "` (PRN ",
+                "No group's longest-primary-code signal matches `acq.system` (",
+                acq_name,
+                ", PRN ",
                 acq.prn,
                 "). Declared groups: ",
                 keys_tuple,
@@ -146,9 +146,9 @@ end
     length(matches) > 1 && throw(
         ArgumentError(
             string(
-                "Acquisition routing is ambiguous: `acq.system::",
-                acq_type,
-                "` (PRN ",
+                "Acquisition routing is ambiguous: `acq.system` (",
+                acq_name,
+                ", PRN ",
                 acq.prn,
                 ") matches groups ",
                 matches,
@@ -281,16 +281,15 @@ end
     throw(
         ArgumentError(
             string(
-                "Acquisition signal type does not match a longest-code signal ",
+                "Acquisition signal does not match a longest-code signal ",
                 "in group `:",
                 group,
                 "`. ",
-                "Got `acq.system::",
-                typeof(acq.system),
-                "` ",
-                "but the group's longest-code signal is `",
-                typeof(longest),
-                "`. ",
+                "Got `acq.system` (",
+                get_signal_name(acq.system),
+                ") but the group's longest-code signal is ",
+                get_signal_name(longest),
+                ". ",
                 "Hand over an acquisition for a signal with the longest code ",
                 "length — its code phase is the only one that is unambiguous ",
                 "when the group tracks multiple signals.",
