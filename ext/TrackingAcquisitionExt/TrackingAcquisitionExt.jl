@@ -1,7 +1,7 @@
 module TrackingAcquisitionExt
 
 using Acquisition: AcquisitionResults
-using GNSSSignals: AbstractGNSSSignal, get_code_length
+using GNSSSignals: AbstractGNSSSignal, get_code_length, get_signal_id
 using Tracking: Tracking, TrackState, TrackedSat
 
 function Tracking.TrackedSat(acq::AcquisitionResults; args...)
@@ -74,8 +74,11 @@ function Tracking.TrackState(
             ),
         )
         sig = first(acqs).system
+        # Compare by signal id, not `typeof`: the code-matrix type parameter
+        # is not part of a signal's identity (see `_acq_signal_matches`).
+        sig_id = get_signal_id(sig)
         for a in acqs
-            typeof(a.system) === typeof(sig) || throw(
+            get_signal_id(a.system) === sig_id || throw(
                 ArgumentError(
                     string(
                         "All acquisition results must share the same `system`. ",
@@ -105,9 +108,14 @@ end
 # equal to the group's longest — the code-phase scaling is unambiguous
 # for any signal tied at the maximum length (e.g. GPS L1C-D and L1C-P
 # are both 10230 chips, so either acquisition is a valid handoff).
+# Signals compare by id (`GNSSSignals.get_signal_id`), not by `typeof`:
+# the signal's code-matrix type parameter is not part of its identity, so
+# an acquisition carrying e.g. `GPSL1CA{Matrix{Int16}}` still matches a
+# group declaring the same signal over a differently-typed code matrix.
 @inline function _acq_signal_matches(sig_tuple::Tuple, system::AbstractGNSSSignal)
     longest_len = get_code_length(_longest_code_signal(sig_tuple))
-    any(s -> typeof(s) === typeof(system) && get_code_length(s) == longest_len, sig_tuple)
+    sys_id = get_signal_id(system)
+    any(s -> get_signal_id(s) === sys_id && get_code_length(s) == longest_len, sig_tuple)
 end
 
 # Walk the TrackState's groups and return the key of the one whose
@@ -221,7 +229,7 @@ end
 
 Batch variant: add each entry of `acqs` to `track_state`. Same validation
 as the single-acq form runs per entry. With `group = nothing` (the
-default) each acq is routed to the matching group by signal type, so a
+default) each acq is routed to the matching group by signal id, so a
 mixed `Vector{AcquisitionResults}` from multiple constellations lands in
 the right place. Passing an explicit `group =` keyword applies that
 group to every entry (use the single-acq form per entry if your vector
