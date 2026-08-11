@@ -8,7 +8,14 @@ module AddSatelliteTest
 
 using Test: @test, @testset, @test_throws, @inferred
 using Unitful: Hz
-using GNSSSignals: GPSL1CA, GPSL1C_D, GPSL1C_P, GalileoE1B, get_code_center_frequency_ratio
+using GNSSSignals:
+    GPSL1CA,
+    GPSL1C_D,
+    GPSL1C_P,
+    GalileoE1B,
+    get_code_center_frequency_ratio,
+    get_codes,
+    get_signal_id
 using Acquisition: Acquisition, AcquisitionResults
 using Tracking:
     TrackState,
@@ -307,6 +314,25 @@ end
     # The short L1CA acquisition stays rejected.
     short_acq = _make_acq(GPSL1CA(), 10, 100.0, 50.0Hz)
     @test_throws ArgumentError add_satellite!(ts, short_acq; group = :mix)
+end
+
+@testset "add_satellite!(ts, acq) matches signals by id, not by code-matrix type" begin
+    # A signal's code-matrix type parameter is not part of its identity, so
+    # routing compares `GNSSSignals.get_signal_id` rather than `typeof`: an
+    # acquisition whose `system` holds the same signal over a differently
+    # typed code matrix (here a `SubArray` view instead of the `Matrix` the
+    # zero-arg constructor builds) still matches the declaring group.
+    l1ca = GPSL1CA()
+    aliased = GPSL1CA(@view(get_codes(l1ca)[:, :]), l1ca.lut)
+    @test typeof(aliased) !== typeof(l1ca)
+    @test get_signal_id(aliased) === get_signal_id(l1ca)
+    ts = TrackState(; signals = (gps = (l1ca,), gal = (GalileoE1B(),)))
+    acq = _make_acq(aliased, 11, 1.5, 50.0Hz)
+    # Auto-routing and the explicit-group assertion both accept it.
+    ts = add_satellite!(ts, acq)
+    @test get_prn(ts, :gps, 11) == 11
+    ts = add_satellite!(ts, _make_acq(aliased, 12, 1.5, 50.0Hz); group = :gps)
+    @test get_prn(ts, :gps, 12) == 12
 end
 
 @testset "add_satellite!(ts, acq) errors on ambiguous group routing (issue #134)" begin
