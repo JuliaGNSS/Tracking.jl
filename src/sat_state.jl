@@ -78,8 +78,8 @@ function validate_preferred_num_code_blocks_to_integrate(
             ArgumentError(
                 "preferred_num_code_blocks_to_integrate = $preferred_num_code_blocks " *
                 "must evenly divide the $num_code_blocks_that_form_a_bit code blocks " *
-                "that form one bit of $(typeof(signal)) — an integration straddling " *
-                "a bit boundary would never emit a bit. Valid values: " *
+                "that form one bit of $(get_signal_name(signal)) — an integration " *
+                "straddling a bit boundary would never emit a bit. Valid values: " *
                 "$(join(valid, ", ")).",
             ),
         )

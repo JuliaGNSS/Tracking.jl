@@ -561,6 +561,14 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             meas,
             ts,
         )
+        # The message names the signal the way its ICD does
+        # (`GNSSSignals.get_signal_name`), not by its internal parametrised
+        # type (`GalileoE1B{Matrix{Int16}}`).
+        @test_throws "Galileo E1B" downconvert_and_correlate(
+            OneBitThreadedDownconvertAndCorrelator(),
+            meas,
+            ts,
+        )
     end
 
     @testset "1-bit SNR loss vs Float32: tracking jitter and C/N0" begin
