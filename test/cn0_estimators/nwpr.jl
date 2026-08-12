@@ -21,6 +21,20 @@ using Tracking:
     has_bit_or_secondary_code_been_found,
     track
 
+@testset "NWPR's coherent window is sized from the signal's code period" begin
+    # The window caps the coherent sum in *blocks*, so sizing it without knowing
+    # the code period gets it wrong by the period's ratio: ~5 ms is 5 blocks of
+    # L1 C/A's 1 ms code and 2 of L1C-P's 10 ms one. This is the form to reach
+    # for on a correlator-ingest path, which is the one place NWPR is still the
+    # estimator to choose over the default.
+    @test NWPRCN0Estimator(GPSL1CA()).num_narrowband_code_blocks == 5
+    @test NWPRCN0Estimator(GPSL1C_P()).num_narrowband_code_blocks == 2
+    @test NWPRCN0Estimator(GPSL1CA(); num_records = 40).num_records == 40
+    # An explicit window still wins.
+    @test NWPRCN0Estimator(GPSL1C_P(); num_narrowband_code_blocks = 7).num_narrowband_code_blocks ==
+          7
+end
+
 @testset "NWPR CN0 estimator on a bare prompt stream" begin
     @test_throws ArgumentError NWPRCN0Estimator(; num_records = 1)
     @test_throws ArgumentError NWPRCN0Estimator(; num_narrowband_code_blocks = 0)
@@ -335,7 +349,15 @@ end
 
     track_state = @inferred TrackState(
         gpsl1,
-        [TrackedSat(gpsl1, prn, start_code_phase, carrier_doppler)];
+        [
+            TrackedSat(
+                gpsl1,
+                prn,
+                start_code_phase,
+                carrier_doppler;
+                cn0_estimator = NWPRCN0Estimator(gpsl1),
+            ),
+        ],
     )
 
     for i = 1:100
@@ -371,21 +393,19 @@ end
     # `fade_to` continues the same satellite at another C/N₀ for `fade_blocks`
     # more records, which is how the post-sync regime is reached at a C/N₀ where
     # the bit-edge detector would never have locked from cold.
+    # NWPR is no longer the library default, so it is configured explicitly here
+    # — sized for the signal, which is what `NWPRCN0Estimator(signal)` is for.
     function track_noisy(
         cn0_db,
         num_blocks;
         seed = 1,
-        cn0_estimator = nothing,
+        cn0_estimator = NWPRCN0Estimator(gpsl1),
         fade_to = nothing,
         fade_blocks = 0,
     )
         rng = Xoshiro(seed)
         amplitude(cn0) = isnothing(cn0) ? 0.0 : 10^(cn0 / 20)
-        sat = if isnothing(cn0_estimator)
-            TrackedSat(gpsl1, 1, 0.0, 0.0Hz)
-        else
-            TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator)
-        end
+        sat = TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator)
         track_state = TrackState(gpsl1, [sat])
         total_blocks = num_blocks + fade_blocks
         data_bits = rand(rng, (-1.0, 1.0), div(total_blocks, 20) + 2)

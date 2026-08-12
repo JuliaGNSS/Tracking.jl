@@ -1,8 +1,15 @@
 """
 $(SIGNATURES)
 
-Van Dierendonck's **narrowband/wideband power ratio** (NWPR) CN0 estimator, the
-default estimator of every [`TrackedSignal`](@ref).
+Van Dierendonck's **narrowband/wideband power ratio** (NWPR) CN0 estimator.
+
+It was the library default until the per-band noise reference landed, and
+remains the estimator to configure explicitly on a **correlator-ingest path with
+no noise observation** — a producer that hands over `CorrelatorOutput`s but
+cannot also report `Σ|B|²` for an untracked PRN. That is the one place it is
+still the right choice; see [`default_cn0_estimator`](@ref) for the measurements
+that moved the default, and [`NWPRCN0Estimator(::AbstractGNSSSignal)`](@ref) for
+the constructor that sizes its window for the signal.
 
 Over a narrowband window of `M` consecutive records it forms
 
@@ -119,9 +126,10 @@ a signal that is never weak; the ideal-coherence estimate improves monotonically
 with it.
 
 Where no window is admissible at all the `fallback` estimator's value is
-reported instead, so such signals keep exactly the behaviour they had before
-NWPR became the default. That includes records that are themselves at least as
-long as the window — with
+reported instead — a *different* estimator, with a different bias and, at the
+default [`MomentsCN0Estimator`](@ref), a ≈27.6 dB-Hz floor on pure noise. That
+is what [`NoiseRefCN0Estimator`](@ref) exists to retire (issue #217). It also
+includes records that are themselves at least as long as the window — with
 [`set_preferred_num_code_blocks_to_integrate!`](@ref) at one navigation bit, say,
 a window closes on a single record, `NBP == WBP` identically, and the estimator
 reports its `fallback` for good.
@@ -227,6 +235,52 @@ function NWPRCN0Estimator(;
         0,
         fallback,
     )
+end
+
+"""
+$(SIGNATURES)
+
+Construct an [`NWPRCN0Estimator`](@ref) whose coherent window is sized for
+`signal`: the whole code blocks covering about 5 ms, at least two of them — 5
+blocks for a 1 ms code, 2 for GPS L1C-P's 10 ms one.
+
+About 5 ms is what a coherent sum survives with the default 18 Hz carrier loop
+at the low C/N₀ this estimator exists for; see [`NWPRCN0Estimator`](@ref) for
+the measurements and for when to raise it. The window is what caps the coherent
+sum for a data-bearing signal (whose windows tile the navigation bit) and is the
+window outright for a pilot, so sizing it in *blocks* without knowing the code
+period gets it wrong by the period's ratio.
+
+This is the form to reach for on a correlator-ingest path with no noise
+observation, which is the one place NWPR is still the estimator to choose over
+the default [`NoiseRefCN0Estimator`](@ref) — see
+[`default_cn0_estimator`](@ref):
+
+```julia
+TrackedSat(
+    GPSL1C_P(),
+    prn,
+    code_phase,
+    doppler;
+    cn0_estimator = NWPRCN0Estimator(GPSL1C_P()),
+)
+```
+
+Every other keyword is forwarded unchanged.
+"""
+function NWPRCN0Estimator(
+    signal::AbstractGNSSSignal;
+    num_records::Int = 100,
+    num_narrowband_code_blocks::Int = _default_narrowband_code_blocks(signal),
+    kwargs...,
+)
+    NWPRCN0Estimator(; num_records, num_narrowband_code_blocks, kwargs...)
+end
+
+# Whole code blocks covering ~5 ms, at least two.
+@inline function _default_narrowband_code_blocks(signal::AbstractGNSSSignal)
+    code_period = get_code_length(signal) / get_code_frequency(signal)
+    max(2, round(Int, 5ms / code_period))
 end
 
 length(estimator::NWPRCN0Estimator) = estimator.filled_ratio_length

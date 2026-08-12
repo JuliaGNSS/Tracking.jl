@@ -46,6 +46,7 @@ using Tracking:
     NumAnts,
     DefaultPostCorrFilter,
     NWPRCN0Estimator,
+    NoiseRefCN0Estimator,
     BitBuffer
 using GNSSSignals: GPSL1C_P, GPSL1C_D, GalileoE1B
 
@@ -220,7 +221,7 @@ end
         @test get_num_bits(sat, 3) == 0
         @test get_integrated_samples(sat, 1) == 0
         @test has_bit_or_secondary_code_been_found(sat, 1) == false
-        @test get_cn0_estimator(sat, 1) isa NWPRCN0Estimator
+        @test get_cn0_estimator(sat, 1) isa NoiseRefCN0Estimator
         @test get_bit_buffer(sat, 1) isa BitBuffer
         @test get_post_corr_filter(sat, 1) isa DefaultPostCorrFilter
     end
@@ -230,7 +231,7 @@ end
         @test get_signal(sat, GPSL1C_D) isa GPSL1C_D
         @test get_signal(sat, GPSL1CA) isa GPSL1CA
         @test get_num_bits(sat, GPSL1CA) == 0
-        @test get_cn0_estimator(sat, GPSL1C_P) isa NWPRCN0Estimator
+        @test get_cn0_estimator(sat, GPSL1C_P) isa NoiseRefCN0Estimator
     end
 
     @testset "TrackedSat: error on missing signal type" begin
@@ -272,18 +273,19 @@ end
     @testset "TrackState forwarding: (group, prn, sig)" begin
         @test get_num_bits(track_state, :modern_gps, 11, 1) == 0
         @test get_num_bits(track_state, :modern_gps, 11, GPSL1CA) == 0
-        @test get_cn0_estimator(track_state, :modern_gps, 11, 2) isa NWPRCN0Estimator
-        @test get_cn0_estimator(track_state, :modern_gps, 11, GPSL1C_D) isa NWPRCN0Estimator
+        @test get_cn0_estimator(track_state, :modern_gps, 11, 2) isa NoiseRefCN0Estimator
+        @test get_cn0_estimator(track_state, :modern_gps, 11, GPSL1C_D) isa
+              NoiseRefCN0Estimator
         @test get_bit_buffer(track_state, :modern_gps, 11, 3) isa BitBuffer
         @test isempty(get_soft_bits(track_state, :modern_gps, 11, GPSL1CA))
-        @test estimate_cn0(track_state, :modern_gps, 11, 1) == 0.0dBHz
-        @test estimate_cn0(track_state, :modern_gps, 11, GPSL1CA) == 0.0dBHz
+        @test estimate_cn0(track_state, :modern_gps, 11, 1) == -Inf * dBHz
+        @test estimate_cn0(track_state, :modern_gps, 11, GPSL1CA) == -Inf * dBHz
     end
 
     @testset "estimate_cn0(::TrackedSignal) direct dispatch" begin
         # The per-signal entry point that didn't exist before.
         sig = sat.signals[1]
-        @test estimate_cn0(sig) == 0.0dBHz
+        @test estimate_cn0(sig) == -Inf * dBHz
     end
 end
 
