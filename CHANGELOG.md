@@ -1,5 +1,12 @@
 # Changelog
 
+## [6.0.3](https://github.com/JuliaGNSS/Tracking.jl/compare/v6.0.2...v6.0.3) (2026-08-12)
+
+
+### Bug Fixes
+
+* **acq:** match acquisition signals by id, not by concrete type ([2ff62dc](https://github.com/JuliaGNSS/Tracking.jl/commit/2ff62dc26b2b4b66f5123ec4eb27eedc03fd0cd1))
+
 ## [6.0.2](https://github.com/JuliaGNSS/Tracking.jl/compare/v6.0.1...v6.0.2) (2026-08-12)
 
 
