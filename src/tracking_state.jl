@@ -39,12 +39,23 @@ doppler-estimator-state type — these are frozen at construction.
 satellites of the already-fixed shape. Power users who need non-default
 correlator or PCF *types* should construct `TrackedSat`s themselves and
 hand them to the `add_satellite!(track_state, group, sat)` overload.
+
+`noise_estimators` declares the per-band noise sources
+([`AbstractNoiseEstimator`](@ref)s keyed by band id). Left at `nothing` it is
+derived: a [`CorrelatorNoiseEstimator`](@ref) for every band on which some
+signal's C/N₀ estimator reads a noise density (see
+[`requires_noise_density`](@ref)), and **no entry** for any other band, so a
+state that stays on [`NWPRCN0Estimator`](@ref) runs no per-band despread at all.
+Pass an explicit NamedTuple to configure the window, or to declare a band's
+source on a correlator-ingest path where you fill it with
+[`append_noise_observation!`](@ref) rather than from samples.
 """
 function TrackState(;
     signal::Maybe{AbstractGNSSSignal} = nothing,
     signals = nothing,
     doppler_estimator::Maybe{AbstractDopplerEstimator} = nothing,
     num_ants::NumAnts = NumAnts(1),
+    noise_estimators::Maybe{NamedTuple} = nothing,
 )
     if isnothing(signal) && isnothing(signals)
         throw(
@@ -79,8 +90,48 @@ function TrackState(;
         _normalize_group_entry(entry, estimator, num_ants)
     end
     _validate_same_band_num_ants(groups)
-    TrackState(groups, estimator)
+    TrackState(groups, estimator, _resolve_noise_estimators(noise_estimators, groups))
 end
+
+# Resolve the `noise_estimators` kwarg. `nothing` provisions one
+# `CorrelatorNoiseEstimator` per band that has a signal asking for a density —
+# and nothing at all for the others, which is what keeps the per-band despread
+# off the bill of anyone who does not consume it.
+@inline _resolve_noise_estimators(noise_estimators::NamedTuple, ::SignalGroups) =
+    noise_estimators
+@inline function _resolve_noise_estimators(::Nothing, groups::SignalGroups)
+    band_ids = _noise_reference_band_keys(Tuple(groups), ())
+    NamedTuple{band_ids}(map(_ -> CorrelatorNoiseEstimator(), band_ids))
+end
+
+# Band ids of the groups whose signals need a noise density, deduplicated and in
+# first-encounter order. Tuple recursion, so it folds at compile time out of the
+# groups' types.
+@inline _noise_reference_band_keys(::Tuple{}, acc::Tuple{Vararg{Symbol}}) = acc
+@inline function _noise_reference_band_keys(t::Tuple, acc::Tuple{Vararg{Symbol}})
+    g = first(t)
+    k = get_band_id(g.band)
+    new_acc = (k in acc || !_group_requires_noise_density(g)) ? acc : (acc..., k)
+    _noise_reference_band_keys(Base.tail(t), new_acc)
+end
+
+# Does any signal of this group use a C/N₀ estimator that reads a noise density?
+# Read off the group's satellites where it has any (their estimators are what
+# will actually run) and off the declared signals' defaults otherwise, which is
+# what `add_satellite!` will later install. Construction-time only — building the
+# default estimators to ask them costs a few small vectors, which is why the
+# warn-once on the fold path uses `_sat_requires_noise_density` directly.
+function _group_requires_noise_density(g::SignalGroup)
+    sats = g.satellites
+    isempty(sats) || return _sat_requires_noise_density(first(sats.values))
+    # The record count is irrelevant here: only the estimator's *type* is asked.
+    any(sig -> requires_noise_density(default_cn0_estimator(sig, 100)), g.signals)
+end
+
+# Same question of one satellite, and allocation-free: `requires_noise_density`
+# is a compile-time constant on each estimator's type, so this folds away.
+@inline _sat_requires_noise_density(sat::TrackedSat) =
+    _any_of_tuple(map(s -> requires_noise_density(get_cn0_estimator(s)), sat.signals))
 
 # Bare tuple of AbstractGNSSSignal → single :default group NamedTuple.
 @inline _normalize_signal_groups(signals::Tuple{Vararg{AbstractGNSSSignal}}) =
@@ -185,6 +236,7 @@ function TrackState(
     signal::AbstractGNSSSignal,
     tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}};
     doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
+    noise_estimators::Maybe{NamedTuple} = nothing,
 )
     # `signal` is implied by each sat's `signals[1].signal` in the new design;
     # the positional argument is kept for backward-compatible construction but
@@ -193,16 +245,25 @@ function TrackState(
     sats_dict = to_dictionary(tracked_sats)
     _assert_doppler_estimator_types_match(sats_dict, doppler_estimator)
     groups = (default = _signal_group_from_dict(sats_dict),)
-    TrackState(groups, doppler_estimator)
+    TrackState(
+        groups,
+        doppler_estimator,
+        _resolve_noise_estimators(noise_estimators, groups),
+    )
 end
 
 function TrackState(
     tracked_sats::Dictionary{<:Any,<:TrackedSat};
     doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
+    noise_estimators::Maybe{NamedTuple} = nothing,
 )
     _assert_doppler_estimator_types_match(tracked_sats, doppler_estimator)
     groups = (default = _signal_group_from_dict(tracked_sats),)
-    TrackState(groups, doppler_estimator)
+    TrackState(
+        groups,
+        doppler_estimator,
+        _resolve_noise_estimators(noise_estimators, groups),
+    )
 end
 
 # Verify every sat in `dict` has a `doppler_estimator_state` matching
@@ -238,13 +299,18 @@ end
 function TrackState(
     satellites::SatelliteDicts;
     doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
+    noise_estimators::Maybe{NamedTuple} = nothing,
 )
     foreach(
         d -> _assert_doppler_estimator_types_match(d, doppler_estimator),
         Tuple(satellites),
     )
     groups = map(_signal_group_from_dict, satellites)
-    TrackState(groups, doppler_estimator)
+    TrackState(
+        groups,
+        doppler_estimator,
+        _resolve_noise_estimators(noise_estimators, groups),
+    )
 end
 
 # Copy-with-overrides constructor: rebuild a TrackState reusing the
@@ -252,13 +318,15 @@ end
 # overrides are constrained to the input's concrete `G` / `DE` types so
 # the result's type parameters are preserved.
 function TrackState(
-    track_state::TrackState{G,DE};
+    track_state::TrackState{G,DE,NE};
     groups::Maybe{G} = nothing,
     doppler_estimator::Maybe{DE} = nothing,
-) where {G<:SignalGroups,DE<:AbstractDopplerEstimator}
-    TrackState{G,DE}(
+    noise_estimators::Maybe{NE} = nothing,
+) where {G<:SignalGroups,DE<:AbstractDopplerEstimator,NE<:NoiseEstimators}
+    TrackState{G,DE,NE}(
         isnothing(groups) ? track_state.groups : groups,
         isnothing(doppler_estimator) ? track_state.doppler_estimator : doppler_estimator,
+        isnothing(noise_estimators) ? track_state.noise_estimators : noise_estimators,
     )
 end
 
@@ -397,10 +465,10 @@ sats so estimators with cross-satellite shared state can grow it.
 For a single-group `TrackState` the `group_idx` may be omitted.
 """
 function merge_sats(
-    track_state::TrackState{G,DE},
+    track_state::TrackState{G,DE,NE},
     group_idx::Union{Symbol,Integer},
     tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}},
-) where {G<:SignalGroups,DE<:AbstractDopplerEstimator}
+) where {G<:SignalGroups,DE<:AbstractDopplerEstimator,NE<:NoiseEstimators}
     new_sats_dict = to_dictionary(tracked_sats)
     _assert_doppler_estimator_types_match(new_sats_dict, track_state.doppler_estimator)
     new_estimator =
@@ -410,7 +478,7 @@ function merge_sats(
     _assert_sats_match_slot_type(g, new_sats_dict, group_idx)
     new_group = SignalGroup(g; satellites = merge(g.satellites, new_sats_dict))
     new_groups = @set groups[group_idx] = new_group
-    TrackState{G,DE}(new_groups, new_estimator)
+    TrackState{G,DE,NE}(new_groups, new_estimator, track_state.noise_estimators)
 end
 
 function merge_sats(
@@ -487,10 +555,10 @@ returned by [`update_estimator_on_handoff`](@ref) — keep using the
 return value.
 """
 function add_satellite!(
-    track_state::TrackState{G,DE},
+    track_state::TrackState{G,DE,NE},
     group::Symbol,
     sat::TrackedSat,
-) where {G<:SignalGroups,DE<:AbstractDopplerEstimator}
+) where {G<:SignalGroups,DE<:AbstractDopplerEstimator,NE<:NoiseEstimators}
     _assert_sat_matches_slot_type(track_state, group, sat)
     insert_or_set!(_dict_for_group(track_state, group), sat.prn, sat)
     new_estimator = update_estimator_on_handoff(
@@ -502,7 +570,7 @@ function add_satellite!(
     # identical object (the contract guarantees the concrete type either
     # way), and then the input `track_state` is handed back unchanged.
     new_estimator === track_state.doppler_estimator && return track_state
-    TrackState{G,DE}(track_state.groups, new_estimator)
+    TrackState{G,DE,NE}(track_state.groups, new_estimator, track_state.noise_estimators)
 end
 
 # Verify that `sat` has exactly the concrete type the group's
@@ -588,10 +656,10 @@ function add_satellite(
 end
 
 function add_satellite(
-    track_state::TrackState{G,DE},
+    track_state::TrackState{G,DE,NE},
     group::Symbol,
     sat::TrackedSat,
-) where {G<:SignalGroups,DE<:AbstractDopplerEstimator}
+) where {G<:SignalGroups,DE<:AbstractDopplerEstimator,NE<:NoiseEstimators}
     _assert_sat_matches_slot_type(track_state, group, sat)
     new_estimator = update_estimator_on_handoff(
         track_state.doppler_estimator,
@@ -602,7 +670,7 @@ function add_satellite(
     new_dict = merge(g.satellites, dictionary((sat.prn => sat,)))
     new_group = SignalGroup(g; satellites = new_dict)
     new_groups = @set groups[group] = new_group
-    TrackState{G,DE}(new_groups, new_estimator)
+    TrackState{G,DE,NE}(new_groups, new_estimator, track_state.noise_estimators)
 end
 
 """
@@ -650,10 +718,10 @@ Immutable variant of [`remove_satellite!`](@ref). Returns a new
 unchanged. Errors if no satellite with the given `prn` exists.
 """
 function remove_satellite(
-    track_state::TrackState{G,DE};
+    track_state::TrackState{G,DE,NE};
     prn::Int,
     group::Union{Symbol,Nothing} = nothing,
-) where {G<:SignalGroups,DE<:AbstractDopplerEstimator}
+) where {G<:SignalGroups,DE<:AbstractDopplerEstimator,NE<:NoiseEstimators}
     resolved = _resolve_group(track_state, group)
     dict = _dict_for_group(track_state, resolved)
     haskey(dict, prn) || throw(KeyError(prn))
@@ -664,7 +732,11 @@ function remove_satellite(
     g = groups[resolved]
     new_group = SignalGroup(g; satellites = new_dict)
     new_groups = @set groups[resolved] = new_group
-    TrackState{G,DE}(new_groups, track_state.doppler_estimator)
+    TrackState{G,DE,NE}(
+        new_groups,
+        track_state.doppler_estimator,
+        track_state.noise_estimators,
+    )
 end
 
 # Collect the `(keys, values)` of every satellite except `prn` into fresh,
@@ -840,6 +912,79 @@ append_correlator_output!(
     sat_id,
     sig::_SignalSelector,
 ) = (append_correlator_output!(get_sat_state(s, group, sat_id), output, sig); s)
+
+"""
+$(SIGNATURES)
+
+Append an externally built [`NoiseObservation`](@ref) to the addressed **band**'s
+noise estimator and return `track_state`:
+
+  - `append_noise_observation!(track_state, obs)` — single-band `TrackState`.
+  - `append_noise_observation!(track_state, obs, :L1)` — explicit band id.
+
+This is the hardware/FPGA fill path, and it is symmetric with what such a
+producer already does for the taps: [`append_correlator_output!`](@ref) per
+signal, `append_noise_observation!` per band, then
+[`estimate_dopplers_and_filter_prompt!`](@ref) to fold. The two are deliberately
+*not* the same mechanism — see [`append_noise_observation!`](@ref)'s
+estimator-level method for the table of differences.
+
+The band must have a noise estimator; it has one whenever some signal on it uses
+a C/N₀ estimator that reads a density (see [`requires_noise_density`](@ref)), or
+whenever you declared one through `TrackState`'s `noise_estimators` keyword.
+"""
+append_noise_observation!(
+    track_state::TrackState,
+    observation::NoiseObservation,
+    band_id::Symbol,
+) = (
+    append_noise_observation!(_noise_estimator_for_band(track_state, band_id), observation);
+    track_state
+)
+
+function append_noise_observation!(track_state::TrackState, observation::NoiseObservation)
+    noise_estimators = track_state.noise_estimators
+    length(noise_estimators) == 1 || throw(
+        ArgumentError(
+            string(
+                "track_state has ",
+                length(noise_estimators),
+                " noise estimators ",
+                keys(noise_estimators),
+                "; pass the band id, e.g. ",
+                "`append_noise_observation!(track_state, obs, :L1)`.",
+            ),
+        ),
+    )
+    append_noise_observation!(only(Tuple(noise_estimators)), observation)
+    track_state
+end
+
+# Look up a band's noise estimator, with an error that names what is configured
+# rather than a bare NamedTuple `KeyError` — the likeliest cause is a band whose
+# signals all use an estimator that reads no density, so nothing provisioned one.
+@inline function _noise_estimator_for_band(track_state::TrackState, band_id::Symbol)
+    noise_estimators = track_state.noise_estimators
+    haskey(noise_estimators, band_id) ||
+        _throw_no_noise_estimator(band_id, keys(noise_estimators))
+    noise_estimators[band_id]
+end
+
+@noinline _throw_no_noise_estimator(band_id::Symbol, configured) = throw(
+    ArgumentError(
+        string(
+            "no noise estimator configured for band `:",
+            band_id,
+            "`; this TrackState has ",
+            isempty(configured) ? "none at all" : string(configured),
+            ". A band is provisioned automatically only where some signal's ",
+            "C/N₀ estimator reads a noise density (see `requires_noise_density`) ",
+            "— pass `noise_estimators = (",
+            band_id,
+            " = CorrelatorNoiseEstimator(),)` to `TrackState` to declare one.",
+        ),
+    ),
+)
 
 # Resolve the index of the addressed signal within a sat's signals tuple.
 # Config-time only (not the hot path), so plain control flow is fine.

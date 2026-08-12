@@ -1355,6 +1355,14 @@ function downconvert_and_correlate!(
     stop_before_partial::Bool = false,
     samples_unchanged::Bool = false,
 )
+    _update_band_noise!(
+        dc,
+        track_state,
+        measurements,
+        chunk_index,
+        chunk_duration,
+        samples_unchanged,
+    )
     _foreach_group!(
         _dc_one_group!,
         track_state.groups,

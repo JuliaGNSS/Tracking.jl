@@ -26,7 +26,10 @@ using Tracking:
     CPUDownconvertAndCorrelator,
     CPUThreadedDownconvertAndCorrelator,
     NumAnts,
-    ConventionalAssistedPLLAndDLL
+    ConventionalAssistedPLLAndDLL,
+    NoiseRefCN0Estimator,
+    append_noise_observation!,
+    noise_observation_from_samples
 
 # Build a simple 4 ms GPS-L1 PRN-1 signal with known carrier doppler & code phase.
 function make_signal(sampling_frequency)
@@ -140,6 +143,48 @@ end
     # for `@batch`'s ManualMemory.Reference + Bumper SlabCheckpoints
     # that don't elide through Polyester's task closure. Cap loosely so
     # a regression to genuine per-sat allocations would still fire.
+    @test measure_est!(track_state, sampling_frequency) == 0
+    if DC === CPUDownconvertAndCorrelator
+        @test measure_dc!(dc, signal, track_state, sampling_frequency) == 0
+    else
+        @test measure_dc!(dc, signal, track_state, sampling_frequency) <= 1024
+    end
+end
+
+# Same measurement with a per-band noise reference in play, so the two pieces
+# this adds to the hot path are held to the same contract as everything else:
+# `_update_band_noise!`'s tuple-recursive walk over the `noise_estimators`
+# NamedTuple (in the correlate step) and the density lookup plus the extra
+# arguments threaded through the fold (in the estimate step). Both are measured
+# through `downconvert_and_correlate!` / `estimate_dopplers_and_filter_prompt!`
+# as wholes rather than in isolation, which is where a regression would actually
+# show up.
+@testset "a noise-referenced band adds no allocation ($DC)" for DC in (
+    CPUDownconvertAndCorrelator,
+    CPUThreadedDownconvertAndCorrelator,
+)
+    sampling_frequency = 4e6Hz
+    signal, gpsl1, carrier_doppler, start_code_phase = make_signal(sampling_frequency)
+    track_state = TrackState(
+        gpsl1,
+        [
+            TrackedSat(
+                gpsl1,
+                1,
+                start_code_phase,
+                carrier_doppler - 20Hz;
+                cn0_estimator = NoiseRefCN0Estimator(),
+            ),
+        ],
+    )
+    dc = DC()
+    @test keys(track_state.noise_estimators) == (:L1,)
+    observation = noise_observation_from_samples(4000.0, 4000, sampling_frequency)
+    for _ = 1:8
+        append_noise_observation!(track_state, observation, :L1)
+        track!(signal, track_state, sampling_frequency; downconvert_and_correlator = dc)
+    end
+
     @test measure_est!(track_state, sampling_frequency) == 0
     if DC === CPUDownconvertAndCorrelator
         @test measure_dc!(dc, signal, track_state, sampling_frequency) == 0

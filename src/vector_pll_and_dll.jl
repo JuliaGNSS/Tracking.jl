@@ -266,6 +266,8 @@ end
     sat::TrackedSat,
     pll_and_dll_state::SatVectorPLLAndDLL,
     sampling_frequency,
+    noise_density,
+    noise_density_ready::Bool,
     driver_carrier_phase::Real = 0.0,
 )
     outputs = tracked_signal.correlator_outputs
@@ -297,6 +299,8 @@ end
             output,
             sat.prn,
             sampling_frequency,
+            noise_density,
+            noise_density_ready,
             driver_carrier_phase;
             correlated_pre_sync = synced_earlier_in_fold,
         )
@@ -402,7 +406,12 @@ function estimate_dopplers_and_filter_prompt!(
     track_state::TrackState{<:SignalGroups,<:VectorPLLAndDLL},
     sampling_frequencies::Union{BandMeasurements,NamedTuple,AbstractDict},
 )
-    _foreach_group!(_est_one_group!, track_state.groups, sampling_frequencies)
+    _foreach_group!(
+        _est_one_group!,
+        track_state.groups,
+        sampling_frequencies,
+        track_state.noise_estimators,
+    )
     return track_state
 end
 
