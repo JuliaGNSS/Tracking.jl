@@ -992,6 +992,11 @@ end
     chunk_duration,
 ) where {K}
     m = measurements[K]
+    # Same check the group loop runs, and it has to happen here too: the noise
+    # measurement is the *first* thing to touch a band's samples, so without it
+    # a wrong sample type would surface as a `MethodError` from inside a kernel
+    # instead of the curated `ArgumentError`.
+    _check_sample_type(dc, m)
     num_samples = get_num_samples(m)
     last_sample =
         _chunk_last_sample(chunk_duration, chunk_index, m.sampling_frequency, num_samples)

@@ -94,9 +94,11 @@ get_current_index(estimator::NoiseRefCN0Estimator) = estimator.current_index
 $(SIGNATURES)
 
 This estimator reads the band's noise density, so a band carrying it is
-provisioned with a [`CorrelatorNoiseEstimator`](@ref).
+provisioned with a [`CorrelatorNoiseEstimator`](@ref). Declared on the type, so
+the provisioning decision folds out of a group's slot type — see
+[`requires_noise_density`](@ref).
 """
-requires_noise_density(::NoiseRefCN0Estimator) = true
+requires_noise_density(::Type{NoiseRefCN0Estimator}) = true
 
 """
 $(SIGNATURES)

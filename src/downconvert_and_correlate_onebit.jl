@@ -1256,16 +1256,7 @@ end
     vals = g.satellites.values
     isempty(vals) && return nothing
     m = measurements[get_band_id(g.band)]
-    eltype(m.samples) === Complex{Int16} || throw(
-        ArgumentError(
-            string(
-                "OneBitDownconvertAndCorrelator requires `Complex{Int16}` measurement ",
-                "samples (12-bit ADC); got element type ",
-                eltype(m.samples),
-                ". Use a CPU(Threaded)DownconvertAndCorrelator for floating-point samples.",
-            ),
-        ),
-    )
+    _check_sample_type(dc, m)
     # Pack the band's measurement sign planes ONCE, shared across sats — but only for >1 sat:
     # for a single sat the shared pack + per-sat realign copy is slower than packing that one sat
     # directly, so empty the band buffer to select the kernel's per-sat path.
@@ -1417,3 +1408,20 @@ end
     false,   # never the shared band pack: it belongs to whichever
     # group ran last, which may be another band or another buffer
 )
+
+# Reject non-`Complex{Int16}` sample buffers up front (12-bit ADC contract).
+# Defined as the shared `_check_sample_type` hook rather than inline in
+# `_dc_one_group!` so the per-band noise measurement — which runs before the
+# group loop — rejects them with the same message instead of a `MethodError`
+# from deep inside the kernel.
+@inline _check_sample_type(::_OneBitDC, m) =
+    eltype(m.samples) === Complex{Int16} || throw(
+        ArgumentError(
+            string(
+                "OneBitDownconvertAndCorrelator requires `Complex{Int16}` measurement ",
+                "samples (12-bit ADC); got element type ",
+                eltype(m.samples),
+                ". Use a CPU(Threaded)DownconvertAndCorrelator for floating-point samples.",
+            ),
+        ),
+    )

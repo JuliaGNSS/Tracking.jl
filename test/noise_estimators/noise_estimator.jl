@@ -208,8 +208,12 @@ end
     @test append_noise_observation!(single, obs, :L1) === single
 
     # A band with no consumer has no estimator, and saying so beats a bare
-    # NamedTuple `KeyError`.
-    nwpr_only = TrackState(; signal = gpsl1)
+    # NamedTuple `KeyError`. Reached by configuring an estimator that reads no
+    # density, since the library default does read one.
+    nwpr_only = TrackState(
+        gpsl1,
+        [TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = NWPRCN0Estimator(gpsl1))],
+    )
     @test nwpr_only.noise_estimators === NamedTuple()
     @test_throws ArgumentError append_noise_observation!(nwpr_only, obs, :L1)
     @test_throws ArgumentError append_noise_observation!(nwpr_only, obs)

@@ -116,22 +116,36 @@ end
 end
 
 # Does any signal of this group use a C/N₀ estimator that reads a noise density?
-# Read off the group's satellites where it has any (their estimators are what
-# will actually run) and off the declared signals' defaults otherwise, which is
-# what `add_satellite!` will later install. Construction-time only — building the
-# default estimators to ask them costs a few small vectors, which is why the
-# warn-once on the fold path uses `_sat_requires_noise_density` directly.
-function _group_requires_noise_density(g::SignalGroup)
-    sats = g.satellites
-    isempty(sats) || return _sat_requires_noise_density(first(sats.values))
-    # The record count is irrelevant here: only the estimator's *type* is asked.
-    any(sig -> requires_noise_density(default_cn0_estimator(sig, 100)), g.signals)
-end
+#
+# Asked of the group's **slot type**, never of a satellite value, and that is
+# load-bearing rather than tidy: the slot type is fixed at `TrackState`
+# construction — from the user's own `TrackedSat`s where the group was handed
+# some, and from `_make_template_tracked_sat` (i.e. `default_cn0_estimator`)
+# where it was declared empty — so it is already the right answer either way,
+# *and* it is a compile-time constant. Branching on `isempty(satellites)`
+# instead would leave the whole `noise_estimators` NamedTuple, keys included,
+# inferring as a union of "provisioned" and "not", which would infect
+# `TrackState`'s own type.
+@inline _group_requires_noise_density(g::SignalGroup) =
+    _sat_type_requires_noise_density(eltype(g.satellites))
 
-# Same question of one satellite, and allocation-free: `requires_noise_density`
-# is a compile-time constant on each estimator's type, so this folds away.
+@inline _sat_type_requires_noise_density(::Type{<:TrackedSat{Signals}}) where {Signals} =
+    _signal_types_require_noise_density(Signals)
+
+# Recurse down the signals' tuple type. `tuple_type_head`/`tuple_type_tail` fold,
+# so the whole walk collapses to a literal `true`/`false`.
+@inline _signal_types_require_noise_density(::Type{Tuple{}}) = false
+@inline _signal_types_require_noise_density(::Type{T}) where {T<:Tuple} =
+    requires_noise_density(_cn0_estimator_type(Base.tuple_type_head(T))) ||
+    _signal_types_require_noise_density(Base.tuple_type_tail(T))
+
+@inline _cn0_estimator_type(
+    ::Type{<:TrackedSignal{Sig,B,C,PCF,CN0}},
+) where {Sig,B,C,PCF,CN0} = CN0
+
+# Same question of one satellite, for the fold path's warn-once. Also folds away.
 @inline _sat_requires_noise_density(sat::TrackedSat) =
-    _any_of_tuple(map(s -> requires_noise_density(get_cn0_estimator(s)), sat.signals))
+    _sat_type_requires_noise_density(typeof(sat))
 
 # Bare tuple of AbstractGNSSSignal → single :default group NamedTuple.
 @inline _normalize_signal_groups(signals::Tuple{Vararg{AbstractGNSSSignal}}) =

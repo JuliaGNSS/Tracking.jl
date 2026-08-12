@@ -318,9 +318,10 @@ end
             TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = estimator)])
         @test ts.noise_estimators === NamedTuple()
     end
-    # The declared-signals constructor asks `default_cn0_estimator`, which is
-    # still NWPR, so nothing is provisioned there either.
-    @test TrackState(; signal = gpsl1).noise_estimators === NamedTuple()
+    # The declared-signals constructor takes its slot type from
+    # `default_cn0_estimator`, which *is* noise-referenced — so the default path
+    # provisions, and needs no configuration at all.
+    @test keys(TrackState(; signal = gpsl1).noise_estimators) == (:L1,)
 
     # Mixed: one band requires a density, the other does not — exactly one entry.
     mixed = TrackState((

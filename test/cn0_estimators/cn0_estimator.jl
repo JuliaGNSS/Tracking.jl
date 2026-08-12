@@ -9,9 +9,11 @@ import Tracking
 using Tracking:
     MomentsCN0Estimator,
     NWPRCN0Estimator,
+    NoiseRefCN0Estimator,
     default_cn0_estimator,
     get_fallback_cn0_estimator,
     get_prompt_buffer,
+    requires_noise_density,
     update,
     estimate_cn0,
     TrackedSignal,
@@ -90,28 +92,30 @@ Tracking.estimate_cn0(estimator::CountingCN0Estimator, integration_time) =
     end
     @test estimate_cn0(track_state, 1) == 5dBHz
 
-    # `num_prompts_for_cn0_estimation` still sizes the default estimator (both
-    # its averaging span and its fallback's buffer).
+    # `num_prompts_for_cn0_estimation` still sizes the default estimator's
+    # averaging span.
     default = get_cn0_estimator(TrackedSignal(gpsl1; num_prompts_for_cn0_estimation = 40))
-    @test default isa NWPRCN0Estimator
+    @test default isa NoiseRefCN0Estimator
     @test default.num_records == 40
-    @test Base.length(get_prompt_buffer(get_fallback_cn0_estimator(default))) == 40
-    # The coherent window covers ~5 ms of code blocks, at least two: 5 for
-    # L1 C/A's 1 ms code, 2 for L1C-P's 10 ms code.
-    @test default_cn0_estimator(gpsl1, 100).num_narrowband_code_blocks == 5
-    @test default_cn0_estimator(GPSL1C_P(), 100).num_narrowband_code_blocks == 2
+    @test Base.length(default.buffered_cn0) == 40
+    # The default reads a measured noise density, which is what makes the band
+    # provision a source for it.
+    @test requires_noise_density(default_cn0_estimator(gpsl1, 100))
+    @test requires_noise_density(default_cn0_estimator(GPSL1C_P(), 100))
 end
 
 @testset "estimate_cn0 overloads on TrackState" begin
     # Multi-group + sat-id and single-group + sat-id variants. The
     # no-argument variant is already covered by the integration test
     # above; these two specialize on the group key / sat identifier
-    # forwarding paths. With an unseeded CN0 estimator the value is
-    # 0 dB-Hz — we only assert the methods dispatch and run.
+    # forwarding paths. An unseeded estimator reports `-Inf dB-Hz` — the house
+    # convention that a missing estimate is never `NaN` and never a finite
+    # number a lock detector might clear — so we only assert the methods
+    # dispatch and run.
     ts = TrackState(; signal = GPSL1CA())
     ts = add_satellite!(ts; prn = 1, carrier_doppler = 0Hz)
-    @test estimate_cn0(ts, :default, 1) == 0.0dBHz
-    @test estimate_cn0(ts, 1) == 0.0dBHz
+    @test estimate_cn0(ts, :default, 1) == -Inf * dBHz
+    @test estimate_cn0(ts, 1) == -Inf * dBHz
 end
 
 @testset "estimate_cn0 divides by the record's real integration time" begin
@@ -130,8 +134,14 @@ end
     # what a longer coherent integration delivers after sample normalization, so
     # feeding the same shape at two different block counts must report the same
     # C/N₀ once the divisor is right.
+    # Pinned to `MomentsCN0Estimator`, because this is a property of the
+    # estimators that fold a bare prompt stream and are handed one `T` at
+    # `estimate_cn0` time. The default `NoiseRefCN0Estimator` applies each
+    # record's own `T` at update time instead — see "records of different length
+    # are each divided by their own T" in `cn0_estimators/noise_ref.jl`, which is
+    # the same contract expressed the other way round.
     function cn0_at(num_blocks, prompts)
-        tsig = Tracking.TrackedSignal(gpsl1)
+        tsig = Tracking.TrackedSignal(gpsl1; cn0_estimator = MomentsCN0Estimator(100))
         estimator = get_cn0_estimator(tsig)
         for p in prompts
             estimator = update(estimator, p)
@@ -172,7 +182,7 @@ end
     # them. Same buffered prompts at 1 and 20 blocks: C/N₀ moves by 10·log₁₀(20)
     # and T moves by 20, so the SNR is unchanged.
     function snr_at(num_blocks, prompts)
-        tsig = Tracking.TrackedSignal(gpsl1)
+        tsig = Tracking.TrackedSignal(gpsl1; cn0_estimator = MomentsCN0Estimator(100))
         estimator = get_cn0_estimator(tsig)
         for p in prompts
             estimator = update(estimator, p)

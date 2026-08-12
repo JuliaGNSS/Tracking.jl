@@ -5,8 +5,10 @@ Abstract supertype for CN0 (carrier-to-noise-density ratio) estimators.
 Each [`TrackedSignal`](@ref) holds one estimator instance, stored in a type
 parameter — pass any subtype instance as the `cn0_estimator` keyword of
 [`TrackedSignal`](@ref) / [`TrackedSat`](@ref) to replace the default
-[`NWPRCN0Estimator`](@ref). Custom estimators subtype this and implement
-`Tracking.update` and [`estimate_cn0`](@ref).
+[`NoiseRefCN0Estimator`](@ref); see [`default_cn0_estimator`](@ref) for which to
+pick when. Custom estimators subtype this and implement `Tracking.update` and
+[`estimate_cn0`](@ref), plus [`requires_noise_density`](@ref) if they read a
+measured noise floor.
 """
 abstract type AbstractCN0Estimator end
 
@@ -142,8 +144,17 @@ type:
     whole band would corrupt a co-resident `NWPRCN0Estimator`: a record missing
     from the bit grid makes `_update_nwpr` drop its open narrowband window, so
     NWPR would silently degrade to its fallback.
+
+The trait's real home is the **type**, and the instance method forwards to it.
+That is what lets provisioning be decided from a group's already-fixed slot type
+rather than from a satellite value: the whole `noise_estimators` NamedTuple —
+its keys included — then folds out of `TrackState`'s type parameters instead of
+inferring as a union of "provisioned" and "not". A custom estimator may define
+either form; defining the type form is the one that keeps that folding.
 """
-requires_noise_density(::AbstractCN0Estimator) = false
+requires_noise_density(::Type{<:AbstractCN0Estimator}) = false
+requires_noise_density(estimator::AbstractCN0Estimator) =
+    requires_noise_density(typeof(estimator))
 
 """
 $(SIGNATURES)
@@ -164,27 +175,54 @@ update(estimator::AbstractCN0Estimator, prompt, ::CN0UpdateContext) =
 """
 $(SIGNATURES)
 
-The default CN0 estimator for `signal`: an [`NWPRCN0Estimator`](@ref) averaging
-over `num_prompts_for_cn0_estimation` records, with a
-`MomentsCN0Estimator(num_prompts_for_cn0_estimation)` as its fallback.
+The default CN0 estimator for `signal`: a [`NoiseRefCN0Estimator`](@ref)
+averaging over `num_prompts_for_cn0_estimation` records, against the band's
+measured noise density.
 
-The narrowband window is the whole code blocks covering about 5 ms, at least two
-of them: 5 blocks for a 1 ms code, 2 for GPS L1C-P's 10 ms code. It caps the
-coherent sum for a data-bearing signal (whose window tiles the navigation bit)
-and is the window outright for a pilot. About 5 ms is what a coherent sum
-survives with the default 18 Hz carrier loop at the low C/N₀ this estimator
-exists for; see [`NWPRCN0Estimator`](@ref) for the measurements and for when to
-raise it.
+It reads a density, so [`TrackState`](@ref) provisions the band a
+[`CorrelatorNoiseEstimator`](@ref) automatically (see
+[`requires_noise_density`](@ref)) and `track!` fills it from the samples — the
+sample-driven path needs no configuration at all.
+
+# Why this and not NWPR
+
+[`NWPRCN0Estimator`](@ref) is accurate where it applies, but it needs a coherent
+narrowband window and so does not apply uniformly. Measured through `track!` on
+a data-modulated GPS L1 C/A signal, 1200 code blocks, median over 9 seeds, with
+the fraction of runs reporting `-Inf dB-Hz` in brackets:
+
+| true | NWPR, 1-block records | NoiseRef    | NWPR, 20-block records | NoiseRef    |
+|:---- | ---------------------:| -----------:| ----------------------:| -----------:|
+| 25   | 11.2 (56 %)           | 23.4 (0)    | —                      | —           |
+| 30   | 29.3 ± 1.40           | 29.6 ± 0.62 | —                      | —           |
+| 40   | 39.7 ± 0.35           | 39.9 ± 0.19 | 27.1 ± 5.79            | 39.8 ± 0.37 |
+| 45   | 44.7 ± 0.30           | 44.9 ± 0.13 | 32.9 ± 2.00            | 44.7 ± 0.30 |
+
+Three things in that table decided the default. At **25 dB-Hz** NWPR's window
+lands outside `1 < μ̂ < M` in over half the runs and the surviving estimates read
+14 dB low, which is exactly the regime a lock detector has to work in. At **long
+coherent records** NWPR collapses — a record as long as its own window has
+`NBP ≡ WBP` and no window exists at all, so it falls back — while the
+non-coherent reference is **immune to the phase-noise wash** and barely moves
+between 1- and 20-block records. And on GPS L1C-D, Galileo E1B and any
+secondary-coded signal before sync, NWPR admits no window ever and defers
+permanently to a fallback with a different bias (issue #217).
+
+What NWPR is still better at is the top of the range, where the reference
+carries a self-leakage bias it does not: ≈0.13 dB at 45 dB-Hz and ≈0.40 at 50 on
+L1 C/A. See [`NoiseRefCN0Estimator`](@ref).
+
+# When to pass something else
+
+`NWPRCN0Estimator` remains exported and is the estimator to configure explicitly
+for **externally supplied correlator outputs without a noise observation** — a
+correlator-ingest path that cannot also report `Σ|B|²` for an untracked PRN. It
+is the one place it is still necessary; everywhere else, prefer appending a
+[`NoiseObservation`](@ref) per band with [`append_noise_observation!`](@ref).
 """
 function default_cn0_estimator(
     signal::AbstractGNSSSignal,
     num_prompts_for_cn0_estimation::Int,
 )
-    code_period = get_code_length(signal) / get_code_frequency(signal)
-    num_narrowband_code_blocks = max(2, round(Int, 5ms / code_period))
-    NWPRCN0Estimator(;
-        num_records = num_prompts_for_cn0_estimation,
-        num_narrowband_code_blocks,
-        fallback = MomentsCN0Estimator(num_prompts_for_cn0_estimation),
-    )
+    NoiseRefCN0Estimator(; num_records = num_prompts_for_cn0_estimation)
 end
