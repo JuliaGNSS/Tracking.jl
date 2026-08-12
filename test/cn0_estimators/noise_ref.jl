@@ -5,30 +5,31 @@ using Logging: Warn
 using Random: Xoshiro, randn
 using Statistics: mean, std
 using Dictionaries: dictionary
+using StaticArrays: SVector
 using Unitful: Hz, s, ms, dBHz, ustrip, uconvert
-using GNSSSignals: GPSL1CA, GPSL1C_P, GPSL5I, gen_code, get_code_frequency
+using GNSSSignals: GPSL1CA, GPSL5I
 import Tracking
 using Tracking:
-    BandMeasurement,
     BitBuffer,
     CN0UpdateContext,
-    CPUDownconvertAndCorrelator,
     CorrelatorNoiseEstimator,
+    CorrelatorOutput,
+    EarlyPromptLateCorrelator,
     MomentsCN0Estimator,
     NWPRCN0Estimator,
     NoCN0Estimator,
     NoiseRefCN0Estimator,
     TrackState,
     TrackedSat,
+    append_correlator_output!,
     append_noise_observation!,
-    downconvert_and_correlate!,
     estimate_cn0,
     estimate_dopplers_and_filter_prompt!,
     get_cn0_estimator,
     noise_observation_from_samples,
     requires_noise_density,
-    track!,
-    update
+    update,
+    update_accumulator
 
 const T = 1ms
 # `E|P|² = N₀/T`, so a unit-noise-power prompt stream is measured against
@@ -171,21 +172,43 @@ end
     @test @inferred(estimate_cn0(estimator, T)) isa typeof(0.0dBHz)
 end
 
-# A satellite whose correlator outputs are already collected, so the fold below
-# has something to consume — the shape `test/external_correlator_producer.jl`
-# uses, which is exactly the hardware ingest path this step exists to serve.
-function _correlated_state(cn0_estimator; fs = 4e6Hz, num_samples = 12_000)
+# A pure **correlator-ingest** state: records are handed over with
+# `append_correlator_output!` and no sample buffer is ever passed, so the software
+# noise measurement cannot run. That is exactly the hardware/FPGA path, and it is
+# the only way to reach the "configured but never fed" condition — on the
+# sample-driven path `downconvert_and_correlate!` fills the window before the fold
+# reads it.
+#
+# The records are noiseless: a raw accumulator of `a = √power · N` normalises to a
+# prompt of `√power` over `N` samples, so the C/N₀ the fold reports follows exactly
+# from the density that is (or is not) appended.
+function _ingested_state(
+    cn0_estimator;
+    fs = 4e6Hz,
+    num_samples = 4000,
+    num_records = 20,
+    prompt_power = 1.0,
+    signals = nothing,
+)
     gpsl1 = GPSL1CA()
-    signal =
-        ComplexF32.(gen_code(num_samples, gpsl1, 1, fs, get_code_frequency(gpsl1), 0.0))
-    ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator)])
-    downconvert_and_correlate!(
-        CPUDownconvertAndCorrelator(),
-        (L1 = BandMeasurement(signal, fs),),
-        ts;
-        chunk_index = 0,
-        chunk_duration = (num_samples / ustrip(Hz, fs)) * s,
+    sat =
+        isnothing(signals) ? TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator) :
+        TrackedSat(signals, 1, 0.0, 0.0Hz; cn0_estimator)
+    ts = TrackState(gpsl1, [sat])
+    a = sqrt(prompt_power) * num_samples
+    correlator = update_accumulator(
+        EarlyPromptLateCorrelator(),
+        SVector(complex(0.5a, 0.0), complex(a, 0.0), complex(0.5a, 0.0)),
     )
+    num_sigs = isnothing(signals) ? 1 : length(signals)
+    for k = 1:num_records, i = 1:num_sigs
+        output = CorrelatorOutput(correlator, num_samples, k * num_samples)
+        if num_sigs == 1
+            append_correlator_output!(ts, output, 1)
+        else
+            append_correlator_output!(ts, output, :default, 1, i)
+        end
+    end
     ts, fs
 end
 
@@ -195,7 +218,7 @@ end
     # static check does not fire (a source exists), so without this the runtime
     # skip would repeat in silence forever, leaving every satellite at
     # `-Inf dB-Hz` with no clue why.
-    ts, fs = _correlated_state(NoiseRefCN0Estimator())
+    ts, fs = _ingested_state(NoiseRefCN0Estimator())
     @test keys(ts.noise_estimators) == (:L1,)
     @test_logs (:warn,) estimate_dopplers_and_filter_prompt!(ts, (L1 = fs,))
     @test estimate_cn0(ts, 1) == -Inf * dBHz
@@ -236,17 +259,14 @@ end
     # Two L1 C/A signals on one satellite — synthetic, but it is the shortest
     # configuration that puts two *different* C/N₀ estimators on one band, and it
     # covers both folds: the noise-referenced one drives the loop, the NWPR one
-    # rides along as a passenger.
+    # rides along as a passenger. Records are ingested rather than correlated, so
+    # the density really is unavailable for the whole run.
     gpsl1 = GPSL1CA()
     signals = (gpsl1, gpsl1)
-    fs = 4e6Hz
-    num_samples = 40_000
-    signal =
-        ComplexF32.(gen_code(num_samples, gpsl1, 1, fs, get_code_frequency(gpsl1), 0.0))
 
     function run(cn0_estimator)
-        ts = TrackState(gpsl1, [TrackedSat(signals, 1, 0.0, 0.0Hz; cn0_estimator)])
-        track!((L1 = BandMeasurement(signal, fs),), ts)
+        ts, fs = _ingested_state(cn0_estimator; signals)
+        estimate_dopplers_and_filter_prompt!(ts, (L1 = fs,))
         ts
     end
 
@@ -272,12 +292,12 @@ end
 end
 
 @testset "the externally fed path reports a real C/N₀" begin
-    # The point of landing the external path first: end to end, with no kernel
-    # work anywhere, a producer that appends its noise observations gets a C/N₀
-    # out. The signal here is noiseless code at unit amplitude, so the normalised
-    # prompt power is 1 and a density of `1e-6 Hz⁻¹` puts the answer at
+    # End to end on the hardware ingest path, with no sample buffer anywhere: a
+    # producer that appends correlator outputs *and* its noise observations gets a
+    # C/N₀ out. The records are noiseless with a normalised prompt power of 1, so
+    # a density of `1e-6 Hz⁻¹` puts the answer at exactly
     # `10log10(1/1e-6 − 1/1e-3)`.
-    ts, fs = _correlated_state(NoiseRefCN0Estimator())
+    ts, fs = _ingested_state(NoiseRefCN0Estimator())
     n = 4000
     append_noise_observation!(
         ts,
@@ -285,8 +305,8 @@ end
         :L1,
     )
     estimate_dopplers_and_filter_prompt!(ts, (L1 = fs,))
-    @test Base.length(get_cn0_estimator(ts, 1)) > 0
-    @test _db(estimate_cn0(ts, 1)) ≈ 10log10(1 / 1e-6 - 1 / 1e-3) atol = 0.5
+    @test Base.length(get_cn0_estimator(ts, 1)) == 20
+    @test _db(estimate_cn0(ts, 1)) ≈ 10log10(1 / 1e-6 - 1 / 1e-3) atol = 1e-6
 end
 
 @testset "a band nobody asks a density of is not provisioned" begin

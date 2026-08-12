@@ -1,0 +1,351 @@
+module CorrelatorNoiseEstimatorTest
+
+using Test: @test, @testset, @test_logs, collect_test_logs
+using Logging: Warn
+using Random: Xoshiro, randn
+using Unitful: Hz, s, ms, dBHz, ustrip, uconvert
+using GNSSSignals: GPSL1CA, GPSL1C_P, GPSL5I, gen_code, get_code_frequency, get_code_length
+import Tracking
+using Tracking:
+    BandMeasurement,
+    CPUDownconvertAndCorrelator,
+    CPUThreadedDownconvertAndCorrelator,
+    CorrelatorNoiseEstimator,
+    EarlyPromptLateCorrelator,
+    Int16DownconvertAndCorrelator,
+    NWPRCN0Estimator,
+    NoiseRefCN0Estimator,
+    OneBitDownconvertAndCorrelator,
+    TrackState,
+    TrackedSat,
+    TwoBitDownconvertAndCorrelator,
+    add_satellite!,
+    downconvert_and_correlate!,
+    get_correlator_sample_shifts,
+    estimate_cn0,
+    get_noise_density,
+    track!
+
+const FS = 4e6Hz
+const NUM_SAMPLES = 40_000                      # 10 ms at 4 MHz
+const GPSL1 = GPSL1CA()
+
+_db(x) = ustrip(uconvert(dBHz, x))
+
+# One satellite at `cn0_dbhz` in noise of per-sample variance `f_s`, so the true
+# noise density is exactly `N₀ = σ²/f_s = 1 Hz⁻¹` and the measured density can be
+# compared against a number rather than against another measurement.
+function _sky(cn0_dbhz; seed = 1, num_samples = NUM_SAMPLES, fs = FS, prn = 1)
+    rng = Xoshiro(seed)
+    code = gen_code(num_samples, GPSL1, prn, fs, get_code_frequency(GPSL1), 0.0)
+    amplitude = isfinite(cn0_dbhz) ? 10^(cn0_dbhz / 20) : 0.0
+    ComplexF64.(amplitude .* code) .+
+    sqrt(ustrip(Hz, fs)) .* randn(rng, ComplexF64, num_samples)
+end
+
+_to_int16(signal) = Complex{Int16}.(
+    round.(Int16, clamp.(real(signal) ./ 4, -2047, 2047)),
+    round.(Int16, clamp.(imag(signal) ./ 4, -2047, 2047)),
+)
+
+function _tracked(signal, dc; fs = FS, num_calls = 5, kwargs...)
+    ts = TrackState(
+        GPSL1,
+        [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator())];
+        kwargs...,
+    )
+    for _ = 1:num_calls
+        track!((L1 = BandMeasurement(signal, fs),), ts; downconvert_and_correlator = dc)
+    end
+    ts
+end
+
+@testset "the software path measures the band's noise density" begin
+    # An empty sky measured against a known floor. The window holds
+    # `num_calls · chunks · num_sub` observations of three taps each, so its own
+    # relative error is ≈1/√(3·50) ≈ 8 %.
+    ts = _tracked(_sky(-Inf; seed = 7), CPUDownconvertAndCorrelator())
+    estimator = ts.noise_estimators.L1
+    @test Base.length(estimator) == 50
+    @test ustrip(Hz^-1, get_noise_density(estimator)) ≈ 1.0 rtol = 0.15
+end
+
+@testset "the software path needs no `append_noise_observation!` and never warns" begin
+    # The counterpart of the configured-but-never-fed regression in
+    # `test/cn0_estimators/noise_ref.jl`: on the sample-driven path
+    # `downconvert_and_correlate!` measures before the fold reads, so the window
+    # is never empty at fold time and the diagnostic must stay quiet.
+    ts = TrackState(
+        GPSL1,
+        [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator())],
+    )
+    signal = _sky(45.0)
+    logs, _ = collect_test_logs() do
+        track!((L1 = BandMeasurement(signal, FS),), ts)
+    end
+    @test isempty(filter(r -> r.level == Warn, logs))
+    @test Base.length(ts.noise_estimators.L1) > 0
+    @test isfinite(_db(estimate_cn0(ts, 1)))
+end
+
+@testset "every backend measures on its own kernel ($(nameof(DC)))" for (
+    DC,
+    build,
+    quantise,
+) in (
+    (CPUDownconvertAndCorrelator, () -> CPUDownconvertAndCorrelator(), false),
+    (
+        CPUThreadedDownconvertAndCorrelator,
+        () -> CPUThreadedDownconvertAndCorrelator(),
+        false,
+    ),
+    (Int16DownconvertAndCorrelator, () -> Int16DownconvertAndCorrelator(NUM_SAMPLES), true),
+    (OneBitDownconvertAndCorrelator, () -> OneBitDownconvertAndCorrelator(), true),
+    (TwoBitDownconvertAndCorrelator, () -> TwoBitDownconvertAndCorrelator(), true),
+)
+    # The reference has to traverse the *same* kernel as the prompt, and on the
+    # bit-wise backends that is not a preference: their accumulators are popcount
+    # counts rather than sample sums, so a float-kernel reference would put `|P|²`
+    # and `N̂₀` on incompatible scales and the reported C/N₀ would be meaningless
+    # rather than merely optimistic.
+    #
+    # What the numbers then say is the model-freeness itself: each backend reports
+    # the C/N₀ *its own quantiser delivers*, with no per-backend correction
+    # anywhere in Tracking. 1-bit costs ≈2 dB (plus ≈1 dB for the 1-bit carrier)
+    # and 2-bit ≈1 dB, which is exactly what shows up.
+    signal = _sky(45.0; seed = 3)
+    ts = _tracked(quantise ? _to_int16(signal) : ComplexF32.(signal), build())
+    cn0 = _db(estimate_cn0(ts, 1))
+    @test Base.length(ts.noise_estimators.L1) == 50
+    if DC === OneBitDownconvertAndCorrelator
+        @test 41.0 < cn0 < 44.5           # ≈2 dB of hard-limiting loss
+    elseif DC === TwoBitDownconvertAndCorrelator
+        @test 43.0 < cn0 < 45.5
+    else
+        @test cn0 ≈ 45.0 atol = 1.0
+    end
+end
+
+@testset "observation cadence follows the chunk, not the buffer" begin
+    # `num_sub = max(1, round(chunk_duration / code_period))`, `C · num_sub`
+    # observations per `track!` over `C` chunks, and **none** from the final drain
+    # pass. Getting the drain gate wrong is the failure this pins: gating on
+    # `samples_unchanged` alone would measure chunk 0 and then freeze the window
+    # for the rest of the buffer.
+    signal = _sky(-Inf; seed = 11)
+    for (interval, expected_num_sub) in ((1ms, 1), (4ms, 4), (20ms, 20))
+        ts = TrackState(
+            GPSL1,
+            [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator())],
+        )
+        # 40 ms of buffer: 40 / 20 / 2 chunks at the three intervals.
+        long = repeat(signal, 4)
+        num_chunks = ceil(Int, 40 / ustrip(ms, interval))
+        track!((L1 = BandMeasurement(long, FS),), ts; doppler_update_interval = interval)
+        @test Base.length(ts.noise_estimators.L1) == num_chunks * expected_num_sub
+    end
+
+    # A second sampling frequency, same chunk time: the count follows the chunk's
+    # *duration* against the code period, not its sample count.
+    ts = TrackState(
+        GPSL1,
+        [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator())],
+    )
+    fast = _sky(-Inf; seed = 12, num_samples = 100_000, fs = 10e6Hz)
+    track!((L1 = BandMeasurement(fast, 10e6Hz),), ts; doppler_update_interval = 4ms)
+    # 10 ms of buffer at a 4 ms chunk: two whole chunks of four slices, then a
+    # 2 ms remainder clamped to the buffer end, which yields two — the slice count
+    # follows each chunk's own duration against the code period, so a short
+    # trailing chunk is measured at its true length rather than padded.
+    @test Base.length(ts.noise_estimators.L1) == 4 + 4 + 2
+end
+
+@testset "a code period longer than the chunk still yields one observation" begin
+    # `max(1, …)` is what stops a band whose reference signal has a 10 ms code
+    # sampled with 1 ms chunks from yielding zero observations forever. GPS L1C-P
+    # is that case, and it is reachable whenever another band forces a shorter
+    # `doppler_update_interval`.
+    fs = 20e6Hz
+    l1cp = GPSL1C_P()
+    num_samples = 200_000                       # 10 ms — one L1C-P code period
+    signal = ComplexF32.(sqrt(ustrip(Hz, fs)) .* randn(Xoshiro(5), ComplexF64, num_samples))
+    ts = TrackState(
+        l1cp,
+        [TrackedSat(l1cp, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator())],
+    )
+    track!((L1 = BandMeasurement(signal, fs),), ts; doppler_update_interval = 1ms)
+    # Ten 1 ms chunks, each a tenth of a code period — one slice apiece, not zero.
+    @test Base.length(ts.noise_estimators.L1) == 10
+    @test ustrip(Hz^-1, get_noise_density(ts.noise_estimators.L1)) ≈ 1.0 rtol = 0.2
+end
+
+@testset "the PRN rotates through the untracked codes" begin
+    # Advancing a PRN needs a position, and a position is scalar state with no
+    # per-band anchor — so it is carried in the window itself. Each observation
+    # records the code it was measured with, and the next one steps on from there,
+    # skipping every PRN the band is tracking (where code phase 0 would sit on the
+    # correlation peak).
+    ts = TrackState(; signal = GPSL1, noise_estimators = (L1 = CorrelatorNoiseEstimator(),))
+    add_satellite!(ts; prn = 3, carrier_doppler = 0.0Hz)
+    add_satellite!(ts; prn = 4, carrier_doppler = 0.0Hz)
+    track!((L1 = BandMeasurement(_sky(-Inf; seed = 2), FS),), ts)
+    prns = [obs.prn for obs in ts.noise_estimators.L1.buffered]
+    @test length(prns) == 10
+    @test !any(p -> p in (3, 4), prns)          # never a tracked PRN
+    @test allunique(prns)                       # ... and it really does advance
+    @test prns == Int16[1, 2, 5, 6, 7, 8, 9, 10, 11, 12]
+end
+
+@testset "the reference's taps are spaced wide enough to be independent" begin
+    # Taps are only worth having if they are statistically independent, and at the
+    # *tracking* default of ±0.5 chip they are not: the sampled-code correlation
+    # there is ≈0.5, so three taps are worth 2.25 looks instead of 3. This is a
+    # regression on the rounding in `get_correlator_sample_shifts` at the band's
+    # `f_s`, not on the code statistics — 1.5 chips must survive as ≥1 chip of
+    # whole samples.
+    estimator = CorrelatorNoiseEstimator()
+    correlator = EarlyPromptLateCorrelator(;
+        preferred_early_late_to_prompt_code_shift = estimator.tap_code_shift,
+    )
+    for fs in (2e6Hz, 4e6Hz, 10e6Hz, 20e6Hz)
+        shifts = get_correlator_sample_shifts(correlator, fs, get_code_frequency(GPSL1))
+        spacing_chips =
+            (shifts[end] - shifts[1]) / 2 * ustrip(Hz, get_code_frequency(GPSL1)) /
+            ustrip(Hz, fs)
+        @test spacing_chips >= 1.0
+    end
+end
+
+@testset "two bands keep separate windows at different sampling rates" begin
+    l5 = GPSL5I()
+    fs_l1, fs_l5 = 4e6Hz, 20e6Hz
+    ts = TrackState(;
+        signals = (l1 = (GPSL1,), l5 = (l5,)),
+        noise_estimators = (
+            L1 = CorrelatorNoiseEstimator(),
+            L5 = CorrelatorNoiseEstimator(),
+        ),
+    )
+    add_satellite!(ts; prn = 1, group = :l1, carrier_doppler = 0.0Hz)
+    add_satellite!(ts; prn = 1, group = :l5, carrier_doppler = 0.0Hz)
+    # Same duration, different rates — and a four-times louder L5 front end, so
+    # the two densities cannot be confused for one another.
+    rng = Xoshiro(21)
+    l1_samples = ComplexF32.(sqrt(ustrip(Hz, fs_l1)) .* randn(rng, ComplexF64, 40_000))
+    l5_samples = ComplexF32.(2 * sqrt(ustrip(Hz, fs_l5)) .* randn(rng, ComplexF64, 200_000))
+    measurements =
+        (L1 = BandMeasurement(l1_samples, fs_l1), L5 = BandMeasurement(l5_samples, fs_l5))
+    for _ = 1:5
+        track!(measurements, ts)
+    end
+    d_l1 = ustrip(Hz^-1, get_noise_density(ts.noise_estimators.L1))
+    d_l5 = ustrip(Hz^-1, get_noise_density(ts.noise_estimators.L5))
+    @test Base.length(ts.noise_estimators.L1) == 50
+    @test Base.length(ts.noise_estimators.L5) == 50
+    @test d_l1 ≈ 1.0 rtol = 0.2
+    @test d_l5 ≈ 4.0 rtol = 0.2
+end
+
+@testset "a band with two groups is measured once" begin
+    # `_dc_one_group!` was rejected as the measurement site precisely because it
+    # fires once per group: `:legacy_gps` and `:galileo` both sit on L1, and a
+    # per-group site would double the window.
+    one_group = TrackState(;
+        signals = (legacy_gps = (GPSL1,),),
+        noise_estimators = (L1 = CorrelatorNoiseEstimator(),),
+    )
+    two_groups = TrackState(;
+        signals = (legacy_gps = (GPSL1,), also_l1 = (GPSL1,)),
+        noise_estimators = (L1 = CorrelatorNoiseEstimator(),),
+    )
+    add_satellite!(one_group; prn = 1, group = :legacy_gps, carrier_doppler = 0.0Hz)
+    add_satellite!(two_groups; prn = 1, group = :legacy_gps, carrier_doppler = 0.0Hz)
+    add_satellite!(two_groups; prn = 2, group = :also_l1, carrier_doppler = 0.0Hz)
+    signal = _sky(-Inf; seed = 4)
+    for ts in (one_group, two_groups)
+        track!((L1 = BandMeasurement(signal, FS),), ts)
+    end
+    @test Base.length(one_group.noise_estimators.L1) ==
+          Base.length(two_groups.noise_estimators.L1)
+end
+
+@testset "an unchunked call measures once, and a re-pass does not" begin
+    # The gate is `chunk_duration === nothing && samples_unchanged`, and it is
+    # reachable from a direct caller as well as from `track!`'s drain pass — which
+    # is why `downconvert_and_correlate!`'s docstring says so.
+    signal = _sky(-Inf; seed = 6)
+    measurements = (L1 = BandMeasurement(signal, FS),)
+    ts = TrackState(
+        GPSL1,
+        [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator())],
+    )
+    dc = CPUDownconvertAndCorrelator()
+    # Unchunked, samples not promised unchanged: the whole buffer in `num_sub`
+    # slices — 10 ms against a 1 ms code period.
+    downconvert_and_correlate!(dc, measurements, ts)
+    @test Base.length(ts.noise_estimators.L1) == 10
+    # The same call promising the samples are unchanged is a re-pass, and must not
+    # re-measure what has already been covered.
+    downconvert_and_correlate!(dc, measurements, ts; samples_unchanged = true)
+    @test Base.length(ts.noise_estimators.L1) == 10
+end
+
+@testset "a band without a consumer is never despread" begin
+    # The whole reason provisioning is gated on `requires_noise_density`: someone
+    # who stays on NWPR must not pay for a per-band despread they never read.
+    ts = TrackState(
+        GPSL1,
+        [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NWPRCN0Estimator())],
+    )
+    @test ts.noise_estimators === NamedTuple()
+    track!((L1 = BandMeasurement(_sky(45.0), FS),), ts)
+    @test ts.noise_estimators === NamedTuple()
+end
+
+@testset "the software measurement is allocation-free in steady state" begin
+    function measure(dc, measurements, ts)
+        for _ = 1:8
+            downconvert_and_correlate!(dc, measurements, ts; chunk_index = 0)
+        end
+        @allocated downconvert_and_correlate!(dc, measurements, ts; chunk_index = 0)
+    end
+    signal = ComplexF32.(_sky(45.0; seed = 8))
+    measurements = (L1 = BandMeasurement(signal, FS),)
+    ts = TrackState(
+        GPSL1,
+        [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator())],
+    )
+    dc = CPUDownconvertAndCorrelator()
+    track!(measurements, ts; downconvert_and_correlator = dc)
+    @test measure(dc, measurements, ts) == 0
+end
+
+@testset "a DC offset only bites on a partial code period" begin
+    # A full-period Gold code is balanced (`E[(Σc)²] ≈ 1`), so an ADC DC offset
+    # averages out of a code-period despread; any sub-period window behaves like
+    # iid signs and the offset adds a *positive*, non-averaging term to every
+    # `|B|²`, inflating `N̂₀` and making C/N₀ read low. That is the one and only
+    # configuration the risk applies to — a reference code period longer than the
+    # chunk — and it is zero-IF only, since the reference downconverts.
+    fs = 4e6Hz
+    n = 40_000
+    rng = Xoshiro(31)
+    offset = 0.10 * sqrt(ustrip(Hz, fs))       # d/σ = 0.10
+    noise = sqrt(ustrip(Hz, fs)) .* randn(rng, ComplexF64, n)
+    with_offset = ComplexF32.(noise .+ offset)
+
+    function density(signal, interval)
+        ts = TrackState(;
+            signal = GPSL1,
+            noise_estimators = (L1 = CorrelatorNoiseEstimator(),),
+        )
+        add_satellite!(ts; prn = 1, carrier_doppler = 0.0Hz)
+        track!((L1 = BandMeasurement(signal, fs),), ts; doppler_update_interval = interval)
+        ustrip(Hz^-1, get_noise_density(ts.noise_estimators.L1))
+    end
+
+    # Whole code periods: the offset is rejected, so the density is unmoved.
+    @test density(with_offset, 1ms) ≈ density(ComplexF32.(noise), 1ms) rtol = 0.1
+end
+
+end

@@ -756,6 +756,7 @@ end
     sampling_frequency,
     signal_start_sample::Integer,
     num_samples::Integer,
+    use_band_cache::Bool = true,
 ) where {M,NC}
     zc = :(zero(SIMD.Vec{_TB_VW,UInt64}))
 
@@ -878,7 +879,7 @@ end
         num_rows = size(signal, 1)
         p_sig = Ptr{Int16}(pointer(signal))
         band = dc.band                              # band-shared measurement planes (>1 sat)
-        band_shared = !isempty(band.mrband)         # pre-packed once per group when it pays off
+        band_shared = use_band_cache && !isempty(band.mrband)  # pre-packed per group when it pays off
         bandstride = cld(num_rows, 64) + 2          # per-antenna plane stride in `band`
 
         bufs = _tb_scratch(dc)
@@ -1053,6 +1054,7 @@ function _twobit_hybrid_blocked!(
     sampling_frequency,
     signal_start_sample::Integer,
     num_samples::Integer,
+    use_band_cache::Bool = true,
 ) where {M}
     _tb_check_modulation(signal_type)
     NC = length(sample_shifts)
@@ -1071,7 +1073,7 @@ function _twobit_hybrid_blocked!(
     num_rows = size(signal, 1)
     p_sig = Ptr{Int16}(pointer(signal))
     band = dc.band
-    band_shared = !isempty(band.mrband)
+    band_shared = use_band_cache && !isempty(band.mrband)
     bandstride = cld(num_rows, 64) + 2
 
     bufs = _tb_scratch(dc)
@@ -1864,3 +1866,43 @@ function downconvert_and_correlate!(
     )
     return track_state
 end
+
+# Open-loop despread of the band's noise reference on this backend's kernel —
+# see `_correlate_noise_reference!` in downconvert_and_correlate_cpu.jl for why
+# the reference must go through the same kernel as the prompt. The bit-wise
+# accumulators are popcount counts rather than sample sums, so a float-kernel
+# reference would put `|P|²` and `N̂₀` on incompatible scales.
+#
+# `code_replica` goes unused here: this backend packs the code sign plane inside
+# the kernel.
+@inline _correlate_noise_reference!(
+    dc::_TwoBitDC,
+    ::Vector{Int8},
+    samples,
+    correlator::AbstractCorrelator,
+    signal_type,
+    prn::Integer,
+    sample_shifts,
+    code_phase,
+    code_frequency,
+    carrier_frequency,
+    sampling_frequency,
+    start_sample::Integer,
+    num_samples::Integer,
+) = _twobit_hybrid_blocked!(
+    dc,
+    samples,
+    _tb_num_ants_val(correlator),
+    signal_type,
+    prn,
+    sample_shifts,
+    code_phase,
+    0.0,
+    code_frequency,
+    carrier_frequency,
+    sampling_frequency,
+    start_sample,
+    num_samples,
+    false,   # never the shared band pack: it belongs to whichever
+    # group ran last, which may be another band or another buffer
+)

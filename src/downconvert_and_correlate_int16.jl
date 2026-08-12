@@ -1269,3 +1269,41 @@ end
     )
 
 @inline _threading(::Int16ThreadedDownconvertAndCorrelator) = _BatchLoop()
+
+# Open-loop despread of the band's noise reference on this backend's kernel —
+# see `_correlate_noise_reference!` in downconvert_and_correlate_cpu.jl for why
+# the reference must go through the same kernel as the prompt. The bit-wise
+# accumulators are popcount counts rather than sample sums, so a float-kernel
+# reference would put `|P|²` and `N̂₀` on incompatible scales.
+#
+# `code_replica` goes unused here: this backend packs the code sign plane inside
+# the kernel.
+@inline _correlate_noise_reference!(
+    dc::_Int16DC,
+    ::Vector{Int8},
+    samples,
+    correlator::AbstractCorrelator,
+    signal_type,
+    prn::Integer,
+    sample_shifts,
+    code_phase,
+    code_frequency,
+    carrier_frequency,
+    sampling_frequency,
+    start_sample::Integer,
+    num_samples::Integer,
+) = _int16_hybrid_blocked!(
+    dc,
+    samples,
+    _num_ants_val(correlator),
+    signal_type,
+    prn,
+    sample_shifts,
+    code_phase,
+    0.0,
+    code_frequency,
+    carrier_frequency,
+    sampling_frequency,
+    start_sample,
+    num_samples,
+)

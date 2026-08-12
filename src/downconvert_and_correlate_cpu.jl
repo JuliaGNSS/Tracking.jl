@@ -936,6 +936,7 @@ end
     _update_band_noise_walk!(
         Val(keys(noise_estimators)),
         Tuple(noise_estimators),
+        dc,
         track_state.groups,
         measurements,
         chunk_index,
@@ -946,6 +947,7 @@ end
 @inline _update_band_noise_walk!(
     ::Val{()},
     ::Tuple{},
+    ::AbstractDownconvertAndCorrelator,
     ::SignalGroups,
     ::BandMeasurements,
     ::Int,
@@ -954,6 +956,7 @@ end
 @inline function _update_band_noise_walk!(
     ::Val{K},
     estimators::Tuple,
+    dc::AbstractDownconvertAndCorrelator,
     groups::SignalGroups,
     measurements::BandMeasurements,
     chunk_index::Int,
@@ -962,6 +965,7 @@ end
     _update_one_band_noise!(
         first(estimators),
         Val(first(K)),
+        dc,
         groups,
         measurements,
         chunk_index,
@@ -970,6 +974,7 @@ end
     _update_band_noise_walk!(
         Val(Base.tail(K)),
         Base.tail(estimators),
+        dc,
         groups,
         measurements,
         chunk_index,
@@ -980,6 +985,7 @@ end
 @inline function _update_one_band_noise!(
     estimator::AbstractNoiseEstimator,
     ::Val{K},
+    dc::AbstractDownconvertAndCorrelator,
     groups::SignalGroups,
     measurements::BandMeasurements,
     chunk_index::Int,
@@ -990,12 +996,7 @@ end
     last_sample =
         _chunk_last_sample(chunk_duration, chunk_index, m.sampling_frequency, num_samples)
     first_sample =
-        _chunk_last_sample(
-            chunk_duration,
-            chunk_index - 1,
-            m.sampling_frequency,
-            num_samples,
-        ) + 1
+        _chunk_first_sample(chunk_duration, chunk_index, m.sampling_frequency, num_samples)
     first_sample > last_sample && return nothing
     band_groups = _groups_on_band(Tuple(groups), Val(K))
     isempty(band_groups) && return nothing
@@ -1006,6 +1007,7 @@ end
         first(first(band_groups).signals),
         map(g -> keys(g.satellites), band_groups),
         chunk_index,
+        dc,
     )
     update_noise!(estimator, m, first_sample, last_sample, context)
     nothing
@@ -1018,6 +1020,68 @@ end
     g = first(t)
     rest = _groups_on_band(Base.tail(t), v)
     get_band_id(g.band) === K ? (g, rest...) : rest
+end
+
+# One open-loop despread of the noise reference, on this backend's own kernel.
+# This is the only per-backend work the noise reference needs, and it is what
+# makes the measurement **model-free**: the reference traverses the identical
+# quantise → downconvert → despread → accumulate path as the prompt, so the
+# measured `N₀` already carries the quantisation loss, the quantiser's operating
+# point under load and the code amplitude, with no per-backend correction. It
+# also has to: the one- and two-bit accumulators are popcount *counts*, not
+# sample sums, so a float-kernel reference would compare `|P|²` and `N̂₀` on
+# incompatible scales.
+#
+# Returns the correlator's raw accumulators for one slice — every tap, which the
+# caller then pools (at ≥1 chip spacing they are independent looks at one
+# scalar, and nothing about their relative values means anything here).
+#
+# The CPU form is the single-satellite template's body: `gen_code_replica!` plus
+# the fused kernel and nothing else, on a replica buffer owned by the estimator
+# rather than borrowed from the backend's `ScratchBuffers` — so the reference can
+# never alias the per-signal replica path. `gen_code_replica!` writes *at*
+# `start_sample` while the kernel reads the replica offset by `start_sample - 1`,
+# which is why the buffer is sized against the whole measurement rather than the
+# slice.
+@inline function _correlate_noise_reference!(
+    dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
+    code_replica::Vector{Int8},
+    samples,
+    correlator::AbstractCorrelator,
+    signal_type,
+    prn::Integer,
+    sample_shifts,
+    code_phase,
+    code_frequency,
+    carrier_frequency,
+    sampling_frequency,
+    start_sample::Integer,
+    num_samples::Integer,
+)
+    gen_code_replica!(
+        code_replica,
+        signal_type,
+        code_frequency,
+        sampling_frequency,
+        code_phase,
+        start_sample,
+        num_samples,
+        sample_shifts,
+        prn,
+    )
+    get_accumulators(
+        _fused_standalone!(
+            correlator,
+            samples,
+            code_replica,
+            sample_shifts,
+            carrier_frequency,
+            sampling_frequency,
+            0.0,
+            start_sample,
+            num_samples,
+        ),
+    )
 end
 
 # Last sample index (inclusive) this satellite may integrate up to in the
@@ -1038,6 +1102,14 @@ end
     grid = uconvert(NoUnits, (chunk_index + 1) * chunk_duration * sampling_frequency)
     min(round(Int, grid), num_samples)
 end
+
+# First sample (inclusive) of the same chunk — where the per-band noise
+# measurement starts. Not simply `_chunk_last_sample(…, chunk_index - 1, …) + 1`:
+# without chunking that clamps to `num_samples + 1` and the whole-buffer pass
+# would measure nothing at all.
+@inline _chunk_first_sample(::Nothing, chunk_index, sampling_frequency, num_samples) = 1
+@inline _chunk_first_sample(chunk_duration, chunk_index, sampling_frequency, num_samples) =
+    _chunk_last_sample(chunk_duration, chunk_index - 1, sampling_frequency, num_samples) + 1
 
 # Optional per-backend sample-type check, run once per group before the
 # per-sat loop. No-op by default; the integer backends override it to reject

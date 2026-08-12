@@ -1478,3 +1478,86 @@ if isdefined(Tracking, :Int16DownconvertAndCorrelator) && isdefined(Tracking, :t
         end
     end
 end
+
+# ── Per-band noise estimation ────────────────────────────────────────────────
+# Feature-gated like every other group here, so the file keeps running unchanged
+# against revisions that predate the noise reference (AirspeedVelocity diffs two
+# revs with one script).
+#
+# Two things are worth watching separately. `update_noise!` is the O(N) despread
+# the software source adds per band per chunk — one correlation against
+# n_sats · n_signals of them, so it should sit near a per-satellite correlate and
+# not near a whole `track!`. `append_noise_observation!` is the hardware ingest
+# path and the FIFO's steady state, which the design requires to be
+# allocation-free.
+#
+# `SUITE["track"]` above is deliberately left alone: those states use the default
+# C/N₀ estimator, which reads no density, so no band is provisioned and the noise
+# pass costs exactly nothing there. That is the comparison that has to stay flat.
+if isdefined(Tracking, :CorrelatorNoiseEstimator)
+    function bench_update_noise(; num_samples = 4000, sampling_frequency = 4e6Hz)
+        gnss_signal = GPSL1CA()
+        estimator = Tracking.CorrelatorNoiseEstimator()
+        measurement =
+            Tracking.BandMeasurement(rand(ComplexF32, num_samples), sampling_frequency)
+        context = Tracking.NoiseUpdateContext(
+            gnss_signal,
+            (),
+            0,
+            Tracking.CPUDownconvertAndCorrelator(),
+        )
+        @benchmarkable Tracking.update_noise!(
+            $estimator,
+            $measurement,
+            1,
+            $num_samples,
+            $context,
+        )
+    end
+    SUITE["noise estimation"]["update_noise! – 1 ms @ 4 MHz"] = bench_update_noise()
+    SUITE["noise estimation"]["update_noise! – 1 ms @ 20 MHz"] =
+        bench_update_noise(; num_samples = 20_000, sampling_frequency = 20e6Hz)
+
+    function bench_append_noise_observation()
+        estimator = Tracking.CorrelatorNoiseEstimator()
+        observation = Tracking.noise_observation_from_samples(4000.0, 4000, 4e6Hz)
+        # Fill the window first: the interesting cost is the steady state, where
+        # every push is paired with a `popfirst!`.
+        for _ = 1:2000
+            Tracking.append_noise_observation!(estimator, observation)
+        end
+        @benchmarkable Tracking.append_noise_observation!($estimator, $observation)
+    end
+    SUITE["noise estimation"]["append_noise_observation! – steady state"] =
+        bench_append_noise_observation()
+
+    function bench_track_noise_ref(;
+        signal_type = Float32,
+        num_samples = 2000,
+        sampling_frequency = 5e6Hz,
+    )
+        gnss_signal = GPSL1CA()
+        downconvert_and_correlator = _make_cpu_dc(sampling_frequency)
+        track_state = TrackState(
+            gnss_signal,
+            [
+                Tracking.TrackedSat(
+                    gnss_signal,
+                    1,
+                    0.0,
+                    1000Hz;
+                    cn0_estimator = Tracking.NoiseRefCN0Estimator(),
+                ),
+            ],
+        )
+        signal = rand(Complex{signal_type}, num_samples)
+        @benchmarkable Tracking.track!(
+            $signal,
+            $track_state,
+            $sampling_frequency;
+            downconvert_and_correlator = $downconvert_and_correlator,
+        )
+    end
+    SUITE["noise estimation"]["track! – Float32/2K with a noise reference"] =
+        bench_track_noise_ref()
+end

@@ -406,6 +406,7 @@ const _OneBitDC =
     sampling_frequency,
     signal_start_sample::Integer,
     num_samples::Integer,
+    use_band_cache::Bool = true,
 ) where {M,NC}
     # Accumulator declarations: A/B (→ I) and C/E (→ Q) popcounts per (antenna j, tap k).
     init = Expr(:block)
@@ -498,7 +499,7 @@ const _OneBitDC =
         num_rows = size(signal, 1)
         p_sig = Ptr{Int16}(pointer(signal))
         band = dc.band                              # band-shared measurement sign planes (>1 sat)
-        band_shared = !isempty(band.mrband)         # pre-packed once per group when it pays off
+        band_shared = use_band_cache && !isempty(band.mrband)  # pre-packed per group when it pays off
         bandstride = cld(num_rows, 64) + 2          # per-antenna plane stride in `band` (see _ob_pack_band!)
 
         bufs = _ob_scratch(dc)
@@ -654,6 +655,7 @@ function _onebit_hybrid_blocked!(
     sampling_frequency,
     signal_start_sample::Integer,
     num_samples::Integer,
+    use_band_cache::Bool = true,
 ) where {M}
     get_modulation(signal_type) isa GNSSSignals.CBOC && throw(
         ArgumentError(
@@ -683,7 +685,7 @@ function _onebit_hybrid_blocked!(
     num_rows = size(signal, 1)
     p_sig = Ptr{Int16}(pointer(signal))
     band = dc.band                              # band-shared measurement sign planes (>1 sat)
-    band_shared = !isempty(band.mrband)
+    band_shared = use_band_cache && !isempty(band.mrband)
     bandstride = cld(num_rows, 64) + 2
 
     bufs = _ob_scratch(dc)
@@ -1375,3 +1377,43 @@ function downconvert_and_correlate!(
     )
     return track_state
 end
+
+# Open-loop despread of the band's noise reference on this backend's kernel —
+# see `_correlate_noise_reference!` in downconvert_and_correlate_cpu.jl for why
+# the reference must go through the same kernel as the prompt. The bit-wise
+# accumulators are popcount counts rather than sample sums, so a float-kernel
+# reference would put `|P|²` and `N̂₀` on incompatible scales.
+#
+# `code_replica` goes unused here: this backend packs the code sign plane inside
+# the kernel.
+@inline _correlate_noise_reference!(
+    dc::_OneBitDC,
+    ::Vector{Int8},
+    samples,
+    correlator::AbstractCorrelator,
+    signal_type,
+    prn::Integer,
+    sample_shifts,
+    code_phase,
+    code_frequency,
+    carrier_frequency,
+    sampling_frequency,
+    start_sample::Integer,
+    num_samples::Integer,
+) = _onebit_hybrid_blocked!(
+    dc,
+    samples,
+    _ob_num_ants_val(correlator),
+    signal_type,
+    prn,
+    sample_shifts,
+    code_phase,
+    0.0,
+    code_frequency,
+    carrier_frequency,
+    sampling_frequency,
+    start_sample,
+    num_samples,
+    false,   # never the shared band pack: it belongs to whichever
+    # group ran last, which may be another band or another buffer
+)
