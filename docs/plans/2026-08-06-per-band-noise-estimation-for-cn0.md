@@ -1,7 +1,9 @@
 # Per-band noise estimation for C/N₀
 
 **Date:** 2026-08-06
-**Status:** Planned (Phase 0 implemented; single noise estimator as of 2026-08-06)
+**Status:** Planned (Phase 0 implemented; single noise estimator as of 2026-08-06;
+review pass 2026-08-09 — self-leakage promoted from a parenthetical to a quantified
+risk, the "no density" skip respecified, anchors corrected against `b9709191`)
 
 > **Anchors are as of `b9709191` (6.0.1).** Phase 0.5 deletes
 > `src/cn0_estimation.jl` and moves every symbol in it, so all
@@ -15,8 +17,8 @@ C/N₀ follows from a measured noise reference instead of being inferred from th
 prompt's own statistics. The noise source is pluggable behind
 `AbstractNoiseEstimator`, with two classes of implementation:
 
-- **software** — derived from the band's samples inside `track!`
-  a shared per-band noise correlator, one despread per band per integration),
+- **software** — derived from the band's samples inside `track!` (a shared per-band
+  noise correlator, one despread per band per integration),
 - **hardware** — the statistic is supplied from outside (FPGA / ASIC correlator,
   or a front-end power monitor) via `append_noise_observation!`, exactly parallel
   to the existing [`append_correlator_output!`](@ref) producer path.
@@ -25,8 +27,8 @@ The consumer is one new estimator, `NoiseRefCN0Estimator`, that works on **every
 signal with **one** set of characteristics and **no fallback**.
 
 The final deliverable is documentation that **compares all the estimators and says
-when to pick which** — with five CN0 estimators and two noise sources, that becomes
-the main thing a user needs from the docs.
+when to pick which** — with four CN0 estimators and one noise estimator that can be
+filled two ways, that becomes the main thing a user needs from the docs.
 
 ## Motivation
 
@@ -40,40 +42,52 @@ not apply uniformly:
   secondary-coded signal pre-sync (`_narrowband_window`,
   `src/cn0_estimation.jl:446-477`). The fallback is `MomentsCN0Estimator`, whose
   noise floor on pure noise is ≈27.6 dB-Hz (`src/cn0_estimation.jl:249-260`,
-  `docs/src/cn0_estimator.md:38-90`). This is issue #217.
+  `docs/src/cn0_estimator.md:40-90`). This is issue #217.
 - `μ̂ → M` saturates, so its relative error asymptotes to `√(M/((M−1)K))`
   regardless of signal strength.
 - The ratio-of-sums inversion carries a small positive bias at every C/N₀
   (`src/cn0_estimation.jl:219-247`).
-- At low C/N₀ a fraction of windows land outside `1 < μ̂ < M` and report
-  `0`/`Inf` dB-Hz (`src/cn0_estimation.jl:704-706`).
+- At low C/N₀ a fraction of *estimates* land outside `1 < μ̂ < M` and report
+  `-Inf`/`Inf` dB-Hz (`src/cn0_estimation.jl:705-706`). Note where that bound is
+  applied: `estimate_cn0` pools every buffered window — `μ̂ = Σ NBP / Σ WBP` over all
+  `num_records ÷ M` of them — and range-checks the *pooled* ratio once
+  (`:700-706`). Individual windows are never screened or discarded, so this is a
+  rate of unusable outputs, not a per-window discard rate.
 
 Measured by `test/cn0_estimator_comparison.jl` (Phase 0): 100 ms of observation at
-1 ms records, NWPR at its default `M = 5`, 4000 trials per point, **NWPR given its
-best case** (perfect carrier phase, bit-aligned windows, no transitions):
+1 ms records, NWPR at its default `M = 5`, 4000 trials × 9 seeds per point (median),
+**NWPR given its best case** (perfect carrier phase, bit-aligned windows, no
+transitions):
 
 | C/N₀ (dB-Hz) | λ = (C/N₀)·T | NWPR σ | NWPR bias | NWPR degenerate | NoiseRef σ (1 ms) | bias | NoiseRef σ (5 ms) | bias |
 |---|---|---|---|---|---|---|---|---|
-| 20 | 0.1  | 2.96 | **+0.47** | **6.2 %** | 4.79 | −0.05 | **2.76** | −0.03 |
-| 25 | 0.32 | 1.50 | +0.08 | 0 | 1.72 | −0.03 | **1.24** | −0.01 |
-| 30 | 1    | 0.90 | +0.08 | 0 | 0.75 | −0.00 | **0.65** | 0.00 |
-| 35 | 3.2  | 0.64 | +0.07 | 0 | 0.37 | −0.00 | **0.35** | 0.00 |
+| 20 | 0.1  | 2.96 | **+0.45** | **5.6 %** | 4.77 | +0.03 | **2.75** | +0.01 |
+| 25 | 0.32 | 1.51 | +0.08 | 0 | 1.76 | −0.01 | **1.25** | −0.01 |
+| 30 | 1    | 0.90 | +0.07 | 0 | 0.76 | +0.01 | **0.65** | 0.00 |
+| 35 | 3.2  | 0.64 | +0.05 | 0 | 0.37 | −0.01 | **0.35** | −0.01 |
 | 40 | 10   | 0.54 | +0.05 | 0 | 0.20 | −0.00 | **0.20** | −0.00 |
-| 45 | 32   | 0.51 | +0.05 | 0 | 0.11 | −0.00 | **0.11** | −0.00 |
-| 50 | 100  | 0.50 | +0.04 | 0 | 0.06 | 0.00 | **0.06** | 0.00 |
+| 45 | 32   | 0.51 | +0.05 | 0 | 0.11 | 0.00 | **0.11** | 0.00 |
+| 50 | 100  | 0.50 | +0.05 | 0 | 0.06 | −0.00 | **0.06** | −0.00 |
 
 σ is the relative standard deviation in dB; bias is of the linear-domain mean. The
-NoiseRef columns assume a **variance-free** noise reference; "How much averaging the
-reference needs" derives what that costs and sets the defaults that get within a few
-percent of it. The
 NWPR column is the *shipped* `NWPRCN0Estimator` folded through its public
 `update`/`estimate_cn0`; the two NoiseRef columns are reference implementations of
 what `NoiseRefCN0Estimator` must reproduce.
 
+**Two things the NoiseRef columns assume, both of which cost something real:**
+
+- a **variance-free** noise reference. "How much averaging the reference needs"
+  derives what that costs and sets the defaults that get within a few percent of it.
+- a noise floor that is exactly the thermal one — i.e. **an empty sky**. A despread
+  reference also collects every satellite's cross-correlation, and unlike NWPR it
+  collects the tracked satellite's *own*. That is a bias, it grows with the
+  satellite's own C/N₀, and above ≈45 dB-Hz it is the dominant error term rather
+  than σ. See "Multi-access interference and the reference's self-leakage".
+
 NWPR's σ and bias are computed over its **non-degenerate** draws only, which is the
 generous reading — the discarded draws are its worst. At 20 dB-Hz that exclusion is
-what turns a wide low tail into the visible +0.47 dB bias: 6.2 % of windows fall
-outside `1 < μ̂ < M` and are reported as 0 or Inf dB-Hz, and the rest sit high.
+what turns a wide low tail into the visible +0.45 dB bias: 5.6 % of estimates fall
+outside `1 < μ̂ < M` and are reported as -Inf or Inf dB-Hz, and the rest sit high.
 
 Reading of the table:
 
@@ -85,12 +99,32 @@ Reading of the table:
   narrowband window is not extra information — it is a longer coherent
   integration reconstructed post-correlation. Taking that integration in the
   correlator instead (`preferred_num_code_blocks_to_integrate`) makes the
-  noise-reference estimator better than NWPR at **every** C/N₀, and it is the
+  noise-reference estimator better than NWPR at **every** C/N₀ *in σ*, and it is the
   better place to spend it because a longer coherent record also helps the
-  discriminators.
-- NWPR is unbiased nowhere, saturates at 0.50 dB, and throws away 1 window in 16
-  at 20 dB-Hz. The noise-reference estimator is unbiased to <0.01 dB throughout
-  and keeps improving with C/N₀.
+  discriminators. (In *total* error the picture flips above ≈45 dB-Hz once
+  self-leakage is counted — see below.)
+- NWPR is unbiased nowhere, saturates at 0.50 dB, and throws away 1 output in 18
+  at 20 dB-Hz. The noise-reference estimator is unbiased to <0.03 dB throughout
+  against a thermal-only floor, and its σ keeps improving with C/N₀.
+
+**Where this actually wins, stated honestly.** The σ advantage is unbounded on
+paper, but self-leakage puts a bias floor under the top of the range: ≈0.13 dB at
+45 dB-Hz and ≈0.40 dB at 50. So the case for the change is *not* "arbitrarily
+accurate strong signals". It is:
+
+1. **It works at all on GPS L1C-D, Galileo E1B and pre-sync secondary-coded
+   signals**, where NWPR produces nothing and hands over to a fallback with a
+   ≈27.6 dB-Hz floor. This is issue #217 and it is the reason for the change.
+2. **20–40 dB-Hz**, where lock and loss decisions are made: no degenerate outputs
+   and no +0.45 dB low-end bias. On σ, at matched 1 ms records it wins only above
+   the ≈28 dB-Hz crossover; with records lengthened to NWPR's window it wins across
+   the whole span. Self-leakage is ≤0.04 dB there (0.013 dB at 35, 0.042 dB at 40),
+   i.e. an order of magnitude under NWPR's +0.05 dB.
+3. **Uniformity** — one estimator, one set of characteristics, no fallback with a
+   different bias, no `M`, no bit sync.
+
+Above 45 dB-Hz the two are comparable in total error and it stops mattering, since
+nothing consuming C/N₀ distinguishes 0.4 dB there.
 
 Secondary benefits: a per-band noise floor is also what acquisition needs for a
 real CFAR threshold, and it is a natural interference/AGC monitor.
@@ -337,7 +371,7 @@ Rejected alternatives, and why:
 Because the state is mutated in place, `TrackState` itself never needs rebuilding
 for a noise update, and the per-band keying means one estimator instance is never
 shared between bands (the same reasoning as `_per_signal_cn0_estimators`,
-`src/sat_state.jl:617-658`).
+`src/sat_state.jl:617-659`).
 
 ### Where it is updated
 
@@ -458,7 +492,7 @@ the chunk loop keeps advancing through `chunk_last_sample`. Since `track!` passe
 `samples_unchanged = chunk_index > 0`, gating on it would measure chunk 0 and then freeze
 the window for the rest of the buffer.
 
-The call that *does* need skipping is the **final drain pass** (`src/track.jl:229`), which
+The call that *does* need skipping is the **final drain pass** (`src/track.jl:224-229`), which
 passes neither `chunk_index` nor `chunk_duration`. With `chunk_duration === nothing` the
 chunk range defaults to the whole buffer (`_chunk_last_sample`,
 `src/downconvert_and_correlate_cpu.jl:885-895`), so measuring there would re-measure
@@ -477,6 +511,36 @@ The discriminating condition needs no pointer:
 So: skip iff `chunk_duration === nothing && samples_unchanged`. The cost is that the
 trailing partial's samples never reach the window — at most one chunk per `track!` call,
 which changes nothing, since omitting an entry biases `σ̂²` not at all.
+
+Verified against every shape a call can take. Note first that **inside `track!` the
+unchunked case never arises**: `_resolve_doppler_update_interval` (`src/track.jl:271-275`)
+falls back to `_smallest_code_period`, so `chunk_duration` is always a concrete time there.
+`track!` therefore has exactly two call shapes, and the third is reachable only by a direct
+caller:
+
+| call | `chunk_duration` | `samples_unchanged` | gate | measures |
+|---|---|---|---|---|
+| chunked loop, iteration `k` (`:206-218`) | set | `k > 0` | no skip | chunk `k` in `num_sub` slices |
+| drain (`:224-229`) | `nothing` | `chunk_index > 0` | **skip** | — |
+| direct unchunked `downconvert_and_correlate!` | `nothing` | `false` | no skip | whole buffer |
+
+A buffer shorter than one chunk is covered by the **loop**, not the drain: `_chunks_left`
+(`:258-265`) seeds from `_chunk_last_sample(cd, -1, …) = 0 < n`, so the loop always runs at
+least once for a non-empty buffer, and `_chunk_last_sample` clamps that single chunk to the
+buffer end. The drain then sees `chunk_index = 1` and is skipped, which is right — the loop
+already measured everything. The drain is reached with `samples_unchanged = false` only when
+the loop ran zero times, i.e. an empty buffer, where there is nothing to measure anyway.
+
+**This does overload a public kwarg, which is worth stating rather than discovering.**
+`samples_unchanged` is documented as a *cache-validity hint* — "the measurement buffers are
+fixed for the whole call, so sample-derived backend caches … are built on the very first pass
+and reused ever after" (`src/downconvert_and_correlate_cpu.jl:849-854`) — and
+`downconvert_and_correlate!` is public API. After this change it also means "do not measure",
+so a direct caller who passes `samples_unchanged = true` on an unchunked call, truthfully,
+gets their noise measurement silently skipped. The gate is right for `track!` and a
+pointer-free discriminator is worth having, but the kwarg's docstring must gain a sentence
+saying so, and the Verification cadence test should cover the direct-caller shape as well as
+`track!`'s.
 
 ### How much averaging the reference needs
 
@@ -650,16 +714,23 @@ purely for `_band_sampling_frequency`, as today. All sample processing is in the
 correlate step.
 
 `_foreach_group!` currently receives only `track_state.groups` and
-`sampling_frequencies` (`src/conventional_pll_and_dll.jl:740`), so it also needs
+`sampling_frequencies` (`src/conventional_pll_and_dll.jl:738`), so it also needs
 `track_state.noise_estimators` passed through — one extra argument at one site.
 
-Functions gaining one argument — all underscore-private:
+Functions gaining **two** arguments — the density and a `Bool` saying whether it is
+meaningful this chunk (see "Two different 'no density' conditions" for why the
+availability flag cannot be folded into the density's type, and why it cannot be
+resolved higher up) — all underscore-private:
 `_update_tracked_sat_doppler` (`:284`), `_process_estimator_driver_signal`
 (`:499`, **two** dispatch families — the vector-tracking one is
 `src/vector_pll_and_dll.jl:264`), `_process_passenger_signals` /
 `_process_one_passenger_signal` (`:600`, `:620`), `_apply_correlator_output`
 (`:413`). Three `_apply_correlator_output` call sites:
 `src/conventional_pll_and_dll.jl:534`, `:636`, `src/vector_pll_and_dll.jl:295`.
+
+Both arguments are scalars of a type fixed per call site, so every one of these stays
+monomorphic; the flag is what keeps the density from ever needing to be
+`Union{Nothing,D}`.
 
 `CN0UpdateContext` (`src/cn0_estimation.jl:48-54`) gains two fields:
 
@@ -724,11 +795,45 @@ earlier revision, which would have made a legitimate warm-up throw:
   `nothing`. This must not throw and must not reach the context, or the context field would
   have to become a `Union` and lose type stability.
 
-The second is handled one level up: `_est_one_group!` reads the band's density *before*
-building any context, and where it is unavailable simply does not update the C/N₀ estimators
-for that band this chunk. The context's density field is then unconditionally a plain scalar
-whenever `N !== Nothing`. Both branches are type-stable — one calls `update`, the other
-does not.
+The second is resolved one level up, in `_est_one_group!`, which reads the band's density
+*before* building any context. But **where the resulting branch lands, and how wide it is,
+both need pinning** — an earlier revision said only "does not update the C/N₀ estimators for
+that band", which is not implementable as written and would have been wrong if it were.
+
+**The branch cannot live in `_est_one_group!`.** That function calls
+`_update_tracked_sat_doppler`, which reaches `_apply_correlator_output`
+(`src/conventional_pll_and_dll.jl:413-489`) — and that function folds a record as one
+indivisible unit: it normalises the correlator (`:422-423`), advances the post-corr filter
+(`:424-426`), pushes the filtered prompt (`:428`), computes the bit-block count
+(`:429-434`), updates the C/N₀ estimator (`:459-463`) and feeds the bit buffer
+(`:464-470`) — everything a record contributes except the discriminators themselves, which
+run one level up in `_process_estimator_driver_signal` (`:499`) off the state this function
+produces. Skipping it for a band would stall bit sync and the prompt history the loops read.
+The only thing that may be skipped is the `update(get_cn0_estimator(…), …)` call itself, so
+the "have we got a density" answer has to reach `_apply_correlator_output`.
+
+Thread it as a `Bool` (or `Val`), not as a `Union{Nothing,D}` density: the density argument
+stays a plain scalar of the band's type, and a separate flag says whether it is meaningful.
+Both branches inside `_apply_correlator_output` are then type-stable and the argument type
+never varies. The cost is honest and worth stating: this is a **second** value threaded
+through the same five private functions the density already goes through
+(`_update_tracked_sat_doppler`, `_process_estimator_driver_signal` in both dispatch families,
+`_process_passenger_signals` / `_process_one_passenger_signal`, `_apply_correlator_output`),
+not a free branch at the top.
+
+**The skip must be per estimator, not per band.** A band is one-to-many with signals, and
+only signals whose estimator returns `requires_noise_density() == true` care. Skipping the
+whole band would stall an `NWPRCN0Estimator` sharing it — and for NWPR that is not "one
+fewer sample", it is **state corruption**: `_update_nwpr` drops the open narrowband window
+whenever `window_block_index != num_accumulated_code_blocks` — the test is
+`src/cn0_estimation.jl:554-555` and the drop itself `:556-557` — so records missing from the
+bit grid silently break window
+alignment and NWPR degrades to its fallback. Gate the skip on the same
+`requires_noise_density` trait that drives provisioning, evaluated per signal — it is a
+compile-time constant on the estimator's type, so this costs nothing at run time.
+
+The context's density field is then unconditionally a plain scalar whenever
+`N !== Nothing`, and both branches are type-stable — one calls `update`, the other does not.
 
 In the software path the second condition is at most a formality: `downconvert_and_correlate!`
 measures before the fold reads, so the window holds an observation from the very first chunk.
@@ -756,6 +861,14 @@ The skip site is the right place because it is the only point that knows a fold 
 *and* the density was unavailable. It needs no state (`maxlog` is handled by the logging
 macro), it never fires on the software path, and on the short-buffer edge it fires once with
 information that is arguably worth having anyway.
+
+**`maxlog` is keyed per callsite, not per band**, so with two misconfigured bands only the
+first to reach the skip ever warns — and since the message interpolates the band id, the
+other band's name never appears. Two options, and the second is preferred: either pass an
+explicit per-band `_id` (`@warn … _id = Symbol(:no_noise_density_, band_id), maxlog = 1`),
+or drop the band id from the message and name the general fix. Take the `_id` route — the
+band id is the single most useful thing in the message for a multi-band setup, which is
+exactly where the mistake is most likely.
 
 **Warn rather than throw, deliberately**, and the asymmetry with the static case is the point:
 "no source configured" is unambiguously a mistake, whereas "window empty at this instant" has
@@ -859,17 +972,66 @@ replica handling on a quantised backend cannot be made allocation-free without
 distorting the design, take the allocation and record it in the benchmark suite
 rather than contorting the abstraction. Everything else should measure zero.
 
-### What is *not* in the design
+### Multi-access interference and the reference's self-leakage
 
-**No multi-access-interference correction.** Other satellites' cross-correlation
-adds incoherent power `ε` to every `|P_k|²`, so NWPR sees
-`E[NBP] = M²P_s + M(P_n+ε)` and `E[WBP] = M(P_s+P_n+ε)`, giving
-`λ̂ = P_s/(P_n+ε)` — **identical** to what the noise reference yields. Both report
-C/N₀ against the effective noise density including MAI, which is what other
-receivers report and the more useful number for a lock detector. This removes the
-cross-satellite feedback loop an earlier sketch of this design had. (The
-correlator source additionally picks up the satellite's own power through its
-wrong-code sidelobe, ≈0.13 dB at 45 dB-Hz; noted, not corrected.)
+**No multi-access-interference correction**, and the two estimators are *nearly* but
+not exactly alike in what they pick up. This distinction was a parenthetical in an
+earlier revision and it should not have been: it is the design's only bias term, and
+it lands squarely on the high-C/N₀ end the σ tables advertise.
+
+A satellite of carrier power `C` spreads over the code band when despread with the
+wrong code, contributing `ε = C/f_chip` to a measured noise density. At
+`C/N₀ = 45 dB-Hz` on L1 C/A that is `10^4.5 / 1.023e6 = 0.031` of `N₀`, i.e.
+**0.13 dB**. It is Doppler-independent: the product of two different codes is spread
+over ±`f_chip`, so a ±5 kHz offset does not null it.
+
+**The shared term.** For the 11 *other* satellites, both estimators see the same
+thing. NWPR sees `E[NBP] = M²P_s + M(P_n+ε)` and `E[WBP] = M(P_s+P_n+ε)`, giving
+`λ̂ = P_s/(P_n+ε)`; the reference measures `N₀+ε` directly and yields the same. Both
+report C/N₀ against the effective noise density including MAI, which is what other
+receivers report and the more useful number for a lock detector. Summed over a
+typical sky this is ≈0.9 dB for both — which is the figure quoted under "The
+rotation policy", where it is the *base* the PRN-choice spread is measured against.
+It is not a difference between the estimators and needs no correction. This is also
+what removes the cross-satellite feedback loop an earlier sketch of this design had.
+
+**The term that is *not* shared**, and the one that matters: the reference despreads
+with a wrong PRN, so it also collects **the tracked satellite's own power**. NWPR
+does not — it despreads with the correct PRN, where the satellite's power appears
+properly in both `NBP` and `WBP` and cancels in the ratio. So the reference carries
+a bias NWPR does not, and it scales with the satellite's own C/N₀:
+
+| own C/N₀ | ε_self/N₀ | bias (C/N₀ reads low by) |
+|---|---|---|
+| 35 | 0.0031 | 0.013 dB |
+| 40 | 0.0098 | 0.042 dB |
+| 45 | 0.031 | **0.13 dB** |
+| 50 | 0.098 | **0.40 dB** |
+
+(L1 C/A, `f_chip` = 1.023 MHz; `10log10(1 + ε_self/N₀)`. A wider spreading bandwidth
+scales it down proportionally, so GPS L5 and E5a at 10.23 Mcps are ≈10× smaller —
+0.013 dB even at 50 dB-Hz. For BOC/CBOC signals the split spectrum is wider than the
+chip rate suggests, so `C/f_chip` is an over-estimate there and E1B is somewhat
+better than the L1 C/A figures above, not equal to them. Measure it rather than
+assume it — that is what the Verification MAI sweep is for.)
+
+**Consequences, and why this is still accepted:**
+
+- Above ≈45 dB-Hz the reference is **bias-limited, not variance-limited**: 0.40 dB of
+  bias at 50 dB-Hz against 0.06 dB of σ. The "keeps improving without bound" claim is
+  true of σ only, and the Motivation table now says so.
+- At and below 40 dB-Hz it is ≤0.042 dB and irrelevant — under NWPR's own +0.05 dB
+  bias there. That is the range that motivated the change, and where NWPR's
+  degenerate outputs and +0.45 dB low-end bias live.
+- **Correcting it is worse than carrying it.** The correction is
+  `N̂₀ ← N̂₀ − Σᵢ Ĉᵢ/f_chip` over the tracked satellites, which reintroduces exactly
+  the cross-satellite feedback loop this design removed, and makes each satellite's
+  C/N₀ a function of every other satellite's estimate. A stable, documented,
+  monotone bias at the top of the range is the better trade.
+- It **must not go undocumented**, because it is the one axis on which NWPR is
+  better. The Phase 3 comparison table carries a "high-C/N₀ bias floor" row for
+  this, and the Verification MAI item measures the NoiseRef−NWPR delta rather than
+  assuming the two shift together.
 
 **No in-estimator coherent pre-sum**, initially. Deferred — see below.
 
@@ -973,10 +1135,18 @@ which is one of the three reasons the software default matches it.
 
 ## External APIs
 
-New exports: `AbstractNoiseEstimator`, `CorrelatorNoiseEstimator`, `requires_noise_density`,
-`NoiseObservation`, `noise_observation_from_correlator`,
+New exports (**11**): `AbstractNoiseEstimator`, `CorrelatorNoiseEstimator`,
+`requires_noise_density`, `NoiseObservation`, `noise_observation_from_correlator`,
 `noise_observation`, `noise_observation_from_samples`, `append_noise_observation!`,
-`get_noise_density`, `NoiseRefCN0Estimator`.
+`update_noise!`, `get_noise_density`, `NoiseRefCN0Estimator`.
+
+`update_noise!` is on that list deliberately, and an earlier revision left it off by
+mistake. It is one of the three methods that *define* `AbstractNoiseEstimator`, and
+the design leans on users implementing it — "anyone who wants [a hardware power
+monitor alongside software correlation] can define their own `AbstractNoiseEstimator`
+with a no-op `update_noise!`; the abstract type and its interface are public". An
+unexported method cannot be extended by name, so leaving it out would have made that
+escape hatch inaccessible and the interface only two-thirds public.
 
 `append_noise_observation!` mirrors `append_correlator_output!`
 (`src/sat_state.jl:273`, `src/tracking_state.jl:834-842`) with band-id selection:
@@ -1040,8 +1210,15 @@ Per `AGENTS.md`, judged against 6.0.1. Both land as `feat(cn0)!` with a
 
 - **`TrackState` gains a field and a type parameter.** Positional construction
   and the copy constructor (`src/tracking_state.jl:254`, which pins type params)
-  change shape. Internal call sites to fix: `src/tracking_state.jl:101`, `:131`,
-  `:282`, `src/sat_state.jl:1088`.
+  change shape. Internal positional `TrackState(groups, doppler_estimator)` call
+  sites to fix: `src/tracking_state.jl:82`, `:196`, `:205`, `:247`, and the two
+  type-parameterised forms `:259` (inside the copy constructor) and `:413`.
+  `src/tracking_state.jl:295` is `TrackState(track_state; groups = new_groups)` — the
+  **kwarg** copy constructor, so the new field flows through it untouched and it needs
+  no third argument, but it is the call that makes the copy constructor at `:254` the
+  place the field must be threaded. (An earlier revision listed
+  `src/tracking_state.jl:101`, `:131`, `:282` and `src/sat_state.jl:1088` here — those
+  are all `SignalGroup` constructors and are **not** affected.)
 - **`CN0UpdateContext` gains two fields.** It is exported
   (`src/Tracking.jl:63`), its 5-field positional constructor is called from
   `test/cn0_estimation.jl:184`, `:347`, `:381`, and
@@ -1061,9 +1238,15 @@ signature (`src/cn0_estimation.jl:137`, `:698`, `src/sat_state.jl:1195-1201`,
 
 `test/cn0_estimator_comparison.jl`: a seeded Monte-Carlo comparison of the shipped
 `NWPRCN0Estimator` against reference non-coherent and coherent-`M` noise-reference
-estimators, at known λ with the noise density known exactly. Runs in ≈4 s and prints
-the Motivation table above, so it stays reproducible. Five testsets pin the
-structural claims the plan rests on: NWPR's degenerate windows, its bias at every
+estimators, at known λ with the noise density known exactly. 4000 trials × 9 seeds
+per point, medianed — the house convention at `test/cn0_estimation.jl:625-634`, and
+necessary rather than decorative here: at one seed the sampling error on `bias_db`
+is ≈0.014 dB at 30 dB-Hz against a 0.02 dB bound, so a single-seed version passed on
+its own seed and failed on ≈13 % of others. At 9 seeds every assertion holds across
+40 alternative seed bases with ≈40 % headroom; the measured worst cases are recorded
+in the comment above `_sweep`. Runs in ≈4 s and prints the Motivation table above,
+so it stays reproducible. Five testsets pin the
+structural claims the plan rests on: NWPR's degenerate estimates, its bias at every
 C/N₀, its σ saturation, the coherent noise reference beating it everywhere, and —
 the honest half — the non-coherent squaring loss below the crossover.
 
@@ -1094,11 +1277,19 @@ file is the singular of the folder name, then one file per concrete type:
 src/cn0_estimators/
   cn0_estimator.jl   # AbstractCN0Estimator, CN0UpdateContext, the 3-arg `update`
                      # extension point, default_cn0_estimator
-  moments.jl         # MomentsCN0Estimator                        (:100-146)
-  no_cn0.jl          # NoCN0Estimator                             (:174-190)
+  moments.jl         # MomentsCN0Estimator                         (:95-146)
+  no_cn0.jl          # NoCN0Estimator                             (:148-190)
   nwpr.jl            # NWPRCN0Estimator, _num_ratios, _narrowband_window,
-                     # _update_nwpr, _with_window_state, _with_open_window  (:352-709)
+                     # _update_nwpr, _with_window_state, _with_open_window  (:192-709)
 ```
+
+**The ranges include each type's docstring**, which is the whole point of stating
+them: `NWPRCN0Estimator`'s alone is `:192-351`, 160 lines — more than the struct and
+all its methods put together — and an earlier revision's `:352-709` would have left
+it stranded in the shared file, splitting a type from its documentation and quietly
+making the commit not-pure-motion. Line accounting for the 737-line original:
+`nwpr.jl` takes 518 lines, `moments.jl` 52, `no_cn0.jl` 43, leaving ~124 for
+`cn0_estimator.jl`.
 
 Constraints and consequences:
 
@@ -1106,9 +1297,10 @@ Constraints and consequences:
   commit, so it lands as `refactor(cn0):` — no release per `AGENTS.md`. Verify with
   a full test run, not by inspection.
 - **Include order.** The shared file must still follow `bit_buffer.jl`, because
-  `CN0UpdateContext` has a `BitBuffer` *field* (`src/cn0_estimation.jl:52`) and
+  `CN0UpdateContext` has a `BitBuffer` *field* (`src/cn0_estimation.jl:53`) and
   that is a compile-time dependency. The explanatory comment at
-  `src/Tracking.jl:201-205` moves with it and needs rewording for the new paths.
+  `src/Tracking.jl:201-203` moves with it and needs rewording for the new paths
+  (the two `include`s it explains are `:204-205`).
   `default_cn0_estimator` only *references* `NWPRCN0Estimator` and
   `MomentsCN0Estimator` inside a function body, so it is resolved at call time and
   can stay in the shared file regardless of include order.
@@ -1183,9 +1375,17 @@ Rotation is worth this much and no more. It is not load-bearing: the leakage ter
 over ~12 satellites, so it is already averaged over 12 cross-correlation draws. What a fixed
 PRN costs is a *slowly drifting* bias — with Gold cross-correlation power roughly
 exponentially distributed, the sum's relative spread across PRN choices is ≈1/√12 ≈ 29 %,
-which on a ≈0.9 dB leakage bias is ≈±0.28 dB that moves as the constellation geometry does.
-Rotation replaces that drift with a stable mean. Since the leakage bias itself is deliberately
-uncorrected (NWPR carries the identical term), a stable bias is the whole objective.
+which on the ≈0.9 dB whole-sky leakage bias derived in "Multi-access interference and the
+reference's self-leakage" is ≈±0.28 dB that moves as the constellation geometry does.
+Rotation replaces that drift with a stable mean. Since the leakage bias is deliberately
+uncorrected, a stable bias is the whole objective.
+
+Note which part of that bias rotation can and cannot touch. The ≈0.9 dB is dominated by the
+term NWPR carries identically — the other satellites' interference — and rotation only
+stabilises *which* draw of it you get. The ≈0.13 dB self-leakage term is not affected at all:
+every wrong PRN collects the tracked satellite's power to the same expected degree, so no
+choice of reference code removes it. That is why it is treated as a documented bias rather
+than as something the rotation policy is expected to solve.
 
 Rotating the PRN randomises the deterministic sidelobe/cross-correlation term
 rather than reducing its mean — it buys tail-risk reduction (Gold sidelobes span
@@ -1229,7 +1429,7 @@ moment method`, `### The window follows the navigation bits`, …). Restructure 
 around a comparison and a decision, and add a companion page for the noise sources.
 
 **Hard gate first:** `docs/make.jl:10` sets `checkdocs = :exports`, so every new
-exported symbol needs a docstring or the docs build fails. That is 10 new exports.
+exported symbol needs a docstring or the docs build fails. That is 11 new exports.
 Add `noise_estimator.md` to the `pages` list at `docs/make.jl:11-21`.
 
 `docs/src/cn0_estimator.md` gains a comparison table up front, one row per
@@ -1241,9 +1441,10 @@ a different estimator:
 | Needs band samples? | Rules out `NoiseRef` on a pure correlator-ingest path with no noise observation |
 | Needs bit sync / a coherent window? | Rules out `NWPR` on L1C-D, E1B and pre-sync secondary-coded signals |
 | Needs to know `M`? | `NWPR` only; couples the estimator to the bit grid |
-| Bias | `NWPR` ≈ +0.06 dB everywhere; `Moments` ≈27.6 dB-Hz floor on noise; `NoiseRef` <0.01 dB |
-| High-C/N₀ behaviour | `NWPR` saturates at `√(M/((M−1)K))`; `NoiseRef` keeps improving |
-| Degenerate outputs | `NWPR` reports 0/Inf dB-Hz outside `1 < μ̂ < M` (6.2 % of windows at 20 dB-Hz) |
+| Bias (thermal only) | `NWPR` ≈ +0.05 dB everywhere; `Moments` ≈27.6 dB-Hz floor on noise; `NoiseRef` <0.03 dB |
+| High-C/N₀ bias floor | **`NoiseRef` only**: self-leakage, ≈0.13 dB at 45 dB-Hz and ≈0.40 dB at 50. The one axis on which `NWPR` is better — see "Multi-access interference and the reference's self-leakage" |
+| High-C/N₀ σ | `NWPR` saturates at `√(M/((M−1)K))`; `NoiseRef` keeps improving (until the row above dominates) |
+| Degenerate outputs | `NWPR` reports -Inf/Inf dB-Hz outside `1 < μ̂ < M` — 5.6 % of *estimates* at 20 dB-Hz, the pooled ratio over all windows, not a per-window discard rate |
 | Phase-noise sensitivity | Non-coherent `NoiseRef` and `Moments` are immune; `NWPR` and long coherent records are not |
 | Cost | Per-record arithmetic, plus O(N) per band per chunk for a software noise source |
 
@@ -1346,9 +1547,17 @@ Modified:
 - **Signals NWPR cannot serve**: GPS L1C-D and Galileo E1B, plus a
   secondary-coded signal pre-sync, must land inside 1 dB with no floor — the #217
   acceptance criterion.
-- **MAI**: a 12-satellite constellation, confirming NWPR and the noise reference
-  shift together (both read against `P_n + ε`), so the change introduces no new
-  bias relative to today.
+- **MAI, and the self-leakage delta**: a 12-satellite constellation. The shared
+  term is confirmed as before — both read against `P_n + ε`, so they shift together
+  on the *other* satellites' interference. But the test must **measure the
+  NoiseRef−NWPR difference** rather than assert it is zero, because it is not: the
+  reference also collects the tracked satellite's own power, which NWPR does not.
+  Sweep the satellite under test across 35/40/45/50 dB-Hz and pin the delta against
+  the predicted `10log10(1 + (C/N₀)/f_chip)` — 0.013 / 0.042 / 0.13 / 0.40 dB — to
+  within a few hundredths. That both validates the model in "Multi-access
+  interference and the reference's self-leakage" and turns the design's one bias
+  term into a regression rather than a footnote. It is also the gate on the Phase 3
+  comparison table's "high-C/N₀ bias floor" row being accurate.
 - **Multi-band**: L1 + L5 with different `f_s`, confirming the densities stay
   separate.
 - **Immutability**: `grep -rn "^mutable struct" src/` stays empty, and
@@ -1365,14 +1574,26 @@ Modified:
 - **Configured-but-never-fed**: a band with a `CorrelatorNoiseEstimator` that is never
   appended to and never measured warns exactly once and leaves C/N₀ at `-Inf dB-Hz` without
   throwing; and the software path never emits that warning. This is the likeliest hardware
-  integration mistake, so it gets its own regression.
+  integration mistake, so it gets its own regression. With **two** misconfigured bands, both
+  must warn — that is what pins the per-band `_id` on the `@warn`, since a bare
+  `maxlog = 1` is keyed per callsite and would silence the second band.
+- **Mixed estimators on one band**: a band carrying one `NoiseRefCN0Estimator` signal and one
+  `NWPRCN0Estimator` signal, driven through a warm-up where the density is unavailable. The
+  NWPR signal's `num_records_per_ratio` and `ratios_are_bit_aligned` must be unaffected — the
+  regression against skipping the whole band's C/N₀ fold, which would drop NWPR's open window
+  on every skipped record (`src/cn0_estimation.jl:554-557`) and silently demote it to its
+  fallback.
 - **Observation cadence**: over a buffer of `C` chunks, exactly `C · num_sub` observations
   reach each band's window, none from the final drain pass, and `num_sub` tracks
   `chunk_duration / code_period` across at least 1 ms, 4 ms and 20 ms Doppler update
   intervals and across two sampling frequencies, and collapses to 1 on a band whose reference
   code period exceeds the chunk. This is the regression that catches a wrong `samples_unchanged` gate,
   which would otherwise freeze the window silently after chunk 0, and a `num_sub` that
-  collapses to zero on a band whose code period exceeds the chunk.
+  collapses to zero on a band whose code period exceeds the chunk. Cover the **direct
+  `downconvert_and_correlate!` caller** as well as `track!`, since the gate reads a public
+  kwarg whose documented meaning is a cache hint (see "Integration boundaries"): all four
+  `track!` shapes, plus an explicit `samples_unchanged = true` unchunked call, whose skip is
+  intended but surprising.
 - **Per-band window**: `@allocated == 0` over ≥1 M pushes at each source's default
   window length, which is what pins the `sizehint!` headroom (see "Where per-band
   accumulation is anchored"). Also that a band with two `SignalGroup`s is measured once,
@@ -1392,14 +1613,14 @@ Modified:
   and both `CN0UpdateContext` parametrisations; Aqua; `format(["src", "test"])`
   before committing.
 - `benchmark/benchmarks.jl`: a new `SUITE["noise estimation"]` group, feature-gated
-  in the established style (`benchmark/benchmarks.jl:41-61`), plus confirmation
+  in the established style (`benchmark/benchmarks.jl:41-63`), plus confirmation
   that `SUITE["track"]` is unchanged within noise.
 
 ## Risks / watch-items
 
 - **Post-corr filter noise gain.** `N̂₀` is measured at the band, but the prompt
   reaching the estimator is post-`PostCorrFilter`
-  (`src/conventional_pll_and_dll.jl:425-427`). `DefaultPostCorrFilter` is
+  (`src/conventional_pll_and_dll.jl:424-427`). `DefaultPostCorrFilter` is
   `last(x)` (`src/post_corr_filter.jl:27`), gain 1, fine. A real beamformer
   changes the prompt's noise scale and silently invalidates the ratio. The same item covers
   **which antenna the reference despreads** when `num_ants > 1`: it must be the one
