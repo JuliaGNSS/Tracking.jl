@@ -20,7 +20,7 @@ using Polyester
 # sync-detection-redesign plan in docs/plans for the comparison).
 BitIntegers.@define_integers 1800
 
-using Unitful: upreferred, uconvert, dimension, NoUnits, Hz, dBHz, ms, s
+using Unitful: upreferred, uconvert, ustrip, dimension, NoUnits, Hz, dBHz, ms, s
 import Base.zero, Base.length, Base.resize!
 
 export get_early,
@@ -59,8 +59,19 @@ export get_early,
     MomentsCN0Estimator,
     NWPRCN0Estimator,
     NoCN0Estimator,
+    NoiseRefCN0Estimator,
     AbstractCN0Estimator,
     CN0UpdateContext,
+    requires_noise_density,
+    AbstractNoiseEstimator,
+    CorrelatorNoiseEstimator,
+    NoiseObservation,
+    noise_observation,
+    noise_observation_from_correlator,
+    noise_observation_from_samples,
+    append_noise_observation!,
+    update_noise!,
+    get_noise_density,
     EarlyPromptLateCorrelator,
     VeryEarlyPromptLateCorrelator,
     AbstractPostCorrFilter,
@@ -207,9 +218,15 @@ include("cn0_estimators/cn0_estimator.jl")
 include("cn0_estimators/moments.jl")
 include("cn0_estimators/no_cn0.jl")
 include("cn0_estimators/nwpr.jl")
+include("cn0_estimators/noise_ref.jl")
 include("correlators/correlator.jl")
 include("correlators/early_prompt_late.jl")
 include("correlators/very_early_prompt_late.jl")
+# `noise_estimators/` after `correlators/`: the software source despreads
+# through a real correlator, and `TrackState`'s `NoiseEstimators` field type
+# needs `AbstractNoiseEstimator` to exist before the struct is defined below.
+include("noise_estimators/noise_estimator.jl")
+include("noise_estimators/correlator.jl")
 include("discriminators.jl")
 include("post_corr_filter.jl")
 include("gps/l1ca.jl")
@@ -232,10 +249,20 @@ struct used for tracking operations.
 `groups` is a NamedTuple of [`SignalGroup`](@ref)s. Each group bundles its
 per-group `satellites` dictionary, signal-instance tuple, band, and
 antenna count.
+
+`noise_estimators` is a NamedTuple of [`AbstractNoiseEstimator`](@ref)s keyed by
+band id (`GNSSSignals.get_band_id`) — the same idiom as
+[`BandMeasurements`](@ref), so a lookup folds to a compile-time constant. A band
+gets an entry only where some signal on it uses a C/N₀ estimator that reads a
+noise density (see [`requires_noise_density`](@ref)); bands with no such signal
+get none, and then the per-band noise measurement costs exactly nothing. Each
+estimator averages **in place**, so `TrackState` itself is never rebuilt for a
+noise update.
 """
-struct TrackState{G<:SignalGroups,DE<:AbstractDopplerEstimator}
+struct TrackState{G<:SignalGroups,DE<:AbstractDopplerEstimator,NE<:NoiseEstimators}
     groups::G
     doppler_estimator::DE
+    noise_estimators::NE
 end
 
 include("sample_parameters.jl")

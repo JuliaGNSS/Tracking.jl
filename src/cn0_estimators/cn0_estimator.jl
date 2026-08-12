@@ -44,14 +44,49 @@ Fields:
   - `bit_buffer` — the signal's `BitBuffer` as of *before* this record:
     the soft bits decoded so far, the open coherent bit accumulator, the lock
     polarity and the secondary-code phase.
+  - `noise_density` — the band's measured noise density `N₀` (dimension `1/Hz`),
+    for an estimator that divides the prompt's power by a *measured* floor
+    instead of inferring one from the prompt stream
+    ([`NoiseRefCN0Estimator`](@ref) does). It is a **type parameter, not a
+    sentinel**: `Nothing` says no [`AbstractNoiseEstimator`](@ref) is configured
+    on the band at all, which is a static property of the setup, so every call
+    site monomorphises and the estimators stay allocation-free. A configured
+    source whose window is merely still empty never reaches here — the fold
+    skips the update instead, so this field is unconditionally a plain scalar
+    whenever it is not `Nothing`.
+  - `integration_time` — this record's own `T`, so an estimator that works per
+    record does not have to be told one `T` for a whole ring of records
+    integrated at different lengths. `nothing` when the caller did not supply
+    one (the bare-prompt-stream path).
 """
-struct CN0UpdateContext{S<:AbstractGNSSSignal,B<:Unsigned}
+struct CN0UpdateContext{S<:AbstractGNSSSignal,B<:Unsigned,N,T}
     signal::S
     num_code_blocks::Int
     num_code_blocks_per_bit::Int
     bit_code_block_index::Int
     bit_buffer::BitBuffer{B}
+    noise_density::N
+    integration_time::T
 end
+
+# Positional convenience for the five load-bearing fields, defaulting the two
+# that only a noise-referenced estimator reads. Keeps the pre-6.1 call shape
+# working: an estimator that ignores them is unaffected by their arrival.
+@inline CN0UpdateContext(
+    signal::AbstractGNSSSignal,
+    num_code_blocks::Integer,
+    num_code_blocks_per_bit::Integer,
+    bit_code_block_index::Integer,
+    bit_buffer::BitBuffer,
+) = CN0UpdateContext(
+    signal,
+    Int(num_code_blocks),
+    Int(num_code_blocks_per_bit),
+    Int(bit_code_block_index),
+    bit_buffer,
+    nothing,
+    nothing,
+)
 
 # Build the context from the state the correlate/fold step has at hand. The
 # bit buffer must be the one from *before* this record was folded in, so
@@ -64,7 +99,9 @@ end
     signal::AbstractGNSSSignal,
     bit_buffer::BitBuffer,
     num_code_blocks::Integer,
-    bit_sync_usable::Bool = true,
+    bit_sync_usable::Bool = true;
+    noise_density = nothing,
+    integration_time = nothing,
 )
     usable = bit_sync_usable && has_bit_or_secondary_code_been_found(bit_buffer)
     CN0UpdateContext(
@@ -73,8 +110,40 @@ end
         _calc_num_code_blocks_that_form_a_bit(signal),
         usable ? bit_buffer.prompt_accumulator_integrated_code_blocks : -1,
         bit_buffer,
+        noise_density,
+        integration_time,
     )
 end
+
+"""
+$(SIGNATURES)
+
+Does `estimator` read the band's noise density out of its
+[`CN0UpdateContext`](@ref)? `false` for every estimator that infers its noise
+floor from the prompt stream ([`MomentsCN0Estimator`](@ref),
+[`NWPRCN0Estimator`](@ref), [`NoCN0Estimator`](@ref)); `true` only for
+[`NoiseRefCN0Estimator`](@ref).
+
+It is a trait rather than a hard-coded type check because
+[`update(::AbstractCN0Estimator, ::Any, ::CN0UpdateContext)`](@ref) is a
+documented extension point: a third-party estimator that wants a density must be
+able to say so, and one that does not must not pay for it.
+
+Two things key off it, and both are compile-time constants on the estimator's
+type:
+
+  - **Provisioning.** [`TrackState`](@ref) gives a band a
+    [`CorrelatorNoiseEstimator`](@ref) only where some signal on it returns
+    `true`. A band with no requiring signal gets no entry at all, so the
+    per-band despread never runs and costs exactly zero — which is the answer
+    for anyone who deliberately stays on NWPR.
+  - **The warm-up skip.** While a configured source's window is still empty, the
+    fold skips the C/N₀ update for the requiring signals *only*. Skipping the
+    whole band would corrupt a co-resident `NWPRCN0Estimator`: a record missing
+    from the bit grid makes `_update_nwpr` drop its open narrowband window, so
+    NWPR would silently degrade to its fallback.
+"""
+requires_noise_density(::AbstractCN0Estimator) = false
 
 """
 $(SIGNATURES)

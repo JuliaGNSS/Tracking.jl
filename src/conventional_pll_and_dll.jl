@@ -334,7 +334,12 @@ end
 # TrackedSat and returns the updated TrackedSat. Shared by the immutable
 # `estimate_dopplers_and_filter_prompt` and the in-place
 # `estimate_dopplers_and_filter_prompt!` so the two cannot drift.
-function _update_tracked_sat_doppler(sat::TrackedSat, sampling_frequency)
+function _update_tracked_sat_doppler(
+    sat::TrackedSat,
+    sampling_frequency,
+    noise_density,
+    noise_density_ready::Bool,
+)
     # Walk all signals. For each one whose integration completed this
     # iteration, normalize/filter its prompt, advance CN0 and bit buffer,
     # and move its correlator to `last_fully_integrated_*`. Additionally,
@@ -358,6 +363,8 @@ function _update_tracked_sat_doppler(sat::TrackedSat, sampling_frequency)
             sat,
             pll_and_dll_state,
             sampling_frequency,
+            noise_density,
+            noise_density_ready,
             driver_carrier_phase,
         )
 
@@ -365,6 +372,8 @@ function _update_tracked_sat_doppler(sat::TrackedSat, sampling_frequency)
         tail_signals,
         sat.prn,
         sampling_frequency,
+        noise_density,
+        noise_density_ready,
         driver_carrier_phase,
     )
 
@@ -468,6 +477,8 @@ end
     output::CorrelatorOutput,
     prn::Integer,
     sampling_frequency,
+    noise_density,
+    noise_density_ready::Bool,
     driver_carrier_phase::Real = 0.0;
     correlated_pre_sync::Bool = false,
 )
@@ -509,10 +520,27 @@ end
     # `drop_prompt` is that condition. Where it holds the context reports "no bit
     # grid", which keeps the sign-corrupted prompt out of any coherent window and
     # drops the window that was open — exactly what happens before sync.
-    cn0_estimator = update(
+    #
+    # It also carries the band's noise density and this record's own integration
+    # time, for an estimator that divides by a *measured* floor
+    # (`NoiseRefCN0Estimator`). `noise_density_ready == false` means a source is
+    # configured but its window is still empty, and then the update is skipped —
+    # but only for the estimators that would actually read the density. Skipping
+    # the whole record would corrupt a co-resident `NWPRCN0Estimator`: a record
+    # missing from the bit grid makes `_update_nwpr` drop its open narrowband
+    # window, silently demoting NWPR to its fallback for a whole `num_records`.
+    # `requires_noise_density` is a compile-time constant on the estimator's
+    # type, so the gate costs nothing at run time.
+    cn0_estimator = _update_cn0_estimator(
         get_cn0_estimator(tracked_signal),
         prompt,
-        CN0UpdateContext(signal, tracked_signal.bit_buffer, bit_block_count, !drop_prompt),
+        signal,
+        tracked_signal.bit_buffer,
+        bit_block_count,
+        !drop_prompt,
+        noise_density,
+        noise_density_ready,
+        output.integrated_samples / sampling_frequency,
     )
     bit_buffer = buffer(
         signal,
@@ -541,6 +569,39 @@ end
     return new_signal, filtered_correlator, integrated_code_blocks
 end
 
+# Build the context and fold the record into one signal's CN0 estimator, or skip
+# it where the estimator needs a density the band has not measured yet. Both
+# branches return the same concrete estimator type, so this stays type-stable
+# and allocation-free; the `requires_noise_density` half of the condition folds
+# away at compile time.
+@inline function _update_cn0_estimator(
+    estimator::AbstractCN0Estimator,
+    prompt,
+    signal::AbstractGNSSSignal,
+    bit_buffer::BitBuffer,
+    num_code_blocks::Integer,
+    bit_sync_usable::Bool,
+    noise_density,
+    noise_density_ready::Bool,
+    integration_time,
+)
+    if !noise_density_ready && requires_noise_density(estimator)
+        return estimator
+    end
+    update(
+        estimator,
+        prompt,
+        CN0UpdateContext(
+            signal,
+            bit_buffer,
+            num_code_blocks,
+            bit_sync_usable;
+            noise_density,
+            integration_time,
+        ),
+    )
+end
+
 # Process the estimator-driver signal (signals[1]): fold over every
 # `CorrelatorOutput` collected during this chunk, in order — running the PLL/DLL
 # plus prompt filter / CN0 / bit-buffer update per record and threading the loop
@@ -554,6 +615,8 @@ end
     sat::TrackedSat,
     pll_and_dll_state::SatConventionalPLLAndDLL,
     sampling_frequency,
+    noise_density,
+    noise_density_ready::Bool,
     driver_carrier_phase::Real = 0.0,
 )
     outputs = tracked_signal.correlator_outputs
@@ -589,6 +652,8 @@ end
             output,
             sat.prn,
             sampling_frequency,
+            noise_density,
+            noise_density_ready,
             driver_carrier_phase;
             correlated_pre_sync = synced_earlier_in_fold,
         )
@@ -654,22 +719,32 @@ end
 # Process the non-driver signals (signals[2:end]): the shared per-signal
 # advance only — no loop-filter work. Walks the tuple recursively to keep
 # type-stability and avoid boxing.
-@inline _process_passenger_signals(::Tuple{}, ::Integer, _, ::Real) = ()
+@inline _process_passenger_signals(::Tuple{}, ::Integer, _, _, ::Bool, ::Real) = ()
 @inline function _process_passenger_signals(
     signals::Tuple,
     prn::Integer,
     sampling_frequency,
+    noise_density,
+    noise_density_ready::Bool,
     driver_carrier_phase::Real,
 )
     head = first(signals)
-    new_head =
-        _process_one_passenger_signal(head, prn, sampling_frequency, driver_carrier_phase)
+    new_head = _process_one_passenger_signal(
+        head,
+        prn,
+        sampling_frequency,
+        noise_density,
+        noise_density_ready,
+        driver_carrier_phase,
+    )
     (
         new_head,
         _process_passenger_signals(
             Base.tail(signals),
             prn,
             sampling_frequency,
+            noise_density,
+            noise_density_ready,
             driver_carrier_phase,
         )...,
     )
@@ -679,6 +754,8 @@ end
     tracked_signal::TrackedSignal,
     prn::Integer,
     sampling_frequency,
+    noise_density,
+    noise_density_ready::Bool,
     driver_carrier_phase::Real = 0.0,
 )
     outputs = tracked_signal.correlator_outputs
@@ -696,6 +773,8 @@ end
                 outputs[k],
                 prn,
                 sampling_frequency,
+                noise_density,
+                noise_density_ready,
                 driver_carrier_phase;
                 correlated_pre_sync = synced_earlier_in_fold,
             ),
@@ -753,6 +832,26 @@ end
 @inline _band_sampling_frequency(fs::NamedTuple, key) = fs[key]
 @inline _band_sampling_frequency(fs::AbstractDict, key) = fs[key]
 
+# Per-band noise density for a group, as `(density, ready)` — the union-free
+# pair the fold threads down to `_apply_correlator_output`. Looked up by band id
+# exactly the way the sampling frequency is, so the reference stays per band.
+#
+# Three cases, and only the first two are ever seen by a shipped estimator:
+#
+#   * no entry for the band — no `AbstractNoiseEstimator` is configured, a
+#     *static* property of the setup. The density is `nothing`, which makes the
+#     context's `N` type parameter `Nothing` and `NoiseRefCN0Estimator.update`
+#     throw. `ready` is `true`, because there is nothing to wait for: the wiring
+#     mistake must surface at the first record, not be silently skipped forever.
+#   * an entry whose window is still empty — a *runtime* condition. The density
+#     is a dummy scalar of the right type and `ready` is `false`, so the fold
+#     skips the update for the estimators that would read it, without ever
+#     letting a `Union{Nothing,D}` into the context.
+#   * an entry with a density — the normal case.
+@inline _band_noise_density(noise_estimators::NamedTuple, ::Val{K}) where {K} =
+    haskey(noise_estimators, K) ? _noise_density_and_ready(noise_estimators[K]) :
+    (nothing, true)
+
 # Per-group body for the doppler estimator. Pulled out so
 # `_foreach_group!` can call it without boxing when the groups tuple
 # is heterogeneous (e.g. GPS L1 + Galileo E1B). The per-signal type
@@ -762,14 +861,60 @@ end
 @inline function _est_one_group!(
     g::SignalGroup,
     sampling_frequencies::Union{BandMeasurements,NamedTuple,AbstractDict},
+    noise_estimators::NamedTuple,
 )
     vals = g.satellites.values
     isempty(vals) && return nothing
-    sampling_frequency = _band_sampling_frequency(sampling_frequencies, get_band_id(g.band))
+    band_id = get_band_id(g.band)
+    sampling_frequency = _band_sampling_frequency(sampling_frequencies, band_id)
+    noise_density, noise_density_ready = _band_noise_density(noise_estimators, Val(band_id))
+    _warn_noise_density_missing(first(vals), band_id, noise_density_ready)
     @inbounds for i in eachindex(vals)
-        vals[i] = _update_tracked_sat_doppler(vals[i], sampling_frequency)
+        vals[i] = _update_tracked_sat_doppler(
+            vals[i],
+            sampling_frequency,
+            noise_density,
+            noise_density_ready,
+        )
     end
     return nothing
+end
+
+# A band with a configured noise estimator whose window is empty is a loud
+# *symptom* — every satellite on it reports `-Inf dB-Hz` — but not a loud
+# diagnosis. The likeliest cause is a hardware integration that configures a
+# `CorrelatorNoiseEstimator` per the docs and then never calls
+# `append_noise_observation!`, so the static "no source configured" check does
+# not fire and the runtime skip repeats silently forever.
+#
+# This is the only point that knows a fold actually ran *and* the density was
+# unavailable, so the warning belongs here. It never fires on the software path,
+# where `downconvert_and_correlate!` measures before the fold reads. `maxlog` is
+# keyed per callsite rather than per band, so the `_id` is made band-specific —
+# otherwise a second misconfigured band would be silenced by the first, and the
+# message interpolates the band id precisely because a multi-band setup is where
+# the mistake is most likely.
+#
+# Warn rather than throw, and the asymmetry with the static case is the point:
+# "no source configured" is unambiguously a mistake, whereas "window empty at
+# this instant" has a legitimate transient reading (a producer that folds before
+# it appends, or a buffer shorter than one sub-integration), so making it fatal
+# would break a caller streaming short buffers.
+@inline function _warn_noise_density_missing(sat::TrackedSat, band_id::Symbol, ready::Bool)
+    ready && return nothing
+    _sat_requires_noise_density(sat) || return nothing
+    _emit_noise_density_warning(band_id)
+end
+
+@noinline function _emit_noise_density_warning(band_id::Symbol)
+    @warn """
+          Band `:$band_id` has a noise estimator but no noise density yet, so \
+          `NoiseRefCN0Estimator` will not update and C/N₀ stays at `-Inf dB-Hz`. \
+          Call `append_noise_observation!` before \
+          `estimate_dopplers_and_filter_prompt!`, or use a noise estimator that \
+          measures from the band's samples.""" _id = Symbol(:no_noise_density_, band_id) maxlog =
+        1
+    nothing
 end
 
 """
@@ -793,7 +938,12 @@ function estimate_dopplers_and_filter_prompt!(
     track_state::TrackState{<:SignalGroups,<:ConventionalPLLAndDLL},
     sampling_frequencies::Union{BandMeasurements,NamedTuple,AbstractDict},
 )
-    _foreach_group!(_est_one_group!, track_state.groups, sampling_frequencies)
+    _foreach_group!(
+        _est_one_group!,
+        track_state.groups,
+        sampling_frequencies,
+        track_state.noise_estimators,
+    )
     return track_state
 end
 

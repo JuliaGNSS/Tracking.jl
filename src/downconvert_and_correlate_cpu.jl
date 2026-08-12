@@ -852,6 +852,16 @@ sample-derived caches (the bit-wise backends skip re-packing their shared
 band sign planes). `track!` passes it on every chunk after the first so the
 pack happens once per call; leave it `false` (the default) whenever the
 buffers may have been refilled.
+
+It has a **second meaning** for the per-band noise measurement, which is worth
+knowing before passing it by hand: an *unchunked* call
+(`chunk_duration === nothing`) that also claims the samples are unchanged is
+taken to be a re-pass over a buffer that has already been measured, and its
+noise measurement is skipped. That is what keeps `track!`'s final drain pass —
+which sees the whole buffer as one chunk — from measuring everything a second
+time. A direct caller who truthfully passes `samples_unchanged = true` on an
+unchunked call therefore gets no noise observation from it; pass `false`, or
+chunk the call, to measure.
 """
 function downconvert_and_correlate!(
     dc::AbstractDownconvertAndCorrelator,
@@ -862,6 +872,14 @@ function downconvert_and_correlate!(
     stop_before_partial::Bool = false,
     samples_unchanged::Bool = false,
 )
+    _update_band_noise!(
+        dc,
+        track_state,
+        measurements,
+        chunk_index,
+        chunk_duration,
+        samples_unchanged,
+    )
     _foreach_group!(
         _dc_one_group!,
         track_state.groups,
@@ -873,6 +891,133 @@ function downconvert_and_correlate!(
         samples_unchanged,
     )
     return track_state
+end
+
+# Measure each band's noise floor over the current chunk, before the per-group
+# correlate loop. Defined once on `AbstractDownconvertAndCorrelator` and called
+# from all three `downconvert_and_correlate!` entry points — those are the only
+# places that see `measurements` whole, and therefore the only per-band-exactly-
+# once sites. `_dc_one_group!` would fire once per *group*, so a band carrying
+# two groups would be measured twice.
+#
+# The `noise_estimators` NamedTuple is walked by tuple recursion rather than by
+# `for (k, v) in pairs(...)`: different bands may hold different estimator types,
+# so a runtime loop over the values is type-unstable and would allocate on every
+# chunk. Recursion unrolls it and each `update_noise!` devirtualises. A band with
+# no entry does no work at all.
+#
+# **When to skip.** `samples_unchanged` alone must not gate this: `track!` passes
+# `samples_unchanged = chunk_index > 0`, so gating on it would measure chunk 0
+# and then freeze the window for the rest of the buffer. The call that does need
+# skipping is `track!`'s final drain pass, which passes neither `chunk_index` nor
+# `chunk_duration` — with `chunk_duration === nothing` the range defaults to the
+# whole buffer, so measuring there would re-measure everything already covered.
+# The discriminating condition needs no per-band sample pointer (which would be
+# the scalar state that has no anchor):
+#
+# | call                            | `chunk_duration` | `samples_unchanged` | measure? |
+# |---------------------------------|------------------|---------------------|----------|
+# | chunked call `k`                | set              | `k > 0`             | yes      |
+# | `track!`'s final drain pass     | `nothing`        | `true`              | no       |
+# | direct unchunked single call    | `nothing`        | `false`             | yes      |
+#
+# The cost is that a buffer's trailing partial never reaches the window — at most
+# one chunk per `track!` call, and omitting an entry biases `σ̂²` not at all.
+@inline function _update_band_noise!(
+    dc::AbstractDownconvertAndCorrelator,
+    track_state::TrackState,
+    measurements::BandMeasurements,
+    chunk_index::Int,
+    chunk_duration,
+    samples_unchanged::Bool,
+)
+    isnothing(chunk_duration) && samples_unchanged && return nothing
+    noise_estimators = track_state.noise_estimators
+    _update_band_noise_walk!(
+        Val(keys(noise_estimators)),
+        Tuple(noise_estimators),
+        track_state.groups,
+        measurements,
+        chunk_index,
+        chunk_duration,
+    )
+end
+
+@inline _update_band_noise_walk!(
+    ::Val{()},
+    ::Tuple{},
+    ::SignalGroups,
+    ::BandMeasurements,
+    ::Int,
+    _,
+) = nothing
+@inline function _update_band_noise_walk!(
+    ::Val{K},
+    estimators::Tuple,
+    groups::SignalGroups,
+    measurements::BandMeasurements,
+    chunk_index::Int,
+    chunk_duration,
+) where {K}
+    _update_one_band_noise!(
+        first(estimators),
+        Val(first(K)),
+        groups,
+        measurements,
+        chunk_index,
+        chunk_duration,
+    )
+    _update_band_noise_walk!(
+        Val(Base.tail(K)),
+        Base.tail(estimators),
+        groups,
+        measurements,
+        chunk_index,
+        chunk_duration,
+    )
+end
+
+@inline function _update_one_band_noise!(
+    estimator::AbstractNoiseEstimator,
+    ::Val{K},
+    groups::SignalGroups,
+    measurements::BandMeasurements,
+    chunk_index::Int,
+    chunk_duration,
+) where {K}
+    m = measurements[K]
+    num_samples = get_num_samples(m)
+    last_sample =
+        _chunk_last_sample(chunk_duration, chunk_index, m.sampling_frequency, num_samples)
+    first_sample =
+        _chunk_last_sample(
+            chunk_duration,
+            chunk_index - 1,
+            m.sampling_frequency,
+            num_samples,
+        ) + 1
+    first_sample > last_sample && return nothing
+    band_groups = _groups_on_band(Tuple(groups), Val(K))
+    isempty(band_groups) && return nothing
+    context = NoiseUpdateContext(
+        # The band's reference signal: the first signal of the first group on it,
+        # in `groups` order. Deterministic and needs no configuration; for white
+        # noise the choice is immaterial once `A_c` is divided out.
+        first(first(band_groups).signals),
+        map(g -> keys(g.satellites), band_groups),
+        chunk_index,
+    )
+    update_noise!(estimator, m, first_sample, last_sample, context)
+    nothing
+end
+
+# The groups sitting on band `K`, as a tuple. Folds at compile time: each
+# group's band id is a constant of its type.
+@inline _groups_on_band(::Tuple{}, ::Val) = ()
+@inline function _groups_on_band(t::Tuple, v::Val{K}) where {K}
+    g = first(t)
+    rest = _groups_on_band(Base.tail(t), v)
+    get_band_id(g.band) === K ? (g, rest...) : rest
 end
 
 # Last sample index (inclusive) this satellite may integrate up to in the
