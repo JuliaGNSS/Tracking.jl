@@ -176,3 +176,173 @@ Number of observations currently in the band's window. Diagnostic only — the
 window is bounded in time, so this varies with the producer's dump cadence.
 """
 Base.length(estimator::CorrelatorNoiseEstimator) = length(estimator.buffered)
+
+"""
+$(SIGNATURES)
+
+Measure the band's noise over samples `first_sample:last_sample` of
+`measurement` and append the resulting observations, returning `estimator`.
+
+The slice is split into `num_sub` **equal** sub-integrations,
+
+```julia
+num_sub = max(1, round(Int, slice_duration / code_period))
+```
+
+with `code_period` the primary code period of the band's reference signal — see
+[`CorrelatorNoiseEstimator`](@ref) for why the sub-integration length is derived
+rather than configured. Equal slices rather than fixed-length ones so no
+remainder is wasted and every window entry is statistically identical; the
+`max(1, …)` matters, because a band whose reference code period exceeds the
+chunk (a 10 ms code with 1 ms chunks) would otherwise yield no observations at
+all, forever. Each observation is pushed **individually**: pre-averaging would
+put one entry per chunk in the window, re-welding its time span to the Doppler
+update rate.
+
+Each sub-integration starts its replica at code phase 0 and runs for its slice.
+**Nothing here follows a code-period boundary**, and that is deliberate: the
+reference despreads with a wrong PRN at a wrong phase, so there is no signal to
+accumulate coherently and `N̂₀ = |B|²/(N·A_c²·f_s)` is unbiased for any `N` and
+any starting phase. Following boundaries would be actively harmful — a chunk
+rarely holds a whole number of code periods, so a boundary-aligned reference
+would have to carry a partial accumulator across calls, which is exactly the
+scalar state that has no per-band anchor. Successive observations are
+independent because their *sample* ranges are disjoint; the replica repeating is
+irrelevant.
+
+All of the correlator's taps are used and pooled into one power sum, at
+`tap_code_shift` chips apart so they are genuinely independent looks (see the
+type's docstring). The despread runs on the caller's backend kernel — the same
+one the prompt goes through — which is what makes the measurement model-free.
+
+The reference is **open-loop**: the band's nominal IF as the carrier frequency,
+zero Doppler and zero carrier phase. ±5 kHz of Doppler is 0.5 % of a 1 MHz code
+band, so no satellite's state is needed and the reference is correct with
+nothing tracked at all.
+"""
+function update_noise!(
+    estimator::CorrelatorNoiseEstimator,
+    measurement::BandMeasurement,
+    first_sample::Integer,
+    last_sample::Integer,
+    context::NoiseUpdateContext,
+)
+    num_samples = Int(last_sample) - Int(first_sample) + 1
+    num_samples > 0 || return estimator
+    signal_type = context.signal
+    sampling_frequency = measurement.sampling_frequency
+    # Nominal chip rate: the reference runs at zero Doppler.
+    code_frequency = get_code_frequency(signal_type)
+    code_period = get_code_length(signal_type) / code_frequency
+    slice_duration = num_samples / sampling_frequency
+    num_sub = max(1, round(Int, uconvert(NoUnits, slice_duration / code_period)))
+    num_sub = min(num_sub, num_samples)          # never fewer than one sample per slice
+
+    # One antenna only, and it must be the one `DefaultPostCorrFilter` selects
+    # (`last`) — the ratio would otherwise compare two different channels. A
+    # post-corr filter with a noise gain other than unity invalidates the ratio
+    # outright; that is documented as a requirement rather than corrected.
+    samples = _noise_reference_samples(measurement.samples)
+    correlator = EarlyPromptLateCorrelator(;
+        preferred_early_late_to_prompt_code_shift = estimator.tap_code_shift,
+    )
+    sample_shifts =
+        get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
+    num_taps = length(sample_shifts)
+    code_amplitude = get_code_amplitude(signal_type)
+
+    prn, code_phase = _next_noise_prn(estimator, signal_type, context)
+    # `gen_code_replica!` writes *at* `start_sample` while the kernel reads the
+    # replica offset by `start_sample - 1`, so the buffer spans the whole
+    # measurement rather than one slice.
+    replica_size =
+        get_num_samples(measurement) + maximum(sample_shifts) - minimum(sample_shifts)
+    length(estimator.code_replica) < replica_size &&
+        resize!(estimator.code_replica, replica_size)
+
+    for sub = 1:num_sub
+        # Equal slices: the `sub`-th covers samples `⌊(sub−1)N/num_sub⌋+1 … ⌊subN/num_sub⌋`.
+        slice_start = Int(first_sample) + div((sub - 1) * num_samples, num_sub)
+        slice_stop = Int(first_sample) + div(sub * num_samples, num_sub) - 1
+        slice_samples = slice_stop - slice_start + 1
+        slice_samples > 0 || continue
+        accumulators = _correlate_noise_reference!(
+            context.downconvert_and_correlator,
+            estimator.code_replica,
+            samples,
+            zero(correlator),
+            signal_type,
+            prn,
+            sample_shifts,
+            code_phase,
+            code_frequency,
+            measurement.intermediate_frequency,
+            sampling_frequency,
+            slice_start,
+            slice_samples,
+        )
+        # Pool the taps. At ≥1 chip spacing they are independent looks at one
+        # scalar, so nothing about their relative values means anything — the
+        # opposite of the prompt path, where the taps' *differences* are the code
+        # and carrier discriminants.
+        power = 0.0
+        for k = 1:num_taps
+            power += abs2(accumulators[k])
+        end
+        append_noise_observation!(
+            estimator,
+            noise_observation_from_correlator(
+                power,
+                num_taps,
+                num_taps * slice_samples,
+                sampling_frequency;
+                code_amplitude,
+                prn,
+                # The taps are simultaneous, not consecutive: they all integrate
+                # the same `slice_samples`, so that — and not `num_taps` times it
+                # — is what the time-bounded window must count.
+                duration = slice_samples / sampling_frequency,
+            ),
+        )
+    end
+    estimator
+end
+
+# The antenna the reference despreads. `DefaultPostCorrFilter` is `last(x)`, so
+# an antenna array's noise must be measured on its last column too.
+@inline _noise_reference_samples(samples::AbstractVector) = samples
+@inline _noise_reference_samples(samples::AbstractMatrix) =
+    view(samples, :, size(samples, 2))
+
+# Which PRN to borrow a code from, and at which phase. Advancing a PRN needs a
+# position, and a position is scalar state with no per-band anchor — so it is
+# carried in the window instead: `NoiseObservation` records the PRN it was
+# measured with, and the next one steps on from `last(buffered).prn`. An empty
+# window starts at the lowest untracked PRN.
+#
+# Rotation is worth this much and no more. The leakage term is already a sum over
+# the whole sky, so it is averaged over that many cross-correlation draws; what a
+# *fixed* PRN would cost is a slowly drifting bias (≈±0.28 dB on the ≈0.9 dB
+# whole-sky leakage, moving as the geometry does). Rotation replaces that drift
+# with a stable mean, which — since the leakage is deliberately uncorrected — is
+# the whole objective. It does not touch the self-leakage term at all: every
+# wrong PRN collects the tracked satellite's own power to the same expected
+# degree.
+#
+# Preferring an untracked PRN is what makes code phase 0 safe. If every PRN of
+# the family is tracked, reuse one and offset by half a code period, which is far
+# outside the correlation peak.
+@inline function _next_noise_prn(
+    estimator::CorrelatorNoiseEstimator,
+    signal_type::AbstractGNSSSignal,
+    context::NoiseUpdateContext,
+)
+    num_prns = size(get_codes(signal_type), 2)
+    previous = isempty(estimator.buffered) ? 0 : Int(last(estimator.buffered).prn)
+    for step = 1:num_prns
+        prn = mod(previous - 1 + step, num_prns) + 1
+        _is_prn_tracked(context, prn) || return prn, 0.0
+    end
+    prn = mod(previous, num_prns) + 1
+    prn, get_code_length(signal_type) / 2
+end

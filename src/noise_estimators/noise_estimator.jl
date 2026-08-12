@@ -300,13 +300,24 @@ Fields:
     without allocating a merged set.
   - `chunk_index` — the index of the chunk being measured, on the same grid
     `downconvert_and_correlate!` uses.
+  - `downconvert_and_correlator` — the backend running this call. A software
+    source **must** despread on it rather than on a kernel of its own choosing:
+    the one- and two-bit accumulators are popcount counts rather than sample
+    sums, so a float-kernel reference would compare `|P|²` and `N̂₀` on
+    incompatible scales, and the quantisation loss would drop out of the
+    measurement instead of being carried by it.
 
 Kept as one struct so that adding a field later is not a signature change.
 """
-struct NoiseUpdateContext{S<:AbstractGNSSSignal,K<:Tuple}
+struct NoiseUpdateContext{
+    S<:AbstractGNSSSignal,
+    K<:Tuple,
+    DC<:AbstractDownconvertAndCorrelator,
+}
     signal::S
     tracked_prn_sets::K
     chunk_index::Int
+    downconvert_and_correlator::DC
 end
 
 # Is `prn` tracked by any of the band's groups? Tuple recursion so the walk over
