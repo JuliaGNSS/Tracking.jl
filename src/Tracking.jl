@@ -198,11 +198,15 @@ include("band_measurement.jl")
 include("code_replica.jl")
 include("carrier_replica.jl")
 include("downconvert.jl")
-# `cn0_estimation.jl` after `bit_buffer.jl`: the CN0 estimators' update context
+# `cn0_estimators/` after `bit_buffer.jl`: the CN0 estimators' update context
 # carries the navigation-bit state (`BitBuffer`) and reads the signal's
-# blocks-per-bit trait from there.
+# blocks-per-bit trait from there. Within the folder the shared file comes
+# first, since every concrete estimator subtypes `AbstractCN0Estimator`.
 include("bit_buffer.jl")
-include("cn0_estimation.jl")
+include("cn0_estimators/cn0_estimator.jl")
+include("cn0_estimators/moments.jl")
+include("cn0_estimators/no_cn0.jl")
+include("cn0_estimators/nwpr.jl")
 include("correlators/correlator.jl")
 include("correlators/early_prompt_late.jl")
 include("correlators/very_early_prompt_late.jl")
