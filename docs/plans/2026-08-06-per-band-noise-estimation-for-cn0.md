@@ -1,9 +1,58 @@
 # Per-band noise estimation for C/N₀
 
 **Date:** 2026-08-06
-**Status:** Planned (Phase 0 implemented; single noise estimator as of 2026-08-06;
+**Status:** **Implemented** 2026-08-12 — Phases 0 through 3 all landed. See
+"Where the implementation diverged" below for the four places it did not follow
+this document, and why.
+
+Earlier: Planned (Phase 0 implemented; single noise estimator as of 2026-08-06;
 review pass 2026-08-09 — self-leakage promoted from a parenthetical to a quantified
 risk, the "no density" skip respecified, anchors corrected against `b9709191`)
+
+## Where the implementation diverged
+
+Four places, each because building it surfaced something this document had not.
+
+1. **`NoiseObservation` stores a `duration`, not `total_samples`.** The window is
+   bounded in time, and the plan's own trim rule (`Σ total_samplesᵢ >
+   window_duration · f_s`) needs a sampling frequency the observation does not
+   carry. Worse, the field is not even a proxy for span in the case the software
+   source actually produces: its `M` looks are the correlator's *taps*, which all
+   integrate the same `N` samples, so `M·N` over-counts the span threefold.
+   The builders still take `total_samples` and `sampling_frequency` exactly as
+   specified — only the stored field changed — and
+   `noise_observation_from_correlator` gained a `duration` keyword for the
+   simultaneous-looks case.
+
+2. **`NoiseUpdateContext` carries the backend.** The plan's interface signature
+   omits it, and the plan's own "Backends" table requires it: the one- and
+   two-bit accumulators are popcount *counts* rather than sample sums, so a
+   float-kernel reference would compare `|P|²` and `N̂₀` on incompatible scales.
+   The context was explicitly designed as "one struct so adding a field later is
+   not a signature change", which is what that escape hatch was for. Each backend
+   supplies one `_correlate_noise_reference!` method.
+
+3. **`requires_noise_density` is a trait on the *type*, and provisioning reads a
+   group's slot type rather than a satellite value.** The plan's value-based form
+   works only while the default requires no density: once it does, the
+   `isempty(satellites)` branch leaves the whole `noise_estimators` NamedTuple —
+   keys included — inferring as a union of "provisioned" and "not", which infects
+   `TrackState`'s own type. The slot type is fixed at construction and is already
+   the right answer either way.
+
+4. **`NWPRCN0Estimator(signal)` is new.** `default_cn0_estimator` used to size
+   NWPR's coherent window from the signal's code period (5 blocks for a 1 ms
+   code, 2 for L1C-P's 10 ms one). Phase 2 replaced that function's body, which
+   would have silently dropped the sizing for the one path NWPR is still
+   recommended on. It moved onto the estimator.
+
+One bug the plan did not anticipate, found by the cadence test:
+`_chunk_last_sample(cd, index − 1, …) + 1` clamps to `num_samples + 1` without
+chunking, so an unchunked whole-buffer pass measured nothing at all. Hence
+`_chunk_first_sample`.
+
+Deferred exactly as written: the optional coherent pre-sum, the acquisition CFAR
+hook, `noise_gain(::PostCorrFilter)`, and the `Σ|x|²` diagnostic source.
 
 > **Anchors are as of `b9709191` (6.0.1).** Phase 0.5 deletes
 > `src/cn0_estimation.jl` and moves every symbol in it, so all
