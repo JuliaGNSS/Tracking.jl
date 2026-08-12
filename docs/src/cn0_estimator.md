@@ -6,6 +6,7 @@ signal quality in dB-Hz. Each [`TrackedSignal`](@ref) on a
 satellite produces one CN0 value per signal.
 
 !!! note "Every signal of a satellite is estimated, not just the driver"
+
     The estimator of *each* signal is fed its own prompt once per completed
     record — the [estimator-driver signal](tracking_state.md#Estimator-driver-signal)
     has no privileged role here, and the per-signal values are not
@@ -19,22 +20,137 @@ satellite produces one CN0 value per signal.
     order and runs only when you call it, so a signal whose C/N₀ you never read
     costs almost nothing either way.
 
-    The reason to switch a signal off is therefore not speed but honesty: where no
-    coherent window exists the value falls back to the moment ratio's noise floor
-    (see the warning below). [`NoCN0Estimator`](@ref) is the per-signal opt-out.
+    The reason to switch a signal off is therefore not speed but honesty.
+    [`NoCN0Estimator`](@ref) is the per-signal opt-out.
 
-## Default Estimator
+## Choosing an estimator
 
-The default estimator is Van Dierendonck's **narrowband/wideband power ratio**
-(NWPR), implemented as [`NWPRCN0Estimator`](@ref). Per narrowband window of `M`
-records it forms the coherent power `NBP = |Σ prompt|²` and the incoherent power
-`WBP = Σ |prompt|²`, divides the sums of both over as many windows as fit in
-`num_prompts_for_cn0_estimation` records, and turns that mean power ratio into a
-C/N₀.
+Four estimators ship, and each column below is a reason somebody picks a
+different one.
+
+|                                                            | [`NoiseRefCN0Estimator`](@ref) (default)                | [`NWPRCN0Estimator`](@ref)                                           | [`MomentsCN0Estimator`](@ref) | [`NoCN0Estimator`](@ref) |
+|:---------------------------------------------------------- |:------------------------------------------------------- |:-------------------------------------------------------------------- |:----------------------------- |:------------------------ |
+| Needs the band's samples (or a noise observation)?         | **yes**                                                 | no                                                                   | no                            | no                       |
+| Needs bit sync / a coherent window?                        | no                                                      | **yes**                                                              | no                            | no                       |
+| Needs to know the window length `M`?                       | no                                                      | **yes**                                                              | no                            | no                       |
+| Works on GPS L1C-D, Galileo E1B, pre-sync secondary codes? | **yes**                                                 | no — falls back                                                      | yes, at its floor             | n/a                      |
+| Bias, thermal only                                         | <0.03 dB                                                | ≈+0.05 dB everywhere                                                 | ≈27.6 dB-Hz *floor* on noise  | n/a                      |
+| High-C/N₀ bias floor                                       | ≈0.13 dB at 45, ≈0.40 at 50 (self-leakage)              | none                                                                 | none                          | n/a                      |
+| High-C/N₀ σ                                                | keeps improving, until the row above dominates          | saturates at `√(M/((M−1)K))` ≈0.5 dB                                 | —                             | n/a                      |
+| Degenerate outputs                                         | none                                                    | `-Inf`/`Inf` outside `1 < μ̂ < M` — 5.6 % of *estimates* at 20 dB-Hz | none                          | always `-Inf`            |
+| Phase-noise sensitivity                                    | immune (non-coherent)                                   | sensitive — the coherent sum loses power                             | immune                        | n/a                      |
+| Cost                                                       | per-record arithmetic + one despread per band per chunk | per-record arithmetic                                                | per-record arithmetic         | none                     |
+
+The "degenerate" row is a rate of unusable *outputs*, not a per-window discard
+rate: [`estimate_cn0`](@ref) pools every buffered window and range-checks the
+pooled ratio once.
+
+### Which one do I use?
+
+ 1. **Sample-driven [`track!`](@ref)** → [`NoiseRefCN0Estimator`](@ref). This is
+    the default and needs no configuration: the band is provisioned a
+    [`CorrelatorNoiseEstimator`](@ref) automatically and `track!` fills it.
+ 2. **Correlator outputs from hardware, *with* a noise observation** → the same,
+    plus one [`append_noise_observation!`](@ref) per band per fold. See
+    [Noise Estimator](noise_estimator.md) for what a producer has to report; the
+    short version is *raw accumulations of an untracked PRN*, with every division
+    and all averaging done here.
+ 3. **Correlator outputs from hardware, *without* one** →
+    `NWPRCN0Estimator(signal)`, accepting its fallback on the signals it cannot
+    serve. This is the one place NWPR is still the right choice.
+ 4. **A signal whose C/N₀ nobody reads** (the passenger of a co-tracked pair) →
+    [`NoCN0Estimator`](@ref); see [Not measuring a signal at all](#Not-measuring-a-signal-at-all).
+ 5. [`MomentsCN0Estimator`](@ref) is a fallback component and a prompt-stream
+    tool, not a recommended standalone default — see
+    [Why not the moment method](#Why-not-the-moment-method) for the ≈27.6 dB-Hz
+    floor that rules it out.
+
+## The default: C/N₀ against a measured noise floor
+
+[`NoiseRefCN0Estimator`](@ref) computes, per record,
+
+```
+Ĉ/N₀ = ⟨|P|²⟩ / N̂₀ − 1/T
+```
+
+with `N̂₀` the band's measured noise **density** and `T` that record's own
+integration time, then averages the per-record terms. It is **non-coherent**: no
+bit sync, no window, no `M`, no fallback, no saturation ceiling — one set of
+characteristics on every signal.
+
+Where the density comes from is a separate, pluggable thing: see
+[Noise Estimator](noise_estimator.md). On the sample-driven path it is automatic.
+
+```@docs
+NoiseRefCN0Estimator
+Tracking.default_cn0_estimator
+```
+
+### Getting the low-C/N₀ variance
+
+Below about 28 dB-Hz a *non-coherent* estimator is the noisier of the two at
+matched record length, and the reason is squaring loss: NWPR sums `M` prompts
+coherently before squaring, so at low SNR its σ is better by exactly `√(M−1)`.
+
+The way to buy that back is not a post-correlation window. **A coherent sum of
+five 1 ms prompts *is* one 5 ms prompt** — NWPR's narrowband window is a longer
+coherent integration reconstructed after the fact, not extra information. Taking
+the same integration in the *correlator* instead, with
+[`set_preferred_num_code_blocks_to_integrate!`](@ref), makes the noise reference
+better than NWPR at every C/N₀ and helps the discriminators as well. Modelled
+over 100 ms of observation, 4000 trials × 9 seeds, relative σ in dB:
+
+| C/N₀ | NWPR (M = 5) | NoiseRef, 1 ms records | NoiseRef, 5 ms records |
+|:---- | ------------:| ----------------------:| ----------------------:|
+| 20   | 2.96         | 4.79                   | **2.76**               |
+| 25   | 1.50         | 1.72                   | **1.24**               |
+| 30   | 0.90         | 0.75                   | **0.65**               |
+| 40   | 0.54         | 0.20                   | **0.20**               |
+| 50   | 0.50         | 0.06                   | **0.06**               |
+
+Two honest caveats. The record length also sets the discriminator behaviour and
+the loop's update interval, so this is a **trade, not a free win** — the
+conventional estimator rescales the carrier bandwidth by `1/N` to keep the loop
+stable, but a longer record still means a slower loop. And the length is capped
+at one block until bit/secondary sync is found, so pre-sync you are on the 1 ms
+column whatever you configure.
+
+### The one bias it carries
+
+The reference despreads with a *wrong* PRN, so besides the thermal floor it also
+collects **the tracked satellite's own power** — `ε_self/N₀ = C/f_chip`. NWPR
+does not: it despreads with the correct code, where the satellite's power appears
+in both `NBP` and `WBP` and cancels in the ratio. On GPS L1 C/A:
+
+| own C/N₀ | C/N₀ reads low by |
+|:-------- | -----------------:|
+| 35 dB-Hz | 0.013 dB          |
+| 40 dB-Hz | 0.042 dB          |
+| 45 dB-Hz | **0.13 dB**       |
+| 50 dB-Hz | **0.40 dB**       |
+
+A wider spreading bandwidth scales it down in proportion, so GPS L5 and Galileo
+E5a at 10.23 Mcps are ≈10× better — 0.013 dB even at 50 dB-Hz.
+
+It is carried rather than corrected on purpose: the correction
+`N̂₀ ← N̂₀ − Σᵢ Ĉᵢ/f_chip` would make every satellite's C/N₀ a function of every
+*other* satellite's estimate, which is a cross-satellite feedback loop this
+design exists without. Below 40 dB-Hz the term sits under NWPR's own +0.05 dB
+bias, and that is the range where lock and loss decisions are made.
+
+## `NWPRCN0Estimator`: the coherent-window estimator
+
+Van Dierendonck's **narrowband/wideband power ratio**. Per narrowband window of
+`M` records it forms the coherent power `NBP = |Σ prompt|²` and the incoherent
+power `WBP = Σ |prompt|²`, divides the sums of both over as many windows as fit
+in `num_prompts_for_cn0_estimation` records, and turns that mean power ratio into
+a C/N₀. It was the default until the per-band noise reference landed, and it is
+what to configure on a correlator-ingest path that cannot report a noise
+observation.
 
 ```@docs
 NWPRCN0Estimator
-Tracking.default_cn0_estimator
+NWPRCN0Estimator(::GNSSSignals.AbstractGNSSSignal)
 ```
 
 ### Why not the moment method
@@ -46,14 +162,14 @@ fluctuate enough to manufacture signal power out of noise. Measured on
 synthetic prompts (amplitude `√(C/N₀·T)` in unit-variance complex noise), 100
 one-millisecond records, 400 realizations:
 
-| true C/N₀   | M2M4 median | p10  | p90  | NWPR (`M = 20`) median |
-|:----------- | -----------:| ----:| ----:| ----------------------:|
-| noise only  | **27.6**    | 22.6 | 31.1 | **−Inf** ("no signal") |
-| 20 dB-Hz    | 27.7        | 22.5 | 30.9 | 19.9                   |
-| 25 dB-Hz    | 27.9        | 23.4 | 30.9 | 25.0                   |
-| 30 dB-Hz    | 30.5        | 27.3 | 32.6 | 30.0                   |
-| 35 dB-Hz    | 35.3        | 33.9 | 36.4 | 35.0                   |
-| 45 dB-Hz    | 45.1        | 44.3 | 45.9 | 45.0                   |
+| true C/N₀  | M2M4 median | p10  | p90  | NWPR (`M = 20`) median |
+|:---------- | -----------:| ----:| ----:| ----------------------:|
+| noise only | **27.6**    | 22.6 | 31.1 | **−Inf** ("no signal") |
+| 20 dB-Hz   | 27.7        | 22.5 | 30.9 | 19.9                   |
+| 25 dB-Hz   | 27.9        | 23.4 | 30.9 | 25.0                   |
+| 30 dB-Hz   | 30.5        | 27.3 | 32.6 | 30.0                   |
+| 35 dB-Hz   | 35.3        | 33.9 | 36.4 | 35.0                   |
+| 45 dB-Hz   | 45.1        | 44.3 | 45.9 | 45.0                   |
 
 M2M4 is accurate from ~35 dB-Hz up and blind below ~30: a true 20 dB-Hz signal
 and pure noise both read ~27.7. As a per-update detection statistic that makes
@@ -71,14 +187,14 @@ windows (see below), which trades some of that margin for immunity against the
 loop's phase noise. End to end through `track` on a data-modulated GPS L1 C/A
 signal at the defaults, 600 ms per run, medians over 16 seeds:
 
-| true C/N₀   | NWPR (default) | p10  | p90  | M2M4 |
-|:----------- | --------------:| ----:| ----:| ----:|
-| noise only  | **−Inf** in 12 of 16 runs | | | 27.9 |
-| 20 dB-Hz    | 18.3           | 6.0  | 22.2 | 27.6 |
-| 25 dB-Hz    | 23.9           | 16.3 | 26.3 | 28.3 |
-| 30 dB-Hz    | 29.0           | 27.4 | 30.3 | 30.8 |
-| 35 dB-Hz    | 34.1           | 33.3 | 35.0 | 35.3 |
-| 45 dB-Hz    | 44.3           | 43.7 | 45.2 | 45.4 |
+| true C/N₀  | NWPR (default)            | p10  | p90  | M2M4 |
+|:---------- | -------------------------:| ----:| ----:| ----:|
+| noise only | **−Inf** in 12 of 16 runs |      |      | 27.9 |
+| 20 dB-Hz   | 18.3                      | 6.0  | 22.2 | 27.6 |
+| 25 dB-Hz   | 23.9                      | 16.3 | 26.3 | 28.3 |
+| 30 dB-Hz   | 29.0                      | 27.4 | 30.3 | 30.8 |
+| 35 dB-Hz   | 34.1                      | 33.3 | 35.0 | 35.3 |
+| 45 dB-Hz   | 44.3                      | 43.7 | 45.2 | 45.4 |
 
 On pure noise, pre-sync — where a code-lock detector has to make its call — the
 default reports a median of `-Inf`, clears a 20 dB-Hz threshold in 4 % of updates
@@ -97,23 +213,23 @@ and a downstream consumer of `get_filtered_prompts` does not, so each
 record's prompt is handed to the estimator together with the navigation-bit
 state in a [`CN0UpdateContext`](@ref), and the window is derived from it:
 
-| signal state                                            | narrowband window                                      |
-|:------------------------------------------------------- |:------------------------------------------------------ |
-| sync found, data-bearing signal (GPS L1 C/A, L5I, …)     | `num_narrowband_code_blocks` (5), tiling the navigation bit from its start |
-| sync found, pilot (GPS L1C-P, L2CL, Galileo E1C, …)      | `num_narrowband_code_blocks` (no bit grid to respect)  |
-| sync not found, data-bearing without secondary code      | `num_presync_narrowband_code_blocks` (5), unaligned    |
-| sync not found, signal with a secondary code             | none — the unknown overlay flips every code block      |
-| one symbol per code block (GPS L1C-D, Galileo E1B)       | none — no window longer than one record is coherent    |
-| record at least as long as its own window                | none — a one-record window has `NBP == WBP`            |
+| signal state                                         | narrowband window                                                          |
+|:---------------------------------------------------- |:-------------------------------------------------------------------------- |
+| sync found, data-bearing signal (GPS L1 C/A, L5I, …) | `num_narrowband_code_blocks` (5), tiling the navigation bit from its start |
+| sync found, pilot (GPS L1C-P, L2CL, Galileo E1C, …)  | `num_narrowband_code_blocks` (no bit grid to respect)                      |
+| sync not found, data-bearing without secondary code  | `num_presync_narrowband_code_blocks` (5), unaligned                        |
+| sync not found, signal with a secondary code         | none — the unknown overlay flips every code block                          |
+| one symbol per code block (GPS L1C-D, Galileo E1B)   | none — no window longer than one record is coherent                        |
+| record at least as long as its own window            | none — a one-record window has `NBP == WBP`                                |
 
 Where no window is admissible the estimator falls back to a
-[`MomentsCN0Estimator`](@ref), which needs no coherence at all — so those
-signals and phases behave exactly as they did before NWPR became the default.
-Note the last row: with
+[`MomentsCN0Estimator`](@ref), which needs no coherence at all — and with it to
+that estimator's floor. Note the last row: with
 [`set_preferred_num_code_blocks_to_integrate!`](@ref) at a whole navigation bit,
 a window closes on a single record and NWPR reports its fallback for good.
 
-!!! warning "The moment ratio's noise floor is still there on data-only signals"
+!!! warning "The moment ratio's noise floor is there on data-only signals"
+
     GPS L1C-D and Galileo E1B carry **one navigation symbol per code block** (a
     10 ms and a 4 ms code period against a 100 sym/s and 250 sym/s data rate), so
     no two consecutive records are guaranteed to share a sign and the longest
@@ -134,14 +250,17 @@ a window closes on a single record and NWPR reports its fallback for good.
     against the moment ratio's `N^{-1/4}`, so it would need seconds of averaging,
     not tens of seconds.)
 
-    In practice both of these are the data component of a pair whose **pilot**
-    does get NWPR: L1C-D with L1C-P, E1B with E1C. Put both on one
-    [`TrackedSat`](@ref) and take the lock decision from the pilot's estimate,
-    which is the component the loops track anyway. To stop the data component
-    reporting a floor you must not trust, give it a
-    [`NoCN0Estimator`](@ref) — or give the whole signal an
-    `NWPRCN0Estimator(; fallback = NoCN0Estimator())`, which reports `-Inf dB-Hz`
-    exactly when no coherent window is available.
+    **This is what the default estimator exists to retire.**
+    [`NoiseRefCN0Estimator`](@ref) has no window at all, so those signals and
+    phases are ordinary records to it — that is
+    [issue #217](https://github.com/JuliaGNSS/Tracking.jl/issues/217), and the
+    reason the default moved. If you are on NWPR anyway (a correlator-ingest path
+    with no noise observation), the mitigations are: take the lock decision from
+    the **pilot** of the pair, which is the component the loops track anyway
+    (L1C-D with L1C-P, E1B with E1C, both on one [`TrackedSat`](@ref)); give the
+    data component a [`NoCN0Estimator`](@ref); or give it an
+    `NWPRCN0Estimator(signal; fallback = NoCN0Estimator())`, which reports
+    `-Inf dB-Hz` exactly when no coherent window is available.
 
 The pre-sync window matters: the bit-edge detector needs seconds to lock at
 35 dB-Hz and does not lock below ~30 dB-Hz, so a strictly bit-aligned window
@@ -167,10 +286,10 @@ The case that shows it is a satellite that fades **after** bit sync was found,
 which is the normal way a receiver reaches low C/N₀. Locked in at 45 dB-Hz, then
 faded to a true 25 dB-Hz, medians over 96 runs:
 
-| coherent window | reported C/N₀ | p10  | runs reading `-Inf` |
-|:--------------- | -------------:| ----:| -------------------:|
-| 5 blocks (default) | **23.6**   | 19.5 | 1 / 96              |
-| one full 20-block bit | 21.0    | 12.0 | 17 / 96             |
+| coherent window       | reported C/N₀ | p10  | runs reading `-Inf` |
+|:--------------------- | -------------:| ----:| -------------------:|
+| 5 blocks (default)    | **23.6**      | 19.5 | 1 / 96              |
+| one full 20-block bit | 21.0          | 12.0 | 17 / 96             |
 
 A whole-bit coherent sum reports "no signal" on a satellite that is being
 tracked. Raise `num_narrowband_code_blocks` for a pilot, a narrow carrier loop,
@@ -179,8 +298,8 @@ or a signal that is never weak; lower it if the loop is noisier than the default
 ## Configuring the estimator
 
 `num_prompts_for_cn0_estimation` (default `100`, ~100 ms for L1 C/A) sets how
-many records the estimate averages over, for the default estimator and its
-fallback alike:
+many records the estimate averages over — for the default estimator, and for
+NWPR's fallback as well:
 
 ```jldoctest cn0_buffer
 julia> using Tracking, GNSSSignals
@@ -189,8 +308,7 @@ julia> using Tracking: Hz
 
 julia> track_state = TrackState(; signal = GPSL1CA());
 
-julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
-                        num_prompts_for_cn0_estimation = 200);
+julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz; num_prompts_for_cn0_estimation = 200);
 
 julia> track_state = add_satellite!(track_state, :default, sat);
 
@@ -207,30 +325,51 @@ julia> using Tracking, GNSSSignals
 
 julia> using Tracking: Hz
 
-julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
-                        cn0_estimator = MomentsCN0Estimator(100));   # the default up to 5.1
+julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz; cn0_estimator = MomentsCN0Estimator(100));   # the default up to 5.1
 
 julia> Tracking.get_cn0_estimator(sat) isa MomentsCN0Estimator
 true
 
-julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
-                        cn0_estimator = NWPRCN0Estimator(;
-                            num_records = 400,                     # ~400 ms of memory
-                            num_presync_narrowband_code_blocks = 0,  # M2M4 until bit sync
-                        ));
+julia> sat = TrackedSat(
+           GPSL1CA(),
+           1,
+           50.0,
+           1000.0Hz;
+           cn0_estimator = NWPRCN0Estimator(
+               GPSL1CA();
+               num_records = 400,                       # ~400 ms of memory
+               num_presync_narrowband_code_blocks = 0,  # M2M4 until bit sync
+           ),
+       );
 
 julia> Tracking.get_cn0_estimator(sat).num_records
 400
 ```
+
+Passing the **signal** to `NWPRCN0Estimator` is what sizes its coherent window
+for that signal's code period — 5 blocks for a 1 ms code, 2 for GPS L1C-P's
+10 ms one. The window is a count of blocks, so leaving it at the bare
+constructor's `5` makes it 50 ms long on a 10 ms code.
 
 Each signal needs its **own** estimator instance — they buffer into a vector, so
 sharing one between two signals of a satellite corrupts both. The multi-signal
 `TrackedSat` constructor therefore takes a tuple, one estimator per signal:
 
 ```julia
-TrackedSat((GPSL1C_P(), GPSL1CA()), prn, code_phase, carrier_doppler;
-           cn0_estimator = (NWPRCN0Estimator(), MomentsCN0Estimator(100)))
+TrackedSat(
+    (GPSL1C_P(), GPSL1CA()),
+    prn,
+    code_phase,
+    carrier_doppler;
+    cn0_estimator = (NoiseRefCN0Estimator(), MomentsCN0Estimator(100)),
+)
 ```
+
+A band is provisioned a noise source if **any** signal on it uses an estimator
+that reads one, and the mixed case above works: the noise-referenced signal gets
+its density, the other ignores it. A band where *no* signal asks for one is not
+provisioned at all, so it runs no per-band despread and costs exactly nothing —
+which is the answer for anyone who deliberately stays on NWPR.
 
 ### Not measuring a signal at all
 
@@ -240,19 +379,25 @@ is worth saying in two situations:
 
 ```julia
 # the non-driver signal of a pair whose C/N₀ nobody reads
-TrackedSat((GPSL1C_P(), GPSL1C_D()), prn, code_phase, carrier_doppler;
-           cn0_estimator = (NWPRCN0Estimator(), NoCN0Estimator()))
+TrackedSat(
+    (GPSL1C_P(), GPSL1C_D()),
+    prn,
+    code_phase,
+    carrier_doppler;
+    cn0_estimator = (NoiseRefCN0Estimator(), NoCN0Estimator()),
+)
 
 # NWPR with no moment-ratio floor underneath it: "no estimate" until a coherent
 # window exists, instead of the moment ratio's ~27.6 dB-Hz on noise
-NWPRCN0Estimator(; fallback = NoCN0Estimator())
+NWPRCN0Estimator(GPSL1C_D(); fallback = NoCN0Estimator())
 ```
 
-The second is the one that changes what a receiver can trust: it turns the
-fallback's noise floor into an honest `-Inf` for every signal and phase that
-admits no coherent window (see the warning above). The per-record saving of the
-first is real but tiny — one estimator update is well under a per cent of the
-correlation work for that record — so choose it for clarity, not for speed.
+The second only matters if you are on NWPR at all — the default estimator has no
+fallback and no floor. Where you are, it turns the fallback's noise floor into an
+honest `-Inf` for every signal and phase that admits no coherent window (see the
+warning above). The per-record saving of the first is real but tiny — one
+estimator update is well under a per cent of the correlation work for that
+record — so choose it for clarity, not for speed.
 
 It reports `-Inf dB-Hz` rather than `NaN dB-Hz` deliberately: with Unitful's
 `Level` comparison, `NaN dB-Hz >= threshold` is `true` for *every* threshold, so a
@@ -266,28 +411,47 @@ NoCN0Estimator
 
 ## What the estimator returns
 
-- **Before the first record has been folded in** — nothing has been measured
-  and `estimate_cn0` returns `0.0 dB-Hz`. This is the value seen immediately
-  after `add_satellite!`.
-- **Driving a noise-free signal through `track`** — the coherent and incoherent
-  powers agree exactly (`μ̂ = M`), so the result is `Inf dB-Hz`. The moment
-  estimator's noise moment goes to zero and it reports `Inf dB-Hz` too. The
-  [Quick start](index.md#Quick-start) shows this behavior.
-- **Driving a noisy signal** — the estimate converges to the underlying CN0 as
-  the power buffers fill. Real-world signals typically land in 30–50 dB-Hz.
-- **Driving noise only** — NWPR reports `-Inf dB-Hz` whenever the mean ratio sits
-  at the incoherent floor (`μ̂ ≤ 1`), i.e. "no detectable signal". That is the
-  median outcome, not a guarantee: a short window has an upper tail on noise, and
-  at the default the estimate clears 20 dB-Hz in ~4 % of updates (0 % at
-  25 dB-Hz), so a lock threshold wants some margin or a dwell. Code that
-  *thresholds* the estimate needs no special case; code that *averages* it must
-  handle the infinities.
-- **While the loops are struggling** — NWPR measures *coherent* C/N₀, so residual
-  phase noise counts against it. With the conventional PLL at 1 ms records and
-  the default windows it reads ~0.9 dB low at a true 35 dB-Hz, ~1.1 dB low at
-  25 dB-Hz, and ~1.7 dB low at 20 dB-Hz, with a wide spread and occasional `-Inf`
-  there (see the table above). Raising `num_narrowband_code_blocks` past the
-  loop's coherence time makes this much worse, not better.
+  - **Before the first record has been folded in** — nothing has been measured and
+    `estimate_cn0` returns `-Inf dB-Hz`. This is the value seen immediately after
+    `add_satellite!`, and it is `-Inf` rather than a finite number precisely so a
+    lock detector cannot clear on it.
+  - **Driving a noise-free signal through `track`** — there is no noise to divide
+    by, so the result runs off to a very large value; NWPR's coherent and
+    incoherent powers agree exactly (`μ̂ = M`) and it reports `Inf dB-Hz`, as does
+    the moment estimator. The [Quick start](index.md#Quick-start) shows this.
+  - **Driving a noisy signal** — the estimate converges to the underlying CN0 as
+    the buffers fill. Real-world signals typically land in 30–50 dB-Hz.
+  - **Driving noise only** — the noise-referenced default reports whatever the
+    averaged per-record terms come to, floored at `-Inf dB-Hz` once the mean fails
+    to clear zero — which on pure noise is most of the time, and never a positive
+    floor. NWPR reports `-Inf dB-Hz` whenever the mean ratio sits at the incoherent
+    floor (`μ̂ ≤ 1`). Either way that is the *median* outcome and not a guarantee:
+    code that **thresholds** the estimate needs no special case, code that
+    **averages** it must handle the infinities.
+  - **While the loops are struggling** — this is where the two differ most. NWPR
+    measures *coherent* C/N₀, so residual phase noise counts against it: at 1 ms
+    records and the default windows it reads ~0.9 dB low at a true 35 dB-Hz,
+    ~1.1 dB low at 25 dB-Hz and ~1.7 dB low at 20 dB-Hz, and raising
+    `num_narrowband_code_blocks` past the loop's coherence time makes it much
+    worse. The non-coherent default is **immune** — measured through `track!` at a
+    true 45 dB-Hz it reads 44.9 at 1-block records and 44.7 at 20-block ones, where
+    NWPR falls to 32.9.
+
+Every estimator here reports C/N₀ against the **effective** noise density,
+including multi-access interference: the other satellites' cross-correlation adds
+incoherent power `ε` that both NWPR and the noise reference see, so both report
+`C/(N₀+ε)`. That is what other receivers report and the more useful number for a
+lock detector. The one term they do *not* share is the reference's self-leakage —
+see [The one bias it carries](#The-one-bias-it-carries).
+
+!!! warning "The post-correlation filter is assumed to have unity noise gain"
+
+    `N̂₀` is measured at the band, but the prompt the estimator sees is
+    post-[`AbstractPostCorrFilter`](@ref). [`DefaultPostCorrFilter`](@ref) selects
+    one antenna (`last`) and has gain 1, which is fine — and the noise reference
+    despreads that same antenna, so the two sides of the ratio match. A real
+    beamformer changes the prompt's noise scale and silently invalidates the
+    ratio; there is no `noise_gain` hook yet.
 
 The doctest below builds a noisy L1 C/A signal at a known 45 dB-Hz CN0
 and drives 25 1-ms tracking cycles through it:
@@ -309,8 +473,9 @@ julia> function run_cn0_demo()
            code_freq = get_code_frequency(sys)
            rng = MersenneTwister(0)
            track_state = TrackState(; signal = GPSL1CA())
-           track_state = add_satellite!(track_state; prn, code_phase = 0.0, carrier_doppler = 0.0Hz)
-           for _ in 1:25
+           track_state =
+               add_satellite!(track_state; prn, code_phase = 0.0, carrier_doppler = 0.0Hz)
+           for _ = 1:25
                clean = gen_code(num_samples, sys, prn, fs, code_freq, 0.0)
                noise = sigma .* randn(rng, ComplexF64, num_samples)
                track_state = track(clean .+ noise, track_state, fs)
@@ -345,18 +510,18 @@ CN0UpdateContext
 You can implement your own estimator by creating a subtype of
 [`AbstractCN0Estimator`](@ref) and implementing:
 
-- `Tracking.update(cn0_estimator::MyCN0Estimator, prompt)` — return a new
-  estimator with the latest prompt added (immutable update).
-- `estimate_cn0(cn0_estimator::MyCN0Estimator, integration_time)` —
-  return the CN0 estimate as a `dB-Hz` quantity. `integration_time` is the
-  integration time of the *record* the last prompt came from, i.e.
-  [`get_last_fully_integrated_integration_time`](@ref).
+  - `Tracking.update(cn0_estimator::MyCN0Estimator, prompt)` — return a new
+    estimator with the latest prompt added (immutable update).
+  - `estimate_cn0(cn0_estimator::MyCN0Estimator, integration_time)` —
+    return the CN0 estimate as a `dB-Hz` quantity. `integration_time` is the
+    integration time of the *record* the last prompt came from, i.e.
+    [`get_last_fully_integrated_integration_time`](@ref).
 
 If the estimator can profit from the navigation-bit grid — bit boundaries,
 whether sync has been found, the decoded soft bits — implement the
 three-argument form instead, which is what the tracking loop calls:
 
-- `Tracking.update(cn0_estimator::MyCN0Estimator, prompt, context::CN0UpdateContext)`
+  - `Tracking.update(cn0_estimator::MyCN0Estimator, prompt, context::CN0UpdateContext)`
 
 The default three-argument method drops the context and calls the two-argument
 one, so implementing only the latter is fine.

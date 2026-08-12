@@ -13,7 +13,7 @@ prompt statistics.
 
 # Why a density and not a power
 
-For a correlator normalised the way [`normalize`](@ref) normalises — by
+For a correlator normalised the way `Tracking.normalize` normalises — by
 `integrated_samples * code_amplitude` — white input noise of per-sample variance
 `σ²` gives `E|P|² = σ²/N = N₀/T`. So `N₀ = σ²/f_s` is **independent of the
 integration time**, which is what lets one per-band figure serve records of any
@@ -119,7 +119,7 @@ form a producer can report, since Tracking does the squaring, the scaling and
 all the averaging itself.
 
 `code_amplitude` is the RMS amplitude of the sampled replica (see
-[`normalize`](@ref)); leave it at `1` for a ±1 code, pass the code's RMS for a
+`Tracking.normalize`); leave it at `1` for a ±1 code, pass the code's RMS for a
 multi-level one (CBOC). `prn` records which code measured it.
 """
 noise_observation(

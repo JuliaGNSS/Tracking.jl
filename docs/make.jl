@@ -17,7 +17,8 @@ makedocs(
         "custom_doppler_estimator.md",
         "vector_tracking.md",
         "correlator.md",
-        "cn0_estimator.md"
+        "cn0_estimator.md",
+        "noise_estimator.md"
     ]
 )
 
