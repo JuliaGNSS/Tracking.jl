@@ -1,5 +1,12 @@
 # Changelog
 
+## [6.0.2](https://github.com/JuliaGNSS/Tracking.jl/compare/v6.0.1...v6.0.2) (2026-08-12)
+
+
+### Bug Fixes
+
+* **discriminators:** slope-normalize the VEML DLL discriminator to chips ([1e03559](https://github.com/JuliaGNSS/Tracking.jl/commit/1e035596990d4d8665b954ff05e9c9df55764f4b))
+
 ## [6.0.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v6.0.0...v6.0.1) (2026-08-05)
 
 
