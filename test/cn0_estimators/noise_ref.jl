@@ -31,7 +31,12 @@ using Tracking:
     update,
     update_accumulator
 
-const T = 1ms
+# Float64 throughout, deliberately: that is what the tracking loop produces
+# (`integrated_samples / sampling_frequency`, and a density built by the
+# `noise_observation` builders), and `1ms` would instead make the density a
+# `Rational{Int64}` — a type combination the loop never creates, whose arithmetic
+# an older compiler does not fully elide.
+const T = 1.0ms
 # `E|P|² = N₀/T`, so a unit-noise-power prompt stream is measured against
 # `N₀ = T` — 1e-3 Hz⁻¹ at a 1 ms record.
 const N₀ = uconvert(Hz^-1, T)
@@ -90,14 +95,15 @@ end
     long = update(
         NoiseRefCN0Estimator(),
         complex(sqrt(power(20)), 0.0),
-        _context(; integration_time = 20ms),
+        _context(; integration_time = 20.0ms),
     )
     @test _db(estimate_cn0(short, T)) ≈ 10log10(γ) atol = 1e-9
     @test _db(estimate_cn0(long, 20ms)) ≈ 10log10(γ) atol = 1e-9
 
     # ... and a ring holding both together still averages to the same γ, which is
     # the case `estimate_cn0(estimator, integration_time)` cannot express at all.
-    both = update(short, complex(sqrt(power(20)), 0.0), _context(; integration_time = 20ms))
+    both =
+        update(short, complex(sqrt(power(20)), 0.0), _context(; integration_time = 20.0ms))
     @test _db(estimate_cn0(both, T)) ≈ 10log10(γ) atol = 1e-9
 end
 

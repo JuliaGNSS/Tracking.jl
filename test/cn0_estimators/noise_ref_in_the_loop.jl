@@ -39,7 +39,9 @@ using Tracking:
 _db(x) = ustrip(uconvert(dBHz, x))
 _median(xs) = (v = sort(collect(xs)); v[div(length(v) + 1, 2)])
 
-const T = 1ms
+# Float64, matching what the tracking loop actually builds — see the note in
+# `cn0_estimators/noise_ref.jl`.
+const T = 1.0ms
 const N₀ = uconvert(Hz^-1, T)              # `E|P|² = N₀/T`, so a unit-noise prompt
 
 # `λ = (C/N₀)·T` per record, CN(0,1) noise, perfect phase — the same model
