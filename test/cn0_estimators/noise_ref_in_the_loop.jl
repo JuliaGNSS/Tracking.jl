@@ -154,14 +154,19 @@ end
         _db(estimate_cn0(_track_noisy(cn0, 700; seed, cn0_estimator = est(), blocks), 1)) for seed in seeds
     ]
 
-    # 1-block records, 25 dB-Hz: NWPR's pooled ratio lands outside `1 < μ̂ < M`
-    # in most runs, and the survivors read far low. This is the regime lock and
-    # loss decisions are made in.
-    nwpr_low = run(25.0, () -> NWPRCN0Estimator(gpsl1))
+    # 1-block records, 25 dB-Hz — the regime lock and loss decisions are made in.
+    # What is asserted here is the *structural* claim: the noise reference cannot
+    # produce a degenerate output, because it has no `1 < μ̂ < M` bound to fall
+    # outside of, and it lands near the truth.
+    #
+    # NWPR's degenerate rate here is real and large — 56 % over 9 seeds × 1200
+    # blocks — but five seeds of 700 blocks cannot pin it, and the RNG stream
+    # differs between Julia versions, so the same seeds give 1 in 5 degenerate on
+    # 1.12 and 0 in 5 on 1.10. Asserting an inequality on that count would be
+    # testing the RNG. The long-record collapse below is the robust comparison.
     ref_low = run(25.0, () -> NoiseRefCN0Estimator())
     @test count(!isfinite, ref_low) == 0
-    @test _median(filter(isfinite, ref_low)) ≈ 25 atol = 3.0
-    @test count(!isfinite, nwpr_low) > count(!isfinite, ref_low)
+    @test _median(ref_low) ≈ 25 atol = 3.0
 
     # 45 dB-Hz, 1-block records: both work, the reference is tighter and closer.
     nwpr_high = run(45.0, () -> NWPRCN0Estimator(gpsl1))

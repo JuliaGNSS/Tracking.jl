@@ -173,13 +173,26 @@ end
     estimator = CorrelatorNoiseEstimator()
     obs = noise_observation_from_samples(4000.0, 4000, 4e6Hz)
     push_many(estimator, obs, 5_000)          # warm up + fill the window
-    @test @allocated(push_many(estimator, obs, 1_000_000)) == 0
+
+    # The contract is that nothing scales with the number of pushes. Asserting a
+    # bare `== 0` would instead assert something about the compiler: on Julia
+    # 1.10 the measurement carries a fixed ~16 B per *call* to the harness, which
+    # does not move between ten thousand pushes and a million. Two very different
+    # counts separate a per-push allocation — which would grow a hundredfold —
+    # from a per-call one, which does not move at all.
+    few = @allocated push_many(estimator, obs, 10_000)
+    many = @allocated push_many(estimator, obs, 1_000_000)
+    @test many == few
+    @test few <= 128
 
     read_many(estimator, n) = (d = get_noise_density(estimator); for _ = 1:n
         d = get_noise_density(estimator)
     end; d)
-    read_many(estimator, 10)
-    @test @allocated(read_many(estimator, 1000)) == 0
+    read_many(estimator, 100)
+    few_reads = @allocated read_many(estimator, 1_000)
+    many_reads = @allocated read_many(estimator, 10_000)
+    @test many_reads == few_reads
+    @test few_reads <= 128
 end
 
 @testset "update_noise! defaults to a no-op for a source fed from outside" begin

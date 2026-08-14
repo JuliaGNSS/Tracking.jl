@@ -28,6 +28,7 @@ using Tracking:
     NumAnts,
     ConventionalAssistedPLLAndDLL,
     NoiseRefCN0Estimator,
+    NWPRCN0Estimator,
     append_noise_observation!,
     noise_observation_from_samples
 
@@ -126,8 +127,23 @@ end
     sampling_frequency = 4e6Hz
     signal, gpsl1, carrier_doppler, start_code_phase = make_signal(sampling_frequency)
 
-    track_state =
-        TrackState(gpsl1, [TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)])
+    # Pinned to an estimator that reads no noise density, so this measures what it
+    # was written to measure: the correlate and estimate stages themselves. The
+    # library default is noise-referenced and adds a per-band despread, which has
+    # its own allocation test below — and that one is gated to Julia >= 1.11,
+    # where the despread is allocation-free.
+    track_state = TrackState(
+        gpsl1,
+        [
+            TrackedSat(
+                gpsl1,
+                1,
+                start_code_phase,
+                carrier_doppler - 20Hz;
+                cn0_estimator = NWPRCN0Estimator(gpsl1),
+            ),
+        ],
+    )
     dc = DC()
 
     # Run the full track! several times so all stages compile, the bit
@@ -159,37 +175,43 @@ end
 # through `downconvert_and_correlate!` / `estimate_dopplers_and_filter_prompt!`
 # as wholes rather than in isolation, which is where a regression would actually
 # show up.
-@testset "a noise-referenced band adds no allocation ($DC)" for DC in (
-    CPUDownconvertAndCorrelator,
-    CPUThreadedDownconvertAndCorrelator,
-)
-    sampling_frequency = 4e6Hz
-    signal, gpsl1, carrier_doppler, start_code_phase = make_signal(sampling_frequency)
-    track_state = TrackState(
-        gpsl1,
-        [
-            TrackedSat(
-                gpsl1,
-                1,
-                start_code_phase,
-                carrier_doppler - 20Hz;
-                cn0_estimator = NoiseRefCN0Estimator(),
-            ),
-        ],
+# Gated to Julia >= 1.11 for the same reason as the software-measurement test in
+# `test/noise_estimators/correlator.jl`: the per-band despread is allocation-free
+# on 1.11+, and on 1.10 the compiler leaves a few hundred bytes per
+# sub-integration inside the correlate call that it elides from 1.11 on.
+@static if VERSION >= v"1.11"
+    @testset "a noise-referenced band adds no allocation ($DC)" for DC in (
+        CPUDownconvertAndCorrelator,
+        CPUThreadedDownconvertAndCorrelator,
     )
-    dc = DC()
-    @test keys(track_state.noise_estimators) == (:L1,)
-    observation = noise_observation_from_samples(4000.0, 4000, sampling_frequency)
-    for _ = 1:8
-        append_noise_observation!(track_state, observation, :L1)
-        track!(signal, track_state, sampling_frequency; downconvert_and_correlator = dc)
-    end
+        sampling_frequency = 4e6Hz
+        signal, gpsl1, carrier_doppler, start_code_phase = make_signal(sampling_frequency)
+        track_state = TrackState(
+            gpsl1,
+            [
+                TrackedSat(
+                    gpsl1,
+                    1,
+                    start_code_phase,
+                    carrier_doppler - 20Hz;
+                    cn0_estimator = NoiseRefCN0Estimator(),
+                ),
+            ],
+        )
+        dc = DC()
+        @test keys(track_state.noise_estimators) == (:L1,)
+        observation = noise_observation_from_samples(4000.0, 4000, sampling_frequency)
+        for _ = 1:8
+            append_noise_observation!(track_state, observation, :L1)
+            track!(signal, track_state, sampling_frequency; downconvert_and_correlator = dc)
+        end
 
-    @test measure_est!(track_state, sampling_frequency) == 0
-    if DC === CPUDownconvertAndCorrelator
-        @test measure_dc!(dc, signal, track_state, sampling_frequency) == 0
-    else
-        @test measure_dc!(dc, signal, track_state, sampling_frequency) <= 1024
+        @test measure_est!(track_state, sampling_frequency) == 0
+        if DC === CPUDownconvertAndCorrelator
+            @test measure_dc!(dc, signal, track_state, sampling_frequency) == 0
+        else
+            @test measure_dc!(dc, signal, track_state, sampling_frequency) <= 1024
+        end
     end
 end
 

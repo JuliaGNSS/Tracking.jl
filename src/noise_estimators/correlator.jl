@@ -289,19 +289,23 @@ function update_noise!(
         for k = 1:num_taps
             power += abs2(accumulators[k])
         end
+        # Straight to the builders' shared core rather than through
+        # `noise_observation_from_correlator`'s keyword form: the keywords cost a
+        # per-call allocation on Julia 1.10 that 1.11+ elides, and this is the one
+        # place it runs per chunk. The arguments are the same ones that builder
+        # would forward — note the duration, which is `slice_samples` and not
+        # `num_taps` times it, because the taps are simultaneous rather than
+        # consecutive: they all integrate the same samples.
         append_noise_observation!(
             estimator,
-            noise_observation_from_correlator(
+            _noise_observation(
                 power,
                 num_taps,
                 num_taps * slice_samples,
-                sampling_frequency;
+                sampling_frequency,
                 code_amplitude,
                 prn,
-                # The taps are simultaneous, not consecutive: they all integrate
-                # the same `slice_samples`, so that — and not `num_taps` times it
-                # — is what the time-bounded window must count.
-                duration = slice_samples / sampling_frequency,
+                slice_samples / sampling_frequency,
             ),
         )
     end
