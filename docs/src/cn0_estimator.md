@@ -28,18 +28,18 @@ satellite produces one CN0 value per signal.
 Four estimators ship, and each column below is a reason somebody picks a
 different one.
 
-|                                                            | [`NoiseRefCN0Estimator`](@ref) (default)                | [`NWPRCN0Estimator`](@ref)                                           | [`MomentsCN0Estimator`](@ref) | [`NoCN0Estimator`](@ref) |
-|:---------------------------------------------------------- |:------------------------------------------------------- |:-------------------------------------------------------------------- |:----------------------------- |:------------------------ |
-| Needs the band's samples (or a noise observation)?         | **yes**                                                 | no                                                                   | no                            | no                       |
-| Needs bit sync / a coherent window?                        | no                                                      | **yes**                                                              | no                            | no                       |
-| Needs to know the window length `M`?                       | no                                                      | **yes**                                                              | no                            | no                       |
-| Works on GPS L1C-D, Galileo E1B, pre-sync secondary codes? | **yes**                                                 | no — falls back                                                      | yes, at its floor             | n/a                      |
-| Bias, thermal only                                         | <0.03 dB                                                | ≈+0.05 dB everywhere                                                 | ≈27.6 dB-Hz *floor* on noise  | n/a                      |
-| High-C/N₀ bias floor                                       | ≈0.13 dB at 45, ≈0.40 at 50 (self-leakage)              | none                                                                 | none                          | n/a                      |
-| High-C/N₀ σ                                                | keeps improving, until the row above dominates          | saturates at `√(M/((M−1)K))` ≈0.5 dB                                 | —                             | n/a                      |
-| Degenerate outputs                                         | none                                                    | `-Inf`/`Inf` outside `1 < μ̂ < M` — 5.6 % of *estimates* at 20 dB-Hz | none                          | always `-Inf`            |
-| Phase-noise sensitivity                                    | immune (non-coherent)                                   | sensitive — the coherent sum loses power                             | immune                        | n/a                      |
-| Cost                                                       | per-record arithmetic + one despread per band per chunk | per-record arithmetic                                                | per-record arithmetic         | none                     |
+|                                                            | [`NoiseRefCN0Estimator`](@ref) (default)                | [`NWPRCN0Estimator`](@ref)                                                                                                                                                 | [`MomentsCN0Estimator`](@ref) | [`NoCN0Estimator`](@ref) |
+|:---------------------------------------------------------- |:------------------------------------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |:----------------------------- |:------------------------ |
+| Needs the band's samples (or a noise observation)?         | **yes**                                                 | no                                                                                                                                                                         | no                            | no                       |
+| Needs bit sync / a coherent window?                        | no                                                      | **yes**                                                                                                                                                                    | no                            | no                       |
+| Needs to know the window length `M`?                       | no                                                      | **yes**                                                                                                                                                                    | no                            | no                       |
+| Works on GPS L1C-D, Galileo E1B, pre-sync secondary codes? | **yes**                                                 | no — falls back                                                                                                                                                            | yes, at its floor             | n/a                      |
+| Bias, thermal only                                         | <0.03 dB                                                | ≈+0.05 dB everywhere                                                                                                                                                       | ≈27.6 dB-Hz *floor* on noise  | n/a                      |
+| High-C/N₀ bias floor                                       | ≈0.13 dB at 45, ≈0.40 at 50 (self-leakage)              | none                                                                                                                                                                       | none                          | n/a                      |
+| High-C/N₀ σ                                                | keeps improving, until the row above dominates          | saturates at `√(M/((M−1)K))` ≈0.5 dB                                                                                                                                       | —                             | n/a                      |
+| Degenerate outputs                                         | none                                                    | `-Inf`/`Inf` outside `1 < μ̂ < M` — 5.6 % of *estimates* at 20 dB-Hz                                                                                                       | none                          | always `-Inf`            |
+| Phase-noise / residual-Doppler sensitivity                 | immune (non-coherent)                                   | sensitive — the coherent sum loses power; **−12 dB at 120 Hz of handoff Doppler**, see [Residual Doppler at acquisition handoff](#Residual-Doppler-at-acquisition-handoff) | immune                        | n/a                      |
+| Cost                                                       | per-record arithmetic + one despread per band per chunk | per-record arithmetic                                                                                                                                                      | per-record arithmetic         | none                     |
 
 The "degenerate" row is a rate of unusable *outputs*, not a per-window discard
 rate: [`estimate_cn0`](@ref) pools every buffered window and range-checks the
@@ -452,6 +452,67 @@ see [The one bias it carries](#The-one-bias-it-carries).
     despreads that same antenna, so the two sides of the ratio match. A real
     beamformer changes the prompt's noise scale and silently invalidates the
     ratio; there is no `noise_gain` hook yet.
+
+### Residual Doppler at acquisition handoff
+
+Acquisition hands over a Doppler estimate good to a search-bin width — commonly
+±100 Hz or so — and the loop takes tens of milliseconds to pull it in. That
+transient is where the coherent and non-coherent estimators differ most, and it
+is also exactly when a lock detector is being asked whether to keep the
+satellite.
+
+Measured through `track!` at a true **40 dB-Hz**, 1 ms records, the satellite
+seeded with a deliberate carrier-Doppler error, median of 5 seeds, read over the
+first 60 ms while the loop is still converging:
+
+| Δf     | real within-record loss | NWPR     | Moments | `NoiseRef` |
+|:------ | -----------------------:| --------:| -------:| ----------:|
+| 0 Hz   | 0.00 dB                 | 39.8     | 40.5    | **40.1**   |
+| 30 Hz  | −0.01 dB                | 39.8     | 40.4    | **40.1**   |
+| 60 Hz  | −0.05 dB                | 39.2     | 40.4    | **40.1**   |
+| 120 Hz | −0.21 dB                | **27.6** | 40.5    | **39.9**   |
+| 250 Hz | −0.91 dB                | **−Inf** | 40.1    | **39.1**   |
+
+At 120 Hz NWPR under-reports by **12 dB**; at 250 Hz it reports `-Inf dB-Hz` —
+"no signal" — on a satellite that is being tracked perfectly well.
+
+The reason is the coherent sum. A residual `Δf` ramps the prompt's phase by
+`2π·Δf·T` per record, so across the window the ramp is `Δf·M·T` **cycles**: 0.6
+of a cycle at 120 Hz over the default 5 ms window, which spreads the five phasors
+over 216° and costs `NBP` ~5.9 dB. `μ̂` collapses toward 1 and the inversion
+`(μ̂−1)/(M−μ̂)` falls off a cliff; past 1.25 cycles `μ̂ ≤ 1` and the estimate is
+`-Inf`. This is the constraint `M·T ≪ 1/(2·Δf)` stated under
+[`NWPRCN0Estimator`](@ref), which at the default window means `Δf ≪ 100 Hz`.
+
+The non-coherent estimators see only the **within-record** loss, `sinc²(Δf·T)` —
+0.21 dB at 120 Hz, 0.91 dB at 250 Hz. That is real signal loss the correlator
+genuinely suffers, so reporting it is correct rather than a defect; the measured
+39.1 dB-Hz at 250 Hz is 40 minus exactly that.
+
+What makes the default robust here is that the **noise reference is open-loop**:
+it runs at the band's nominal IF with zero Doppler and measures *noise*, which is
+white. No amount of Doppler error on any satellite can perturb the denominator,
+so `N̂₀` is trustworthy precisely when nothing derived from the loop is.
+
+Once the loop converges, NWPR recovers — 39.2 dB-Hz at every offset up to 120 Hz
+after 300 ms. At 250 Hz it stays at `-Inf`, and the noise reference's 38.9 says
+why: the loop never pulled in from there, so the residual — and its real 0.9 dB
+loss — is still present. The two agree about the physics and disagree about
+whether to report it.
+
+If you are on NWPR anyway (a correlator-ingest path with no noise observation),
+shorten the window that applies before bit sync — but it only goes so far,
+because a two-record window is also the noisiest one:
+
+| `num_presync_narrowband_code_blocks` | `Δf·M·T` at 120 Hz | reported |
+|:------------------------------------ | ------------------:| --------:|
+| 5 (default)                          | 0.60 cycles        | 27.6     |
+| 3                                    | 0.36 cycles        | 32.4     |
+| 2                                    | 0.24 cycles        | 34.9     |
+
+```julia
+NWPRCN0Estimator(GPSL1CA(); num_presync_narrowband_code_blocks = 2)
+```
 
 The doctest below builds a noisy L1 C/A signal at a known 45 dB-Hz CN0
 and drives 25 1-ms tracking cycles through it:
