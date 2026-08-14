@@ -7,7 +7,7 @@ C/N₀ against a **measured noise reference**: per record,
 Ĉ/N₀ = ⟨|P|²⟩ / N̂₀ − 1/T
 ```
 
-with `N̂₀` the band's noise density from its [`AbstractNoiseEstimator`](@ref) and
+with `N̂₀` the signal's noise density from its [`AbstractNoiseEstimator`](@ref) and
 `T` that record's own integration time. The ring averages the per-record terms
 and [`estimate_cn0`](@ref) converts the mean once.
 
@@ -21,16 +21,18 @@ to a fallback with a different bias (issue #217).
 
 # What it needs
 
-A noise density on its band. On the sample-driven path that is automatic:
-[`TrackState`](@ref) provisions a [`CorrelatorNoiseEstimator`](@ref) for every
-band some signal's estimator asks for one (see
-[`requires_noise_density`](@ref)), and `track!` measures before the fold reads.
-On a correlator-ingest path you configure the same type and fill it with
-[`append_noise_observation!`](@ref) per band instead. With **no** source
-configured on the band, `update` throws — a wiring mistake, and a silent
+A noise density for its **own signal** — not for its RF band, because what this
+divides by is the post-correlation floor and that depends on the despreading
+modulation (see [`AbstractNoiseEstimator`](@ref)). On the sample-driven path it
+is automatic: [`TrackState`](@ref) provisions a
+[`CorrelatorNoiseEstimator`](@ref) for every signal whose estimator asks for one
+(see [`requires_noise_density`](@ref)), and `track!` measures before the fold
+reads. On a correlator-ingest path you configure the same type and fill it with
+[`append_noise_observation!`](@ref) per signal instead. With **no** source
+configured for the signal, `update` throws — a wiring mistake, and a silent
 substitution would hide a backend that fails to populate the reference. While a
 configured source's window is merely still **empty**, the update is skipped
-(the fold warns once per band) and [`estimate_cn0`](@ref) reports `-Inf dB-Hz`
+(the fold warns once per signal) and [`estimate_cn0`](@ref) reports `-Inf dB-Hz`
 until it fills.
 
 # Three deliberate properties
@@ -93,7 +95,7 @@ get_current_index(estimator::NoiseRefCN0Estimator) = estimator.current_index
 """
 $(SIGNATURES)
 
-This estimator reads the band's noise density, so a band carrying it is
+This estimator reads its signal's noise density, so a signal carrying it is
 provisioned with a [`CorrelatorNoiseEstimator`](@ref). Declared on the type, so
 the provisioning decision folds out of a group's slot type — see
 [`requires_noise_density`](@ref).
@@ -125,7 +127,7 @@ function update(estimator::NoiseRefCN0Estimator, prompt, context::CN0UpdateConte
     )
 end
 
-# No noise source configured on this band: a static property of the setup, so it
+# No noise source configured for this signal: a static property of the setup, so it
 # is caught at the first record and loudly. A silent substitution would hide a
 # backend that never populates the reference — the whole point of the estimator.
 @noinline function update(
@@ -135,11 +137,11 @@ end
 )
     throw(
         ArgumentError(
-            "NoiseRefCN0Estimator needs a noise density on its band, but no " *
+            "NoiseRefCN0Estimator needs a noise density for its signal, but no " *
             "AbstractNoiseEstimator is configured for it. Pass " *
             "`cn0_estimator = NWPRCN0Estimator()` if you are feeding externally " *
             "supplied correlator outputs without a noise observation, or give " *
-            "`TrackState` a `noise_estimators` entry for this band and fill it " *
+            "`TrackState` a `noise_estimators` entry for this signal and fill it " *
             "with `append_noise_observation!`.",
         ),
     )
@@ -157,7 +159,7 @@ what the tracking loop calls, or [`MomentsCN0Estimator`](@ref) /
 @noinline update(::NoiseRefCN0Estimator, prompt) = throw(
     ArgumentError(
         "NoiseRefCN0Estimator cannot be updated from a bare prompt: it needs the " *
-        "band's noise density and the record's integration time, both of which " *
+        "signal's noise density and the record's integration time, both of which " *
         "live in the CN0UpdateContext. Call the three-argument `update`.",
     ),
 )

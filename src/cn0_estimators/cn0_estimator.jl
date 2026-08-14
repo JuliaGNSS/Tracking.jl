@@ -46,13 +46,15 @@ Fields:
   - `bit_buffer` — the signal's `BitBuffer` as of *before* this record:
     the soft bits decoded so far, the open coherent bit accumulator, the lock
     polarity and the secondary-code phase.
-  - `noise_density` — the band's measured noise density `N₀` (dimension `1/Hz`),
-    for an estimator that divides the prompt's power by a *measured* floor
-    instead of inferring one from the prompt stream
-    ([`NoiseRefCN0Estimator`](@ref) does). It is a **type parameter, not a
-    sentinel**: `Nothing` says no [`AbstractNoiseEstimator`](@ref) is configured
-    on the band at all, which is a static property of the setup, so every call
-    site monomorphises and the estimators stay allocation-free. A configured
+  - `noise_density` — **this signal's** measured noise density `N₀` (dimension
+    `1/Hz`), for an estimator that divides the prompt's power by a *measured*
+    floor instead of inferring one from the prompt stream
+    ([`NoiseRefCN0Estimator`](@ref) does). Per signal and not per band because
+    the floor is the post-correlation one — see [`AbstractNoiseEstimator`](@ref).
+    It is a **type parameter, not a sentinel**: `Nothing` says no
+    [`AbstractNoiseEstimator`](@ref) is configured for this signal at all, which
+    is a static property of the setup, so every call site monomorphises and the
+    estimators stay allocation-free. A configured
     source whose window is merely still empty never reaches here — the fold
     skips the update instead, so this field is unconditionally a plain scalar
     whenever it is not `Nothing`.
@@ -120,7 +122,7 @@ end
 """
 $(SIGNATURES)
 
-Does `estimator` read the band's noise density out of its
+Does `estimator` read its signal's noise density out of its
 [`CN0UpdateContext`](@ref)? `false` for every estimator that infers its noise
 floor from the prompt stream ([`MomentsCN0Estimator`](@ref),
 [`NWPRCN0Estimator`](@ref), [`NoCN0Estimator`](@ref)); `true` only for
@@ -134,16 +136,17 @@ able to say so, and one that does not must not pay for it.
 Two things key off it, and both are compile-time constants on the estimator's
 type:
 
-  - **Provisioning.** [`TrackState`](@ref) gives a band a
-    [`CorrelatorNoiseEstimator`](@ref) only where some signal on it returns
-    `true`. A band with no requiring signal gets no entry at all, so the
-    per-band despread never runs and costs exactly zero — which is the answer
-    for anyone who deliberately stays on NWPR.
+  - **Provisioning.** [`TrackState`](@ref) gives a signal a
+    [`CorrelatorNoiseEstimator`](@ref) only where that signal's estimator returns
+    `true`. A signal that does not ask gets no entry at all, so its despread
+    never runs and costs exactly zero — which is the answer for anyone who
+    deliberately stays on NWPR.
   - **The warm-up skip.** While a configured source's window is still empty, the
-    fold skips the C/N₀ update for the requiring signals *only*. Skipping the
-    whole band would corrupt a co-resident `NWPRCN0Estimator`: a record missing
-    from the bit grid makes `_update_nwpr` drop its open narrowband window, so
-    NWPR would silently degrade to its fallback.
+    fold skips the C/N₀ update for the requiring signal *only* — its co-residents
+    on the same band and the same satellite are untouched, because each has its
+    own source. An `NWPRCN0Estimator` beside it would otherwise be corrupted: a
+    record missing from the bit grid makes `_update_nwpr` drop its open
+    narrowband window, so NWPR would silently degrade to its fallback.
 
 The trait's real home is the **type**, and the instance method forwards to it.
 That is what lets provisioning be decided from a group's already-fixed slot type
@@ -176,10 +179,10 @@ update(estimator::AbstractCN0Estimator, prompt, ::CN0UpdateContext) =
 $(SIGNATURES)
 
 The default CN0 estimator for `signal`: a [`NoiseRefCN0Estimator`](@ref)
-averaging over `num_prompts_for_cn0_estimation` records, against the band's
-measured noise density.
+averaging over `num_prompts_for_cn0_estimation` records, against that signal's
+own measured noise density.
 
-It reads a density, so [`TrackState`](@ref) provisions the band a
+It reads a density, so [`TrackState`](@ref) provisions the signal a
 [`CorrelatorNoiseEstimator`](@ref) automatically (see
 [`requires_noise_density`](@ref)) and `track!` fills it from the samples — the
 sample-driven path needs no configuration at all.
@@ -218,7 +221,7 @@ L1 C/A. See [`NoiseRefCN0Estimator`](@ref).
 for **externally supplied correlator outputs without a noise observation** — a
 correlator-ingest path that cannot also report `Σ|B|²` for an untracked PRN. It
 is the one place it is still necessary; everywhere else, prefer appending a
-[`NoiseObservation`](@ref) per band with [`append_noise_observation!`](@ref).
+[`NoiseObservation`](@ref) per signal with [`append_noise_observation!`](@ref).
 """
 function default_cn0_estimator(
     signal::AbstractGNSSSignal,

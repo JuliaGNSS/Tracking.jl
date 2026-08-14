@@ -1,13 +1,84 @@
 # Per-band noise estimation for C/N₀
 
 **Date:** 2026-08-06
-**Status:** **Implemented** 2026-08-12 — Phases 0 through 3 all landed. See
-"Where the implementation diverged" below for the four places it did not follow
-this document, and why.
+**Status:** **Implemented** 2026-08-12, **corrected to per-signal** 2026-08-14 —
+Phases 0 through 3 all landed. See "Superseded: the floor is per signal, not per
+band" immediately below for the one axis on which this document is now wrong, and
+"Where the implementation diverged" for the four places the build did not follow
+it, and why.
 
 Earlier: Planned (Phase 0 implemented; single noise estimator as of 2026-08-06;
 review pass 2026-08-09 — self-leakage promoted from a parenthetical to a quantified
 risk, the "no density" skip respecified, anchors corrected against `b9709191`)
+
+## Superseded: the floor is per signal, not per band
+
+**Everywhere this document says "per band" about the noise *estimator*, read "per
+signal".** The estimators are keyed by `GNSSSignals.get_signal_id`, not
+`get_band_id`; everything else in the design — the density rather than a power,
+the despread rather than a power meter, the `M`-weighted time-bounded window, the
+two disjoint fill paths, the open-loop reference, the self-leakage carry — stands
+unchanged. The *samples* are still a band property and `BandMeasurements` is
+still keyed by band id.
+
+**Why the plan was wrong.** It rested on "a band has exactly one noise floor".
+That holds only for white noise. What a record divides by is the
+**post-correlation** floor,
+
+```
+N₀,eff = N₀,thermal + ∫ S_I(f) · |G(f)|² df
+```
+
+weighted by the despreading modulation's own spectrum, so it is a per-signal
+quantity as soon as the interference is coloured. BPSK(1) peaks at band centre
+and nulls at ±1.023 MHz; BOC(1,1) is the reverse. This document came within one
+sentence of noticing — the reference-signal field was documented as "for white
+noise the choice is immaterial … it only selects *which* spectral weighting a
+tilted front end is measured with", which is precisely the scope limit, recorded
+and then not followed up.
+
+Measured through `track!` on one shared set of samples, 13 dB J/N CW tone, both
+densities relative to the thermal floor (4 MHz, pure BOC(1,1) E1B):
+
+| tone      | GPS L1 C/A | Galileo E1B | E1B / C/A |
+|-----------|-----------:|------------:|----------:|
+| none      | 1.0        | 1.0         | 1.0       |
+| 1.023 MHz | 1.4        | 39          | **28×**   |
+| 0.4 MHz   | 35         | 26          | **0.75×** |
+
+A single per-band figure is wrong by ≈14.5 dB for one of the two at the chip
+rate, and the **reversal** in the last row is what makes this spectral rather
+than a scale factor. The real CBOC E1B (which needs `f_s ≥ 12.276 MHz`) shows
+the same reversal about four times larger. A tone at exactly DC is *not* a good
+example either way — a full-period Gold code is balanced, so the exact-DC line
+is suppressed whatever the modulation.
+
+**What it changed, and what it did not.** The variance argument for pooling did
+not survive contact: each signal's window holds the same `K_n` looks at the same
+`window_duration`, so per-signal costs nothing statistically. It cost CPU
+linearly in the noise-referenced signals sharing a band — one despread each per
+chunk — and bought three simplifications:
+
+- The "band's reference signal" heuristic (*the first signal of the first group
+  on the band, in `groups` order*) is gone. There is nothing to choose: the
+  measured signal is the consumer's signal.
+- Divergence 3 below shrinks. Provisioning still reads the slot type, but the
+  OR-fold over a group's signal tuple ("does *any* signal here want one?")
+  collapses into asking each signal's own estimator directly.
+- `_is_prn_tracked` became *correct* rather than merely conservative: "in use" is
+  a question about this code family, so a PRN tracked on Galileo E1B no longer
+  blocks the L1 C/A reference from borrowing L1 C/A's PRN 5 code.
+
+It also made the model-freeness argument stronger than the plan claimed. The
+reference already traversed the consumer's kernel; now it also runs the
+consumer's *code*, so the SSC integral above is measured rather than modelled —
+no jammer model, no spectrum analysis. And it matches the hardware the plan's own
+"Hardware producers" section argues for: a noise channel is a tracking channel
+with a wrong PRN, and a tracking channel is configured with a code.
+
+The threading in `_est_one_group!` got slightly *longer*, not shorter: the single
+`(density, ready)` scalar pair became one pair per signal, indexed positionally
+against the group's slot type. Still compile-time, still allocation-free.
 
 ## Where the implementation diverged
 

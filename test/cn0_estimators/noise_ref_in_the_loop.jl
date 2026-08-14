@@ -210,7 +210,7 @@ end
         for _ = 1:10
             track!(signal, ts, fs; downconvert_and_correlator = dc)
         end
-        ustrip(Hz^-1, get_noise_density(ts.noise_estimators.L1))
+        ustrip(Hz^-1, get_noise_density(ts.noise_estimators.GPSL1CA))
     end
 
     for cn0 in (45.0, 50.0)

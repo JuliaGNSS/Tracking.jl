@@ -3,7 +3,7 @@ module NoiseEstimatorTest
 using Test: @test, @testset, @inferred, @test_throws
 using Random: Xoshiro, randn
 using Unitful: Hz, s, ms, ustrip, uconvert
-using GNSSSignals: GPSL1CA, GPSL5I
+using GNSSSignals: GPSL1CA, GPSL1C_P, GPSL5I, GalileoE1B
 import Tracking
 using Tracking:
     AbstractNoiseEstimator,
@@ -150,7 +150,7 @@ end
 end
 
 @testset "the estimator is mutated in place, never rebuilt" begin
-    # This is what lets per-band state live in an immutable `TrackState`: the
+    # This is what lets per-signal state live in an immutable `TrackState`: the
     # window is a `Vector` field written in place, and the struct that comes back
     # is the identical object.
     estimator = CorrelatorNoiseEstimator()
@@ -206,7 +206,7 @@ end
     @test isnothing(get_noise_density(estimator))
 end
 
-@testset "append_noise_observation! addresses a band on TrackState" begin
+@testset "append_noise_observation! addresses a signal on TrackState" begin
     gpsl1 = GPSL1CA()
     obs = noise_observation_from_samples(4000.0, 4000, 4e6Hz)
 
@@ -215,12 +215,16 @@ end
         gpsl1,
         [TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator())],
     )
-    @test keys(single.noise_estimators) == (:L1,)
+    @test keys(single.noise_estimators) == (:GPSL1CA,)
     @test append_noise_observation!(single, obs) === single
-    @test !isnothing(get_noise_density(single.noise_estimators.L1))
-    @test append_noise_observation!(single, obs, :L1) === single
+    @test !isnothing(get_noise_density(single.noise_estimators.GPSL1CA))
+    @test append_noise_observation!(single, obs, :GPSL1CA) === single
+    # The signal type and an instance of it address the same window — a producer
+    # usually holds one of those rather than the bare symbol.
+    @test append_noise_observation!(single, obs, GPSL1CA) === single
+    @test append_noise_observation!(single, obs, gpsl1) === single
 
-    # A band with no consumer has no estimator, and saying so beats a bare
+    # A signal with no consumer has no estimator, and saying so beats a bare
     # NamedTuple `KeyError`. Reached by configuring an estimator that reads no
     # density, since the library default does read one.
     nwpr_only = TrackState(
@@ -228,36 +232,113 @@ end
         [TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = NWPRCN0Estimator(gpsl1))],
     )
     @test nwpr_only.noise_estimators === NamedTuple()
-    @test_throws ArgumentError append_noise_observation!(nwpr_only, obs, :L1)
+    @test_throws ArgumentError append_noise_observation!(nwpr_only, obs, :GPSL1CA)
     @test_throws ArgumentError append_noise_observation!(nwpr_only, obs)
 
-    # Multi-band: the bare form refuses to guess, and the two windows stay apart.
+    # Multi-signal: the bare form refuses to guess, and the two windows stay
+    # apart. Across bands here, but see below for the case that per-band keying
+    # could not express at all.
     multi = TrackState(;
         signals = (l1 = (gpsl1,), l5 = (GPSL5I(),)),
         noise_estimators = (
-            L1 = CorrelatorNoiseEstimator(),
-            L5 = CorrelatorNoiseEstimator(),
+            GPSL1CA = CorrelatorNoiseEstimator(),
+            GPSL5I = CorrelatorNoiseEstimator(),
         ),
     )
     @test_throws ArgumentError append_noise_observation!(multi, obs)
-    append_noise_observation!(multi, obs, :L1)
-    @test !isnothing(get_noise_density(multi.noise_estimators.L1))
-    @test isnothing(get_noise_density(multi.noise_estimators.L5))
+    append_noise_observation!(multi, obs, :GPSL1CA)
+    @test !isnothing(get_noise_density(multi.noise_estimators.GPSL1CA))
+    @test isnothing(get_noise_density(multi.noise_estimators.GPSL5I))
     # ... including at different sampling rates, which is the point of storing a
     # density rather than a power.
     append_noise_observation!(
         multi,
         noise_observation_from_samples(20_000.0, 20_000, 20e6Hz),
-        :L5,
+        :GPSL5I,
     )
-    @test get_noise_density(multi.noise_estimators.L1) !=
-          get_noise_density(multi.noise_estimators.L5)
+    @test get_noise_density(multi.noise_estimators.GPSL1CA) !=
+          get_noise_density(multi.noise_estimators.GPSL5I)
+end
+
+@testset "two signals on one band keep separate windows" begin
+    # The case the per-band key could not express: GPS L1 C/A and Galileo E1B
+    # share the L1 band, one antenna and one front end, but not a post-correlation
+    # noise floor — BPSK(1) peaks where BOC(1,1) nulls. A producer must be able to
+    # report a different density for each, and each consumer must read its own.
+    gpsl1 = GPSL1CA()
+    e1b = GalileoE1B()
+    ts = TrackState(; signals = (gps = (gpsl1,), galileo = (e1b,)))
+    @test keys(ts.noise_estimators) == (:GPSL1CA, :GalileoE1B)
+
+    append_noise_observation!(
+        ts,
+        noise_observation_from_samples(4000.0, 4000, 4e6Hz),
+        gpsl1,
+    )
+    append_noise_observation!(ts, noise_observation_from_samples(8000.0, 4000, 4e6Hz), e1b)
+    l1ca_density = get_noise_density(ts.noise_estimators.GPSL1CA)
+    e1b_density = get_noise_density(ts.noise_estimators.GalileoE1B)
+    @test !isnothing(l1ca_density)
+    @test !isnothing(e1b_density)
+    # Twice the accumulated power over the same samples ⇒ twice the density, and
+    # the two do not leak into one another.
+    @test e1b_density ≈ 2 * l1ca_density
+end
+
+@testset "the per-signal density tuple folds and pairs positionally" begin
+    # Replacing the fold's single `(density, ready)` pair with one pair per signal
+    # is the only thing per-signal keying costs on the hot path, so it has to stay
+    # a compile-time-shaped tuple: a `Union` here would box the density on its way
+    # down to `_apply_correlator_output` and undo the allocation contracts in
+    # `test/track_in_place.jl`.
+    ts = TrackState(;
+        signals = (modern = (GPSL1C_P(), GPSL1CA()), galileo = (GalileoE1B(),)),
+    )
+    @test keys(ts.noise_estimators) == (:GPSL1C_P, :GPSL1CA, :GalileoE1B)
+    for group in Tuple(ts.groups)
+        slot_type = eltype(group.satellites)
+        returned = only(
+            Base.return_types(
+                Tracking._signal_noise_densities,
+                (typeof(ts.noise_estimators), Type{slot_type}),
+            ),
+        )
+        @test isconcretetype(returned)
+        @test @inferred(
+            Tracking._signal_noise_densities(ts.noise_estimators, slot_type)
+        ) isa returned
+    end
+
+    # And the pairing is positional against the slot type, so a satellite carrying
+    # one requiring and one non-requiring signal gets a *different* entry for each
+    # — `nothing` (statically no source, surface it at the first record) beside a
+    # real slot. Reading one signal's floor for the other is what this prevents.
+    gpsl1, e1b = GPSL1CA(), GalileoE1B()
+    mixed = TrackState(
+        gpsl1,
+        TrackedSat(
+            (gpsl1, e1b),
+            1,
+            0.0,
+            0.0Hz;
+            cn0_estimator = (NoiseRefCN0Estimator(), NWPRCN0Estimator(e1b)),
+        ),
+    )
+    @test keys(mixed.noise_estimators) == (:GPSL1CA,)
+    noise = Tracking._signal_noise_densities(
+        mixed.noise_estimators,
+        eltype(only(Tuple(mixed.groups)).satellites),
+    )
+    @test length(noise) == 2
+    @test last(noise[1]) == false           # provisioned, window still empty
+    @test isnothing(first(noise[2]))        # no source, and none is wanted
+    @test last(noise[2]) == true
 end
 
 @testset "nothing in this design is a mutable struct" begin
-    # The whole per-band design is shaped by this constraint — the length-managed
-    # FIFO, the PRN carried in the observation, averaging in the band rather than
-    # per signal — and nothing else enforces it.
+    # The whole per-signal design is shaped by this constraint — the
+    # length-managed FIFO, the PRN carried in the observation, averaging in the
+    # window rather than in a scalar — and nothing else enforces it.
     src = joinpath(dirname(dirname(@__DIR__)), "src")
     mutable_lines = String[]
     for (root, _, files) in walkdir(src), file in files

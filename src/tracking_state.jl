@@ -40,14 +40,14 @@ satellites of the already-fixed shape. Power users who need non-default
 correlator or PCF *types* should construct `TrackedSat`s themselves and
 hand them to the `add_satellite!(track_state, group, sat)` overload.
 
-`noise_estimators` declares the per-band noise sources
-([`AbstractNoiseEstimator`](@ref)s keyed by band id). Left at `nothing` it is
-derived: a [`CorrelatorNoiseEstimator`](@ref) for every band on which some
-signal's C/N₀ estimator reads a noise density (see
-[`requires_noise_density`](@ref)), and **no entry** for any other band, so a
-state that stays on [`NWPRCN0Estimator`](@ref) runs no per-band despread at all.
-Pass an explicit NamedTuple to configure the window, or to declare a band's
-source on a correlator-ingest path where you fill it with
+`noise_estimators` declares the per-signal noise sources
+([`AbstractNoiseEstimator`](@ref)s keyed by signal id, `GNSSSignals.get_signal_id`
+— `:GPSL1CA`, `:GalileoE1B`, …). Left at `nothing` it is derived: a
+[`CorrelatorNoiseEstimator`](@ref) for every signal whose C/N₀ estimator reads a
+noise density (see [`requires_noise_density`](@ref)), and **no entry** for any
+other signal, so a state that stays on [`NWPRCN0Estimator`](@ref) runs no
+despread at all. Pass an explicit NamedTuple to configure the window, or to
+declare a signal's source on a correlator-ingest path where you fill it with
 [`append_noise_observation!`](@ref) rather than from samples.
 """
 function TrackState(;
@@ -94,28 +94,30 @@ function TrackState(;
 end
 
 # Resolve the `noise_estimators` kwarg. `nothing` provisions one
-# `CorrelatorNoiseEstimator` per band that has a signal asking for a density —
-# and nothing at all for the others, which is what keeps the per-band despread
-# off the bill of anyone who does not consume it.
+# `CorrelatorNoiseEstimator` per *signal* asking for a density — and nothing at
+# all for the others, which is what keeps the despread off the bill of anyone who
+# does not consume it.
 @inline _resolve_noise_estimators(noise_estimators::NamedTuple, ::SignalGroups) =
     noise_estimators
 @inline function _resolve_noise_estimators(::Nothing, groups::SignalGroups)
-    band_ids = _noise_reference_band_keys(Tuple(groups), ())
-    NamedTuple{band_ids}(map(_ -> CorrelatorNoiseEstimator(), band_ids))
+    signal_ids = _noise_reference_signal_keys(Tuple(groups), ())
+    NamedTuple{signal_ids}(map(_ -> CorrelatorNoiseEstimator(), signal_ids))
 end
 
-# Band ids of the groups whose signals need a noise density, deduplicated and in
-# first-encounter order. Tuple recursion, so it folds at compile time out of the
-# groups' types.
-@inline _noise_reference_band_keys(::Tuple{}, acc::Tuple{Vararg{Symbol}}) = acc
-@inline function _noise_reference_band_keys(t::Tuple, acc::Tuple{Vararg{Symbol}})
-    g = first(t)
-    k = get_band_id(g.band)
-    new_acc = (k in acc || !_group_requires_noise_density(g)) ? acc : (acc..., k)
-    _noise_reference_band_keys(Base.tail(t), new_acc)
-end
+# Signal ids of the signals that need a noise density, deduplicated and in
+# first-encounter order across all groups. Deduplicated because two groups may
+# carry the same signal (the same modulation has the same noise floor however it
+# is grouped), and the reference is despread once per signal per chunk.
+#
+# Tuple recursion, so it folds at compile time out of the groups' types.
+@inline _noise_reference_signal_keys(::Tuple{}, acc::Tuple{Vararg{Symbol}}) = acc
+@inline _noise_reference_signal_keys(t::Tuple, acc::Tuple{Vararg{Symbol}}) =
+    _noise_reference_signal_keys(
+        Base.tail(t),
+        _group_noise_reference_keys(eltype(first(t).satellites), acc),
+    )
 
-# Does any signal of this group use a C/N₀ estimator that reads a noise density?
+# Which of a group's signals use a C/N₀ estimator that reads a noise density?
 #
 # Asked of the group's **slot type**, never of a satellite value, and that is
 # load-bearing rather than tidy: the slot type is fixed at `TrackState`
@@ -126,26 +128,38 @@ end
 # instead would leave the whole `noise_estimators` NamedTuple, keys included,
 # inferring as a union of "provisioned" and "not", which would infect
 # `TrackState`'s own type.
-@inline _group_requires_noise_density(g::SignalGroup) =
-    _sat_type_requires_noise_density(eltype(g.satellites))
+@inline _group_noise_reference_keys(
+    ::Type{<:TrackedSat{Signals}},
+    acc::Tuple{Vararg{Symbol}},
+) where {Signals} = _signal_type_noise_reference_keys(Signals, acc)
 
-@inline _sat_type_requires_noise_density(::Type{<:TrackedSat{Signals}}) where {Signals} =
-    _signal_types_require_noise_density(Signals)
+# Recurse down the signals' tuple type. Both the signal id and the C/N₀ estimator
+# type are parameters of `TrackedSignal`, so the whole walk collapses to a
+# literal tuple of symbols.
+@inline _signal_type_noise_reference_keys(::Type{Tuple{}}, acc::Tuple{Vararg{Symbol}}) = acc
+@inline function _signal_type_noise_reference_keys(
+    ::Type{T},
+    acc::Tuple{Vararg{Symbol}},
+) where {T<:Tuple}
+    head = Base.tuple_type_head(T)
+    k = get_signal_id(_signal_type(head))
+    new_acc =
+        (k in acc || !requires_noise_density(_cn0_estimator_type(head))) ? acc : (acc..., k)
+    _signal_type_noise_reference_keys(Base.tuple_type_tail(T), new_acc)
+end
 
-# Recurse down the signals' tuple type. `tuple_type_head`/`tuple_type_tail` fold,
-# so the whole walk collapses to a literal `true`/`false`.
-@inline _signal_types_require_noise_density(::Type{Tuple{}}) = false
-@inline _signal_types_require_noise_density(::Type{T}) where {T<:Tuple} =
-    requires_noise_density(_cn0_estimator_type(Base.tuple_type_head(T))) ||
-    _signal_types_require_noise_density(Base.tuple_type_tail(T))
+@inline _signal_type(::Type{<:TrackedSignal{Sig}}) where {Sig} = Sig
 
 @inline _cn0_estimator_type(
     ::Type{<:TrackedSignal{Sig,B,C,PCF,CN0}},
 ) where {Sig,B,C,PCF,CN0} = CN0
 
-# Same question of one satellite, for the fold path's warn-once. Also folds away.
-@inline _sat_requires_noise_density(sat::TrackedSat) =
-    _sat_type_requires_noise_density(typeof(sat))
+# The band a signal type sits on, as a compile-time constant. `get_band` is
+# defined on the signal *type* and every band is a singleton, so this folds to a
+# literal symbol — which is what lets the noise walk index `BandMeasurements`
+# from a signal key without a runtime lookup.
+@inline _signal_band_id(::Type{Sig}) where {Sig<:AbstractGNSSSignal} =
+    get_band_id(get_band(Sig))
 
 # Bare tuple of AbstractGNSSSignal → single :default group NamedTuple.
 @inline _normalize_signal_groups(signals::Tuple{Vararg{AbstractGNSSSignal}}) =
@@ -930,31 +944,47 @@ append_correlator_output!(
 """
 $(SIGNATURES)
 
-Append an externally built [`NoiseObservation`](@ref) to the addressed **band**'s
-noise estimator and return `track_state`:
+Append an externally built [`NoiseObservation`](@ref) to the addressed
+**signal**'s noise estimator and return `track_state`:
 
-  - `append_noise_observation!(track_state, obs)` — single-band `TrackState`.
-  - `append_noise_observation!(track_state, obs, :L1)` — explicit band id.
+  - `append_noise_observation!(track_state, obs)` — single-signal `TrackState`.
+  - `append_noise_observation!(track_state, obs, :GPSL1CA)` — explicit signal id.
+  - `append_noise_observation!(track_state, obs, GPSL1CA)` — or the signal type /
+    an instance of it, which is what a caller usually has to hand.
 
 This is the hardware/FPGA fill path, and it is symmetric with what such a
 producer already does for the taps: [`append_correlator_output!`](@ref) per
-signal, `append_noise_observation!` per band, then
+signal, `append_noise_observation!` per signal, then
 [`estimate_dopplers_and_filter_prompt!`](@ref) to fold. The two are deliberately
 *not* the same mechanism — see [`append_noise_observation!`](@ref)'s
 estimator-level method for the table of differences.
 
-The band must have a noise estimator; it has one whenever some signal on it uses
-a C/N₀ estimator that reads a density (see [`requires_noise_density`](@ref)), or
-whenever you declared one through `TrackState`'s `noise_estimators` keyword.
+Per signal and not per band because the floor a record divides by is the
+*post-correlation* one, and that depends on the despreading modulation: a noise
+channel is a tracking channel with a wrong PRN, so it is configured with a code
+exactly like the ones it serves. See [`AbstractNoiseEstimator`](@ref).
+
+The signal must have a noise estimator; it has one whenever its C/N₀ estimator
+reads a density (see [`requires_noise_density`](@ref)), or whenever you declared
+one through `TrackState`'s `noise_estimators` keyword.
 """
 append_noise_observation!(
     track_state::TrackState,
     observation::NoiseObservation,
-    band_id::Symbol,
+    signal_id::Symbol,
 ) = (
-    append_noise_observation!(_noise_estimator_for_band(track_state, band_id), observation);
+    append_noise_observation!(
+        _noise_estimator_for_signal(track_state, signal_id),
+        observation,
+    );
     track_state
 )
+
+append_noise_observation!(
+    track_state::TrackState,
+    observation::NoiseObservation,
+    signal::Union{AbstractGNSSSignal,Type{<:AbstractGNSSSignal}},
+) = append_noise_observation!(track_state, observation, get_signal_id(signal))
 
 function append_noise_observation!(track_state::TrackState, observation::NoiseObservation)
     noise_estimators = track_state.noise_estimators
@@ -965,8 +995,8 @@ function append_noise_observation!(track_state::TrackState, observation::NoiseOb
                 length(noise_estimators),
                 " noise estimators ",
                 keys(noise_estimators),
-                "; pass the band id, e.g. ",
-                "`append_noise_observation!(track_state, obs, :L1)`.",
+                "; pass the signal id, e.g. ",
+                "`append_noise_observation!(track_state, obs, :GPSL1CA)`.",
             ),
         ),
     )
@@ -974,27 +1004,27 @@ function append_noise_observation!(track_state::TrackState, observation::NoiseOb
     track_state
 end
 
-# Look up a band's noise estimator, with an error that names what is configured
-# rather than a bare NamedTuple `KeyError` — the likeliest cause is a band whose
-# signals all use an estimator that reads no density, so nothing provisioned one.
-@inline function _noise_estimator_for_band(track_state::TrackState, band_id::Symbol)
+# Look up a signal's noise estimator, with an error that names what is configured
+# rather than a bare NamedTuple `KeyError` — the likeliest cause is a signal
+# whose C/N₀ estimator reads no density, so nothing provisioned one.
+@inline function _noise_estimator_for_signal(track_state::TrackState, signal_id::Symbol)
     noise_estimators = track_state.noise_estimators
-    haskey(noise_estimators, band_id) ||
-        _throw_no_noise_estimator(band_id, keys(noise_estimators))
-    noise_estimators[band_id]
+    haskey(noise_estimators, signal_id) ||
+        _throw_no_noise_estimator(signal_id, keys(noise_estimators))
+    noise_estimators[signal_id]
 end
 
-@noinline _throw_no_noise_estimator(band_id::Symbol, configured) = throw(
+@noinline _throw_no_noise_estimator(signal_id::Symbol, configured) = throw(
     ArgumentError(
         string(
-            "no noise estimator configured for band `:",
-            band_id,
+            "no noise estimator configured for signal `:",
+            signal_id,
             "`; this TrackState has ",
             isempty(configured) ? "none at all" : string(configured),
-            ". A band is provisioned automatically only where some signal's ",
+            ". A signal is provisioned automatically only where its ",
             "C/N₀ estimator reads a noise density (see `requires_noise_density`) ",
             "— pass `noise_estimators = (",
-            band_id,
+            signal_id,
             " = CorrelatorNoiseEstimator(),)` to `TrackState` to declare one.",
         ),
     ),

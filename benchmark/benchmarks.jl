@@ -1479,21 +1479,23 @@ if isdefined(Tracking, :Int16DownconvertAndCorrelator) && isdefined(Tracking, :t
     end
 end
 
-# ── Per-band noise estimation ────────────────────────────────────────────────
+# ── Per-signal noise estimation ──────────────────────────────────────────────
 # Feature-gated like every other group here, so the file keeps running unchanged
 # against revisions that predate the noise reference (AirspeedVelocity diffs two
 # revs with one script).
 #
 # Two things are worth watching separately. `update_noise!` is the O(N) despread
-# the software source adds per band per chunk — one correlation against
-# n_sats · n_signals of them, so it should sit near a per-satellite correlate and
-# not near a whole `track!`. `append_noise_observation!` is the hardware ingest
-# path and the FIFO's steady state, which the design requires to be
+# the software source adds per *signal* per chunk — one correlation against
+# n_sats of them for that signal, so it should sit near a per-satellite correlate
+# and not near a whole `track!`. Keying by signal rather than by band multiplies
+# this by the number of noise-referenced signals sharing a band, which is what
+# this number is here to keep honest. `append_noise_observation!` is the hardware
+# ingest path and the FIFO's steady state, which the design requires to be
 # allocation-free.
 #
-# `SUITE["track"]` above is deliberately left alone: those states use the default
-# C/N₀ estimator, which reads no density, so no band is provisioned and the noise
-# pass costs exactly nothing there. That is the comparison that has to stay flat.
+# `SUITE["track"]` above is deliberately left alone: those states use a C/N₀
+# estimator that reads no density, so no signal is provisioned and the noise pass
+# costs exactly nothing there. That is the comparison that has to stay flat.
 if isdefined(Tracking, :CorrelatorNoiseEstimator)
     function bench_update_noise(; num_samples = 4000, sampling_frequency = 4e6Hz)
         gnss_signal = GPSL1CA()
