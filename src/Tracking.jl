@@ -251,13 +251,15 @@ per-group `satellites` dictionary, signal-instance tuple, band, and
 antenna count.
 
 `noise_estimators` is a NamedTuple of [`AbstractNoiseEstimator`](@ref)s keyed by
-band id (`GNSSSignals.get_band_id`) — the same idiom as
-[`BandMeasurements`](@ref), so a lookup folds to a compile-time constant. A band
-gets an entry only where some signal on it uses a C/N₀ estimator that reads a
-noise density (see [`requires_noise_density`](@ref)); bands with no such signal
-get none, and then the per-band noise measurement costs exactly nothing. Each
-estimator averages **in place**, so `TrackState` itself is never rebuilt for a
-noise update.
+**signal** id (`GNSSSignals.get_signal_id` — `:GPSL1CA`, `:GalileoE1B`, …), the
+same NamedTuple idiom [`BandMeasurements`](@ref) uses for bands, so a lookup
+folds to a compile-time constant. Keyed by signal and not by band because the
+floor a record divides by is the *post-correlation* one, which depends on the
+despreading modulation (see [`AbstractNoiseEstimator`](@ref)). A signal gets an
+entry only where its C/N₀ estimator reads a noise density (see
+[`requires_noise_density`](@ref)); signals with no such estimator get none, and
+then the noise measurement costs exactly nothing. Each estimator averages **in
+place**, so `TrackState` itself is never rebuilt for a noise update.
 """
 struct TrackState{G<:SignalGroups,DE<:AbstractDopplerEstimator,NE<:NoiseEstimators}
     groups::G

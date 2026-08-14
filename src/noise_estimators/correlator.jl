@@ -1,7 +1,7 @@
 """
 $(SIGNATURES)
 
-The band's noise reference, measured by **despreading an untracked PRN** — the
+The signal's noise reference, measured by **despreading an untracked PRN** — the
 only [`AbstractNoiseEstimator`](@ref) Tracking ships, and the one to configure on
 a hardware path too (you simply fill it with
 [`append_noise_observation!`](@ref) instead of letting [`update_noise!`](@ref)
@@ -10,13 +10,20 @@ fill it).
 # Why a despread and not a power meter
 
 The reference traverses the **identical** quantise → downconvert → despread →
-accumulate path as the prompt, reusing the same kernel and the same replica
-generator. So the measured `N₀` already contains every imperfection of that
-chain — the 1-bit / 2-bit quantisation loss, the quantiser's operating point
-under load, the input scaling an AGC step moves, the code amplitude of a CBOC
-replica — with no per-backend model and no closed-form correction. A `Σ|x|²`
-power meter would need one line per backend and would still miss the
-second-order coupling where a strong signal shifts that operating point.
+accumulate path as the prompt, reusing the same kernel, the same replica
+generator and — because the estimator is keyed by signal — the same *code*. So
+the measured `N₀` already contains every imperfection of that chain — the 1-bit /
+2-bit quantisation loss, the quantiser's operating point under load, the input
+scaling an AGC step moves, the code amplitude of a CBOC replica — with no
+per-backend model and no closed-form correction. A `Σ|x|²` power meter would need
+one line per backend and would still miss the second-order coupling where a
+strong signal shifts that operating point.
+
+It is also what makes the spectral weighting right rather than assumed. Sharing
+the consumer's code means the despread evaluates that signal's own
+`∫ S_I(f)·|G(f)|² df` — the coloured-interference case a power meter, or a
+reference despread with some *other* signal's code, both get wrong. See
+[`AbstractNoiseEstimator`](@ref).
 
 # It is open-loop
 
@@ -43,14 +50,14 @@ channel is a strict subset of a tracking channel rather than an addition to one.
     null and clear of both the 1- and 2-chip sidelobe values.
   - `buffered` — the sliding window itself, a **length-managed FIFO** written in
     place. The `Vector`'s own length is the position, so there is no ring index
-    to write back and the struct is never rebuilt — which is what lets per-band
+    to write back and the struct is never rebuilt — which is what lets per-signal
     state live in an immutable [`TrackState`](@ref).
   - `code_replica` — scratch for the software despread, grown once and reused.
     Held here rather than borrowed from the backend's `ScratchBuffers` so the
     reference can never alias the per-signal replica path.
 
 The sub-integration length is deliberately **not** a field: it is the primary
-code period of the band's reference signal, derived rather than configured.
+code period of the signal it measures, derived rather than configured.
 Coherent integration buys nothing for noise-power estimation — one dump carries
 100 % relative error however long it is, because `Var(|B|²) = (E|B|²)²` — so all
 the information lives in the *number* of looks, and shortening the dump is the
@@ -62,7 +69,7 @@ window behaves like iid signs, ≈16 at 16 chips, so an ADC offset biases a shor
 despread and not a full-period one), and cadence parity with a hardware
 correlator, which naturally dumps on the code epoch. The variance is bought back
 with `window_duration` instead, which is nearly free — a 1 s window is ~1000
-`Float64` densities per band.
+`Float64` densities per signal.
 """
 struct CorrelatorNoiseEstimator{D,T} <: AbstractNoiseEstimator
     window_duration::typeof(1.0s)
@@ -108,7 +115,7 @@ end
 """
 $(SIGNATURES)
 
-Append `observation` to the band's sliding window, dropping entries off the
+Append `observation` to the signal's sliding window, dropping entries off the
 front while the remainder still spans `window_duration`. Returns `estimator`.
 
 The window is bounded in **time**, not in observation count, which is what lets
@@ -172,7 +179,7 @@ noise_density_type(::CorrelatorNoiseEstimator{D}) where {D} = D
 """
 $(SIGNATURES)
 
-Number of observations currently in the band's window. Diagnostic only — the
+Number of observations currently in the signal's window. Diagnostic only — the
 window is bounded in time, so this varies with the producer's dump cadence.
 """
 Base.length(estimator::CorrelatorNoiseEstimator) = length(estimator.buffered)
@@ -180,7 +187,7 @@ Base.length(estimator::CorrelatorNoiseEstimator) = length(estimator.buffered)
 """
 $(SIGNATURES)
 
-Measure the band's noise over samples `first_sample:last_sample` of
+Measure this signal's noise over samples `first_sample:last_sample` of
 `measurement` and append the resulting observations, returning `estimator`.
 
 The slice is split into `num_sub` **equal** sub-integrations,
@@ -189,11 +196,11 @@ The slice is split into `num_sub` **equal** sub-integrations,
 num_sub = max(1, round(Int, slice_duration / code_period))
 ```
 
-with `code_period` the primary code period of the band's reference signal — see
+with `code_period` the primary code period of the signal being measured — see
 [`CorrelatorNoiseEstimator`](@ref) for why the sub-integration length is derived
 rather than configured. Equal slices rather than fixed-length ones so no
 remainder is wasted and every window entry is statistically identical; the
-`max(1, …)` matters, because a band whose reference code period exceeds the
+`max(1, …)` matters, because a signal whose code period exceeds the
 chunk (a 10 ms code with 1 ms chunks) would otherwise yield no observations at
 all, forever. Each observation is pushed **individually**: pre-averaging would
 put one entry per chunk in the window, re-welding its time span to the Doppler
@@ -206,7 +213,7 @@ accumulate coherently and `N̂₀ = |B|²/(N·A_c²·f_s)` is unbiased for any `
 any starting phase. Following boundaries would be actively harmful — a chunk
 rarely holds a whole number of code periods, so a boundary-aligned reference
 would have to carry a partial accumulator across calls, which is exactly the
-scalar state that has no per-band anchor. Successive observations are
+scalar state that has no per-signal anchor. Successive observations are
 independent because their *sample* ranges are disjoint; the replica repeating is
 irrelevant.
 
@@ -319,7 +326,7 @@ end
     view(samples, :, size(samples, 2))
 
 # Which PRN to borrow a code from, and at which phase. Advancing a PRN needs a
-# position, and a position is scalar state with no per-band anchor — so it is
+# position, and a position is scalar state with no per-signal anchor — so it is
 # carried in the window instead: `NoiseObservation` records the PRN it was
 # measured with, and the next one steps on from `last(buffered).prn`. An empty
 # window starts at the lowest untracked PRN.

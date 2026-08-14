@@ -129,7 +129,7 @@ end
 
     # Pinned to an estimator that reads no noise density, so this measures what it
     # was written to measure: the correlate and estimate stages themselves. The
-    # library default is noise-referenced and adds a per-band despread, which has
+    # library default is noise-referenced and adds a per-signal despread, which has
     # its own allocation test below — and that one is gated to Julia >= 1.11,
     # where the despread is allocation-free.
     track_state = TrackState(
@@ -167,20 +167,20 @@ end
     end
 end
 
-# Same measurement with a per-band noise reference in play, so the two pieces
+# Same measurement with a per-signal noise reference in play, so the two pieces
 # this adds to the hot path are held to the same contract as everything else:
-# `_update_band_noise!`'s tuple-recursive walk over the `noise_estimators`
-# NamedTuple (in the correlate step) and the density lookup plus the extra
-# arguments threaded through the fold (in the estimate step). Both are measured
-# through `downconvert_and_correlate!` / `estimate_dopplers_and_filter_prompt!`
-# as wholes rather than in isolation, which is where a regression would actually
-# show up.
+# `_update_signal_noise!`'s tuple-recursive walk over the `noise_estimators`
+# NamedTuple (in the correlate step) and the per-signal density tuple plus the
+# extra arguments threaded through the fold (in the estimate step). Both are
+# measured through `downconvert_and_correlate!` /
+# `estimate_dopplers_and_filter_prompt!` as wholes rather than in isolation,
+# which is where a regression would actually show up.
 # Gated to Julia >= 1.11 for the same reason as the software-measurement test in
-# `test/noise_estimators/correlator.jl`: the per-band despread is allocation-free
-# on 1.11+, and on 1.10 the compiler leaves a few hundred bytes per
-# sub-integration inside the correlate call that it elides from 1.11 on.
+# `test/noise_estimators/correlator.jl`: the despread is allocation-free on
+# 1.11+, and on 1.10 the compiler leaves a few hundred bytes per sub-integration
+# inside the correlate call that it elides from 1.11 on.
 @static if VERSION >= v"1.11"
-    @testset "a noise-referenced band adds no allocation ($DC)" for DC in (
+    @testset "a noise-referenced signal adds no allocation ($DC)" for DC in (
         CPUDownconvertAndCorrelator,
         CPUThreadedDownconvertAndCorrelator,
     )
@@ -199,10 +199,10 @@ end
             ],
         )
         dc = DC()
-        @test keys(track_state.noise_estimators) == (:L1,)
+        @test keys(track_state.noise_estimators) == (:GPSL1CA,)
         observation = noise_observation_from_samples(4000.0, 4000, sampling_frequency)
         for _ = 1:8
-            append_noise_observation!(track_state, observation, :L1)
+            append_noise_observation!(track_state, observation, :GPSL1CA)
             track!(signal, track_state, sampling_frequency; downconvert_and_correlator = dc)
         end
 

@@ -84,7 +84,7 @@ end
 
 @testset "records of different length are each divided by their own T" begin
     # `T` enters per record rather than once at `estimate_cn0`, which is what
-    # lets one per-band density serve records of any length — and retires the
+    # lets one per-signal density serve records of any length — and retires the
     # heterogeneous-`T` bug class structurally instead of guarding it. Against a
     # fixed `N₀` the sample-normalised prompt power of a record at C/N₀ = γ is
     # `N₀·(γ + 1/T)`, so a 20 ms record carrying the *same* γ has a visibly
@@ -237,24 +237,24 @@ function _ingested_state(
     ts, fs
 end
 
-@testset "a configured-but-never-fed band warns once and stays at -Inf" begin
+@testset "a configured-but-never-fed signal warns once and stays at -Inf" begin
     # The likeliest hardware integration mistake: a `CorrelatorNoiseEstimator` is
     # configured per the docs and `append_noise_observation!` is never called. The
     # static check does not fire (a source exists), so without this the runtime
     # skip would repeat in silence forever, leaving every satellite at
     # `-Inf dB-Hz` with no clue why.
     ts, fs = _ingested_state(NoiseRefCN0Estimator())
-    @test keys(ts.noise_estimators) == (:L1,)
+    @test keys(ts.noise_estimators) == (:GPSL1CA,)
     @test_logs (:warn,) estimate_dopplers_and_filter_prompt!(ts, (L1 = fs,))
     @test estimate_cn0(ts, 1) == -Inf * dBHz
     @test Base.length(get_cn0_estimator(ts, 1)) == 0
 end
 
-@testset "two misconfigured bands both warn" begin
+@testset "two misconfigured signals both warn" begin
     # `maxlog` is keyed per callsite, so a bare `maxlog = 1` would let the first
-    # band to reach the skip silence the second — and since the message
-    # interpolates the band id, the second band's name would never appear. The
-    # per-band `_id` is what prevents that, so pin the ids rather than the count
+    # signal to reach the skip silence the second — and since the message
+    # interpolates the signal id, the second signal's name would never appear. The
+    # per-signal `_id` is what prevents that, so pin the ids rather than the count
     # of messages the real logger would let through.
     gpsl1, gpsl5 = GPSL1CA(), GPSL5I()
     multi = TrackState((
@@ -265,24 +265,26 @@ end
             1 => TrackedSat(gpsl5, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator()),
         )),
     ))
-    @test Set(keys(multi.noise_estimators)) == Set((:L1, :L5))
+    @test Set(keys(multi.noise_estimators)) == Set((:GPSL1CA, :GPSL5I))
     logs, _ = collect_test_logs() do
         estimate_dopplers_and_filter_prompt!(multi, (L1 = 4e6Hz, L5 = 4e6Hz))
     end
     warnings = filter(r -> r.level == Warn, logs)
     @test length(warnings) == 2
-    @test Set(r.id for r in warnings) == Set((:no_noise_density_L1, :no_noise_density_L5))
+    @test Set(r.id for r in warnings) ==
+          Set((:no_noise_density_GPSL1CA, :no_noise_density_GPSL5I))
     @test all(r -> occursin("append_noise_observation!", r.message), warnings)
 end
 
-@testset "the warm-up skip is per estimator, not per band" begin
-    # A band carrying one `NoiseRefCN0Estimator` signal and one `NWPRCN0Estimator`
-    # signal, driven through a warm-up where the density is unavailable. Skipping
-    # the whole band's C/N₀ fold would drop NWPR's open narrowband window on every
-    # skipped record — `_update_nwpr` drops it whenever the record is missing from
-    # the bit grid — and silently demote NWPR to its fallback.
+@testset "the warm-up skip is per estimator, not per satellite" begin
+    # One satellite carrying a `NoiseRefCN0Estimator` signal and an
+    # `NWPRCN0Estimator` signal, driven through a warm-up where the density is
+    # unavailable. Skipping the whole satellite's C/N₀ fold would drop NWPR's open
+    # narrowband window on every skipped record — `_update_nwpr` drops it whenever
+    # the record is missing from the bit grid — and silently demote NWPR to its
+    # fallback.
     # Two L1 C/A signals on one satellite — synthetic, but it is the shortest
-    # configuration that puts two *different* C/N₀ estimators on one band, and it
+    # configuration that puts two *different* C/N₀ estimators side by side, and it
     # covers both folds: the noise-referenced one drives the loop, the NWPR one
     # rides along as a passenger. Records are ingested rather than correlated, so
     # the density really is unavailable for the whole run.
@@ -298,10 +300,10 @@ end
     # The mixed band: the noise-referenced signal is skipped throughout (nothing
     # ever fills its window), the NWPR one must not be.
     mixed = run((NoiseRefCN0Estimator(), NWPRCN0Estimator()))
-    # The reference: the same NWPR signal on a band with no noise estimator at
-    # all, so no skip can apply anywhere.
+    # The reference: the same NWPR signal on a satellite with no noise estimator
+    # at all, so no skip can apply anywhere.
     reference = run((NoCN0Estimator(), NWPRCN0Estimator()))
-    @test keys(mixed.noise_estimators) == (:L1,)
+    @test keys(mixed.noise_estimators) == (:GPSL1CA,)
     @test reference.noise_estimators === NamedTuple()
 
     skipped = get_cn0_estimator(mixed, :default, 1, 2)
@@ -327,17 +329,17 @@ end
     append_noise_observation!(
         ts,
         noise_observation_from_samples(n * 1e-6 * ustrip(Hz, fs), n, fs),
-        :L1,
+        :GPSL1CA,
     )
     estimate_dopplers_and_filter_prompt!(ts, (L1 = fs,))
     @test Base.length(get_cn0_estimator(ts, 1)) == 20
     @test _db(estimate_cn0(ts, 1)) ≈ 10log10(1 / 1e-6 - 1 / 1e-3) atol = 1e-6
 end
 
-@testset "a band nobody asks a density of is not provisioned" begin
+@testset "a signal nobody asks a density of is not provisioned" begin
     gpsl1, gpsl5 = GPSL1CA(), GPSL5I()
     # Every shipped estimator but the noise-referenced one reads no density, so a
-    # state that stays on one of them runs no per-band despread at all.
+    # state that stays on one of them runs no despread at all.
     for estimator in (NWPRCN0Estimator(), MomentsCN0Estimator(100), NoCN0Estimator())
         ts =
             TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = estimator)])
@@ -346,9 +348,9 @@ end
     # The declared-signals constructor takes its slot type from
     # `default_cn0_estimator`, which *is* noise-referenced — so the default path
     # provisions, and needs no configuration at all.
-    @test keys(TrackState(; signal = gpsl1).noise_estimators) == (:L1,)
+    @test keys(TrackState(; signal = gpsl1).noise_estimators) == (:GPSL1CA,)
 
-    # Mixed: one band requires a density, the other does not — exactly one entry.
+    # Mixed: one signal requires a density, the other does not — exactly one entry.
     mixed = TrackState((
         l1 = dictionary((
             1 => TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator()),
@@ -357,7 +359,7 @@ end
             1 => TrackedSat(gpsl5, 1, 0.0, 0.0Hz; cn0_estimator = NWPRCN0Estimator()),
         )),
     ))
-    @test keys(mixed.noise_estimators) == (:L1,)
+    @test keys(mixed.noise_estimators) == (:GPSL1CA,)
 end
 
 end

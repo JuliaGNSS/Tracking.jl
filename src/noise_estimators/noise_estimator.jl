@@ -1,22 +1,51 @@
 """
 $(SIGNATURES)
 
-Abstract supertype for per-band noise estimators — the source of the noise
+Abstract supertype for per-signal noise estimators — the source of the noise
 **density** `N₀` that [`NoiseRefCN0Estimator`](@ref) divides each record's prompt
 power by.
 
-One instance is held per RF band in [`TrackState`](@ref)'s `noise_estimators`
-NamedTuple (keyed by `GNSSSignals.get_band_id`), never per satellite and never
-per signal: a band has exactly one noise floor, and averaging it once per band
-is what makes the reference's own variance negligible against the per-record
-prompt statistics.
+One instance is held per **signal** in [`TrackState`](@ref)'s `noise_estimators`
+NamedTuple (keyed by `GNSSSignals.get_signal_id`), never per satellite: every
+satellite of a signal shares one floor, and averaging it once per signal is what
+makes the reference's own variance negligible against the per-record prompt
+statistics.
+
+# Why per signal and not per RF band
+
+What a record actually divides by is the **post-correlation** density. For an
+interferer of PSD `S_I(f)` on top of the thermal floor that is
+
+```
+N₀,eff = N₀,thermal + ∫ S_I(f) · |G(f)|² df
+```
+
+— the spectral separation coefficient, weighted by the *despreading modulation's*
+own spectrum `|G(f)|²`. Two signals sharing one band, one antenna and one front
+end therefore see different floors the moment the interference is not white, and
+the difference is not small: BPSK(1) has its peak at DC and a null at
+±1.023 MHz, BOC(1,1) is the reverse, so a CW tone at band centre is rejected by
+Galileo E1B and lands squarely in GPS L1 C/A, while a tone at ±1.023 MHz does the
+opposite. Front-end tilt, filter roll-off at the band edge and adjacent-band
+leakage all colour the floor the same way, more quietly.
+
+Because [`CorrelatorNoiseEstimator`](@ref) *despreads* rather than metering
+power, keying by signal makes that integral **measured rather than modelled**:
+the reference runs the consumer's own code, so its spectral weighting is the
+consumer's by construction. This is the same argument that makes the reference
+backend-free — it traverses the identical path as the prompt — extended from the
+quantiser to the interference environment.
+
+It also matches the hardware. A noise channel is a tracking channel with a wrong
+PRN, and a tracking channel is configured with a code; per-signal is what an FPGA
+would build anyway.
 
 # Why a density and not a power
 
 For a correlator normalised the way `Tracking.normalize` normalises — by
 `integrated_samples * code_amplitude` — white input noise of per-sample variance
 `σ²` gives `E|P|² = σ²/N = N₀/T`. So `N₀ = σ²/f_s` is **independent of the
-integration time**, which is what lets one per-band figure serve records of any
+integration time**, which is what lets one per-signal figure serve records of any
 length. It is stored as a Unitful quantity of dimension `1/Hz`, so the
 consumer's `⟨|P|²⟩/N₀ − 1/T` is dimension-checked rather than trusted.
 
@@ -24,14 +53,14 @@ consumer's `⟨|P|²⟩/N₀ − 1/T` is dimension-checked rather than trusted.
 
 Three methods, all with a default on this abstract type:
 
-  - [`update_noise!`](@ref) — measure one band's slice of samples and append the
-    resulting observations. This is the **software** fill path; it has exactly
-    one call site, inside `downconvert_and_correlate!`.
+  - [`update_noise!`](@ref) — measure one signal's slice of its band's samples
+    and append the resulting observations. This is the **software** fill path; it
+    has exactly one call site, inside `downconvert_and_correlate!`.
   - [`append_noise_observation!`](@ref) — append an observation built elsewhere.
     This is the **hardware** fill path (FPGA/ASIC correlator or a front-end
     power monitor), parallel to [`append_correlator_output!`](@ref).
-  - [`get_noise_density`](@ref) — the band's current density, or `nothing` while
-    nothing has been measured yet. A read, not a drain: the window keeps
+  - [`get_noise_density`](@ref) — the signal's current density, or `nothing`
+    while nothing has been measured yet. A read, not a drain: the window keeps
     sliding.
 
 The two fill paths live on **disjoint call graphs** — a hardware producer never
@@ -46,10 +75,10 @@ interface is exported.
 abstract type AbstractNoiseEstimator end
 
 """
-Type alias for a NamedTuple of [`AbstractNoiseEstimator`](@ref)s keyed by band id
-— the shape [`TrackState`](@ref) holds them in. A NamedTuple and not a
+Type alias for a NamedTuple of [`AbstractNoiseEstimator`](@ref)s keyed by signal
+id — the shape [`TrackState`](@ref) holds them in. A NamedTuple and not a
 `Dictionary`, because a dictionary would need an abstract value type as soon as
-two bands hold different estimator types, which is type-unstable and would
+two signals hold different estimator types, which is type-unstable and would
 allocate on every chunk.
 """
 const NoiseEstimators = NamedTuple{<:Any,<:Tuple{Vararg{AbstractNoiseEstimator}}}
@@ -225,13 +254,15 @@ end
 """
 $(SIGNATURES)
 
-Measure the noise on one band's samples and append the resulting observations to
-`estimator`'s window, returning `estimator`.
+Measure one signal's noise on its band's samples and append the resulting
+observations to `estimator`'s window, returning `estimator`.
 
-`measurement` is the band's [`BandMeasurement`](@ref); `first_sample` and
-`last_sample` bound the slice of it this call may consume (the current chunk).
-`context` is a [`NoiseUpdateContext`](@ref), carrying what a source may need but
-a `BandMeasurement` does not have — the band's reference signal, which PRNs are
+`measurement` is the band's [`BandMeasurement`](@ref) — the samples are a band
+property, one front end feeding every signal on it; only the despreading code,
+and therefore the measured floor, is per signal. `first_sample` and `last_sample`
+bound the slice of it this call may consume (the current chunk). `context` is a
+[`NoiseUpdateContext`](@ref), carrying what a source may need but a
+`BandMeasurement` does not have — the signal being measured, which PRNs are
 currently tracked on it, and the chunk index.
 
 This is the **software** fill path and it has exactly one call site, inside
@@ -258,11 +289,12 @@ window and return `estimator`. This is the **hardware** fill path, parallel to
 The window is mutated in place and the struct is not rebuilt, so this is
 allocation-free in steady state and works through the immutable `TrackState`.
 
-The [`TrackState`](@ref) form selects the band:
+The [`TrackState`](@ref) form selects the signal:
 
 ```julia
-append_noise_observation!(track_state, obs)         # single-band TrackState
-append_noise_observation!(track_state, obs, :L1)    # explicit band id
+append_noise_observation!(track_state, obs)             # single-signal TrackState
+append_noise_observation!(track_state, obs, :GPSL1CA)   # explicit signal id
+append_noise_observation!(track_state, obs, GPSL1CA)    # or the signal type
 ```
 """
 append_noise_observation!(estimator::AbstractNoiseEstimator, ::NoiseObservation) = estimator
@@ -270,13 +302,14 @@ append_noise_observation!(estimator::AbstractNoiseEstimator, ::NoiseObservation)
 """
 $(SIGNATURES)
 
-The band's current noise density `N₀`, or `nothing` while the window holds
+The signal's current noise density `N₀`, or `nothing` while the window holds
 nothing yet.
 
 A **read, not a drain**: the window keeps sliding across chunks and across
-`track!` calls, so every record of every satellite on the band divides by the
-same figure. The returned quantity has dimension `1/Hz` — see
-[`AbstractNoiseEstimator`](@ref) for why a density rather than a power.
+`track!` calls, so every record of every satellite tracking that signal divides
+by the same figure. The returned quantity has dimension `1/Hz` — see
+[`AbstractNoiseEstimator`](@ref) for why a density rather than a power, and why
+per signal rather than per band.
 """
 get_noise_density(::AbstractNoiseEstimator) = nothing
 
@@ -288,16 +321,17 @@ noise source may need and a [`BandMeasurement`](@ref) does not carry.
 
 Fields:
 
-  - `signal` — the band's **reference signal**: the first signal of the first
-    group on that band, in `groups` order. Its primary code period sets the
-    sub-integration length and its code family is the one the reference
-    despreads with. Deterministic, needs no configuration, and for white noise
-    the choice is immaterial (`N̂₀ = σ²/f_s` is code-independent once `A_c` is
-    divided out) — it only selects *which* spectral weighting a tilted front end
-    is measured with.
-  - `tracked_prn_sets` — a tuple of the key sets of the band's groups'
-    satellite dictionaries, so a source can pick a PRN nobody is tracking
-    without allocating a merged set.
+  - `signal` — **the signal being measured**, i.e. the one this estimator's key
+    names. Its primary code period sets the sub-integration length and its code
+    family is the one the reference despreads with, so the measurement carries
+    that signal's own spectral weighting — which is the point of keying the
+    estimator by signal (see [`AbstractNoiseEstimator`](@ref)). Nothing here is
+    chosen: it is the consumer's signal, not a per-band stand-in for it.
+  - `tracked_prn_sets` — a tuple of the key sets of the satellite dictionaries of
+    the groups tracking **this signal**, so a source can pick a PRN nobody is
+    tracking without allocating a merged set. Scoped to this signal because "in
+    use" is a question about this code family: PRN 5 tracked on Galileo E1B does
+    not make GPS L1 C/A's PRN 5 code unavailable to the reference.
   - `chunk_index` — the index of the chunk being measured, on the same grid
     `downconvert_and_correlate!` uses.
   - `downconvert_and_correlator` — the backend running this call. A software
@@ -320,8 +354,8 @@ struct NoiseUpdateContext{
     downconvert_and_correlator::DC
 end
 
-# Is `prn` tracked by any of the band's groups? Tuple recursion so the walk over
-# a heterogeneous tuple of key sets stays concrete and allocation-free.
+# Is `prn` tracked on this signal? Tuple recursion so the walk over a
+# heterogeneous tuple of key sets stays concrete and allocation-free.
 @inline _is_prn_tracked(::Tuple{}, prn) = false
 @inline _is_prn_tracked(sets::Tuple, prn) =
     (prn in first(sets)) || _is_prn_tracked(Base.tail(sets), prn)
@@ -329,9 +363,9 @@ end
 @inline _is_prn_tracked(context::NoiseUpdateContext, prn) =
     _is_prn_tracked(context.tracked_prn_sets, prn)
 
-# The band's density as a plain scalar plus a "is it meaningful yet" flag —
+# The signal's density as a plain scalar plus a "is it meaningful yet" flag —
 # the union-free form the fold threads down to `_apply_correlator_output`.
-# `get_noise_density`'s `Union{Nothing,D}` is split here, once per band per
+# `get_noise_density`'s `Union{Nothing,D}` is split here, once per signal per
 # chunk, so that everything below it stays monomorphic.
 @inline function _noise_density_and_ready(estimator::AbstractNoiseEstimator)
     density = get_noise_density(estimator)

@@ -1837,7 +1837,7 @@ function downconvert_and_correlate!(
     stop_before_partial::Bool = false,
     samples_unchanged::Bool = false,
 )
-    _update_band_noise!(
+    _update_signal_noise!(
         dc,
         track_state,
         measurements,

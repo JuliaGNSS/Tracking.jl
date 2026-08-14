@@ -872,7 +872,7 @@ function downconvert_and_correlate!(
     stop_before_partial::Bool = false,
     samples_unchanged::Bool = false,
 )
-    _update_band_noise!(
+    _update_signal_noise!(
         dc,
         track_state,
         measurements,
@@ -893,18 +893,23 @@ function downconvert_and_correlate!(
     return track_state
 end
 
-# Measure each band's noise floor over the current chunk, before the per-group
-# correlate loop. Defined once on `AbstractDownconvertAndCorrelator` and called
-# from all three `downconvert_and_correlate!` entry points — those are the only
-# places that see `measurements` whole, and therefore the only per-band-exactly-
-# once sites. `_dc_one_group!` would fire once per *group*, so a band carrying
-# two groups would be measured twice.
+# Measure each *signal's* noise floor over the current chunk, before the
+# per-group correlate loop. Defined once on `AbstractDownconvertAndCorrelator`
+# and called from all three `downconvert_and_correlate!` entry points — those are
+# the only places that see `measurements` whole, and therefore the only
+# per-signal-exactly-once sites. `_dc_one_group!` would fire once per *group*, so
+# a signal carried by two groups would be measured twice.
 #
-# The `noise_estimators` NamedTuple is walked by tuple recursion rather than by
-# `for (k, v) in pairs(...)`: different bands may hold different estimator types,
-# so a runtime loop over the values is type-unstable and would allocate on every
-# chunk. Recursion unrolls it and each `update_noise!` devirtualises. A band with
-# no entry does no work at all.
+# Walking `noise_estimators` (keyed by signal id) rather than the groups is what
+# makes "exactly once" structural: two groups carrying the same signal share the
+# one estimator that key names, so the reference is despread once for it however
+# the satellites are grouped.
+#
+# The NamedTuple is walked by tuple recursion rather than by
+# `for (k, v) in pairs(...)`: different signals may hold different estimator
+# types, so a runtime loop over the values is type-unstable and would allocate on
+# every chunk. Recursion unrolls it and each `update_noise!` devirtualises. A
+# signal with no entry does no work at all.
 #
 # **When to skip.** `samples_unchanged` alone must not gate this: `track!` passes
 # `samples_unchanged = chunk_index > 0`, so gating on it would measure chunk 0
@@ -923,7 +928,7 @@ end
 #
 # The cost is that a buffer's trailing partial never reaches the window — at most
 # one chunk per `track!` call, and omitting an entry biases `σ̂²` not at all.
-@inline function _update_band_noise!(
+@inline function _update_signal_noise!(
     dc::AbstractDownconvertAndCorrelator,
     track_state::TrackState,
     measurements::BandMeasurements,
@@ -933,7 +938,7 @@ end
 )
     isnothing(chunk_duration) && samples_unchanged && return nothing
     noise_estimators = track_state.noise_estimators
-    _update_band_noise_walk!(
+    _update_signal_noise_walk!(
         Val(keys(noise_estimators)),
         Tuple(noise_estimators),
         dc,
@@ -944,7 +949,7 @@ end
     )
 end
 
-@inline _update_band_noise_walk!(
+@inline _update_signal_noise_walk!(
     ::Val{()},
     ::Tuple{},
     ::AbstractDownconvertAndCorrelator,
@@ -953,7 +958,7 @@ end
     ::Int,
     _,
 ) = nothing
-@inline function _update_band_noise_walk!(
+@inline function _update_signal_noise_walk!(
     ::Val{K},
     estimators::Tuple,
     dc::AbstractDownconvertAndCorrelator,
@@ -962,7 +967,7 @@ end
     chunk_index::Int,
     chunk_duration,
 ) where {K}
-    _update_one_band_noise!(
+    _update_one_signal_noise!(
         first(estimators),
         Val(first(K)),
         dc,
@@ -971,7 +976,7 @@ end
         chunk_index,
         chunk_duration,
     )
-    _update_band_noise_walk!(
+    _update_signal_noise_walk!(
         Val(Base.tail(K)),
         Base.tail(estimators),
         dc,
@@ -982,7 +987,7 @@ end
     )
 end
 
-@inline function _update_one_band_noise!(
+@inline function _update_one_signal_noise!(
     estimator::AbstractNoiseEstimator,
     ::Val{K},
     dc::AbstractDownconvertAndCorrelator,
@@ -991,7 +996,17 @@ end
     chunk_index::Int,
     chunk_duration,
 ) where {K}
-    m = measurements[K]
+    # The groups tracking signal `K`, and the signal instance itself. A key
+    # naming a signal no group tracks measures nothing — that is the
+    # correlator-ingest case, where the window is filled by
+    # `append_noise_observation!` instead.
+    signal_groups = _groups_with_signal(Tuple(groups), Val(K))
+    isempty(signal_groups) && return nothing
+    signal = first(_signals_with_id(first(signal_groups).signals, Val(K)))
+    # The samples are still a *band* property — one front end feeds every signal
+    # on it. Only the despreading code, and therefore the measured floor, is per
+    # signal.
+    m = measurements[_signal_band_id(typeof(signal))]
     # Same check the group loop runs, and it has to happen here too: the noise
     # measurement is the *first* thing to touch a band's samples, so without it
     # a wrong sample type would surface as a `MethodError` from inside a kernel
@@ -1003,14 +1018,12 @@ end
     first_sample =
         _chunk_first_sample(chunk_duration, chunk_index, m.sampling_frequency, num_samples)
     first_sample > last_sample && return nothing
-    band_groups = _groups_on_band(Tuple(groups), Val(K))
-    isempty(band_groups) && return nothing
     context = NoiseUpdateContext(
-        # The band's reference signal: the first signal of the first group on it,
-        # in `groups` order. Deterministic and needs no configuration; for white
-        # noise the choice is immaterial once `A_c` is divided out.
-        first(first(band_groups).signals),
-        map(g -> keys(g.satellites), band_groups),
+        signal,
+        # Only the groups that track *this* signal: "already in use" is a
+        # question about this code family, so a PRN tracked on another signal of
+        # the same band is still free for the reference to borrow.
+        map(g -> keys(g.satellites), signal_groups),
         chunk_index,
         dc,
     )
@@ -1018,13 +1031,21 @@ end
     nothing
 end
 
-# The groups sitting on band `K`, as a tuple. Folds at compile time: each
-# group's band id is a constant of its type.
-@inline _groups_on_band(::Tuple{}, ::Val) = ()
-@inline function _groups_on_band(t::Tuple, v::Val{K}) where {K}
+# The groups tracking signal `K`, as a tuple, and that signal within a group's
+# signal tuple. Both fold at compile time: a group's signal ids are constants of
+# its type.
+@inline _groups_with_signal(::Tuple{}, ::Val) = ()
+@inline function _groups_with_signal(t::Tuple, v::Val)
     g = first(t)
-    rest = _groups_on_band(Base.tail(t), v)
-    get_band_id(g.band) === K ? (g, rest...) : rest
+    rest = _groups_with_signal(Base.tail(t), v)
+    isempty(_signals_with_id(g.signals, v)) ? rest : (g, rest...)
+end
+
+@inline _signals_with_id(::Tuple{}, ::Val) = ()
+@inline function _signals_with_id(t::Tuple, v::Val{K}) where {K}
+    s = first(t)
+    rest = _signals_with_id(Base.tail(t), v)
+    get_signal_id(typeof(s)) === K ? (s, rest...) : rest
 end
 
 # One open-loop despread of the noise reference, on this backend's own kernel.

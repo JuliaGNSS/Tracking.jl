@@ -39,7 +39,7 @@ different one.
 | High-C/N₀ σ                                                | keeps improving, until the row above dominates          | saturates at `√(M/((M−1)K))` ≈0.5 dB                                                                                                                                       | —                             | n/a                      |
 | Degenerate outputs                                         | none                                                    | `-Inf`/`Inf` outside `1 < μ̂ < M` — 5.6 % of *estimates* at 20 dB-Hz                                                                                                       | none                          | always `-Inf`            |
 | Phase-noise / residual-Doppler sensitivity                 | immune (non-coherent)                                   | sensitive — the coherent sum loses power; **−12 dB at 120 Hz of handoff Doppler**, see [Residual Doppler at acquisition handoff](#Residual-Doppler-at-acquisition-handoff) | immune                        | n/a                      |
-| Cost                                                       | per-record arithmetic + one despread per band per chunk | per-record arithmetic                                                                                                                                                      | per-record arithmetic         | none                     |
+| Cost                                                       | per-record arithmetic + one despread per signal per chunk | per-record arithmetic                                                                                                                                                      | per-record arithmetic         | none                     |
 
 The "degenerate" row is a rate of unusable *outputs*, not a per-window discard
 rate: [`estimate_cn0`](@ref) pools every buffered window and range-checks the
@@ -48,10 +48,10 @@ pooled ratio once.
 ### Which one do I use?
 
  1. **Sample-driven [`track!`](@ref)** → [`NoiseRefCN0Estimator`](@ref). This is
-    the default and needs no configuration: the band is provisioned a
+    the default and needs no configuration: the signal is provisioned a
     [`CorrelatorNoiseEstimator`](@ref) automatically and `track!` fills it.
  2. **Correlator outputs from hardware, *with* a noise observation** → the same,
-    plus one [`append_noise_observation!`](@ref) per band per fold. See
+    plus one [`append_noise_observation!`](@ref) per signal per fold. See
     [Noise Estimator](noise_estimator.md) for what a producer has to report; the
     short version is *raw accumulations of an untracked PRN*, with every division
     and all averaging done here.
@@ -144,7 +144,7 @@ Van Dierendonck's **narrowband/wideband power ratio**. Per narrowband window of
 `M` records it forms the coherent power `NBP = |Σ prompt|²` and the incoherent
 power `WBP = Σ |prompt|²`, divides the sums of both over as many windows as fit
 in `num_prompts_for_cn0_estimation` records, and turns that mean power ratio into
-a C/N₀. It was the default until the per-band noise reference landed, and it is
+a C/N₀. It was the default until the measured noise reference landed, and it is
 what to configure on a correlator-ingest path that cannot report a noise
 observation.
 
@@ -365,11 +365,17 @@ TrackedSat(
 )
 ```
 
-A band is provisioned a noise source if **any** signal on it uses an estimator
-that reads one, and the mixed case above works: the noise-referenced signal gets
-its density, the other ignores it. A band where *no* signal asks for one is not
-provisioned at all, so it runs no per-band despread and costs exactly nothing —
-which is the answer for anyone who deliberately stays on NWPR.
+A **signal** is provisioned a noise source if its estimator reads one, so the
+mixed case above provisions exactly one: the noise-referenced signal gets its own
+density, the other neither reads nor pays for one. A signal nobody asks a density
+of is not provisioned at all and runs no despread — which is the answer for
+anyone who deliberately stays on NWPR.
+
+Per signal rather than per band because the floor is the *post-correlation* one
+and therefore a property of the despreading modulation, not of the RF band; see
+[Why per signal and not per RF band](noise_estimator.md#Why-per-signal-and-not-per-RF-band).
+The cost of that is linear in the noise-referenced signals sharing a band — a
+despread each per chunk, against `n_sats` tracking correlations apiece.
 
 ### Not measuring a signal at all
 

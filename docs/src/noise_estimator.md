@@ -4,20 +4,65 @@
 record's prompt power by a **measured noise floor** instead of inferring one from
 the prompt's own statistics. This page is about where that floor comes from.
 
-The floor is estimated **once per RF band**, never per satellite and never per
-signal: a band has exactly one noise density, and averaging it once per band is
-what makes the reference's own variance negligible against the per-record prompt
-statistics. The estimators live in [`TrackState`](@ref)'s `noise_estimators`
-field, a NamedTuple keyed by band id.
+The floor is estimated **once per signal**, never per satellite: every satellite
+tracking a signal shares its floor, and averaging once per signal is what makes
+the reference's own variance negligible against the per-record prompt statistics.
+The estimators live in [`TrackState`](@ref)'s `noise_estimators` field, a
+NamedTuple keyed by signal id (`GNSSSignals.get_signal_id` — `:GPSL1CA`,
+`:GalileoE1B`, …).
 
 On the sample-driven path none of this needs configuring — `TrackState`
-provisions a [`CorrelatorNoiseEstimator`](@ref) for every band that has a signal
-asking for a density, and `track!` fills it. Read on if you feed correlator
-outputs from hardware, or if you want to know what the measurement actually does.
+provisions a [`CorrelatorNoiseEstimator`](@ref) for every signal asking for a
+density, and `track!` fills it. Read on if you feed correlator outputs from
+hardware, or if you want to know what the measurement actually does.
 
 ```@docs
 AbstractNoiseEstimator
 ```
+
+## Why per signal and not per RF band
+
+Because what a record divides by is the **post-correlation** floor. For an
+interferer of PSD `S_I(f)` on top of the thermal floor that is
+
+```
+N₀,eff = N₀,thermal + ∫ S_I(f) · |G(f)|² df
+```
+
+— the spectral separation coefficient — weighted by the *despreading
+modulation's* own spectrum `|G(f)|²`. So two signals sharing one band, one
+antenna and one front end do not share a noise floor the moment the interference
+is not white, and the gap is not subtle. BPSK(1) peaks at band centre and nulls
+at ±1.023 MHz; BOC(1,1) is the reverse. A CW tone at the chip rate is rejected by
+GPS L1 C/A and lands squarely on Galileo E1B; move it into C/A's main lobe and
+the order reverses. Measured through `track!` on one shared set of samples,
+13 dB J/N tone, densities relative to the thermal floor (4 MHz, pure BOC(1,1)
+E1B):
+
+| tone      | GPS L1 C/A | Galileo E1B | E1B / C/A |
+|-----------|-----------:|------------:|----------:|
+| none      | 1.0        | 1.0         | 1.0       |
+| 1.023 MHz | 1.4        | 39          | **28×**   |
+| 0.4 MHz   | 35         | 26          | **0.75×** |
+
+Reporting C/A's figure to E1B in the middle row overstates E1B's C/N₀ by
+≈14.5 dB; the **reversal** in the last row is what makes this a spectral result
+and not a scale factor. The real CBOC E1B shows the same reversal about four
+times larger. Front-end tilt, filter roll-off at the band edge and adjacent-band
+leakage colour the floor the same way, more quietly.
+
+The payoff of despreading rather than metering power is that this integral is
+**measured, never modelled**: the reference runs the consumer's own code, so its
+spectral weighting is the consumer's by construction, with no jammer model and no
+spectrum analysis anywhere. It is the same argument that makes the measurement
+backend-free, extended from the quantiser to the interference environment.
+
+It also matches the hardware: a noise channel is a tracking channel with a wrong
+PRN, and a tracking channel is configured with a code.
+
+The *samples* remain a band property — one front end feeds every signal on it,
+and `BandMeasurements` stays keyed by band id. Only the despread, and therefore
+the measured floor, is per signal.
 
 ## Why a density and not a power
 
@@ -32,7 +77,7 @@ E|P|² = σ²/N = N₀/T
 so `N₀ = σ²/f_s` is **independent of the integration time**. That is the whole
 reason a density is stored rather than a power, and it buys two things:
 
-- **One per-band figure serves records of any length.** A satellite still on
+- **One per-signal figure serves records of any length.** A satellite still on
   1-block records pre-sync and one promoted to 20-block records post-sync divide
   by the same `N̂₀`, each subtracting its own `1/T`. Mixed record lengths are
   handled by construction rather than by guarding.
@@ -72,7 +117,7 @@ Tracking.update_noise!(::CorrelatorNoiseEstimator, ::Tracking.BandMeasurement, :
 
 Three properties are worth knowing about it.
 
-**It is open-loop.** The reference runs at the band's nominal IF with zero
+**It is open-loop.** The reference runs at its band's nominal IF with zero
 Doppler and an off-peak code phase from a rotating PRN. There is no
 discriminator, no loop filter and no NCO update ever written to it — so it is
 correct with **zero satellites tracked**, which is also what would make it usable
@@ -100,7 +145,7 @@ balanced, `E[(Σc)²] ≈ 1`; a 16-chip window behaves like iid signs at ≈16, 
 ADC offset biases a short despread and not a full-period one). And cadence parity
 with a hardware correlator, which naturally dumps on the code epoch. The variance
 is bought back with `window_duration` instead, which is nearly free — a 1 s
-window is ~1000 `Float64` densities per band.
+window is ~1000 `Float64` densities per signal.
 
 ## Hardware producers (FPGA / ASIC)
 
@@ -139,7 +184,8 @@ Only two things, because everything else is computed here:
    needed: `append_noise_observation!` sits beside
    [`append_correlator_output!`](@ref) on the host.
 2. **Use an off-peak code phase and rotate the PRN.** A PRN not currently tracked
-   is simplest, since then any phase is safe.
+   *on that signal* is simplest, since then any phase is safe — a PRN tracked on
+   another signal of the same band is a different code and stays available.
 
 A producer that can only dump on the code epoch matches the software default
 exactly, so in the normal case there is nothing to reconcile. Where a producer
@@ -174,7 +220,9 @@ A worked ingest, per fold:
 # taps, per signal, exactly as before
 append_correlator_output!(track_state, CorrelatorOutput(correlator, n, sample_index), prn)
 
-# the noise channel: Σ|B|² pooled over its taps, one band at a time.
+# the noise channel: Σ|B|² pooled over its taps, one signal at a time. A noise
+# channel is configured with a code, so this is the granularity a producer
+# already has.
 # `accumulated_power` is the raw integer sum off the wire; `num_taps` is how many
 # accumulators it pooled, and the sample count is per tap times that.
 append_noise_observation!(
@@ -189,14 +237,14 @@ append_noise_observation!(
         # same samples, so the window must count that span once
         duration = samples_per_dump / sampling_frequency,
     ),
-    :L1,
+    :GPSL1CA,
 )
 
 estimate_dopplers_and_filter_prompt!(track_state, (L1 = sampling_frequency,))
 ```
 
-If a band has a noise estimator and nothing ever fills it, the fold **warns once
-per band** and every C/N₀ on it reads `-Inf dB-Hz`. That is the likeliest
+If a signal has a noise estimator and nothing ever fills it, the fold **warns
+once per signal** and every C/N₀ on it reads `-Inf dB-Hz`. That is the likeliest
 integration mistake and the warning names the fix; it never fires on the
 sample-driven path.
 
@@ -206,7 +254,7 @@ They are deliberately not the same mechanism:
 
 |            | [`append_correlator_output!`](@ref)                                    | [`append_noise_observation!`](@ref)                    |
 |:---------- |:---------------------------------------------------------------------- |:------------------------------------------------------ |
-| scope      | one **signal** of one satellite                                        | one **band**                                           |
+| scope      | one **signal** of one satellite                                        | one **signal**, across every satellite tracking it     |
 | payload    | the whole correlator: every tap kept **separate**, complex, per antenna | the taps **pooled** into one power sum, plus `M`, the span and the PRN |
 | drives     | discriminators, both loop filters, bit sync, the NCO update, the C/N₀ prompt | the noise floor only                              |
 | timing     | `sample_index` is load-bearing — vector tracking needs a common grid    | none: `N₀` is slowly varying, so only "recent" matters |
@@ -241,14 +289,14 @@ Tracking.get_noise_density(e::MyPowerMonitor) =
 Pass it in through `TrackState`'s `noise_estimators` keyword:
 
 ```julia
-TrackState(; signal = GPSL1CA(), noise_estimators = (L1 = MyPowerMonitor(...),))
+TrackState(; signal = GPSL1CA(), noise_estimators = (GPSL1CA = MyPowerMonitor(...),))
 ```
 
 Two contracts to keep. The window must be mutated **in place** and the struct
 returned unchanged — `TrackState` is immutable and never rebuilt for a noise
 update. And [`Tracking.noise_density_type`](@ref) must name the concrete type
 `get_noise_density` returns, so the fold can split off the `nothing` once per
-band per chunk and keep everything below it monomorphic; it defaults to
+signal per chunk and keep everything below it monomorphic; it defaults to
 `typeof(1.0/1.0Hz)`, which every shipped builder produces.
 
 ```@docs
