@@ -80,6 +80,7 @@ interferer resolves. On an FPGA an arbitrary code phase is *easier* than phase 0
     sub-integration per code period the window holds `K_n ≈ 1000` looks per tap,
     which costs ≤0.08 dB against a variance-free reference at every C/N₀ — below
     which no further tuning is warranted.
+
   - `tap_code_shift` — the reference correlator's tap spacing in chips (1.5 by
     default). Taps are only worth having if they are statistically independent,
     and at the *tracking* default of ±0.5 chip they are not: for jointly circular
@@ -87,25 +88,35 @@ interferer resolves. On an FPGA an arbitrary code phase is *easier* than phase 0
     correlation at half a chip is ≈0.5, so three taps are worth 2.25 independent
     looks. At ≥1 chip they are worth 2.98. 1.5 chips sits in the autocorrelation
     null and clear of both the 1- and 2-chip sidelobe values.
+
   - `carrier_dither` — half-width of the uniform offset added to the band's
     nominal IF, per sub-integration (5 kHz by default, i.e. the terrestrial GNSS
     Doppler spread). Zero pins the reference at the IF exactly, which restores
     half of the stationary target described above — useful to isolate the
     code-phase draw in a test, and not otherwise.
-  - `rng` — the source of the code-phase and carrier draws, **seeded and
-    therefore reproducible** by default (`Xoshiro(0)`, one stream per estimator,
-    advanced in place like `buffered` so the struct is never rebuilt). What the
-    randomisation has to defeat is a *stationary* reference, not a reader: an
-    attacker cannot observe the chunk grid the phase would be measured against,
-    so scattering the draws is the whole requirement and unpredictability buys
-    nothing on top. Reproducibility, on the other hand, buys a lot in a library
-    whose other guarantees are phrased as bit-identical arithmetic. Pass
-    `rng = Random.default_rng()` for a task-local, non-reproducible stream (also
-    the one to use if you ever share an estimator across threads).
+
+  - `rng` — the source of the code-phase and carrier draws, **seeded** by default
+    (`Xoshiro(0)`, one stream per estimator, advanced in place like `buffered` so
+    the struct is never rebuilt). What the randomisation has to defeat is a
+    *stationary* reference, not a reader: an attacker cannot observe the chunk
+    grid the phase would be measured against, so scattering the draws is the whole
+    requirement and unpredictability buys nothing on top. A seeded default keeps a
+    run repeatable, which is worth having in a library whose other guarantees are
+    phrased as bit-identical arithmetic. Pass `rng = Random.default_rng()` for a
+    task-local stream (also the one to use if you ever share an estimator across
+    threads).
+
+    Repeatable **on one Julia version**, and no further: `Xoshiro`'s stream is not
+    part of Julia's compatibility guarantee and does change across releases. Do
+    not build a tolerance around a particular draw — size the window so the
+    assertion holds for *any* draw. Every `N̂₀` here is a `1/√(3K)` estimate over
+    `K` observations, and that is the number to design against.
+
   - `buffered` — the sliding window itself, a **length-managed FIFO** written in
     place. The `Vector`'s own length is the position, so there is no ring index
     to write back and the struct is never rebuilt — which is what lets per-signal
     state live in an immutable [`TrackState`](@ref).
+
   - `code_replica` — scratch for the software despread, grown once and reused.
     Held here rather than borrowed from the backend's `ScratchBuffers` so the
     reference can never alias the per-signal replica path.
@@ -144,10 +155,10 @@ either side of the band's nominal IF. See the type's docstring for what the
 parameters buy and why nothing else is configurable.
 
 `rng` is drawn from for the per-sub-integration code phase and carrier offset. It
-defaults to a **seeded** `Xoshiro(0)`, so a run reproduces exactly; pass
-`Random.default_rng()` for a task-local, unpredictable stream. See the type's
-docstring for why scattering the draws — rather than making them unguessable — is
-the whole requirement.
+defaults to a **seeded** `Xoshiro(0)`, so a run repeats on a given Julia version;
+pass `Random.default_rng()` for a task-local stream. See the type's docstring for
+why scattering the draws — rather than making them unguessable — is the whole
+requirement, and for why the seed is not something to calibrate against.
 
 The window is `sizehint!`-ed to four times the number of code-period
 observations it expects to hold. The headroom is what makes the FIFO's

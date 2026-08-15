@@ -56,7 +56,14 @@ _to_int16(signal) = Complex{Int16}.(
     round.(Int16, clamp.(imag(signal) ./ 4, -2047, 2047)),
 )
 
-function _tracked(signal, dc; fs = FS, num_calls = 5, kwargs...)
+# 20 calls, not 5. The window's own relative error is `1/√(3K)` over `K`
+# observations, so a 50-entry window carries σ ≈ 0.6 dB — under half the `atol`
+# the C/N₀ assertions below use. That was invisible while the reference despread
+# at a fixed phase (one deterministic draw, which happened to land well); with the
+# phase and carrier drawn per sub-integration the assertions have to be backed by
+# a window long enough to support them. At `K = 200` σ is 0.22 dB, so a 1 dB gate
+# is ≈4.5σ and the per-backend quantisation bands stay meaningful.
+function _tracked(signal, dc; fs = FS, num_calls = 20, kwargs...)
     ts = TrackState(
         GPSL1,
         [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator())];
@@ -71,10 +78,10 @@ end
 @testset "the software path measures the signal's noise density" begin
     # An empty sky measured against a known floor. The window holds
     # `num_calls · chunks · num_sub` observations of three taps each, so its own
-    # relative error is ≈1/√(3·50) ≈ 8 %.
+    # relative error is ≈1/√(3·200) ≈ 4 %.
     ts = _tracked(_sky(-Inf; seed = 7), CPUDownconvertAndCorrelator())
     estimator = ts.noise_estimators.GPSL1CA
-    @test Base.length(estimator) == 50
+    @test Base.length(estimator) == 200
     @test ustrip(Hz^-1, get_noise_density(estimator)) ≈ 1.0 rtol = 0.15
 end
 
@@ -124,7 +131,7 @@ end
     signal = _sky(45.0; seed = 3)
     ts = _tracked(quantise ? _to_int16(signal) : ComplexF32.(signal), build())
     cn0 = _db(estimate_cn0(ts, 1))
-    @test Base.length(ts.noise_estimators.GPSL1CA) == 50
+    @test Base.length(ts.noise_estimators.GPSL1CA) == 200
     if DC === OneBitDownconvertAndCorrelator
         @test 41.0 < cn0 < 44.5           # ≈2 dB of hard-limiting loss
     elseif DC === TwoBitDownconvertAndCorrelator
@@ -310,13 +317,14 @@ end
     l5_samples = ComplexF32.(2 * sqrt(ustrip(Hz, fs_l5)) .* randn(rng, ComplexF64, 200_000))
     measurements =
         (L1 = BandMeasurement(l1_samples, fs_l1), L5 = BandMeasurement(l5_samples, fs_l5))
-    for _ = 1:5
+    # 20 calls for the same reason `_tracked` uses 20 — see the note there.
+    for _ = 1:20
         track!(measurements, ts)
     end
     d_l1 = ustrip(Hz^-1, get_noise_density(ts.noise_estimators.GPSL1CA))
     d_l5 = ustrip(Hz^-1, get_noise_density(ts.noise_estimators.GPSL5I))
-    @test Base.length(ts.noise_estimators.GPSL1CA) == 50
-    @test Base.length(ts.noise_estimators.GPSL5I) == 50
+    @test Base.length(ts.noise_estimators.GPSL1CA) == 200
+    @test Base.length(ts.noise_estimators.GPSL5I) == 200
     @test d_l1 ≈ 1.0 rtol = 0.2
     @test d_l5 ≈ 4.0 rtol = 0.2
 end
