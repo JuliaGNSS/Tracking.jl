@@ -1307,3 +1307,11 @@ end
     start_sample,
     num_samples,
 )
+
+# This backend packs the code sign plane inside its own kernel, so the noise
+# reference's `code_replica` scratch goes unread — see `_grow_noise_code_replica!`
+# in noise_estimators/correlator.jl. Leave it empty rather than sizing it to the
+# measurement: that byte-per-sample buffer would be allocated and held per signal
+# for something never looked at.
+@inline _grow_noise_code_replica!(::_Int16DC, code_replica::Vector{Int8}, ::Integer) =
+    code_replica

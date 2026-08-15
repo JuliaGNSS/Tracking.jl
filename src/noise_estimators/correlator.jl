@@ -1,3 +1,34 @@
+# Running sums over a `CorrelatorNoiseEstimator`'s window, so that neither
+# appending to it nor reading it has to walk it. `span` answers "does the window
+# still cover `window_duration`?" for the trim, and `weighted_density / looks` is
+# `get_noise_density` outright.
+#
+# `stale` counts appends since the last exact recomputation. Incremental
+# add/subtract on `Float64` drifts, and `append_noise_observation!` is public — a
+# producer may legitimately mix a 0.2 s pre-averaged entry with 1 ms ones, so the
+# magnitudes are not guaranteed comparable and the cancellation is not purely
+# hypothetical. Rebuilding once per window's worth of appends bounds the drift to
+# one window of operations while staying O(1) amortised.
+#
+# An ordinary immutable value, rebuilt whole on every change and stored in the
+# estimator's single `Ref`. Immutable rather than a mutable struct because
+# nothing in `src` is one — that is what lets per-signal state live in an
+# immutable `TrackState` — and one `Ref` of a four-field value rather than four
+# `Ref`s of a field each: it is isbits, so the box holds it inline and an update
+# is one write to one cache line instead of four chases to four heap objects.
+#
+# The estimator itself is still never rebuilt. Only this cache is, and it is a
+# cache of `buffered`'s contents — derived state with an anchor, recomputed from
+# it exactly (see `stale`) — not the free-floating scalar the design rules out.
+struct NoiseWindowTotals{D,T}
+    span::T
+    weighted_density::D
+    looks::Int
+    stale::Int
+end
+
+NoiseWindowTotals{D,T}() where {D,T} = NoiseWindowTotals{D,T}(zero(T), zero(D), 0, 0)
+
 """
 $(SIGNATURES)
 
@@ -119,7 +150,21 @@ interferer resolves. On an FPGA an arbitrary code phase is *easier* than phase 0
 
   - `code_replica` — scratch for the software despread, grown once and reused.
     Held here rather than borrowed from the backend's `ScratchBuffers` so the
-    reference can never alias the per-signal replica path.
+    reference can never alias the per-signal replica path. Grown only on the
+    backends that read it: the Int16 and bit-wise kernels pack the code sign
+    plane themselves, so on those it stays empty rather than costing a byte per
+    sample of every buffer.
+
+  - `totals` — the window's running sums (span, `M`-weighted density, looks),
+    maintained as entries are pushed and dropped. They are what keeps both
+    `append_noise_observation!` and `get_noise_density` **O(1)**; recomputing
+    them per call made each an O(K) scan, and since the whole design buys its
+    variance by making `K` large (≈2500 entries at a 1 s window and a 0.4 ms
+    chunk), that put a per-chunk cost directly proportional to the accuracy
+    asked for. Written in place through `Ref` cells, exactly as `buffered` is,
+    so the "never rebuilt" property still holds — and a *cache* of `buffered`
+    rather than state of its own, recomputed from it exactly often enough that
+    the incremental arithmetic cannot drift.
 
 The sub-integration length is deliberately **not** a field: it is the primary
 code period of the signal it measures, derived rather than configured.
@@ -142,6 +187,7 @@ struct CorrelatorNoiseEstimator{D,T,R<:AbstractRNG} <: AbstractNoiseEstimator
     carrier_dither::typeof(1.0Hz)
     buffered::Vector{NoiseObservation{D,T}}
     code_replica::Vector{Int8}
+    totals::Base.RefValue{NoiseWindowTotals{D,T}}
     rng::R
 end
 
@@ -188,6 +234,7 @@ function CorrelatorNoiseEstimator(;
         uconvert(Hz, float(carrier_dither)),
         buffered,
         Int8[],
+        Ref(NoiseWindowTotals{NoiseDensity,typeof(1.0s)}()),
         rng,
     )
 end
@@ -201,32 +248,91 @@ front while the remainder still spans `window_duration`. Returns `estimator`.
 The window is bounded in **time**, not in observation count, which is what lets
 one producer report 16-chip accumulations and another a single pre-averaged
 0.2 s figure under the same configuration and with no scalar state — the span
-is computable from the FIFO itself.
+is a property of the FIFO rather than of a configured count.
+
+**O(1)** per call, amortised, whatever the window holds — see `totals` in the
+type's docstring for why that matters here rather than being a micro-optimisation.
 """
 function append_noise_observation!(
     estimator::CorrelatorNoiseEstimator{D,T},
     observation::NoiseObservation{D,T},
 ) where {D,T}
     buffered = estimator.buffered
+    totals = estimator.totals
     push!(buffered, observation)
-    _trim_noise_window!(buffered, estimator.window_duration)
+    _add_observation!(totals, observation)
+    _trim_noise_window!(buffered, totals, estimator.window_duration)
+    _refresh_totals_if_stale!(buffered, totals)
     estimator
+end
+
+@inline function _add_observation!(totals::Base.RefValue{<:NoiseWindowTotals}, observation)
+    t = totals[]
+    totals[] = typeof(t)(
+        t.span + observation.duration,
+        t.weighted_density + observation.num_sub_integrations * observation.noise_density,
+        t.looks + observation.num_sub_integrations,
+        t.stale,
+    )
+    nothing
+end
+
+@inline function _drop_observation!(totals::Base.RefValue{<:NoiseWindowTotals}, observation)
+    t = totals[]
+    totals[] = typeof(t)(
+        t.span - observation.duration,
+        t.weighted_density - observation.num_sub_integrations * observation.noise_density,
+        t.looks - observation.num_sub_integrations,
+        t.stale,
+    )
+    nothing
 end
 
 # Drop entries off the front while what is left still spans `window_duration`,
 # keeping the window minimal but never shorter than the configured span (and
 # never empty, so a single observation longer than the window still counts).
-# The span is summed once and decremented as entries go, so this is O(K) per
-# append with no allocation.
-@inline function _trim_noise_window!(buffered::Vector{<:NoiseObservation}, window_duration)
-    total = zero(window_duration)
-    @inbounds for i in eachindex(buffered)
-        total += buffered[i].duration
-    end
-    @inbounds while length(buffered) > 1 && total - buffered[1].duration >= window_duration
-        total -= buffered[1].duration
+# The span comes from `totals` rather than being re-summed, so an append that
+# drops one entry does O(1) work rather than walking the whole window.
+@inline function _trim_noise_window!(
+    buffered::Vector{<:NoiseObservation},
+    totals::Base.RefValue{<:NoiseWindowTotals},
+    window_duration,
+)
+    @inbounds while length(buffered) > 1 &&
+                    totals[].span - buffered[1].duration >= window_duration
+        _drop_observation!(totals, buffered[1])
         popfirst!(buffered)
     end
+    nothing
+end
+
+# Recompute the totals exactly, once per window's worth of appends. See
+# `NoiseWindowTotals` for why the incremental sums cannot simply be trusted
+# forever; the O(K) walk every K appends is O(1) amortised.
+@inline function _refresh_totals_if_stale!(
+    buffered::Vector{<:NoiseObservation},
+    totals::Base.RefValue{<:NoiseWindowTotals},
+)
+    t = totals[]
+    totals[] = typeof(t)(t.span, t.weighted_density, t.looks, t.stale + 1)
+    t.stale + 1 < length(buffered) && return nothing
+    _refresh_totals!(buffered, totals)
+end
+
+function _refresh_totals!(
+    buffered::Vector{<:NoiseObservation},
+    totals::Base.RefValue{NoiseWindowTotals{D,T}},
+) where {D,T}
+    span = zero(T)
+    weighted_density = zero(D)
+    looks = 0
+    @inbounds for i in eachindex(buffered)
+        observation = buffered[i]
+        span += observation.duration
+        weighted_density += observation.num_sub_integrations * observation.noise_density
+        looks += observation.num_sub_integrations
+    end
+    totals[] = NoiseWindowTotals{D,T}(span, weighted_density, looks, 0)
     nothing
 end
 
@@ -239,19 +345,16 @@ Weighted by `num_sub_integrations` because that is the number of independent
 looks each entry represents: the density itself needs only the sample count, but
 its relative variance is `1/M`, so a one-dump entry and a 64-dump entry combine
 correctly only when weighted this way.
+
+Read straight off the window's running totals, so this is **O(1)**. It is called
+once per signal per chunk from the Doppler-estimator fold, which is why it may
+not walk the window: doing so charged every chunk for the window length, i.e.
+for the very `K` the estimator's accuracy is bought with.
 """
-function get_noise_density(estimator::CorrelatorNoiseEstimator{D}) where {D}
-    buffered = estimator.buffered
-    isempty(buffered) && return nothing
-    weighted = zero(D)
-    total_looks = 0
-    @inbounds for i in eachindex(buffered)
-        observation = buffered[i]
-        weighted += observation.num_sub_integrations * observation.noise_density
-        total_looks += observation.num_sub_integrations
-    end
-    total_looks == 0 && return nothing
-    weighted / total_looks
+function get_noise_density(estimator::CorrelatorNoiseEstimator)
+    totals = estimator.totals[]
+    totals.looks == 0 && return nothing
+    totals.weighted_density / totals.looks
 end
 
 noise_density_type(::CorrelatorNoiseEstimator{D}) where {D} = D
@@ -351,8 +454,11 @@ function update_noise!(
     # measurement rather than one slice.
     replica_size =
         get_num_samples(measurement) + maximum(sample_shifts) - minimum(sample_shifts)
-    length(estimator.code_replica) < replica_size &&
-        resize!(estimator.code_replica, replica_size)
+    _grow_noise_code_replica!(
+        context.downconvert_and_correlator,
+        estimator.code_replica,
+        replica_size,
+    )
 
     rng = estimator.rng
     code_length = get_code_length(signal_type)
@@ -416,6 +522,22 @@ function update_noise!(
     end
     estimator
 end
+
+# Grow the reference's replica scratch so `_correlate_noise_reference!` can write
+# a whole measurement's worth of code into it.
+#
+# Backend-dispatched because only the software kernels read the buffer at all:
+# the Int16 and bit-wise backends pack the code sign plane inside their own
+# kernel and take the `Vector{Int8}` purely to share one signature. Sizing it
+# there would allocate — and then keep alive — one byte per sample of the largest
+# buffer ever passed, per signal, for something never read; on a 500 k-sample
+# buffer that is half a megabyte of pure waste. They override this to leave it
+# empty.
+@inline _grow_noise_code_replica!(
+    ::AbstractDownconvertAndCorrelator,
+    code_replica::Vector{Int8},
+    replica_size::Integer,
+) = length(code_replica) < replica_size ? resize!(code_replica, replica_size) : code_replica
 
 # The antenna the reference despreads. `DefaultPostCorrFilter` is `last(x)`, so
 # an antenna array's noise must be measured on its last column too.
