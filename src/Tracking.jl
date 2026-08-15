@@ -12,6 +12,7 @@ using TrackingLoopFilters
 using Dictionaries
 using Accessors
 using Polyester
+using Random: AbstractRNG, Xoshiro
 
 # 1800-bit exact-width unsigned for the GPS L1C-P overlay-code search.
 # Defined once at module load. Benchmarked at ~71 μs for the full

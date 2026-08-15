@@ -327,11 +327,6 @@ Fields:
     that signal's own spectral weighting — which is the point of keying the
     estimator by signal (see [`AbstractNoiseEstimator`](@ref)). Nothing here is
     chosen: it is the consumer's signal, not a per-band stand-in for it.
-  - `tracked_prn_sets` — a tuple of the key sets of the satellite dictionaries of
-    the groups tracking **this signal**, so a source can pick a PRN nobody is
-    tracking without allocating a merged set. Scoped to this signal because "in
-    use" is a question about this code family: PRN 5 tracked on Galileo E1B does
-    not make GPS L1 C/A's PRN 5 code unavailable to the reference.
   - `chunk_index` — the index of the chunk being measured, on the same grid
     `downconvert_and_correlate!` uses.
   - `downconvert_and_correlator` — the backend running this call. A software
@@ -342,26 +337,18 @@ Fields:
     measurement instead of being carried by it.
 
 Kept as one struct so that adding a field later is not a signature change.
+
+Note what is **not** here: which PRNs are currently tracked. The reference used
+to need it, to skip tracked PRNs and so keep a fixed code phase 0 off their
+correlation peaks. [`CorrelatorNoiseEstimator`](@ref) now randomises the phase
+instead, so it rotates over the whole family and reads nothing from satellite
+state — which is what makes "open-loop" literal rather than approximate.
 """
-struct NoiseUpdateContext{
-    S<:AbstractGNSSSignal,
-    K<:Tuple,
-    DC<:AbstractDownconvertAndCorrelator,
-}
+struct NoiseUpdateContext{S<:AbstractGNSSSignal,DC<:AbstractDownconvertAndCorrelator}
     signal::S
-    tracked_prn_sets::K
     chunk_index::Int
     downconvert_and_correlator::DC
 end
-
-# Is `prn` tracked on this signal? Tuple recursion so the walk over a
-# heterogeneous tuple of key sets stays concrete and allocation-free.
-@inline _is_prn_tracked(::Tuple{}, prn) = false
-@inline _is_prn_tracked(sets::Tuple, prn) =
-    (prn in first(sets)) || _is_prn_tracked(Base.tail(sets), prn)
-
-@inline _is_prn_tracked(context::NoiseUpdateContext, prn) =
-    _is_prn_tracked(context.tracked_prn_sets, prn)
 
 # The signal's density as a plain scalar plus a "is it meaningful yet" flag —
 # the union-free form the fold threads down to `_apply_correlator_output`.

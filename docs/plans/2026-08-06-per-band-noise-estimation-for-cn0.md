@@ -1,11 +1,12 @@
 # Per-band noise estimation for C/N₀
 
 **Date:** 2026-08-06
-**Status:** **Implemented** 2026-08-12, **corrected to per-signal** 2026-08-14 —
-Phases 0 through 3 all landed. See "Superseded: the floor is per signal, not per
-band" immediately below for the one axis on which this document is now wrong, and
-"Where the implementation diverged" for the four places the build did not follow
-it, and why.
+**Status:** **Implemented** 2026-08-12, **corrected to per-signal** 2026-08-14,
+**reference randomised** 2026-08-15 — Phases 0 through 3 all landed. See the two
+"Superseded" sections immediately below for the axes on which this document is
+now wrong (the floor is per signal, not per band; the reference's code phase and
+Doppler are randomised, not pinned), and "Where the implementation diverged" for
+the four places the build did not follow it, and why.
 
 Earlier: Planned (Phase 0 implemented; single noise estimator as of 2026-08-06;
 review pass 2026-08-09 — self-leakage promoted from a parenthetical to a quantified
@@ -79,6 +80,47 @@ with a wrong PRN, and a tracking channel is configured with a code.
 The threading in `_est_one_group!` got slightly *longer*, not shorter: the single
 `(density, ready)` scalar pair became one pair per signal, indexed positionally
 against the group's slot type. Still compile-time, still allocation-free.
+
+## Superseded: the reference's code phase and Doppler are randomised
+
+**Everywhere this document specifies code phase 0 and exactly zero Doppler for
+the reference, read "a fresh random code phase and a dithered carrier, drawn per
+sub-integration".** The rotation also covers the **whole PRN family**, not just
+the untracked ones.
+
+The plan's safety argument was that a PRN nobody tracks cannot be at the peak, so
+phase 0 is off-peak by construction. That is true of *tracked* PRNs and says
+nothing about the rest of the sky. A signal that is present but untracked — a
+spoofed PRN, or a visible satellite the receiver has not acquired — is exactly
+what the reference is free to select, and a *stationary* reference makes any
+alignment with it permanent: the replica is re-anchored to phase 0 on a grid
+running at the nominal chip rate, so the relative phase against a zero-Doppler
+signal never drifts. `3 × 1.5 / 1023 ≈ 0.44 %` of PRNs sit inside a tap, and one
+that does contributes `T·(C/N₀)/3 ≈ 10.5·N₀` at 45 dB-Hz to every observation
+with that code, forever — ≈+1.5 dB on `N̂₀` after the rotation's dilution. The
+geometry compounds it: relative phase drifts only at the signal's own code
+Doppler (`f_d/1540`), so low Doppler both enables the hit and freezes it.
+
+Drawing the phase and the carrier per sub-integration makes each observation an
+independent trial (≈0.07 dB residual instead of a standing bias), and because a
+hit needs both draws the two randomisations multiply. It then makes the
+untracked-PRN skip pointless, which is worth more than it sounds: the skip was
+the reference's **only** read of satellite state, so dropping it makes
+"open-loop" literal, and it keeps the pool at a constant 32 instead of shrinking
+— and diluting worse — exactly as the receiver acquires more satellites. Landing
+on a tracked peak now costs ≈0.045 dB for the one observation it touches, an
+order of magnitude under the whole-sky leakage already carried uncorrected.
+
+The generator is **seeded** (`Xoshiro(0)`) rather than task-local, so runs stay
+reproducible. What has to be defeated is a stationary reference, not a reader: an
+attacker cannot observe the chunk grid the phase would be measured against, so
+scattering the draws is the whole requirement. `rng = Random.default_rng()` opts
+into an unpredictable stream.
+
+`NoiseUpdateContext` loses `tracked_prn_sets` and `_is_prn_tracked` goes with it
+(divergence 2 below still stands — the backend field stays). This landed as an
+ordinary `refactor` commit: everything it touches is introduced by the same
+unmerged PR.
 
 ## Where the implementation diverged
 

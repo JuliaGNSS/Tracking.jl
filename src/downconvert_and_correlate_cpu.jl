@@ -1018,15 +1018,9 @@ end
     first_sample =
         _chunk_first_sample(chunk_duration, chunk_index, m.sampling_frequency, num_samples)
     first_sample > last_sample && return nothing
-    context = NoiseUpdateContext(
-        signal,
-        # Only the groups that track *this* signal: "already in use" is a
-        # question about this code family, so a PRN tracked on another signal of
-        # the same band is still free for the reference to borrow.
-        map(g -> keys(g.satellites), signal_groups),
-        chunk_index,
-        dc,
-    )
+    # No tracked-PRN set is threaded through: the reference randomises its code
+    # phase, so it has no reason to know which PRNs are in use.
+    context = NoiseUpdateContext(signal, chunk_index, dc)
     update_noise!(estimator, m, first_sample, last_sample, context)
     nothing
 end

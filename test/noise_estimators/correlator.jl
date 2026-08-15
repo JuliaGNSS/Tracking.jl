@@ -38,6 +38,7 @@ const NUM_SAMPLES = 40_000                      # 10 ms at 4 MHz
 const GPSL1 = GPSL1CA()
 
 _db(x) = ustrip(uconvert(dBHz, x))
+_median(xs) = (v = sort(collect(xs)); v[div(length(v) + 1, 2)])
 
 # One satellite at `cn0_dbhz` in noise of per-sample variance `f_s`, so the true
 # noise density is exactly `N₀ = σ²/f_s = 1 Hz⁻¹` and the measured density can be
@@ -183,16 +184,22 @@ end
     track!((L1 = BandMeasurement(signal, fs),), ts; doppler_update_interval = 1ms)
     # Ten 1 ms chunks, each a tenth of a code period — one slice apiece, not zero.
     @test Base.length(ts.noise_estimators.GPSL1C_P) == 10
-    @test ustrip(Hz^-1, get_noise_density(ts.noise_estimators.GPSL1C_P)) ≈ 1.0 rtol = 0.2
+    # Ten observations of three taps is 30 looks, so the window's own relative σ is
+    # `1/√30 ≈ 18 %` — this is a sanity check that the measurement is meaningful at
+    # all, not a precision claim, and the tolerance says so. The precision claims
+    # live in the tests above, on windows two orders of magnitude longer.
+    @test ustrip(Hz^-1, get_noise_density(ts.noise_estimators.GPSL1C_P)) ≈ 1.0 rtol = 0.55
 end
 
-@testset "the PRN rotates through the untracked codes" begin
+@testset "the PRN rotates through the whole family, tracked codes included" begin
     # Advancing a PRN needs a position, and a position is scalar state with no
-    # per-signal anchor — so it is carried in the window itself. Each observation
-    # records the code it was measured with, and the next one steps on from there,
-    # skipping every PRN tracked *on this signal* (where code phase 0 would sit on
-    # the correlation peak). A PRN tracked on another signal of the same band is a
-    # different code and stays available.
+    # per-signal anchor — so it is carried in the window itself: each observation
+    # records the code it was measured with, and the next one steps on from there.
+    #
+    # Tracked PRNs are deliberately **not** skipped. Skipping them was what made a
+    # fixed code phase 0 safe; the phase is now drawn at random instead, which
+    # both removes the need and removes the reference's last read of satellite
+    # state. See the two tests below for the properties that replace the skip.
     ts = TrackState(;
         signal = GPSL1,
         noise_estimators = (GPSL1CA = CorrelatorNoiseEstimator(),),
@@ -202,9 +209,66 @@ end
     track!((L1 = BandMeasurement(_sky(-Inf; seed = 2), FS),), ts)
     prns = [obs.prn for obs in ts.noise_estimators.GPSL1CA.buffered]
     @test length(prns) == 10
-    @test !any(p -> p in (3, 4), prns)          # never a tracked PRN
-    @test allunique(prns)                       # ... and it really does advance
-    @test prns == Int16[1, 2, 5, 6, 7, 8, 9, 10, 11, 12]
+    @test allunique(prns)                       # it really does advance
+    @test prns == Int16[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+end
+
+@testset "the code phase and carrier are drawn per sub-integration" begin
+    # The draws have to actually reach the kernel, and they have to be
+    # reproducible when the caller supplies a generator — the paired self-leakage
+    # comparison in `cn0_estimators/noise_ref_in_the_loop.jl` depends on the
+    # second half of that.
+    m = BandMeasurement(_sky(-Inf; seed = 4), FS)
+    dc = CPUDownconvertAndCorrelator()
+    function densities(seed)
+        estimator =
+            CorrelatorNoiseEstimator(; window_duration = 1000.0s, rng = Xoshiro(seed))
+        Tracking.update_noise!(
+            estimator,
+            m,
+            1,
+            NUM_SAMPLES,
+            Tracking.NoiseUpdateContext(GPSL1, 0, dc),
+        )
+        [ustrip(Hz^-1, o.noise_density) for o in estimator.buffered]
+    end
+    @test densities(1) == densities(1)          # seeded, so a run is reproducible
+    @test densities(1) != densities(2)          # ... and the draws reach the kernel
+end
+
+@testset "a random code phase keeps a present-but-untracked signal off the reference" begin
+    # The property that replaces the untracked-PRN skip, and the reason the phase
+    # is randomised at all. `_sky` puts its satellite at code phase 0 and zero
+    # Doppler — exactly where a reference pinned to phase 0 would despread it. A
+    # fixed phase therefore does not merely risk a hit, it lands one on *every*
+    # observation measured with that PRN, worth `T·(C/N₀)/3 ≈ 10.5·N₀` at
+    # 45 dB-Hz, and — because the replica is re-anchored on a nominal-rate grid —
+    # it never drifts off again.
+    #
+    # Nothing tracks PRN 7 here, so the old skip would not have caught it either:
+    # this is the untracked spoofed-or-unacquired signal, not the self-leakage
+    # case.
+    m = BandMeasurement(_sky(45.0; seed = 3, prn = 7), FS)
+    dc = CPUDownconvertAndCorrelator()
+    # `carrier_dither = 0` isolates the code-phase draw. With the dither on, a hit
+    # needs both draws to land and the test would pass for the weaker reason.
+    estimator = CorrelatorNoiseEstimator(;
+        window_duration = 1000.0s,
+        carrier_dither = 0.0Hz,
+        rng = Xoshiro(7),
+    )
+    context = Tracking.NoiseUpdateContext(GPSL1, 0, dc)
+    for _ = 1:40
+        Tracking.update_noise!(estimator, m, 1, NUM_SAMPLES, context)
+    end
+    on_seven = [ustrip(Hz^-1, o.noise_density) for o in estimator.buffered if o.prn == 7]
+    others = [ustrip(Hz^-1, o.noise_density) for o in estimator.buffered if o.prn != 7]
+    @test length(on_seven) >= 10
+    # Medians, not means: the randomisation converts the standing bias into a
+    # ≈0.6 %-per-observation outlier, and pinning the median is what says the
+    # *bias* is gone rather than that this seed drew no outlier at all. A fixed
+    # phase 0 would put this ratio at ≈11.
+    @test _median(on_seven) / _median(others) ≈ 1.0 rtol = 0.6
 end
 
 @testset "the reference's taps are spaced wide enough to be independent" begin

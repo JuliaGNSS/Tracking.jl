@@ -115,13 +115,35 @@ CorrelatorNoiseEstimator()
 Tracking.update_noise!(::CorrelatorNoiseEstimator, ::Tracking.BandMeasurement, ::Integer, ::Integer, ::Tracking.NoiseUpdateContext)
 ```
 
-Three properties are worth knowing about it.
+Four properties are worth knowing about it.
 
-**It is open-loop.** The reference runs at its band's nominal IF with zero
-Doppler and an off-peak code phase from a rotating PRN. There is no
-discriminator, no loop filter and no NCO update ever written to it — so it is
-correct with **zero satellites tracked**, which is also what would make it usable
-as an acquisition CFAR floor.
+**It is open-loop.** The reference runs at its band's nominal IF, dithered, with
+a random code phase and a rotating PRN. There is no discriminator, no loop filter
+and no NCO update ever written to it, and it reads nothing at all from satellite
+state — so it is correct with **zero satellites tracked**, which is also what
+would make it usable as an acquisition CFAR floor.
+
+**Its code phase and Doppler are randomised**, drawn afresh for every
+sub-integration. The reason is not an adversary; it is that a *stationary*
+reference makes a chance alignment permanent. The replica is re-anchored to phase
+0 on a grid running at the nominal chip rate, so against any incoming signal at
+zero Doppler the relative phase is frozen wherever it lands — and a
+present-but-untracked signal (a spoofed PRN, or a visible satellite the receiver
+has not acquired) has a `3 × 1.5 / 1023 ≈ 0.44 %` chance per PRN of landing
+inside a tap, worth `T·(C/N₀)/3 ≈ 10.5·N₀` at 45 dB-Hz on every observation with
+that code, forever. The geometry is perverse too: relative phase drifts only at
+the signal's own code Doppler, so *low* Doppler both enables a hit and makes it
+stick. Drawing the phase and the carrier per sub-integration turns that into an
+independent trial per observation — a ≈0.07 dB residual instead of a ≈1.5 dB
+standing bias — and since a hit needs both draws, the two multiply.
+
+This is also why the rotation covers the **whole PRN family**, tracked codes
+included. Skipping tracked PRNs was what made a fixed phase 0 safe; a random
+phase makes it unnecessary, and dropping it removes the reference's only
+dependency on satellite state while keeping the pool at a constant 32 — under the
+old rule the pool shrank, and diluted a bad draw less well, exactly as the
+receiver acquired more satellites. Landing within ±1 chip of a tracked peak now
+costs ≈0.045 dB for the single observation it touches.
 
 **It is model-free**, and that is the reason it despreads rather than measuring
 `Σ|x|²`. The reference traverses the *identical* quantise → downconvert →
@@ -183,9 +205,14 @@ Only two things, because everything else is computed here:
    same return path as the correlator outputs, so no new wire interface is
    needed: `append_noise_observation!` sits beside
    [`append_correlator_output!`](@ref) on the host.
-2. **Use an off-peak code phase and rotate the PRN.** A PRN not currently tracked
-   *on that signal* is simplest, since then any phase is safe — a PRN tracked on
-   another signal of the same band is a different code and stays available.
+2. **Randomise the code phase per dump, and rotate the PRN.** Do not pin the
+   phase — see above for why a stationary reference turns a chance alignment into
+   a permanent one. On an FPGA this is the *easy* option: a free-running code
+   generator gives an arbitrary phase, where phase 0 needs a reset. Dithering the
+   carrier a few kHz either side of the nominal IF costs one more LFSR draw and
+   multiplies the protection. With the phase randomised there is no need to know
+   which PRNs are tracked, so the noise channel needs no input from the tracking
+   channels at all.
 
 A producer that can only dump on the code epoch matches the software default
 exactly, so in the normal case there is nothing to reconcile. Where a producer

@@ -496,8 +496,8 @@ genuinely suffers, so reporting it is correct rather than a defect; the measured
 39.1 dB-Hz at 250 Hz is 40 minus exactly that.
 
 What makes the default robust here is that the **noise reference is open-loop**:
-it runs at the band's nominal IF with zero Doppler and measures *noise*, which is
-white. No amount of Doppler error on any satellite can perturb the denominator,
+it runs near the band's nominal IF, at a random code phase, and measures *noise*,
+which is white. No amount of Doppler error on any satellite can perturb the denominator,
 so `N̂₀` is trustworthy precisely when nothing derived from the loop is.
 
 Once the loop converges, NWPR recovers — 39.2 dB-Hz at every offset up to 120 Hz
