@@ -1504,7 +1504,6 @@ if isdefined(Tracking, :CorrelatorNoiseEstimator)
             Tracking.BandMeasurement(rand(ComplexF32, num_samples), sampling_frequency)
         context = Tracking.NoiseUpdateContext(
             gnss_signal,
-            (),
             0,
             Tracking.CPUDownconvertAndCorrelator(),
         )
