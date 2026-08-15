@@ -22,6 +22,7 @@ using Tracking:
     BitBuffer,
     CN0UpdateContext,
     CPUDownconvertAndCorrelator,
+    CorrelatorNoiseEstimator,
     MomentsCN0Estimator,
     NWPRCN0Estimator,
     NoiseRefCN0Estimator,
@@ -192,9 +193,11 @@ end
     # The one bias this estimator carries and NWPR does not: the reference
     # despreads with a *wrong* PRN, so it also collects the tracked satellite's
     # own power, `ε_self = C/f_chip`. Measured as a paired comparison — the same
-    # noise realisation, the same PRN rotation, with and without the satellite —
-    # so the loop's own σ cancels and the prediction is testable at a few per
-    # cent rather than needing hundreds of seeds.
+    # noise realisation, the same PRN rotation, the same code-phase and carrier
+    # draws, with and without the satellite — so the loop's own σ cancels and the
+    # prediction is testable at a few per cent rather than needing hundreds of
+    # seeds. The reference's `rng` is what makes the last of those hold: the
+    # draws are random but seeded, so the two runs despread identically.
     gpsl1 = GPSL1CA()
     fs = 4e6Hz
     num_samples = 40_000
@@ -203,9 +206,13 @@ end
     noise = sqrt(ustrip(Hz, fs)) .* randn(rng, ComplexF64, num_samples)
 
     function density(signal)
-        # PRN 1 is tracked in both runs, so the reference skips it identically
-        # and borrows the same codes in the same order.
-        ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 0.0Hz)])
+        # A freshly seeded generator per run, so both borrow the same codes in
+        # the same order *and* despread them at the same phases and carriers.
+        ts = TrackState(
+            gpsl1,
+            [TrackedSat(gpsl1, 1, 0.0, 0.0Hz)];
+            noise_estimators = (GPSL1CA = CorrelatorNoiseEstimator(; rng = Xoshiro(1)),),
+        )
         dc = CPUDownconvertAndCorrelator()
         for _ = 1:10
             track!(signal, ts, fs; downconvert_and_correlator = dc)

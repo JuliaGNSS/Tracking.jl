@@ -27,11 +27,50 @@ reference despread with some *other* signal's code, both get wrong. See
 
 # It is open-loop
 
-The reference has **no feedback of any kind**: it runs at the band's nominal IF
-with zero Doppler and an off-peak code phase from a rotating PRN, so there is no
-discriminator, no loop filter and no NCO update ever written to it. It is
-therefore correct with **zero satellites tracked**, and on an FPGA a noise
-channel is a strict subset of a tracking channel rather than an addition to one.
+The reference has **no feedback of any kind**: it runs at the band's nominal IF,
+at a randomly dithered offset from zero Doppler, with a random code phase and a
+rotating PRN. There is no discriminator, no loop filter and no NCO update ever
+written to it — and, since the randomisation removed the need to know which PRNs
+are in use, it reads **nothing** from satellite state, not even the tracked key
+set. It is therefore correct with **zero satellites tracked**, and on an FPGA a
+noise channel is a strict subset of a tracking channel rather than an addition to
+one.
+
+# Why the code phase and the Doppler are randomised
+
+A reference at a *fixed* code phase and *exactly* zero Doppler is a stationary
+target, and the failure that matters is not an attacker — it is that a hit never
+goes away. The replica is re-anchored to code phase 0 on a grid running at the
+**nominal** chip rate, so the relative phase against any incoming signal at zero
+Doppler is frozen: whatever it lands on, it stays. A signal that is present but
+untracked — a spoofed PRN, or simply a visible satellite the receiver has not
+acquired — has a `3 × 1.5 / 1023 ≈ 0.44 %` chance per PRN of sitting inside one
+of the three taps, and if it does it contributes `T·(C/N₀)/3 ≈ 10.5·N₀` at
+45 dB-Hz to every observation on that PRN, **indefinitely** (≈+1.5 dB on `N̂₀`
+after the rotation's dilution). Worse, the geometry is perverse: relative phase
+drifts only at the signal's own code Doppler (`f_d/1540`), so *low* Doppler is
+both what makes a hit possible and what makes it permanent.
+
+Drawing a fresh code phase and a fresh carrier offset per sub-integration turns
+that standing bias into an independent per-observation trial. For a full sky at
+45 dB-Hz the residual is `≈0.07 dB` — a handful of 1 %-sized outliers scattered
+through a 1000-entry window, rather than a permanent shift of the floor — and,
+because a hit now needs *both* draws to land, the two randomisations multiply.
+
+It also makes the untracked-PRN restriction unnecessary, which is why the
+reference now rotates over **all** PRNs of the family: a random phase lands
+within ±1 chip of a tracked satellite's peak with probability `≈0.6 %`, worth
+`10.5/1000 ≈ 0.045 dB` for the one observation it touches — an order of magnitude
+under the whole-sky leakage the estimator already carries uncorrected. A constant
+32-PRN pool also stops the rotation from shortening (and the dilution from
+worsening) exactly as the receiver acquires more satellites.
+
+Neither draw biases the measurement. `N̂₀ = |B|²/(N·A_c²·f_s)` is unbiased for
+any starting phase, and for the carrier the reference measures the same noise
+power wherever it sits; `carrier_dither` of ±5 kHz smears the spectral weighting
+`∫ S_I(f)·|G(f)|² df` by 0.25 % of a 2 MHz main lobe, which no coloured
+interferer resolves. On an FPGA an arbitrary code phase is *easier* than phase 0
+— a free-running code generator gives you one, where phase 0 needs a reset.
 
 # Fields / configuration
 
@@ -48,6 +87,21 @@ channel is a strict subset of a tracking channel rather than an addition to one.
     correlation at half a chip is ≈0.5, so three taps are worth 2.25 independent
     looks. At ≥1 chip they are worth 2.98. 1.5 chips sits in the autocorrelation
     null and clear of both the 1- and 2-chip sidelobe values.
+  - `carrier_dither` — half-width of the uniform offset added to the band's
+    nominal IF, per sub-integration (5 kHz by default, i.e. the terrestrial GNSS
+    Doppler spread). Zero pins the reference at the IF exactly, which restores
+    half of the stationary target described above — useful to isolate the
+    code-phase draw in a test, and not otherwise.
+  - `rng` — the source of the code-phase and carrier draws, **seeded and
+    therefore reproducible** by default (`Xoshiro(0)`, one stream per estimator,
+    advanced in place like `buffered` so the struct is never rebuilt). What the
+    randomisation has to defeat is a *stationary* reference, not a reader: an
+    attacker cannot observe the chunk grid the phase would be measured against,
+    so scattering the draws is the whole requirement and unpredictability buys
+    nothing on top. Reproducibility, on the other hand, buys a lot in a library
+    whose other guarantees are phrased as bit-identical arithmetic. Pass
+    `rng = Random.default_rng()` for a task-local, non-reproducible stream (also
+    the one to use if you ever share an estimator across threads).
   - `buffered` — the sliding window itself, a **length-managed FIFO** written in
     place. The `Vector`'s own length is the position, so there is no ring index
     to write back and the struct is never rebuilt — which is what lets per-signal
@@ -71,11 +125,13 @@ correlator, which naturally dumps on the code epoch. The variance is bought back
 with `window_duration` instead, which is nearly free — a 1 s window is ~1000
 `Float64` densities per signal.
 """
-struct CorrelatorNoiseEstimator{D,T} <: AbstractNoiseEstimator
+struct CorrelatorNoiseEstimator{D,T,R<:AbstractRNG} <: AbstractNoiseEstimator
     window_duration::typeof(1.0s)
     tap_code_shift::Float64
+    carrier_dither::typeof(1.0Hz)
     buffered::Vector{NoiseObservation{D,T}}
     code_replica::Vector{Int8}
+    rng::R
 end
 
 """
@@ -83,8 +139,15 @@ $(SIGNATURES)
 
 Construct a [`CorrelatorNoiseEstimator`](@ref) averaging over the last
 `window_duration` of observations, with the reference correlator's taps spaced
-`tap_code_shift` chips apart. See the type's docstring for what the two
+`tap_code_shift` chips apart and its carrier dithered by up to `carrier_dither`
+either side of the band's nominal IF. See the type's docstring for what the
 parameters buy and why nothing else is configurable.
+
+`rng` is drawn from for the per-sub-integration code phase and carrier offset. It
+defaults to a **seeded** `Xoshiro(0)`, so a run reproduces exactly; pass
+`Random.default_rng()` for a task-local, unpredictable stream. See the type's
+docstring for why scattering the draws — rather than making them unguessable — is
+the whole requirement.
 
 The window is `sizehint!`-ed to four times the number of code-period
 observations it expects to hold. The headroom is what makes the FIFO's
@@ -94,12 +157,16 @@ periodically shifts the front offset back and reallocates.
 function CorrelatorNoiseEstimator(;
     window_duration = 1.0s,
     tap_code_shift = 1.5,
+    carrier_dither = 5000.0Hz,
     num_ants::NumAnts = NumAnts(1),
+    rng::AbstractRNG = Xoshiro(0),
 )
     window_duration > zero(window_duration) ||
         throw(ArgumentError("window_duration must be positive, got $window_duration"))
     tap_code_shift > 0 ||
         throw(ArgumentError("tap_code_shift must be positive, got $tap_code_shift"))
+    carrier_dither >= zero(carrier_dither) ||
+        throw(ArgumentError("carrier_dither must not be negative, got $carrier_dither"))
     buffered = NoiseObservation{NoiseDensity,typeof(1.0s)}[]
     # Four times the count a 1 ms sub-integration would put in the window; see
     # the docstring for why the headroom rather than an exact fit.
@@ -107,8 +174,10 @@ function CorrelatorNoiseEstimator(;
     CorrelatorNoiseEstimator(
         uconvert(s, float(window_duration)),
         Float64(tap_code_shift),
+        uconvert(Hz, float(carrier_dither)),
         buffered,
         Int8[],
+        rng,
     )
 end
 
@@ -206,26 +275,33 @@ all, forever. Each observation is pushed **individually**: pre-averaging would
 put one entry per chunk in the window, re-welding its time span to the Doppler
 update rate.
 
-Each sub-integration starts its replica at code phase 0 and runs for its slice.
-**Nothing here follows a code-period boundary**, and that is deliberate: the
-reference despreads with a wrong PRN at a wrong phase, so there is no signal to
-accumulate coherently and `N̂₀ = |B|²/(N·A_c²·f_s)` is unbiased for any `N` and
-any starting phase. Following boundaries would be actively harmful — a chunk
-rarely holds a whole number of code periods, so a boundary-aligned reference
-would have to carry a partial accumulator across calls, which is exactly the
-scalar state that has no per-signal anchor. Successive observations are
-independent because their *sample* ranges are disjoint; the replica repeating is
-irrelevant.
+Each sub-integration draws a **fresh random code phase** and a **fresh random
+carrier offset** within ±`carrier_dither` of the band's nominal IF, then runs for
+its slice. **Nothing here follows a code-period boundary**, and that is
+deliberate: the reference despreads with a wrong PRN at a wrong phase, so there
+is no signal to accumulate coherently and `N̂₀ = |B|²/(N·A_c²·f_s)` is unbiased
+for any `N` and any starting phase. Following boundaries would be actively
+harmful — a chunk rarely holds a whole number of code periods, so a
+boundary-aligned reference would have to carry a partial accumulator across
+calls, which is exactly the scalar state that has no per-signal anchor.
+Successive observations are independent because their *sample* ranges are
+disjoint; the replica repeating is irrelevant.
+
+The draws are per sub-integration rather than per chunk so that every window
+entry is an independent trial — see [`CorrelatorNoiseEstimator`](@ref) for why a
+*stationary* phase and Doppler turn a chance alignment with a present-but-
+untracked signal into a permanent bias, and the randomisation turns it back into
+an occasional single-observation outlier.
 
 All of the correlator's taps are used and pooled into one power sum, at
 `tap_code_shift` chips apart so they are genuinely independent looks (see the
 type's docstring). The despread runs on the caller's backend kernel — the same
 one the prompt goes through — which is what makes the measurement model-free.
 
-The reference is **open-loop**: the band's nominal IF as the carrier frequency,
-zero Doppler and zero carrier phase. ±5 kHz of Doppler is 0.5 % of a 1 MHz code
-band, so no satellite's state is needed and the reference is correct with
-nothing tracked at all.
+The reference is **open-loop**: no discriminator, no loop filter, no NCO update,
+and nothing read from satellite state at all. The PRN rotates over the whole
+family, tracked or not, because a random phase makes avoiding the tracked ones
+unnecessary.
 """
 function update_noise!(
     estimator::CorrelatorNoiseEstimator,
@@ -258,7 +334,7 @@ function update_noise!(
     num_taps = length(sample_shifts)
     code_amplitude = get_code_amplitude(signal_type)
 
-    prn, code_phase = _next_noise_prn(estimator, signal_type, context)
+    prn = _next_noise_prn(estimator, signal_type)
     # `gen_code_replica!` writes *at* `start_sample` while the kernel reads the
     # replica offset by `start_sample - 1`, so the buffer spans the whole
     # measurement rather than one slice.
@@ -267,12 +343,23 @@ function update_noise!(
     length(estimator.code_replica) < replica_size &&
         resize!(estimator.code_replica, replica_size)
 
+    rng = estimator.rng
+    code_length = get_code_length(signal_type)
+    carrier_dither = estimator.carrier_dither
+    intermediate_frequency = measurement.intermediate_frequency
+
     for sub = 1:num_sub
         # Equal slices: the `sub`-th covers samples `⌊(sub−1)N/num_sub⌋+1 … ⌊subN/num_sub⌋`.
         slice_start = Int(first_sample) + div((sub - 1) * num_samples, num_sub)
         slice_stop = Int(first_sample) + div(sub * num_samples, num_sub) - 1
         slice_samples = slice_stop - slice_start + 1
         slice_samples > 0 || continue
+        # One draw each, per sub-integration. Both are free — the kernels already
+        # take a code phase and a carrier frequency — and both are what keep a
+        # chance alignment with a present-but-untracked signal from freezing into
+        # a standing bias. See the type's docstring.
+        code_phase = rand(rng) * code_length
+        carrier_frequency = intermediate_frequency + (2 * rand(rng) - 1) * carrier_dither
         accumulators = _correlate_noise_reference!(
             context.downconvert_and_correlator,
             estimator.code_replica,
@@ -283,7 +370,7 @@ function update_noise!(
             sample_shifts,
             code_phase,
             code_frequency,
-            measurement.intermediate_frequency,
+            carrier_frequency,
             sampling_frequency,
             slice_start,
             slice_samples,
@@ -325,11 +412,10 @@ end
 @inline _noise_reference_samples(samples::AbstractMatrix) =
     view(samples, :, size(samples, 2))
 
-# Which PRN to borrow a code from, and at which phase. Advancing a PRN needs a
-# position, and a position is scalar state with no per-signal anchor — so it is
-# carried in the window instead: `NoiseObservation` records the PRN it was
-# measured with, and the next one steps on from `last(buffered).prn`. An empty
-# window starts at the lowest untracked PRN.
+# Which PRN to borrow a code from. Advancing a PRN needs a position, and a
+# position is scalar state with no per-signal anchor — so it is carried in the
+# window instead: `NoiseObservation` records the PRN it was measured with, and
+# the next one steps on from `last(buffered).prn`. An empty window starts at 1.
 #
 # Rotation is worth this much and no more. The leakage term is already a sum over
 # the whole sky, so it is averaged over that many cross-correlation draws; what a
@@ -340,20 +426,19 @@ end
 # wrong PRN collects the tracked satellite's own power to the same expected
 # degree.
 #
-# Preferring an untracked PRN is what makes code phase 0 safe. If every PRN of
-# the family is tracked, reuse one and offset by half a code period, which is far
-# outside the correlation peak.
+# The rotation runs over the **whole family**, tracked PRNs included. Skipping
+# the tracked ones was what made a fixed code phase 0 safe; a random phase makes
+# it unnecessary, and keeping the skip would have cost more than it bought — it
+# is the only thing the reference read from satellite state, and it shrank the
+# pool (worsening the dilution of any one bad draw) exactly as the receiver
+# acquired more satellites. Landing within ±1 chip of a tracked peak now has
+# probability ≈0.6 % and is worth ≈0.045 dB for the single observation it
+# touches, against the ≈0.9 dB of whole-sky leakage already carried uncorrected.
 @inline function _next_noise_prn(
     estimator::CorrelatorNoiseEstimator,
     signal_type::AbstractGNSSSignal,
-    context::NoiseUpdateContext,
 )
     num_prns = size(get_codes(signal_type), 2)
     previous = isempty(estimator.buffered) ? 0 : Int(last(estimator.buffered).prn)
-    for step = 1:num_prns
-        prn = mod(previous - 1 + step, num_prns) + 1
-        _is_prn_tracked(context, prn) || return prn, 0.0
-    end
-    prn = mod(previous, num_prns) + 1
-    prn, get_code_length(signal_type) / 2
+    mod(previous, num_prns) + 1
 end
