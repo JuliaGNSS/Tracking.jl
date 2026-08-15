@@ -1832,6 +1832,55 @@ Modified:
   it inherits CPU's. Confirm `_update_band_noise!` is reached exactly once there
   and that the sample type check does not reject the noise pass.
 
+## Rejected: a robust (median / trimmed-mean) window statistic
+
+Raised as the natural partner to randomising the reference — randomisation
+converts a standing bias into rare outliers, so a robust average would then
+*remove* them rather than average them in. It does not survive the heterogeneous
+window, and the reason is worth recording so it is not re-proposed.
+
+**It breaks the interchangeability of the three builders.** A window entry's
+density is `Gamma(M, N₀/M)` — `M` pooled independent looks — and every order
+statistic of a skewed distribution is shape-dependent, so the median reads low by
+an amount that is a function of `M` alone (4 M samples each):
+
+| `M` | median / `N₀` | reads |
+|---|---|---|
+| 1 | 0.693 | −1.59 dB |
+| 2 | 0.839 | −0.76 dB |
+| 3 | 0.891 | −0.50 dB |
+| 8 | 0.958 | −0.18 dB |
+| 64 | 0.995 | −0.02 dB |
+| 1000 | 1.000 | −0.00 dB |
+
+There is no single correction factor, because the window is *deliberately*
+heterogeneous — that is what the `M`-weighting exists for. A software source
+(`M = 3`, the taps) and a hardware producer reporting single dumps (`M = 1`)
+would disagree by **1.1 dB on identical white noise**, breaking "all three
+builders reduce to the same `N₀`", which is an explicit tested contract. A
+trimmed mean fails identically; the shape is the problem, not the estimator.
+
+**The effect it would remove is under the estimator's own σ.** With the draws
+randomised the outlier residual is ≈0.07 dB at 45 dB-Hz for a full sky, against
+a window σ of ≈0.08 dB — and 0.08 dB is already the stated threshold below which
+no further tuning is warranted.
+
+**And it is incoherent with what the design knowingly carries.** In the regime
+where a hit does get large (55–60 dB-Hz) the uncorrected whole-sky leakage is
+larger still — ≈0.9 dB at 45 dB-Hz, ≈1.15 dB for one satellite at 55. Chasing a
+0.4 dB outlier while carrying a 1 dB known bias is the wrong order of operations,
+and correcting the leakage is what reintroduces the cross-satellite feedback loop
+this design exists to remove.
+
+Cost, for completeness and not as the argument: 548 ns → 2.20 µs per signal per
+chunk, roughly doubling the noise subsystem (`update_noise!` is 1.78 µs), plus a
+scratch buffer — the window cannot be sorted in place, because
+`last(buffered).prn` carries the PRN-rotation position.
+
+If contamination of the reference is ever actually in doubt, the `Σ|x|²` second
+source below is the better instrument: it reads the leakage out directly instead
+of hiding it.
+
 ## Deferred follow-ups
 
 - **Optional coherent pre-sum of `M` records** inside
