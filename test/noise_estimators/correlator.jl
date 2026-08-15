@@ -504,4 +504,93 @@ end
     @test density(with_offset, 1ms) ≈ density(ComplexF32.(noise), 1ms) rtol = 0.1
 end
 
+@testset "the window's running totals stay exact" begin
+    # `append_noise_observation!` and `get_noise_density` read cached sums rather
+    # than walking the window, so the cache has to be provably equal to the walk
+    # it replaces — including after thousands of appends have each added one entry
+    # and subtracted another, and including for a producer that mixes entry sizes
+    # (the case incremental floating-point arithmetic could drift on, and the one
+    # the periodic exact refresh exists for).
+    exact_span(e) = sum(o.duration for o in e.buffered)
+    exact_looks(e) = sum(o.num_sub_integrations for o in e.buffered)
+    exact_density(e) =
+        sum(o.num_sub_integrations * o.noise_density for o in e.buffered) / exact_looks(e)
+
+    rng = Xoshiro(17)
+    window = 50.0ms
+    estimator = CorrelatorNoiseEstimator(; window_duration = window)
+    for i = 1:5000
+        # 1-in-20 entries is a long pre-averaged dump among short ones, so the
+        # running sums are not adding and removing like-sized numbers.
+        duration = uconvert(s, (rand(rng) < 0.05 ? 200.0 : 1.0) * rand(rng) * ms)
+        Tracking.append_noise_observation!(
+            estimator,
+            Tracking.NoiseObservation(
+                (1.0 + 5rand(rng)) * 1e-10 / 1.0Hz,
+                rand(rng, 1:64),
+                duration,
+                Int16(rand(rng, 1:32)),
+            ),
+        )
+        i % 500 == 0 || continue
+        @test estimator.totals[].span ≈ exact_span(estimator) rtol = 1e-10
+        @test estimator.totals[].looks == exact_looks(estimator)
+        @test get_noise_density(estimator) ≈ exact_density(estimator) rtol = 1e-10
+    end
+
+    # …and the window is still bounded in time: minimal, but never short of the
+    # configured span.
+    @test estimator.totals[].span >= window
+    @test estimator.totals[].span - first(estimator.buffered).duration < window
+end
+
+@testset "reading the window does not walk it" begin
+    # `get_noise_density` runs once per signal per chunk. It used to sum the whole
+    # window on every call, which charged each chunk for the window length — i.e.
+    # for exactly the `K` the estimator's accuracy is bought with, so configuring
+    # a longer window made tracking slower. Timing is too flaky to assert on a
+    # shared runner; that the cost does not grow with `K` is the property, so
+    # assert the walk is gone by its allocation-free, K-independent shape instead.
+    estimator = CorrelatorNoiseEstimator(; window_duration = 1.0s)
+    observation = Tracking.NoiseObservation(2e-10 / 1.0Hz, 1, uconvert(s, 0.4ms), Int16(3))
+    for _ = 1:6000
+        Tracking.append_noise_observation!(estimator, observation)
+    end
+    @test Base.length(estimator) > 2000        # a full window, not a short one
+    get_noise_density(estimator)
+    @test (@allocated get_noise_density(estimator)) == 0
+    @test (@allocated Tracking.append_noise_observation!(estimator, observation)) == 0
+end
+
+@testset "the replica scratch is grown only where it is read ($(nameof(DC)))" for (
+    DC,
+    build,
+    quantise,
+    reads_replica,
+) in (
+    (CPUDownconvertAndCorrelator, () -> CPUDownconvertAndCorrelator(), false, true),
+    (
+        Int16DownconvertAndCorrelator,
+        () -> Int16DownconvertAndCorrelator(NUM_SAMPLES),
+        true,
+        false,
+    ),
+    (OneBitDownconvertAndCorrelator, () -> OneBitDownconvertAndCorrelator(), true, false),
+    (TwoBitDownconvertAndCorrelator, () -> TwoBitDownconvertAndCorrelator(), true, false),
+)
+    # The Int16 and bit-wise kernels pack the code sign plane themselves and take
+    # the `Vector{Int8}` only to share one signature. Sizing it for them held a
+    # byte per sample of the whole measurement, per signal, for something never
+    # read — half a megabyte on a 500 k-sample buffer.
+    signal = _sky(45.0; seed = 5)
+    ts = _tracked(quantise ? _to_int16(signal) : ComplexF32.(signal), build())
+    estimator = ts.noise_estimators.GPSL1CA
+    @test get_noise_density(estimator) !== nothing      # it still measured
+    if reads_replica
+        @test Base.length(estimator.code_replica) >= NUM_SAMPLES
+    else
+        @test isempty(estimator.code_replica)
+    end
+end
+
 end
