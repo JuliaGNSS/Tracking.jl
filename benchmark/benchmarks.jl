@@ -406,7 +406,7 @@ function bench_track(;
         downconvert_and_correlator = $downconvert_and_correlator,
     )
 end
-SUITE["track"]["1. Float32/2K – track"] = bench_track()
+SUITE["track"]["GPS L1CA, 1 sat, 2K @ 5 MHz – out-of-place"] = bench_track()
 
 # In-place track! (only on branches that define it). Mirrors bench_track so
 # the comparison report shows them side by side.
@@ -427,7 +427,7 @@ function bench_track_inplace(;
     )
 end
 if isdefined(Tracking, :track!)
-    SUITE["track"]["1. Float32/2K – track!"] = bench_track_inplace()
+    SUITE["track"]["GPS L1CA, 1 sat, 2K @ 5 MHz – in-place"] = bench_track_inplace()
 end
 
 # Fused kernel microbenchmarks (only available on branches with the fused kernel)
@@ -780,26 +780,50 @@ function bench_track_steady_state(
 end
 
 # Three per-system workloads exercised across four entry-point variants
-# (immutable / in-place × single-threaded / threaded). Naming convention:
+# (out-of-place / in-place × single-threaded / threaded).
 #
-#   track[!][-threaded] / <system> <Nsats>sat/<Nsamp>
+# Naming convention for every leaf under the "track" group:
 #
-# Master only registers the immutable variants (no `track!`); the
-# threaded suffix is also master-compatible since the underlying
+#   <constellation>, <Nsats> sats[, <extra>], <Nsamp> @ <rate> – <variant>
+#
+# where `<variant>` is `out-of-place` (`track`, returns a new state) or
+# `in-place` (`track!`), optionally followed by `, threaded` or by a non-default
+# sample backend (`, Int16` / `, OneBit` / `, TwoBit`). Both entry points are
+# named rather than leaving `track`'s rows bare: an unsuffixed row reads as "the
+# default" instead of "the other variant", which is the ambiguity the suffix is
+# there to remove in the first place. Float32 is the default backend and so goes
+# unmarked, the same way single-threaded does.
+#
+# The scenario carries the satellite count, the sample count and the sampling
+# rate, because the comparison table is read by people who have not opened this
+# file — "8 sats" is the number that explains why one row moved 1.1× and another
+# 2×.
+#
+# No numeric prefixes. The table sorts leaves alphabetically on the "/"-joined
+# path, so the scenario text alone has to produce a sensible order — which it
+# does: the constellation groups the rows, the variant suffix keeps each
+# scenario's variants adjacent, and the bit-sync block counts sort 2 / 20 / 200
+# because " " precedes "0". Numbering added nothing the text does not, drifted
+# out of order as cases were added (two different cases both called themselves
+# "7."), and read as a rank rather than as an index.
+#
+# The one place a lexicographic sort still reads oddly is sample counts of
+# different digit lengths: "500K" precedes "5K", so the 8-sat rows list the long
+# buffer first. Left as is — the rows that must be adjacent to be compared (a
+# scenario's variants, and a backend against its Float32 sibling) are, and
+# zero-padding the counts to fix the rest would cost more legibility than it buys.
+#
+# Master only registers the out-of-place variants (no `track!`); the threaded
+# suffix is also master-compatible since the underlying
 # `CPUThreadedDownconvertAndCorrelator` exists in both.
-# Flat keys with numeric prefixes so AirspeedVelocity's alphabetical sort
-# clusters all four {track, track!, track-threaded, track!-threaded} variants
-# of each case together in the PR comparison table. All entries live under a
-# single top-level "track" group; the variant is part of the case name so the
-# case prefix dominates the sort order.
 const _TRACK_BENCH_CASES = let gpsl1 = GPSL1CA(), gal = GalileoE1B()
     [
         (
-            "2. L1 8sat/5K",
+            "GPS L1CA, 8 sats, 5K @ 5 MHz",
             (systems = (gpsl1,), nsats_list = [8], sfreq = 5e6Hz, nsamp = 5000),
         ),
         (
-            "3. E1B 4sat/25K",
+            "Galileo E1B, 4 sats, 25K @ 25 MHz",
             (
                 systems = (gal,),
                 nsats_list = [4],
@@ -810,7 +834,7 @@ const _TRACK_BENCH_CASES = let gpsl1 = GPSL1CA(), gal = GalileoE1B()
             ),
         ),
         (
-            "4. 8L1+8E1B/25K",
+            "GPS L1CA + Galileo E1B, 8+8 sats, 25K @ 25 MHz",
             (
                 systems = (gpsl1, gal),
                 nsats_list = [8, 8],
@@ -824,11 +848,12 @@ const _TRACK_BENCH_CASES = let gpsl1 = GPSL1CA(), gal = GalileoE1B()
 end
 
 for (key, kw) in _TRACK_BENCH_CASES
-    SUITE["track"]["$key – track"] = bench_track_steady_state(false, false; kw...)
-    SUITE["track"]["$key – track-threaded"] = bench_track_steady_state(false, true; kw...)
+    SUITE["track"]["$key – out-of-place"] = bench_track_steady_state(false, false; kw...)
+    SUITE["track"]["$key – out-of-place, threaded"] =
+        bench_track_steady_state(false, true; kw...)
     if isdefined(Tracking, :track!)
-        SUITE["track"]["$key – track!"] = bench_track_steady_state(true, false; kw...)
-        SUITE["track"]["$key – track!-threaded"] =
+        SUITE["track"]["$key – in-place"] = bench_track_steady_state(true, false; kw...)
+        SUITE["track"]["$key – in-place, threaded"] =
             bench_track_steady_state(true, true; kw...)
     end
 end
@@ -908,11 +933,13 @@ if _HAS_TRACKED_SIGNAL
     end
 
     for n_signals = 1:3
-        prefix = "$(4 + n_signals). multi-signal N=$n_signals/5K"
+        # One satellite carrying N stacked signals — the sat count is 1 and the
+        # thing being swept is signals-per-sat, so the label says both.
+        prefix = "GPS L1CA, 1 sat, $n_signals signal$(n_signals == 1 ? "" : "s"), 5K @ 5 MHz"
         ts, signal =
             _make_multi_signal_track_state(; n_signals, nsamp = 5000, sfreq = 5e6Hz)
         dc = _make_cpu_dc(5e6Hz)
-        SUITE["track"]["$prefix – track"] = @benchmarkable Tracking.track(
+        SUITE["track"]["$prefix – out-of-place"] = @benchmarkable Tracking.track(
             $signal,
             $ts,
             $(5e6Hz);
@@ -922,7 +949,7 @@ if _HAS_TRACKED_SIGNAL
             ts_ip, signal_ip =
                 _make_multi_signal_track_state(; n_signals, nsamp = 5000, sfreq = 5e6Hz)
             dc_ip = _make_cpu_dc(5e6Hz)
-            SUITE["track"]["$prefix – track!"] = @benchmarkable Tracking.track!(
+            SUITE["track"]["$prefix – in-place"] = @benchmarkable Tracking.track!(
                 $signal_ip,
                 $ts_ip,
                 $(5e6Hz);
@@ -969,7 +996,7 @@ if _HAS_TRACKED_SIGNAL && isdefined(Tracking, :track!)
             nsamp = samples_per_block * n_blocks
             sig = rand(ComplexF32, nsamp)
             dc = _make_cpu_dc(sfreq)
-            SUITE["track"]["8. L1CA presync $(n_blocks) blk – track!"] = @benchmarkable(
+            SUITE["track"]["GPS L1CA, 1 sat, bit sync pending, $(n_blocks) blk @ 5 MHz – in-place"] = @benchmarkable(
                 Tracking.track!($sig, ts, $sfreq; downconvert_and_correlator = $dc),
                 setup = (
                     ts = first(
@@ -986,7 +1013,7 @@ if _HAS_TRACKED_SIGNAL && isdefined(Tracking, :track!)
             # The synced rows stay short: post-sync there is no per-block search
             # to leak from, so the extra length would only cost runtime.
             n_blocks == 200 && continue
-            SUITE["track"]["8. L1CA synced $(n_blocks) blk – track!"] = @benchmarkable(
+            SUITE["track"]["GPS L1CA, 1 sat, bit sync found, $(n_blocks) blk @ 5 MHz – in-place"] = @benchmarkable(
                 Tracking.track!($sig, ts, $sfreq; downconvert_and_correlator = $dc),
                 setup = (
                     ts = first(
@@ -1243,7 +1270,7 @@ if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
     # multi-signal (M=1) and multi-antenna (N=1) via the uniform pipeline.
     for n_signals in (3,)
         cap = _int16_capture(_AXES_NSAMP)
-        g = SUITE["track! Int16 vs Float32"]["multi-signal N=$n_signals @ 5 MHz"]
+        g = SUITE["track! Int16 vs Float32"]["GPS L1CA, 1 sat, $n_signals signals @ 5 MHz"]
         g["Float32"] = _axes_dc(
             _make_cpu_threaded_dc(_AXES_FS),
             cap,
@@ -1266,7 +1293,7 @@ if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
     end
     for num_ants in (4,)
         cap = _int16_capture_mat(_AXES_NSAMP, num_ants)
-        g = SUITE["track! Int16 vs Float32"]["$num_ants-antenna @ 5 MHz"]
+        g = SUITE["track! Int16 vs Float32"]["GPS L1CA, 1 sat, $num_ants antennas @ 5 MHz"]
         g["Float32"] = _axes_dc(
             _make_cpu_threaded_dc(_AXES_FS),
             cap,
@@ -1399,9 +1426,19 @@ if isdefined(Tracking, :Int16DownconvertAndCorrelator) && isdefined(Tracking, :t
     # tracks it across revisions. It uses the locked composite capture for the
     # same NaN reason as above, and additionally registers a TwoBit leaf.
     for (key, systems, nsats_list, sfreq, nsamp, prn_max, onebit, twobit, capture) in (
-        ("2. L1 8sat/5K", (GPSL1CA(),), [8], 5e6Hz, 5000, 32, true, false, _int16_capture),
         (
-            "3. E1B 4sat/25K",
+            "GPS L1CA, 8 sats, 5K @ 5 MHz",
+            (GPSL1CA(),),
+            [8],
+            5e6Hz,
+            5000,
+            32,
+            true,
+            false,
+            _int16_capture,
+        ),
+        (
+            "Galileo E1B, 4 sats, 25K @ 25 MHz",
             (GalileoE1B(),),
             [4],
             25e6Hz,
@@ -1412,7 +1449,7 @@ if isdefined(Tracking, :Int16DownconvertAndCorrelator) && isdefined(Tracking, :t
             _int16_capture,
         ),
         (
-            "7. L1 8sat/500K",
+            "GPS L1CA, 8 sats, 500K @ 5 MHz",
             (GPSL1CA(),),
             [8],
             5e6Hz,
@@ -1425,7 +1462,7 @@ if isdefined(Tracking, :Int16DownconvertAndCorrelator) && isdefined(Tracking, :t
     )
         sig16 = capture(nsamp)
         dc_i = _make_int16_dc(2^11)   # max_meas = 2^11 matches _int16_capture's ±2048
-        SUITE["track"]["$key – track! Int16"] = @benchmarkable(
+        SUITE["track"]["$key – in-place, Int16"] = @benchmarkable(
             Tracking.track!($sig16, ts, $sfreq; downconvert_and_correlator = $dc_i),
             setup = (
                 ts = first(
@@ -1442,7 +1479,7 @@ if isdefined(Tracking, :Int16DownconvertAndCorrelator) && isdefined(Tracking, :t
         )
         if onebit && isdefined(Tracking, :OneBitDownconvertAndCorrelator)
             dc_b = Tracking.OneBitDownconvertAndCorrelator()
-            SUITE["track"]["$key – track! OneBit"] = @benchmarkable(
+            SUITE["track"]["$key – in-place, OneBit"] = @benchmarkable(
                 Tracking.track!($sig16, ts, $sfreq; downconvert_and_correlator = $dc_b),
                 setup = (
                     ts = first(
@@ -1460,7 +1497,7 @@ if isdefined(Tracking, :Int16DownconvertAndCorrelator) && isdefined(Tracking, :t
         end
         if twobit && isdefined(Tracking, :TwoBitDownconvertAndCorrelator)
             dc_t = Tracking.TwoBitDownconvertAndCorrelator()
-            SUITE["track"]["$key – track! TwoBit"] = @benchmarkable(
+            SUITE["track"]["$key – in-place, TwoBit"] = @benchmarkable(
                 Tracking.track!($sig16, ts, $sfreq; downconvert_and_correlator = $dc_t),
                 setup = (
                     ts = first(
@@ -1559,6 +1596,6 @@ if isdefined(Tracking, :CorrelatorNoiseEstimator)
             downconvert_and_correlator = $downconvert_and_correlator,
         )
     end
-    SUITE["noise estimation"]["track! – Float32/2K with a noise reference"] =
+    SUITE["noise estimation"]["track! – GPS L1CA, 1 sat, 2K @ 5 MHz with a noise reference"] =
         bench_track_noise_ref()
 end
