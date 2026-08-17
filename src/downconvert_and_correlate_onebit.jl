@@ -388,10 +388,17 @@ const _OneBitDC =
 @inline _ob_num_ants_val(::AbstractCorrelator{M}) where {M} = NumAnts{M}()
 
 # ── The one-bit hybrid-blocked kernel ─────────────────────────────────────────
-# Returns this integration's correlation contribution: `Vector` of `NC` complex
+# Returns this integration's correlation contribution: `SVector{NC}` of complex
 # sums (one per tap) — `ComplexF64` (M=1) or `SVector{M,ComplexF64}` (M>1) — to be
 # added to the correlator's running accumulators. `@generated` over (NC, M): the
 # per-(antenna, tap) popcount accumulators live in named locals and unroll.
+#
+# `SVector` and not `Vector` because `NC` is a parameter here, so the result needs
+# no heap cell at all — matching `_int16_hybrid_blocked!`. It used to be a
+# `Vector`, which the compiler elided at the per-satellite call site but *not* at
+# the noise reference's, leaving that one call 112 B per despread (and so ~1 kB per
+# chunk at ten sub-integrations) on these two backends alone. This kernel's dynamic
+# fallback below, where `NC` is a runtime value, still returns a `Vector`.
 @generated function _onebit_hybrid_blocked!(
     dc::_OneBitDC,
     signal::AbstractVecOrMat{Complex{Int16}},
@@ -461,9 +468,7 @@ const _OneBitDC =
             :(SVector{$M,ComplexF64}(tuple($(ant...))))
         end
     end
-    ret =
-        M == 1 ? :(ComplexF64[$([tapval(k) for k = 1:NC]...)]) :
-        :(SVector{M,ComplexF64}[$([tapval(k) for k = 1:NC]...)])
+    ret = :(SVector{$NC}(tuple($([tapval(k) for k = 1:NC]...))))
 
     quote
         # Bit-wise correlation keeps only the code's SIGN, so it needs a binary (±1,
@@ -638,9 +643,12 @@ end
 # at runtime and horizontally sums each popcount chunk into per-(antenna, tap) Int64
 # totals. Not the hot path (it allocates the offset/total scratch and sums per chunk),
 # but bit-identical to the `@generated` kernel: `sum` over chunks of `sum(count_ones)`
-# equals `sum(count_ones)` over all chunks. Returns `Vector{ComplexF64}` (M=1) or
-# `Vector{SVector{M,ComplexF64}}` (M>1). `SVector` shifts are more specific and
-# dispatch to the `@generated` method above, so EPL/VEPL keep the fast unrolled path.
+# equals `sum(count_ones)` over all chunks. Returns a `Vector` — of `ComplexF64` (M=1)
+# or `SVector{M,ComplexF64}` (M>1) — rather than the `@generated` method's
+# `SVector{NC}`, because here the tap count is only known at runtime; the caller
+# broadcasts either shape onto the correlator's accumulators. `SVector` shifts are more
+# specific and dispatch to the `@generated` method above, so EPL/VEPL keep the fast
+# unrolled path.
 function _onebit_hybrid_blocked!(
     dc::_OneBitDC,
     signal::AbstractVecOrMat{Complex{Int16}},
@@ -1052,8 +1060,11 @@ end
         push!(sigs.args, signal_block(i))
     end
 
-    # Finalize: per signal, a Vector of NCᵢ tap sums — Iₓ = 2N − 2(A+B), Qₓ = 2(E − C)
-    # (matching the single-signal kernel's return so `_correlate_signals` is shared).
+    # Finalize: per signal, a Vector of NCᵢ tap sums — Iₓ = 2N − 2(A+B), Qₓ = 2(E − C).
+    # A `Vector` and not the single-signal kernel's `SVector{NC}`: these are consumed by
+    # the multi-signal `_correlate_signals`, which broadcasts each onto its signal's
+    # accumulators and lets the compiler elide the cell — which, unlike at the noise
+    # reference's call site, it does (measured 0 B for a two-signal satellite).
     function tapval(i, k)
         A(j) = s(Symbol("A_$(i)_$(j)_$k"))
         B(j) = s(Symbol("B_$(i)_$(j)_$k"))
