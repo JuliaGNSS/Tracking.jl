@@ -414,10 +414,11 @@ end
           Base.length(two_groups.noise_estimators.GPSL1CA)
 end
 
-@testset "an unchunked call measures once, and a re-pass does not" begin
-    # The gate is `chunk_duration === nothing && samples_unchanged`, and it is
-    # reachable from a direct caller as well as from `track!`'s drain pass — which
-    # is why `downconvert_and_correlate!`'s docstring says so.
+@testset "an unchunked call measures once, and a re-pass says so" begin
+    # `measure_noise` is what decides, and `samples_unchanged` — which answers the
+    # unrelated question of whether a backend may reuse a sample-derived cache —
+    # must not. `track!`'s drain pass is the caller that needs `false`; a direct
+    # caller re-passing over a measured buffer is the same situation.
     signal = _sky(-Inf; seed = 6)
     measurements = (L1 = BandMeasurement(signal, FS),)
     ts = TrackState(
@@ -425,14 +426,18 @@ end
         [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator())],
     )
     dc = CPUDownconvertAndCorrelator()
-    # Unchunked, samples not promised unchanged: the whole buffer in `num_sub`
-    # slices — 10 ms against a 1 ms code period.
+    # Unchunked: the whole buffer in `num_sub` slices — 10 ms against a 1 ms code
+    # period.
     downconvert_and_correlate!(dc, measurements, ts)
     @test Base.length(ts.noise_estimators.GPSL1CA) == 10
-    # The same call promising the samples are unchanged is a re-pass, and must not
-    # re-measure what has already been covered.
-    downconvert_and_correlate!(dc, measurements, ts; samples_unchanged = true)
+    # A declared re-pass must not re-measure what has already been covered.
+    downconvert_and_correlate!(dc, measurements, ts; measure_noise = false)
     @test Base.length(ts.noise_estimators.GPSL1CA) == 10
+    # `samples_unchanged` on its own no longer suppresses anything: promising the
+    # backend its cache is still valid says nothing about whether these samples
+    # have been measured.
+    downconvert_and_correlate!(dc, measurements, ts; samples_unchanged = true)
+    @test Base.length(ts.noise_estimators.GPSL1CA) == 20
 end
 
 @testset "a signal without a consumer is never despread" begin
