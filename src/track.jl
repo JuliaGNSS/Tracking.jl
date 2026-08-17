@@ -222,11 +222,18 @@ function track!(
     # the final chunk's Doppler), so the integration carries into the next
     # `track!` call. A boundary landing exactly on the buffer end completes
     # here, so fold once more; a no-op (per-sat early return) otherwise.
+    #
+    # `measure_noise = false` unless this is the only pass: unchunked, this call
+    # sees the whole buffer as one chunk, so measuring here would enter every
+    # sample into the noise window a second time. When no chunk ran at all
+    # (`chunk_index == 0`, a buffer shorter than one chunk) this *is* the pass
+    # that measures it.
     downconvert_and_correlate!(
         downconvert_and_correlator,
         measurements,
         track_state;
         samples_unchanged = chunk_index > 0,
+        measure_noise = chunk_index == 0,
     )
     estimate_dopplers_and_filter_prompt!(track_state, measurements)
     return track_state
