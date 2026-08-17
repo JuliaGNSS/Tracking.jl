@@ -1324,56 +1324,12 @@ end
     return nothing
 end
 
-"""
-$(SIGNATURES)
-
-Downconvert and correlate all satellites with the one-bit bit-wise backend.
-"""
-function downconvert_and_correlate(
-    dc::_OneBitDC,
-    measurements::BandMeasurements,
-    track_state::TrackState;
-    kwargs...,
-)
-    new_track_state =
-        TrackState(track_state; groups = _copy_groups_slot_vectors(track_state.groups))
-    downconvert_and_correlate!(dc, measurements, new_track_state; kwargs...)
-end
-
-"""
-$(SIGNATURES)
-
-In-place one-bit downconvert and correlate. Returns the same `track_state`.
-"""
-function downconvert_and_correlate!(
-    dc::_OneBitDC,
-    measurements::BandMeasurements,
-    track_state::TrackState;
-    chunk_index::Int = 0,
-    chunk_duration = nothing,
-    stop_before_partial::Bool = false,
-    samples_unchanged::Bool = false,
-)
-    _update_signal_noise!(
-        dc,
-        track_state,
-        measurements,
-        chunk_index,
-        chunk_duration,
-        samples_unchanged,
-    )
-    _foreach_group!(
-        _dc_one_group!,
-        track_state.groups,
-        dc,
-        measurements,
-        chunk_index,
-        chunk_duration,
-        stop_before_partial,
-        samples_unchanged,
-    )
-    return track_state
-end
+# The public `downconvert_and_correlate(!)` entry points are the backend-agnostic
+# ones in downconvert_and_correlate_cpu.jl, inherited via
+# `AbstractDownconvertAndCorrelator`: this backend's methods were byte-identical to
+# them, so the only thing they added was a third copy of the noise pass's call
+# site. Everything one-bit-specific is reached through `_despread_one_signal!`,
+# `_dc_one_group!`, `_check_sample_type` and `_dc_group_loop!`.
 
 # Reject non-`Complex{Int16}` sample buffers up front (12-bit ADC contract).
 # Defined as the shared `_check_sample_type` hook rather than inline in

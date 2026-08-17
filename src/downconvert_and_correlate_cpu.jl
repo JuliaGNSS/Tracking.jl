@@ -832,8 +832,11 @@ end
 """
 $(SIGNATURES)
 
-Downconvert and correlate all available satellites on the CPU (both the
-single-threaded and the multi-threaded backend). Returns a new
+Downconvert and correlate all available satellites. Defined on
+`AbstractDownconvertAndCorrelator`, so every backend — the CPU ones, the Int16
+one and both bit-wise ones — is served by this method; a backend customises
+what happens inside it through `_despread_one_signal!`, `_dc_one_group!`,
+`_check_sample_type` and `_threading`. Returns a new
 `TrackState` whose slot *values* are detached from the input (the input's
 per-sat tracking values are left untouched), but whose key set
 (`Indices`) is *shared* with the input — this step never changes the key
@@ -891,15 +894,14 @@ band sign planes). `track!` passes it on every chunk after the first so the
 pack happens once per call; leave it `false` (the default) whenever the
 buffers may have been refilled.
 
-It has a **second meaning** for the per-band noise measurement, which is worth
-knowing before passing it by hand: an *unchunked* call
-(`chunk_duration === nothing`) that also claims the samples are unchanged is
-taken to be a re-pass over a buffer that has already been measured, and its
-noise measurement is skipped. That is what keeps `track!`'s final drain pass —
-which sees the whole buffer as one chunk — from measuring everything a second
-time. A direct caller who truthfully passes `samples_unchanged = true` on an
-unchunked call therefore gets no noise observation from it; pass `false`, or
-chunk the call, to measure.
+`measure_noise = false` skips the per-signal noise measurement for this call,
+leaving every configured [`CorrelatorNoiseEstimator`](@ref)'s window untouched.
+Pass it on a call that re-covers samples an earlier call already measured —
+which is exactly what `track!` does on its final drain pass, where the whole
+buffer arrives as one unchunked chunk. Measuring there would enter every sample
+of the buffer into the window a second time. It has no effect on a
+`TrackState` whose C/N₀ estimators read no noise density, since nothing is
+measured on those at all.
 """
 function downconvert_and_correlate!(
     dc::AbstractDownconvertAndCorrelator,
@@ -909,6 +911,7 @@ function downconvert_and_correlate!(
     chunk_duration = nothing,
     stop_before_partial::Bool = false,
     samples_unchanged::Bool = false,
+    measure_noise::Bool = true,
 )
     _update_signal_noise!(
         dc,
@@ -916,7 +919,7 @@ function downconvert_and_correlate!(
         measurements,
         chunk_index,
         chunk_duration,
-        samples_unchanged,
+        measure_noise,
     )
     _foreach_group!(
         _dc_one_group!,
@@ -949,32 +952,28 @@ end
 # every chunk. Recursion unrolls it and each `update_noise!` devirtualises. A
 # signal with no entry does no work at all.
 #
-# **When to skip.** `samples_unchanged` alone must not gate this: `track!` passes
-# `samples_unchanged = chunk_index > 0`, so gating on it would measure chunk 0
-# and then freeze the window for the rest of the buffer. The call that does need
-# skipping is `track!`'s final drain pass, which passes neither `chunk_index` nor
-# `chunk_duration` — with `chunk_duration === nothing` the range defaults to the
-# whole buffer, so measuring there would re-measure everything already covered.
-# The discriminating condition needs no per-band sample pointer (which would be
-# the scalar state that has no anchor):
+# **When to skip.** Whether a call re-covers samples an earlier one already
+# measured is the caller's knowledge, not something to infer here, so it arrives
+# as `measure_noise`. The one caller that has to say no is `track!`'s final drain
+# pass: it passes neither `chunk_index` nor `chunk_duration`, so the range
+# defaults to the whole buffer and measuring there would enter every sample into
+# the window a second time. The cost is that a buffer's trailing partial never
+# reaches the window — at most one chunk per `track!` call, and omitting an entry
+# biases `σ̂²` not at all.
 #
-# | call                            | `chunk_duration` | `samples_unchanged` | measure? |
-# |---------------------------------|------------------|---------------------|----------|
-# | chunked call `k`                | set              | `k > 0`             | yes      |
-# | `track!`'s final drain pass     | `nothing`        | `true`              | no       |
-# | direct unchunked single call    | `nothing`        | `false`             | yes      |
-#
-# The cost is that a buffer's trailing partial never reaches the window — at most
-# one chunk per `track!` call, and omitting an entry biases `σ̂²` not at all.
+# `samples_unchanged` is deliberately *not* what decides it. It answers a
+# different question — may the backend reuse a sample-derived cache — and `track!`
+# passes it on every chunk after the first, so gating on it would measure chunk 0
+# and then freeze the window for the rest of the buffer.
 @inline function _update_signal_noise!(
     dc::AbstractDownconvertAndCorrelator,
     track_state::TrackState,
     measurements::BandMeasurements,
     chunk_index::Int,
     chunk_duration,
-    samples_unchanged::Bool,
+    measure_noise::Bool,
 )
-    isnothing(chunk_duration) && samples_unchanged && return nothing
+    measure_noise || return nothing
     noise_estimators = track_state.noise_estimators
     _update_signal_noise_walk!(
         Val(keys(noise_estimators)),
@@ -1034,13 +1033,13 @@ end
     chunk_index::Int,
     chunk_duration,
 ) where {K}
-    # The groups tracking signal `K`, and the signal instance itself. A key
+    # An instance of signal `K`, from whichever group happens to carry it. A key
     # naming a signal no group tracks measures nothing — that is the
     # correlator-ingest case, where the window is filled by
     # `append_noise_observation!` instead.
-    signal_groups = _groups_with_signal(Tuple(groups), Val(K))
-    isempty(signal_groups) && return nothing
-    signal = first(_signals_with_id(first(signal_groups).signals, Val(K)))
+    found = _first_signal_with_id(Tuple(groups), Val(K))
+    isempty(found) && return nothing
+    signal = first(found)
     # The samples are still a *band* property — one front end feeds every signal
     # on it. Only the despreading code, and therefore the measured floor, is per
     # signal.
@@ -1063,21 +1062,27 @@ end
     nothing
 end
 
-# The groups tracking signal `K`, as a tuple, and that signal within a group's
-# signal tuple. Both fold at compile time: a group's signal ids are constants of
-# its type.
-@inline _groups_with_signal(::Tuple{}, ::Val) = ()
-@inline function _groups_with_signal(t::Tuple, v::Val)
-    g = first(t)
-    rest = _groups_with_signal(Base.tail(t), v)
-    isempty(_signals_with_id(g.signals, v)) ? rest : (g, rest...)
+# An instance of signal `K`, searched groups-then-signals and returned as a 0- or
+# 1-tuple so the not-found case stays type-stable instead of widening to
+# `Union{Nothing,…}`. The instance is all anyone wants: the band it is measured on
+# comes from the signal *type* (`_signal_band_id`) and the estimator is already in
+# hand, so *which* group carries the signal — and how many do — changes nothing.
+# Folds at compile time; a group's signal ids are constants of its type.
+@inline _first_signal_with_id(::Tuple{}, ::Val) = ()
+@inline function _first_signal_with_id(
+    groups::Tuple{SignalGroup,Vararg{SignalGroup}},
+    v::Val,
+)
+    found = _first_signal_with_id(first(groups).signals, v)
+    isempty(found) ? _first_signal_with_id(Base.tail(groups), v) : found
 end
-
-@inline _signals_with_id(::Tuple{}, ::Val) = ()
-@inline function _signals_with_id(t::Tuple, v::Val{K}) where {K}
-    s = first(t)
-    rest = _signals_with_id(Base.tail(t), v)
-    get_signal_id(typeof(s)) === K ? (s, rest...) : rest
+@inline function _first_signal_with_id(
+    signals::Tuple{AbstractGNSSSignal,Vararg{AbstractGNSSSignal}},
+    ::Val{K},
+) where {K}
+    s = first(signals)
+    get_signal_id(typeof(s)) === K ? (s,) :
+    _first_signal_with_id(Base.tail(signals), Val(K))
 end
 
 # Last sample index (inclusive) this satellite may integrate up to in the
