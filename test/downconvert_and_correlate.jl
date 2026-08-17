@@ -673,15 +673,16 @@ Tracking.get_correlator_sample_shifts(
     )
     @test get_accumulators(public_result) ≈ ref_accumulators rtol = 1e-4
 
-    # Both backends' per-signal kernel
+    # Both backends' despread primitive — the one every despread goes through,
+    # satellites and noise reference alike. It draws its replica buffer from the
+    # backend's own scratch, so the size is all the caller supplies.
     for dc in (CPUDownconvertAndCorrelator(), CPUThreadedDownconvertAndCorrelator())
-        backend_code_replica = zeros(Int8, code_replica_length)
-        backend_result = Tracking._correlate_one_signal!(
+        backend_result = Tracking._despread_one_signal!(
             dc,
-            backend_code_replica,
-            gpsl1,
             correlator,
             signal,
+            gpsl1,
+            prn,
             dynamic_shifts,
             window_code_phase,
             0.0,
@@ -690,7 +691,7 @@ Tracking.get_correlator_sample_shifts(
             sampling_frequency,
             start_sample,
             num_samples,
-            prn,
+            code_replica_length,
         )
         @test get_accumulators(backend_result) ≈ ref_accumulators rtol = 1e-4
     end

@@ -185,11 +185,14 @@ parent.
 The per-sat correlation loop, per-group body, and public
 `downconvert_and_correlate(!)` entry points are defined once on this abstract
 type (see `downconvert_and_correlate_cpu.jl`); a subtype customises behaviour by
-overriding the dispatch hooks it needs — `_correlate_signals` / `_scratch_buffers`
-(kernel + scratch), `_threading` (serial vs. Polyester `@batch`, default serial),
-and `_check_sample_type` (per-backend sample-type check, default no-op). A
-subtype that overrides none inherits the single-threaded CPU plumbing rather
-than getting a `MethodError`.
+overriding the dispatch hooks it needs — `_despread_one_signal!` (the one
+correlation primitive, which both the per-satellite path and the noise reference
+go through), `_correlate_signals` / `_scratch_buffers` (multi-signal kernel +
+scratch), `_threading` (serial vs. Polyester `@batch`, default serial), and
+`_check_sample_type` (per-backend sample-type check, default no-op). A subtype
+that overrides none inherits the single-threaded CPU plumbing rather than getting
+a `MethodError`; one that overrides only `_despread_one_signal!` gets a working
+single-signal path, satellites and noise measurement alike.
 """
 abstract type AbstractDownconvertAndCorrelator end
 

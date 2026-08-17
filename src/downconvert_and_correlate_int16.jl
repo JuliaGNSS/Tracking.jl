@@ -1197,63 +1197,60 @@ end
     map(tuple, new_corrs, per_signal_completed)
 end
 
-# Per-signal correlate for the integer backend: single signal, static tap count,
-# any antenna count M. Returns the one-tuple
-# `((new_correlator, is_integration_completed),)` matching the Float32 backend's
-# `_correlate_signals` contract.
-@inline function _correlate_signals(
-    signals::Tuple{TrackedSignal},
-    per_signal_completed::Tuple{Bool},
+# The despread primitive on this backend's kernel — see `_despread_one_signal!`
+# in downconvert_and_correlate_cpu.jl for the contract and for why the noise
+# reference must go through the same kernel as the prompt. Serves the
+# per-satellite single-signal path and the open-loop noise reference alike; the
+# shared `_correlate_signals` above it needs no `_Int16DC` method of its own.
+#
+# `code_replica_size` is ignored: this backend packs the code sign plane inside
+# the kernel, so there is no replica buffer to size (which is also why it costs
+# the noise reference nothing here). So is `use_band_cache` — the shared band
+# sign planes are a bit-wise-backend thing; this kernel packs per call.
+@inline _despread_one_signal!(
     dc::_Int16DC,
-    signal,
-    code_doppler,
-    code_phase,
-    carrier_frequency,
-    carrier_phase,
-    sampling_frequency,
-    signal_start_sample,
-    samples_to_integrate,
+    correlator,
+    samples,
+    signal_type,
     prn,
-    num_samples_signal,
-)
-    head = signals[1]
-    s = head.signal
-    correlator = head.correlator
-    p = _signal_replica_params(
-        head,
-        code_doppler,
-        code_phase,
-        sampling_frequency,
-        num_samples_signal,
-    )
-    new_acc = _int16_hybrid_blocked!(
+    sample_shifts,
+    code_phase,
+    carrier_phase,
+    code_frequency,
+    carrier_frequency,
+    sampling_frequency,
+    start_sample,
+    num_samples,
+    ::Any,
+    ::Bool = true,
+) = update_accumulator(
+    correlator,
+    get_accumulators(correlator) .+ _int16_hybrid_blocked!(
         dc,
-        signal,
+        samples,
         _num_ants_val(correlator),
-        s,
+        signal_type,
         prn,
-        p.sample_shifts,
-        p.signal_code_phase,
+        sample_shifts,
+        code_phase,
         carrier_phase,
-        p.code_frequency,
+        code_frequency,
         carrier_frequency,
         sampling_frequency,
-        signal_start_sample,
-        samples_to_integrate,
-    )
-    prev = get_accumulators(correlator)
-    new_corr = update_accumulator(correlator, prev .+ new_acc)
-    ((new_corr, per_signal_completed[1]),)
-end
+        start_sample,
+        num_samples,
+    ),
+)
 
 # ── Group/measurement plumbing ────────────────────────────────────────────────
 # The per-sat loop (`_update_tracked_sat_correlator`), the group body
 # (`_dc_one_group!`), and the public `downconvert_and_correlate(!)` entry points
 # are all backend-agnostic and inherited from the CPU backend
 # (`downconvert_and_correlate_cpu.jl`) via `AbstractDownconvertAndCorrelator` —
-# the integer-specific work already routes through `_correlate_signals` and
-# `_scratch_buffers` dispatch. This backend only supplies the two hooks the
-# shared plumbing dispatches on: a sample-type check and a threading trait.
+# the integer-specific work already routes through `_despread_one_signal!` /
+# `_correlate_signals` and `_scratch_buffers` dispatch. This backend only supplies
+# the two hooks the shared plumbing dispatches on: a sample-type check and a
+# threading trait.
 
 # Reject non-`Complex{Int16}` sample buffers up front (12-bit ADC contract).
 @inline _check_sample_type(::_Int16DC, m) =
@@ -1269,49 +1266,3 @@ end
     )
 
 @inline _threading(::Int16ThreadedDownconvertAndCorrelator) = _BatchLoop()
-
-# Open-loop despread of the band's noise reference on this backend's kernel —
-# see `_correlate_noise_reference!` in downconvert_and_correlate_cpu.jl for why
-# the reference must go through the same kernel as the prompt. The bit-wise
-# accumulators are popcount counts rather than sample sums, so a float-kernel
-# reference would put `|P|²` and `N̂₀` on incompatible scales.
-#
-# `code_replica` goes unused here: this backend packs the code sign plane inside
-# the kernel.
-@inline _correlate_noise_reference!(
-    dc::_Int16DC,
-    ::Vector{Int8},
-    samples,
-    correlator::AbstractCorrelator,
-    signal_type,
-    prn::Integer,
-    sample_shifts,
-    code_phase,
-    code_frequency,
-    carrier_frequency,
-    sampling_frequency,
-    start_sample::Integer,
-    num_samples::Integer,
-) = _int16_hybrid_blocked!(
-    dc,
-    samples,
-    _num_ants_val(correlator),
-    signal_type,
-    prn,
-    sample_shifts,
-    code_phase,
-    0.0,
-    code_frequency,
-    carrier_frequency,
-    sampling_frequency,
-    start_sample,
-    num_samples,
-)
-
-# This backend packs the code sign plane inside its own kernel, so the noise
-# reference's `code_replica` scratch goes unread — see `_grow_noise_code_replica!`
-# in noise_estimators/correlator.jl. Leave it empty rather than sizing it to the
-# measurement: that byte-per-sample buffer would be allocated and held per signal
-# for something never looked at.
-@inline _grow_noise_code_replica!(::_Int16DC, code_replica::Vector{Int8}, ::Integer) =
-    code_replica
