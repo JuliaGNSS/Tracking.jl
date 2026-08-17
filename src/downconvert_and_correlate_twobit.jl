@@ -738,10 +738,17 @@ const _TwoBitDC =
 end
 
 # ── The two-bit hybrid-blocked kernel ─────────────────────────────────────────
-# Returns this integration's correlation contribution: `Vector` of `NC` complex sums (one
+# Returns this integration's correlation contribution: `SVector{NC}` of complex sums (one
 # per tap) — `ComplexF64` (M=1) or `SVector{M,ComplexF64}` (M>1) — to be added to the
 # correlator's running accumulators. `@generated` over (NC, M): the per-(antenna, tap)
 # IS/IF/QS/QF and per-antenna GXA accumulators live in named locals and unroll.
+#
+# `SVector` and not `Vector` because `NC` is a parameter here, so the result needs no heap
+# cell at all — matching `_int16_hybrid_blocked!`. It used to be a `Vector`, which the
+# compiler elided at the per-satellite call site but *not* at the noise reference's,
+# leaving that one call 112 B per despread (and so ~1 kB per chunk at ten
+# sub-integrations) on this backend and the one-bit one alone. This kernel's dynamic
+# fallback below, where `NC` is a runtime value, still returns a `Vector`.
 @generated function _twobit_hybrid_blocked!(
     dc::_TwoBitDC,
     signal::AbstractVecOrMat{Complex{Int16}},
@@ -858,9 +865,7 @@ end
             :(SVector{$M,ComplexF64}(tuple($([cplx(j) for j = 1:M]...))))
         end
     end
-    ret =
-        M == 1 ? :(ComplexF64[$([tapval(k) for k = 1:NC]...)]) :
-        :(SVector{M,ComplexF64}[$([tapval(k) for k = 1:NC]...)])
+    ret = :(SVector{$NC}(tuple($([tapval(k) for k = 1:NC]...))))
 
     quote
         _tb_check_modulation(signal_type)
@@ -1038,8 +1043,10 @@ end
 # runtime-sized `AbstractVector`. Mirrors the one-bit dynamic method: same block
 # pipeline, but loops taps/antennas at runtime and horizontally sums each popcount chunk
 # into per-(antenna, tap) Int64 totals. Not the hot path, but bit-identical to the
-# `@generated` kernel. `SVector` shifts dispatch to the `@generated` method above, so
-# EPL/VEPL keep the fast unrolled path.
+# `@generated` kernel. Returns a `Vector` rather than that kernel's `SVector{NC}`,
+# because here the tap count is only known at runtime; the caller broadcasts either
+# shape onto the correlator's accumulators. `SVector` shifts dispatch to the
+# `@generated` method above, so EPL/VEPL keep the fast unrolled path.
 function _twobit_hybrid_blocked!(
     dc::_TwoBitDC,
     signal::AbstractVecOrMat{Complex{Int16}},
