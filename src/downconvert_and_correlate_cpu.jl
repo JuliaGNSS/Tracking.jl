@@ -194,55 +194,96 @@ end
     end
 end
 
-# Per-signal correlation kernel, shared by both CPU backends: generate
-# the code replica into the supplied `code_replica` buffer (from the
-# calling correlator's `ScratchBuffers`), then run the fused kernel via
-# `_fused_with_tile_scratch!` (which supplies SoA tile scratch when the
-# shifts are a runtime-sized `AbstractVector`). Returns a value of the
-# same correlator type as `correlator`.
+# THE per-backend correlation primitive: one despread of one signal over one
+# range of samples, accumulating into `correlator` and returning a value of the
+# same correlator type. Every despread in the package goes through it — the
+# per-satellite single-signal path (`_correlate_signals`) and the open-loop noise
+# reference (`update_noise!`) alike.
 #
-# Args are per-signal scalars: the caller is responsible for picking the
-# right `signal_type`, `correlator`, `code_phase` (modded into the signal's
-# primary period), `code_frequency`, and `sample_shifts` for this signal.
-@inline function _correlate_one_signal!(
+# That is what makes the noise measurement **model-free** structurally rather
+# than by agreement: the reference traverses the identical quantise →
+# downconvert → despread → accumulate path as the prompt because there is only
+# one path to traverse, so the measured `N₀` already carries the quantisation
+# loss, the quantiser's operating point under load and the code amplitude with no
+# per-backend correction. It is also the only thing that *can* work: the one- and
+# two-bit accumulators are popcount **counts** rather than sample sums, so a
+# float-kernel reference would compare `|P|²` and `N̂₀` on incompatible scales.
+# Four adapters kept in step by hand would have had to be re-verified on every
+# kernel change; one primitive cannot drift.
+#
+# Args are per-signal scalars: the caller picks the `signal_type`, `correlator`,
+# `code_phase` (modded into the signal's primary period), `code_frequency` and
+# `sample_shifts`. `carrier_phase` is where the caller's carrier stands — the
+# per-satellite path continues its NCO, the open-loop reference passes `0.0`.
+#
+# `code_replica_size` is what the backend needs *if* it generates a code replica
+# at all: the CPU kernels do, while the Int16 and bit-wise kernels pack the code
+# sign plane inside the kernel and ignore the argument. Size it against the whole
+# sample buffer plus the tap spread, not the slice — `gen_code_replica!` writes
+# *at* `start_sample` while the kernel reads the replica offset by
+# `start_sample - 1`.
+#
+# The CPU method draws that buffer from the calling backend's per-thread
+# `ScratchBuffers`, so one buffer serves the satellites and the noise reference
+# instead of one being held per noise estimator. The two never overlap: the noise
+# pass runs to completion at the top of `downconvert_and_correlate!`, before the
+# per-group satellite loop that reuses the slot, and the threaded backends index
+# the slot by `threadid()`.
+#
+# `use_band_cache` is the other half of that ordering, and the one thing the two
+# callers genuinely disagree about: the bit-wise backends pack a band's
+# measurement sign planes once per group and share them across its satellites, so
+# the per-satellite path may read that cache while the noise reference — running
+# *before* any group packs — must not, since the planes belong to whichever group
+# ran last, possibly on another band or another buffer. Backends without such a
+# cache ignore it.
+@inline function _despread_one_signal!(
     dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
-    code_replica,
-    signal_type,
     correlator,
-    signal,
+    samples,
+    signal_type,
+    prn,
     sample_shifts,
     code_phase,
     carrier_phase,
     code_frequency,
     carrier_frequency,
     sampling_frequency,
-    signal_start_sample,
-    signal_samples_to_integrate,
-    prn,
+    start_sample,
+    num_samples,
+    code_replica_size,
+    use_band_cache::Bool = true,
 )
-    gen_code_replica!(
-        code_replica,
-        signal_type,
-        code_frequency,
-        sampling_frequency,
-        code_phase,
-        signal_start_sample,
-        signal_samples_to_integrate,
-        sample_shifts,
-        prn,
-    )
-    _fused_with_tile_scratch!(
-        dc,
-        correlator,
-        signal,
-        code_replica,
-        sample_shifts,
-        carrier_frequency,
-        sampling_frequency,
-        carrier_phase,
-        signal_start_sample,
-        signal_samples_to_integrate,
-    )::typeof(correlator)
+    # GNSSSignals' embedded-LUT `gen_code!` is Int8-only (the legacy fixed-point
+    # generator that emitted `get_code_type(s)` — Int16/Float32 — was removed),
+    # so the code replica buffer is `Int8`. The fused kernel reads the replica as
+    # generic `CT = eltype(code_replica)` and widens to Float32, so Int8 works
+    # unchanged; CBOC (Galileo E1B) is the Int8 integer-amplitude approximation.
+    _with_code_replica_buffer(dc, Int8, code_replica_size) do code_replica
+        gen_code_replica!(
+            code_replica,
+            signal_type,
+            code_frequency,
+            sampling_frequency,
+            code_phase,
+            start_sample,
+            num_samples,
+            sample_shifts,
+            prn,
+        )
+        _fused_with_tile_scratch!(
+            dc,
+            correlator,
+            samples,
+            code_replica,
+            sample_shifts,
+            carrier_frequency,
+            sampling_frequency,
+            carrier_phase,
+            start_sample,
+            num_samples,
+        )::typeof(correlator)
+    end
 end
 
 # Dispatch helper for the fused kernel that hands SoA tile buffers from
@@ -592,11 +633,16 @@ end
     (; code_frequency, sample_shifts, code_replica_size, n_blocks, signal_code_phase)
 end
 
-# Single-signal path: gen one code replica + run the in-register fused
-# kernel. Returns a one-tuple of `(new_correlator, is_integration_completed)`.
-# This is the hot path for N=1 — the fused kernel keeps downconverted
-# samples in registers and is ~24% faster than the tile-share kernel
-# below at N=1.
+# Single-signal path, shared by **every** backend: derive this signal's replica
+# parameters, then hand them to the one despread primitive. Returns a one-tuple
+# of `(new_correlator, is_integration_completed)`. This is the hot path for N=1 —
+# on the CPU backends the fused kernel keeps downconverted samples in registers
+# and is ~24% faster than the tile-share kernel below at N=1.
+#
+# Untyped `dc`: the per-backend difference is entirely inside
+# `_despread_one_signal!`, so there is nothing left for a backend to override
+# here. Only the multi-signal method below is still per-backend, because the
+# tile-share kernels take all N signals at once and have no single-signal form.
 @inline function _correlate_signals(
     signals::Tuple{TrackedSignal},
     per_signal_completed::Tuple{Bool},
@@ -613,7 +659,6 @@ end
     num_samples_signal,
 )
     head = signals[1]
-    s = head.signal
     p = _signal_replica_params(
         head,
         code_doppler,
@@ -621,29 +666,22 @@ end
         sampling_frequency,
         num_samples_signal,
     )
-    # GNSSSignals' embedded-LUT `gen_code!` is Int8-only (the legacy fixed-point
-    # generator that emitted `get_code_type(s)` — Int16/Float32 — was removed),
-    # so the code replica buffer is `Int8`. The fused kernel reads the replica as
-    # generic `CT = eltype(code_replica)` and widens to Float32, so Int8 works
-    # unchanged; CBOC (Galileo E1B) is the Int8 integer-amplitude approximation.
-    new_corr = _with_code_replica_buffer(dc, Int8, p.code_replica_size) do code_replica
-        _correlate_one_signal!(
-            dc,
-            code_replica,
-            s,
-            head.correlator,
-            signal,
-            p.sample_shifts,
-            p.signal_code_phase,
-            carrier_phase,
-            p.code_frequency,
-            carrier_frequency,
-            sampling_frequency,
-            signal_start_sample,
-            samples_to_integrate,
-            prn,
-        )
-    end
+    new_corr = _despread_one_signal!(
+        dc,
+        head.correlator,
+        signal,
+        head.signal,
+        prn,
+        p.sample_shifts,
+        p.signal_code_phase,
+        carrier_phase,
+        p.code_frequency,
+        carrier_frequency,
+        sampling_frequency,
+        signal_start_sample,
+        samples_to_integrate,
+        p.code_replica_size,
+    )
     ((new_corr, per_signal_completed[1]),)
 end
 
@@ -1040,68 +1078,6 @@ end
     s = first(t)
     rest = _signals_with_id(Base.tail(t), v)
     get_signal_id(typeof(s)) === K ? (s, rest...) : rest
-end
-
-# One open-loop despread of the noise reference, on this backend's own kernel.
-# This is the only per-backend work the noise reference needs, and it is what
-# makes the measurement **model-free**: the reference traverses the identical
-# quantise → downconvert → despread → accumulate path as the prompt, so the
-# measured `N₀` already carries the quantisation loss, the quantiser's operating
-# point under load and the code amplitude, with no per-backend correction. It
-# also has to: the one- and two-bit accumulators are popcount *counts*, not
-# sample sums, so a float-kernel reference would compare `|P|²` and `N̂₀` on
-# incompatible scales.
-#
-# Returns the correlator's raw accumulators for one slice — every tap, which the
-# caller then pools (at ≥1 chip spacing they are independent looks at one
-# scalar, and nothing about their relative values means anything here).
-#
-# The CPU form is the single-satellite template's body: `gen_code_replica!` plus
-# the fused kernel and nothing else, on a replica buffer owned by the estimator
-# rather than borrowed from the backend's `ScratchBuffers` — so the reference can
-# never alias the per-signal replica path. `gen_code_replica!` writes *at*
-# `start_sample` while the kernel reads the replica offset by `start_sample - 1`,
-# which is why the buffer is sized against the whole measurement rather than the
-# slice.
-@inline function _correlate_noise_reference!(
-    dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
-    code_replica::Vector{Int8},
-    samples,
-    correlator::AbstractCorrelator,
-    signal_type,
-    prn::Integer,
-    sample_shifts,
-    code_phase,
-    code_frequency,
-    carrier_frequency,
-    sampling_frequency,
-    start_sample::Integer,
-    num_samples::Integer,
-)
-    gen_code_replica!(
-        code_replica,
-        signal_type,
-        code_frequency,
-        sampling_frequency,
-        code_phase,
-        start_sample,
-        num_samples,
-        sample_shifts,
-        prn,
-    )
-    get_accumulators(
-        _fused_standalone!(
-            correlator,
-            samples,
-            code_replica,
-            sample_shifts,
-            carrier_frequency,
-            sampling_frequency,
-            0.0,
-            start_sample,
-            num_samples,
-        ),
-    )
 end
 
 # Last sample index (inclusive) this satellite may integrate up to in the

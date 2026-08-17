@@ -1142,49 +1142,55 @@ end
 end
 
 # ── Correlate / plumbing (mirrors the CPU/Int16 backends) ─────────────────────
-# Single signal per sat: one kernel call.
-@inline function _correlate_signals(
-    signals::Tuple{TrackedSignal},
-    per_signal_completed::Tuple{Bool},
+# The despread primitive on this backend's kernel — see `_despread_one_signal!`
+# in downconvert_and_correlate_cpu.jl for the contract and for why the noise
+# reference must go through the same kernel as the prompt (here it is not merely
+# desirable: the one-bit accumulators are popcount counts rather than sample sums,
+# so a float-kernel reference would put `|P|²` and `N̂₀` on incompatible scales).
+# Serves the per-satellite single-signal path and the open-loop noise reference
+# alike, so the shared `_correlate_signals` needs no `_OneBitDC` method.
+#
+# `code_replica_size` is ignored: this backend packs the code sign plane inside
+# the kernel, so there is no replica buffer to size. `use_band_cache` is the one
+# it does read — `_dc_one_group!` packs the band's measurement sign planes once
+# per group and the per-satellite path reads them, while the noise reference,
+# running before any group packs, must pass `false` (the planes would be whichever
+# group ran last).
+@inline _despread_one_signal!(
     dc::_OneBitDC,
-    signal,
-    code_doppler,
-    code_phase,
-    carrier_frequency,
-    carrier_phase,
-    sampling_frequency,
-    signal_start_sample,
-    samples_to_integrate,
+    correlator,
+    samples,
+    signal_type,
     prn,
-    num_samples_signal,
-)
-    head = signals[1]
-    p = _signal_replica_params(
-        head,
-        code_doppler,
-        code_phase,
-        sampling_frequency,
-        num_samples_signal,
-    )
-    new_acc = _onebit_hybrid_blocked!(
+    sample_shifts,
+    code_phase,
+    carrier_phase,
+    code_frequency,
+    carrier_frequency,
+    sampling_frequency,
+    start_sample,
+    num_samples,
+    ::Any,
+    use_band_cache::Bool = true,
+) = update_accumulator(
+    correlator,
+    get_accumulators(correlator) .+ _onebit_hybrid_blocked!(
         dc,
-        signal,
-        _ob_num_ants_val(head.correlator),
-        head.signal,
+        samples,
+        _ob_num_ants_val(correlator),
+        signal_type,
         prn,
-        p.sample_shifts,
-        p.signal_code_phase,
+        sample_shifts,
+        code_phase,
         carrier_phase,
-        p.code_frequency,
+        code_frequency,
         carrier_frequency,
         sampling_frequency,
-        signal_start_sample,
-        samples_to_integrate,
-    )
-    new_corr =
-        update_accumulator(head.correlator, get_accumulators(head.correlator) .+ new_acc)
-    ((new_corr, per_signal_completed[1]),)
-end
+        start_sample,
+        num_samples,
+        use_band_cache,
+    ),
+)
 
 # Multiple signals per sat: share one carrier + measurement downconvert across the
 # sat's signals via the tile-share kernel. Returns the per-signal
@@ -1369,46 +1375,6 @@ function downconvert_and_correlate!(
     return track_state
 end
 
-# Open-loop despread of the band's noise reference on this backend's kernel —
-# see `_correlate_noise_reference!` in downconvert_and_correlate_cpu.jl for why
-# the reference must go through the same kernel as the prompt. The bit-wise
-# accumulators are popcount counts rather than sample sums, so a float-kernel
-# reference would put `|P|²` and `N̂₀` on incompatible scales.
-#
-# `code_replica` goes unused here: this backend packs the code sign plane inside
-# the kernel.
-@inline _correlate_noise_reference!(
-    dc::_OneBitDC,
-    ::Vector{Int8},
-    samples,
-    correlator::AbstractCorrelator,
-    signal_type,
-    prn::Integer,
-    sample_shifts,
-    code_phase,
-    code_frequency,
-    carrier_frequency,
-    sampling_frequency,
-    start_sample::Integer,
-    num_samples::Integer,
-) = _onebit_hybrid_blocked!(
-    dc,
-    samples,
-    _ob_num_ants_val(correlator),
-    signal_type,
-    prn,
-    sample_shifts,
-    code_phase,
-    0.0,
-    code_frequency,
-    carrier_frequency,
-    sampling_frequency,
-    start_sample,
-    num_samples,
-    false,   # never the shared band pack: it belongs to whichever
-    # group ran last, which may be another band or another buffer
-)
-
 # Reject non-`Complex{Int16}` sample buffers up front (12-bit ADC contract).
 # Defined as the shared `_check_sample_type` hook rather than inline in
 # `_dc_one_group!` so the per-band noise measurement — which runs before the
@@ -1425,11 +1391,3 @@ end
             ),
         ),
     )
-
-# This backend packs the code sign plane inside its own kernel, so the noise
-# reference's `code_replica` scratch goes unread — see `_grow_noise_code_replica!`
-# in noise_estimators/correlator.jl. Leave it empty rather than sizing it to the
-# measurement: that byte-per-sample buffer would be allocated and held per signal
-# for something never looked at.
-@inline _grow_noise_code_replica!(::_OneBitDC, code_replica::Vector{Int8}, ::Integer) =
-    code_replica

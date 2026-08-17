@@ -148,13 +148,6 @@ interferer resolves. On an FPGA an arbitrary code phase is *easier* than phase 0
     to write back and the struct is never rebuilt — which is what lets per-signal
     state live in an immutable [`TrackState`](@ref).
 
-  - `code_replica` — scratch for the software despread, grown once and reused.
-    Held here rather than borrowed from the backend's `ScratchBuffers` so the
-    reference can never alias the per-signal replica path. Grown only on the
-    backends that read it: the Int16 and bit-wise kernels pack the code sign
-    plane themselves, so on those it stays empty rather than costing a byte per
-    sample of every buffer.
-
   - `totals` — the window's running sums (span, `M`-weighted density, looks),
     maintained as entries are pushed and dropped. They are what keeps both
     `append_noise_observation!` and `get_noise_density` **O(1)**; recomputing
@@ -186,7 +179,6 @@ struct CorrelatorNoiseEstimator{D,T,R<:AbstractRNG} <: AbstractNoiseEstimator
     tap_code_shift::Float64
     carrier_dither::typeof(1.0Hz)
     buffered::Vector{NoiseObservation{D,T}}
-    code_replica::Vector{Int8}
     totals::Base.RefValue{NoiseWindowTotals{D,T}}
     rng::R
 end
@@ -233,7 +225,6 @@ function CorrelatorNoiseEstimator(;
         Float64(tap_code_shift),
         uconvert(Hz, float(carrier_dither)),
         buffered,
-        Int8[],
         Ref(NoiseWindowTotals{NoiseDensity,typeof(1.0s)}()),
         rng,
     )
@@ -451,14 +442,11 @@ function update_noise!(
     prn = _next_noise_prn(estimator, signal_type)
     # `gen_code_replica!` writes *at* `start_sample` while the kernel reads the
     # replica offset by `start_sample - 1`, so the buffer spans the whole
-    # measurement rather than one slice.
+    # measurement rather than one slice. Only the software backends read it at
+    # all; `_despread_one_signal!` sizes it from this on those that do and ignores
+    # it on the ones that pack the code plane in-kernel.
     replica_size =
         get_num_samples(measurement) + maximum(sample_shifts) - minimum(sample_shifts)
-    _grow_noise_code_replica!(
-        context.downconvert_and_correlator,
-        estimator.code_replica,
-        replica_size,
-    )
 
     rng = estimator.rng
     code_length = get_code_length(signal_type)
@@ -477,20 +465,29 @@ function update_noise!(
         # a standing bias. See the type's docstring.
         code_phase = rand(rng) * code_length
         carrier_frequency = intermediate_frequency + (2 * rand(rng) - 1) * carrier_dither
-        accumulators = _correlate_noise_reference!(
-            context.downconvert_and_correlator,
-            estimator.code_replica,
-            samples,
-            zero(correlator),
-            signal_type,
-            prn,
-            sample_shifts,
-            code_phase,
-            code_frequency,
-            carrier_frequency,
-            sampling_frequency,
-            slice_start,
-            slice_samples,
+        # The same despread primitive the per-satellite path runs, which is what
+        # keeps the measurement model-free: `carrier_phase = 0.0` because the
+        # reference is open-loop and has no NCO to continue from, and
+        # `use_band_cache = false` because this runs before any group has packed
+        # the bit-wise backends' shared sign planes.
+        accumulators = get_accumulators(
+            _despread_one_signal!(
+                context.downconvert_and_correlator,
+                zero(correlator),
+                samples,
+                signal_type,
+                prn,
+                sample_shifts,
+                code_phase,
+                0.0,
+                code_frequency,
+                carrier_frequency,
+                sampling_frequency,
+                slice_start,
+                slice_samples,
+                replica_size,
+                false,
+            ),
         )
         # Pool the taps. At ≥1 chip spacing they are independent looks at one
         # scalar, so nothing about their relative values means anything — the
@@ -522,22 +519,6 @@ function update_noise!(
     end
     estimator
 end
-
-# Grow the reference's replica scratch so `_correlate_noise_reference!` can write
-# a whole measurement's worth of code into it.
-#
-# Backend-dispatched because only the software kernels read the buffer at all:
-# the Int16 and bit-wise backends pack the code sign plane inside their own
-# kernel and take the `Vector{Int8}` purely to share one signature. Sizing it
-# there would allocate — and then keep alive — one byte per sample of the largest
-# buffer ever passed, per signal, for something never read; on a 500 k-sample
-# buffer that is half a megabyte of pure waste. They override this to leave it
-# empty.
-@inline _grow_noise_code_replica!(
-    ::AbstractDownconvertAndCorrelator,
-    code_replica::Vector{Int8},
-    replica_size::Integer,
-) = length(code_replica) < replica_size ? resize!(code_replica, replica_size) : code_replica
 
 # The antenna the reference despreads. `DefaultPostCorrFilter` is `last(x)`, so
 # an antenna array's noise must be measured on its last column too.
