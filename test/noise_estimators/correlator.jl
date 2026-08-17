@@ -498,23 +498,51 @@ end
 # 1.11+ get zero. Asserting `== 0` unconditionally would either fail on a
 # supported version or have to be weakened into something that no longer catches
 # a real regression.
+#
+# Asserted on **every** backend, because the despread is the same primitive on each
+# and only the kernel behind it differs — and the kernel is where this last went
+# wrong. The one-bit and two-bit `@generated` kernels used to return their per-tap
+# sums in a heap `Vector`; the compiler elided it at the per-satellite call site but
+# not at the reference's, so the measurement alone allocated ~112 B per
+# sub-integration (about 1 kB per 10 ms chunk) on those two backends while every
+# other path measured 0. They now return an `SVector{NC}`, as the integer kernel
+# always did, so `NC` being a compile-time constant means no heap cell at all.
 if VERSION >= v"1.11"
-    @testset "the software measurement is allocation-free in steady state" begin
+    @testset "the software measurement is allocation-free in steady state ($(nameof(DC)))" for (
+        DC,
+        build,
+        quantise,
+    ) in (
+        (CPUDownconvertAndCorrelator, () -> CPUDownconvertAndCorrelator(), false),
+        (
+            Int16DownconvertAndCorrelator,
+            () -> Int16DownconvertAndCorrelator(NUM_SAMPLES),
+            true,
+        ),
+        (OneBitDownconvertAndCorrelator, () -> OneBitDownconvertAndCorrelator(), true),
+        (TwoBitDownconvertAndCorrelator, () -> TwoBitDownconvertAndCorrelator(), true),
+    )
         function measure(dc, measurements, ts)
             for _ = 1:8
                 downconvert_and_correlate!(dc, measurements, ts; chunk_index = 0)
             end
             @allocated downconvert_and_correlate!(dc, measurements, ts; chunk_index = 0)
         end
-        signal = ComplexF32.(_sky(45.0; seed = 8))
+        raw = _sky(45.0; seed = 8)
+        signal = quantise ? _to_int16(raw) : ComplexF32.(raw)
         measurements = (L1 = BandMeasurement(signal, FS),)
-        ts = TrackState(
-            GPSL1,
-            [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator())],
-        )
-        dc = CPUDownconvertAndCorrelator()
+        # Measured against the same state without a reference, so the assertion is
+        # about the *measurement* rather than about the correlate stage as a whole.
+        state(cn0) =
+            TrackState(GPSL1, [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = cn0())])
+        ts = state(NoiseRefCN0Estimator)
+        plain_ts = state(() -> NWPRCN0Estimator(GPSL1))
+        dc = build()
+        plain_dc = build()
         track!(measurements, ts; downconvert_and_correlator = dc)
+        track!(measurements, plain_ts; downconvert_and_correlator = plain_dc)
         @test measure(dc, measurements, ts) == 0
+        @test measure(plain_dc, measurements, plain_ts) == 0
     end
 end
 
