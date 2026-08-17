@@ -215,6 +215,85 @@ end
     end
 end
 
+# What the noise reference costs the *threaded* backend at launch, which the loose
+# cap above cannot see. Polyester heap-allocates one argument tuple per `@batch`
+# launch, sized by what the region references and copying an immutable struct into
+# it by value — so a noise descriptor reached by value put the estimator (48 B), the
+# band measurement (24 B) and the signal instance (56 B) in there and took the
+# launch from ~96 B to 240 B. Reached through one box it costs a pointer, and the
+# contract is that it costs nothing measurable at all.
+#
+# Asserted as equality against an otherwise identical state whose C/N₀ estimator
+# reads no density, not against a byte count: the count is Polyester's and Julia's
+# to change, "the reference is free at launch" is ours. Two satellites, so the
+# comparison is not made at the one satellite count where the loop has a single
+# item and no residual to speak of.
+@static if VERSION >= v"1.11"
+    @testset "the noise reference adds nothing to the threaded launch residual" begin
+        sampling_frequency = 4e6Hz
+        signal, gpsl1, carrier_doppler, start_code_phase = make_signal(sampling_frequency)
+        make_state(make_cn0_estimator) = TrackState(
+            gpsl1,
+            [
+                TrackedSat(
+                    gpsl1,
+                    prn,
+                    start_code_phase,
+                    carrier_doppler - 20Hz;
+                    cn0_estimator = make_cn0_estimator(),
+                ) for prn = 1:2
+            ],
+        )
+        plain_state = make_state(() -> NWPRCN0Estimator(gpsl1))
+        noise_state = make_state(NoiseRefCN0Estimator)
+        @test keys(plain_state.noise_estimators) == ()
+        @test keys(noise_state.noise_estimators) == (:GPSL1CA,)
+
+        plain_dc = CPUThreadedDownconvertAndCorrelator()
+        noise_dc = CPUThreadedDownconvertAndCorrelator()
+        for _ = 1:8
+            track!(
+                signal,
+                plain_state,
+                sampling_frequency;
+                downconvert_and_correlator = plain_dc,
+            )
+            track!(
+                signal,
+                noise_state,
+                sampling_frequency;
+                downconvert_and_correlator = noise_dc,
+            )
+        end
+
+        @test measure_dc!(noise_dc, signal, noise_state, sampling_frequency) ==
+              measure_dc!(plain_dc, signal, plain_state, sampling_frequency)
+
+        # The box the descriptors are parked in is provisioned once and reused —
+        # which is what makes the launch cost flat rather than merely smaller — and
+        # it has to survive the `TrackState` copies `track` and `track!` make of it.
+        box = noise_state.noise_descriptor[]
+        @test box isa Base.RefValue
+        track!(
+            signal,
+            noise_state,
+            sampling_frequency;
+            downconvert_and_correlator = noise_dc,
+        )
+        @test noise_state.noise_descriptor[] === box
+        @test track(
+            signal,
+            noise_state,
+            sampling_frequency;
+            downconvert_and_correlator = noise_dc,
+        ).noise_descriptor === noise_state.noise_descriptor
+
+        # Nothing to measure parks nothing: a state whose C/N₀ estimators read no
+        # density never provisions a box, so the loop has nothing extra to root.
+        @test isnothing(plain_state.noise_descriptor[])
+    end
+end
+
 # Acquisition (pre-sync) allocation guard. Before bit sync, `track!` runs the
 # per-code-block bit-edge search (`_buffer_find_bit`) once per code block. A
 # regression there — e.g. a closure-capture `Core.Box` + boxed `SyncResult`

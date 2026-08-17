@@ -80,31 +80,40 @@ blocks in the chunk rather than staying flat per `track!` call. With a single
 thread or the single-threaded `CPUDownconvertAndCorrelator` there is no such
 residual.
 
-The residual measures ~80 B per launch for satellites alone. A `TrackState`
-whose C/N₀ estimators read a measured noise density adds the chunk's noise
-despreads to the same loop as extra work items — see `_dc_group_loop!` — which
-gives the closure the descriptor tuple to root as well and takes the launch to
-~240 B; it also means a **single**-satellite state pays a residual where it
+The residual measures ~96 B per launch, and a `TrackState` whose C/N₀ estimators
+read a measured noise density measures the **same** ~96 B: the chunk's noise
+despreads ride the same loop as extra work items (see `_dc_group_loop!`), but the
+loop reaches their descriptors through one pointer into a reusable box rather than
+by value — see `_park_noise_items!` for why by-value copies cost 152 B of
+Polyester argument tuple and a pointer costs 8. The one thing the noise reference
+still changes is that a **single**-satellite state pays the residual where it
 previously paid none, because the loop then has two items rather than one. What
 that buys is the despread's wall time: as one more item in the parallel loop it
 usually costs a fraction of the ~1.75 µs it costs as a serial pass, and full
-price only when it happens to open a new scheduling step. Both figures are per
-launch and bounded; neither scales with the input buffer.
+price only when it happens to open a new scheduling step. The figure is per launch
+and bounded; it does not scale with the input buffer.
 
-Why it allocates at all — Polyester's `@batch` roots only *bare* `Array`s and
-`isbits` values into its worker tasks for free (that is why a `Vector{Float64}`
-kernel allocates nothing). It pays a small per-launch allocation to root any
-**non-`isbits` struct** referenced inside the region — and it is the struct-ness
-that costs, not the contents: capturing even a plain struct whose only fields
-are `Matrix`es and isbits scalars measures the same ~64 B/launch, whereas
-capturing those same bare arrays measures 0. The culprit here is the GNSS
-**signal**: `GPSL1CA`, for instance, is not `isbits` — it wraps a `Matrix{Int16}`
-code table and a (also non-`isbits`) `SignalLUT`. Each satellite's code-replica
-generation needs its signal, so every `@batch` launch touches that non-`isbits`
-object once. (The per-satellite `TrackedSat` is likewise non-`isbits` — it
-carries the signal plus the CN0/bit buffers — and the loop reaches the signal
-through it, so iterating `Vector{TrackedSat}` is not free the way iterating a
-`Vector{Float64}` is.)
+Why it allocates at all — Polyester copies everything the `@batch` region
+references into **one** argument tuple per launch and heap-allocates that tuple
+(`ManualMemory.Reference`) so the worker tasks can read it. Two rules decide what
+that costs:
+
+  - A tuple whose every member is `isbits` (bare `Array`s become `PtrArray`s, so
+    they qualify) does not escape and is elided outright — that is why a
+    `Vector{Float64}` kernel allocates nothing.
+  - As soon as one member is not, the whole tuple is allocated at its `sizeof`,
+    and each member is copied by *value* if it is an immutable struct, or as a
+    single pointer if it is a mutable object.
+
+Which is why "capture a struct or its bare arrays" is not a wash: a plain struct
+whose fields are `Matrix`es and isbits scalars costs its own `sizeof` in the
+tuple, where the same arrays passed separately cost 0. The culprit here is the
+GNSS **signal**: `GPSL1CA`, for instance, is not `isbits` — it wraps a
+`Matrix{Int16}` code table and a (also non-`isbits`) `SignalLUT` — and each
+satellite's code-replica generation needs it. (The per-satellite `TrackedSat` is
+likewise non-`isbits`, but it is reached *through* `Vector{TrackedSat}`, which is
+mutable and so costs one pointer; it is the loop's other captures that put the
+tuple over the isbits line.)
 
 Note that merely *hoisting* the `SignalLUT` out of the signal does not help — a
 `SignalLUT` is itself a non-`isbits` struct (it wraps `Matrix{Int8}` fields), so
@@ -122,7 +131,7 @@ the region (reconstructing one there sends the generator dynamic and allocates
 far more). Absent that, the only in-tree way to reach 0 is a serial code-gen
 pre-pass, which is allocation-free but serializes ~30 % of the work and slows
 the threaded pipeline — the inferior fallback. Neither is currently worth
-~64 B/block, which is bounded per call and dwarfed by the caller's input buffer.
+~96 B/block, which is bounded per call and dwarfed by the caller's input buffer.
 
 For real-time loops, construct the correlator **once outside** the
 `track!` loop and pass it via the `downconvert_and_correlator` keyword
@@ -928,7 +937,7 @@ function downconvert_and_correlate!(
     _dc_groups!(
         Tuple(track_state.groups),
         noise_items,
-        measure_noise ? length(noise_items) : 0,
+        measure_noise ? _num_noise_items(noise_items) : 0,
         dc,
         measurements,
         chunk_index,
@@ -997,7 +1006,7 @@ end
 # which is what keeps `_check_sample_type` in front of every kernel (so a wrong
 # sample type still throws the curated `ArgumentError` rather than surfacing as a
 # `MethodError` from a worker), and keeps what the `@batch` closure captures down
-# to one tuple.
+# to one pointer (see `_park_noise_items!`).
 #
 # Resolution is per *signal*, keyed off `noise_estimators`, which is what makes
 # "exactly once" structural: two groups carrying the same signal share the one
@@ -1023,16 +1032,81 @@ end
     chunk_duration,
 )
     noise_estimators = track_state.noise_estimators
-    _noise_items_walk(
-        Val(keys(noise_estimators)),
-        Tuple(noise_estimators),
-        dc,
-        track_state.groups,
-        measurements,
-        chunk_index,
-        chunk_duration,
+    _park_noise_items!(
+        track_state.noise_descriptor,
+        _noise_items_walk(
+            Val(keys(noise_estimators)),
+            Tuple(noise_estimators),
+            dc,
+            track_state.groups,
+            measurements,
+            chunk_index,
+            chunk_duration,
+        ),
     )
 end
+
+# Park the descriptors in the `TrackState`'s reusable cell and hand back the box
+# holding them — because *how* the parallel loop reaches its descriptors is what
+# the launch costs, not what they contain.
+#
+# Polyester copies every value the `@batch` region references into one argument
+# tuple it heap-allocates per launch, and the copy is by *value* for an immutable
+# struct: a descriptor carrying a `CorrelatorNoiseEstimator` (48 B), the band's
+# `BandMeasurement` (24 B) and the signal instance (`GPSL1CA` is 56 B) is 152 B of
+# argument tuple, which measured as a rise from ~96 B to 240 B per launch. A
+# *mutable* object is copied as a pointer instead — 8 B whatever it holds — so
+# handing the loop one box costs the launch 8 B and nothing per descriptor.
+#
+# The box has to outlive the launch and be reused across launches, or its own
+# allocation would cost more than the copy it replaces. It cannot be provisioned
+# up front: its type names the caller's `BandMeasurement`, which the `TrackState`
+# does not know until the first correlate call. So the cell is a type-erased
+# `Base.RefValue{Any}` filled on that call and reused thereafter; the *box* inside
+# it is concretely typed, so both the write here and the read in the loop are
+# type-stable, and a caller who changes sample types simply gets a new box once.
+#
+# Writing a descriptor tuple into the box is a store into an existing object —
+# allocation-free — and the box roots everything the descriptors point at, so
+# nothing here relies on the caller keeping anything alive. The flip side is that
+# the box keeps the *last* chunk's `BandMeasurement` — and so the caller's sample
+# buffer — reachable until the next call overwrites it. That is one buffer, and a
+# caller who hands `track!` a fresh buffer per chunk was holding this one anyway.
+#
+# Nothing to measure stays `()`: an empty descriptor set gives the loop nothing to
+# root at all, so a `TrackState` whose C/N₀ estimators read no noise density pays
+# exactly the launch cost it paid before any of this existed.
+@inline _park_noise_items!(::Base.RefValue{Any}, ::Tuple{}) = ()
+@inline function _park_noise_items!(
+    cell::Base.RefValue{Any},
+    items::T,
+) where {T<:Tuple{Any,Vararg{Any}}}
+    box = cell[]
+    box isa Base.RefValue{T} || return _new_noise_items_box!(cell, items)
+    box[] = items
+    box
+end
+
+# First call with this descriptor type (or the first after the caller changed one).
+# `@noinline` so the hot path above stays a load, a type check and a store.
+@noinline function _new_noise_items_box!(
+    cell::Base.RefValue{Any},
+    items::T,
+) where {T<:Tuple}
+    box = Base.RefValue{T}(items)
+    cell[] = box
+    box
+end
+
+# How many work items the loop must add to the satellites' range. A property of the
+# descriptor set's *type*, so it folds to a literal at every call site.
+@inline _num_noise_items(::Tuple{}) = 0
+@inline _num_noise_items(::Base.RefValue{<:Tuple{Vararg{Any,N}}}) where {N} = N
+
+# What a group loop is handed for the chunk's noise work: `()` when there is nothing
+# to measure — including for every group after the one that carries it — and
+# otherwise the single box the descriptors were parked in.
+const _NoiseWork = Union{Tuple{},Base.RefValue{<:Tuple}}
 
 @inline _noise_items_walk(
     ::Val{()},
@@ -1128,7 +1202,11 @@ end
 # Run the `j`-th descriptor. `j` is a runtime index into a heterogeneous tuple, so
 # the walk is a chain of compile-time-known steps rather than an index — it unrolls
 # to `n` comparisons for `n` measured signals, which is one or two in practice.
+# Reading the box is the one dereference the whole scheme costs, and it happens
+# inside the parallel region, on the thread that runs the item.
 @inline _run_noise_item!(::Int, ::Tuple{}, ::Any) = nothing
+@inline _run_noise_item!(j::Int, box::Base.RefValue{<:Tuple}, dc) =
+    _run_noise_item!(j, box[], dc)
 @inline _run_noise_item!(j::Int, items::Tuple, dc) =
     j == 1 ? _apply_noise_item!(first(items), dc) :
     _run_noise_item!(j - 1, Base.tail(items), dc)
@@ -1136,6 +1214,7 @@ end
 # All of them, in order — the serial backends' path, where there is no parallel
 # region to hide the despread in.
 @inline _run_noise_items!(::Tuple{}, ::Any) = nothing
+@inline _run_noise_items!(box::Base.RefValue{<:Tuple}, dc) = _run_noise_items!(box[], dc)
 @inline _run_noise_items!(items::Tuple, dc) =
     (_apply_noise_item!(first(items), dc); _run_noise_items!(Base.tail(items), dc))
 
@@ -1218,7 +1297,7 @@ end
     # The float backends derive nothing from the raw samples worth caching;
     # only the bit-wise backends act on `samples_unchanged`.
     samples_unchanged::Bool,
-    noise_items::Tuple,
+    noise_items::_NoiseWork,
     n_noise::Int,
 )
     vals = g.satellites.values

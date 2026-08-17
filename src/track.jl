@@ -129,14 +129,20 @@ After one warmup call (which seats each satellite's `filtered_prompts`
 buffer capacity), the single-threaded path is fully allocation-free.
 
 The threaded path (`CPUThreadedDownconvertAndCorrelator`) keeps a small
-residual — about 64 B per **completed code-block integration** per group —
-but only when the process runs with more than one thread *and* the group
-holds more than one satellite (so Polyester's `@batch` actually distributes
-work). `track!` launches one `@batch` per code block, so this residual
-scales with the chunk length rather than staying flat per call; for a
+residual — about 96 B per **completed code-block integration** per group —
+but only when the process runs with more than one thread *and* the group's
+loop holds more than one work item (so Polyester's `@batch` actually
+distributes work). `track!` launches one `@batch` per code block, so this
+residual scales with the chunk length rather than staying flat per call; for a
 real-time loop with fixed-size chunks it is bounded per call and, in
 practice, dwarfed by the input sample buffer the caller allocates each
 chunk. The single-threaded backend has none of it.
+
+A `TrackState` whose C/N₀ estimators read a measured noise density pays the
+**same** ~96 B, even though its per-signal noise despread rides that same
+parallel loop: the loop reaches the despread's descriptor through one pointer
+rather than by value. It does mean a group with a *single* satellite now has
+two work items, so it pays the residual where it previously paid none.
 
 The root cause is not the per-satellite state per se — it is that the
 GNSS **signal** object is not an `isbits` type: `GPSL1CA`, for example, holds
