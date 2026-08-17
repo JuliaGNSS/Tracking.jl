@@ -264,12 +264,31 @@ entry only where its C/N₀ estimator reads a noise density (see
 [`requires_noise_density`](@ref)); signals with no such estimator get none, and
 then the noise measurement costs exactly nothing. Each estimator averages **in
 place**, so `TrackState` itself is never rebuilt for a noise update.
+
+`noise_descriptor` is per-call **scratch**, not state: one reusable heap cell in
+which the correlate step parks the chunk's noise descriptors so that a threaded
+backend's parallel loop can reach them through a single pointer instead of a
+by-value copy (see `_park_noise_items!`). It is shared — not copied — by every
+`TrackState` derived from this one, exactly as the per-satellite scratch vectors
+are, and nothing outside one `downconvert_and_correlate!` call reads it.
 """
 struct TrackState{G<:SignalGroups,DE<:AbstractDopplerEstimator,NE<:NoiseEstimators}
     groups::G
     doppler_estimator::DE
     noise_estimators::NE
+    noise_descriptor::Base.RefValue{Any}
 end
+
+# Three-argument construction: the descriptor cell is scratch, so a freshly built
+# `TrackState` starts with an empty one and fills it on its first correlate call.
+# Every *derived* state (`TrackState(track_state; …)` and the in-place mutators)
+# threads the existing cell through instead, which is what keeps the box inside it
+# alive across `track!`'s copies and the steady state allocation-free.
+TrackState(
+    groups::SignalGroups,
+    doppler_estimator::AbstractDopplerEstimator,
+    noise_estimators::NoiseEstimators,
+) = TrackState(groups, doppler_estimator, noise_estimators, Base.RefValue{Any}(nothing))
 
 include("sample_parameters.jl")
 include("downconvert_and_correlate.jl")

@@ -355,6 +355,7 @@ function TrackState(
         isnothing(groups) ? track_state.groups : groups,
         isnothing(doppler_estimator) ? track_state.doppler_estimator : doppler_estimator,
         isnothing(noise_estimators) ? track_state.noise_estimators : noise_estimators,
+        track_state.noise_descriptor,
     )
 end
 
@@ -506,7 +507,12 @@ function merge_sats(
     _assert_sats_match_slot_type(g, new_sats_dict, group_idx)
     new_group = SignalGroup(g; satellites = merge(g.satellites, new_sats_dict))
     new_groups = @set groups[group_idx] = new_group
-    TrackState{G,DE,NE}(new_groups, new_estimator, track_state.noise_estimators)
+    TrackState{G,DE,NE}(
+        new_groups,
+        new_estimator,
+        track_state.noise_estimators,
+        track_state.noise_descriptor,
+    )
 end
 
 function merge_sats(
@@ -598,7 +604,12 @@ function add_satellite!(
     # identical object (the contract guarantees the concrete type either
     # way), and then the input `track_state` is handed back unchanged.
     new_estimator === track_state.doppler_estimator && return track_state
-    TrackState{G,DE,NE}(track_state.groups, new_estimator, track_state.noise_estimators)
+    TrackState{G,DE,NE}(
+        track_state.groups,
+        new_estimator,
+        track_state.noise_estimators,
+        track_state.noise_descriptor,
+    )
 end
 
 # Verify that `sat` has exactly the concrete type the group's
@@ -698,7 +709,12 @@ function add_satellite(
     new_dict = merge(g.satellites, dictionary((sat.prn => sat,)))
     new_group = SignalGroup(g; satellites = new_dict)
     new_groups = @set groups[group] = new_group
-    TrackState{G,DE,NE}(new_groups, new_estimator, track_state.noise_estimators)
+    TrackState{G,DE,NE}(
+        new_groups,
+        new_estimator,
+        track_state.noise_estimators,
+        track_state.noise_descriptor,
+    )
 end
 
 """
@@ -764,6 +780,7 @@ function remove_satellite(
         new_groups,
         track_state.doppler_estimator,
         track_state.noise_estimators,
+        track_state.noise_descriptor,
     )
 end
 

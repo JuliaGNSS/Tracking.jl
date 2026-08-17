@@ -1743,7 +1743,7 @@ end
     chunk_duration,
     stop_before_partial::Bool,
     samples_unchanged::Bool,
-    noise_items::Tuple,
+    noise_items::_NoiseWork,
     n_noise::Int,
 )
     vals = g.satellites.values
