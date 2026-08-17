@@ -1258,11 +1258,17 @@ end
     chunk_duration,
     stop_before_partial::Bool,
     samples_unchanged::Bool,
+    noise_items::Tuple,
+    n_noise::Int,
 )
     vals = g.satellites.values
-    isempty(vals) && return nothing
+    isempty(vals) && n_noise == 0 && return nothing
     m = measurements[get_band_id(g.band)]
     _check_sample_type(dc, m)
+    # The pack below is sized by the *satellite* count alone: a noise item riding
+    # this loop passes `use_band_cache = false` (its band may not even be this one),
+    # so it neither reads the planes nor should influence whether they are built.
+    #
     # Pack the band's measurement sign planes ONCE, shared across sats — but only for >1 sat:
     # for a single sat the shared pack + per-sat realign copy is slower than packing that one sat
     # directly, so empty the band buffer to select the kernel's per-sat path.
@@ -1293,6 +1299,8 @@ end
     _dc_group_loop!(
         dc,
         vals,
+        noise_items,
+        n_noise,
         m.samples,
         num_samples,
         chunk_last_sample,

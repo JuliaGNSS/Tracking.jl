@@ -391,10 +391,11 @@ end
 end
 
 @testset "a signal carried by two groups is measured once" begin
-    # `_dc_one_group!` was rejected as the measurement site precisely because it
-    # fires once per group: two groups may carry the same signal, and a per-group
-    # site would double its window. Walking the `noise_estimators` NamedTuple —
-    # one entry per signal — makes once-per-signal structural instead.
+    # The despread rides *one* group's per-satellite loop, and which group that is
+    # must not change how often it runs. Resolving the work per signal off the
+    # `noise_estimators` NamedTuple — one entry per signal — and executing it in a
+    # single group's loop is what keeps once-per-signal structural; pushing it into
+    # every `_dc_one_group!` would double the window of a signal two groups carry.
     one_group = TrackState(;
         signals = (legacy_gps = (GPSL1,),),
         noise_estimators = (GPSL1CA = CorrelatorNoiseEstimator(),),
@@ -412,6 +413,42 @@ end
     end
     @test Base.length(one_group.noise_estimators.GPSL1CA) ==
           Base.length(two_groups.noise_estimators.GPSL1CA)
+end
+
+@testset "the group whose loop carries the despread may be empty" begin
+    # The despread rides the *first* group's loop, and that group can legitimately
+    # hold no satellites — the items do not belong to it, they only need a loop to
+    # run in. Before the fold every group with no satellites returned early, which
+    # would now drop the measurement entirely.
+    ts = TrackState(;
+        signals = (empty_first = (GPSL1,), with_sats = (GPSL1,)),
+        noise_estimators = (GPSL1CA = CorrelatorNoiseEstimator(),),
+    )
+    add_satellite!(ts; prn = 1, group = :with_sats, carrier_doppler = 0.0Hz)
+    @test isempty(Tracking.get_sat_states(ts, :empty_first))
+    track!((L1 = BandMeasurement(_sky(-Inf; seed = 11), FS),), ts)
+    @test Base.length(ts.noise_estimators.GPSL1CA) == 10
+    @test ustrip(Hz^-1, get_noise_density(ts.noise_estimators.GPSL1CA)) ≈ 1.0 rtol = 0.3
+end
+
+@testset "the serial and threaded loops measure bit-identically" begin
+    # The despread is a work item in the threaded backend's `@batch` and a straight
+    # call on the serial one. Nothing about it depends on which: one item is the only
+    # writer of its estimator's window and RNG stream, so the seeded draw order is
+    # the same either way and the two windows must agree to the last bit — not merely
+    # to a tolerance. This is the regression that would catch a shared-state slip in
+    # the parallel path.
+    signal = ComplexF32.(_sky(45.0; seed = 12))
+    densities =
+        map((CPUDownconvertAndCorrelator(), CPUThreadedDownconvertAndCorrelator()),) do dc
+            ts = _tracked(signal, dc)
+            (
+                Base.length(ts.noise_estimators.GPSL1CA),
+                get_noise_density(ts.noise_estimators.GPSL1CA),
+            )
+        end
+    @test densities[1][1] == densities[2][1]
+    @test densities[1][2] === densities[2][2]
 end
 
 @testset "an unchunked call measures once, and a re-pass says so" begin
