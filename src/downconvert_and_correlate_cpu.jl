@@ -74,11 +74,22 @@ state.
 
 One `@batch` is launched per code block (once per `downconvert_and_correlate!`
 call inside `track!`'s inner loop). When the process runs with more than one
-thread *and* the group has more than one satellite, each launch keeps a small
-Polyester allocation (~64 B), so the total scales with the number of completed
-code blocks in the chunk rather than staying flat per `track!` call. With a
-single thread, a single satellite, or the single-threaded
-`CPUDownconvertAndCorrelator`, there is no such residual.
+thread *and* the loop has more than one work item, each launch keeps a small
+Polyester allocation, so the total scales with the number of completed code
+blocks in the chunk rather than staying flat per `track!` call. With a single
+thread or the single-threaded `CPUDownconvertAndCorrelator` there is no such
+residual.
+
+The residual measures ~80 B per launch for satellites alone. A `TrackState`
+whose C/N₀ estimators read a measured noise density adds the chunk's noise
+despreads to the same loop as extra work items — see `_dc_group_loop!` — which
+gives the closure the descriptor tuple to root as well and takes the launch to
+~240 B; it also means a **single**-satellite state pays a residual where it
+previously paid none, because the loop then has two items rather than one. What
+that buys is the despread's wall time: as one more item in the parallel loop it
+usually costs a fraction of the ~1.75 µs it costs as a serial pass, and full
+price only when it happens to open a new scheduling step. Both figures are per
+launch and bounded; neither scales with the input buffer.
 
 Why it allocates at all — Polyester's `@batch` roots only *bare* `Array`s and
 `isbits` values into its worker tasks for free (that is why a `Vector{Float64}`
@@ -913,17 +924,11 @@ function downconvert_and_correlate!(
     samples_unchanged::Bool = false,
     measure_noise::Bool = true,
 )
-    _update_signal_noise!(
-        dc,
-        track_state,
-        measurements,
-        chunk_index,
-        chunk_duration,
-        measure_noise,
-    )
-    _foreach_group!(
-        _dc_one_group!,
-        track_state.groups,
+    noise_items = _noise_items(dc, track_state, measurements, chunk_index, chunk_duration)
+    _dc_groups!(
+        Tuple(track_state.groups),
+        noise_items,
+        measure_noise ? length(noise_items) : 0,
         dc,
         measurements,
         chunk_index,
@@ -934,48 +939,91 @@ function downconvert_and_correlate!(
     return track_state
 end
 
-# Measure each *signal's* noise floor over the current chunk, before the
-# per-group correlate loop. Defined once on `AbstractDownconvertAndCorrelator`
-# and called from all three `downconvert_and_correlate!` entry points — those are
-# the only places that see `measurements` whole, and therefore the only
-# per-signal-exactly-once sites. `_dc_one_group!` would fire once per *group*, so
-# a signal carried by two groups would be measured twice.
+# Walk the groups, handing the chunk's noise work to the first of them. The items
+# do not *belong* to that group — each carries its own band measurement and its own
+# signal — they only ride its per-satellite loop, which is the whole point: on a
+# threaded backend the despread then runs *alongside* the satellite correlations
+# instead of serially in front of them, and its cost is hidden wherever that loop
+# has a spare thread. Any group would serve equally; the first is the one that
+# needs no runtime choice over a heterogeneous tuple.
 #
-# Walking `noise_estimators` (keyed by signal id) rather than the groups is what
-# makes "exactly once" structural: two groups carrying the same signal share the
-# one estimator that key names, so the reference is despread once for it however
-# the satellites are grouped.
+# Exactly-once still holds, and more simply than before: the items are resolved
+# once from `noise_estimators` (keyed by signal) and executed in one group's loop,
+# so a signal carried by two groups is still despread once however the satellites
+# are grouped. That is why the noise work is not simply pushed into every
+# `_dc_one_group!` — that fires once per *group*.
+#
+# A `TrackState` with no groups has no noise estimators either (they are derived
+# from the groups' slot types), so nothing is dropped here.
+@inline _dc_groups!(::Tuple{}, args::Vararg{Any,8}) = nothing
+@inline function _dc_groups!(
+    groups::Tuple{SignalGroup,Vararg{SignalGroup}},
+    noise_items,
+    n_noise::Int,
+    dc,
+    measurements,
+    chunk_index,
+    chunk_duration,
+    stop_before_partial,
+    samples_unchanged,
+)
+    _dc_one_group!(
+        first(groups),
+        dc,
+        measurements,
+        chunk_index,
+        chunk_duration,
+        stop_before_partial,
+        samples_unchanged,
+        noise_items,
+        n_noise,
+    )
+    _dc_groups!(
+        Base.tail(groups),
+        (),
+        0,
+        dc,
+        measurements,
+        chunk_index,
+        chunk_duration,
+        stop_before_partial,
+        samples_unchanged,
+    )
+end
+
+# The chunk's noise work, resolved once: one descriptor per measured signal,
+# carrying everything the despread needs and nothing it does not. Resolved here,
+# on the caller's thread, rather than inside the parallel region it will run in —
+# which is what keeps `_check_sample_type` in front of every kernel (so a wrong
+# sample type still throws the curated `ArgumentError` rather than surfacing as a
+# `MethodError` from a worker), and keeps what the `@batch` closure captures down
+# to one tuple.
+#
+# Resolution is per *signal*, keyed off `noise_estimators`, which is what makes
+# "exactly once" structural: two groups carrying the same signal share the one
+# estimator that key names, so one descriptor is produced for it however the
+# satellites are grouped.
 #
 # The NamedTuple is walked by tuple recursion rather than by
 # `for (k, v) in pairs(...)`: different signals may hold different estimator
 # types, so a runtime loop over the values is type-unstable and would allocate on
-# every chunk. Recursion unrolls it and each `update_noise!` devirtualises. A
-# signal with no entry does no work at all.
+# every chunk. Recursion unrolls it and each `update_noise!` devirtualises, and the
+# resulting tuple's *length* is a property of the types alone — a signal with no
+# estimator, and a key naming a signal no group tracks, both contribute nothing.
 #
-# **When to skip.** Whether a call re-covers samples an earlier one already
-# measured is the caller's knowledge, not something to infer here, so it arrives
-# as `measure_noise`. The one caller that has to say no is `track!`'s final drain
-# pass: it passes neither `chunk_index` nor `chunk_duration`, so the range
-# defaults to the whole buffer and measuring there would enter every sample into
-# the window a second time. The cost is that a buffer's trailing partial never
-# reaches the window — at most one chunk per `track!` call, and omitting an entry
-# biases `σ̂²` not at all.
-#
-# `samples_unchanged` is deliberately *not* what decides it. It answers a
-# different question — may the backend reuse a sample-derived cache — and `track!`
-# passes it on every chunk after the first, so gating on it would measure chunk 0
-# and then freeze the window for the rest of the buffer.
-@inline function _update_signal_noise!(
+# Note what is deliberately *not* decided here: whether to measure at all. An
+# out-of-range chunk is left to `update_noise!`'s own `num_samples > 0` guard, and
+# `measure_noise` is applied by the caller as a count, because either one folded in
+# here would make the tuple's type depend on a runtime value.
+@inline function _noise_items(
     dc::AbstractDownconvertAndCorrelator,
     track_state::TrackState,
     measurements::BandMeasurements,
     chunk_index::Int,
     chunk_duration,
-    measure_noise::Bool,
 )
-    measure_noise || return nothing
     noise_estimators = track_state.noise_estimators
-    _update_signal_noise_walk!(
+    _noise_items_walk(
         Val(keys(noise_estimators)),
         Tuple(noise_estimators),
         dc,
@@ -986,7 +1034,7 @@ end
     )
 end
 
-@inline _update_signal_noise_walk!(
+@inline _noise_items_walk(
     ::Val{()},
     ::Tuple{},
     ::AbstractDownconvertAndCorrelator,
@@ -994,8 +1042,8 @@ end
     ::BandMeasurements,
     ::Int,
     _,
-) = nothing
-@inline function _update_signal_noise_walk!(
+) = ()
+@inline function _noise_items_walk(
     ::Val{K},
     estimators::Tuple,
     dc::AbstractDownconvertAndCorrelator,
@@ -1004,27 +1052,31 @@ end
     chunk_index::Int,
     chunk_duration,
 ) where {K}
-    _update_one_signal_noise!(
-        first(estimators),
-        Val(first(K)),
-        dc,
-        groups,
-        measurements,
-        chunk_index,
-        chunk_duration,
-    )
-    _update_signal_noise_walk!(
-        Val(Base.tail(K)),
-        Base.tail(estimators),
-        dc,
-        groups,
-        measurements,
-        chunk_index,
-        chunk_duration,
+    (
+        _noise_item(
+            first(estimators),
+            Val(first(K)),
+            dc,
+            groups,
+            measurements,
+            chunk_index,
+            chunk_duration,
+        )...,
+        _noise_items_walk(
+            Val(Base.tail(K)),
+            Base.tail(estimators),
+            dc,
+            groups,
+            measurements,
+            chunk_index,
+            chunk_duration,
+        )...,
     )
 end
 
-@inline function _update_one_signal_noise!(
+# One signal's descriptor, as a 0- or 1-tuple so the "nothing to measure" case is
+# an empty tuple in the *type* domain rather than a `Nothing` to branch on later.
+@inline function _noise_item(
     estimator::AbstractNoiseEstimator,
     ::Val{K},
     dc::AbstractDownconvertAndCorrelator,
@@ -1038,29 +1090,54 @@ end
     # correlator-ingest case, where the window is filled by
     # `append_noise_observation!` instead.
     found = _first_signal_with_id(Tuple(groups), Val(K))
-    isempty(found) && return nothing
+    isempty(found) && return ()
     signal = first(found)
     # The samples are still a *band* property — one front end feeds every signal
     # on it. Only the despreading code, and therefore the measured floor, is per
     # signal.
     m = measurements[_signal_band_id(typeof(signal))]
-    # Same check the group loop runs, and it has to happen here too: the noise
-    # measurement is the *first* thing to touch a band's samples, so without it
-    # a wrong sample type would surface as a `MethodError` from inside a kernel
-    # instead of the curated `ArgumentError`.
     _check_sample_type(dc, m)
     num_samples = get_num_samples(m)
-    last_sample =
-        _chunk_last_sample(chunk_duration, chunk_index, m.sampling_frequency, num_samples)
-    first_sample =
-        _chunk_first_sample(chunk_duration, chunk_index, m.sampling_frequency, num_samples)
-    first_sample > last_sample && return nothing
     # No tracked-PRN set is threaded through: the reference randomises its code
     # phase, so it has no reason to know which PRNs are in use.
-    context = NoiseUpdateContext(signal, chunk_index, dc)
-    update_noise!(estimator, m, first_sample, last_sample, context)
-    nothing
+    ((
+        estimator,
+        m,
+        _chunk_first_sample(chunk_duration, chunk_index, m.sampling_frequency, num_samples),
+        _chunk_last_sample(chunk_duration, chunk_index, m.sampling_frequency, num_samples),
+        signal,
+        chunk_index,
+    ),)
 end
+
+# The `NoiseUpdateContext` is built here rather than stored in the descriptor: the
+# backend is one of the things it carries, and the backend is already captured by
+# the loop this runs in, so storing it would give the `@batch` closure a second
+# reference to root for nothing.
+@inline _apply_noise_item!(item::Tuple, dc) = (
+    update_noise!(
+        item[1],
+        item[2],
+        item[3],
+        item[4],
+        NoiseUpdateContext(item[5], item[6], dc),
+    );
+    nothing
+)
+
+# Run the `j`-th descriptor. `j` is a runtime index into a heterogeneous tuple, so
+# the walk is a chain of compile-time-known steps rather than an index — it unrolls
+# to `n` comparisons for `n` measured signals, which is one or two in practice.
+@inline _run_noise_item!(::Int, ::Tuple{}, ::Any) = nothing
+@inline _run_noise_item!(j::Int, items::Tuple, dc) =
+    j == 1 ? _apply_noise_item!(first(items), dc) :
+    _run_noise_item!(j - 1, Base.tail(items), dc)
+
+# All of them, in order — the serial backends' path, where there is no parallel
+# region to hide the despread in.
+@inline _run_noise_items!(::Tuple{}, ::Any) = nothing
+@inline _run_noise_items!(items::Tuple, dc) =
+    (_apply_noise_item!(first(items), dc); _run_noise_items!(Base.tail(items), dc))
 
 # An instance of signal `K`, searched groups-then-signals and returned as a 0- or
 # 1-tuple so the not-found case stays type-stable instead of widening to
@@ -1119,13 +1196,18 @@ end
 # `_validate_measurements` (band-set/shape/duration check in `track`).
 @inline _check_sample_type(::AbstractDownconvertAndCorrelator, m) = nothing
 
-# Per-group body shared by every backend. Pulled out so `_foreach_group!` can
-# call it on each `SignalGroup` in the (possibly heterogeneous) `groups` tuple
-# without dynamic dispatch / boxing. Routes to this group's band's
-# `BandMeasurement` for the signal buffer and front-end metadata; the
-# serial-vs-`@batch` loop choice is dispatched via `_threading` in
-# `_dc_group_loop!`, and any backend-specific sample-type check runs in
-# `_check_sample_type`.
+# Per-group body shared by every backend. Pulled out so `_dc_groups!` can call it
+# on each `SignalGroup` in the (possibly heterogeneous) `groups` tuple without
+# dynamic dispatch / boxing. Routes to this group's band's `BandMeasurement` for
+# the signal buffer and front-end metadata; the serial-vs-`@batch` loop choice is
+# dispatched via `_threading` in `_dc_group_loop!`, and any backend-specific
+# sample-type check runs in `_check_sample_type`.
+#
+# `noise_items` / `n_noise` are the chunk's noise despreads, non-empty for exactly
+# one group (see `_dc_groups!`). They ride this group's loop without belonging to
+# it: each item carries its own band measurement, so a group's `m` below has
+# nothing to do with them. An empty group still runs when it carries them — there
+# would otherwise be no loop for the despread to ride.
 @inline function _dc_one_group!(
     g::SignalGroup,
     dc::AbstractDownconvertAndCorrelator,
@@ -1136,9 +1218,11 @@ end
     # The float backends derive nothing from the raw samples worth caching;
     # only the bit-wise backends act on `samples_unchanged`.
     samples_unchanged::Bool,
+    noise_items::Tuple,
+    n_noise::Int,
 )
     vals = g.satellites.values
-    isempty(vals) && return nothing
+    isempty(vals) && n_noise == 0 && return nothing
     m = measurements[get_band_id(g.band)]
     _check_sample_type(dc, m)
     num_samples = get_num_samples(m)
@@ -1147,6 +1231,8 @@ end
     _dc_group_loop!(
         dc,
         vals,
+        noise_items,
+        n_noise,
         m.samples,
         num_samples,
         chunk_last_sample,
@@ -1167,19 +1253,61 @@ struct _BatchLoop end
 @inline _threading(::AbstractDownconvertAndCorrelator) = _SerialLoop()
 @inline _threading(::CPUThreadedDownconvertAndCorrelator) = _BatchLoop()
 
-@inline _dc_group_loop!(dc::AbstractDownconvertAndCorrelator, vals, args::Vararg{Any,6}) =
-    _dc_group_loop!(_threading(dc), dc, vals, args...)
+@inline _dc_group_loop!(
+    dc::AbstractDownconvertAndCorrelator,
+    vals,
+    noise_items,
+    n_noise::Int,
+    args::Vararg{Any,6},
+) = _dc_group_loop!(_threading(dc), dc, vals, noise_items, n_noise, args...)
 
-@inline function _dc_group_loop!(::_SerialLoop, dc, vals, args::Vararg{Any,6})
+# Serial: nothing to hide the despread behind, so run it first — the order it had
+# when the measurement was a pass of its own.
+@inline function _dc_group_loop!(
+    ::_SerialLoop,
+    dc,
+    vals,
+    noise_items,
+    n_noise::Int,
+    args::Vararg{Any,6},
+)
+    n_noise > 0 && _run_noise_items!(noise_items, dc)
     @inbounds for i in eachindex(vals)
         vals[i] = _update_tracked_sat_correlator(vals[i], dc, args...)
     end
     return nothing
 end
 
-@inline function _dc_group_loop!(::_BatchLoop, dc, vals, args::Vararg{Any,6})
-    @batch for i = 1:length(vals)
-        @inbounds vals[i] = _update_tracked_sat_correlator(vals[i], dc, args...)
+# Threaded: the noise despreads are extra work items on the end of the satellites'
+# index range, so `@batch` schedules them across the same threads. A despread of one
+# chunk costs about what one satellite's correlation does, so they are well-sized
+# items rather than stragglers — and wherever the satellite range does not already
+# fill every thread, the despread costs close to nothing in wall time.
+#
+# The branch is on a runtime `i` but is loop-invariant per thread block and
+# perfectly predicted; both arms are compiled, and `_run_noise_item!` resolves its
+# heterogeneous tuple by an unrolled walk rather than an index.
+#
+# Thread-safety rests on two things already true: each item is the only writer of
+# its own estimator's window, `totals` and RNG stream — so no two threads touch one
+# estimator, and the seeded draw order within an item is unchanged, keeping runs
+# reproducible — and `_despread_one_signal!` takes its replica scratch from the
+# backend's per-thread slot, which `@batch` pins for the duration of an iteration.
+@inline function _dc_group_loop!(
+    ::_BatchLoop,
+    dc,
+    vals,
+    noise_items,
+    n_noise::Int,
+    args::Vararg{Any,6},
+)
+    n = length(vals)
+    @batch for i = 1:(n+n_noise)
+        if i <= n
+            @inbounds vals[i] = _update_tracked_sat_correlator(vals[i], dc, args...)
+        else
+            _run_noise_item!(i - n, noise_items, dc)
+        end
     end
     return nothing
 end
