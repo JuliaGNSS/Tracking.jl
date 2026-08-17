@@ -11,6 +11,16 @@ name: Benchmark this PR
 # Runs on both x86 (Ubuntu) and ARM (Apple Silicon, macos-14) so the NEON code path gets
 # benchmarked on real Apple-Silicon hardware, not just the x86 AVX2/AVX-512 paths.
 #
+# `--exeflags="-t auto"` is load-bearing, not a tuning knob. `benchpkg` spawns the benchmark
+# process as `julia --project=... --startup-file=no $exeflags`, and its `--exeflags` defaults
+# to *none* — so without this the benchmarks run with Julia's default of ONE thread, and
+# every `– threaded` entry in the suite silently measures the serial path: the Polyester
+# `@batch` in `_dc_group_loop!` runs its loop inline on the calling thread, so the threaded
+# backends and their vs-Float32 speedup rows compare two serial runs. `auto` rather than a
+# fixed count because the two runners differ (ubuntu-latest 4 vCPU, macos-14 3 cores) while
+# the base and head revisions of one PR always run on the same runner, so the comparison
+# stays fair. If a threading change ever shows no effect here, check this flag first.
+#
 # Security: runs as pull_request_target so the comment-posting token has write access. The
 # repo is checked out at the *base* (trusted) ref — which provides bench_table.jl — and
 # benchpkg benchmarks the PR's own benchmark/benchmarks.jl via --bench-on=<head sha>.
@@ -77,6 +87,7 @@ jobs:
             --rev=${{ github.event.pull_request.base.sha }},${{ github.event.pull_request.head.sha }} \
             --bench-on=${{ github.event.pull_request.head.sha }} \
             --add=GNSSSignals,Unitful,StaticArrays \
+            --exeflags="-t auto" \
             --output-dir=results/ \
             --tune
 
