@@ -562,35 +562,43 @@ end
     @test (@allocated Tracking.append_noise_observation!(estimator, observation)) == 0
 end
 
-@testset "the replica scratch is grown only where it is read ($(nameof(DC)))" for (
+@testset "the reference owns no scratch of its own ($(nameof(DC)))" for (
     DC,
     build,
     quantise,
-    reads_replica,
 ) in (
-    (CPUDownconvertAndCorrelator, () -> CPUDownconvertAndCorrelator(), false, true),
-    (
-        Int16DownconvertAndCorrelator,
-        () -> Int16DownconvertAndCorrelator(NUM_SAMPLES),
-        true,
-        false,
-    ),
-    (OneBitDownconvertAndCorrelator, () -> OneBitDownconvertAndCorrelator(), true, false),
-    (TwoBitDownconvertAndCorrelator, () -> TwoBitDownconvertAndCorrelator(), true, false),
+    (CPUDownconvertAndCorrelator, () -> CPUDownconvertAndCorrelator(), false),
+    (Int16DownconvertAndCorrelator, () -> Int16DownconvertAndCorrelator(NUM_SAMPLES), true),
+    (OneBitDownconvertAndCorrelator, () -> OneBitDownconvertAndCorrelator(), true),
+    (TwoBitDownconvertAndCorrelator, () -> TwoBitDownconvertAndCorrelator(), true),
 )
-    # The Int16 and bit-wise kernels pack the code sign plane themselves and take
-    # the `Vector{Int8}` only to share one signature. Sizing it for them held a
-    # byte per sample of the whole measurement, per signal, for something never
-    # read — half a megabyte on a 500 k-sample buffer.
+    # The estimator holds no replica buffer at all: `_despread_one_signal!` draws
+    # one from the backend's own scratch on the kernels that generate a replica and
+    # ignores the size on the ones that pack the code sign plane themselves. That
+    # removes a byte per sample of the whole measurement, per signal, on *every*
+    # backend rather than on the three that never read it — half a megabyte per
+    # signal on a 500 k-sample buffer.
+    @test :code_replica ∉ fieldnames(CorrelatorNoiseEstimator)
     signal = _sky(45.0; seed = 5)
     ts = _tracked(quantise ? _to_int16(signal) : ComplexF32.(signal), build())
     estimator = ts.noise_estimators.GPSL1CA
     @test get_noise_density(estimator) !== nothing      # it still measured
-    if reads_replica
-        @test Base.length(estimator.code_replica) >= NUM_SAMPLES
-    else
-        @test isempty(estimator.code_replica)
-    end
+end
+
+@testset "the reference and the satellites despread out of one scratch slot" begin
+    # The other half of that: the buffer the software reference writes its replica
+    # into is the backend's shared per-thread slot — the same one the per-satellite
+    # path uses — so there is exactly one, however many signals are measured. Safe
+    # because the noise pass runs to completion before the per-group satellite loop
+    # that reuses the slot, and the threaded backends index it by `threadid()`.
+    dc = CPUDownconvertAndCorrelator()
+    @test isempty(Tracking._scratch_buffers(dc).code_replica)
+    ts = _tracked(ComplexF32.(_sky(45.0; seed = 5)), dc)
+    @test get_noise_density(ts.noise_estimators.GPSL1CA) !== nothing
+    # Sized against the whole buffer plus the tap spread, not the slice:
+    # `gen_code_replica!` writes *at* `start_sample`, and a slice can start
+    # anywhere in the measurement.
+    @test length(Tracking._scratch_buffers(dc).code_replica) >= NUM_SAMPLES
 end
 
 end
