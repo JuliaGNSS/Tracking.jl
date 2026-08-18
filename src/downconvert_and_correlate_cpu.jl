@@ -944,7 +944,7 @@ throw: a multi-band `TrackState` may be advanced one band at a time. Groups that
 hold satellites on a band still require that band's measurement, as before.
 
 Note that the per-signal noise estimators are **mutable state shared with the
-input** on the out-of-place [`downconvert_and_correlate`](@ref) and
+input** on the out-of-place `downconvert_and_correlate` and
 [`track`](@ref) — see there.
 """
 function downconvert_and_correlate!(

@@ -40,7 +40,7 @@ a [`CorrelatorNoiseEstimator`](@ref)'s sliding window and RNG stream are written
 in place, so branching two states from one input leaves them dividing by one
 shared noise reference, and advancing two of them concurrently races on it. Build
 a separate `TrackState` per thread rather than branching one — see
-[`downconvert_and_correlate`](@ref) for why the window is not copied.
+`downconvert_and_correlate` for why the window is not copied.
 
 For real-time loops processing many chunks of signal in sequence, **construct
 the correlator once outside the loop** and pass it via the

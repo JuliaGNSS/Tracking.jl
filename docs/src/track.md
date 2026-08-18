@@ -107,6 +107,8 @@ julia> using Tracking, GNSSSignals
 
 julia> using Tracking: Hz
 
+julia> using Random: Xoshiro
+
 julia> track_state = TrackState(;
            signals = (legacy_gps_l1 = (GPSL1CA(),), gps_l5 = (GPSL5I(),)),
        );
@@ -115,13 +117,15 @@ julia> track_state = add_satellite!(track_state; prn = 1, group = :legacy_gps_l1
 
 julia> track_state = add_satellite!(track_state; prn = 1, group = :gps_l5,        code_phase = 0.0, carrier_doppler = 0.0Hz);
 
-julia> buf_l1 = zeros(ComplexF64, 4000);   # 1 ms at  4 MHz
+julia> buf_l1 = randn(Xoshiro(1), ComplexF64, 4000);   # 1 ms at  4 MHz
 
-julia> buf_l5 = zeros(ComplexF64, 25000);  # 1 ms at 25 MHz
+julia> buf_l5 = randn(Xoshiro(2), ComplexF64, 25000);  # 1 ms at 25 MHz
 
 julia> track!((L1 = BandMeasurement(buf_l1, 4e6Hz),
                L5 = BandMeasurement(buf_l5, 25e6Hz)), track_state);
 ```
+
+Noise rather than `zeros` in that buffer on purpose: the default C/N₀ estimator measures each signal's noise floor from the samples it is given, and a buffer that is identically zero has no floor to measure — `track!` says so, once per signal, rather than dividing by it (see [`AbstractNoiseEstimator`](@ref)).
 
 See [Multi-band tracking](tracking_state.md#Multi-band-tracking) for the full setup (group declaration, per-band antenna counts, duration matching).
 
