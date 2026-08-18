@@ -130,9 +130,16 @@ const NoiseDensity = typeof(1.0 / 1.0Hz)
 # Retype an observation onto a window's own `{D,T}`. The builders already emit the
 # canonical pair, so this is for an observation assembled by hand: its field types
 # are then whatever the caller's arithmetic produced, and a window that will not
-# take it has no way to say so except by dropping it. Base's
-# `convert(::Type{T}, ::T)` covers the matching case, so the steady state copies
-# nothing.
+# take it has no way to say so except by dropping it.
+#
+# The identity method is written out rather than left to Base's
+# `convert(::Type{T}, ::T)`, because Base's does *not* win here — binding `{D,T}`
+# in the first argument makes the retyping method specific enough to be chosen
+# even when the second argument already matches. It reduces to a no-op either way
+# (`NoiseObservation` is isbits and `convert(D, ::D)` is identity, so the append
+# path measures zero bytes), but only with this method is "the steady state
+# converts nothing" true of the dispatch rather than of the optimiser.
+Base.convert(::Type{NoiseObservation{D,T}}, o::NoiseObservation{D,T}) where {D,T} = o
 Base.convert(::Type{NoiseObservation{D,T}}, o::NoiseObservation) where {D,T} =
     NoiseObservation{D,T}(
         convert(D, o.noise_density),
