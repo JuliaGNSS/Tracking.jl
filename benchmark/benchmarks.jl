@@ -82,7 +82,19 @@ end
 #   * Master / wrapper branch: a `SatState`.
 #   * Multi-signal branch: a `TrackedSat` (with one TrackedSignal inside,
 #     and the doppler_estimator_state already seeded).
-function _make_initial_sat(sys, prn, code_phase, carrier_doppler; num_ants = NumAnts(1))
+# `cn0_estimator = nothing` leaves the package default in place, which is what
+# every caller but `bench_downconvert_and_correlate` wants. Forwarded through a
+# splat rather than a positional default so that revisions whose sat constructor
+# has no `cn0_estimator` keyword still see the exact call they saw before.
+function _make_initial_sat(
+    sys,
+    prn,
+    code_phase,
+    carrier_doppler;
+    num_ants = NumAnts(1),
+    cn0_estimator = nothing,
+)
+    cn0_kw = isnothing(cn0_estimator) ? (;) : (; cn0_estimator)
     if _HAS_TRACKED_SIGNAL
         return Tracking.TrackedSat(
             sys,
@@ -91,14 +103,21 @@ function _make_initial_sat(sys, prn, code_phase, carrier_doppler; num_ants = Num
             carrier_doppler;
             doppler_estimator = Tracking.ConventionalAssistedPLLAndDLL(),
             num_ants,
+            cn0_kw...,
         )
     else
-        return Tracking.SatState(sys, prn, code_phase, carrier_doppler; num_ants)
+        return Tracking.SatState(sys, prn, code_phase, carrier_doppler; num_ants, cn0_kw...)
     end
 end
 
-_make_initial_sat_with_num_ants(sys, prn, code_phase, carrier_doppler, num_ants) =
-    _make_initial_sat(sys, prn, code_phase, carrier_doppler; num_ants)
+_make_initial_sat_with_num_ants(
+    sys,
+    prn,
+    code_phase,
+    carrier_doppler,
+    num_ants;
+    cn0_estimator = nothing,
+) = _make_initial_sat(sys, prn, code_phase, carrier_doppler; num_ants, cn0_estimator)
 
 const SUITE = BenchmarkGroup()
 
@@ -210,8 +229,29 @@ function _gen_code_replica!(
     end
 end
 
-# ── High-level downconvert_and_correlate (full pipeline) ───────────────────
-
+# ── High-level downconvert_and_correlate (one PRN's pipeline) ──────────────
+#
+# What this group measures is the per-satellite pipeline — quantise,
+# downconvert, despread, accumulate — for ONE PRN, one step above the raw
+# `fused kernel` rows and one step below the end-to-end `track` rows. That is the
+# only reason it is worth a row of its own, and it only stays comparable against
+# `fused kernel/*` if nothing else rides along.
+#
+# So the satellite is built with a C/N₀ estimator that reads no noise density.
+# `downconvert_and_correlate!` also runs the per-signal noise measurement, and
+# with the default `NoiseRefCN0Estimator` a `CorrelatorNoiseEstimator` is
+# provisioned and the reference is despread on every call — a whole second
+# correlator channel inside the measured region, which roughly DOUBLED these
+# rows and left a future regression in the correlate path showing at half size.
+# The noise reference's own cost is measured by the `noise estimation` group, and
+# its cost in context by the `track` rows; it does not belong here as well.
+#
+# `MomentsCN0Estimator(N)` is the vehicle because it has the same signature on
+# every revision benchpkg runs this script against, so base and head build the
+# same state with no `isdefined` branch. Any estimator with
+# `requires_noise_density == false` would do — the estimator is never *invoked*
+# here, since C/N₀ is updated in the Doppler fold and not in this function. It is
+# named only to keep `TrackState` from provisioning a noise source.
 function bench_downconvert_and_correlate(;
     signal_type = Float32,
     num_samples = 2000,
@@ -228,7 +268,8 @@ function bench_downconvert_and_correlate(;
                 1,
                 10.5,
                 1000.0Hz,
-                NumAnts(num_ants),
+                NumAnts(num_ants);
+                cn0_estimator = Tracking.MomentsCN0Estimator(100),
             ),
         ],
     )
