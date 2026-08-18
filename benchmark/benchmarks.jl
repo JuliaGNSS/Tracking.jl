@@ -1586,9 +1586,16 @@ end
 # ingest path and the FIFO's steady state, which the design requires to be
 # allocation-free.
 #
-# `SUITE["track"]` above is deliberately left alone: those states use a C/N₀
-# estimator that reads no density, so no signal is provisioned and the noise pass
-# costs exactly nothing there. That is the comparison that has to stay flat.
+# `SUITE["track"]` above is deliberately left alone, but for the opposite reason to
+# the `downconvert and correlate` rows: those states are built with the package
+# default, which this PR moves to `NoiseRefCN0Estimator`, so a noise source *is*
+# provisioned and the per-chunk despread runs inside every `track` row. That is
+# intentional — `track` is the end-to-end number, and the noise reference is now
+# part of what a default `track!` does, so its cost belongs there. Expect those
+# rows to move against a pre-reference base revision; the reference's cost in
+# isolation is what the rows below are for, and the comparison that has to stay
+# flat is `downconvert and correlate/*`, which is held to one PRN's pipeline by
+# naming an estimator that reads no density.
 if isdefined(Tracking, :CorrelatorNoiseEstimator)
     function bench_update_noise(; num_samples = 4000, sampling_frequency = 4e6Hz)
         gnss_signal = GPSL1CA()
