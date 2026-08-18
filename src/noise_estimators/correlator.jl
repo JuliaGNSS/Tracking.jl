@@ -202,12 +202,16 @@ The window is `sizehint!`-ed to four times the number of code-period
 observations it expects to hold. The headroom is what makes the FIFO's
 `push!`/`popfirst!` pair measure **exactly** zero bytes: at 1× or 2× Julia
 periodically shifts the front offset back and reallocates.
+
+There is deliberately no `num_ants`. The reference despreads **one** antenna
+column — necessarily the one `DefaultPostCorrFilter` selects, or the ratio would
+compare two different channels — so an array changes nothing this constructor
+could configure. See [`update_noise!`](@ref).
 """
 function CorrelatorNoiseEstimator(;
     window_duration = 1.0s,
     tap_code_shift = 1.5,
     carrier_dither = 5000.0Hz,
-    num_ants::NumAnts = NumAnts(1),
     rng::AbstractRNG = Xoshiro(0),
 )
     window_duration > zero(window_duration) ||
