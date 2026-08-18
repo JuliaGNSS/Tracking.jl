@@ -149,6 +149,28 @@ end
     @test density == get_noise_density(estimator)
 end
 
+@testset "a zero measured floor is not a floor to divide by" begin
+    # `get_noise_density` keeps its documented contract — the window is not empty,
+    # so it reports what it holds. The fold's splitter is what decides whether the
+    # figure is usable, and a zero density is not: `|P|²/0` is `Inf`, or `NaN` for
+    # the zero prompt the same all-zero buffer produces, and a `NaN dB-Hz` passes
+    # every lock threshold. A front-end dropout or buffer underrun reaches this
+    # with no misuse at all.
+    dead = CorrelatorNoiseEstimator()
+    append_noise_observation!(dead, noise_observation_from_samples(0.0, 4000, 4e6Hz))
+    D = Tracking.noise_density_type(dead)
+    @test get_noise_density(dead) == zero(D)
+    @test @inferred(Tracking._noise_density_and_ready(dead)) == (zero(D), false)
+
+    # A producer's own arithmetic can hand over a non-finite one through the public
+    # append path; same answer, and still inferred.
+    for bad in (NaN, Inf)
+        e = CorrelatorNoiseEstimator()
+        append_noise_observation!(e, NoiseObservation(bad / 1.0Hz, 1, 1.0e-3s, Int16(1)))
+        @test @inferred(Tracking._noise_density_and_ready(e)) == (zero(D), false)
+    end
+end
+
 @testset "the estimator is mutated in place, never rebuilt" begin
     # This is what lets per-signal state live in an immutable `TrackState`: the
     # window is a `Vector` field written in place, and the struct that comes back
