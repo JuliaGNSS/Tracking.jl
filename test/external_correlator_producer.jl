@@ -1,7 +1,7 @@
 module ExternalCorrelatorProducerTest
 
 using Test: @test, @testset
-using Unitful: Hz, s
+using Unitful: Hz, s, dBHz, ustrip, uconvert
 using StaticArrays: SVector
 import Tracking
 using GNSSSignals: GPSL1CA, gen_code, get_code_frequency
@@ -23,7 +23,9 @@ using Tracking:
     get_default_correlator,
     NumAnts,
     EarlyPromptLateCorrelator,
-    CorrelatorOutput
+    CorrelatorOutput,
+    append_noise_observation!,
+    noise_observation_from_samples
 
 # A track state with one L1 C/A sat, an offset initial Doppler, and its
 # `correlator_outputs` buffer filled by the software correlate phase (so the
@@ -145,6 +147,67 @@ end
     @test isempty(get_correlator_outputs(ts, 3))
     @test isfinite(get_carrier_doppler(ts, 3) / Hz)
     @test isfinite(get_code_doppler(ts, 3) / Hz)
+end
+
+# One producer, one buffer of hand-built outputs, folded once — the shape the two
+# C/N₀ assertions below differ only by.
+function _ingest_and_fold!(ts; fs = 4e6Hz, prn = 3, num_records = 3, period = 4000)
+    corr = get_default_correlator(GPSL1CA(), NumAnts(1))
+    shift = corr.preferred_early_late_to_prompt_code_shift
+    for k = 1:num_records
+        raw = EarlyPromptLateCorrelator(
+            SVector(complex(1500.0), complex(3000.0), complex(1500.0)),
+            shift,
+        )
+        append_correlator_output!(ts, CorrelatorOutput(raw, period, k * period - 1), prn)
+    end
+    estimate_dopplers_and_filter_prompt!(ts, (L1 = fs,))
+end
+
+@testset "the ingest path's C/N₀ needs a noise observation under the default" begin
+    # The default C/N₀ estimator is noise-referenced, so a correlator-ingest
+    # producer has TWO things to feed, not one. Doppler tracking works off the
+    # outputs alone — the testset above — and this is the part that does not: with
+    # no noise observation the fold skips every C/N₀ update and the satellite
+    # reports `-Inf dB-Hz` forever, which downstream reads as loss of lock.
+    #
+    # Asserted rather than merely documented because it is invisible from the
+    # ingest path itself: nothing here throws, nothing returns an error, and the
+    # one warning is `maxlog = 1`. This is also the assertion that makes a future
+    # move of `default_cn0_estimator` show up in CI as a behavior change on this
+    # path instead of as silence.
+    fs = 4e6Hz
+    starved = Tracking.add_satellite!(
+        TrackState(; signal = GPSL1CA());
+        prn = 3,
+        code_phase = 0.0,
+        carrier_doppler = 50.0Hz,
+    )
+    @test keys(starved.noise_estimators) == (:GPSL1CA,)
+    _ingest_and_fold!(starved; fs)
+    @test Tracking.estimate_cn0(starved, 3) == -Inf * dBHz
+    @test Base.length(Tracking.get_cn0_estimator(starved, 3)) == 0
+
+    # Feed the second half of the contract and the same producer reports a real
+    # figure. `Σ|x|²` over `n` samples at a per-sample variance of `σ² = 1e-6·f_s`
+    # gives `N₀ = 1e-6 Hz⁻¹`, against a normalised prompt power of
+    # `(3000/4000)² = 0.5625`.
+    fed = Tracking.add_satellite!(
+        TrackState(; signal = GPSL1CA());
+        prn = 3,
+        code_phase = 0.0,
+        carrier_doppler = 50.0Hz,
+    )
+    n = 4000
+    append_noise_observation!(
+        fed,
+        noise_observation_from_samples(n * 1e-6 * ustrip(Hz, fs), n, fs),
+        :GPSL1CA,
+    )
+    _ingest_and_fold!(fed; fs)
+    @test Base.length(Tracking.get_cn0_estimator(fed, 3)) == 3
+    @test ustrip(uconvert(dBHz, Tracking.estimate_cn0(fed, 3))) ≈
+          10log10((3000 / 4000)^2 / 1e-6 - 1 / 1e-3) atol = 1e-6
 end
 
 end
