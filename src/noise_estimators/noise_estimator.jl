@@ -354,9 +354,22 @@ end
 # the union-free form the fold threads down to `_apply_correlator_output`.
 # `get_noise_density`'s `Union{Nothing,D}` is split here, once per signal per
 # chunk, so that everything below it stays monomorphic.
+#
+# "Meaningful" is more than "present". A measured floor of zero is not a floor to
+# divide by, and it is reachable without any misuse: a front-end dropout or a
+# buffer underrun delivers all-zero samples, every tap despreads to zero and the
+# window fills with `N̂₀ = 0`. `|P|²/0` is then `Inf`, or — since that same buffer
+# gives a zero prompt — `NaN`, and a `NaN dB-Hz` compares `>=` **true** against
+# every lock threshold, so a dead signal would read as locked. A non-finite
+# density (from a producer's own arithmetic via `append_noise_observation!`) is
+# rejected for the same reason. Not-ready is the honest answer and needs no new
+# machinery: the fold already skips the update and warns, and `estimate_cn0`
+# already reports `-Inf dB-Hz` — the house convention for a missing estimate.
 @inline function _noise_density_and_ready(estimator::AbstractNoiseEstimator)
     density = get_noise_density(estimator)
     D = noise_density_type(estimator)
     isnothing(density) && return (zero(D), false)
-    (density::D, true)
+    d = density::D
+    isfinite(d) && d > zero(d) || return (zero(D), false)
+    (d, true)
 end

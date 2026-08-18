@@ -175,9 +175,15 @@ each record's own value was known — a record lengthened by
 correctly even when it sits in the ring beside shorter ones. The argument stays
 for interface uniformity with the other estimators.
 
-An empty ring, and a mean that has not cleared zero, both report `-Inf dB-Hz` —
-the house convention that a missing estimate is `-Inf` and never `NaN` (see
-[`NoCN0Estimator`](@ref) for why).
+An empty ring, a mean that has not cleared zero, and a **non-finite** mean all
+report `-Inf dB-Hz` — the house convention that a missing estimate is `-Inf` and
+never `NaN` (see [`NoCN0Estimator`](@ref) for why). The last case is what makes
+the convention hold rather than merely be intended: `NaN dB-Hz` compares `>=`
+**true** against every lock threshold, so letting one out would turn a dead
+signal into a locked one, and `mean_cn0 <= 0` is exactly the test a `NaN` passes
+through. `_noise_density_and_ready` keeps the reachable source of one — a zero
+measured floor — out of the ring in the first place; this covers what a `NaN`
+prompt would still put there.
 """
 function estimate_cn0(estimator::NoiseRefCN0Estimator, integration_time)
     filled = length(estimator)
@@ -187,6 +193,6 @@ function estimate_cn0(estimator::NoiseRefCN0Estimator, integration_time)
         total += estimator.buffered_cn0[i]
     end
     mean_cn0 = total / filled
-    mean_cn0 <= 0 && return dBHz(0.0Hz)
+    isfinite(mean_cn0) && mean_cn0 > 0 || return dBHz(0.0Hz)
     dBHz(mean_cn0 * Hz)
 end

@@ -163,6 +163,38 @@ end
     @test_throws ArgumentError update(estimator, complex(1.0, 0.0))
 end
 
+@testset "a NaN never leaves estimate_cn0" begin
+    # The house convention is that a missing estimate is `-Inf dB-Hz` and never
+    # `NaN`, and here it is load-bearing rather than tidy: `NaN dB-Hz` compares
+    # `>=` TRUE against every threshold, so one escaping would report a dead
+    # signal as passing every lock detector. `mean_cn0 <= 0` is exactly the test a
+    # `NaN` slips through.
+    #
+    # A zero measured floor with a zero prompt is the reachable source — a
+    # front-end dropout or buffer underrun delivers all-zero samples — so it is
+    # the case built here.
+    poisoned = update(
+        NoiseRefCN0Estimator(; num_records = 4),
+        complex(0.0, 0.0),
+        _context(; noise_density = 0.0 * N₀),
+    )
+    @test isnan(poisoned.buffered_cn0[1])           # the per-record term is NaN ...
+    @test estimate_cn0(poisoned, T) == -Inf * dBHz  # ... and the estimate is not
+    @test !(estimate_cn0(poisoned, T) >= 30dBHz)
+
+    # A NaN prompt is the other way in, and is covered by the same guard.
+    nan_prompt = update(NoiseRefCN0Estimator(), complex(NaN, 0.0), _context())
+    @test estimate_cn0(nan_prompt, T) == -Inf * dBHz
+
+    # An `Inf` term (a zero floor under a non-zero prompt) is not a C/N₀ either.
+    inf_term = update(
+        NoiseRefCN0Estimator(),
+        complex(1.0, 0.0),
+        _context(; noise_density = 0.0 * N₀),
+    )
+    @test estimate_cn0(inf_term, T) == -Inf * dBHz
+end
+
 @testset "update is allocation-free and inferred" begin
     function fold_many(estimator, prompt, context, n)
         for _ = 1:n
