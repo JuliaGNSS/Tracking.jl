@@ -163,6 +163,37 @@ end
     @test_throws ArgumentError update(estimator, complex(1.0, 0.0))
 end
 
+@testset "a density without a T is the same kind of error, not a MethodError" begin
+    # `integration_time` defaults to `nothing` on the public `CN0UpdateContext`,
+    # and the bare-prompt error tells the caller to "call the three-argument
+    # update" — so supplying the density and forgetting `T` is an easy mistake.
+    # `1/nothing` used to surface it as a `MethodError` from inside Unitful.
+    estimator = NoiseRefCN0Estimator()
+    err = try
+        update(estimator, complex(1.0, 0.0), _context(; integration_time = nothing))
+        nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError
+    @test occursin("integration time", err.msg)
+
+    # Missing both is ambiguous between the two guards unless it is dispatched
+    # explicitly; it is, and it names the missing *source* — the root cause.
+    err_both = try
+        update(
+            estimator,
+            complex(1.0, 0.0),
+            _context(; noise_density = nothing, integration_time = nothing),
+        )
+        nothing
+    catch e
+        e
+    end
+    @test err_both isa ArgumentError
+    @test occursin("AbstractNoiseEstimator is configured", err_both.msg)
+end
+
 @testset "a NaN never leaves estimate_cn0" begin
     # The house convention is that a missing estimate is `-Inf dB-Hz` and never
     # `NaN`, and here it is load-bearing rather than tidy: `NaN dB-Hz` compares
