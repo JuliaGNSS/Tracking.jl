@@ -1,5 +1,90 @@
 # Changelog
 
+# [7.0.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v6.0.3...v7.0.0) (2026-08-18)
+
+
+* feat(cn0)!: make NoiseRefCN0Estimator the default ([7d331d8](https://github.com/JuliaGNSS/Tracking.jl/commit/7d331d8671ab5a3fca1c77d5041e32d8ba849d7a)), closes [#217](https://github.com/JuliaGNSS/Tracking.jl/issues/217)
+* feat(cn0)!: measure the noise floor per band and add NoiseRefCN0Estimator ([decd94d](https://github.com/JuliaGNSS/Tracking.jl/commit/decd94d373d002fc1c196cea28768cb69203d66b)), closes [#217](https://github.com/JuliaGNSS/Tracking.jl/issues/217)
+
+
+### Bug Fixes
+
+* **bench:** drop the removed tracked-PRN argument from NoiseUpdateContext ([cbb501e](https://github.com/JuliaGNSS/Tracking.jl/commit/cbb501ec7a5f6542083293521f5497bad19f6b50))
+* **cn0:** keep a NaN out of the measured noise reference's C/N₀ ([62af0e3](https://github.com/JuliaGNSS/Tracking.jl/commit/62af0e397e0b23f58890e2dafb1ed87dbc72e816))
+* **cn0:** name a missing integration time instead of throwing a MethodError ([7d18c8f](https://github.com/JuliaGNSS/Tracking.jl/commit/7d18c8f4b67dded487ef546bd04c39fcaf5ac70a))
+* **dc:** do not resolve the noise pass for a band the call brought no samples for ([2b8583a](https://github.com/JuliaGNSS/Tracking.jl/commit/2b8583a63807deeea744f1392a178a540c390f11))
+* **noise:** stop dropping an observation whose number type is not Float64 ([5ab085c](https://github.com/JuliaGNSS/Tracking.jl/commit/5ab085cef3566bdf96241bf9c00787759c797576))
+
+
+### Features
+
+* **cn0:** measure the band noise from samples in CorrelatorNoiseEstimator ([bb3c088](https://github.com/JuliaGNSS/Tracking.jl/commit/bb3c088fe9aa0a3b809fc72cb31acf3b7eb253f9))
+
+
+### Performance Improvements
+
+* **cn0:** build the per-record CN0UpdateContext positionally ([b870e78](https://github.com/JuliaGNSS/Tracking.jl/commit/b870e783a5a764e69d2cf5b3b66a5a471ce5297b))
+* **cn0:** make the noise window's read and append O(1) ([72b3031](https://github.com/JuliaGNSS/Tracking.jl/commit/72b30310b57884d12746ecd451af977bee90f9ee))
+* **cn0:** run the noise despread inside the per-satellite parallel loop ([8f90139](https://github.com/JuliaGNSS/Tracking.jl/commit/8f901399a625fdbae87be1c693e192967c1cb9b0))
+* **dc:** hand the parallel loop one box of noise descriptors, not copies ([5453a51](https://github.com/JuliaGNSS/Tracking.jl/commit/5453a5131384a3d71ae6e55ca4505ef4d59af0b0))
+* **dc:** return the bit-wise kernels' tap sums as an SVector ([c06ecb6](https://github.com/JuliaGNSS/Tracking.jl/commit/c06ecb6c6f14a07faf0c1c993f41d657e9df6fae))
+
+
+### Tests
+
+* **cn0:** pin the ingest path's C/N₀ under the default estimator ([9106d27](https://github.com/JuliaGNSS/Tracking.jl/commit/9106d27f41b54a92aaa836e103c85de2e2501987))
+
+
+### BREAKING CHANGES
+
+* **cn0:** actually alters on that path was invisible to CI: with the
+default estimator now noise-referenced, a producer that appends correlator
+outputs and nothing else gets every C/N₀ update skipped and reports
+`-Inf dB-Hz` forever.
+
+Nothing on that path can tell you so — nothing throws, nothing returns an
+error, and the one warning is `maxlog = 1` — which is exactly why it belongs in
+an assertion rather than only in a docstring.
+
+Two states, differing only in whether the producer feeds the second half of the
+contract: the starved one is pinned at `-Inf dB-Hz` with an empty ring, and the
+fed one is pinned at the exact figure its prompt power and density imply. The
+pair also makes a future move of `default_cn0_estimator` show up here as a
+behaviour change instead of as silence.
+
+The existing testsets already used explicit `NoiseRefCN0Estimator()` instances,
+so they would have passed unchanged had the default been reverted.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+* `default_cn0_estimator` now returns a `NoiseRefCN0Estimator`,
+so every `TrackedSignal` built without an explicit `cn0_estimator` changes
+estimator, and its band is provisioned a `CorrelatorNoiseEstimator` that
+`track!` fills from the samples. Sample-driven callers need no change and get a
+better estimate. Callers that feed **externally supplied correlator outputs**
+and cannot supply a noise observation must now pass
+`cn0_estimator = NWPRCN0Estimator(signal)` explicitly, or their C/N₀ will read
+`-Inf dB-Hz` (with a warning naming the fix) — see `default_cn0_estimator`.
+
+An unmeasured estimator now reports `-Inf dB-Hz` rather than `0.0 dB-Hz`,
+matching the house convention that a missing estimate is never a finite number a
+lock detector might clear.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+* `TrackState` gains a third field, `noise_estimators`, and a
+third type parameter. Code that constructs it positionally
+(`TrackState(groups, doppler_estimator)`) or that spells the type with two
+parameters (`TrackState{G,DE}`) must be updated; every keyword constructor
+gained a `noise_estimators = nothing` keyword that derives it, so the usual
+construction paths are unaffected.
+
+`CN0UpdateContext` gains two fields, `noise_density` and `integration_time`, and
+two type parameters. A custom `AbstractCN0Estimator` dispatching on
+`CN0UpdateContext{S,B}` must be respelled. The five-field positional constructor
+and the convenience constructor both keep their current call shape by defaulting
+the new fields, so an estimator that ignores them needs no change.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
 ## [6.0.3](https://github.com/JuliaGNSS/Tracking.jl/compare/v6.0.2...v6.0.3) (2026-08-12)
 
 
