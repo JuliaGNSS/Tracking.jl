@@ -898,16 +898,24 @@ end
     return nothing
 end
 
-# A signal with a configured noise estimator whose window is empty is a loud
-# *symptom* — every satellite reports `-Inf dB-Hz` on it — but not a loud
-# diagnosis. The likeliest cause is a hardware integration that configures a
-# `CorrelatorNoiseEstimator` per the docs and then never calls
-# `append_noise_observation!`, so the static "no source configured" check does
-# not fire and the runtime skip repeats silently forever.
+# A signal with a configured noise estimator that has no *usable* density is a
+# loud *symptom* — every satellite reports `-Inf dB-Hz` on it — but not a loud
+# diagnosis. There are two causes, and the message names both because the fold
+# cannot tell them apart from here:
+#
+#   - The window is still empty. The likeliest hardware-integration mistake: a
+#     `CorrelatorNoiseEstimator` configured per the docs whose
+#     `append_noise_observation!` is never called, so the static "no source
+#     configured" check does not fire and the runtime skip repeats forever.
+#   - The window holds a floor of zero, i.e. the input carries no power at all —
+#     a front-end dropout or a buffer underrun. `_noise_density_and_ready`
+#     reports that as not-ready rather than dividing by it (see there), so it
+#     arrives here as the same flag. This is the one cause that *can* reach a
+#     software-path caller, and the one that can appear after a signal has been
+#     reporting a real C/N₀ for a while.
 #
 # This is the only point that knows a fold actually ran *and* the density was
-# unavailable, so the warning belongs here. It never fires on the software path,
-# where `downconvert_and_correlate!` measures before the fold reads. `maxlog` is
+# unusable, so the warning belongs here. `maxlog` is
 # keyed per callsite rather than per signal, so the `_id` is made
 # signal-specific — otherwise a second misconfigured signal would be silenced by
 # the first, and the message names the signal precisely because a multi-signal
@@ -918,10 +926,10 @@ end
 # each signal's runtime `ready` flag.
 #
 # Warn rather than throw, and the asymmetry with the static case is the point:
-# "no source configured" is unambiguously a mistake, whereas "window empty at
-# this instant" has a legitimate transient reading (a producer that folds before
-# it appends, or a buffer shorter than one sub-integration), so making it fatal
-# would break a caller streaming short buffers.
+# "no source configured" is unambiguously a mistake, whereas "no usable density at
+# this instant" has legitimate transient readings (a producer that folds before it
+# appends, a buffer shorter than one sub-integration, or a momentary dead input),
+# so making it fatal would break a caller streaming short buffers.
 @inline _warn_noise_density_missing(
     ::Type{<:TrackedSat{Signals}},
     noise::Tuple,
@@ -937,12 +945,13 @@ end
 
 @noinline function _emit_noise_density_warning(signal_id::Symbol)
     @warn """
-          Signal `:$signal_id` has a noise estimator but no noise density yet, so \
+          Signal `:$signal_id` has a noise estimator but no usable noise density, so \
           `NoiseRefCN0Estimator` will not update and C/N₀ stays at `-Inf dB-Hz`. \
-          Call `append_noise_observation!` before \
+          Either its window is still empty — call `append_noise_observation!` before \
           `estimate_dopplers_and_filter_prompt!`, or use a noise estimator that \
-          measures from the band's samples.""" _id = Symbol(:no_noise_density_, signal_id) maxlog =
-        1
+          measures from the band's samples — or the measured floor is zero, which \
+          means the samples carry no power at all (a dead input or an underrun).""" _id =
+        Symbol(:no_noise_density_, signal_id) maxlog = 1
     nothing
 end
 
