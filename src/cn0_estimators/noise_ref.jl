@@ -127,25 +127,54 @@ function update(estimator::NoiseRefCN0Estimator, prompt, context::CN0UpdateConte
     )
 end
 
-# No noise source configured for this signal: a static property of the setup, so it
-# is caught at the first record and loudly. A silent substitution would hide a
-# backend that never populates the reference — the whole point of the estimator.
-@noinline function update(
+# Neither of the two things this estimator reads is optional, and both absences are
+# a static property of the setup — `CN0UpdateContext` carries each as `Nothing`
+# rather than as a sentinel — so both are caught in the type domain, at the first
+# record and loudly. A silent substitution would hide a backend that never
+# populates the reference, which is the whole point of the estimator.
+#
+# Three methods rather than two: `{…,Nothing,Nothing}` is ambiguous between the
+# other two, and a context missing both is reported as the missing *source*,
+# because that is the root cause — an integration time would not help a signal
+# with nothing to divide by.
+@noinline update(
     ::NoiseRefCN0Estimator,
     prompt,
     ::CN0UpdateContext{<:AbstractGNSSSignal,<:Unsigned,Nothing},
+) = _throw_noise_ref_needs_density()
+@noinline update(
+    ::NoiseRefCN0Estimator,
+    prompt,
+    ::CN0UpdateContext{<:AbstractGNSSSignal,<:Unsigned,Nothing,Nothing},
+) = _throw_noise_ref_needs_density()
+@noinline update(
+    ::NoiseRefCN0Estimator,
+    prompt,
+    ::CN0UpdateContext{<:AbstractGNSSSignal,<:Unsigned,<:Any,Nothing},
+) = _throw_noise_ref_needs_integration_time()
+
+@noinline _throw_noise_ref_needs_density() = throw(
+    ArgumentError(
+        "NoiseRefCN0Estimator needs a noise density for its signal, but no " *
+        "AbstractNoiseEstimator is configured for it. Pass " *
+        "`cn0_estimator = NWPRCN0Estimator()` if you are feeding externally " *
+        "supplied correlator outputs without a noise observation, or give " *
+        "`TrackState` a `noise_estimators` entry for this signal and fill it " *
+        "with `append_noise_observation!`.",
+    ),
 )
-    throw(
-        ArgumentError(
-            "NoiseRefCN0Estimator needs a noise density for its signal, but no " *
-            "AbstractNoiseEstimator is configured for it. Pass " *
-            "`cn0_estimator = NWPRCN0Estimator()` if you are feeding externally " *
-            "supplied correlator outputs without a noise observation, or give " *
-            "`TrackState` a `noise_estimators` entry for this signal and fill it " *
-            "with `append_noise_observation!`.",
-        ),
-    )
-end
+
+@noinline _throw_noise_ref_needs_integration_time() = throw(
+    ArgumentError(
+        "NoiseRefCN0Estimator has this signal's noise density but no integration " *
+        "time: it applies `T` per record (`|P|²/N̂₀ - 1/T`), so it cannot fold one " *
+        "without it. Build the context with both — " *
+        "`CN0UpdateContext(signal, bit_buffer, num_code_blocks; noise_density, " *
+        "integration_time)` — which is what the tracking loop does; " *
+        "`integration_time` is that record's own " *
+        "`integrated_samples / sampling_frequency`.",
+    ),
+)
 
 """
 $(SIGNATURES)
