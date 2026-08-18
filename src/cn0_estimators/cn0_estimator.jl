@@ -99,13 +99,37 @@ end
 # marker for a record whose prompt cannot be summed coherently against the grid
 # — a record correlated with a pre-sync replica whose secondary-code wipe-off the
 # sync changed under it (see `drop_prompt` in `_apply_correlator_output`).
-@inline function CN0UpdateContext(
+#
+# The keyword form is the readable one for a caller building a context by hand; it
+# forwards to the positional core below, which is what the per-record fold calls.
+# The split is not cosmetic: a keyword call costs a per-call allocation on Julia
+# 1.10 that 1.11+ elides, `Project.toml` still supports 1.10, and this runs once
+# per completed record per signal per satellite — the hottest of the three sites
+# that build one. `_noise_observation` is routed around its builder's keywords for
+# the same reason.
+@inline CN0UpdateContext(
     signal::AbstractGNSSSignal,
     bit_buffer::BitBuffer,
     num_code_blocks::Integer,
     bit_sync_usable::Bool = true;
     noise_density = nothing,
     integration_time = nothing,
+) = CN0UpdateContext(
+    signal,
+    bit_buffer,
+    num_code_blocks,
+    bit_sync_usable,
+    noise_density,
+    integration_time,
+)
+
+@inline function CN0UpdateContext(
+    signal::AbstractGNSSSignal,
+    bit_buffer::BitBuffer,
+    num_code_blocks::Integer,
+    bit_sync_usable::Bool,
+    noise_density,
+    integration_time,
 )
     usable = bit_sync_usable && has_bit_or_secondary_code_been_found(bit_buffer)
     CN0UpdateContext(

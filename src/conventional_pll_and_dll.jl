@@ -587,6 +587,8 @@ end
     if !noise_density_ready && requires_noise_density(estimator)
         return estimator
     end
+    # Positional, not keyword: this is the per-record site, and a keyword call
+    # allocates per call on Julia 1.10 (see `CN0UpdateContext`).
     update(
         estimator,
         prompt,
@@ -594,7 +596,7 @@ end
             signal,
             bit_buffer,
             num_code_blocks,
-            bit_sync_usable;
+            bit_sync_usable,
             noise_density,
             integration_time,
         ),
