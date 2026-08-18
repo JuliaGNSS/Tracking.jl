@@ -869,6 +869,22 @@ per-sat scratch vectors are shared, see [`track`](@ref). Per-call
 code-replica scratch comes from the correlator's (per-thread)
 `ScratchBuffers` so the kernel itself stays allocation-free; the only
 per-call allocation is the slot-value copy.
+
+The **noise estimators are shared too**, and this call advances them: a
+[`CorrelatorNoiseEstimator`](@ref)'s sliding window and its RNG stream are
+written in place through the immutable `TrackState` (that is what lets per-signal
+state live in one), so the input's window grows and its draws advance even though
+its per-sat values do not. They are deliberately not copied — a window holds
+~1000 observations per signal, and duplicating it per call would put an O(K) cost
+on the very `K` the estimator's accuracy is bought with, plus reset the reference's
+PRN rotation. Two consequences worth knowing:
+
+  - Branching two outputs from one input does not give them independent noise
+    references. They keep sharing the input's, so the same samples enter one window
+    twice and every branch divides by the same figure.
+  - Advancing two such states **concurrently** races on that window and RNG. Give
+    each thread its own `TrackState` (built separately, not branched), or its own
+    `noise_estimators` entry.
 """
 function downconvert_and_correlate(
     dc::AbstractDownconvertAndCorrelator,
