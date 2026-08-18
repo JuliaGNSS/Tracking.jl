@@ -243,11 +243,18 @@ is a property of the FIFO rather than of a configured count.
 
 **O(1)** per call, amortised, whatever the window holds — see `totals` in the
 type's docstring for why that matters here rather than being a micro-optimisation.
+
+Any [`NoiseObservation`](@ref) is accepted and retyped onto the window's own field
+types, which costs nothing for one the builders produced (they already emit the
+canonical pair) and is what keeps a hand-assembled or `Float32` one from matching
+no method here and falling through to the abstract no-op — where it would be
+**dropped silently** and leave the window empty forever.
 """
 function append_noise_observation!(
     estimator::CorrelatorNoiseEstimator{D,T},
-    observation::NoiseObservation{D,T},
+    observation::NoiseObservation,
 ) where {D,T}
+    observation = convert(NoiseObservation{D,T}, observation)
     buffered = estimator.buffered
     totals = estimator.totals
     push!(buffered, observation)

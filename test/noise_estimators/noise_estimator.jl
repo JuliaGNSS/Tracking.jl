@@ -171,6 +171,34 @@ end
     end
 end
 
+@testset "an observation lands whatever number type the producer used" begin
+    # The builders' shared core `convert`s to the canonical `{NoiseDensity,
+    # typeof(1.0s)}` rather than only `uconvert`ing the units, because a window
+    # matches on the *type*: a producer spelling their sampling frequency `4f6Hz`
+    # built a `Float32` observation that matched no method for the `Float64` window,
+    # fell through to the abstract no-op and was dropped SILENTLY — the documented
+    # hardware fill path, leaving the window empty forever and C/N₀ at -Inf.
+    f32 = noise_observation(complex(1.0f0, 0.0f0), 4000, 4.0f6Hz)
+    @test f32 isa NoiseObservation{Tracking.NoiseDensity,typeof(1.0s)}
+    e32 = CorrelatorNoiseEstimator()
+    append_noise_observation!(e32, f32)
+    @test Base.length(e32) == 1
+    @test ustrip(Hz^-1, get_noise_density(e32)) ≈ 6.25e-11 rtol = 1e-6
+
+    # An `Int`-spelled one, and a duration given in `ms`, land on the same type.
+    mixed = noise_observation_from_correlator(1.0, 1, 4000, 4_000_000Hz; duration = 1ms)
+    @test mixed isa NoiseObservation{Tracking.NoiseDensity,typeof(1.0s)}
+
+    # And an observation assembled by hand — never through a builder — is retyped
+    # on append instead of being dropped.
+    hand = NoiseObservation(1.0f-10 / 1.0f0Hz, 1, 1.0f-3s, Int16(3))
+    @test !(hand isa NoiseObservation{Tracking.NoiseDensity,typeof(1.0s)})
+    ehand = CorrelatorNoiseEstimator()
+    append_noise_observation!(ehand, hand)
+    @test Base.length(ehand) == 1
+    @test ustrip(Hz^-1, get_noise_density(ehand)) ≈ 1.0e-10 rtol = 1e-6
+end
+
 @testset "the estimator is mutated in place, never rebuilt" begin
     # This is what lets per-signal state live in an immutable `TrackState`: the
     # window is a `Vector` field written in place, and the struct that comes back

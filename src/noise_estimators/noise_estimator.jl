@@ -127,6 +127,20 @@ end
 # concretely typed however the caller spelled their sampling frequency.
 const NoiseDensity = typeof(1.0 / 1.0Hz)
 
+# Retype an observation onto a window's own `{D,T}`. The builders already emit the
+# canonical pair, so this is for an observation assembled by hand: its field types
+# are then whatever the caller's arithmetic produced, and a window that will not
+# take it has no way to say so except by dropping it. Base's
+# `convert(::Type{T}, ::T)` covers the matching case, so the steady state copies
+# nothing.
+Base.convert(::Type{NoiseObservation{D,T}}, o::NoiseObservation) where {D,T} =
+    NoiseObservation{D,T}(
+        convert(D, o.noise_density),
+        o.num_sub_integrations,
+        convert(T, o.duration),
+        o.prn,
+    )
+
 """
 $(SIGNATURES)
 
@@ -232,9 +246,18 @@ noise_observation_from_samples(
 )
 
 # Shared core of the three builders: `N₀ = power / (total_samples · A_c² · f_s)`.
-# Both the density and the duration are converted to their canonical units, so a
-# band's window stays concretely typed no matter how the caller spelled the
-# sampling frequency.
+#
+# Both fields are `convert`ed to the canonical types — `NoiseDensity` and
+# `typeof(1.0s)` — rather than merely `uconvert`ed to canonical *units*, so that a
+# window's element type is fixed by this function and not by how the caller
+# spelled their sampling frequency. `uconvert` alone preserves the input's number
+# type, so a producer reporting `4f6Hz` built a `NoiseObservation{Quantity{Float32,
+# …},…}`, which then matched no `append_noise_observation!` method for the
+# `Float64` window and fell through to the abstract no-op — the observation was
+# silently dropped and the window stayed empty forever. Canonicalising here is
+# what makes the documented hardware fill path work for any spelling; the
+# converting method on `CorrelatorNoiseEstimator` covers a hand-built observation
+# that never came through a builder.
 @inline function _noise_observation(
     accumulated_power,
     num_sub_integrations,
@@ -244,11 +267,16 @@ noise_observation_from_samples(
     prn,
     duration,
 )
-    density = uconvert(
-        Hz^-1,
+    density = convert(
+        NoiseDensity,
         accumulated_power / (total_samples * code_amplitude^2 * sampling_frequency),
     )
-    NoiseObservation(density, Int(num_sub_integrations), uconvert(s, duration), Int16(prn))
+    NoiseObservation(
+        density,
+        Int(num_sub_integrations),
+        convert(typeof(1.0s), duration),
+        Int16(prn),
+    )
 end
 
 """
