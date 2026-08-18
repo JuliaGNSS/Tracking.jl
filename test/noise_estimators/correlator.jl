@@ -477,6 +477,48 @@ end
     @test Base.length(ts.noise_estimators.GPSL1CA) == 20
 end
 
+@testset "a band this call brought no samples for is skipped, not thrown on" begin
+    # A multi-band `TrackState` advanced one band at a time is a legitimate call
+    # shape: pre-noise-reference, a group whose band was absent simply had no
+    # satellites to loop over. The noise pass resolves per *signal* and named its
+    # signal's band unconditionally, so it indexed a `BandMeasurements` NamedTuple
+    # for a key that was not there and threw a `FieldError` out of a call the
+    # caller never asked to advance that band on.
+    for measure_noise in (true, false)
+        ts = TrackState(; signals = (gps_l1 = (GPSL1CA(),), gps_l5 = (GPSL5I(),)))
+        add_satellite!(ts; prn = 1, group = :gps_l1, carrier_doppler = 0.0Hz)
+        @test keys(ts.noise_estimators) == (:GPSL1CA, :GPSL5I)
+        downconvert_and_correlate!(
+            CPUDownconvertAndCorrelator(),
+            (L1 = BandMeasurement(_sky(-Inf; seed = 21), FS),),
+            ts;
+            measure_noise,
+        )
+        # L5 brought no samples, so it measured nothing either way ...
+        @test Base.length(ts.noise_estimators.GPSL5I) == 0
+        # ... and L1 measured exactly as `measure_noise` says.
+        @test (Base.length(ts.noise_estimators.GPSL1CA) > 0) == measure_noise
+    end
+
+    # `measure_noise = false` now skips the *resolution*, not just the execution,
+    # so nothing about the descriptors is computed for a pass that will not run
+    # them. The walk stays type-stable and allocation-free either way.
+    ts = TrackState(; signals = (gps_l1 = (GPSL1CA(),), gps_l5 = (GPSL5I(),)))
+    add_satellite!(ts; prn = 1, group = :gps_l1, carrier_doppler = 0.0Hz)
+    dc = CPUDownconvertAndCorrelator()
+    measurements = (L1 = BandMeasurement(_sky(-Inf; seed = 22), FS),)
+    items = Tracking._noise_items(dc, ts, measurements, 0, nothing)
+    # One descriptor, for L1 alone — its length is a property of the types.
+    @test items isa Base.RefValue{<:Tuple{Any}}
+    @test Base.return_types(
+        Tracking._noise_items,
+        (typeof(dc), typeof(ts), typeof(measurements), Int, Nothing),
+    ) == [typeof(items)]
+    resolve(dc, ts, m) = Tracking._noise_items(dc, ts, m, 0, nothing)
+    resolve(dc, ts, measurements)
+    @test @allocated(resolve(dc, ts, measurements)) == 0
+end
+
 @testset "a signal without a consumer is never despread" begin
     # The whole reason provisioning is gated on `requires_noise_density`: someone
     # who stays on NWPR must not pay for a despread they never read.

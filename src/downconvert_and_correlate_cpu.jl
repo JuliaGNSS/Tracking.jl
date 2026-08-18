@@ -922,6 +922,14 @@ buffer arrives as one unchunked chunk. Measuring there would enter every sample
 of the buffer into the window a second time. It has no effect on a
 `TrackState` whose C/N₀ estimators read no noise density, since nothing is
 measured on those at all.
+
+A band that is **absent** from `measurements` is not measured either, and does not
+throw: a multi-band `TrackState` may be advanced one band at a time. Groups that
+hold satellites on a band still require that band's measurement, as before.
+
+Note that the per-signal noise estimators are **mutable state shared with the
+input** on the out-of-place [`downconvert_and_correlate`](@ref) and
+[`track`](@ref) — see there.
 """
 function downconvert_and_correlate!(
     dc::AbstractDownconvertAndCorrelator,
@@ -933,18 +941,44 @@ function downconvert_and_correlate!(
     samples_unchanged::Bool = false,
     measure_noise::Bool = true,
 )
-    noise_items = _noise_items(dc, track_state, measurements, chunk_index, chunk_duration)
-    _dc_groups!(
-        Tuple(track_state.groups),
-        noise_items,
-        measure_noise ? _num_noise_items(noise_items) : 0,
-        dc,
-        measurements,
-        chunk_index,
-        chunk_duration,
-        stop_before_partial,
-        samples_unchanged,
-    )
+    # `measure_noise = false` skips the *resolution* and not merely the execution.
+    # Resolving descriptors for work that will not run wastes the sample-type check
+    # and the box park on every drain pass, and — because a descriptor names its
+    # signal's band — it also made a call that hands over only some bands' samples
+    # throw for the bands it left out, which is a legitimate shape (see
+    # `_noise_item`). The branch sits here rather than inside `_noise_items` so both
+    # arms call `_dc_groups!` with a concretely typed `_NoiseWork`: the empty arm is
+    # the `()` specialisation the group tail already instantiates, so it costs no
+    # extra compilation and the descriptor tuple's type still never depends on a
+    # runtime value.
+    groups = Tuple(track_state.groups)
+    if measure_noise
+        noise_items =
+            _noise_items(dc, track_state, measurements, chunk_index, chunk_duration)
+        _dc_groups!(
+            groups,
+            noise_items,
+            _num_noise_items(noise_items),
+            dc,
+            measurements,
+            chunk_index,
+            chunk_duration,
+            stop_before_partial,
+            samples_unchanged,
+        )
+    else
+        _dc_groups!(
+            groups,
+            (),
+            0,
+            dc,
+            measurements,
+            chunk_index,
+            chunk_duration,
+            stop_before_partial,
+            samples_unchanged,
+        )
+    end
     return track_state
 end
 
@@ -1022,8 +1056,10 @@ end
 #
 # Note what is deliberately *not* decided here: whether to measure at all. An
 # out-of-range chunk is left to `update_noise!`'s own `num_samples > 0` guard, and
-# `measure_noise` is applied by the caller as a count, because either one folded in
-# here would make the tuple's type depend on a runtime value.
+# `measure_noise` is decided by the caller — which skips this function outright —
+# because either one folded in here would make the tuple's type depend on a runtime
+# value. What *is* decided here is only ever type-domain: a signal no group tracks,
+# and a band this call brought no samples for, both contribute nothing.
 @inline function _noise_items(
     dc::AbstractDownconvertAndCorrelator,
     track_state::TrackState,
@@ -1169,7 +1205,19 @@ end
     # The samples are still a *band* property — one front end feeds every signal
     # on it. Only the despreading code, and therefore the measured floor, is per
     # signal.
-    m = measurements[_signal_band_id(typeof(signal))]
+    #
+    # A band this call brings no samples for measures nothing. That is not a
+    # mistake to report: a multi-band `TrackState` may legitimately be advanced one
+    # band at a time, and indexing for the absent band threw a `FieldError` out of
+    # the noise pass for a group the caller never asked to advance. Nothing is
+    # hidden by skipping — a group that *does* hold satellites on that band still
+    # indexes its own measurement in `_dc_one_group!` and throws there. Decided in
+    # the type domain (a `BandMeasurements` NamedTuple's keys are part of its type),
+    # so the descriptor tuple's length stays a property of the types alone.
+    found_m =
+        _band_measurement_if_present(measurements, Val(_signal_band_id(typeof(signal))))
+    isempty(found_m) && return ()
+    m = first(found_m)
     _check_sample_type(dc, m)
     num_samples = get_num_samples(m)
     # No tracked-PRN set is threaded through: the reference randomises its code
@@ -1217,6 +1265,16 @@ end
 @inline _run_noise_items!(box::Base.RefValue{<:Tuple}, dc) = _run_noise_items!(box[], dc)
 @inline _run_noise_items!(items::Tuple, dc) =
     (_apply_noise_item!(first(items), dc); _run_noise_items!(Base.tail(items), dc))
+
+# Band `B`'s measurement as a 0- or 1-tuple — the same "absent stays in the type
+# domain" shape as `_first_signal_with_id` below, and for the same reason: the
+# descriptor tuple's length has to be a property of the types alone. Both `B` and
+# the NamedTuple's key set are type parameters here, so the branch folds at compile
+# time and nothing about it survives into the chunk.
+@inline _band_measurement_if_present(
+    measurements::NamedTuple{K,<:Tuple{Vararg{BandMeasurement}}},
+    ::Val{B},
+) where {K,B} = B in K ? (measurements[B],) : ()
 
 # An instance of signal `K`, searched groups-then-signals and returned as a 0- or
 # 1-tuple so the not-found case stays type-stable instead of widening to
