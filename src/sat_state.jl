@@ -97,13 +97,18 @@ override.
 
 `cn0_estimator` accepts any [`AbstractCN0Estimator`](@ref) — it is a type
 parameter of the returned `TrackedSignal`, so a custom estimator is stored as
-is. The default is [`default_cn0_estimator`](@ref), an
-[`NWPRCN0Estimator`](@ref) whose pre-sync fallback holds
-`num_prompts_for_cn0_estimation` prompts; pass
+is. The default is [`default_cn0_estimator`](@ref), a
+[`NoiseRefCN0Estimator`](@ref) averaging `num_prompts_for_cn0_estimation` records
+against the signal's own **measured** noise density. On the sample-driven path
+that needs no configuration — `TrackState` provisions the noise source and
+`track!` fills it — but a **correlator-ingest** path must feed it too, with
+[`append_noise_observation!`](@ref) per signal, or C/N₀ stays at `-Inf dB-Hz`.
+Pass `cn0_estimator = NWPRCN0Estimator()` for the estimator that infers its floor
+from the prompt stream and needs no noise observation, or
 `cn0_estimator = MomentsCN0Estimator(num_prompts_for_cn0_estimation)` for the
-plain moment-ratio estimator. Each signal needs its **own** estimator instance:
-they buffer into a shared vector, so handing one instance to two signals
-corrupts both.
+plain moment-ratio estimator. See [`default_cn0_estimator`](@ref) for which to
+pick when. Each signal needs its **own** estimator instance: they buffer into a
+shared vector, so handing one instance to two signals corrupts both.
 
 Throws an `ArgumentError` if `preferred_num_code_blocks_to_integrate` is
 invalid for `signal` (see

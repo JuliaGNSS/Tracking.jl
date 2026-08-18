@@ -510,7 +510,7 @@ end
     drop_prompt = correlated_pre_sync && get_secondary_code_length(signal) > 1
     # The CN0 estimator is handed the navigation-bit state along with the prompt
     # (`CN0UpdateContext`, built from the bit buffer as it stands *before* this
-    # record): the default `NWPRCN0Estimator` needs to know where the data-bit
+    # record): `NWPRCN0Estimator` needs to know where the data-bit
     # boundaries are to sum prompts coherently over exactly one bit — nothing a
     # downstream consumer of `get_filtered_prompts` could reconstruct. The bit
     # grid is trustworthy for exactly the records whose prompt is: this record's
