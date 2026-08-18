@@ -406,7 +406,7 @@ function bench_track(;
         downconvert_and_correlator = $downconvert_and_correlator,
     )
 end
-SUITE["track"]["GPS L1CA, 1 sat, 2K @ 5 MHz – out-of-place"] = bench_track()
+SUITE["track"]["GPS L1CA, 1 sat, 2K @ 5 MHz – out-of-place, Float32"] = bench_track()
 
 # In-place track! (only on branches that define it). Mirrors bench_track so
 # the comparison report shows them side by side.
@@ -427,7 +427,8 @@ function bench_track_inplace(;
     )
 end
 if isdefined(Tracking, :track!)
-    SUITE["track"]["GPS L1CA, 1 sat, 2K @ 5 MHz – in-place"] = bench_track_inplace()
+    SUITE["track"]["GPS L1CA, 1 sat, 2K @ 5 MHz – in-place, Float32"] =
+        bench_track_inplace()
 end
 
 # Fused kernel microbenchmarks (only available on branches with the fused kernel)
@@ -787,12 +788,18 @@ end
 #   <constellation>, <Nsats> sats[, <extra>], <Nsamp> @ <rate> – <variant>
 #
 # where `<variant>` is `out-of-place` (`track`, returns a new state) or
-# `in-place` (`track!`), optionally followed by `, threaded` or by a non-default
-# sample backend (`, Int16` / `, OneBit` / `, TwoBit`). Both entry points are
-# named rather than leaving `track`'s rows bare: an unsuffixed row reads as "the
+# `in-place` (`track!`), then the backend (`Float32` / `Int16` / `OneBit` /
+# `TwoBit`), then `, threaded` on the rows that are. Both entry points are named
+# rather than leaving `track`'s rows bare: an unsuffixed row reads as "the
 # default" instead of "the other variant", which is the ambiguity the suffix is
-# there to remove in the first place. Float32 is the default backend and so goes
-# unmarked, the same way single-threaded does.
+# there to remove in the first place.
+#
+# The **backend is always named**, `Float32` included, for the same reason one
+# level down: it has four values and no reading of a bare label says which one a
+# row measured, so "the default" is knowledge the label was relying on the reader
+# already having. Threading stays marked only when on — there the pair is a
+# binary, both halves of it sit adjacent in the table, and an unmarked row
+# genuinely does read as "the other one".
 #
 # The scenario carries the satellite count, the sample count and the sampling
 # rate, because the comparison table is read by people who have not opened this
@@ -806,6 +813,12 @@ end
 # because " " precedes "0". Numbering added nothing the text does not, drifted
 # out of order as cases were added (two different cases both called themselves
 # "7."), and read as a rank rather than as an index.
+#
+# Naming the backend also fixes the sort: `– in-place, threaded` used to land
+# *after* `– in-place, TwoBit` (lowercase `t` sorts above the uppercase backend
+# names), so a scenario's Float32 pair was split by three other backends. As
+# `– in-place, Float32` / `– in-place, Float32, threaded` they lead the group and
+# stay adjacent.
 #
 # The one place a lexicographic sort still reads oddly is sample counts of
 # different digit lengths: "500K" precedes "5K", so the 8-sat rows list the long
@@ -848,12 +861,14 @@ const _TRACK_BENCH_CASES = let gpsl1 = GPSL1CA(), gal = GalileoE1B()
 end
 
 for (key, kw) in _TRACK_BENCH_CASES
-    SUITE["track"]["$key – out-of-place"] = bench_track_steady_state(false, false; kw...)
-    SUITE["track"]["$key – out-of-place, threaded"] =
+    SUITE["track"]["$key – out-of-place, Float32"] =
+        bench_track_steady_state(false, false; kw...)
+    SUITE["track"]["$key – out-of-place, Float32, threaded"] =
         bench_track_steady_state(false, true; kw...)
     if isdefined(Tracking, :track!)
-        SUITE["track"]["$key – in-place"] = bench_track_steady_state(true, false; kw...)
-        SUITE["track"]["$key – in-place, threaded"] =
+        SUITE["track"]["$key – in-place, Float32"] =
+            bench_track_steady_state(true, false; kw...)
+        SUITE["track"]["$key – in-place, Float32, threaded"] =
             bench_track_steady_state(true, true; kw...)
     end
 end
@@ -939,7 +954,7 @@ if _HAS_TRACKED_SIGNAL
         ts, signal =
             _make_multi_signal_track_state(; n_signals, nsamp = 5000, sfreq = 5e6Hz)
         dc = _make_cpu_dc(5e6Hz)
-        SUITE["track"]["$prefix – out-of-place"] = @benchmarkable Tracking.track(
+        SUITE["track"]["$prefix – out-of-place, Float32"] = @benchmarkable Tracking.track(
             $signal,
             $ts,
             $(5e6Hz);
@@ -949,7 +964,7 @@ if _HAS_TRACKED_SIGNAL
             ts_ip, signal_ip =
                 _make_multi_signal_track_state(; n_signals, nsamp = 5000, sfreq = 5e6Hz)
             dc_ip = _make_cpu_dc(5e6Hz)
-            SUITE["track"]["$prefix – in-place"] = @benchmarkable Tracking.track!(
+            SUITE["track"]["$prefix – in-place, Float32"] = @benchmarkable Tracking.track!(
                 $signal_ip,
                 $ts_ip,
                 $(5e6Hz);
@@ -996,7 +1011,7 @@ if _HAS_TRACKED_SIGNAL && isdefined(Tracking, :track!)
             nsamp = samples_per_block * n_blocks
             sig = rand(ComplexF32, nsamp)
             dc = _make_cpu_dc(sfreq)
-            SUITE["track"]["GPS L1CA, 1 sat, bit sync pending, $(n_blocks) blk @ 5 MHz – in-place"] = @benchmarkable(
+            SUITE["track"]["GPS L1CA, 1 sat, bit sync pending, $(n_blocks) blk @ 5 MHz – in-place, Float32"] = @benchmarkable(
                 Tracking.track!($sig, ts, $sfreq; downconvert_and_correlator = $dc),
                 setup = (
                     ts = first(
@@ -1013,7 +1028,7 @@ if _HAS_TRACKED_SIGNAL && isdefined(Tracking, :track!)
             # The synced rows stay short: post-sync there is no per-block search
             # to leak from, so the extra length would only cost runtime.
             n_blocks == 200 && continue
-            SUITE["track"]["GPS L1CA, 1 sat, bit sync found, $(n_blocks) blk @ 5 MHz – in-place"] = @benchmarkable(
+            SUITE["track"]["GPS L1CA, 1 sat, bit sync found, $(n_blocks) blk @ 5 MHz – in-place, Float32"] = @benchmarkable(
                 Tracking.track!($sig, ts, $sfreq; downconvert_and_correlator = $dc),
                 setup = (
                     ts = first(
