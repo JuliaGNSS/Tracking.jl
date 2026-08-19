@@ -179,9 +179,13 @@ The existing [`ConventionalPLLAndDLL`](@ref) implementation in
 the immutable and in-place forms share a `_update_tracked_sat_doppler`
 helper so they cannot drift, and how the per-signal walk distinguishes
 the [estimator-driver signal](tracking_state.md#Estimator-driver-signal)
-(`signals[1]`, which drives the conventional PLL/DLL) from the other
-signals (which only have their prompts filtered).
-That split is a convention `ConventionalPLLAndDLL` chooses — your own
+(`signals[1]`, which closes the conventional PLL/DLL) from the other
+signals (which contribute measurements but do not close a loop of their own).
+That split is narrower than it sounds: the driver signal owns the loop
+*cadence*, *bandwidths* and *carrier-phase reference*, but every signal's
+discriminator output can be folded into the loop update — see
+[Multi-signal discriminator combining](tracking_state.md#Multi-signal-discriminator-combining)
+for the weighting and for the differential group delay the combined code loop needs. All of that is a convention `ConventionalPLLAndDLL` chooses; your own
 estimator can use every signal's state any way you like.
 
 ## What stays generic
