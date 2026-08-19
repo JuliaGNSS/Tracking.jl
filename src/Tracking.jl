@@ -36,6 +36,9 @@ export get_early,
     get_integrated_samples,
     get_preferred_num_code_blocks_to_integrate,
     set_preferred_num_code_blocks_to_integrate!,
+    get_code_bias,
+    set_code_bias!,
+    dll_disc_noise_gain,
     reset_loop_filters!,
     get_signal_start_sample,
     get_correlator,
@@ -235,6 +238,7 @@ include("noise_estimators/noise_estimator.jl")
 include("noise_estimators/correlator.jl")
 include("discriminators.jl")
 include("post_corr_filter.jl")
+include("code_bias.jl")
 include("gps/l1ca.jl")
 include("gps/l1c_d.jl")
 include("gps/l1c_p.jl")

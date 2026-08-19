@@ -107,8 +107,79 @@ the cap starts to bind, this returns the configured bandwidth unchanged.
 end
 
 """
+Running weighted sums of the discriminator outputs contributed by a satellite's
+**passenger** signals (`signals[2:end]`) since the estimator-driver signal last
+closed its loops — the state multi-signal discriminator combining threads
+through the fold and parks in each `SatConventionalPLLAndDLL`.
+
+One `(weight, sum)` pair per loop, because the three loops weight a record
+differently (see `_accumulate_passenger_discriminators`). Consumed and
+zeroed at every driver record; carried **across chunk boundaries** in the
+per-satellite estimator state, which is not an optimisation but a requirement:
+the default chunk is the *shortest* code period across all tracked signals, so
+with a 10 ms pilot driver and a 1 ms C/A passenger nine chunks out of ten
+contain passenger records and no driver record at all. A per-chunk accumulator
+would throw those nine away.
+"""
+struct DiscriminatorAccumulator
+    dll_weight::Float64
+    dll_sum::Float64                # chips × weight
+    pll_weight::Float64
+    pll_sum::Float64                # radians × weight
+    fll_weight::Float64
+    fll_sum::typeof(1.0Hz)          # Hz × weight
+end
+
+zero(::Type{DiscriminatorAccumulator}) =
+    DiscriminatorAccumulator(0.0, 0.0, 0.0, 0.0, 0.0, 0.0Hz)
+zero(::DiscriminatorAccumulator) = zero(DiscriminatorAccumulator)
+
+# Fold one more measurement into each loop's running sums.
+@inline _accumulate(
+    acc::DiscriminatorAccumulator,
+    dll_value,
+    dll_weight,
+    pll_value,
+    pll_weight,
+    fll_value,
+    fll_weight,
+) = DiscriminatorAccumulator(
+    acc.dll_weight + dll_weight,
+    acc.dll_sum + dll_weight * dll_value,
+    acc.pll_weight + pll_weight,
+    acc.pll_sum + pll_weight * pll_value,
+    acc.fll_weight + fll_weight,
+    acc.fll_sum + fll_weight * fll_value,
+)
+
+"""
+$(SIGNATURES)
+
+Minimum-variance combination of the passenger signals' accumulated
+`(weight, sum)` with the driver's own discriminator value and weight.
+
+The result is a **weight-normalized mean**, which is what keeps the loop gain
+out of it: the combined value stays calibrated in the discriminator's own units
+no matter how many signals happened to contribute at this epoch, so only the
+measurement *noise* varies from epoch to epoch. A plain sum would multiply the
+loop gain by the number of contributors and destabilise the filter every time a
+long-period passenger reported. (It is not what makes combining safe to enable —
+see [`ConventionalPLLAndDLL`](@ref) for the precondition that keeps it opt-in.)
+
+The `iszero(weight)` branch is not just an optimisation — it makes the
+driver-only case return the driver's discriminator **bit-identically**, so a
+single-signal satellite (and a multi-signal one in a chunk where no passenger
+completed) tracks exactly as it did before combining existed.
+"""
+@inline _combine_with_own(sum, weight, own_value, own_weight) =
+    iszero(weight) ? own_value :
+    iszero(own_weight) ? sum / weight :
+    (sum + own_weight * own_value) / (weight + own_weight)
+
+"""
 Per-satellite state for the conventional PLL and DLL Doppler estimator.
-Holds initial Doppler values and loop filter states.
+Holds initial Doppler values, loop filter states, and the multi-signal
+discriminator accumulator ([`DiscriminatorAccumulator`](@ref)).
 """
 @kwdef struct SatConventionalPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     init_carrier_doppler::typeof(1.0Hz)
@@ -117,6 +188,7 @@ Holds initial Doppler values and loop filter states.
     code_loop_filter::CO = SecondOrderBilinearLF()
     carrier_loop_filter_bandwidth::typeof(1.0Hz) = 18.0Hz
     code_loop_filter_bandwidth::typeof(1.0Hz) = 1.0Hz
+    pending_discriminators::DiscriminatorAccumulator = zero(DiscriminatorAccumulator)
 end
 
 function SatConventionalPLLAndDLL(
@@ -133,6 +205,7 @@ function SatConventionalPLLAndDLL(
         code_loop_filter,
         carrier_loop_filter_bandwidth,
         code_loop_filter_bandwidth,
+        zero(DiscriminatorAccumulator),
     )
 end
 
@@ -142,6 +215,7 @@ function SatConventionalPLLAndDLL(
     code_loop_filter::Maybe{CO} = nothing,
     carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
     code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
+    pending_discriminators::Maybe{DiscriminatorAccumulator} = nothing,
 ) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     SatConventionalPLLAndDLL{CA,CO}(
         sat_conventional_pll_and_dll.init_carrier_doppler,
@@ -156,6 +230,8 @@ function SatConventionalPLLAndDLL(
         isnothing(code_loop_filter_bandwidth) ?
         sat_conventional_pll_and_dll.code_loop_filter_bandwidth :
         code_loop_filter_bandwidth,
+        isnothing(pending_discriminators) ?
+        sat_conventional_pll_and_dll.pending_discriminators : pending_discriminators,
     )
 end
 
@@ -190,11 +266,89 @@ bandwidth change. The **code** bandwidth is an absolute value that longer
 integration does not narrow; it is only capped by the same stability product
 against the record's actual integration time — see
 [`effective_code_loop_filter_bandwidth`](@ref).
+
+## Multi-signal discriminator combining
+
+On a satellite tracking several signals, `signals[1]` is still the
+estimator-driver signal — it sets the loop cadence, the bandwidths and the
+carrier phase reference — but the **passenger** signals `signals[2:end]` are not
+mere onlookers: with `signal_combining = true`, every discriminator they produce
+is folded into the driver's, as a minimum-variance weighted mean, before the loop
+filters see it.
+
+Combining is **opt-in** (`signal_combining = false` by default), for two reasons.
+It changes a multi-signal satellite's carrier/code Doppler, code phase and
+decoded-bit timing, so it is not something to acquire by upgrading. And it has a
+precondition this package cannot check: the driver must be the
+longest-*integrating* signal of its group, since the accumulator is zeroed at
+every driver record and a passenger reporting once per `k` driver records
+therefore reaches the loop in one update out of `k`. That holds for every
+intra-band pilot/data pair — their components share a primary code period, or the
+pilot's is the longer one — but a group mixing code periods (GPS L1 C/A with L1C)
+must put the long signal first. The caller assembling the group is the only party
+that knows, so it is the caller that switches this on.
+
+Each record is weighted by its post-integration SNR — the component's **nominal**
+power share (`GNSSSignals.get_relative_power`) times the record's sample count —
+divided by the discriminator's noise gain ([`dll_disc_noise_gain`](@ref) for the
+code loop; the carrier loop's gain is signal-independent, and the FLL's scales
+with the record length squared). The power is the ICD power split rather than the
+measured prompt because within one constellation and band that ratio is the stable
+quantity: elevation, satellite block, free-space loss, antenna gain and front-end
+gain are common to the components and cancel, whereas a measured `|P|²` would feed
+its own estimation noise (biased upward by `σ²/N`) into the loop gain. It also
+folds to a compile-time constant.
+
+One kind of record is **excluded** rather than weighted down: one correlated with
+a pre-sync replica on a secondary-coded signal, whose coherent sum partially
+cancels without the secondary-code wipe-off and so measures nothing. Nominal
+weights cannot notice that on their own, hence the gate.
+
+There is deliberately no check that a component is being received at all. A signal
+is in a satellite's tuple only because the caller declared it, so declaring one the
+satellite does not transmit is a configuration error to be fixed where it was
+declared — not something to detect per record in the hot path. Declare only the
+signals a satellite actually broadcasts (pre-Block-III GPS carries no L1C, for
+instance).
+
+Combining happens at the *discriminator* level, not by summing prompts, because
+`pll_disc` and `fll_disc` are blind to the unknown ±1 navigation-data sign — so a
+data component's discriminator may be averaged with a pilot's, whereas their
+prompts would partially cancel. A passenger in carrier quadrature with the driver
+is de-rotated onto the driver's phase frame first.
+
+The combination is exact rather than epoch-smeared: the fold walks the driver's
+and the passengers' records in sample order, so each driver record's loop update
+sees exactly the passenger records that completed inside its own window, and
+records completing after the last driver record of a chunk stay pending in the
+[`DiscriminatorAccumulator`](@ref) for the next one.
+
+### The code loop needs a bias, the carrier loops do not
+
+The carrier loops combine from the first integration — carrier phase carries no
+inter-signal code bias. The **code** loop is different: a combined DLL drives the
+shared `code_phase` towards a weighted average of the signals' code phases, and
+those differ by the satellite's differential payload group delay. So each
+passenger's code discriminator is first referred to the driver's code phase by
+subtracting that passenger's [`set_code_bias!`](@ref) value.
+
+A passenger whose bias is `nothing` — the default for every signal — contributes
+to the carrier loops only, and joins the code loop the moment a bias is set.
+Nothing is assumed on its behalf, because assuming zero is not the harmless
+direction: a passenger can outweigh its driver by roughly 80:1 (comparable power,
+10× the integration, ~8× the discriminator gain for an L1C-P passenger against an
+L1 C/A driver), so the shared code phase becomes essentially the *passenger's*,
+and an uncorrected 1–3 ns differential lands as 0.3–0.9 m of bias in a phase
+downstream corrections read as the driver's — larger than the jitter the combining
+just bought. Where a bias of exactly `0.0` is justified (a pilot/data pair out of
+one payload chain, which is every Galileo pair) it is the caller that knows, and
+the caller that says so.
 """
 struct ConventionalPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter} <:
        AbstractDopplerEstimator
     carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)}
     code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)}
+    signal_combining::Bool
 end
 
 function ConventionalPLLAndDLL(
@@ -202,8 +356,13 @@ function ConventionalPLLAndDLL(
     ::Type{CO} = SecondOrderBilinearLF;
     carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
     code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
+    signal_combining::Bool = false,
 ) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
-    ConventionalPLLAndDLL{CA,CO}(carrier_loop_filter_bandwidth, code_loop_filter_bandwidth)
+    ConventionalPLLAndDLL{CA,CO}(
+        carrier_loop_filter_bandwidth,
+        code_loop_filter_bandwidth,
+        signal_combining,
+    )
 end
 
 """
@@ -222,26 +381,30 @@ function ConventionalAssistedPLLAndDLL(
     ::Type{CO} = SecondOrderBilinearLF;
     carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
     code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
+    signal_combining::Bool = false,
 ) where {CO<:AbstractLoopFilter}
     ConventionalPLLAndDLL(
         ThirdOrderAssistedBilinearLF,
         CO;
         carrier_loop_filter_bandwidth,
         code_loop_filter_bandwidth,
+        signal_combining,
     )
 end
 
-# Kwarg-update constructor for tweaking bandwidths in place.
+# Kwarg-update constructor for tweaking bandwidths / combining in place.
 function ConventionalPLLAndDLL(
     pll_and_dll::ConventionalPLLAndDLL{CA,CO};
     carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
     code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
+    signal_combining::Maybe{Bool} = nothing,
 ) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     ConventionalPLLAndDLL{CA,CO}(
         isnothing(carrier_loop_filter_bandwidth) ?
         pll_and_dll.carrier_loop_filter_bandwidth : carrier_loop_filter_bandwidth,
         isnothing(code_loop_filter_bandwidth) ? pll_and_dll.code_loop_filter_bandwidth :
         code_loop_filter_bandwidth,
+        isnothing(signal_combining) ? pll_and_dll.signal_combining : signal_combining,
     )
 end
 
@@ -280,6 +443,7 @@ function init_estimator_state(
         code_loop_filter,
         carrier_loop_filter_bandwidth,
         code_loop_filter_bandwidth,
+        zero(DiscriminatorAccumulator),
     )
 end
 
@@ -308,6 +472,12 @@ function _reset_estimator_state(
         constructorof(typeof(state.code_loop_filter))(),
         state.carrier_loop_filter_bandwidth,
         state.code_loop_filter_bandwidth,
+        # Drop any pending passenger discriminators along with the filter
+        # integrators: they were measured against the pre-reset cadence /
+        # Doppler, and `reset_loop_filters!` exists precisely to stop carrying
+        # that history (the same reason each signal's
+        # `last_fully_integrated_filtered_prompt` is cleared for the FLL).
+        zero(DiscriminatorAccumulator),
     )
 end
 
@@ -338,13 +508,22 @@ end
 # `noise` is one `(density, ready)` pair per signal, in `sat.signals` order (see
 # `_signal_noise_densities`) — so the driver takes `first(noise)` and the
 # passengers `Base.tail(noise)`, and no signal is ever handed another's floor.
-function _update_tracked_sat_doppler(sat::TrackedSat, sampling_frequency, noise::Tuple)
+# It is passed on whole rather than split here, because which signals are folded
+# where is `_process_signals`' decision, not this function's.
+function _update_tracked_sat_doppler(
+    sat::TrackedSat,
+    sampling_frequency,
+    noise::Tuple,
+    estimator,
+)
     # Walk all signals. For each one whose integration completed this
     # iteration, normalize/filter its prompt, advance CN0 and bit buffer,
-    # and move its correlator to `last_fully_integrated_*`. Additionally,
-    # for `signals[1]` (the estimator-driver signal), run PLL/DLL and
-    # update the sat-shared carrier/code Doppler. Each signal's coherent-
-    # integration length comes from its own `preferred_num_code_blocks_to_integrate`.
+    # and move its correlator to `last_fully_integrated_*`. `signals[1]` (the
+    # estimator-driver signal) additionally runs the PLL/DLL and updates the
+    # sat-shared carrier/code Doppler — fed, unless combining is switched off,
+    # by every signal's discriminators rather than only its own (see
+    # `_process_signals`). Each signal's coherent-integration length comes from
+    # its own `preferred_num_code_blocks_to_integrate`.
     pll_and_dll_state = sat.doppler_estimator_state
     head = first(sat.signals)
     tail_signals = Base.tail(sat.signals)
@@ -352,29 +531,23 @@ function _update_tracked_sat_doppler(sat::TrackedSat, sampling_frequency, noise:
     # The loops lock the driver (`signals[1]`) onto the real axis; every signal's
     # bit-buffer prompt is de-rotated by its carrier-phase offset from the driver
     # so a quadrature component (QPSK data/pilot, e.g. GPS L5 / Galileo E5a) does
-    # not decode off the collapsed real part. The per-signal carrier phase comes
-    # from `get_carrier_phase_offset`.
-    driver_carrier_phase = get_carrier_phase_offset(head.signal)
+    # not decode off the collapsed real part. The offset is the nominal per-signal
+    # one from `get_carrier_phase_offset`, not the satellite's tracked
+    # `carrier_phase`. The combined PLL de-rotates by the very same factor, for
+    # the same reason.
+    driver_carrier_phase_offset = get_carrier_phase_offset(head.signal)
 
-    driver_noise_density, driver_noise_density_ready = first(noise)
-    new_head, new_doppler_estimator_state, new_carrier_doppler, new_code_doppler =
-        _process_estimator_driver_signal(
+    new_head, new_tail, new_doppler_estimator_state, new_carrier_doppler, new_code_doppler =
+        _process_signals(
             head,
+            tail_signals,
             sat,
             pll_and_dll_state,
             sampling_frequency,
-            driver_noise_density,
-            driver_noise_density_ready,
-            driver_carrier_phase,
+            noise,
+            driver_carrier_phase_offset,
+            estimator,
         )
-
-    new_tail = _process_passenger_signals(
-        tail_signals,
-        sat.prn,
-        sampling_frequency,
-        Base.tail(noise),
-        driver_carrier_phase,
-    )
 
     # Phase-snap fallback chain. Picks the synced signal with the
     # longest `(primary × secondary)` code length, and uses its
@@ -425,16 +598,19 @@ end
 
 # De-rotation applied to a component's bit-buffer prompt so its own energy is
 # real again, given the loops lock the driver onto the real axis. The rotation
-# is `cis(driver_carrier_phase − get_carrier_phase(signal))`, where the
-# per-signal carrier phase (radians, relative to the band's in-phase reference)
-# comes from `get_carrier_phase_offset`.
+# is `cis(driver_carrier_phase_offset − get_carrier_phase_offset(signal))`. Both
+# terms are the *nominal* per-signal carrier phase offset the ICD specifies
+# (radians, relative to the band's in-phase reference), from
+# `get_carrier_phase_offset` — a compile-time constant per signal, not the
+# satellite's tracked `carrier_phase`, which cancels out of the difference
+# because every signal of a group rides one carrier.
 # For an in-phase component (co-phased with the driver, or the driver itself)
 # the difference is 0 and `cis(0) === 1 + 0im`, a bit-identical no-op; a
 # quadrature component (GPS L5 / Galileo E5a I-vs-Q) rotates by `±90°` onto the
 # real axis, where the navigation decoder resolves the residual sign via its
 # preamble.
-@inline _carrier_phase_derotation(driver_carrier_phase::Real, signal) =
-    cis(driver_carrier_phase - get_carrier_phase_offset(signal))
+@inline _carrier_phase_derotation(driver_carrier_phase_offset::Real, signal) =
+    cis(driver_carrier_phase_offset - get_carrier_phase_offset(signal))
 
 # Apply one completed `CorrelatorOutput` record to a signal — shared by the
 # estimator-driver and passenger folds so they cannot drift (issue #133):
@@ -478,7 +654,7 @@ end
     sampling_frequency,
     noise_density,
     noise_density_ready::Bool,
-    driver_carrier_phase::Real = 0.0;
+    driver_carrier_phase_offset::Real = 0.0;
     correlated_pre_sync::Bool = false,
 )
     signal = tracked_signal.signal
@@ -509,7 +685,7 @@ end
     # secondary/bit sync search and the coherent bit accumulation inside
     # `buffer`, so a quadrature component's data lands on the real axis it is
     # decided on. No-op for the driver and for co-phased pairs.
-    bit_prompt = prompt * _carrier_phase_derotation(driver_carrier_phase, signal)
+    bit_prompt = prompt * _carrier_phase_derotation(driver_carrier_phase_offset, signal)
     # Keep a pre-sync-correlated record's prompt out of the coherent sum where
     # the sync changed the replica under it (secondary-code wipe-off), but
     # always let it advance the accumulator's block count — see above.
@@ -582,6 +758,83 @@ end
     return new_signal, filtered_correlator, integrated_code_blocks
 end
 
+# Everything the three driver folds — conventional, combining, vector — do
+# identically to one `CorrelatorOutput` before they part ways over *how* the
+# loops are closed on it. Returns the rebuilt signal plus the five values loop
+# closure needs, as a NamedTuple so six positional results do not have to be
+# unpacked in the right order at three call sites.
+#
+# Shared rather than mirrored because every line of it is a rule about pairing a
+# quantity with the record it belongs to, and three copies is three chances to
+# pair them differently.
+@inline function _advance_driver_record(
+    tracked_signal::TrackedSignal,
+    output::CorrelatorOutput,
+    prn::Integer,
+    sampling_frequency,
+    noise_density,
+    noise_density_ready::Bool,
+    driver_carrier_phase_offset::Real,
+    found_before_fold::Bool,
+    carrier_loop_filter_bandwidth,
+    code_loop_filter_bandwidth,
+)
+    # FLL needs the previous record's filtered prompt; the first record of the
+    # chunk chains from the sat's carried-over
+    # `last_fully_integrated_filtered_prompt` (the previous chunk's last). Read
+    # it off the signal BEFORE the advance overwrites it.
+    previous_prompt = get_last_fully_integrated_filtered_prompt(tracked_signal)
+    # Per-record integration time — the block time, NOT the chunk time.
+    integration_time = output.integrated_samples / sampling_frequency
+    # A record that follows a sync detected earlier in THIS fold was correlated
+    # with pre-sync replicas — its blocks still count towards the bit, only its
+    # prompt may have to be dropped (see `_apply_correlator_output`).
+    synced_earlier_in_fold =
+        !found_before_fold &&
+        has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer)
+    # The driver de-rotates against itself (offset 0), so the derotation is a
+    # no-op for it; passed for symmetry with the passenger path.
+    ts, filtered_correlator, integrated_code_blocks = _apply_correlator_output(
+        tracked_signal,
+        output,
+        prn,
+        sampling_frequency,
+        noise_density,
+        noise_density_ready,
+        driver_carrier_phase_offset;
+        correlated_pre_sync = synced_earlier_in_fold,
+    )
+
+    # The configured CARRIER bandwidth is referenced to a
+    # one-primary-code-period integration. Coherently integrating N periods
+    # grows the loop update interval by that factor, so scale the effective
+    # bandwidth by 1/N to hold the loop's BL·Δt stability product at its
+    # single-period value. N (`integrated_code_blocks`) is the number of blocks
+    # this record ACTUALLY covered — recovered from its sample count — not the
+    # intended integration length: the bandwidth pairs with the record's true
+    # `integration_time`, so it only switches once the integrations really
+    # lengthen. Scaling by the intended length instead would under-gain the loop
+    # for single-block records folded after a mid-fold sync detection
+    # (correlated pre-sync, but the live bit buffer already reports the post-sync
+    # length) and for the first post-sync integration, which is truncated to land
+    # on the data-bit boundary. For the N=1 path this divides by 1 and is
+    # bit-identical to before.
+    carrier_bandwidth = carrier_loop_filter_bandwidth / integrated_code_blocks
+    # The DLL's is an absolute bandwidth, so it is capped by its own stability
+    # product against this record's integration time instead of scaled by N —
+    # see `effective_code_loop_filter_bandwidth`.
+    code_bandwidth =
+        effective_code_loop_filter_bandwidth(code_loop_filter_bandwidth, integration_time)
+    (;
+        tracked_signal = ts,
+        filtered_correlator,
+        previous_prompt,
+        integration_time,
+        carrier_bandwidth,
+        code_bandwidth,
+    )
+end
+
 # Build the context and fold the record into one signal's CN0 estimator, or skip
 # it where the estimator needs a density that signal has not measured yet. Both
 # branches return the same concrete estimator type, so this stays type-stable
@@ -632,7 +885,7 @@ end
     sampling_frequency,
     noise_density,
     noise_density_ready::Bool,
-    driver_carrier_phase::Real = 0.0,
+    driver_carrier_phase_offset::Real = 0.0,
 )
     outputs = tracked_signal.correlator_outputs
     if isempty(outputs)
@@ -646,64 +899,27 @@ end
     code_doppler = sat.code_doppler
     found_before_fold = has_bit_or_secondary_code_been_found(ts.bit_buffer)
     @inbounds for k in eachindex(outputs)
-        output = outputs[k]
-        # FLL needs the previous record's filtered prompt; the first record of
-        # the chunk chains from the sat's carried-over
-        # `last_fully_integrated_filtered_prompt` (the previous chunk's last).
-        # Read it off `ts` BEFORE the advance overwrites it.
-        previous_prompt = get_last_fully_integrated_filtered_prompt(ts)
-        # Per-record integration time — the block time, NOT the chunk time.
-        integration_time = output.integrated_samples / sampling_frequency
-        # A record that follows a sync detected earlier in THIS fold was
-        # correlated with pre-sync replicas — its blocks still count towards the
-        # bit, only its prompt may have to be dropped (see
-        # `_apply_correlator_output`).
-        synced_earlier_in_fold =
-            !found_before_fold && has_bit_or_secondary_code_been_found(ts.bit_buffer)
-        # The driver de-rotates against itself (offset 0), so the derotation is a
-        # no-op for it; passed for symmetry with the passenger path.
-        ts, filtered_correlator, integrated_code_blocks = _apply_correlator_output(
+        folded = _advance_driver_record(
             ts,
-            output,
+            outputs[k],
             sat.prn,
             sampling_frequency,
             noise_density,
             noise_density_ready,
-            driver_carrier_phase;
-            correlated_pre_sync = synced_earlier_in_fold,
-        )
-
-        # The configured CARRIER bandwidth is referenced to a
-        # one-primary-code-period integration. Coherently integrating N periods
-        # grows the loop update interval by that factor, so scale the effective
-        # bandwidth by 1/N to hold the loop's BL·Δt stability product at its
-        # single-period value. N (`integrated_code_blocks`) is the number of
-        # blocks this record ACTUALLY covered — recovered from its sample count —
-        # not the intended integration length: the bandwidth pairs with the
-        # record's true `integration_time`, so it only switches once the
-        # integrations really lengthen. Scaling by the intended length instead
-        # would under-gain the loop for single-block records folded after a
-        # mid-fold sync detection (correlated pre-sync, but the live bit buffer
-        # already reports the post-sync length) and for the first post-sync
-        # integration, which is truncated to land on the data-bit boundary. For
-        # the N=1 path this divides by 1 and is bit-identical to before.
-        carrier_bandwidth =
-            pll_and_dll_state.carrier_loop_filter_bandwidth / integrated_code_blocks
-        # The DLL's is an absolute bandwidth, so it is capped by its own
-        # stability product against this record's integration time instead of
-        # scaled by N — see `effective_code_loop_filter_bandwidth`.
-        code_bandwidth = effective_code_loop_filter_bandwidth(
+            driver_carrier_phase_offset,
+            found_before_fold,
+            pll_and_dll_state.carrier_loop_filter_bandwidth,
             pll_and_dll_state.code_loop_filter_bandwidth,
-            integration_time,
         )
+        ts = folded.tracked_signal
 
         carrier_freq_update, carrier_loop_filter = calculate_carrier_frequency_update(
             signal,
             carrier_loop_filter,
-            filtered_correlator,
-            previous_prompt,
-            integration_time,
-            carrier_bandwidth,
+            folded.filtered_correlator,
+            folded.previous_prompt,
+            folded.integration_time,
+            folded.carrier_bandwidth,
         )
         # `dll_disc` is fed the chunk-fixed `sat.code_doppler` — the code Doppler
         # that actually generated this chunk's replicas — for every record;
@@ -711,11 +927,11 @@ end
         code_freq_update, code_loop_filter = calculate_code_frequency_update(
             signal,
             code_loop_filter,
-            filtered_correlator,
+            folded.filtered_correlator,
             sat.code_doppler,
             sampling_frequency,
-            integration_time,
-            code_bandwidth,
+            folded.integration_time,
+            folded.code_bandwidth,
         )
         carrier_doppler, code_doppler = aid_dopplers(
             signal,
@@ -731,71 +947,547 @@ end
     return ts, new_doppler_estimator_state, carrier_doppler, code_doppler
 end
 
-# Process the non-driver signals (signals[2:end]): the shared per-signal
-# advance only — no loop-filter work. Walks the tuple recursively to keep
-# type-stability and avoid boxing, stepping the per-signal `(density, ready)`
-# tuple in lockstep so each passenger divides by its own noise floor.
-@inline _process_passenger_signals(::Tuple{}, ::Integer, _, ::Tuple{}, ::Real) = ()
-@inline function _process_passenger_signals(
-    signals::Tuple,
-    prn::Integer,
+# ---------------------------------------------------------------------------
+# Signal processing entry point — driver-only vs. multi-signal combining
+# ---------------------------------------------------------------------------
+#
+# `_process_signals` is the seam `_update_tracked_sat_doppler` calls; every
+# method returns `(new_head, new_tail, new_state, carrier_doppler, code_doppler)`.
+#
+# The dispatch is deliberately at the *type* level on the passenger tuple, so a
+# single-signal satellite compiles to exactly the driver-only code it always ran
+# — no extra discriminator or weight arithmetic in the N=1 hot path, and
+# bit-identical Dopplers.
+
+# No passengers: nothing to combine. Also the path every estimator whose per-sat
+# state is not a `SatConventionalPLLAndDLL` takes (the vector estimator plugs its
+# own `_process_estimator_driver_signal` in here).
+@inline function _process_signals(
+    head::TrackedSignal,
+    tail::Tuple,
+    sat::TrackedSat,
+    state,
     sampling_frequency,
     noise::Tuple,
-    driver_carrier_phase::Real,
+    driver_carrier_phase_offset::Real,
+    estimator,
 )
-    noise_density, noise_density_ready = first(noise)
-    new_head = _process_one_passenger_signal(
-        first(signals),
-        prn,
+    _process_signals_separately(
+        head,
+        tail,
+        sat,
+        state,
         sampling_frequency,
-        noise_density,
-        noise_density_ready,
-        driver_carrier_phase,
+        noise,
+        driver_carrier_phase_offset,
     )
-    (
-        new_head,
-        _process_passenger_signals(
-            Base.tail(signals),
-            prn,
+end
+
+# Passengers present and combining enabled: run the interleaved fold. The
+# runtime branch on `signal_combining` sits here rather than at a type level so
+# that flipping it does not change any container's concrete type.
+@inline function _process_signals(
+    head::TrackedSignal,
+    tail::Tuple{TrackedSignal,Vararg{TrackedSignal}},
+    sat::TrackedSat,
+    state::SatConventionalPLLAndDLL,
+    sampling_frequency,
+    noise::Tuple,
+    driver_carrier_phase_offset::Real,
+    estimator::ConventionalPLLAndDLL,
+)
+    if estimator.signal_combining
+        _process_signals_combined(
+            head,
+            tail,
+            sat,
+            state,
             sampling_frequency,
-            Base.tail(noise),
-            driver_carrier_phase,
+            noise,
+            driver_carrier_phase_offset,
+        )
+    else
+        _process_signals_separately(
+            head,
+            tail,
+            sat,
+            state,
+            sampling_frequency,
+            noise,
+            driver_carrier_phase_offset,
+        )
+    end
+end
+
+# The pre-combining behaviour, kept intact: fold the driver (loops included),
+# then fold the passengers (prompt / CN0 / bit buffer only).
+@inline function _process_signals_separately(
+    head::TrackedSignal,
+    tail::Tuple,
+    sat::TrackedSat,
+    state,
+    sampling_frequency,
+    noise::Tuple,
+    driver_carrier_phase_offset::Real,
+)
+    driver_noise_density, driver_noise_density_ready = first(noise)
+    new_head, new_state, carrier_doppler, code_doppler = _process_estimator_driver_signal(
+        head,
+        sat,
+        state,
+        sampling_frequency,
+        driver_noise_density,
+        driver_noise_density_ready,
+        driver_carrier_phase_offset,
+    )
+    # The passengers walk through the very same fold the combining path uses,
+    # with `nothing` where the accumulator goes: no driver window to respect
+    # (`typemax(Int)` takes every record of the chunk) and nothing to accumulate.
+    # `nothing` is a *type*, so every discriminator and weight in that fold folds
+    # away at compile time and this path costs exactly what it cost before
+    # combining existed.
+    new_tail, _, _ = _advance_passengers_to(
+        tail,
+        map(_ -> 1, tail),
+        map(s -> has_bit_or_secondary_code_been_found(s.bit_buffer), tail),
+        Base.tail(noise),
+        nothing,
+        typemax(Int),
+        PassengerFoldContext(
+            sat.prn,
+            sampling_frequency,
+            sat.code_doppler,
+            Float64(driver_carrier_phase_offset),
+        ),
+    )
+    _empty_correlator_outputs(new_tail)
+    (new_head, new_tail, new_state, carrier_doppler, code_doppler)
+end
+
+"""
+Everything the passenger fold needs that is fixed for the whole chunk, bundled so
+the recursive walk threads one value instead of four. Built by both callers of
+that fold — with and without combining — since only the accumulator differs.
+
+`code_doppler` is chunk-fixed — the Doppler that actually generated this
+chunk's replicas, which is what every `dll_disc` in the chunk must be evaluated
+at, driver and passengers alike.
+
+The driver's code bias is deliberately absent: each passenger's `code_bias` is
+already stated relative to the driver, so there is no driver-side value to
+difference against.
+"""
+struct PassengerFoldContext{FS}
+    prn::Int
+    sampling_frequency::FS
+    code_doppler::typeof(1.0Hz)
+    driver_carrier_phase_offset::Float64
+end
+
+"""
+$(SIGNATURES)
+
+Everything one record contributes to the three combined loops, as
+`(dll_value, dll_weight, pll_value, pll_weight, fll_value, fll_weight)` — read
+by the passenger accumulate step and by the driver's own record, so the two
+cannot end up on different scales. That they share one scale is the whole
+premise of the weighted mean.
+
+Weights are nominal post-integration SNR (power share × record length) over the
+loop's discriminator noise gain; see `_nominal_record_snr` for why the
+ICD split beats the measured prompt here, and what that costs. Only *ratios*
+within one satellite matter, so every factor shared across a group cancels and is
+never formed — including the sampling frequency, which is why the FLL's `T²`
+appears as `N²`.
+
+`rotation` de-rotates the prompt onto the driver's phase frame
+(`_carrier_phase_derotation`); it is `1 + 0im` for the driver itself and
+for a co-phased passenger, where the PLL discriminator is then bit-identical to
+its two-argument form.
+
+`bias` is this signal's code bias in seconds, `0.0` for the driver (its code
+phase *is* the reference) and `nothing` for a passenger whose differential group
+delay the caller has not supplied — which zeroes the **code** weight only, and
+leaves both carrier contributions untouched.
+
+There is deliberately NO check that a component is present at all. A signal is in
+a `TrackedSat` only because the caller put it there, so "declared but not
+transmitted" is a configuration error to be fixed at the source rather than
+papered over per record in the hot path.
+"""
+@inline function _record_contribution(
+    signal::AbstractGNSSSignal,
+    filtered_correlator,
+    integrated_samples::Integer,
+    previous_prompt,
+    rotation::Complex,
+    bias::Maybe{Float64},
+    code_doppler,
+    sampling_frequency,
+)
+    snr = _nominal_record_snr(signal, integrated_samples)
+
+    # --- Code loop -------------------------------------------------------
+    # A passenger's code phase differs from the driver's by the satellite's
+    # differential payload group delay, so its raw discriminator measures the
+    # driver's error *plus* that offset. Subtract it to refer the measurement to
+    # the driver's code phase, which is what the shared `sat.code_phase` (and
+    # everything downstream of it) means.
+    #
+    # `nothing` means the caller has supplied no bias, and then this record
+    # contributes zero weight to the code loop — it still aids the carrier loops
+    # below. Zero is *not* substituted: see `set_code_bias!` for why guessing it
+    # is the unsafe direction.
+    dll_value, dll_weight = if !isnothing(bias)
+        code_frequency = code_doppler + get_code_frequency(signal)
+        offset_chips = _group_delay_to_chips(bias, code_frequency)
+        raw = dll_disc(signal, filtered_correlator, code_doppler, sampling_frequency)
+        gain = dll_disc_noise_gain(
+            signal,
+            filtered_correlator,
+            code_doppler,
+            sampling_frequency,
+        )
+        (raw - offset_chips, snr / gain)
+    else
+        (0.0, 0.0)
+    end
+
+    # --- Carrier phase loop ----------------------------------------------
+    # No group-delay analogue to wait for: the carrier carries no inter-signal
+    # code bias, so this contributes from the very first integration. The
+    # de-rotation puts a quadrature component's prompt back on the driver's
+    # phase frame, where it measures the same phase error. The noise gain is
+    # signal-independent (`σ² ≈ 1 / 2·SNR` for every Costas prompt), so it
+    # cancels in the normalized mean and the weight is the bare SNR.
+    pll_value = pll_disc(signal, filtered_correlator, rotation)
+    pll_weight = snr
+
+    # --- Carrier frequency (FLL) loop ------------------------------------
+    # `fll_disc` reads the rotation between two consecutive prompts of *this*
+    # signal, so its accuracy improves with the interval between them: dividing
+    # the phase difference by `2π·T` scales the noise by `1/T`, hence the `T²`
+    # (here `N²`) in the weight — a 10 ms passenger is worth 100× a 1 ms one at
+    # equal SNR. A zeroed previous prompt is "no measurement yet", not a
+    # measurement of zero, so it contributes nothing rather than pulling the
+    # combined frequency error towards 0 Hz.
+    fll_value, fll_weight = if iszero(previous_prompt)
+        (0.0Hz, 0.0)
+    else
+        integration_time = integrated_samples / sampling_frequency
+        (
+            fll_disc(signal, filtered_correlator, previous_prompt, integration_time),
+            snr * integrated_samples^2,
+        )
+    end
+
+    (dll_value, dll_weight, pll_value, pll_weight, fll_value, fll_weight)
+end
+
+# Fold one passenger record into the running accumulator.
+#
+# A record `_apply_correlator_output` marked `correlated_pre_sync` on a
+# secondary-coded signal is excluded outright rather than weighted down: it was
+# correlated without the secondary-code wipe-off the sync had just established,
+# so a multi-block record's coherent sum partially cancels and even a
+# single-block one carries an unresolved secondary-chip sign. Exactly the
+# condition under which that function drops the prompt from the bit
+# accumulation, and for the same reason. Nominal weights cannot notice this on
+# their own, which is why it is a gate rather than a weight. The driver's own
+# record is deliberately NOT gated: it is the only thing closing the loop, and
+# skipping it would mean skipping the loop update altogether — the behaviour
+# every single-signal satellite has always had.
+@inline function _accumulate_passenger_discriminators(
+    acc::DiscriminatorAccumulator,
+    tracked_signal::TrackedSignal,
+    output::CorrelatorOutput,
+    filtered_correlator,
+    previous_prompt,
+    ctx::PassengerFoldContext,
+    correlated_pre_sync::Bool,
+)
+    signal = tracked_signal.signal
+    # Reject before doing any discriminator work: a replica invalidated by a
+    # mid-chunk sync carries no usable phase or delay information.
+    correlated_pre_sync && get_secondary_code_length(signal) > 1 && return acc
+    _accumulate(
+        acc,
+        _record_contribution(
+            signal,
+            filtered_correlator,
+            output.integrated_samples,
+            previous_prompt,
+            _carrier_phase_derotation(ctx.driver_carrier_phase_offset, signal),
+            get_code_bias(tracked_signal),
+            ctx.code_doppler,
+            ctx.sampling_frequency,
         )...,
     )
 end
 
-@inline function _process_one_passenger_signal(
+# Not combining: the fold still has to advance every passenger's prompt, CN0 and
+# bit buffer, but there is nothing to accumulate. Dispatching on `Nothing` (not
+# branching on a flag) is what keeps the discriminators and weights above out of
+# the non-combining path entirely.
+@inline _accumulate_passenger_discriminators(
+    ::Nothing,
+    ::TrackedSignal,
+    ::CorrelatorOutput,
+    _,
+    _,
+    ::PassengerFoldContext,
+    ::Bool,
+) = nothing
+
+# Advance one passenger through every record that completed at or before
+# `window_end`, folding each into the signal (prompt / CN0 / bit buffer) and
+# accumulating its discriminators. Returns the rebuilt signal, the new cursor,
+# and the grown accumulator. `window_end = typemax(Int)` takes the whole chunk,
+# which with `acc === nothing` is the non-combining fold.
+#
+# `found_before_chunk` is the signal's sync state at the *chunk* boundary, passed
+# in rather than re-read: `correlated_pre_sync` must stay true for every record
+# of this chunk that follows a mid-chunk sync detection, and re-reading the (now
+# synced) bit buffer at each window would silently clear it for the later
+# windows' records — which were correlated with pre-sync replicas just the same.
+@inline function _advance_one_passenger_to(
     tracked_signal::TrackedSignal,
-    prn::Integer,
-    sampling_frequency,
+    cursor::Int,
+    found_before_chunk::Bool,
     noise_density,
     noise_density_ready::Bool,
-    driver_carrier_phase::Real = 0.0,
+    acc::Maybe{DiscriminatorAccumulator},
+    window_end::Int,
+    ctx::PassengerFoldContext,
 )
-    outputs = tracked_signal.correlator_outputs
-    isempty(outputs) && return tracked_signal
     ts = tracked_signal
-    found_before_fold = has_bit_or_secondary_code_been_found(ts.bit_buffer)
-    @inbounds for k in eachindex(outputs)
-        # Same rule as the driver fold: records after a sync detected earlier
-        # in this fold stay out of the bit buffer.
+    outputs = ts.correlator_outputs
+    @inbounds while cursor <= length(outputs) && outputs[cursor].sample_index <= window_end
+        output = outputs[cursor]
+        previous_prompt = get_last_fully_integrated_filtered_prompt(ts)
         synced_earlier_in_fold =
-            !found_before_fold && has_bit_or_secondary_code_been_found(ts.bit_buffer)
-        ts = first(
-            _apply_correlator_output(
-                ts,
-                outputs[k],
-                prn,
-                sampling_frequency,
-                noise_density,
-                noise_density_ready,
-                driver_carrier_phase;
-                correlated_pre_sync = synced_earlier_in_fold,
-            ),
+            !found_before_chunk && has_bit_or_secondary_code_been_found(ts.bit_buffer)
+        ts, filtered_correlator, _ = _apply_correlator_output(
+            ts,
+            output,
+            ctx.prn,
+            ctx.sampling_frequency,
+            noise_density,
+            noise_density_ready,
+            ctx.driver_carrier_phase_offset;
+            correlated_pre_sync = synced_earlier_in_fold,
         )
+        acc = _accumulate_passenger_discriminators(
+            acc,
+            ts,
+            output,
+            filtered_correlator,
+            previous_prompt,
+            ctx,
+            synced_earlier_in_fold,
+        )
+        cursor += 1
     end
-    empty!(outputs)
-    ts
+    (ts, cursor, acc)
+end
+
+# Tuple-recursive walk of `_advance_one_passenger_to` over all passengers, in
+# lockstep with their cursors, chunk-boundary sync flags and `(density, ready)`
+# noise pairs — the last of those for the same reason the driver-only fold steps
+# them: the C/N₀ floor is per signal, and handing one passenger another's would
+# misreport every record it folds. Heterogeneous signal types fold at inference
+# time, so this stays type-stable and allocation-free.
+@inline _advance_passengers_to(
+    ::Tuple{},
+    ::Tuple{},
+    ::Tuple{},
+    ::Tuple{},
+    acc::Maybe{DiscriminatorAccumulator},
+    ::Int,
+    ::PassengerFoldContext,
+) = ((), (), acc)
+
+@inline function _advance_passengers_to(
+    signals::Tuple,
+    cursors::Tuple,
+    found_before_chunk::Tuple,
+    noise::Tuple,
+    acc::Maybe{DiscriminatorAccumulator},
+    window_end::Int,
+    ctx::PassengerFoldContext,
+)
+    noise_density, noise_density_ready = first(noise)
+    signal, cursor, acc = _advance_one_passenger_to(
+        first(signals),
+        first(cursors),
+        first(found_before_chunk),
+        noise_density,
+        noise_density_ready,
+        acc,
+        window_end,
+        ctx,
+    )
+    rest_signals, rest_cursors, acc = _advance_passengers_to(
+        Base.tail(signals),
+        Base.tail(cursors),
+        Base.tail(found_before_chunk),
+        Base.tail(noise),
+        acc,
+        window_end,
+        ctx,
+    )
+    ((signal, rest_signals...), (cursor, rest_cursors...), acc)
+end
+
+@inline _empty_correlator_outputs(::Tuple{}) = nothing
+@inline function _empty_correlator_outputs(signals::Tuple)
+    empty!(first(signals).correlator_outputs)
+    _empty_correlator_outputs(Base.tail(signals))
+end
+
+# The combining fold: walk the driver's records, and before closing the loops on
+# each one, advance every passenger through the records that completed inside
+# that record's window. So each loop update sees exactly the measurements that
+# belong to its own interval, and passenger records that complete after the last
+# driver record of the chunk stay pending for the next chunk (the common case at
+# the default chunk length — see `DiscriminatorAccumulator`).
+#
+# The per-record driver body shares `_advance_driver_record` with
+# `_process_estimator_driver_signal` above, and its own record goes through the
+# same `_record_contribution` the passengers do, so neither the record handling
+# nor the weighting can drift between the two paths. The difference is only
+# *what* reaches the filters: combined discriminators here, the driver's own
+# there.
+@inline function _process_signals_combined(
+    head::TrackedSignal,
+    tail::Tuple{TrackedSignal,Vararg{TrackedSignal}},
+    sat::TrackedSat,
+    state::SatConventionalPLLAndDLL,
+    sampling_frequency,
+    noise::Tuple,
+    driver_carrier_phase_offset::Real,
+)
+    signal = head.signal
+    driver_outputs = head.correlator_outputs
+    driver_noise_density, driver_noise_density_ready = first(noise)
+    passenger_noise = Base.tail(noise)
+    ctx = PassengerFoldContext(
+        sat.prn,
+        sampling_frequency,
+        sat.code_doppler,
+        Float64(driver_carrier_phase_offset),
+    )
+
+    ts = head
+    passengers = tail
+    cursors = map(_ -> 1, tail)
+    found_before_chunk = map(s -> has_bit_or_secondary_code_been_found(s.bit_buffer), tail)
+    acc = state.pending_discriminators
+
+    carrier_loop_filter = state.carrier_loop_filter
+    code_loop_filter = state.code_loop_filter
+    carrier_doppler = sat.carrier_doppler
+    code_doppler = sat.code_doppler
+    driver_found_before_chunk = has_bit_or_secondary_code_been_found(ts.bit_buffer)
+
+    @inbounds for k in eachindex(driver_outputs)
+        output = driver_outputs[k]
+        passengers, cursors, acc = _advance_passengers_to(
+            passengers,
+            cursors,
+            found_before_chunk,
+            passenger_noise,
+            acc,
+            output.sample_index,
+            ctx,
+        )
+
+        folded = _advance_driver_record(
+            ts,
+            output,
+            sat.prn,
+            sampling_frequency,
+            driver_noise_density,
+            driver_noise_density_ready,
+            driver_carrier_phase_offset,
+            driver_found_before_chunk,
+            state.carrier_loop_filter_bandwidth,
+            state.code_loop_filter_bandwidth,
+        )
+        ts = folded.tracked_signal
+
+        # The driver's own measurements, through the same function that produced
+        # the passengers' — one weighting scale by construction. It de-rotates
+        # against itself, hence the identity rotation, and its code phase *is*
+        # the reference the passengers' biases are stated against, hence the
+        # `0.0` bias. `dll_disc` is fed the chunk-fixed `sat.code_doppler` — the
+        # code Doppler that actually generated this chunk's replicas — for every
+        # record, and so are the passengers' via `ctx.code_doppler`.
+        own_dll, own_dll_weight, own_pll, own_pll_weight, own_fll, own_fll_weight =
+            _record_contribution(
+                signal,
+                folded.filtered_correlator,
+                output.integrated_samples,
+                folded.previous_prompt,
+                one(ComplexF64),
+                0.0,
+                sat.code_doppler,
+                sampling_frequency,
+            )
+
+        pll_discriminator =
+            _combine_with_own(acc.pll_sum, acc.pll_weight, own_pll, own_pll_weight)
+        fll_discriminator =
+            _combine_with_own(acc.fll_sum, acc.fll_weight, own_fll, own_fll_weight)
+        dll_discriminator =
+            _combine_with_own(acc.dll_sum, acc.dll_weight, own_dll, own_dll_weight)
+
+        carrier_freq_update, carrier_loop_filter = _filter_carrier_loop(
+            carrier_loop_filter,
+            pll_discriminator,
+            fll_discriminator,
+            folded.integration_time,
+            folded.carrier_bandwidth,
+        )
+        code_freq_update, code_loop_filter = filter_loop(
+            code_loop_filter,
+            dll_discriminator,
+            folded.integration_time,
+            folded.code_bandwidth,
+        )
+        carrier_doppler, code_doppler = aid_dopplers(
+            signal,
+            state.init_carrier_doppler,
+            state.init_code_doppler,
+            carrier_freq_update,
+            code_freq_update,
+        )
+        # This window is closed; the next driver record starts a fresh one.
+        acc = zero(DiscriminatorAccumulator)
+    end
+
+    # Drain whatever completed after the last driver record (all of it, when the
+    # driver had no record this chunk): the signals must still see those records,
+    # and their discriminators stay pending for the next chunk's driver update.
+    passengers, _, acc = _advance_passengers_to(
+        passengers,
+        cursors,
+        found_before_chunk,
+        passenger_noise,
+        acc,
+        typemax(Int),
+        ctx,
+    )
+    empty!(driver_outputs)
+    _empty_correlator_outputs(passengers)
+
+    new_state = SatConventionalPLLAndDLL(
+        state;
+        carrier_loop_filter,
+        code_loop_filter,
+        pending_discriminators = acc,
+    )
+    (ts, passengers, new_state, carrier_doppler, code_doppler)
 end
 
 """
@@ -900,6 +1592,7 @@ end
     g::SignalGroup,
     sampling_frequencies::Union{BandMeasurements,NamedTuple,AbstractDict},
     noise_estimators::NamedTuple,
+    estimator,
 )
     vals = g.satellites.values
     isempty(vals) && return nothing
@@ -907,7 +1600,7 @@ end
     noise = _signal_noise_densities(noise_estimators, eltype(g.satellites))
     _warn_noise_density_missing(eltype(g.satellites), noise, noise_estimators)
     @inbounds for i in eachindex(vals)
-        vals[i] = _update_tracked_sat_doppler(vals[i], sampling_frequency, noise)
+        vals[i] = _update_tracked_sat_doppler(vals[i], sampling_frequency, noise, estimator)
     end
     return nothing
 end
@@ -1014,9 +1707,40 @@ function estimate_dopplers_and_filter_prompt!(
         track_state.groups,
         sampling_frequencies,
         track_state.noise_estimators,
+        track_state.doppler_estimator,
     )
     return track_state
 end
+
+# Push already-formed carrier discriminators through the carrier loop filter.
+# This is the single place that knows an FLL-assisted filter takes the
+# `(pll, fll)` pair while every other filter takes the PLL discriminator alone —
+# both `calculate_carrier_frequency_update` (driver-only) and the combining fold
+# route through it, so the two cannot disagree about it.
+#
+# The non-assisted method ignores `fll_discriminator` entirely; the combining
+# fold still accumulates one, which costs an `atan` per passenger record and
+# changes nothing. Not worth a second gate.
+@inline _filter_carrier_loop(
+    carrier_loop_filter::ThirdOrderAssistedBilinearLF,
+    pll_discriminator,
+    fll_discriminator,
+    integration_time,
+    loop_bandwidth,
+) = filter_loop(
+    carrier_loop_filter,
+    (pll_discriminator, fll_discriminator),
+    integration_time,
+    loop_bandwidth,
+)
+
+@inline _filter_carrier_loop(
+    carrier_loop_filter::AbstractLoopFilter,
+    pll_discriminator,
+    fll_discriminator,
+    integration_time,
+    loop_bandwidth,
+) = filter_loop(carrier_loop_filter, pll_discriminator, integration_time, loop_bandwidth)
 
 function calculate_carrier_frequency_update(
     signal::AbstractGNSSSignal,
@@ -1028,9 +1752,10 @@ function calculate_carrier_frequency_update(
 )
     pll_discriminator = pll_disc(signal, correlator)
     fll_discriminator = fll_disc(signal, correlator, previous_prompt, integration_time)
-    filter_loop(
+    _filter_carrier_loop(
         carrier_loop_filter,
-        (pll_discriminator, fll_discriminator),
+        pll_discriminator,
+        fll_discriminator,
         integration_time,
         loop_bandwidth,
     )
@@ -1045,7 +1770,13 @@ function calculate_carrier_frequency_update(
     loop_bandwidth,
 )
     pll_discriminator = pll_disc(signal, correlator)
-    filter_loop(carrier_loop_filter, pll_discriminator, integration_time, loop_bandwidth)
+    _filter_carrier_loop(
+        carrier_loop_filter,
+        pll_discriminator,
+        nothing,
+        integration_time,
+        loop_bandwidth,
+    )
 end
 
 function calculate_code_frequency_update(

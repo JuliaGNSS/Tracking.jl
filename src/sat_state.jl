@@ -48,6 +48,21 @@ struct TrackedSignal{
     # (`preferred_num_code_blocks_to_integrate`) or by an external producer
     # summing dumps. Starts at 1, the pre-sync length.
     last_fully_integrated_num_code_blocks::Int
+    # This signal's differential payload group delay against its satellite's
+    # estimator-driver signal, in **seconds**, or `nothing` when the caller has
+    # not supplied one. Purely an input: nothing in the signal path reads it
+    # except multi-signal discriminator combining, which needs it to put this
+    # signal's code discriminator on the driver's code-phase reference.
+    #
+    # `nothing` is the default for every signal and means *unknown*, not zero:
+    # the passenger then contributes to the carrier loops only and stays out of
+    # the code loop, which is the safe direction (see
+    # [`get_code_bias`](@ref)). Where the bias comes from — a decoded
+    # navigation message, a calibration table, or the knowledge that a
+    # pilot/data pair leaves the satellite as one composite and so shares a
+    # payload chain — is the caller's business, not this package's. Set it with
+    # [`set_code_bias!`](@ref).
+    code_bias::Maybe{Float64}
 end
 
 # Reject a preferred coherent-integration length that cannot work for this
@@ -125,6 +140,7 @@ function TrackedSignal(
     ),
     post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),
     preferred_num_code_blocks_to_integrate::Int = 1,
+    code_bias::Maybe{Float64} = nothing,
 )
     validate_preferred_num_code_blocks_to_integrate(
         signal,
@@ -153,6 +169,7 @@ function TrackedSignal(
         correlator_outputs,
         preferred_num_code_blocks_to_integrate,
         1,
+        code_bias,
     )
 end
 
@@ -182,6 +199,12 @@ function TrackedSignal(
     correlator_outputs::Maybe{Vector{CorrelatorOutput{C}}} = nothing,
     preferred_num_code_blocks_to_integrate = nothing,
     last_fully_integrated_num_code_blocks = nothing,
+    # Wrapped in `Some` rather than following the plain `Maybe` convention of
+    # every other kwarg here: `nothing` is a *legal value* of this field
+    # ("bias not known"), so the usual `isnothing(x) ? keep : set` test cannot
+    # tell "leave it alone" from "clear it". `Some(nothing)` clears, a bare
+    # `nothing` keeps.
+    code_bias::Maybe{Some{Maybe{Float64}}} = nothing,
 ) where {
     Sig<:AbstractGNSSSignal,
     B<:Unsigned,
@@ -211,6 +234,7 @@ function TrackedSignal(
         t.preferred_num_code_blocks_to_integrate : preferred_num_code_blocks_to_integrate,
         isnothing(last_fully_integrated_num_code_blocks) ?
         t.last_fully_integrated_num_code_blocks : last_fully_integrated_num_code_blocks,
+        isnothing(code_bias) ? t.code_bias : something(code_bias),
     )
 end
 
@@ -288,6 +312,24 @@ has_bit_or_secondary_code_been_found(t::TrackedSignal) =
 get_integrated_samples(t::TrackedSignal) = t.integrated_samples
 get_preferred_num_code_blocks_to_integrate(t::TrackedSignal) =
     t.preferred_num_code_blocks_to_integrate
+
+"""
+$(SIGNATURES)
+
+This signal's differential payload group delay against its satellite's
+estimator-driver signal, in seconds, or `nothing` when the caller has supplied
+none. Read by multi-signal code-discriminator combining only; set it with
+[`set_code_bias!`](@ref).
+
+`nothing` and `0.0` are deliberately different states. `0.0` asserts that this
+signal's code phase is the driver's, so its code discriminator may join the code
+loop. `nothing` says nothing is known, and the passenger then aids the carrier
+loops only — a passenger can outweigh its driver by ~80:1, so combining an
+unknown differential as if it were zero would drag the satellite-shared
+`code_phase` towards the passenger's by a bias that *moves as the weights move*,
+in a phase downstream group-delay corrections read as the driver's.
+"""
+get_code_bias(t::TrackedSignal) = t.code_bias
 
 """
 $(SIGNATURES)
@@ -856,6 +898,7 @@ get_correlator_outputs(s::TrackedSat, sel...) =
     get_correlator_outputs(_find_signal(s.signals, sel...))
 get_preferred_num_code_blocks_to_integrate(s::TrackedSat, sel...) =
     get_preferred_num_code_blocks_to_integrate(_find_signal(s.signals, sel...))
+get_code_bias(s::TrackedSat, sel...) = get_code_bias(_find_signal(s.signals, sel...))
 
 # Append an external `CorrelatorOutput` to one signal of a sat. `output` comes
 # first so an optional trailing signal selector (integer index / signal type)

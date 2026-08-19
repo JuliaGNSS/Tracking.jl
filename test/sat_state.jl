@@ -184,6 +184,7 @@ GNSSSignals.get_data_frequency(::FakeWrapSignal) = 0Hz
         base.correlator_outputs,
         base.preferred_num_code_blocks_to_integrate,
         base.last_fully_integrated_num_code_blocks,
+        base.code_bias,
     )
 
     # Pre-sync wraps 4 and 6: the shared wrap must be 12 (max would give 6,

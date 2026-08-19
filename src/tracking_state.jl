@@ -1234,6 +1234,130 @@ function set_preferred_num_code_blocks_to_integrate!(
     track_state
 end
 
+# Rebuild `sat` with the addressed signal's code bias set; every other signal is
+# left untouched, so the satellite's concrete type is preserved.
+function _set_sat_code_bias(sat::TrackedSat, bias::Maybe{Float64}, sel...)
+    idx = _signal_index(sat.signals, sel...)
+    # The driver's code phase *is* the reference every other bias is stated
+    # against, so its own bias is 0 by definition and nothing ever reads it.
+    # Storing a non-zero one silently would be the worst of the three options: it
+    # is exactly what a caller does when it derives every signal's delay against
+    # some external datum and sets them all, and it leaves every passenger's bias
+    # short by the driver's — metres of code phase, in the one place the feature
+    # exists to protect. `nothing` and `0.0` both restate the definition and are
+    # accepted.
+    if idx == 1 && !isnothing(bias) && !iszero(bias)
+        _throw_nonzero_driver_code_bias(bias)
+    end
+    idx_tuple = ntuple(identity, length(sat.signals))
+    # `Some` because `nothing` is a legal value here — see the `TrackedSignal`
+    # kwarg-update constructor. Spelled with the full parameter because `Some` is
+    # invariant: `Some(1.0)` is a `Some{Float64}`, which is *not* a
+    # `Some{Maybe{Float64}}`.
+    wrapped = Some{Maybe{Float64}}(bias)
+    new_signals = map(sat.signals, idx_tuple) do s, i
+        i == idx ? TrackedSignal(s; code_bias = wrapped) : s
+    end
+    TrackedSat(sat; signals = new_signals)
+end
+
+"""
+$(SIGNATURES)
+
+Set the **code bias** of one signal on one satellite, in **seconds** — the
+`code_bias` field of the addressed [`TrackedSignal`](@ref). Pass `nothing` to
+mark it unknown again.
+
+The value is this signal's differential payload group delay **against its
+satellite's estimator-driver signal** (`signals[1]`), positive when this signal
+sits at the larger code phase of the two. The driver's own bias is `0.0` by
+definition and never needs setting; a **non-zero** bias on the driver throws an
+`ArgumentError` rather than being ignored, since it means the caller has
+referenced its values to something other than the driver and every *other* bias
+it supplies is then short by this one.
+
+Multi-signal code-discriminator combining ([`ConventionalPLLAndDLL`](@ref))
+subtracts it from the passenger's DLL discriminator, which refers that
+discriminator to the driver's code phase and keeps the satellite-shared
+`code_phase` meaning "the driver signal's code phase". That is what downstream
+per-signal group-delay corrections (e.g. `PositionVelocityTime.jl`'s) already
+assume. Without it a combined DLL drives the shared phase to a weighted average
+that drifts as the weights move, and the downstream correction is applied to a
+phase that is no longer the signal it was told about.
+
+Where the value comes from is deliberately **not** this package's concern. It may
+be the difference of two broadcast inter-signal corrections, a ground
+calibration, or a hard `0.0` justified by the ICD — a pilot/data pair that leaves
+the satellite as one composite out of one payload chain (every Galileo pair, for
+instance) has no differential by construction. Tracking neither knows which
+constellation broadcasts what nor parses navigation messages; the caller that
+does owns this decision, and the sign convention above is the whole contract.
+
+A passenger left at `nothing` still aids the **carrier** loops from the first
+integration — carrier phase carries no inter-signal code bias — and only its code
+contribution waits. Leaving it unset is therefore the safe default rather than a
+silent error.
+
+The satellite is addressed exactly like
+[`set_preferred_num_code_blocks_to_integrate!`](@ref):
+
+```julia
+set_code_bias!(ts, :gps_l1, 7, GPSL1C_P, 1.2e-9)  # (group, prn, signal)
+set_code_bias!(ts, :gps_l1, 7, 1.2e-9)            # single-signal sat
+set_code_bias!(ts, 7, 1.2e-9)                     # single-group state
+```
+
+Mutates `track_state` in place and returns it.
+"""
+function set_code_bias!(
+    track_state::TrackState{<:SignalGroups},
+    group::Union{Symbol,Integer,Val},
+    sat_id::Integer,
+    sig::_SignalSelector,
+    bias::Maybe{Real},
+)
+    _set_code_bias!(get_sat_states(track_state, group), sat_id, bias, sig)
+    track_state
+end
+
+function set_code_bias!(
+    track_state::TrackState{<:SignalGroups},
+    group::Union{Symbol,Integer,Val},
+    sat_id::Integer,
+    bias::Maybe{Real},
+)
+    _set_code_bias!(get_sat_states(track_state, group), sat_id, bias)
+    track_state
+end
+
+function set_code_bias!(
+    track_state::TrackState{<:SignalGroups{1}},
+    sat_id::Integer,
+    bias::Maybe{Real},
+)
+    _set_code_bias!(get_sat_states(track_state), sat_id, bias)
+    track_state
+end
+
+@noinline function _throw_nonzero_driver_code_bias(bias)
+    throw(
+        ArgumentError(
+            "the estimator-driver signal (`signals[1]`) has a code bias of 0.0 by " *
+            "definition — a code bias is a differential group delay *against the " *
+            "driver*, so there is nothing for the driver's own to be relative to. " *
+            "Got $bias s. State the other signals' biases relative to the driver " *
+            "and leave this one at 0.0 (or `nothing`).",
+        ),
+    )
+end
+
+# Shared body for the addressing overloads above.
+@inline function _set_code_bias!(sats, sat_id, bias::Maybe{Real}, sel...)
+    sats[sat_id] =
+        _set_sat_code_bias(sats[sat_id], isnothing(bias) ? nothing : Float64(bias), sel...)
+    nothing
+end
+
 # Re-seed one satellite's Doppler-estimator state from its current Doppler via
 # the estimator's `_reset_estimator_state` hook (a fresh, zeroed loop filter
 # for the conventional estimator, keeping any per-sat bandwidth override),
