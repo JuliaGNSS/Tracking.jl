@@ -450,14 +450,33 @@ incoherent power `ε` that both NWPR and the noise reference see, so both report
 lock detector. The one term they do *not* share is the reference's self-leakage —
 see [The one bias it carries](#The-one-bias-it-carries).
 
-!!! warning "The post-correlation filter is assumed to have unity noise gain"
+!!! note "An antenna array's floor follows each satellite's own beamformer"
 
-    `N̂₀` is measured at the band, but the prompt the estimator sees is
-    post-[`AbstractPostCorrFilter`](@ref). [`DefaultPostCorrFilter`](@ref) selects
-    one antenna (`last`) and has gain 1, which is fine — and the noise reference
-    despreads that same antenna, so the two sides of the ratio match. A real
-    beamformer changes the prompt's noise scale and silently invalidates the
-    ratio; there is no `noise_gain` hook yet.
+    `N̂₀` is measured before the prompt is combined, but the prompt the estimator
+    sees is post-[`AbstractPostCorrFilter`](@ref) — so on an antenna array the two
+    sides of the ratio would describe different channels unless the floor is
+    reduced through the very weights that produced the prompt.
+
+    It is. With `num_ants > 1` the noise reference despreads **every** antenna
+    column and its window holds the array's `M×M` spatial noise covariance `R̂`
+    rather than one scalar — one window per signal, shared by every satellite on
+    it, exactly as satellite-agnostic as the single-antenna case. Each satellite
+    then reduces `R̂` to its own scalar floor at C/N₀ time through its own current
+    weights,
+
+    ```
+    N̂₀ = wᴴ R̂ w
+    ```
+
+    which is exact rather than approximate for any fixed `w`, because
+    `E[|wᴴn|²] = wᴴRw`. Nothing is stored per satellite: only the final read is.
+
+    This is why [`get_weights`](@ref) is a required part of the
+    [`AbstractPostCorrFilter`](@ref) contract, and why that contract is
+    deliberately **linear in the antennas** — a non-linear combiner has no such
+    closed form. [`DefaultPostCorrFilter`](@ref) selects one antenna (`last`), for
+    which `wᴴR̂w` is that antenna's own diagonal entry, so it reports exactly what
+    a single-antenna run on that column would.
 
 ### Residual Doppler at acquisition handoff
 

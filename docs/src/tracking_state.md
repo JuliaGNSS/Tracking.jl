@@ -101,10 +101,13 @@ for writing your own.
 A worked example combining a narrower-than-default correlator, a custom
 post-correlation filter (beamformer), and a larger CN0 buffer. The
 beamformer here is a trivial mean-of-antennas — a real receiver would
-plug in an actual beamforming algorithm:
+plug in an actual beamforming algorithm. A filter declares its combining
+weights rather than combining the taps itself, which is what lets the C/N₀
+path reduce the measured noise covariance through those same weights (see
+[CN0 Estimator](cn0_estimator.md)):
 
 ```jldoctest power_user
-julia> using Tracking, GNSSSignals
+julia> using Tracking, GNSSSignals, StaticArrays
 
 julia> using Tracking: Hz, NumAnts, AbstractPostCorrFilter
 
@@ -113,9 +116,10 @@ julia> # Trivial beamformer — averages across antenna elements
 
 julia> Tracking.update(f::MyBeamformer, prompt) = f;
 
-julia> (::MyBeamformer)(x::AbstractVector) = sum(x) / length(x);
+julia> Tracking.get_weights(::MyBeamformer, ::NumAnts{1}) = 1.0 + 0.0im;
 
-julia> (::MyBeamformer)(x) = x;
+julia> Tracking.get_weights(::MyBeamformer, ::NumAnts{M}) where {M} =
+           SVector{M,ComplexF64}(ntuple(_ -> 1 / M + 0.0im, M));
 
 julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
            num_ants                       = NumAnts(4),
@@ -249,10 +253,10 @@ julia> get_num_ants(track_state, 1)
 4
 ```
 
-By default the track function uses the first antenna channel as the reference signal to drive the discriminators. An appropriate beamforming algorithm will probably suit better — construct a [`TrackedSat`](@ref) with a custom `post_corr_filter` and build the `TrackState` from it (so the slot type takes the custom filter type rather than the default):
+By default the track function uses the last antenna channel as the reference signal to drive the discriminators. An appropriate beamforming algorithm will probably suit better — construct a [`TrackedSat`](@ref) with a custom `post_corr_filter` and build the `TrackState` from it (so the slot type takes the custom filter type rather than the default). A filter supplies its combining weights through [`get_weights`](@ref); Tracking applies them to the correlator and reduces the measured noise covariance through the same weights, so the C/N₀ stays correct for whatever the beamformer does:
 
 ```jldoctest beamformer_array
-julia> using Tracking, GNSSSignals
+julia> using Tracking, GNSSSignals, StaticArrays
 
 julia> using Tracking: Hz, NumAnts, AbstractPostCorrFilter
 
@@ -261,9 +265,10 @@ julia> # Same trivial mean-of-antennas filter as the power-user example above
 
 julia> Tracking.update(f::MyBeamformer, prompt) = f;
 
-julia> (::MyBeamformer)(x::AbstractVector) = sum(x) / length(x);
+julia> Tracking.get_weights(::MyBeamformer, ::NumAnts{1}) = 1.0 + 0.0im;
 
-julia> (::MyBeamformer)(x) = x;
+julia> Tracking.get_weights(::MyBeamformer, ::NumAnts{M}) where {M} =
+           SVector{M,ComplexF64}(ntuple(_ -> 1 / M + 0.0im, M));
 
 julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
                         num_ants = NumAnts(4),

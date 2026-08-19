@@ -158,13 +158,23 @@ NumAccumulators
 
 ## Post-correlation filter
 
-A post-correlation filter is applied to the correlator output before the
-Doppler estimator sees it. The default is a passthrough; for multi-antenna
-tracking a beamformer is the natural override.
+A post-correlation filter reduces the correlator's per-antenna taps to the single
+channel the Doppler estimator and the C/N₀ estimator see. It does not combine the
+taps itself: it declares its combining weights through [`get_weights`](@ref), and
+Tracking applies them. That indirection is what keeps the C/N₀ honest on an
+antenna array — the measured noise covariance is reduced through the *same*
+weights, so numerator and denominator describe the same channel (see
+[CN0 Estimator](cn0_estimator.md)).
+
+[`DefaultPostCorrFilter`](@ref) is the identity for a single antenna and selects
+the last element for an array. For multi-antenna tracking a beamformer is the
+natural override; see the worked example in
+[Tracking State](tracking_state.md).
 
 ```@docs
 AbstractPostCorrFilter
 DefaultPostCorrFilter
+get_weights
 ```
 
 ## Integration sizing

@@ -97,24 +97,79 @@ end
 # `CorrelatorNoiseEstimator` per *signal* asking for a density — and nothing at
 # all for the others, which is what keeps the despread off the bill of anyone who
 # does not consume it.
-@inline _resolve_noise_estimators(noise_estimators::NamedTuple, ::SignalGroups) =
+@inline function _resolve_noise_estimators(
+    noise_estimators::NamedTuple,
+    groups::SignalGroups,
+)
+    _validate_noise_estimator_num_ants(noise_estimators, groups)
     noise_estimators
+end
 @inline function _resolve_noise_estimators(::Nothing, groups::SignalGroups)
-    signal_ids = _noise_reference_signal_keys(Tuple(groups), ())
-    NamedTuple{signal_ids}(map(_ -> CorrelatorNoiseEstimator(), signal_ids))
+    entries = _noise_reference_signal_entries(Tuple(groups), ())
+    signal_ids = map(first, entries)
+    NamedTuple{signal_ids}(
+        map(entry -> CorrelatorNoiseEstimator(; num_ants = last(entry)), entries),
+    )
 end
 
-# Signal ids of the signals that need a noise density, deduplicated and in
-# first-encounter order across all groups. Deduplicated because two groups may
-# carry the same signal (the same modulation has the same noise floor however it
-# is grouped), and the reference is despread once per signal per chunk.
+# Every provisioned estimator must despread as many antennas as its signal's
+# group carries, or the floor it measures and the prompt it is divided into
+# describe different arrays. The count is not free-standing configuration — it
+# comes off the group — so an auto-provisioned estimator simply takes it.
+#
+# An explicitly-passed estimator cannot, so it is checked instead, and checked
+# here rather than at the first record: this is where both halves are known, and
+# a shape error inside the per-chunk fold names nothing a user can act on. The
+# check reads the estimator's count off `noise_density_type` alone, so it holds
+# for any `AbstractNoiseEstimator`, a custom hardware source included.
+@inline function _validate_noise_estimator_num_ants(
+    noise_estimators::NamedTuple,
+    groups::SignalGroups,
+)
+    entries = _noise_reference_signal_entries(Tuple(groups), ())
+    foreach(entries) do (signal_id, num_ants)
+        haskey(noise_estimators, signal_id) || return nothing
+        estimator = noise_estimators[signal_id]
+        measured = _num_ants_of_density_type(noise_density_type(estimator))
+        measured === num_ants && return nothing
+        throw(
+            ArgumentError(
+                string(
+                    "The noise estimator for signal `:",
+                    signal_id,
+                    "` measures ",
+                    _num_ants_count(measured),
+                    " antenna(s), but its signal group declares NumAnts(",
+                    _num_ants_count(num_ants),
+                    "). Construct it for the group's antenna count, e.g. ",
+                    "`CorrelatorNoiseEstimator(; num_ants = NumAnts(",
+                    _num_ants_count(num_ants),
+                    "))` — the measured noise floor and the prompt it is divided ",
+                    "into have to come from the same array.",
+                ),
+            ),
+        )
+    end
+    nothing
+end
+
+@inline _num_ants_count(::NumAnts{M}) where {M} = M
+
+# `(signal id, num_ants)` for the signals that need a noise density, deduplicated
+# and in first-encounter order across all groups. Deduplicated because two groups
+# may carry the same signal (the same modulation has the same noise floor however
+# it is grouped), and the reference is despread once per signal per chunk.
+#
+# Pairing each id with its group's `num_ants` is unambiguous even across groups:
+# a signal type determines its band, and `_validate_same_band_num_ants` already
+# forces groups sharing a band to agree on the antenna count.
 #
 # Tuple recursion, so it folds at compile time out of the groups' types.
-@inline _noise_reference_signal_keys(::Tuple{}, acc::Tuple{Vararg{Symbol}}) = acc
-@inline _noise_reference_signal_keys(t::Tuple, acc::Tuple{Vararg{Symbol}}) =
-    _noise_reference_signal_keys(
+@inline _noise_reference_signal_entries(::Tuple{}, acc::Tuple) = acc
+@inline _noise_reference_signal_entries(t::Tuple, acc::Tuple) =
+    _noise_reference_signal_entries(
         Base.tail(t),
-        _group_noise_reference_keys(eltype(first(t).satellites), acc),
+        _group_noise_reference_keys(eltype(first(t).satellites), first(t).num_ants, acc),
     )
 
 # Which of a group's signals use a C/N₀ estimator that reads a noise density?
@@ -130,22 +185,26 @@ end
 # `TrackState`'s own type.
 @inline _group_noise_reference_keys(
     ::Type{<:TrackedSat{Signals}},
-    acc::Tuple{Vararg{Symbol}},
-) where {Signals} = _signal_type_noise_reference_keys(Signals, acc)
+    num_ants::NumAnts,
+    acc::Tuple,
+) where {Signals} = _signal_type_noise_reference_keys(Signals, num_ants, acc)
 
 # Recurse down the signals' tuple type. Both the signal id and the C/N₀ estimator
-# type are parameters of `TrackedSignal`, so the whole walk collapses to a
-# literal tuple of symbols.
-@inline _signal_type_noise_reference_keys(::Type{Tuple{}}, acc::Tuple{Vararg{Symbol}}) = acc
+# type are parameters of `TrackedSignal`, and `NumAnts` is a singleton, so the
+# whole walk collapses to a literal tuple of `(Symbol, NumAnts)` pairs.
+@inline _signal_type_noise_reference_keys(::Type{Tuple{}}, ::NumAnts, acc::Tuple) = acc
 @inline function _signal_type_noise_reference_keys(
     ::Type{T},
-    acc::Tuple{Vararg{Symbol}},
+    num_ants::NumAnts,
+    acc::Tuple,
 ) where {T<:Tuple}
     head = Base.tuple_type_head(T)
     k = get_signal_id(_signal_type(head))
+    seen = any(entry -> first(entry) === k, acc)
     new_acc =
-        (k in acc || !requires_noise_density(_cn0_estimator_type(head))) ? acc : (acc..., k)
-    _signal_type_noise_reference_keys(Base.tuple_type_tail(T), new_acc)
+        (seen || !requires_noise_density(_cn0_estimator_type(head))) ? acc :
+        (acc..., (k, num_ants))
+    _signal_type_noise_reference_keys(Base.tuple_type_tail(T), num_ants, new_acc)
 end
 
 @inline _signal_type(::Type{<:TrackedSignal{Sig}}) where {Sig} = Sig

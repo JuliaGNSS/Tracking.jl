@@ -18,6 +18,7 @@ using Tracking:
     get_accumulators,
     get_early_late_sample_spacing,
     DefaultPostCorrFilter,
+    get_weights,
     apply,
     normalize,
     get_correlator_sample_shifts,
@@ -158,8 +159,12 @@ import Tracking
             ),
             0.5,
         )
+        # The post-corr filter reaches `apply` through its weights now, not as a
+        # callable; `DefaultPostCorrFilter` still selects the last antenna.
         default_post_corr_filter = DefaultPostCorrFilter()
-        filtered_correlator = @inferred apply(default_post_corr_filter, correlator)
+        weights = @inferred get_weights(default_post_corr_filter, NumAnts(2))
+        filtered_correlator =
+            @inferred apply(tap -> Tracking._combine_antennas(weights, tap), correlator)
         @test filtered_correlator ==
               EarlyPromptLateCorrelator(SVector(1.0 + 1.0im, 2.0 + 0.0im, 1.0 + 3.0im), 0.5)
 

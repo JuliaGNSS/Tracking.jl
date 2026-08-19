@@ -203,15 +203,19 @@ observations it expects to hold. The headroom is what makes the FIFO's
 `push!`/`popfirst!` pair measure **exactly** zero bytes: at 1× or 2× Julia
 periodically shifts the front offset back and reallocates.
 
-There is deliberately no `num_ants`. The reference despreads **one** antenna
-column — necessarily the one `DefaultPostCorrFilter` selects, or the ratio would
-compare two different channels — so an array changes nothing this constructor
-could configure. See [`update_noise!`](@ref).
+`num_ants` must match the antenna count of the signal group this estimator is
+keyed to. At `NumAnts(1)` the window holds scalar densities; above it, the
+`M×M` spatial covariance `R̂` of the array's noise, which each satellite reduces
+to its own scalar floor through its own beamforming weights (`wᴴR̂w`, see
+[`update_noise!`](@ref) and [`AbstractPostCorrFilter`](@ref)). `TrackState`
+provisions the right count automatically when `noise_estimators` is left at
+`nothing`, and rejects a mismatch when the estimators are passed explicitly.
 """
 function CorrelatorNoiseEstimator(;
     window_duration = 1.0s,
     tap_code_shift = 1.5,
     carrier_dither = 5000.0Hz,
+    num_ants::NumAnts = NumAnts(1),
     rng::AbstractRNG = Xoshiro(0),
 )
     window_duration > zero(window_duration) ||
@@ -220,7 +224,8 @@ function CorrelatorNoiseEstimator(;
         throw(ArgumentError("tap_code_shift must be positive, got $tap_code_shift"))
     carrier_dither >= zero(carrier_dither) ||
         throw(ArgumentError("carrier_dither must not be negative, got $carrier_dither"))
-    buffered = NoiseObservation{NoiseDensity,typeof(1.0s)}[]
+    D = _density_type_for_num_ants(num_ants)
+    buffered = NoiseObservation{D,typeof(1.0s)}[]
     # Four times the count a 1 ms sub-integration would put in the window; see
     # the docstring for why the headroom rather than an exact fit.
     sizehint!(buffered, 4 * max(1, round(Int, window_duration / 1.0ms)) + 1)
@@ -229,10 +234,15 @@ function CorrelatorNoiseEstimator(;
         Float64(tap_code_shift),
         uconvert(Hz, float(carrier_dither)),
         buffered,
-        Ref(NoiseWindowTotals{NoiseDensity,typeof(1.0s)}()),
+        Ref(NoiseWindowTotals{D,typeof(1.0s)}()),
         rng,
     )
 end
+
+# The antenna count this estimator despreads, recovered from its density type.
+# Stored nowhere: `D` already determines it, and one source of truth means a
+# window and its reference correlator cannot disagree.
+@inline _num_ants(::CorrelatorNoiseEstimator{D}) where {D} = _num_ants_of_density_type(D)
 
 """
 $(SIGNATURES)
@@ -414,6 +424,15 @@ All of the correlator's taps are used and pooled into one power sum, at
 type's docstring). The despread runs on the caller's backend kernel — the same
 one the prompt goes through — which is what makes the measurement model-free.
 
+With `num_ants > 1` the reference despreads **every** antenna column and pools
+the taps into the array's spatial covariance `R̂ = Σ_k b_k·b_kᴴ` rather than a
+scalar power. One window per signal still, shared by every satellite on it and
+just as satellite-agnostic as the scalar case: the reduction to a per-satellite
+floor happens at C/N₀ time, where `wᴴR̂w` under that satellite's own weights is
+the exact noise scale of the very prompt being divided. Measuring one column
+instead — as this did before — and assuming unity noise gain silently
+invalidated the ratio for any real beamformer.
+
 The reference is **open-loop**: no discriminator, no loop filter, no NCO update,
 and nothing read from satellite state at all. The PRN rotates over the whole
 family, tracked or not, because a random phase makes avoiding the tracked ones
@@ -437,12 +456,15 @@ function update_noise!(
     num_sub = max(1, round(Int, uconvert(NoUnits, slice_duration / code_period)))
     num_sub = min(num_sub, num_samples)          # never fewer than one sample per slice
 
-    # One antenna only, and it must be the one `DefaultPostCorrFilter` selects
-    # (`last`) — the ratio would otherwise compare two different channels. A
-    # post-corr filter with a noise gain other than unity invalidates the ratio
-    # outright; that is documented as a requirement rather than corrected.
-    samples = _noise_reference_samples(measurement.samples)
+    # Every antenna column, despread through a correlator of the estimator's own
+    # width. The window then holds the array's spatial covariance rather than one
+    # column's scalar power, which is what lets each satellite ask for the floor
+    # *its own* beamformer sees — `wᴴR̂w` — instead of forcing every satellite to
+    # share one antenna's answer and assume unity noise gain on top.
+    samples = measurement.samples
+    num_ants = _num_ants(estimator)
     correlator = EarlyPromptLateCorrelator(;
+        num_ants,
         preferred_early_late_to_prompt_code_shift = estimator.tap_code_shift,
     )
     sample_shifts =
@@ -500,14 +522,7 @@ function update_noise!(
                 false,
             ),
         )
-        # Pool the taps. At ≥1 chip spacing they are independent looks at one
-        # scalar, so nothing about their relative values means anything — the
-        # opposite of the prompt path, where the taps' *differences* are the code
-        # and carrier discriminants.
-        power = 0.0
-        for k = 1:num_taps
-            power += abs2(accumulators[k])
-        end
+        power = _pool_taps(accumulators, num_ants)
         # Straight to the builders' shared core rather than through
         # `noise_observation_from_correlator`'s keyword form: the keywords cost a
         # per-call allocation on Julia 1.10 that 1.11+ elides, and this is the one
@@ -531,11 +546,38 @@ function update_noise!(
     estimator
 end
 
-# The antenna the reference despreads. `DefaultPostCorrFilter` is `last(x)`, so
-# an antenna array's noise must be measured on its last column too.
-@inline _noise_reference_samples(samples::AbstractVector) = samples
-@inline _noise_reference_samples(samples::AbstractMatrix) =
-    view(samples, :, size(samples, 2))
+# Pool the taps. At ≥1 chip spacing they are independent looks at the same noise,
+# so nothing about their relative values means anything — the opposite of the
+# prompt path, where the taps' *differences* are the code and carrier
+# discriminants.
+#
+# Single antenna: the scalar power `Σ_k |b_k|²`. An array: the same sum one
+# dimension up, `Σ_k b_k·b_kᴴ`, whose diagonal is exactly the per-antenna scalar
+# each column would have measured alone and whose off-diagonals carry the
+# antennas' noise correlation. Same law of large numbers, same window machinery —
+# just matrix-valued. `b*b'` on an `SVector` is unrolled and heap-free.
+#
+# Both iterate the accumulator container directly rather than indexing it over
+# `1:num_taps`. The two counts are the same number — the correlator has exactly
+# the taps `sample_shifts` describes — but a *runtime* index into an `SVector`
+# defeats the unroll, and at `M > 1` its elements are themselves `SVector`s big
+# enough that Julia 1.10 spills the whole thing rather than keeping it in
+# registers. Iterating is both clearer and the shape that stays heap-free.
+@inline function _pool_taps(accumulators, ::NumAnts{1})
+    power = 0.0
+    for tap in accumulators
+        power += abs2(tap)
+    end
+    power
+end
+
+@inline function _pool_taps(accumulators, ::NumAnts{M}) where {M}
+    covariance = zero(SMatrix{M,M,ComplexF64,M * M})
+    for tap in accumulators
+        covariance += tap * tap'
+    end
+    covariance
+end
 
 # Which PRN to borrow a code from. Advancing a PRN needs a position, and a
 # position is scalar state with no per-signal anchor — so it is carried in the

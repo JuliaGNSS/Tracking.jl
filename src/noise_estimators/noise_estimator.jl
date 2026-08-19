@@ -100,7 +100,11 @@ the same white input.
 
 Fields:
 
-  - `noise_density` — `N₀`, of dimension `1/Hz`.
+  - `noise_density` — `N₀`, of dimension `1/Hz`. For an antenna array it is the
+    `M×M` spatial covariance `R̂` instead, of the same dimension elementwise: the
+    diagonal is each antenna's own `N₀` and the off-diagonals their noise
+    correlation. A satellite reduces it to its own scalar floor through its
+    beamforming weights, `wᴴR̂w` (see [`AbstractPostCorrFilter`](@ref)).
   - `num_sub_integrations` — `M`, the number of **independent looks** that went
     into it, and therefore its statistical weight. Not the sample count: for
     `Σ_m |B_m|²` over `M` sub-integrations of `N` samples each, the density needs
@@ -126,6 +130,29 @@ end
 # Canonical density type. Every builder converts to it, so a band's window is
 # concretely typed however the caller spelled their sampling frequency.
 const NoiseDensity = typeof(1.0 / 1.0Hz)
+
+# The same, per element of a multi-antenna window's spatial covariance `R̂`. The
+# diagonal carries each antenna's own `N₀`; the off-diagonals carry the antennas'
+# noise correlation, which is exactly what a beamformer's weights see.
+const NoiseCovarianceElement = typeof((1.0 + 0.0im) / 1.0Hz)
+
+# What a window measures, as a function of how many antennas it despreads.
+#
+# A bare `SMatrix`, not a `Hermitian` wrapper: `zero`, `+` and `/` are all the
+# window's totals need, StaticArrays supplies them, and the result stays isbits —
+# which is what keeps `NoiseWindowTotals` inline in its `Ref` and the whole
+# update path allocation-free (see `NoiseWindowTotals`).
+_density_type_for_num_ants(::NumAnts{1}) = NoiseDensity
+_density_type_for_num_ants(::NumAnts{M}) where {M} =
+    SMatrix{M,M,NoiseCovarianceElement,M * M}
+
+# The inverse, read off a density *type*. Deliberately phrased on the type rather
+# than on the estimator, so it answers for **any** `AbstractNoiseEstimator` —
+# including a user's own hardware source — through `noise_density_type` alone.
+# That is what lets `TrackState` check an explicitly-passed estimator's antenna
+# count against its signal group's without knowing the estimator's concrete type.
+_num_ants_of_density_type(::Type{NoiseDensity}) = NumAnts(1)
+_num_ants_of_density_type(::Type{<:SMatrix{M,M}}) where {M} = NumAnts(M)
 
 # Retype an observation onto a window's own `{D,T}`. The builders already emit the
 # canonical pair, so this is for an observation assembled by hand: its field types
@@ -171,6 +198,11 @@ all the averaging itself.
 `code_amplitude` is the RMS amplitude of the sampled replica (see
 `Tracking.normalize`); leave it at `1` for a ±1 code, pass the code's RMS for a
 multi-level one (CBOC). `prn` records which code measured it.
+
+Pass an `SVector` of `M` per-antenna accumulations for an antenna array, and the
+observation carries the spatial covariance `b·bᴴ` instead of the scalar `|b|²`.
+Report every element the front end has: a satellite's floor is `wᴴR̂w` under its
+own beamforming weights, and an array collapsed to one number cannot answer that.
 """
 noise_observation(
     accumulation::Complex,
@@ -180,6 +212,22 @@ noise_observation(
     prn::Integer = 0,
 ) = _noise_observation(
     abs2(accumulation),
+    1,
+    integrated_samples,
+    sampling_frequency,
+    code_amplitude,
+    prn,
+    integrated_samples / sampling_frequency,
+)
+
+noise_observation(
+    accumulation::StaticVector{M,<:Complex},
+    integrated_samples,
+    sampling_frequency;
+    code_amplitude = 1,
+    prn::Integer = 0,
+) where {M} = _noise_observation(
+    accumulation * accumulation',
     1,
     integrated_samples,
     sampling_frequency,
@@ -205,6 +253,10 @@ the `M` sub-integrations are consecutive in time. Pass it explicitly when they
 are **simultaneous** — the software source's `M` looks are the reference
 correlator's taps, which all integrate the same `N` samples, so their span is
 `N / sampling_frequency` and not `M` times that.
+
+For an antenna array, pass the pre-summed spatial covariance `Σ_m B_m·B_mᴴ` as an
+`SMatrix`. The incoherence requirement is the same one term for term: sum the
+outer products, never form the outer product of the sum.
 """
 noise_observation_from_correlator(
     accumulated_power,
@@ -215,6 +267,24 @@ noise_observation_from_correlator(
     prn::Integer = 0,
     duration = total_samples / sampling_frequency,
 ) = _noise_observation(
+    accumulated_power,
+    num_sub_integrations,
+    total_samples,
+    sampling_frequency,
+    code_amplitude,
+    prn,
+    duration,
+)
+
+noise_observation_from_correlator(
+    accumulated_power::StaticMatrix{M,M},
+    num_sub_integrations,
+    total_samples,
+    sampling_frequency;
+    code_amplitude = 1,
+    prn::Integer = 0,
+    duration = total_samples / sampling_frequency,
+) where {M} = _noise_observation(
     accumulated_power,
     num_sub_integrations,
     total_samples,
@@ -236,6 +306,9 @@ window mean is exactly `σ̂²` — so `M == num_samples` and no `code_amplitude
 applies. It is the minimum-variance, flat-weighting end of the same continuum
 the despread source sits at the spectral-fidelity end of; a tilted front end is
 the one thing that tells them apart.
+
+For an antenna array, pass `Σ x·xᴴ` as an `SMatrix` — the array's raw spatial
+covariance, which is what a beamformer's weights are reduced against.
 """
 noise_observation_from_samples(
     accumulated_power,
@@ -243,6 +316,21 @@ noise_observation_from_samples(
     sampling_frequency;
     prn::Integer = 0,
 ) = _noise_observation(
+    accumulated_power,
+    num_samples,
+    num_samples,
+    sampling_frequency,
+    1,
+    prn,
+    num_samples / sampling_frequency,
+)
+
+noise_observation_from_samples(
+    accumulated_power::StaticMatrix{M,M},
+    num_samples,
+    sampling_frequency;
+    prn::Integer = 0,
+) where {M} = _noise_observation(
     accumulated_power,
     num_samples,
     num_samples,
@@ -265,6 +353,17 @@ noise_observation_from_samples(
 # what makes the documented hardware fill path work for any spelling; the
 # converting method on `CorrelatorNoiseEstimator` covers a hand-built observation
 # that never came through a builder.
+#
+# The canonical type is chosen by dispatching on the measured value itself — a
+# scalar power lands on `NoiseDensity`, an `M×M` covariance on the matching
+# `SMatrix` — rather than by threading the type in as an argument. That is not a
+# style preference: a `Type` passed by value is opaque to Julia 1.10's optimiser,
+# and inside `update_noise!`'s per-sub-integration loop it was enough to stop the
+# whole frame being optimised, boxing isbits temporaries several calls deeper.
+@inline _canonical_density(density::Number) = convert(NoiseDensity, density)
+@inline _canonical_density(density::StaticMatrix{M,M}) where {M} =
+    convert(SMatrix{M,M,NoiseCovarianceElement,M * M}, density)
+
 @inline function _noise_observation(
     accumulated_power,
     num_sub_integrations,
@@ -274,8 +373,7 @@ noise_observation_from_samples(
     prn,
     duration,
 )
-    density = convert(
-        NoiseDensity,
+    density = _canonical_density(
         accumulated_power / (total_samples * code_amplitude^2 * sampling_frequency),
     )
     NoiseObservation(
@@ -400,11 +498,28 @@ end
 # rejected for the same reason. Not-ready is the honest answer and needs no new
 # machinery: the fold already skips the update and warns, and `estimate_cn0`
 # already reports `-Inf dB-Hz` — the house convention for a missing estimate.
+#
+# Both tests are dispatched, because a multi-antenna window's density is an
+# `SMatrix` and neither `isfinite` nor `>` is defined on one.
+@inline _finite_density(d::Number) = isfinite(d)
+@inline _finite_density(R::StaticMatrix) = all(isfinite, R)
+
+# "Positive" for a covariance means **each antenna measured some power**, i.e. the
+# diagonal is positive — deliberately not positive definiteness. A near-singular
+# `R̂` is legitimate, not a fault: strongly correlated antennas (in the limit, one
+# signal fed to every element) produce a rank-1 covariance that is still the
+# right answer for every `wᴴR̂w` anyone will ask of it. `R̂` is never inverted, so
+# rank never matters; only a genuinely dead element does, and that shows on the
+# diagonal.
+@inline _positive_density(d::Number) = d > zero(d)
+@inline _positive_density(R::StaticMatrix) =
+    all(i -> real(R[i, i]) > zero(real(R[i, i])), axes(R, 1))
+
 @inline function _noise_density_and_ready(estimator::AbstractNoiseEstimator)
     density = get_noise_density(estimator)
     D = noise_density_type(estimator)
     isnothing(density) && return (zero(D), false)
     d = density::D
-    isfinite(d) && d > zero(d) || return (zero(D), false)
+    _finite_density(d) && _positive_density(d) || return (zero(D), false)
     (d, true)
 end
