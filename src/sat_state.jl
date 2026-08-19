@@ -48,6 +48,13 @@ struct TrackedSignal{
     # (`preferred_num_code_blocks_to_integrate`) or by an external producer
     # summing dumps. Starts at 1, the pre-sync length.
     last_fully_integrated_num_code_blocks::Int
+    # This signal's differential payload group delay against its satellite's
+    # estimator-driver signal, as a **time**, or `nothing` (the default) when the
+    # caller has not supplied one. Purely an input: only multi-signal
+    # discriminator combining reads it. See `set_differential_group_delay!` for
+    # the contract, and `get_differential_group_delay` for why `nothing` and
+    # `0.0s` are different states.
+    differential_group_delay::Maybe{typeof(1.0s)}
 end
 
 # Reject a preferred coherent-integration length that cannot work for this
@@ -125,6 +132,11 @@ function TrackedSignal(
     ),
     post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),
     preferred_num_code_blocks_to_integrate::Int = 1,
+    # `Number`-wide so that every wrong input — a bare number, a value in metres,
+    # anything that is not a time — reaches `_as_differential_group_delay` and is
+    # refused with a sentence about *that* mistake, rather than dying on a keyword
+    # type assertion.
+    differential_group_delay::Maybe{Number} = nothing,
 )
     validate_preferred_num_code_blocks_to_integrate(
         signal,
@@ -153,6 +165,7 @@ function TrackedSignal(
         correlator_outputs,
         preferred_num_code_blocks_to_integrate,
         1,
+        _as_differential_group_delay(differential_group_delay),
     )
 end
 
@@ -182,6 +195,12 @@ function TrackedSignal(
     correlator_outputs::Maybe{Vector{CorrelatorOutput{C}}} = nothing,
     preferred_num_code_blocks_to_integrate = nothing,
     last_fully_integrated_num_code_blocks = nothing,
+    # Wrapped in `Some` rather than following the plain `Maybe` convention of
+    # every other kwarg here: `nothing` is a *legal value* of this field
+    # ("bias not known"), so the usual `isnothing(x) ? keep : set` test cannot
+    # tell "leave it alone" from "clear it". `Some(nothing)` clears, a bare
+    # `nothing` keeps.
+    differential_group_delay::Maybe{Some{Maybe{typeof(1.0s)}}} = nothing,
 ) where {
     Sig<:AbstractGNSSSignal,
     B<:Unsigned,
@@ -211,6 +230,8 @@ function TrackedSignal(
         t.preferred_num_code_blocks_to_integrate : preferred_num_code_blocks_to_integrate,
         isnothing(last_fully_integrated_num_code_blocks) ?
         t.last_fully_integrated_num_code_blocks : last_fully_integrated_num_code_blocks,
+        isnothing(differential_group_delay) ? t.differential_group_delay :
+        something(differential_group_delay),
     )
 end
 
@@ -288,6 +309,104 @@ has_bit_or_secondary_code_been_found(t::TrackedSignal) =
 get_integrated_samples(t::TrackedSignal) = t.integrated_samples
 get_preferred_num_code_blocks_to_integrate(t::TrackedSignal) =
     t.preferred_num_code_blocks_to_integrate
+
+# The differential group delay's value contract: what a caller may hand
+# `TrackedSignal(; differential_group_delay = …)` and
+# [`set_differential_group_delay!`](@ref), and what the driver signal's own must
+# be. Both entry points are constructors in this file; the setter in
+# tracking_state.jl routes through the same two functions, so a value is checked
+# once wherever it enters. See `set_differential_group_delay!` for the contract
+# itself and the manual's "Multi-signal discriminator combining" for why the
+# value is supplied rather than derived here.
+
+_as_differential_group_delay(::Nothing) = nothing
+_as_differential_group_delay(delay::Real) = _throw_unitless_differential_group_delay(delay)
+function _as_differential_group_delay(delay::Number)
+    dimension(delay) == dimension(1.0s) ||
+        _throw_wrong_dimension_differential_group_delay(delay)
+    float(uconvert(s, delay))
+end
+
+# A bare number is refused rather than read as seconds: every dimensioned quantity in this
+# package carries its unit, and a realistic value here is sub-nanosecond — the scale at
+# which a silently assumed unit turns into a metre.
+@noinline _throw_unitless_differential_group_delay(delay) = throw(
+    ArgumentError(
+        "a differential group delay is a time and needs its unit: got the bare " *
+        "number $delay. " *
+        "Write `$(delay)s` for seconds, or e.g. `$(delay)u\"ns\"` " *
+        "(`using Unitful`) — a broadcast inter-signal correction arrives in " *
+        "seconds, so `isc_difference * 1.0s`.",
+    ),
+)
+
+# A length is the *likely* wrong input rather than an exotic one: "code bias" in the
+# SSR/PPP world (Galileo HAS, IGS, and GNSSDecoder.jl's own HAS decoder) is a per-signal
+# pseudorange correction in metres, so a caller arriving from that side holds metres. Name
+# the conversion, and the datum trap that comes with it, instead of refusing blankly.
+@noinline function _throw_wrong_dimension_differential_group_delay(delay)
+    hint =
+        dimension(delay) == 𝐋 ?
+        " A per-signal code bias in metres (the SSR/PPP sense) converts with the " *
+        "speed of light — `$delay / Unitful.c0` — but check the datum first: this " *
+        "field is a differential against the estimator-driver signal (`signals[1]`), " *
+        "whereas an SSR code bias is referenced to the product's own clock datum and " *
+        "is not a difference of two signals at all." : ""
+    throw(
+        ArgumentError(
+            "a differential group delay is a time: got $delay, which has dimension " *
+            "$(dimension(delay)). Supply it in seconds — `1.2e-9s`, `-0.3u\"ns\"` — or " *
+            "`nothing` to mark it unknown." *
+            hint,
+        ),
+    )
+end
+
+# The driver's code phase *is* the reference every other delay is stated against, so
+# its own delay is 0 by definition and nothing reads it. Storing a non-zero one silently
+# is the dangerous option: it leaves every passenger's delay short by the driver's.
+# `nothing` and `0.0s` both restate the definition and pass. Enforced on both paths that
+# can put a value on `signals[1]`: `set_differential_group_delay!`, and a `TrackedSat`
+# built from `TrackedSignal`s that already carry one.
+_check_driver_differential_group_delay(::Nothing) = nothing
+_check_driver_differential_group_delay(delay) =
+    iszero(delay) ? nothing : _throw_nonzero_driver_differential_group_delay(delay)
+
+@noinline function _throw_nonzero_driver_differential_group_delay(delay)
+    throw(
+        ArgumentError(
+            "the estimator-driver signal (`signals[1]`) has a differential group " *
+            "delay of 0.0 by definition — the quantity is measured *against the " *
+            "driver*, so there is nothing for the driver's own to be relative to. " *
+            "Got $delay. State the other signals' values relative to the driver " *
+            "and leave this one at 0.0 (or `nothing`).",
+        ),
+    )
+end
+
+"""
+$(SIGNATURES)
+
+This signal's differential payload group delay against its satellite's
+estimator-driver signal, as a time (`1.2e-9s`, `-0.3u"ns"`, …), or `nothing`
+when the caller has supplied none. Read by multi-signal code-discriminator
+combining only; set it with [`set_differential_group_delay!`](@ref).
+
+`nothing` and `0.0s` are deliberately different states — **on a passenger**.
+There, `0.0s` asserts that this signal's code phase *is* the driver's, so its
+code discriminator may join the code loop, whereas `nothing` says nothing is
+known and the passenger aids the carrier loops only. See
+[Differential group delay](@ref) in the manual for why assuming zero is not the
+harmless direction.
+
+On `signals[1]` the distinction does not exist and the rule must not be read
+onto it: the quantity is measured *against* the driver, so the driver's own is
+`0.0` by definition, `nothing` and `0.0s` both say exactly that, and
+[`set_differential_group_delay!`](@ref) refuses anything else. A consumer that
+treats the driver's `nothing` as "unknown" and withholds the satellite has
+withheld every satellite it owns.
+"""
+get_differential_group_delay(t::TrackedSignal) = t.differential_group_delay
 
 """
 $(SIGNATURES)
@@ -543,6 +662,7 @@ function TrackedSat(
     carrier_phase = 0.0,
     code_doppler = nothing,
 )
+    _check_driver_differential_group_delay(first(tracked_signals).differential_group_delay)
     # Float-ize the carrier first so its product with the code/center ratio
     # is float-typed too; that way users may pass `200Hz` (Int) without
     # the struct constructor's `typeof(1.0Hz)` field type rejecting it.
@@ -712,11 +832,22 @@ function TrackedSat(
         isnothing(carrier_phase) ? sat.carrier_phase : carrier_phase,
         isnothing(carrier_doppler) ? sat.carrier_doppler : carrier_doppler,
         isnothing(signal_start_sample) ? sat.signal_start_sample : signal_start_sample,
-        isnothing(signals) ? sat.signals : signals,
+        isnothing(signals) ? sat.signals : _checked_signals(signals),
         isnothing(doppler_estimator_state) ? sat.doppler_estimator_state :
         doppler_estimator_state,
     )
 end
+
+# A replacement signals tuple goes through the same driver check as a freshly
+# built satellite: `TrackedSignal(sig; differential_group_delay = …)` can put a
+# value on a signal that only becomes `signals[1]` here, which the setter's own
+# guard never sees. The fold rebuilds every satellite through this constructor
+# each chunk and so pays the check — one `isnothing`-or-`iszero` branch on a
+# field it never writes.
+@inline _checked_signals(signals::Tuple{Vararg{TrackedSignal}}) = (
+    _check_driver_differential_group_delay(first(signals).differential_group_delay);
+    signals
+)
 
 """
 $(SIGNATURES)
@@ -856,6 +987,8 @@ get_correlator_outputs(s::TrackedSat, sel...) =
     get_correlator_outputs(_find_signal(s.signals, sel...))
 get_preferred_num_code_blocks_to_integrate(s::TrackedSat, sel...) =
     get_preferred_num_code_blocks_to_integrate(_find_signal(s.signals, sel...))
+get_differential_group_delay(s::TrackedSat, sel...) =
+    get_differential_group_delay(_find_signal(s.signals, sel...))
 
 # Append an external `CorrelatorOutput` to one signal of a sat. `output` comes
 # first so an optional trailing signal selector (integer index / signal type)

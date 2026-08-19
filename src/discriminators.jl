@@ -18,7 +18,7 @@ function dll_disc(
     sampling_frequency,
 )
     code_frequency = code_doppler + get_code_frequency(signal)
-    code_phase_delta = code_frequency / sampling_frequency
+    code_phase_delta = upreferred(code_frequency / sampling_frequency)
     E = abs(get_early(correlator))
     L = abs(get_late(correlator))
     distance_between_early_and_late =
@@ -45,14 +45,56 @@ function _boc11_envelope_slope(offset)
     (left + right) / 2
 end
 
+# Tap offsets of a VEML correlator's inner (early/late) and outer
+# (very-early/very-late) pairs, in chips, at the code frequency in effect — where the
+# taps *actually* sit once the preferred chip shifts have been rounded to whole samples.
+#
+# Shared by `dll_disc` and `dll_disc_noise_gain` rather than computed in each, because
+# the gain is the noise gain *of that discriminator* only if both are evaluated at the
+# same offsets: the S-curve slope, and with it the chip calibration of the one and the
+# variance of the other, moves with them.
+@inline function _veml_tap_offsets(
+    signal::AbstractGNSSSignal,
+    correlator::VeryEarlyPromptLateCorrelator,
+    code_doppler,
+    sampling_frequency,
+)
+    code_frequency = code_doppler + get_code_frequency(signal)
+    code_phase_delta = upreferred(code_frequency / sampling_frequency)
+    inner_offset =
+        calc_preferred_code_shift_to_sample_shift(
+            correlator.preferred_early_late_to_prompt_code_shift,
+            sampling_frequency,
+            code_frequency,
+        ) * code_phase_delta
+    outer_offset =
+        calc_preferred_code_shift_to_sample_shift(
+            correlator.preferred_very_early_late_to_prompt_code_shift,
+            sampling_frequency,
+            code_frequency,
+        ) * code_phase_delta
+    (inner_offset, outer_offset)
+end
+
 # S-curve slope of the very-early-minus-late discriminator at the origin, for the
 # inner (early/late) and outer (very-early/very-late) tap offsets in chips: each tap
 # pair's envelope difference contributes −2·slope·τ to the numerator and its envelope
 # sum 2·|R| to the denominator. For the default ±0.15/±0.6 taps this is
 # 4 / (2 − 3·0.15 − 0.6) ≈ 4.2.
-_veml_discriminator_slope(inner_offset, outer_offset) =
+#
+# A tap layout that puts *both* pairs past the correlation support (≥ 1 chip) makes the
+# envelope sum zero, and the quotient `-0.0 / 0.0` a `NaN` — which would then defeat the
+# `iszero(slope)` guard in `dll_disc` and the `iszero(denominator)` one in
+# `dll_disc_noise_gain`, since `NaN` compares equal to nothing. Report `0.0` instead: such a
+# layout carries no delay information, which is what those two guards are there to say, and
+# a `NaN` weight would otherwise propagate out of the combining accumulator into the
+# *driver's* loop filter and wreck a satellite that was tracking fine.
+function _veml_discriminator_slope(inner_offset, outer_offset)
+    envelope_sum = _boc11_envelope(inner_offset) + _boc11_envelope(outer_offset)
+    iszero(envelope_sum) && return 0.0
     -(_boc11_envelope_slope(inner_offset) + _boc11_envelope_slope(outer_offset)) /
-    (_boc11_envelope(inner_offset) + _boc11_envelope(outer_offset))
+    envelope_sum
+end
 
 """
 $(SIGNATURES)
@@ -77,20 +119,8 @@ function dll_disc(
     code_doppler,
     sampling_frequency,
 )
-    code_frequency = code_doppler + get_code_frequency(signal)
-    code_phase_delta = upreferred(code_frequency / sampling_frequency)
-    inner_offset =
-        calc_preferred_code_shift_to_sample_shift(
-            correlator.preferred_early_late_to_prompt_code_shift,
-            sampling_frequency,
-            code_frequency,
-        ) * code_phase_delta
-    outer_offset =
-        calc_preferred_code_shift_to_sample_shift(
-            correlator.preferred_very_early_late_to_prompt_code_shift,
-            sampling_frequency,
-            code_frequency,
-        ) * code_phase_delta
+    inner_offset, outer_offset =
+        _veml_tap_offsets(signal, correlator, code_doppler, sampling_frequency)
     slope = _veml_discriminator_slope(inner_offset, outer_offset)
     VE = abs(get_very_early(correlator))
     E = abs(get_early(correlator))
@@ -100,7 +130,7 @@ function dll_disc(
     # A tap layout whose S-curve is locally flat cannot be calibrated — return the raw
     # discriminator rather than dividing by zero. Every functional layout (inner taps on
     # the main peak, outer taps on the side lobe) has a positive slope.
-    slope == 0 ? raw : raw / slope
+    iszero(slope) ? raw : raw / slope
 end
 
 """
@@ -111,6 +141,153 @@ Calculates the carrier phase error in radians.
 function pll_disc(signal::AbstractGNSSSignal, correlator)
     p = get_prompt(correlator)
     atan(imag(p) / real(p))
+end
+
+# ---------------------------------------------------------------------------
+# Discriminator noise gains — the `G` in `σ² ≈ G / SNR`
+# ---------------------------------------------------------------------------
+#
+# Used to weight one signal's discriminator against another's when several
+# signals of one satellite drive a common loop (see `_record_contribution`). Only
+# *ratios* between the signals of a group matter, so every gain is expressed
+# against the same SNR definition — `SNR ≡ (received power) · (integration time)
+# / N₀` — and every factor common across a group (the noise density, the code
+# amplitude that `normalize` divides out) cancels and is never formed. A wrong
+# gain costs combining efficiency, never bias: each discriminator is calibrated
+# in its own units, so any positive weights give a consistent combined estimate.
+#
+# Only the *code* gain is a hook, because only it varies across a group: the
+# correlator layout is per signal, and a BOC signal's VEML discriminator is ~8x
+# more precise than a BPSK signal's early-late one at equal SNR. The carrier
+# gains are constants in `_record_contribution` — every `pll_disc` is the same
+# Costas `atan(Q/I)` with `σ² ≈ 1 / 2·SNR`, which cancels in the normalized
+# mean, and every `fll_disc` is that phase difference over `2π·T`, whose only
+# signal-dependent factor is `T` itself. A correlator type with its own
+# `dll_disc` method must define `dll_disc_noise_gain` as well to take part in
+# combining; there is deliberately no generic fallback.
+
+"""
+$(SIGNATURES)
+
+Post-integration SNR of one correlator record, up to factors common to a
+satellite's signals: the component's **nominal** power share
+(`GNSSSignals.get_relative_power`) times the record's `integrated_samples`.
+
+The power is the ICD split rather than the record's own `|P|²`, and it therefore
+does *not* notice a component that is absent or unlocked — see
+[Multi-signal discriminator combining](@ref Multi-signal-discriminator-combining)
+for why that trade is the right way round, and what it obliges the caller to do.
+
+`integrated_samples` rather than a time, because the sampling frequency is one of
+the factors shared across a group.
+"""
+@inline _nominal_record_snr(signal::AbstractGNSSSignal, integrated_samples::Integer) =
+    get_relative_power(signal) * integrated_samples
+
+"""
+$(SIGNATURES)
+
+Convert a differential group delay (a time) to the code-phase offset it produces,
+in chips, at
+the code frequency actually in effect (chip rate plus the satellite's code
+Doppler).
+
+Sign convention: a positive delay means the signal sits at a **larger** code phase
+than the driver, by `delay · f_code` chips — exactly the amount to subtract from
+its code discriminator to refer that discriminator to the driver's code phase.
+
+That is fixed by the loop's own stability rather than by any ICD: a positive
+`dll_disc` raises the code frequency, which advances the replica phase, so
+`dll_disc` carries the sign of `(true phase − replica phase)`. A passenger whose
+code phase exceeds the driver's therefore reads `e_driver + δ`, and `δ` comes off.
+
+See [`set_differential_group_delay!`](@ref) for how to derive `δ` from broadcast
+inter-signal corrections, whose own sign conventions differ between the GPS and
+BeiDou ICDs.
+"""
+# Both arguments carry their units, so this is a plain multiply; `uconvert(NoUnits,
+# …)` strips the (already dimensionless) product back to a `Float64` in chips that
+# the discriminators can be corrected with directly.
+@inline _group_delay_to_chips(delay, code_frequency) =
+    uconvert(NoUnits, delay * code_frequency)
+
+"""
+$(SIGNATURES)
+
+Noise gain `G` of the code discriminator for `correlator`, i.e. the constant in
+`σ²_chips ≈ G / SNR`. Multi-signal combining weights each signal's
+DLL discriminator by `SNR / G`, so this is what lets a BOC signal's VEML
+discriminator outvote a BPSK signal's early-late one at equal C/N₀. Every
+correlator type that defines `dll_disc` needs a method of this too.
+
+This is a statement about *variance*, and it is not made redundant by the
+chip calibration every `dll_disc` method carries (the `(2 - d) / 2` factor here,
+the S-curve slope division for VEML). That calibration equalizes the
+discriminators' **mean** response — every method answers `1.0 · τ` in chips,
+which is what makes two signals' discriminators averageable at all — by dividing
+signal and noise alike by the slope. A raw discriminator that was steeper
+therefore comes out of it with *less* noise per chip, not the same: `G` is
+exactly what is left, and `G` is measured after the calibration, never a
+substitute for it. Hence `d / 4 ≈ 0.25` for a 1-chip early-late layout against
+`≈ 0.03` for the default VEML taps on a BOC(1,1) peak — an 8× precision
+difference that survives both discriminators reading unit slope.
+
+For the noncoherent early-minus-late envelope discriminator with early-late
+spacing `d` chips this is `d / 4`, the Kaplan & Hegarty (2nd ed., Table 5.6)
+tracking-jitter constant. The `d` dependence comes entirely from the *noise
+correlation* between the early and late taps (`ρ ≈ 1 - d` for a triangular
+autocorrelation): narrowing the taps shrinks the S-curve slope and the
+differenced noise together, and the latter wins.
+"""
+@inline function dll_disc_noise_gain(
+    signal::AbstractGNSSSignal,
+    correlator::EarlyPromptLateCorrelator,
+    code_doppler,
+    sampling_frequency,
+)
+    code_frequency = code_doppler + get_code_frequency(signal)
+    code_phase_delta = upreferred(code_frequency / sampling_frequency)
+    d =
+        get_early_late_sample_spacing(correlator, sampling_frequency, code_frequency) *
+        code_phase_delta
+    d / 4
+end
+
+"""
+$(SIGNATURES)
+
+Noise gain `G` of the very-early-minus-late code discriminator, in the same
+`σ²_chips ≈ G / SNR` convention as the early-late method above.
+
+Evaluated on the same piecewise-linear sine-BOC(1,1) autocorrelation envelope
+the discriminator's own chip calibration uses, at the same sample-quantized tap
+offsets (both from `_veml_tap_offsets`): with S-curve slope `k`
+(`_veml_discriminator_slope`) and envelope values `e_i`, `e_o` at the inner and
+outer taps, the four taps contribute `4 · σ²/2` of noise to a numerator whose
+denominator is `2 · (e_i + e_o)`, giving `G = 1 / (2 · k² · (e_i + e_o)²)`.
+
+Unlike the early-late gain this does **not** model the noise correlation
+between the tap pairs, so it over-states VEML noise and under-weights a VEML
+signal — the conservative direction, and only a matter of combining efficiency.
+For the default ±0.15/±0.6 chip taps it lands near `0.03`, about 8× smaller
+than the 1-chip early-late gain, matching the ~3× steeper BOC(1,1) main peak.
+"""
+@inline function dll_disc_noise_gain(
+    signal::AbstractGNSSSignal,
+    correlator::VeryEarlyPromptLateCorrelator,
+    code_doppler,
+    sampling_frequency,
+)
+    inner_offset, outer_offset =
+        _veml_tap_offsets(signal, correlator, code_doppler, sampling_frequency)
+    slope = _veml_discriminator_slope(inner_offset, outer_offset)
+    envelope_sum = _boc11_envelope(inner_offset) + _boc11_envelope(outer_offset)
+    # A degenerate tap layout (flat S-curve, or both taps past the correlation
+    # support) carries no delay information. Returning `Inf` gives it weight
+    # zero instead of a division by zero — the discriminator is uninformative,
+    # not infinitely precise.
+    denominator = 2 * slope^2 * envelope_sum^2
+    iszero(denominator) ? Inf : 1 / denominator
 end
 
 """

@@ -114,6 +114,16 @@ integration:
     [`enable_vt!`](@ref) puts them in the loop) run a conventional scalar
     PLL/DLL as a fallback.
 
+A multi-signal satellite closes its loops on its estimator-driver signal
+(`signals[1]`) alone under this estimator: the other signals are correlated,
+have their prompts filtered and their bits decoded, but contribute no
+discriminator. [Multi-signal discriminator combining](@ref Multi-signal-discriminator-combining)
+is a [`ConventionalPLLAndDLL`](@ref) feature — there is no `signal_combining`
+here, and a [`set_differential_group_delay!`](@ref) value is stored but never
+read (the setter warns once). A receiver offering both modes therefore ranges on
+the shared `code_phase` of `signals[1]` in either mode, but only the scalar mode
+can add the passengers' measurements.
+
 Type parameters `CA` and `CO` select the carrier and code loop filter types.
 The FLL-assisted `ThirdOrderAssistedBilinearLF` carrier filter is the
 default — with any non-assisted filter the navigation filter's
@@ -268,59 +278,42 @@ end
     sampling_frequency,
     noise_density,
     noise_density_ready::Bool,
-    driver_carrier_phase::Real = 0.0,
 )
     outputs = tracked_signal.correlator_outputs
     if isempty(outputs)
         return tracked_signal, pll_and_dll_state, sat.carrier_doppler, sat.code_doppler
     end
     signal = tracked_signal.signal
-    ts = tracked_signal
+    tsig = tracked_signal
     carrier_loop_filter = pll_and_dll_state.carrier_loop_filter
     code_loop_filter = pll_and_dll_state.code_loop_filter
     code_discr_acc = pll_and_dll_state.code_discr_acc
     carrier_discr_acc = pll_and_dll_state.carrier_discr_acc
     carrier_doppler = sat.carrier_doppler
     code_doppler = sat.code_doppler
-    found_before_fold = has_bit_or_secondary_code_been_found(ts.bit_buffer)
+    found_before_fold = has_bit_or_secondary_code_been_found(tsig.bit_buffer)
     @inbounds for k in eachindex(outputs)
-        output = outputs[k]
-        # FLL needs the previous record's filtered prompt; the first record of
-        # the chunk chains from the sat's carried-over
-        # `last_fully_integrated_filtered_prompt`. Read it off `ts` BEFORE the
-        # advance overwrites it.
-        previous_prompt = get_last_fully_integrated_filtered_prompt(ts)
-        # Per-record integration time — the block time, NOT the chunk time.
-        integration_time = output.integrated_samples / sampling_frequency
-        synced_earlier_in_fold =
-            !found_before_fold && has_bit_or_secondary_code_been_found(ts.bit_buffer)
-        ts, filtered_correlator, integrated_code_blocks = _apply_correlator_output(
-            ts,
-            output,
+        # Same per-record prologue as the conventional folds, bandwidth handling
+        # included: the carrier's per-primary-period reference scaled by 1/N,
+        # the DLL's absolute bandwidth capped by the same stability product.
+        folded = _advance_driver_record(
+            tsig,
+            outputs[k],
             sat.prn,
             sampling_frequency,
             noise_density,
             noise_density_ready,
-            driver_carrier_phase;
-            correlated_pre_sync = synced_earlier_in_fold,
-        )
-
-        # Same effective-bandwidth handling as the conventional estimator: the
-        # carrier's per-primary-period reference is scaled by 1/N when a record
-        # coherently integrates N primary code blocks, holding its BL·Δt
-        # stability product at the single-period value, while the DLL's absolute
-        # bandwidth is only capped by that same product against the record's
-        # actual integration time.
-        carrier_bandwidth =
-            pll_and_dll_state.carrier_loop_filter_bandwidth / integrated_code_blocks
-        code_bandwidth = effective_code_loop_filter_bandwidth(
+            found_before_fold,
+            pll_and_dll_state.carrier_loop_filter_bandwidth,
             pll_and_dll_state.code_loop_filter_bandwidth,
-            integration_time,
         )
+        tsig = folded.tracked_signal
+        filtered_correlator = folded.filtered_correlator
+        integration_time = folded.integration_time
 
         pll_discriminator = pll_disc(signal, filtered_correlator)
         fll_discriminator =
-            fll_disc(signal, filtered_correlator, previous_prompt, integration_time)
+            fll_disc(signal, filtered_correlator, folded.previous_prompt, integration_time)
         # `dll_disc` is fed the chunk-fixed `sat.code_doppler` — the code Doppler
         # that generated this chunk's replicas — for every record.
         dll_discriminator =
@@ -336,7 +329,7 @@ end
                 code_loop_filter,
                 dll_discriminator,
                 integration_time,
-                code_bandwidth,
+                folded.code_bandwidth,
             )
             fll_input = fll_discriminator
         end
@@ -345,7 +338,7 @@ end
             pll_discriminator,
             fll_input,
             integration_time,
-            carrier_bandwidth,
+            folded.carrier_bandwidth,
         )
         carrier_doppler, code_doppler = aid_dopplers(
             signal,
@@ -368,7 +361,7 @@ end
         code_discr_acc,
         carrier_discr_acc,
     )
-    return ts, new_doppler_estimator_state, carrier_doppler, code_doppler
+    return tsig, new_doppler_estimator_state, carrier_doppler, code_doppler
 end
 
 """
@@ -411,6 +404,7 @@ function estimate_dopplers_and_filter_prompt!(
         track_state.groups,
         sampling_frequencies,
         track_state.noise_estimators,
+        track_state.doppler_estimator,
     )
     return track_state
 end

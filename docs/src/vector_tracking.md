@@ -49,6 +49,12 @@ satellite's estimator-driver signal (`signals[1]`) completes an integration,
     magnitude are **accumulated** on the per-sat state for the navigation
     filter to read and reset.
 
+A multi-signal satellite closes its loops on `signals[1]` alone in both modes.
+[Multi-signal discriminator combining](tracking_state.md#Multi-signal-discriminator-combining)
+belongs to the conventional estimators: `VectorPLLAndDLL` has no
+`signal_combining` switch, and a differential group delay set on a vector-tracking
+`TrackState` is stored but never read (the setter warns once).
+
 The satellite-shared carrier/code Doppler is always updated through the same
 carrier-aiding (`aid_dopplers`) used by the conventional estimator, and the
 same effective-bandwidth handling applies when a signal integrates `N` primary
