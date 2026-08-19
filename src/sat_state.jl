@@ -48,6 +48,13 @@ struct TrackedSignal{
     # (`preferred_num_code_blocks_to_integrate`) or by an external producer
     # summing dumps. Starts at 1, the pre-sync length.
     last_fully_integrated_num_code_blocks::Int
+    # This signal's differential payload group delay against its satellite's
+    # estimator-driver signal, as a **time**, or `nothing` (the default) when the
+    # caller has not supplied one. Purely an input: only multi-signal
+    # discriminator combining reads it. See `set_differential_group_delay!` for
+    # the contract, and `get_differential_group_delay` for why `nothing` and
+    # `0.0s` are different states.
+    differential_group_delay::Maybe{typeof(1.0s)}
 end
 
 # Reject a preferred coherent-integration length that cannot work for this
@@ -125,6 +132,11 @@ function TrackedSignal(
     ),
     post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),
     preferred_num_code_blocks_to_integrate::Int = 1,
+    # `Number`-wide so that every wrong input — a bare number, a value in metres,
+    # anything that is not a time — reaches `_as_differential_group_delay` and is
+    # refused with a sentence about *that* mistake, rather than dying on a keyword
+    # type assertion.
+    differential_group_delay::Maybe{Number} = nothing,
 )
     validate_preferred_num_code_blocks_to_integrate(
         signal,
@@ -153,6 +165,7 @@ function TrackedSignal(
         correlator_outputs,
         preferred_num_code_blocks_to_integrate,
         1,
+        _as_differential_group_delay(differential_group_delay),
     )
 end
 
@@ -182,6 +195,12 @@ function TrackedSignal(
     correlator_outputs::Maybe{Vector{CorrelatorOutput{C}}} = nothing,
     preferred_num_code_blocks_to_integrate = nothing,
     last_fully_integrated_num_code_blocks = nothing,
+    # Wrapped in `Some` rather than following the plain `Maybe` convention of
+    # every other kwarg here: `nothing` is a *legal value* of this field
+    # ("bias not known"), so the usual `isnothing(x) ? keep : set` test cannot
+    # tell "leave it alone" from "clear it". `Some(nothing)` clears, a bare
+    # `nothing` keeps.
+    differential_group_delay::Maybe{Some{Maybe{typeof(1.0s)}}} = nothing,
 ) where {
     Sig<:AbstractGNSSSignal,
     B<:Unsigned,
@@ -211,6 +230,8 @@ function TrackedSignal(
         t.preferred_num_code_blocks_to_integrate : preferred_num_code_blocks_to_integrate,
         isnothing(last_fully_integrated_num_code_blocks) ?
         t.last_fully_integrated_num_code_blocks : last_fully_integrated_num_code_blocks,
+        isnothing(differential_group_delay) ? t.differential_group_delay :
+        something(differential_group_delay),
     )
 end
 
@@ -288,6 +309,22 @@ has_bit_or_secondary_code_been_found(t::TrackedSignal) =
 get_integrated_samples(t::TrackedSignal) = t.integrated_samples
 get_preferred_num_code_blocks_to_integrate(t::TrackedSignal) =
     t.preferred_num_code_blocks_to_integrate
+
+"""
+$(SIGNATURES)
+
+This signal's differential payload group delay against its satellite's
+estimator-driver signal, as a time (`1.2e-9s`, `-0.3u"ns"`, …), or `nothing`
+when the caller has supplied none. Read by multi-signal code-discriminator
+combining only; set it with [`set_differential_group_delay!`](@ref).
+
+`nothing` and `0.0s` are deliberately different states: `0.0s` asserts that this
+signal's code phase *is* the driver's, so its code discriminator may join the
+code loop, whereas `nothing` says nothing is known and the passenger then aids
+the carrier loops only. See [Differential group delay](@ref) in the manual for
+why assuming zero is not the harmless direction.
+"""
+get_differential_group_delay(t::TrackedSignal) = t.differential_group_delay
 
 """
 $(SIGNATURES)
@@ -856,6 +893,8 @@ get_correlator_outputs(s::TrackedSat, sel...) =
     get_correlator_outputs(_find_signal(s.signals, sel...))
 get_preferred_num_code_blocks_to_integrate(s::TrackedSat, sel...) =
     get_preferred_num_code_blocks_to_integrate(_find_signal(s.signals, sel...))
+get_differential_group_delay(s::TrackedSat, sel...) =
+    get_differential_group_delay(_find_signal(s.signals, sel...))
 
 # Append an external `CorrelatorOutput` to one signal of a sat. `output` comes
 # first so an optional trailing signal selector (integer index / signal type)

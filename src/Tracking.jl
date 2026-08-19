@@ -22,7 +22,7 @@ using Random: AbstractRNG, Xoshiro
 # sync-detection-redesign plan in docs/plans for the comparison).
 BitIntegers.@define_integers 1800
 
-using Unitful: upreferred, uconvert, ustrip, dimension, NoUnits, Hz, dBHz, ms, s
+using Unitful: Unitful, upreferred, uconvert, ustrip, dimension, NoUnits, Hz, dBHz, ms, s
 import Base.zero, Base.length, Base.resize!
 
 export get_early,
@@ -36,6 +36,8 @@ export get_early,
     get_integrated_samples,
     get_preferred_num_code_blocks_to_integrate,
     set_preferred_num_code_blocks_to_integrate!,
+    get_differential_group_delay,
+    set_differential_group_delay!,
     reset_loop_filters!,
     get_signal_start_sample,
     get_correlator,
@@ -235,6 +237,7 @@ include("noise_estimators/noise_estimator.jl")
 include("noise_estimators/correlator.jl")
 include("discriminators.jl")
 include("post_corr_filter.jl")
+include("differential_group_delay.jl")
 include("gps/l1ca.jl")
 include("gps/l1c_d.jl")
 include("gps/l1c_p.jl")

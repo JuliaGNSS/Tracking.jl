@@ -17,14 +17,15 @@ For signal down-conversion and correlation Tracking.jl provides a highly optimiz
 With respect to the second block Tracking.jl provides conventional DLLs and PLLs with FLL-assisted carrier tracking as the default.
 Down-conversion and correlation is done in full code blocks meaning from code start to code end or multiples of that (e.g. in GPS L1 C/A from 0 to `N`*1023). The factor `N` can be specified, but will be `1` as long as the bit start is unknown in order to find the bit start. Once that is done for every tracked satellite the result will be handed over to the code and carrier estimation block.
 Moreover, Tracking.jl allows tracking of signals from phased antenna arrays meaning that they are down-converted and correlated by the very same replica to conserve phase relationships.
-Multi-signal tracking is supported: a single satellite can be tracked on several signals at once (e.g. GPS L1 C/A together with L1C-D and L1C-P) sharing one carrier downconvert per outer iteration, with a per-signal correlator each.
+Multi-signal tracking is supported: a single satellite can be tracked on several signals at once (e.g. the Galileo E1 pilot/data pair, `E1C` and `E1B`) sharing one carrier downconvert per outer iteration, with a per-signal correlator each. Those signals' discriminator outputs can be combined into one minimum-variance loop update rather than only the first signal's, so a pilot's longer coherent integration and sharper BOC discriminator benefit the whole satellite.
 Multi-band tracking is supported as well: one `track` call can process sample buffers from several RF bands at once (e.g. L1 and L5), each band bundled as a `Measurement` with its own sampling frequency and intermediate frequency.
 
 ## Features
 
 * Supports GPS L1 C/A, GPS L1C-D, GPS L1C-P, GPS L5I, and Galileo E1B (including the BOC(1,1) approximation `GalileoE1B_BOC11`)
 * Multi-band tracking: one `track` call processes measurements from multiple RF bands (e.g. L1 + L5) in lockstep
-* Multi-signal tracking on a single satellite (e.g. L1 C/A + L1C-D + L1C-P together) with a single shared downconvert
+* Multi-signal tracking on a single satellite (e.g. a pilot/data pair such as Galileo E1C + E1B) with a single shared
+  downconvert, optionally combining every signal's PLL/FLL/DLL discriminator into one loop update
 * CN0 estimation
 * Secondary code detection
 * Bit detection

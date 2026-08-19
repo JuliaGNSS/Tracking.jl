@@ -88,7 +88,7 @@ The offload loop, per processing chunk (epoch):
 
 - `CorrelatorOutput.correlator` — the **raw** accumulator (sum-of-products over `integrated_samples`, matching what `normalize` expects). Reusing [`EarlyPromptLateCorrelator`](@ref) / `update_accumulator` on the producer side satisfies this by construction.
 - `CorrelatorOutput.integrated_samples` — the producer's true sample count for that integration.
-- `CorrelatorOutput.sample_index` — the chunk-relative end sample. The software path writes it buffer-relative (`signal_start_sample` returns to 1 each `track!`); a producer with a free-running **global** sample counter must subtract the current chunk/epoch origin so every satellite reads a consistent per-chunk time grid (the estimator itself does not read it — it is preserved for downstream vector/Kalman tracking).
+- `CorrelatorOutput.sample_index` — the chunk-relative end sample. The software path writes it buffer-relative (`signal_start_sample` returns to 1 each `track!`); a producer with a free-running **global** sample counter must subtract the current chunk/epoch origin so every satellite reads a consistent per-chunk time grid. Read by downstream vector/Kalman tracking, and — with `signal_combining = true` — by the conventional estimator, to decide which passenger records fall inside each driver record's loop-update window; it must therefore be comparable across one satellite's signals. Getting it wrong there costs the exact windows (epoch-smearing, or a one-chunk lag), not correctness, and a driver-only setup never reads it at all.
 
 ### Transport delay
 

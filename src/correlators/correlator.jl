@@ -24,9 +24,11 @@ Fields:
     Fill it with the accumulator scaling `normalize` expects — the raw
     sum-of-products over `integrated_samples` — which an external producer gets
     for free by reusing [`EarlyPromptLateCorrelator`](@ref) / `update_accumulator`.
+
   - `integrated_samples`: samples integrated into this output (for `normalize`,
     the loop-filter `integration_time`, and the bit-buffer block count). For an
     external producer this is the true sample count of that integration.
+
   - `sample_index`: sample index at which this integration ended, on the time
     grid the Doppler estimator and vector tracking read. The software correlate
     phase writes it **buffer-relative** — the end sample within the current
@@ -35,9 +37,18 @@ Fields:
     counter must therefore map its global timestamp onto the same per-chunk
     origin before storing it here: subtract the sample index of the current
     chunk/epoch origin so the value is relative to the chunk the estimator is
-    folding, keeping every satellite on one consistent time grid. The estimator
-    itself does not read `sample_index` (the loop filters key off
-    `integrated_samples`); it is preserved for downstream vector/Kalman tracking.
+    folding, keeping every satellite on one consistent time grid.
+
+    Read by downstream vector/Kalman tracking, and — with
+    `signal_combining = true` — by the conventional estimator itself, which uses
+    it to decide which of a satellite's passenger records fall inside each driver
+    record's loop-update window. It has to be comparable **across the signals of
+    one satellite** for that, which the shared per-chunk origin already gives. A
+    producer that gets it wrong there does not break tracking: the fold either
+    lumps every passenger record into the chunk's first driver record (losing the
+    exact windows, i.e. epoch-smearing) or parks them for the next chunk (a
+    one-chunk lag). Nothing else reads it — the loop filters key off
+    `integrated_samples` — so a driver-only or single-signal setup is unaffected.
 """
 struct CorrelatorOutput{C<:AbstractCorrelator}
     correlator::C
