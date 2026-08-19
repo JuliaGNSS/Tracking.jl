@@ -66,6 +66,12 @@ Get number of antennas from correlator
 """
 get_num_ants(correlator::AbstractCorrelator{M}) where {M} = M
 
+# The same count as a **type-stable** `NumAnts{M}`, taken off the correlator's own
+# type parameter. `NumAnts(get_num_ants(c))` would route the count through a
+# runtime `Int` and lose inference, which costs an allocation per record on every
+# path that dispatches on it.
+@inline _num_ants_val(::AbstractCorrelator{M}) where {M} = NumAnts{M}()
+
 """
 $(SIGNATURES)
 
