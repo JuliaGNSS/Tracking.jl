@@ -282,7 +282,7 @@ They are deliberately not the same mechanism:
 |            | [`append_correlator_output!`](@ref)                                    | [`append_noise_observation!`](@ref)                    |
 |:---------- |:---------------------------------------------------------------------- |:------------------------------------------------------ |
 | scope      | one **signal** of one satellite                                        | one **signal**, across every satellite tracking it     |
-| payload    | the whole correlator: every tap kept **separate**, complex, per antenna | the taps **pooled** into one power sum, plus `M`, the span and the PRN |
+| payload    | the whole correlator: every tap kept **separate**, complex, per antenna | the taps **pooled** — into one power sum, or into one spatial covariance for an array — plus `M`, the span and the PRN |
 | drives     | discriminators, both loop filters, bit sync, the NCO update, the C/N₀ prompt | the noise floor only                              |
 | timing     | `sample_index` is load-bearing — vector tracking needs a common grid    | none: `N₀` is slowly varying, so only "recent" matters |
 | lifetime   | **drained** by the fold each chunk, buffer reused                      | **sliding window** bounded in time, never drained      |
@@ -291,8 +291,17 @@ They are deliberately not the same mechanism:
 The payload row is the sharpest difference. Both traverse a multi-tap correlator,
 for opposite reasons: the prompt path needs the taps kept apart because their
 *differences* are the code and carrier discriminants, while the reference pools
-them, because at ≥1 chip spacing they are three independent looks at one scalar
-and nothing about their relative values means anything.
+them, because at ≥1 chip spacing they are three independent looks at the same
+noise and nothing about their relative values means anything.
+
+The **antenna** dimension is the one thing the reference does keep. With
+`num_ants > 1` the pooled payload is the array's `M×M` spatial covariance
+`R̂ = Σ_k b_k·b_kᴴ` rather than a scalar `Σ_k |b_k|²` — its diagonal is each
+antenna's own `N₀` and its off-diagonals the antennas' noise correlation. That is
+what a beamformer's C/N₀ needs: the floor its weights actually see is `wᴴR̂w`,
+which no single number can answer. Every builder below takes the per-antenna form
+of the input it already takes, so a hardware source reports all `M` elements
+rather than collapsing them.
 
 ## Writing your own source
 

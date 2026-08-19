@@ -486,7 +486,13 @@ end
         normalize(output.correlator, output.integrated_samples, get_code_amplitude(signal))
     post_corr_filter =
         update(tracked_signal.post_corr_filter, get_prompt(normalized_correlator))
-    filtered_correlator = apply(post_corr_filter, normalized_correlator)
+    # The filter's weights, read once and used twice: to combine the antennas
+    # here, and to reduce the shared noise covariance to *this* satellite's floor
+    # below. Both sides of the C/N₀ ratio must go through the same `w` or they
+    # describe different channels — which is precisely what went wrong when the
+    # floor was measured on one fixed antenna and the prompt was beamformed.
+    weights = get_weights(post_corr_filter, _num_ants_val(normalized_correlator))
+    filtered_correlator = _combine_correlator(normalized_correlator, weights)
     prompt = get_prompt(filtered_correlator)
     push!(tracked_signal.filtered_prompts, prompt)
     bit_block_count = calc_num_code_blocks_for_bit_buffer(
@@ -530,6 +536,14 @@ end
     # window, silently demoting NWPR to its fallback for a whole `num_records`.
     # `requires_noise_density` is a compile-time constant on the estimator's
     # type, so the gate costs nothing at run time.
+    #
+    # The density arrives as whatever the signal's window measures — a scalar for
+    # a single antenna, a spatial covariance for an array — and is reduced here,
+    # through the same weights that produced `prompt`, to the one scalar floor
+    # this satellite's combiner actually sees. `nothing` (no estimator configured)
+    # passes straight through, so the context's type parameter stays `Nothing` and
+    # the wiring mistake still surfaces at the first record.
+    scalar_noise_density = _reduce_noise_density(noise_density, weights)
     cn0_estimator = _update_cn0_estimator(
         get_cn0_estimator(tracked_signal),
         prompt,
@@ -537,7 +551,7 @@ end
         tracked_signal.bit_buffer,
         bit_block_count,
         !drop_prompt,
-        noise_density,
+        scalar_noise_density,
         noise_density_ready,
         output.integrated_samples / sampling_frequency,
     )

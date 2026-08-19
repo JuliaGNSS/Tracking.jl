@@ -2,6 +2,7 @@ module NoiseEstimatorTest
 
 using Test: @test, @testset, @inferred, @test_throws
 using Random: Xoshiro, randn
+using StaticArrays: SVector, SMatrix
 using Unitful: Hz, s, ms, ustrip, uconvert
 using GNSSSignals: GPSL1CA, GPSL1C_P, GPSL5I, GalileoE1B
 import Tracking
@@ -11,6 +12,7 @@ using Tracking:
     NoiseObservation,
     NoiseRefCN0Estimator,
     NWPRCN0Estimator,
+    NumAnts,
     TrackState,
     TrackedSat,
     append_noise_observation!,
@@ -406,6 +408,58 @@ end
     )
         @test !ismutabletype(T)
     end
+end
+
+@testset "the builders take per-antenna input" begin
+    # A producer with `M` elements reports all `M`: the same three shapes as the
+    # scalar case, one dimension up. Collapsing them to a scalar first is what
+    # the covariance exists to avoid — a beamformer's floor is `wᴴR̂w`, which a
+    # single number cannot answer.
+    fs = 4e6Hz
+    n = 4000
+    M = 3
+
+    # A raw complex accumulation per antenna → the outer product `b·bᴴ`.
+    b = SVector{M,ComplexF64}(2.0 + 0.0im, 0.0 + 1.0im, 1.0 - 1.0im)
+    obs = @inferred noise_observation(b, n, fs)
+    R = obs.noise_density
+    @test R isa SMatrix{M,M}
+    @test obs.num_sub_integrations == 1
+    # Every element is the scalar builder's answer for that pair of antennas.
+    for m = 1:M, k = 1:M
+        @test R[m, k] ≈ (b[m] * conj(b[k])) / (n * fs)
+    end
+    # The diagonal is exactly what each antenna alone would have reported.
+    for m = 1:M
+        @test real(R[m, m]) ≈ noise_observation(b[m], n, fs).noise_density
+    end
+
+    # A pre-summed covariance from a correlator, and from a sample power monitor.
+    pre_summed = b * b' + (2 * b) * (2 * b)'
+    from_corr = @inferred noise_observation_from_correlator(pre_summed, 2, 2n, fs)
+    @test from_corr.noise_density isa SMatrix{M,M}
+    @test from_corr.noise_density ≈ pre_summed / (2n * fs)
+    @test from_corr.num_sub_integrations == 2
+
+    from_samples = @inferred noise_observation_from_samples(pre_summed, n, fs)
+    @test from_samples.noise_density isa SMatrix{M,M}
+    @test from_samples.noise_density ≈ pre_summed / (n * fs)
+
+    # The window takes them, and averages them elementwise.
+    estimator = CorrelatorNoiseEstimator(; num_ants = NumAnts(M))
+    append_noise_observation!(estimator, obs)
+    @test get_noise_density(estimator) ≈ R
+
+    # A hand-built observation whose number type is not the canonical one is
+    # still converted onto the window's, exactly as in the scalar case.
+    hand_built = NoiseObservation(
+        SMatrix{M,M,ComplexF32,M * M}(b * b') / 4.0f6Hz,
+        1,
+        1.0ms,
+        Int16(3),
+    )
+    append_noise_observation!(estimator, hand_built)
+    @test Base.length(estimator) == 2
 end
 
 end

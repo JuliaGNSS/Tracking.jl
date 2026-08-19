@@ -38,8 +38,15 @@ using Tracking:
     get_code_length,
     NumAnts,
     get_num_ants,
+    get_noise_density,
+    get_weights,
+    AbstractPostCorrFilter,
+    DefaultPostCorrFilter,
     ConventionalPLLAndDLL,
     ConventionalAssistedPLLAndDLL
+import Tracking
+using StaticArrays: SVector
+using Unitful: ustrip, uconvert
 
 # Normalise a code replica to unit peak amplitude. The embedded-LUT CBOC code
 # (Galileo E1B) has integer sub-carrier amplitudes (±25/±13) while BPSK codes are
@@ -606,6 +613,127 @@ end
     #    figure("Prompt")
     #    plot(real.(tracked_prompts))
     #    plot(imag.(tracked_prompts))
+end
+
+# The testset above tracks three antennas, but its columns are `repeat`-identical
+# and noise-free, so which column the noise reference reads is unobservable there.
+# These two pin the antenna array's C/N₀ on a sky where it *is* observable: each
+# column carries independent noise at its own level, so every antenna has a
+# different floor and picking the wrong one shows up immediately.
+@testset "Multi-antenna C/N₀ under the default filter matches its own column" begin
+    gpsl1 = GPSL1CA()
+    sampling_frequency = 5e6Hz
+    prn = 1
+    samples_per_code = 5000
+    num_ants = 3
+    # Distinct per-antenna noise levels: antenna m's floor is `scaleₘ²·σ²/f_s`.
+    scales = (1.0, 1.5, 2.0)
+
+    function make_array_signal(rng, code_idx)
+        code = get_code.(
+            gpsl1,
+            get_code_frequency(gpsl1) .* (0:(samples_per_code-1)) ./ sampling_frequency .+ code_idx * get_code_length(gpsl1),
+            prn,
+        )
+        clean = 30.0 .* ComplexF64.(code)
+        sigma = sqrt(ustrip(Hz, sampling_frequency))
+        reduce(
+            hcat,
+            (
+                clean .+ (scale * sigma) .* randn(rng, ComplexF64, samples_per_code) for
+                scale in scales
+            ),
+        )
+    end
+
+    # One array run, and one single-antenna control fed the *same* last column.
+    array_state = @inferred TrackState(
+        gpsl1,
+        [TrackedSat(gpsl1, prn, 0.0, 0.0Hz; num_ants = NumAnts(num_ants))],
+    )
+    single_state = @inferred TrackState(gpsl1, [TrackedSat(gpsl1, prn, 0.0, 0.0Hz)])
+    rng_array = Random.MersenneTwister(2718)
+    rng_single = Random.MersenneTwister(2718)
+    for i = 0:199
+        array_state = @inferred track(
+            make_array_signal(rng_array, i),
+            array_state,
+            sampling_frequency,
+        )
+        single_state = @inferred track(
+            view(make_array_signal(rng_single, i), :, num_ants),
+            single_state,
+            sampling_frequency,
+        )
+    end
+
+    # The array's window measures a covariance, one entry per antenna pair.
+    R = get_noise_density(array_state.noise_estimators.GPSL1CA)
+    @test size(R) == (num_ants, num_ants)
+    # `DefaultPostCorrFilter` combines to the last antenna, and the covariance
+    # reduced through those weights is that antenna's own floor — so the array
+    # run and the control report the identical C/N₀, not merely a close one.
+    @test estimate_cn0(array_state, 1) === estimate_cn0(single_state, 1)
+    @test isfinite(ustrip(uconvert(dBHz, estimate_cn0(array_state, 1))))
+end
+
+@testset "A beamformer's C/N₀ follows its own weights" begin
+    # The case the covariance exists for. An equal-weight combiner over antennas
+    # with *independent* noise gets `‖w‖²` of the average floor — here 1/3 of it
+    # — while the signal adds coherently, so its C/N₀ is ~10log10(3) dB above the
+    # single-antenna one. Under the old fixed-column floor the denominator would
+    # not have moved at all and the reported gain would have been wrong.
+    gpsl1 = GPSL1CA()
+    sampling_frequency = 5e6Hz
+    prn = 1
+    samples_per_code = 5000
+    num_ants = 3
+
+    struct MeanBeamformer <: AbstractPostCorrFilter end
+    Tracking.update(f::MeanBeamformer, prompt) = f
+    Tracking.get_weights(::MeanBeamformer, ::NumAnts{1}) = 1.0 + 0.0im
+    Tracking.get_weights(::MeanBeamformer, ::NumAnts{M}) where {M} =
+        SVector{M,ComplexF64}(ntuple(_ -> 1 / M + 0.0im, M))
+
+    function make_array_signal(rng)
+        code = get_code.(
+            gpsl1,
+            get_code_frequency(gpsl1) .* (0:(samples_per_code-1)) ./ sampling_frequency,
+            prn,
+        )
+        clean = 30.0 .* ComplexF64.(code)
+        sigma = sqrt(ustrip(Hz, sampling_frequency))
+        reduce(
+            hcat,
+            (clean .+ sigma .* randn(rng, ComplexF64, samples_per_code) for _ = 1:num_ants),
+        )
+    end
+
+    function run(filter)
+        state = TrackState(
+            gpsl1,
+            [
+                TrackedSat(
+                    gpsl1,
+                    prn,
+                    0.0,
+                    0.0Hz;
+                    num_ants = NumAnts(num_ants),
+                    post_corr_filter = filter,
+                ),
+            ],
+        )
+        rng = Random.MersenneTwister(31415)
+        for _ = 1:200
+            state = track(make_array_signal(rng), state, sampling_frequency)
+        end
+        state
+    end
+
+    beamformed = ustrip(uconvert(dBHz, estimate_cn0(run(MeanBeamformer()), 1)))
+    one_antenna = ustrip(uconvert(dBHz, estimate_cn0(run(DefaultPostCorrFilter()), 1)))
+    @test isfinite(beamformed)
+    @test beamformed - one_antenna ≈ 10 * log10(num_ants) atol = 1.0
 end
 
 @testset "Collect filtered prompts per track call" begin

@@ -3,6 +3,7 @@ module CorrelatorNoiseEstimatorTest
 using Test: @test, @testset, @test_logs, collect_test_logs
 using Logging: Warn
 using Random: Xoshiro, randn
+using StaticArrays: SMatrix
 using Unitful: Hz, s, ms, dBHz, ustrip, uconvert
 using GNSSSignals:
     GPSL1CA,
@@ -18,10 +19,13 @@ using Tracking:
     CPUDownconvertAndCorrelator,
     CPUThreadedDownconvertAndCorrelator,
     CorrelatorNoiseEstimator,
+    DefaultPostCorrFilter,
     EarlyPromptLateCorrelator,
     Int16DownconvertAndCorrelator,
     NWPRCN0Estimator,
+    NoiseDensity,
     NoiseRefCN0Estimator,
+    NumAnts,
     OneBitDownconvertAndCorrelator,
     TrackState,
     TrackedSat,
@@ -31,6 +35,8 @@ using Tracking:
     get_correlator_sample_shifts,
     estimate_cn0,
     get_noise_density,
+    get_weights,
+    noise_density_type,
     track!
 
 const FS = 4e6Hz
@@ -711,6 +717,195 @@ end
     # `gen_code_replica!` writes *at* `start_sample`, and a slice can start
     # anywhere in the measurement.
     @test length(Tracking._scratch_buffers(dc).code_replica) >= NUM_SAMPLES
+end
+
+# --- antenna arrays ---------------------------------------------------------
+
+# The same sky as `_sky`, but as an `M`-column array: one shared satellite (the
+# arriving wavefront) plus **independent** noise per column, each column's floor
+# scaled by `noise_scales[m]`. Independent noise is what makes the off-diagonals
+# of the measured covariance meaningfully near zero, and unequal scales are what
+# makes "which antenna did it measure?" answerable at all — the pre-existing
+# multi-antenna fixtures use `repeat`, where every column is identical and a
+# wrong column reads exactly like the right one.
+function _sky_array(
+    cn0_dbhz,
+    noise_scales;
+    seed = 1,
+    num_samples = NUM_SAMPLES,
+    fs = FS,
+    prn = 1,
+)
+    rng = Xoshiro(seed)
+    code = gen_code(num_samples, GPSL1, prn, fs, get_code_frequency(GPSL1), 0.0)
+    amplitude = isfinite(cn0_dbhz) ? 10^(cn0_dbhz / 20) : 0.0
+    signal = ComplexF64.(amplitude .* code)
+    sigma = sqrt(ustrip(Hz, fs))
+    reduce(
+        hcat,
+        (
+            signal .+ (scale * sigma) .* randn(rng, ComplexF64, num_samples) for
+            scale in noise_scales
+        ),
+    )
+end
+
+function _tracked_array(signal, num_ants; fs = FS, num_calls = 20, kwargs...)
+    ts = TrackState(
+        GPSL1,
+        [
+            TrackedSat(
+                GPSL1,
+                1,
+                0.0,
+                0.0Hz;
+                num_ants = NumAnts(num_ants),
+                cn0_estimator = NoiseRefCN0Estimator(),
+            ),
+        ];
+        kwargs...,
+    )
+    for _ = 1:num_calls
+        track!((L1 = BandMeasurement(signal, fs),), ts)
+    end
+    ts
+end
+
+@testset "the default estimator is provisioned for its group's antenna count" begin
+    # `noise_density_type` is the single source of truth for how many antennas a
+    # window measures, and it has to follow the group rather than the default.
+    @test noise_density_type(CorrelatorNoiseEstimator()) === NoiseDensity
+    @test noise_density_type(CorrelatorNoiseEstimator(; num_ants = NumAnts(1))) ===
+          NoiseDensity
+
+    single = TrackState(GPSL1, [TrackedSat(GPSL1, 1, 0.0, 0.0Hz)])
+    @test noise_density_type(single.noise_estimators.GPSL1CA) === NoiseDensity
+
+    array = TrackState(GPSL1, [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; num_ants = NumAnts(3))])
+    D = noise_density_type(array.noise_estimators.GPSL1CA)
+    @test D <: SMatrix{3,3}
+    @test Tracking._num_ants_of_density_type(D) === NumAnts(3)
+end
+
+@testset "an explicitly-passed estimator must match its group's antenna count" begin
+    # Caught at construction, where both halves are known, rather than as a shape
+    # error inside the per-chunk fold. Before the covariance, this combination
+    # silently measured one column and compared it against a beamformed prompt.
+    err = try
+        TrackState(
+            GPSL1,
+            [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; num_ants = NumAnts(3))];
+            noise_estimators = (GPSL1CA = CorrelatorNoiseEstimator(),),
+        )
+        nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError
+    @test occursin("GPSL1CA", err.msg)
+    @test occursin("NumAnts(3)", err.msg)
+
+    # The matching one is accepted, and so is the single-antenna default on a
+    # single-antenna group.
+    @test TrackState(
+        GPSL1,
+        [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; num_ants = NumAnts(3))];
+        noise_estimators = (GPSL1CA = CorrelatorNoiseEstimator(; num_ants = NumAnts(3)),),
+    ) isa TrackState
+    @test TrackState(
+        GPSL1,
+        [TrackedSat(GPSL1, 1, 0.0, 0.0Hz)];
+        noise_estimators = (GPSL1CA = CorrelatorNoiseEstimator(),),
+    ) isa TrackState
+end
+
+@testset "an antenna array measures a spatial covariance" begin
+    # Per-column noise scales chosen so each antenna's own floor is a different,
+    # known number: `N₀ₘ = scaleₘ² · σ²/f_s = scaleₘ²` in units of Hz⁻¹.
+    scales = (1.0, 1.5, 2.0)
+    ts = _tracked_array(_sky_array(-Inf, scales; seed = 11), 3)
+    R = get_noise_density(ts.noise_estimators.GPSL1CA)
+
+    @test R isa SMatrix{3,3}
+    # The diagonal is each antenna's own N₀ — the value a single-antenna window
+    # on that column alone would have measured. Same 15 % gate the scalar case
+    # uses, for the same window length.
+    for m = 1:3
+        @test ustrip(Hz^-1, real(R[m, m])) ≈ scales[m]^2 rtol = 0.15
+    end
+    # Independent noise, so the off-diagonals are small against the geometric
+    # mean of the two diagonals they sit between. They are *not* zero: the window
+    # holds finitely many looks, so this bounds the estimator's own variance.
+    for m = 1:3, n = 1:3
+        m == n && continue
+        @test abs(R[m, n]) < 0.25 * sqrt(real(R[m, m]) * real(R[n, n]))
+    end
+    # Hermitian by construction: `Σ b·bᴴ` is, and the window only ever sums and
+    # scales it.
+    @test R ≈ R'
+end
+
+@testset "the default filter's weights reduce the covariance to its own column" begin
+    # The regression lock for "reduces to exactly what it did before": the
+    # covariance seen through `DefaultPostCorrFilter`'s weights *is* the last
+    # antenna's own floor, so a multi-antenna run and a single-antenna run of the
+    # same last column report the same C/N₀.
+    scales = (1.0, 1.5, 2.0)
+    signal = _sky_array(45.0, scales; seed = 12)
+    ts_array = _tracked_array(signal, 3)
+    R = get_noise_density(ts_array.noise_estimators.GPSL1CA)
+    w = get_weights(DefaultPostCorrFilter(), NumAnts(3))
+    @test Tracking._reduce_noise_density(R, w) === real(R[3, 3])
+
+    ts_single = _tracked(view(signal, :, 3), CPUDownconvertAndCorrelator())
+    scalar = get_noise_density(ts_single.noise_estimators.GPSL1CA)
+    # Same samples, same seeded reference draws, same despread — so this is an
+    # equality, not a tolerance.
+    @test Tracking._reduce_noise_density(R, w) === scalar
+    @test estimate_cn0(ts_array, 1) === estimate_cn0(ts_single, 1)
+end
+
+# Gated to Julia >= 1.11 for exactly the reason its scalar sibling above is: the
+# reference's measurement is allocation-free on 1.11+ and leaves ~5 kB per
+# `downconvert_and_correlate!` call on 1.10, with or without an antenna array —
+# verified against the pre-covariance revision, which allocates the identical
+# amount there. What this adds over the scalar guard is the covariance itself:
+# `NoiseWindowTotals` holds an `SMatrix` rather than a `Matrix`, so it stays
+# isbits, its `Ref` still holds it inline, and pooling `Σ b·bᴴ` runs in
+# registers. A `Matrix` there would pass every other test in this file.
+if VERSION >= v"1.11"
+    @testset "an array's software measurement is allocation-free in steady state" begin
+        function measure(dc, measurements, ts)
+            for _ = 1:8
+                downconvert_and_correlate!(dc, measurements, ts; chunk_index = 0)
+            end
+            @allocated downconvert_and_correlate!(dc, measurements, ts; chunk_index = 0)
+        end
+        signal = ComplexF32.(_sky_array(45.0, (1.0, 1.5, 2.0); seed = 13))
+        measurements = (L1 = BandMeasurement(signal, FS),)
+        state(cn0) = TrackState(
+            GPSL1,
+            [
+                TrackedSat(
+                    GPSL1,
+                    1,
+                    0.0,
+                    0.0Hz;
+                    num_ants = NumAnts(3),
+                    cn0_estimator = cn0(),
+                ),
+            ],
+        )
+        ts = state(NoiseRefCN0Estimator)
+        plain_ts = state(() -> NWPRCN0Estimator(GPSL1))
+        @test keys(ts.noise_estimators) == (:GPSL1CA,)
+        dc = CPUDownconvertAndCorrelator()
+        plain_dc = CPUDownconvertAndCorrelator()
+        track!(measurements, ts; downconvert_and_correlator = dc)
+        track!(measurements, plain_ts; downconvert_and_correlator = plain_dc)
+        @test measure(dc, measurements, ts) == 0
+        @test measure(plain_dc, measurements, plain_ts) == 0
+    end
 end
 
 end
