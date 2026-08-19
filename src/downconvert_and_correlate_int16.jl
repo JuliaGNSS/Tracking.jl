@@ -398,9 +398,6 @@ const _Int16DC = Union{Int16DownconvertAndCorrelator,Int16ThreadedDownconvertAnd
 @inline _scratch_buffers(dc::Int16ThreadedDownconvertAndCorrelator) =
     dc.buffers[Threads.threadid()]
 
-# Type-stable `NumAnts{M}` from a correlator (M from its type parameter).
-@inline _num_ants_val(::AbstractCorrelator{M}) where {M} = NumAnts{M}()
-
 # Fill `len` carrier samples (sin→csb, cos→ccb) starting at absolute sample
 # `start`, 4-way unrolled so the permute lookups pipeline (the value engine is
 # latency-bound single-stream). Ported from the benchmark's `_epl_fill_carrier!`.
