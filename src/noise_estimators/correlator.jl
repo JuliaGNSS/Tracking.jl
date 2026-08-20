@@ -371,6 +371,11 @@ end
 
 noise_density_type(::CorrelatorNoiseEstimator{D}) where {D} = D
 
+# The window already tracks this: `looks` is the running sum of every buffered
+# observation's `num_sub_integrations`, which is exactly the independent-look count
+# the density is averaged over. See `noise_window_looks` for what reads it.
+noise_window_looks(estimator::CorrelatorNoiseEstimator) = estimator.totals[].looks
+
 """
 $(SIGNATURES)
 

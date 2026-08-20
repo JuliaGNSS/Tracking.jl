@@ -51,7 +51,7 @@ consumer's `⟨|P|²⟩/N₀ − 1/T` is dimension-checked rather than trusted.
 
 # The interface
 
-Three methods, all with a default on this abstract type:
+Three required methods, all with a default on this abstract type:
 
   - [`update_noise!`](@ref) — measure one signal's slice of its band's samples
     and append the resulting observations. This is the **software** fill path; it
@@ -62,6 +62,12 @@ Three methods, all with a default on this abstract type:
   - [`get_noise_density`](@ref) — the signal's current density, or `nothing`
     while nothing has been measured yet. A read, not a drain: the window keeps
     sliding.
+
+A fourth, `Tracking.noise_window_looks`, is optional and only matters to a source
+that reports a **covariance**: an `M×M` estimate averaged from fewer than `M`
+independent looks is rank-deficient by construction, so the fold withholds it
+until there are enough. A source that leaves the default in place reports no look
+count and is never withheld.
 
 The two fill paths live on **disjoint call graphs** — a hardware producer never
 calls `downconvert_and_correlate!` — so one concrete type serves both and no
@@ -515,11 +521,59 @@ end
 @inline _positive_density(R::StaticMatrix) =
     all(i -> real(R[i, i]) > zero(real(R[i, i])), axes(R, 1))
 
+"""
+$(SIGNATURES)
+
+How many independent looks the estimator's current density is averaged from, or
+`nothing` if the source does not report it.
+
+Only the rank gate below reads this: an `M×M` covariance averaged from fewer than
+`M` looks is rank-deficient *by construction*, whatever the samples were, so it
+cannot answer `wᴴR̂w` for every `w`. A source that cannot report a look count is
+taken at its word and not gated.
+"""
+noise_window_looks(::AbstractNoiseEstimator) = nothing
+
+# Is the estimate built from enough looks to span its own dimensions?
+#
+# A scalar density has no rank to be deficient in, so it never gates. An `M×M`
+# covariance does: the software reference pools `num_taps` (three) rank-1 outer
+# products per observation, so a window holding one observation spans at most
+# three of `M` dimensions. At `M ≤ 3` that is already full rank and the gate never
+# fires; above it, the first `⌈M/3⌉` observations are held back.
+#
+# Without this, a beamformer whose weights happen to lie near the unmeasured
+# subspace reads a floor far below the true one — measured down to 2 % of it on a
+# one-observation window at `M = 4`, i.e. a C/N₀ ≈16 dB optimistic. The diagonal
+# stays positive throughout, so `_positive_density` cannot catch it.
+@inline _sufficient_looks(::Number, looks) = true
+@inline _sufficient_looks(::StaticMatrix, ::Nothing) = true
+@inline _sufficient_looks(::StaticMatrix{M,M}, looks::Integer) where {M} = looks >= M
+
 @inline function _noise_density_and_ready(estimator::AbstractNoiseEstimator)
     density = get_noise_density(estimator)
     D = noise_density_type(estimator)
     isnothing(density) && return (zero(D), false)
     d = density::D
-    _finite_density(d) && _positive_density(d) || return (zero(D), false)
+    _finite_density(d) &&
+    _positive_density(d) &&
+    _sufficient_looks(d, noise_window_looks(estimator)) || return (zero(D), false)
     (d, true)
+end
+
+# Not ready *because the window is still filling*, as opposed to because nothing
+# is arriving or the input is dead. Spelled out as "everything else about this
+# density is fine and only the look count is short" rather than as "the window is
+# non-empty", so a measured floor of zero — a front-end dropout — still reaches
+# the diagnostic it is supposed to reach.
+#
+# Used only to keep the fold's warning quiet across a normal multi-antenna
+# startup; the density is withheld either way.
+@inline function _noise_window_filling(estimator::AbstractNoiseEstimator)
+    density = get_noise_density(estimator)
+    isnothing(density) && return false
+    d = density::noise_density_type(estimator)
+    _finite_density(d) &&
+        _positive_density(d) &&
+        !_sufficient_looks(d, noise_window_looks(estimator))
 end

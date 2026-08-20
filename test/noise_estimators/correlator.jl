@@ -37,6 +37,7 @@ using Tracking:
     get_noise_density,
     get_weights,
     noise_density_type,
+    noise_window_looks,
     track!
 
 const FS = 4e6Hz
@@ -56,6 +57,10 @@ function _sky(cn0_dbhz; seed = 1, num_samples = NUM_SAMPLES, fs = FS, prn = 1)
     ComplexF64.(amplitude .* code) .+
     sqrt(ustrip(Hz, fs)) .* randn(rng, ComplexF64, num_samples)
 end
+
+# A hardware-style source that keeps no window and therefore reports no look
+# count: the rank gate has nothing to check and must not withhold its density.
+struct UncountedNoiseSource <: Tracking.AbstractNoiseEstimator end
 
 _to_int16(signal) = Complex{Int16}.(
     round.(Int16, clamp.(real(signal) ./ 4, -2047, 2047)),
@@ -843,6 +848,89 @@ end
     # Hermitian by construction: `Σ b·bᴴ` is, and the window only ever sums and
     # scales it.
     @test R ≈ R'
+end
+
+@testset "a covariance is withheld until it spans its own dimensions" begin
+    # The reference pools three taps per observation, so one observation is three
+    # rank-1 outer products: full rank at `M ≤ 3`, rank-deficient above it. A
+    # beamformer whose weights lie near the unmeasured subspace would read a floor
+    # far below the true one — measured down to 2 % of it at `M = 4`, a C/N₀ ≈16 dB
+    # optimistic — and the diagonal stays positive throughout, so
+    # `_positive_density` cannot catch it. So the fold is held off until the window
+    # holds `M` looks, i.e. `⌈M/3⌉` observations.
+    #
+    # 1 ms buffers are one GPS L1 C/A code period, so each call contributes exactly
+    # one observation. That is the only chunk shape that can reach the gate at all:
+    # a buffer spanning several code periods clears it within the first call.
+    one_ms(M, seed) = ComplexF32.(
+        reduce(
+            hcat,
+            (sqrt(ustrip(Hz, FS)) .* randn(Xoshiro(seed), ComplexF64, 4000) for _ = 1:M),
+        ),
+    )
+    array_state(M) = TrackState(
+        GPSL1,
+        [
+            TrackedSat(
+                GPSL1,
+                1,
+                0.0,
+                0.0Hz;
+                num_ants = NumAnts(M),
+                cn0_estimator = NoiseRefCN0Estimator(),
+            ),
+        ],
+    )
+
+    # `⌈M/3⌉` observations before the density is handed over, and never any gate at
+    # or below the tap count.
+    for (M, expected_calls) in ((1, 1), (3, 1), (4, 2), (8, 3))
+        ts = array_state(M)
+        ready_at = 0
+        for call = 1:4
+            track!((L1 = BandMeasurement(one_ms(M, call), FS),), ts)
+            _, ready = Tracking._noise_density_and_ready(ts.noise_estimators.GPSL1CA)
+            if ready && ready_at == 0
+                ready_at = call
+            end
+        end
+        @test ready_at == expected_calls
+    end
+
+    # The look count is the window's own running total, three per observation.
+    ts = array_state(4)
+    track!((L1 = BandMeasurement(one_ms(4, 1), FS),), ts)
+    est = ts.noise_estimators.GPSL1CA
+    @test noise_window_looks(est) == 3
+    # The public reader keeps its contract — it reports what the window holds; only
+    # the fold defers.
+    @test !isnothing(get_noise_density(est))
+    @test Tracking._noise_window_filling(est)
+    @test estimate_cn0(ts, 1) == -Inf * dBHz
+
+    # A filling window is a normal transient, not a misconfiguration, so it must
+    # stay quiet — the diagnostic is reserved for a source that is not producing.
+    quiet = array_state(4)
+    logs, _ = collect_test_logs() do
+        track!((L1 = BandMeasurement(one_ms(4, 5), FS),), quiet)
+    end
+    @test isempty(filter(r -> r.level == Warn, logs))
+
+    # But a dead input at four antennas measures a floor of zero, which is *not* a
+    # filling window and must still reach the warning.
+    dead = array_state(4)
+    dead_logs, _ = collect_test_logs() do
+        track!((L1 = BandMeasurement(zeros(ComplexF32, 4000, 4), FS),), dead)
+    end
+    @test !Tracking._noise_window_filling(dead.noise_estimators.GPSL1CA)
+    @test !isempty(filter(r -> r.level == Warn, dead_logs))
+
+    # A source that reports no look count is taken at its word rather than gated.
+    @test noise_window_looks(UncountedNoiseSource()) === nothing
+    @test Tracking._sufficient_looks(zero(SMatrix{4,4,ComplexF64,16}), nothing)
+    @test !Tracking._sufficient_looks(zero(SMatrix{4,4,ComplexF64,16}), 3)
+    @test Tracking._sufficient_looks(zero(SMatrix{4,4,ComplexF64,16}), 4)
+    @test Tracking._sufficient_looks(1.0 / 1.0Hz, 1)      # a scalar has no rank
 end
 
 @testset "the default filter's weights reduce the covariance to its own column" begin

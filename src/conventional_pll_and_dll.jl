@@ -905,7 +905,7 @@ end
     isempty(vals) && return nothing
     sampling_frequency = _band_sampling_frequency(sampling_frequencies, get_band_id(g.band))
     noise = _signal_noise_densities(noise_estimators, eltype(g.satellites))
-    _warn_noise_density_missing(eltype(g.satellites), noise)
+    _warn_noise_density_missing(eltype(g.satellites), noise, noise_estimators)
     @inbounds for i in eachindex(vals)
         vals[i] = _update_tracked_sat_doppler(vals[i], sampling_frequency, noise)
     end
@@ -944,18 +944,37 @@ end
 # this instant" has legitimate transient readings (a producer that folds before it
 # appends, a buffer shorter than one sub-integration, or a momentary dead input),
 # so making it fatal would break a caller streaming short buffers.
+#
+# Takes the estimators as well as the `(density, ready)` pairs, for one reason: a
+# multi-antenna window that is merely *filling* to its own dimension count is
+# not-ready too, and that is a normal startup transient rather than a
+# misconfiguration. Reading `_noise_window_filling` off the estimator keeps the
+# fold's pair two-state — nothing downstream has to learn a third case — while
+# still telling the two apart here, which is the only place that cares.
 @inline _warn_noise_density_missing(
     ::Type{<:TrackedSat{Signals}},
     noise::Tuple,
-) where {Signals} = _warn_noise_density_missing(Signals, noise)
-@inline _warn_noise_density_missing(::Type{Tuple{}}, ::Tuple{}) = nothing
-@inline function _warn_noise_density_missing(::Type{T}, noise::Tuple) where {T<:Tuple}
+    noise_estimators::NamedTuple,
+) where {Signals} = _warn_noise_density_missing(Signals, noise, noise_estimators)
+@inline _warn_noise_density_missing(::Type{Tuple{}}, ::Tuple{}, ::NamedTuple) = nothing
+@inline function _warn_noise_density_missing(
+    ::Type{T},
+    noise::Tuple,
+    noise_estimators::NamedTuple,
+) where {T<:Tuple}
     head = Base.tuple_type_head(T)
     if !last(first(noise)) && requires_noise_density(_cn0_estimator_type(head))
-        _emit_noise_density_warning(get_signal_id(_signal_type(head)))
+        signal_id = get_signal_id(_signal_type(head))
+        _noise_window_still_filling(noise_estimators, Val(signal_id)) ||
+            _emit_noise_density_warning(signal_id)
     end
-    _warn_noise_density_missing(Base.tuple_type_tail(T), Base.tail(noise))
+    _warn_noise_density_missing(Base.tuple_type_tail(T), Base.tail(noise), noise_estimators)
 end
+
+# `haskey` on a NamedTuple is compile-time, so the no-estimator case (a static
+# wiring mistake, which must warn) folds away rather than being tested per fold.
+@inline _noise_window_still_filling(noise_estimators::NamedTuple, ::Val{K}) where {K} =
+    haskey(noise_estimators, K) ? _noise_window_filling(noise_estimators[K]) : false
 
 @noinline function _emit_noise_density_warning(signal_id::Symbol)
     @warn """
