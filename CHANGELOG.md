@@ -1,5 +1,43 @@
 # Changelog
 
+# [8.0.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v7.0.0...v8.0.0) (2026-08-20)
+
+
+* feat(cn0)!: measure an antenna array's noise as a spatial covariance ([a5ce50a](https://github.com/JuliaGNSS/Tracking.jl/commit/a5ce50afdf16b08b795cd1684dc52efc8026cca8))
+
+
+### Features
+
+* **cn0:** withhold a covariance until it spans its own dimensions ([548411d](https://github.com/JuliaGNSS/Tracking.jl/commit/548411d4f2817b86dacde5d354c3c5d4aaa2188a))
+
+
+### BREAKING CHANGES
+
+* `AbstractPostCorrFilter` no longer works as a callable. An
+implementation must define `get_weights(filter, ::NumAnts{M})` returning its
+combining weights — a `ComplexF64` at one antenna, an `SVector{M,ComplexF64}`
+above — and must drop its call operator. A mean-of-antennas beamformer that was
+
+    (::MyBeamformer)(x::AbstractVector) = sum(x) / length(x)
+    (::MyBeamformer)(x) = x
+
+becomes
+
+    Tracking.get_weights(::MyBeamformer, ::NumAnts{1}) = 1.0 + 0.0im
+    Tracking.get_weights(::MyBeamformer, ::NumAnts{M}) where {M} =
+        SVector{M,ComplexF64}(ntuple(_ -> 1 / M + 0.0im, M))
+
+`get_default_post_corr_filter` is removed; it had no caller and its
+multi-antenna method could never dispatch.
+
+`CorrelatorNoiseEstimator` gained a `num_ants` keyword. `TrackState` provisions
+it from each signal group automatically, but an explicitly-passed
+`noise_estimators` whose antenna count disagrees with its group now throws an
+`ArgumentError` at construction instead of silently measuring one column — pass
+`CorrelatorNoiseEstimator(; num_ants = NumAnts(M))` to match the group.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
 # [7.0.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v6.0.3...v7.0.0) (2026-08-18)
 
 
