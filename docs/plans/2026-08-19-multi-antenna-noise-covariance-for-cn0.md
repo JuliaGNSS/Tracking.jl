@@ -85,6 +85,29 @@ strongly correlated antennas (in the limit, one signal fed to every element) giv
 covariance that is still the right answer for every `wᴴR̂w` anyone will ask of it. Only a
 genuinely dead element matters, and that shows on the diagonal.
 
+**But rank *deficiency from too few looks* is a different thing, and is gated.** The
+reference pools `num_taps` — three — rank-1 outer products per observation, so a window
+holding one observation spans at most three of `M` dimensions. That is full rank at `M ≤ 3`
+and deficient above it, and it is deficient *by construction* rather than because of what
+the samples were. Measured on a one-observation window at `M = 4`, a beamformer whose
+weights lie near the unmeasured subspace reads a floor down to 2 % of the true one — a C/N₀
+about 16 dB optimistic — and the diagonal stays positive throughout, so the check above
+cannot see it. So `_noise_density_and_ready` also requires the window to hold `M` looks
+(`noise_window_looks`, `_sufficient_looks`), which withholds the first `⌈M/3⌉` observations.
+`M ≤ 3` is never gated, and a chunk spanning several code periods clears it within the first
+call; only a caller streaming one-code-period buffers at `M ≥ 4` ever sees it, and then for
+one or two chunks.
+
+While gated, the density is withheld exactly as an empty window's is: the fold skips the
+C/N₀ update and `estimate_cn0` reports `-Inf dB-Hz`, which every downstream consumer already
+handles (GNSSReceiver's `CodeLockDetector` linearises it to `0 Hz` and needs 80 ms of warm-up
+plus 200 ms of dwell before it drops a satellite, so a one-chunk transient is invisible to
+it). The one thing that is *not* reused is the warning: a filling window is a normal
+transient, not a misconfiguration, so `_noise_window_filling` keeps it quiet. It is phrased
+as "everything else about this density is fine and only the look count is short" rather than
+as "the window is non-empty", so a measured floor of zero — a dead input — still reaches the
+diagnostic it is meant to reach.
+
 **`M = 1` is bit-identical to before, by construction.** `DefaultPostCorrFilter`'s scalar
 weight is exactly `1.0 + 0.0im`, so `conj(w)·tap` and `abs2(w)·N₀` are IEEE-exact no-ops. The
 regression lock in `test/track.jl` is stronger than a tolerance: a three-antenna run and a
