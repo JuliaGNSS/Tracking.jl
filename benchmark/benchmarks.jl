@@ -1619,6 +1619,61 @@ if isdefined(Tracking, :CorrelatorNoiseEstimator)
     SUITE["noise estimation"]["update_noise! – 1 ms @ 20 MHz"] =
         bench_update_noise(; num_samples = 20_000, sampling_frequency = 20e6Hz)
 
+    # The antenna-array reference, which is the one cost the spatial covariance
+    # raises by construction: it despreads **all** `M` columns where the
+    # single-antenna reference despread one.
+    #
+    # It is markedly **sub-linear** in `M`, which is the point of measuring it
+    # rather than assuming it. Against the 1-antenna row above: `M = 4` costs
+    # **≈2×**, not ≈4× — measured at 2.08× on the x86 runner and 2.05× on Apple
+    # Silicon, so it is the algorithm rather than one machine's vector width. The
+    # despread is bandwidth-bound and the kernel vectorises across the antenna
+    # dimension, so four columns cost about twice one column. Sweeping wider on one
+    # x86 host: `M = 2` ≈1.3×, `M = 8` ≈3.3×.
+    #
+    # What this row is here to catch is that ratio *degrading* — the per-tap
+    # `Σ b·bᴴ` pooling is `M²` work on top of an `M · N` despread, so a change that
+    # stops the despread dominating would show up here first.
+    #
+    # `M = 4` also happens to be the last size that stays allocation-free: an 8×8
+    # covariance is 1 kB of `SMatrix`, past the size StaticArrays keeps on the
+    # stack, and `M = 8` picks up two allocations per call. Arrays that large want a
+    # different representation, not a bigger `SMatrix`.
+    #
+    # Registers only where the constructor takes `num_ants`, so it appears as new on
+    # the PR that introduces it rather than inventing a base counterpart. The rows
+    # above deliberately stay single-antenna: they are the long-running series, and
+    # re-keying them to an array would break comparability with every earlier
+    # revision.
+    if hasmethod(Tracking.CorrelatorNoiseEstimator, Tuple{}, (:num_ants,))
+        function bench_update_noise_array(;
+            num_samples = 4000,
+            sampling_frequency = 4e6Hz,
+            num_ants = 4,
+        )
+            gnss_signal = GPSL1CA()
+            estimator = Tracking.CorrelatorNoiseEstimator(; num_ants = NumAnts(num_ants))
+            measurement = Tracking.BandMeasurement(
+                rand(ComplexF32, num_samples, num_ants),
+                sampling_frequency,
+            )
+            context = Tracking.NoiseUpdateContext(
+                gnss_signal,
+                0,
+                Tracking.CPUDownconvertAndCorrelator(),
+            )
+            @benchmarkable Tracking.update_noise!(
+                $estimator,
+                $measurement,
+                1,
+                $num_samples,
+                $context,
+            )
+        end
+        SUITE["noise estimation"]["update_noise! – 1 ms @ 4 MHz, 4 antennas"] =
+            bench_update_noise_array()
+    end
+
     function bench_append_noise_observation()
         estimator = Tracking.CorrelatorNoiseEstimator()
         observation = Tracking.noise_observation_from_samples(4000.0, 4000, 4e6Hz)
