@@ -1,5 +1,12 @@
 # Changelog
 
+# [8.1.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v8.0.0...v8.1.0) (2026-08-21)
+
+
+### Features
+
+* **signals:** move to GNSSSignals v4 and track its Galileo E5b/E6 and BeiDou signals ([d4d3e96](https://github.com/JuliaGNSS/Tracking.jl/commit/d4d3e966e2a5f74644e6d45892daf499ef7806d0))
+
 # [8.0.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v7.0.0...v8.0.0) (2026-08-20)
 
 
