@@ -522,9 +522,10 @@ $(SIGNATURES)
 
 Soft-decision, CFAR secondary-code sync detector — the maximum-energy analog of
 [`_detect_bit_edge_cfar`](@ref) for signals carrying a short periodic secondary /
-overlay code (selected by [`uses_soft_secondary_code_detection`](@ref); GPS L5I,
-GPS L5Q, Galileo E1C / E5aI / E5aQ). The per-rotation bin statistics are carried
-in `accumulators` ([`PhaseAccumulators`](@ref), advanced in place by
+overlay code (selected by [`uses_soft_secondary_code_detection`](@ref) — GPS
+L5I/L5Q, Galileo E1C / E5aI / E5aQ / E5bI / E5bQ / E6C and BeiDou B1I / B3I /
+B2aI / B2aQ). The per-rotation bin statistics are carried in `accumulators`
+([`PhaseAccumulators`](@ref), advanced in place by
 [`_update_secondary_accumulators!`](@ref)); `secondary_code_length` (`N`) is both
 the bin length and the number of rotation hypotheses, and `num_blocks` is the
 total number of prompts seen. The peak-vs-runner-up hypothesis test is the shared
@@ -576,9 +577,10 @@ end
 $(SIGNATURES)
 
 Generic **hard-decision** secondary-code sync detector for signals on the
-hard path — among the currently implemented signals only GPS L1C-P (its
-1800-chip overlay) routes through here. The short-secondary-code signals
-(GPS L5I/L5Q, Galileo E1C/E5aI/E5aQ) were moved to the soft, maximum-energy
+hard path — among the currently implemented signals the two 1800-chip overlay
+pilots, GPS L1C-P and BeiDou B1C-P, route through here. The short-secondary-code
+signals (GPS L5I/L5Q, the other Galileo E1/E5/E6 components, BeiDou
+B1I/B3I/B2a) were moved to the soft, maximum-energy
 [`_detect_secondary_code_cfar`](@ref) (see
 [`uses_soft_secondary_code_detection`](@ref)); GPS L1 C/A uses the soft
 bit-edge [`_detect_bit_edge_cfar`](@ref). Unlike those, this runs a full
@@ -701,25 +703,31 @@ end
 """
 $(SIGNATURES)
 
-Hook for [`_detect_secondary_code_sync`](@ref): return the signal's
+Reference for [`_detect_secondary_code_sync`](@ref): return the signal's
 secondary / overlay code for `prn`, packed into the buffer type `B` in
 the same newest-first order the prompt buffer fills — bit `i` holds
 secondary chip `N - 1 - i`, so that when the most recent `N` blocks span
 exactly one period ending on its last chip, `received & mask == reference` (see [`_secondary_code_search`](@ref)).
+
+The single generic method below covers every signal GNSSSignals defines; it
+stays a `function` others can specialize only for a signal whose overlay is
+not reachable through `get_secondary_code`.
 """
 function _packed_secondary_code end
 
-# Generic packer: derive the reference directly from the signal's
+# The only packer: derive the reference directly from the signal's
 # `SecondaryCode` (`get_secondary_code`), setting bit `N - 1 - k` iff
 # secondary chip `k` is positive. Works for both `SharedSecondaryCode`
-# (GPS L5Q's NH20, Galileo E1C's CS25 / E5aI's CS20) and
-# `PerPRNSecondaryCode` (Galileo E5aQ's per-PRN CS100), so a new
-# secondary-coded signal needs no bespoke method — it only picks a wide
-# enough `get_code_block_buffer_type`. The rotation search in
-# [`_secondary_code_search`](@ref) tries both polarities, so the absolute
-# ±1 → bit convention here only sets the reported `polarity` sign, not
-# whether the lock is found. GPS L5I and L1C-P keep their own (more
-# specific) methods, which win dispatch.
+# (GPS L5I's NH10 / L5Q's NH20, Galileo E1C's CS25 / E5aI's CS20) and
+# `PerPRNSecondaryCode` (Galileo E5aQ's per-PRN CS100, the 1800-chip overlays
+# of GPS L1C-P and BeiDou B1C-P), so a secondary-coded signal needs no bespoke
+# method — it only picks a wide enough `get_code_block_buffer_type`. Because
+# every signal's reference comes from this one convention, the reported
+# `polarity` means the same thing across signals: `+1` iff the prompt signs
+# follow `get_secondary_code`, which is the same overlay the post-sync replica
+# and the soft [`_update_secondary_accumulators!`](@ref) apply. The rotation
+# search in [`_secondary_code_search`](@ref) tries both polarities, so the
+# convention only sets that sign, not whether the lock is found.
 @inline function _packed_secondary_code(
     ::Type{B},
     signal::AbstractGNSSSignal,
@@ -760,10 +768,10 @@ The `phase_acc` field holds the incremental per-hypothesis bin statistics
 signal uses — [`_detect_bit_edge_cfar`](@ref) for signals whose
 [`uses_soft_bit_edge_detection`](@ref) is `true` (GPS L1 C/A), or
 [`_detect_secondary_code_cfar`](@ref) for those whose
-[`uses_soft_secondary_code_detection`](@ref) is `true` (GPS L5I/L5Q, Galileo
-E1C/E5aI/E5aQ). It is seeded and updated only for those signals; for all others
-(hard-decision path) it stays empty. Its size is bounded (one entry per
-hypothesis), so there is no growing pre-sync history.
+[`uses_soft_secondary_code_detection`](@ref) is `true` (every signal with a
+secondary code of length `1 < N ≤ 100`). It is seeded and updated only for those
+signals; for all others (hard-decision path) it stays empty. Its size is bounded
+(one entry per hypothesis), so there is no growing pre-sync history.
 """
 struct BitBuffer{B<:Unsigned}
     code_block_buffer::B
@@ -858,8 +866,9 @@ Width `B` of the packed prompt-sign buffer (`BitBuffer.code_block_buffer`) for
 
 That packed buffer is the sliding-window search horizon **only for the
 hard-decision path** — the rotation/Hamming sweep [`_secondary_code_search`](@ref),
-which among the currently implemented signals is used by GPS L1C-P alone. The
-soft-decision CFAR detectors ([`_detect_bit_edge_cfar`](@ref) for GPS L1 C/A,
+which among the currently implemented signals is used by the two 1800-chip
+overlay pilots, GPS L1C-P and BeiDou B1C-P. The soft-decision CFAR detectors
+([`_detect_bit_edge_cfar`](@ref) for GPS L1 C/A,
 [`_detect_secondary_code_cfar`](@ref) for the short-secondary-code signals) read
 the incremental [`PhaseAccumulators`](@ref) instead, so for those signals the
 packed buffer of this width is built but not consulted for detection — it is
@@ -880,6 +889,17 @@ the returned width and — for the hard path — the horizon it must hold:
 | Galileo E1C   | `UInt32`   | soft secondary CFAR — packed buffer vestigial       |
 | Galileo E5a-I | `UInt32`   | soft secondary CFAR — packed buffer vestigial       |
 | Galileo E5a-Q | `UInt128`  | soft secondary CFAR — packed buffer vestigial       |
+| Galileo E5b-I | `UInt32`   | soft secondary CFAR — packed buffer vestigial       |
+| Galileo E5b-Q | `UInt128`  | soft secondary CFAR — packed buffer vestigial       |
+| Galileo E6-B  | `UInt8`    | symbol = primary period, buffer unused              |
+| Galileo E6-C  | `UInt128`  | soft secondary CFAR — packed buffer vestigial       |
+| BeiDou B1I    | `UInt32`   | soft secondary CFAR — packed buffer vestigial       |
+| BeiDou B3I    | `UInt32`   | soft secondary CFAR — packed buffer vestigial       |
+| BeiDou B2a-I  | `UInt32`   | soft secondary CFAR — packed buffer vestigial       |
+| BeiDou B2a-Q  | `UInt128`  | soft secondary CFAR — packed buffer vestigial       |
+| BeiDou B2b-I  | `UInt8`    | symbol = primary period, buffer unused              |
+| BeiDou B1C-D  | `UInt8`    | symbol = primary period, buffer unused              |
+| BeiDou B1C-P  | `UInt1800` | **hard** rotation sweep — 1800-chip overlay horizon |
 
 The default for any signal not specialized below is `UInt64`. The width
 flows through `BitBuffer{B}` and `TrackedSignal{Sig, B, C, PCF, CN0}` so the
@@ -899,22 +919,24 @@ Returns the largest **fraction** of bit-flips the per-signal
 `found = true`. Each detector converts this to an integer error budget
 at its call site: `max_errors = floor(Int, tolerance × window_size)`.
 
-Among the currently implemented signals **only GPS L1C-P reads this trait** — it
-is the sole signal still on the hard path. The short-secondary-code signals (GPS
-L5I/L5Q, Galileo E1C/E5aI/E5aQ) were moved to the soft, confidence-driven
-[`_detect_secondary_code_cfar`](@ref) (selected by
+Among the currently implemented signals **only the 1800-chip overlay pilots GPS
+L1C-P and BeiDou B1C-P read this trait** — they are the only signals still on the
+hard path. The short-secondary-code signals (GPS L5I/L5Q, Galileo
+E1C/E5aI/E5aQ/E5bI/E5bQ/E6C, BeiDou B1I/B3I/B2aI/B2aQ) were moved to the soft,
+confidence-driven [`_detect_secondary_code_cfar`](@ref) (selected by
 [`uses_soft_secondary_code_detection`](@ref)) and no longer consult it; likewise
 GPS L1 C/A uses [`_detect_bit_edge_cfar`](@ref). Both soft detectors are tuned by
-[`get_bit_edge_detection_confidence`](@ref) instead. Galileo E1B and GPS L1C-D
-broadcast one channel symbol per primary code period, so their detectors return
-`SyncResult(true, 0, +1)` unconditionally — the trait default applies but the
-value is ignored — and GPS L2CL is a dataless pilot with no sync.
+[`get_bit_edge_detection_confidence`](@ref) instead. Galileo E1B / E6-B, GPS
+L1C-D and BeiDou B2b-I / B1C-D broadcast one channel symbol per primary code
+period, so their detectors return `SyncResult(true, 0, +1)` unconditionally — the
+trait default applies but the value is ignored — and GPS L2CL is a dataless pilot
+with no sync.
 
-Default is `0.025` (2.5 %). At L1C-P's 1800-chip window that discretizes to
-`max_errors = 45`. (For reference, the same 2.5 % at the now-soft signals' short
-windows would floor to 0–2 errors — an exact or near-exact match — which is
-exactly the noise-driven false-lock exposure the move to the soft detector
-removed.)
+Default is `0.025` (2.5 %). At the 1800-chip window of either overlay pilot that
+discretizes to `max_errors = 45`. (For reference, the same 2.5 % at the now-soft
+signals' short windows would floor to 0–2 errors — an exact or near-exact match —
+which is exactly the noise-driven false-lock exposure the move to the soft
+detector removed.)
 
 # Overriding
 
@@ -952,7 +974,12 @@ E1B, GPS L1C-D: one symbol per primary period) and not a periodic overlay
 (GPS L5I, L1C-P: located by [`_secondary_code_search`](@ref)). Among the
 currently implemented signals only GPS L1 C/A (20 blocks/bit) qualifies,
 but a newly added signal with the same structure is picked up
-automatically.
+automatically. Note BeiDou B1I/B3I do *not* qualify even though their GEO
+satellites carry no overlay: `get_secondary_code_length` is 20 for the signal
+type, so they route to the secondary-code detector. On a GEO PRN that detector
+finds nothing to lock — the all-ones column is rotation-invariant and the D2
+symbols are 2 blocks long, so no 20-block rotation bin stands out — and those
+satellites stay pre-sync (see `src/beidou/b1i.jl`).
 
 Override per signal type to force the choice, e.g. to disable it:
 
@@ -980,10 +1007,12 @@ The soft detector coherently integrates one *full secondary-code period* per bin
 so it only makes sense while a whole period is a phase-coherent integration
 length. The default therefore enables it for signals with a **short** secondary
 code — `1 < get_secondary_code_length(signal) ≤ 100` — which covers GPS L5I
-(NH10, 10), GPS L5Q (NH20, 20), Galileo E1C (CS25, 25), E5aI (CS20, 20) and E5aQ
-(CS100, 100), whose periods are ≤ 100 ms. GPS L1C-P is deliberately excluded: its
-1800-chip overlay is an 18 s period, far too long to integrate coherently (and
-its long code is not false-lock-prone), so it keeps the hard
+(NH10, 10), GPS L5Q (NH20, 20), Galileo E1C (CS25, 25), E5aI (CS20, 20), E5aQ
+(CS100, 100), E5bI (CS4, 4) and E5bQ / E6C (CS100, 100), plus BeiDou B1I / B3I
+(NH20, 20), B2aI (5) and B2aQ (100) — all periods of at most 100 ms. The two
+1800-chip overlay pilots, GPS L1C-P and BeiDou B1C-P, are deliberately excluded:
+an 1800-chip overlay is an 18 s period, far too long to integrate coherently
+(and such a long code is not false-lock-prone), so they keep the hard
 [`_secondary_code_search`](@ref).
 
 Because it locates a periodic overlay, this is mutually exclusive with

@@ -15,6 +15,9 @@ i.e. exact match). The negated-polarity (data-bit-1) case is handled
 inside the search, so the detector locks after a single NH10 period in the
 worst case and reports the upcoming integration's NH10 chip in
 `SyncResult.phase`. Returns [`SyncResult`](@ref).
+
+The packed reference is derived generically from `get_secondary_code`
+(see [`_packed_secondary_code`](@ref)); no bespoke packing is needed.
 """
 @inline function detect_bit_or_secondary_code_sync(
     signal::GPSL5I,
@@ -24,12 +27,6 @@ worst case and reports the upcoming integration's NH10 chip in
 )
     _detect_secondary_code_sync(signal, prn, code_block_bits, num_code_blocks)
 end
-
-# NH10 packed newest-first as `0x035` (= `0000110101`) — bit `i` holds
-# NH10 chip `9 - i`, matching the prompt buffer's newest-in-bit-0 fill
-# order. Shared across PRNs.
-@inline _packed_secondary_code(::Type{B}, ::GPSL5I, ::Integer) where {B<:Unsigned} =
-    B(0x035)
 
 """
 $(SIGNATURES)
