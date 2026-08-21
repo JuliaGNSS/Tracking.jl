@@ -18,17 +18,60 @@ Multi-signal tracking is supported: a single satellite can be tracked on several
 
 ## Supported signals
 
+### GPS
+
 - GPS L1 C/A
 - GPS L1C-D (data)
 - GPS L1C-P (pilot, with 1800-chip overlay-code sync)
 - GPS L2CM (data)
 - GPS L2CL (pilot, dataless — no secondary code)
-- GPS L5I
+- GPS L5I (data, with NH10 secondary-code sync)
 - GPS L5Q (pilot, with NH20 secondary-code sync)
+
+### Galileo
+
 - Galileo E1B (and its BOC(1,1) approximation)
 - Galileo E1C (pilot, with CS25 secondary-code sync; and its BOC(1,1) approximation)
 - Galileo E5a-I (data, with CS20 secondary-code sync)
 - Galileo E5a-Q (pilot, with per-PRN CS100 secondary-code sync)
+- Galileo E5b-I (data, with CS4 secondary-code sync)
+- Galileo E5b-Q (pilot, with per-PRN CS100 secondary-code sync)
+- Galileo E6-B (data, C/NAV at 1000 sym/s — one symbol per primary period)
+- Galileo E6-C (pilot, with per-PRN CS100 secondary-code sync)
+
+### BeiDou
+
+- BeiDou B1I (data, with per-PRN NH20 secondary-code sync)
+- BeiDou B3I (data, with per-PRN NH20 secondary-code sync)
+- BeiDou B2b-I (data, B-CNAV3 at 1000 sym/s — one symbol per primary period)
+- BeiDou B2a data (with 5-chip secondary-code sync)
+- BeiDou B2a pilot (with per-PRN 100-chip secondary-code sync)
+- BeiDou B1C data (BOC(1,1), one symbol per primary period)
+- BeiDou B1C pilot (BOC(1,1), with 1800-chip overlay-code sync)
+
+Galileo E5b and BeiDou B2b share the 1207.14 MHz carrier, which GNSSSignals.jl
+names the `E5b` band for both; BeiDou B2a shares `L5` with GPS L5 and Galileo
+E5a, and BeiDou B1C shares `L1` with GPS L1 C/A, GPS L1C and Galileo E1. Signals
+on one band can be tracked in one [`BandMeasurement`](@ref) regardless of
+constellation.
+
+Galileo E5a-QP is **not** tracked, by design: it is an acquisition aid rather
+than a tracking signal — a dataless BPSK(5) quasi-pilot whose 330-chip code
+repeats every 64.5 µs, there to let a receiver find E5a cheaply and hand the
+satellite over to E5a-I / E5a-Q (OS SIS ICD v2.2 §2.3.1.4). It carries neither
+data nor a secondary code, so there is no sync feature to lock, and one primary
+code period — the unit Tracking integrates in and derives its loop-bandwidth
+defaults from — is 64.5 µs, far too short for either to be meaningful.
+`test/signal_coverage.jl` records that decision, and fails if GNSSSignals.jl
+adds a further signal Tracking.jl has no support for.
+
+On the BeiDou GEO satellites (PRN 1-5 and 59-63) the B1I/B3I ranging codes carry
+no NH20 overlay and the navigation message is D2 at 500 sym/s rather than D1 at
+50 sym/s. Those two together leave the secondary-code detector nothing to lock
+onto, so a GEO satellite tracks and can be *ranged* on but never syncs, and its
+data is not decoded: a 2-block D2 bit-edge search would need a per-PRN data rate,
+while `get_data_frequency` is a per-signal-type accessor reporting the D1 rate
+for every PRN — see `src/beidou/b1i.jl`.
 
 ```@contents
 Pages = [

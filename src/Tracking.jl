@@ -14,7 +14,8 @@ using Accessors
 using Polyester
 using Random: AbstractRNG, Xoshiro
 
-# 1800-bit exact-width unsigned for the GPS L1C-P overlay-code search.
+# 1800-bit exact-width unsigned for the 1800-chip overlay-code searches of
+# GPS L1C-P and BeiDou B1C-P.
 # Defined once at module load. Benchmarked at ~71 μs for the full
 # 1800-phase Hamming-distance sweep, ~1.5× faster than a padded
 # UInt1856 variant because no mask is needed on shift/XOR (see the
@@ -242,6 +243,13 @@ include("gps/l5.jl")
 include("galileo/e1b.jl")
 include("galileo/e1c.jl")
 include("galileo/e5a.jl")
+include("galileo/e5b.jl")
+include("galileo/e6.jl")
+include("beidou/b1i.jl")
+include("beidou/b3i.jl")
+include("beidou/b2a.jl")
+include("beidou/b2b.jl")
+include("beidou/b1c.jl")
 include("sat_state.jl")
 
 """

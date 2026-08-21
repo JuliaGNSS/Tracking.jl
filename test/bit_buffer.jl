@@ -20,7 +20,8 @@ using Tracking:
     _seed_phase_accumulators!,
     _update_phase_accumulators!,
     _update_secondary_accumulators!,
-    _secondary_code_search
+    _secondary_code_search,
+    _packed_secondary_code
 
 @testset "SyncResult" begin
     r = @inferred SyncResult(false, 0, Int8(0))
@@ -280,8 +281,8 @@ _secondary_chips(signal, prn) = [
     k = 0:(get_secondary_code_length(signal)-1)
 ]
 
-# NH10 packed newest-first, as the hard detector references it (see l5.jl).
-_packed_l5i() = UInt32(0x035)
+# NH10 packed newest-first, as the hard detector references it.
+_packed_l5i() = _packed_secondary_code(UInt32, GPSL5I(), 1)
 
 # Build a prompt stream for a secondary-coded signal: block `i` (0-based) carries
 # secondary chip `(i + start_chip) % N` times a per-period data symbol (constant

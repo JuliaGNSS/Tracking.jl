@@ -21,17 +21,24 @@ rotl(x::T, r, N) where {T} =
 @testset "GPS L5I" begin
     gpsl5 = GPSL5I()
     prn = 1
-    # NH10 = 0x035 — matched at positive polarity.
-    res = @inferred(detect_bit_or_secondary_code_sync(gpsl5, prn, UInt32(0x35), 50))
+    # NH10 packed newest-first from `get_secondary_code` — `0x3ca`
+    # (= 1111001010), matched at positive polarity. The ICD writes NH10 as
+    # `0000110101`; GNSSSignals carries the ±1 chips, and
+    # `_packed_secondary_code` sets a bit per `+1` chip, so the packed
+    # reference is that pattern's complement. Only the reported polarity sign
+    # rides on the convention, and it is the same convention the post-sync
+    # replica and the soft detector apply.
+    @test Tracking._packed_secondary_code(UInt32, gpsl5, prn) == UInt32(0x3ca)
+    res = @inferred(detect_bit_or_secondary_code_sync(gpsl5, prn, UInt32(0x3ca), 50))
     @test res.found == true
     @test res.polarity == +1
 
     # Buffer not yet at 10 blocks.
-    @test @inferred(detect_bit_or_secondary_code_sync(gpsl5, prn, UInt32(0x35), 5)).found ==
+    @test @inferred(detect_bit_or_secondary_code_sync(gpsl5, prn, UInt32(0x3ca), 5)).found ==
           false
 
-    # 0x3ca == 1111001010 is the negated NH10 (matches at negative polarity).
-    res = @inferred(detect_bit_or_secondary_code_sync(gpsl5, prn, UInt32(0x3ca), 10))
+    # 0x035 is the negated NH10 (matches at negative polarity).
+    res = @inferred(detect_bit_or_secondary_code_sync(gpsl5, prn, UInt32(0x035), 10))
     @test res.found == true
     @test res.polarity == -1
 
@@ -58,7 +65,7 @@ rotl(x::T, r, N) where {T} =
     @testset "Hamming tolerance" begin
         # 2.5 % ceiling over a 10-block window discretizes to "exact match"
         # (floor(0.025 × 10) = 0) — any single bit-flip rejects.
-        template = UInt32(0x035)
+        template = Tracking._packed_secondary_code(UInt32, gpsl5, prn)
         @test detect_bit_or_secondary_code_sync(gpsl5, prn, template, 10).found == true
         @test detect_bit_or_secondary_code_sync(gpsl5, prn, template ⊻ UInt32(0x1), 10).found ==
               false
