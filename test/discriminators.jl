@@ -151,4 +151,74 @@ end
     @test dll_disc_s_curve_slope(GalileoE1C(), veml, 20MHz) ≈ 1.0 atol = 0.2
 end
 
+# A correlator with no energy at all used to make every discriminator compute
+# 0 / 0. The NaN then propagated into the loop filter and out as a NaN Doppler,
+# and the next correlate iteration threw `InexactError: Int64(NaN)` while
+# converting a Doppler-derived sample count -- killing the whole tracking task
+# from inside, with nothing pointing back at the empty correlator. Reported from
+# on-FPGA correlator bring-up (GNSSReceiver.jl#107), where a reassigned hardware
+# channel can deliver a dump with `integrated_samples == 0`.
+@testset "Discriminators with a zero-energy correlator" begin
+    gpsl1 = GPSL1CA()
+    sampling_frequency = get_code_frequency(gpsl1) * 4
+    empty_correlator = EarlyPromptLateCorrelator()
+    empty_veml = VeryEarlyPromptLateCorrelator()
+
+    @test iszero(get_prompt(empty_correlator))
+
+    @testset "DLL returns zero rather than NaN" begin
+        d = @inferred(dll_disc(gpsl1, empty_correlator, 0.0Hz, sampling_frequency))
+        @test !isnan(d)
+        @test d == 0
+    end
+
+    @testset "VEML DLL returns zero rather than NaN" begin
+        d = @inferred(dll_disc(gpsl1, empty_veml, 0.0Hz, sampling_frequency))
+        @test !isnan(d)
+        @test d == 0
+    end
+
+    @testset "PLL returns zero rather than NaN" begin
+        p = @inferred(pll_disc(gpsl1, empty_correlator))
+        @test !isnan(p)
+        @test p == 0
+    end
+
+    @testset "FLL returns zero rather than NaN for a zero current prompt" begin
+        nonzero_prompt = get_prompt(
+            EarlyPromptLateCorrelator(SVector(0.5 + 0.0im, 1 + 0.0im, 0.5 + 0.0im), 0.5),
+        )
+        f = @inferred(fll_disc(gpsl1, empty_correlator, nonzero_prompt, 1ms))
+        @test !isnan(f)
+        @test f == 0Hz
+    end
+
+    # The guard must not swallow the legitimate quadrature cases: a purely
+    # imaginary prompt is +-pi/2, not "no energy".
+    @testset "A purely imaginary prompt is still +-pi/2" begin
+        quadrature = EarlyPromptLateCorrelator(
+            SVector(0.0 + 0.5im, 0.0 + 1.0im, 0.0 + 0.5im),
+            0.5,
+        )
+        @test @inferred(pll_disc(gpsl1, quadrature)) == π / 2
+        minus_quadrature = EarlyPromptLateCorrelator(
+            SVector(0.0 - 0.5im, 0.0 - 1.0im, 0.0 - 0.5im),
+            0.5,
+        )
+        @test @inferred(pll_disc(gpsl1, minus_quadrature)) == -π / 2
+    end
+
+    # E == L with real energy is a genuine zero code error, and must stay
+    # distinguishable from the no-energy case above (both report 0, but only the
+    # latter may skip the normalisation).
+    @testset "A balanced correlator with energy still discriminates" begin
+        balanced =
+            EarlyPromptLateCorrelator(SVector(0.5 + 0.0im, 1 + 0.0im, 0.5 + 0.0im), 0.5)
+        @test @inferred(dll_disc(gpsl1, balanced, 0.0Hz, sampling_frequency)) == 0
+        off_late =
+            EarlyPromptLateCorrelator(SVector(0.25 + 0.0im, 0.75 + 0.0im, 0.75 + 0.0im), 0.5)
+        @test @inferred(dll_disc(gpsl1, off_late, 0.0Hz, sampling_frequency)) == 0.25
+    end
+end
+
 end
