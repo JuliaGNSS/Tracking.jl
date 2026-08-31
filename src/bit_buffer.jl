@@ -1069,44 +1069,59 @@ function buffer(
     # for code-phase anchoring and longer coherent integration).
     num_code_blocks_that_form_a_bit == 0 && return bit_buffer
 
-    prompt_accumulator = bit_buffer.prompt_accumulator + prompt
-    prompt_accumulator_integrated_code_blocks =
-        bit_buffer.prompt_accumulator_integrated_code_blocks + integrated_code_blocks
+    prompt_accumulator, prompt_accumulator_integrated_code_blocks = _complete_bits!(
+        bit_buffer.soft_bits,
+        bit_buffer.prompt_accumulator + prompt,
+        bit_buffer.prompt_accumulator_integrated_code_blocks + integrated_code_blocks,
+        num_code_blocks_that_form_a_bit,
+        bit_buffer.polarity,
+    )
+    return BitBuffer{B}(
+        bit_buffer.code_block_buffer,
+        bit_buffer.code_block_buffer_length,
+        true,
+        bit_buffer.secondary_phase,
+        bit_buffer.polarity,
+        prompt_accumulator,
+        prompt_accumulator_integrated_code_blocks,
+        bit_buffer.soft_bits,
+        bit_buffer.phase_acc,
+    )
+end
 
-    if prompt_accumulator_integrated_code_blocks == num_code_blocks_that_form_a_bit
-        # Flip the decoded bit if the detector locked at negative polarity:
-        # the prompt accumulator's real-part sign is then inverted relative
-        # to the data symbol's "0/1" convention.
-        bit_acc =
-            bit_buffer.polarity < 0 ? -real(prompt_accumulator) : real(prompt_accumulator)
-        # The polarity-corrected accumulation IS the bit: its sign is the hard
-        # decision, its magnitude the confidence. The vector grows without a
-        # ceiling — the caller decides how often to read bits out and `reset`.
-        push!(bit_buffer.soft_bits, Float32(bit_acc))
-        return BitBuffer{B}(
-            bit_buffer.code_block_buffer,
-            bit_buffer.code_block_buffer_length,
-            true,
-            bit_buffer.secondary_phase,
-            bit_buffer.polarity,
-            zero(prompt_accumulator),
-            0,
-            bit_buffer.soft_bits,
-            bit_buffer.phase_acc,
-        )
-    else
-        return BitBuffer{B}(
-            bit_buffer.code_block_buffer,
-            bit_buffer.code_block_buffer_length,
-            true,
-            bit_buffer.secondary_phase,
-            bit_buffer.polarity,
-            prompt_accumulator,
-            prompt_accumulator_integrated_code_blocks,
-            bit_buffer.soft_bits,
-            bit_buffer.phase_acc,
-        )
+# Emit every bit the accumulated block count has completed and return what is
+# left over, as `(accumulator, blocks)` for the still-open bit.
+#
+# The loop is a `while ... >=`, not an `if ... ==`, because the block count must
+# never be able to *step over* the boundary. A record whose length does not
+# divide the symbol — a producer folding several code blocks into one record, a
+# record credited for a gap in the stream, an integration length changed
+# mid-lock — pushes the count past `num_code_blocks_that_form_a_bit`, and from
+# then on an equality test never fires again: that satellite silently stops
+# producing navigation bits for the rest of its lock, with bit sync still
+# reported as found. Seen on a hardware-correlator receiver
+# (GNSSReceiver.jl#107) folding 2 ms records: bit sync held for 90 s and one
+# soft bit came out of it.
+#
+# Flip the decoded bit if the detector locked at negative polarity: the prompt
+# accumulator's real-part sign is then inverted relative to the data symbol's
+# "0/1" convention. The polarity-corrected accumulation IS the bit — its sign
+# is the hard decision, its magnitude the confidence. The vector grows without
+# a ceiling; the caller decides how often to read bits out and `reset`.
+@inline function _complete_bits!(
+    soft_bits::Vector{Float32},
+    accumulator,
+    blocks::Int,
+    num_code_blocks_that_form_a_bit::Int,
+    polarity,
+)
+    while blocks >= num_code_blocks_that_form_a_bit
+        bit_acc = polarity < 0 ? -real(accumulator) : real(accumulator)
+        push!(soft_bits, Float32(bit_acc))
+        accumulator = zero(accumulator)
+        blocks -= num_code_blocks_that_form_a_bit
     end
+    accumulator, blocks
 end
 
 function _buffer_find_bit(
