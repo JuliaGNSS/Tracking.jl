@@ -1020,6 +1020,55 @@ append_correlator_output!(
 """
 $(SIGNATURES)
 
+Credit `num_code_blocks` of elapsed signal time to a satellite's bit clock
+*without* a measurement, and return `track_state`.
+
+It sits beside [`append_correlator_output!`](@ref) and is addressed the same
+way. Use it when a producer knows time passed but has nothing to report — a hole
+in a hardware correlator's record stream (GNSSReceiver.jl#107) is the motivating
+case. The alternative, appending an all-zero `CorrelatorOutput` so that *some*
+record spans the gap, makes every discriminator compute `0/0` and feeds a zero
+prompt to the prompt filter and the C/N₀ estimator; the discriminators guard
+against the `NaN`, but a zero-error measurement is still a measurement the loop
+filter should never have seen. See [`advance_bit_clock`](@ref).
+
+Nothing but the bit buffer moves: no discriminator runs, no loop filter updates,
+no correlator output is consumed.
+"""
+advance_bit_clock!(s::TrackState, num_code_blocks::Integer, id...) =
+    _advance_bit_clock!(s, num_code_blocks, id...)
+
+function _advance_bit_clock!(
+    s::TrackState,
+    num_code_blocks::Integer,
+    group::Union{Symbol,Integer,Val},
+    sat_id,
+    signal_index::Integer = 1,
+)
+    num_code_blocks <= 0 && return s
+    sats = get_sat_states(s, group)
+    sat = sats[sat_id]
+    signals = get_signals(sat)
+    tracked = signals[signal_index]
+    advanced = TrackedSignal(
+        tracked;
+        bit_buffer = advance_bit_clock(
+            get_signal(tracked),
+            get_bit_buffer(tracked),
+            num_code_blocks,
+        ),
+    )
+    sats[sat_id] = TrackedSat(sat; signals = Base.setindex(signals, advanced, signal_index))
+    s
+end
+
+function _advance_bit_clock!(s::TrackState, num_code_blocks::Integer, sat_id)
+    _advance_bit_clock!(s, num_code_blocks, 1, sat_id, 1)
+end
+
+"""
+$(SIGNATURES)
+
 Append an externally built [`NoiseObservation`](@ref) to the addressed
 **signal**'s noise estimator and return `track_state`:
 
