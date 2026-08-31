@@ -1089,6 +1089,83 @@ function buffer(
     )
 end
 
+"""
+$(SIGNATURES)
+
+Advance the bit clock across `num_code_blocks` primary-code periods for which
+**no usable prompt exists**, and return the updated buffer.
+
+This is the counterpart to [`buffer`](@ref) for elapsed signal time that carries
+no measurement — a hole in a hardware producer's record stream, most often. The
+navigation bit boundary is defined by elapsed *code blocks*, so time that is
+simply dropped moves that satellite's 20 ms grid permanently: tracking, C/N₀ and
+bit sync all stay healthy while the bit stream sits off its grid, and the only
+symptom is that a valid preamble never appears again.
+
+It exists so that a producer never has to *fake* a measurement to express the
+passage of time. Appending an all-zero `CorrelatorOutput` for a gap is the
+obvious workaround and it is a bad one: a zero correlator is a measurement of
+nothing, so every discriminator computes `0/0`, the prompt filter integrates a
+zero and the C/N₀ estimator averages in a zero-power record. Say "time passed"
+directly instead.
+
+Pre-sync the missing blocks are shifted through the hard-decision search window
+as zeros and its length advanced, so both the sliding-window search and the CFAR
+phase index stay on the true block grid. Post-sync they are credited to the
+accumulator through the same drain [`buffer`](@ref) uses, so a gap spanning more
+than one symbol yields every bit it covers. Pilots decode nothing and are left
+untouched.
+"""
+function advance_bit_clock(
+    signal::AbstractGNSSSignal,
+    bit_buffer::BitBuffer{B},
+    num_code_blocks::Integer,
+) where {B<:Unsigned}
+    num_code_blocks <= 0 && return bit_buffer
+    if !bit_buffer.found
+        # `<<` past the window width saturates to zero, which is what a gap that
+        # long means: nothing in the window is evidence any more.
+        return BitBuffer{B}(
+            bit_buffer.code_block_buffer << num_code_blocks,
+            bit_buffer.code_block_buffer_length + Int(num_code_blocks),
+            false,
+            0,
+            Int8(0),
+            bit_buffer.prompt_accumulator,
+            bit_buffer.prompt_accumulator_integrated_code_blocks,
+            bit_buffer.soft_bits,
+            bit_buffer.phase_acc,
+        )
+    end
+    num_code_blocks_that_form_a_bit = _calc_num_code_blocks_that_form_a_bit(signal)
+    num_code_blocks_that_form_a_bit == 0 && return bit_buffer
+    prompt_accumulator, blocks = _complete_bits!(
+        bit_buffer.soft_bits,
+        bit_buffer.prompt_accumulator,
+        bit_buffer.prompt_accumulator_integrated_code_blocks + Int(num_code_blocks),
+        num_code_blocks_that_form_a_bit,
+        bit_buffer.polarity,
+    )
+    BitBuffer{B}(
+        bit_buffer.code_block_buffer,
+        bit_buffer.code_block_buffer_length,
+        true,
+        # A secondary-coded signal's overlay phase advances with the blocks it
+        # missed, or the anchor is stale by the length of the gap.
+        _advance_secondary_phase_by(signal, bit_buffer.secondary_phase, num_code_blocks),
+        bit_buffer.polarity,
+        prompt_accumulator,
+        blocks,
+        bit_buffer.soft_bits,
+        bit_buffer.phase_acc,
+    )
+end
+
+function _advance_secondary_phase_by(signal, secondary_phase, num_code_blocks)
+    len = get_secondary_code_length(signal)
+    len <= 1 ? secondary_phase : mod(secondary_phase + Int(num_code_blocks), len)
+end
+
 # Emit every bit the accumulated block count has completed and return what is
 # left over, as `(accumulator, blocks)` for the still-open bit.
 #
