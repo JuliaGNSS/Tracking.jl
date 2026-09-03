@@ -37,9 +37,12 @@ const _PRECOMPILE_SIGNALS = (
 # the chip rate for TMBOC/CBOC/QMBOC — so every signal at the 1.023 MHz chip
 # rate is sampled at 24 chips per sample period; the 5.115 and 10.23 MHz BPSK
 # codes get four samples per chip.
+# Float64-valued, like the `5e6Hz` a receiver passes: the kernels specialise on
+# the frequency's element type, and an `Int`-valued rate would compile a
+# specialisation nobody calls.
 function _precompile_sampling_frequency(system)
     code_frequency = get_code_frequency(system)
-    code_frequency <= 1.1e6Hz ? 24code_frequency : 4code_frequency
+    code_frequency <= 1.1e6Hz ? 24.0 * code_frequency : 4.0 * code_frequency
 end
 
 # One code period of a clean replica at four samples per chip, with a small
@@ -62,29 +65,42 @@ function _precompile_signal(system)
     signal_f32, Complex{Int16}.(round.(signal_f32 .* 512)), sampling_frequency
 end
 
+# One signal's workload, as a function so every call inside it is statically
+# dispatched on the concrete signal type — the specialisations then land in
+# the package image. Iterating the signal tuple in a loop instead dispatches
+# dynamically, and the methods compiled that way were not all cached (the
+# first `track!` of a session still cost ~1 s).
+function _precompile_track(system, signal_f32, signal_i16, sampling_frequency, backend16)
+    state = TrackState(system, [TrackedSat(system, 1, 0.0, 180.0Hz)])
+    for _ = 1:3
+        track!(signal_f32, state, sampling_frequency)
+    end
+    state16 = TrackState(system, [TrackedSat(system, 1, 0.0, 180.0Hz)])
+    for _ = 1:3
+        track!(
+            signal_i16,
+            state16,
+            sampling_frequency;
+            downconvert_and_correlator = backend16,
+        )
+    end
+    estimate_cn0(state, 1)
+    get_soft_bits(state, 1)
+    get_carrier_doppler(state, 1)
+    get_code_phase(state, 1)
+    nothing
+end
+
 @setup_workload begin
     signals = map(_precompile_signal, _PRECOMPILE_SIGNALS)
     backend16 = Int16ThreadedDownconvertAndCorrelator(2^12)
     @compile_workload begin
-        for (system, (signal_f32, signal_i16, sampling_frequency)) in
-            zip(_PRECOMPILE_SIGNALS, signals)
-            state = TrackState(system, [TrackedSat(system, 1, 0.0, 180.0Hz)])
-            for _ = 1:3
-                track!(signal_f32, state, sampling_frequency)
-            end
-            state16 = TrackState(system, [TrackedSat(system, 1, 0.0, 180.0Hz)])
-            for _ = 1:3
-                track!(
-                    signal_i16,
-                    state16,
-                    sampling_frequency;
-                    downconvert_and_correlator = backend16,
-                )
-            end
-            estimate_cn0(state, 1)
-            get_soft_bits(state, 1)
-            get_carrier_doppler(state, 1)
-            get_code_phase(state, 1)
+        # `map` over tuples unrolls, so each call below is a static dispatch.
+        map(
+            _PRECOMPILE_SIGNALS,
+            signals,
+        ) do system, (signal_f32, signal_i16, sampling_frequency)
+            _precompile_track(system, signal_f32, signal_i16, sampling_frequency, backend16)
         end
     end
 end
