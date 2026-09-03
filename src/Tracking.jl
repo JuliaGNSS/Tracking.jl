@@ -310,5 +310,6 @@ include("conventional_pll_and_dll.jl")
 include("vector_pll_and_dll.jl")
 include("tracking_state.jl")
 include("track.jl")
+include("precompile.jl")
 
 end
