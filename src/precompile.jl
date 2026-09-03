@@ -13,7 +13,8 @@ using PrecompileTools: @setup_workload, @compile_workload
     sampling_frequency = 4e6Hz
     carrier_doppler = 200.0Hz
     code_frequency =
-        carrier_doppler * get_code_center_frequency_ratio(system) + get_code_frequency(system)
+        carrier_doppler * get_code_center_frequency_ratio(system) +
+        get_code_frequency(system)
     samples = 0:3999
     signal_f32 = ComplexF32.(
         cis.(2π .* 200.0 .* samples ./ 4e6) .*
@@ -28,7 +29,12 @@ using PrecompileTools: @setup_workload, @compile_workload
         state16 = TrackState(system, [TrackedSat(system, 1, 100.0, 180.0Hz)])
         backend = Int16ThreadedDownconvertAndCorrelator(2^12)
         for _ = 1:3
-            track!(signal_i16, state16, sampling_frequency; downconvert_and_correlator = backend)
+            track!(
+                signal_i16,
+                state16,
+                sampling_frequency;
+                downconvert_and_correlator = backend,
+            )
         end
         estimate_cn0(state, 1)
         get_soft_bits(state, 1)
