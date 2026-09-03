@@ -1,5 +1,18 @@
 # Changelog
 
+# [8.2.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v8.1.0...v8.2.0) (2026-09-03)
+
+
+### Bug Fixes
+
+* precompile track! for Float64 sampling frequencies ([0f9b509](https://github.com/JuliaGNSS/Tracking.jl/commit/0f9b509f52c32f59bbc5ebd08bae61bfa4d6bf34))
+
+
+### Features
+
+* precompile every signal Tracking can track, not only GPS L1 C/A ([059348e](https://github.com/JuliaGNSS/Tracking.jl/commit/059348e2e0cdf738b679ffe078cb7108edc2284d)), closes [#234](https://github.com/JuliaGNSS/Tracking.jl/issues/234)
+* precompile the common track! shapes ([cb49c62](https://github.com/JuliaGNSS/Tracking.jl/commit/cb49c62b7fcf4751432277a9268cf02e1072952a)), closes [GNSSReceiver.jl#107](https://github.com/GNSSReceiver.jl/issues/107)
+
 # [8.1.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v8.0.0...v8.1.0) (2026-08-21)
 
 
