@@ -7,6 +7,7 @@ using GNSSSignals:
 using Tracking:
     BitBuffer,
     buffer,
+    advance_bit_clock,
     reset,
     get_soft_bits,
     has_bit_or_secondary_code_been_found,
@@ -591,6 +592,55 @@ end
         @test length(next_bit_buffer) == 3
         @test next_bit_buffer.prompt_accumulator == 0 + 0im
         @test next_bit_buffer.prompt_accumulator_integrated_code_blocks == 0
+    end
+
+    @testset "Advance across missing prompt measurements" begin
+        signal = GPSL1CA()
+
+        presync = BitBuffer{UInt8}()
+        presync = buffer(signal, 1, presync, 1, 1 + 0im)
+        advanced = @inferred advance_bit_clock(signal, presync, 3)
+        @test advanced.code_block_buffer == 0x08
+        @test advanced.code_block_buffer_length == 4
+        @test !advanced.found
+        @test advance_bit_clock(signal, advanced, 0) === advanced
+        @test advance_bit_clock(signal, advanced, -1) === advanced
+
+        soft_bits = Float32[2]
+        synced = BitBuffer{UInt64}(
+            0x00,
+            40,
+            true,
+            0,
+            Int8(1),
+            5 + 2im,
+            18,
+            soft_bits,
+            PhaseAccumulators(),
+        )
+        drained = @inferred advance_bit_clock(signal, synced, 45)
+        @test get_soft_bits(drained) === soft_bits
+        @test get_soft_bits(drained) == Float32[2, 5, 0, 0]
+        @test drained.prompt_accumulator == 0
+        @test drained.prompt_accumulator_integrated_code_blocks == 3
+        @test drained.secondary_phase == 0
+
+        l5 = GPSL5I()
+        l5_buffer = BitBuffer{UInt32}(
+            0x00,
+            20,
+            true,
+            9,
+            Int8(-1),
+            -4 + 1im,
+            8,
+            Float32[],
+            PhaseAccumulators(),
+        )
+        l5_advanced = @inferred advance_bit_clock(l5, l5_buffer, 4)
+        @test get_soft_bits(l5_advanced) == Float32[4]
+        @test l5_advanced.prompt_accumulator_integrated_code_blocks == 2
+        @test l5_advanced.secondary_phase == 3
     end
 
     @testset "Soft bits" begin

@@ -29,6 +29,7 @@ using Tracking:
     get_bit_buffer,
     get_soft_bits,
     get_num_bits,
+    advance_bit_clock!,
     has_bit_or_secondary_code_been_found,
     estimate_cn0,
     get_sat_state,
@@ -682,6 +683,20 @@ end
     # Per-signal form `(group, prn, signal selector)`.
     @test get_filtered_prompts(ts, :default, 1, 1) isa Vector{ComplexF64}
     @test get_filtered_prompts(ts, :default, 1, GPSL1CA) isa Vector{ComplexF64}
+end
+
+@testset "advance_bit_clock! updates the addressed tracked signal" begin
+    signal = GPSL1CA()
+    track_state = TrackState(signal, [TrackedSat(signal, 7, 0.0, 0.0Hz)])
+    original = get_bit_buffer(track_state, 7)
+
+    @test advance_bit_clock!(track_state, 0, 7) === track_state
+    @test get_bit_buffer(track_state, 7) === original
+
+    @test @inferred(advance_bit_clock!(track_state, 6, :default, 7, 1)) === track_state
+    advanced = get_bit_buffer(track_state, 7)
+    @test advanced.code_block_buffer_length == 6
+    @test advanced.code_block_buffer == 0
 end
 
 @testset "get_signal works on a declared-but-unpopulated group (issue #134)" begin
