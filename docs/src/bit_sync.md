@@ -112,6 +112,19 @@ Two distinct phases, separated by the `found::Bool` flag:
 
 Pilot signals (`get_data_frequency = 0 Hz`, e.g. GPS L1C-P) never enter the post-sync accumulation branch — their `bit_buffer` carries the recovered secondary-code phase but no decoded bits, and the post-sync work is purely the [code-phase seeding](#Code-phase-seeding-from-the-secondary-code-phase) described next.
 
+### Advancing across missing measurements
+
+A producer that knows signal time elapsed but has no usable prompt can advance
+the bit clock directly. This preserves the symbol grid without inventing a zero
+correlator measurement for the discriminators, prompt filter, or C/N₀
+estimator. The buffer-level method returns an updated `BitBuffer`; the
+state-level method updates the addressed signal in place.
+
+```@docs
+advance_bit_clock
+advance_bit_clock!
+```
+
 ### Code-phase seeding from the secondary-code phase
 
 When a signal with a secondary code (`secondary_code_length > 1`) syncs — any of the short-secondary-code signals, or one of the 1800-chip overlay pilots — its `secondary_phase` seeds `TrackedSat.code_phase` so subsequent wrap-mod-[`current_code_wrap`](@ref) arithmetic gives the absolute position in the longest secondary-code cycle. The seeding follows a fallback chain: the synced signal with the largest `(primary × secondary)` code length wins. For the soft-CFAR signals `secondary_phase` is always `0` (they fire on a period boundary, so the upcoming integration is at chip 0); for the hard-sweep overlay pilots it is the recovered chip offset. Either way it is a multiple-of-primary snap into the correct secondary window.
