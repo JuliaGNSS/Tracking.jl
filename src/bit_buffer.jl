@@ -1124,7 +1124,7 @@ $(SIGNATURES)
 Advance the bit clock across `num_code_blocks` primary-code periods for which
 **no usable prompt exists**, and return the updated buffer.
 
-This is the counterpart to [`buffer`](@ref) for elapsed signal time that carries
+This is the counterpart to `buffer` for elapsed signal time that carries
 no measurement — a hole in a hardware producer's record stream, most often. The
 navigation bit boundary is defined by elapsed *code blocks*, so time that is
 simply dropped moves that satellite's 20 ms grid permanently: tracking, C/N₀ and
@@ -1141,7 +1141,7 @@ directly instead.
 Pre-sync the missing blocks are shifted through the hard-decision search window
 as zeros and its length advanced, so both the sliding-window search and the CFAR
 phase index stay on the true block grid. Post-sync they are credited to the
-accumulator through the same drain [`buffer`](@ref) uses, so a gap spanning more
+accumulator through the same drain `buffer` uses, so a gap spanning more
 than one symbol yields every bit it covers. Pilots decode nothing and are left
 untouched.
 """

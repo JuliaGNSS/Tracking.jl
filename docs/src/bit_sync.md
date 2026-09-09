@@ -121,7 +121,6 @@ estimator. The buffer-level method returns an updated `BitBuffer`; the
 state-level method updates the addressed signal in place.
 
 ```@docs
-buffer
 advance_bit_clock
 advance_bit_clock!
 ```
