@@ -49,11 +49,25 @@ satellite's estimator-driver signal (`signals[1]`) completes an integration,
     magnitude are **accumulated** on the per-sat state for the navigation
     filter to read and reset.
 
-A multi-signal satellite closes its loops on `signals[1]` alone in both modes.
+A multi-signal satellite can fold its signals' discriminators into one
+minimum-variance loop update here too, with
+`VectorPLLAndDLL(signal_combining = true)` — the same weighting and the same
+driver-ordering precondition
 [Multi-signal discriminator combining](tracking_state.md#Multi-signal-discriminator-combining)
-belongs to the conventional estimators: `VectorPLLAndDLL` has no
-`signal_combining` switch, and a differential group delay set on a vector-tracking
-`TrackState` is stored but never read (the setter warns once).
+describes. Which loops it reaches follows `vt_on`, because that is what decides
+which loops this package still closes:
+
+  - **`vt_on = false`** — every loop is local, so this *is* scalar tracking and
+    all three discriminators combine, differential group delay included. A
+    satellite pulls in with the full combining gain.
+  - **`vt_on = true`** — the carrier phase loop alone. The code and carrier
+    frequency loops are the navigation filter's, and their discriminators reach
+    it as raw dumps, which is where they should be fused: the filter has the
+    measured C/N₀, tap spacing and dump length, so it can weigh them better than
+    a nominal power split can, and fusing here as well would fuse the same
+    measurements twice. For the same reason the differential group delay goes unread in this
+    mode — referring a passenger's code measurement to one ranging datum belongs
+    with the consumer that ranges on it.
 
 The satellite-shared carrier/code Doppler is always updated through the same
 carrier-aiding (`aid_dopplers`) used by the conventional estimator, and the

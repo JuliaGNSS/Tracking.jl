@@ -1287,10 +1287,12 @@ that on a **single-signal** satellite the only signal *is* the driver, so any
 non-zero value there throws too. The same check runs when a [`TrackedSat`](@ref)
 is built from `TrackedSignal`s that already carry a delay.
 
-Only the conventional estimators read the value. On a `TrackState` driven by
-[`VectorPLLAndDLL`](@ref) it is stored but never used — vector tracking closes
-every satellite's loops on `signals[1]` alone and does not combine — and the
-setter warns once to say so.
+The value is read wherever this package closes the code loop: the conventional
+estimators, and [`VectorPLLAndDLL`](@ref)'s scalar fallback. Under vector
+closure it is stored and not applied — every signal's code discriminator leaves
+as its own measurement for the navigation filter, which is then the party that
+must refer them to one ranging datum — and the setter warns once to say so. Set
+it regardless: a satellite pulls in through the fallback, where it is used.
 
 ## Deriving the value
 
@@ -1368,16 +1370,22 @@ function set_differential_group_delay!(
     track_state
 end
 
-# Only the conventional estimators read the delay. Warn — once — when it is set on a
-# `TrackState` whose estimator never will, so the omission is visible rather than a
-# silent capability cliff between a receiver's scalar and vector modes.
+# The delay refers a *code* discriminator to the driver's code phase, so only an
+# estimator that closes a combined code loop reads it. Under `VectorPLLAndDLL` that is
+# the scalar fallback and not vector closure, where each signal's code dump goes to the
+# navigation filter raw — and the receiver, which ranges on it, is then the party that
+# must refer it to a datum. Say so once when the value is set there, because a receiver
+# that assumes Tracking handles it in both modes has a bias that appears only after
+# `enable_vt!` and only on its passenger measurements.
 _warn_differential_group_delay_unread(::AbstractDopplerEstimator) = nothing
 @noinline function _warn_differential_group_delay_unread(::VectorPLLAndDLL)
     @warn """
-          `set_differential_group_delay!` stores a value that `VectorPLLAndDLL` never \
-          reads: vector tracking closes every satellite's loops on `signals[1]` alone and \
-          does not combine discriminators. Only `ConventionalPLLAndDLL` with \
-          `signal_combining = true` uses this delay.""" maxlog = 1
+          `set_differential_group_delay!` under `VectorPLLAndDLL` is read only while a \
+          satellite runs the scalar fallback (`vt_on = false`), where the code loop is \
+          local and combines. Once `enable_vt!` puts it in the vector loop the code loop \
+          is the navigation filter's, every signal hands it its own raw dump, and \
+          referring those to one ranging datum is the filter's job — this value is not \
+          applied to them.""" maxlog = 1
     nothing
 end
 

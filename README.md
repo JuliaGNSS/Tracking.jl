@@ -26,6 +26,7 @@ Multi-band tracking is supported as well: one `track` call can process sample bu
 * Multi-band tracking: one `track` call processes measurements from multiple RF bands (e.g. L1 + L5) in lockstep
 * Multi-signal tracking on a single satellite (e.g. a pilot/data pair such as Galileo E1C + E1B) with a single shared
   downconvert, optionally combining every signal's PLL/FLL/DLL discriminator into one loop update
+  (the carrier phase one under vector tracking)
 * CN0 estimation
 * Secondary code detection
 * Bit detection

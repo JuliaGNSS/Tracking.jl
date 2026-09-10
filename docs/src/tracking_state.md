@@ -237,17 +237,20 @@ When a satellite tracks signals with different primary-code lengths (e.g. L1 C/A
 
 ### Multi-signal discriminator combining
 
-Tracking multiple signals of one satellite and closing the loops on only one of them throws away most of the information. The conventional estimators can therefore combine them: with `signal_combining = true`, **every** signal's discriminator output is folded into the driver's before the loop filters see it, as a minimum-variance weighted mean.
+Tracking multiple signals of one satellite and closing the loops on only one of them throws away most of the information. Both shipped estimators can therefore combine them: with `signal_combining = true`, **every** signal's discriminator output is folded into the driver's before the loop filters see it, as a minimum-variance weighted mean.
 
 ```julia
 # Every signal's discriminators drive the loops.
 ConventionalAssistedPLLAndDLL(signal_combining = true)
 
-# The default: driver-only.
+# The same under vector tracking — every loop it still closes itself.
+VectorPLLAndDLL(signal_combining = true)
+
+# The default in either mode: driver-only.
 ConventionalAssistedPLLAndDLL()
 ```
 
-Combining is a feature of the conventional estimators only. Under [`VectorPLLAndDLL`](@ref) a multi-signal satellite closes its loops on `signals[1]` alone, there is no `signal_combining` switch, and a differential group delay set on such a `TrackState` is stored but never read (the setter warns once). A receiver that offers both modes gets the passengers' measurements only in its scalar mode. Per satellite or per group the setting is expressed at construction: the `doppler_estimator` keyword of [`TrackedSat`](@ref) and [`add_satellite!`](@ref) seeds that satellite from the estimator passed there, independently of the `TrackState`'s own.
+[`VectorPLLAndDLL`](@ref) takes the same `signal_combining` keyword and everything below applies to it, with one restriction: a satellite already in the vector loop (`vt_on = true`) combines the **carrier phase** discriminator only, because its other two loops are the navigation filter's and each signal's discriminator reaches the filter raw for it to weigh — see [Vector tracking](vector_tracking.md). In its scalar fallback, which is where a satellite pulls in, all three combine exactly as described here. Per satellite or per group the setting is expressed at construction: the `doppler_estimator` keyword of [`TrackedSat`](@ref) and [`add_satellite!`](@ref) seeds that satellite from the estimator passed there, independently of the `TrackState`'s own.
 
 Combining is opt-in because it changes a multi-signal satellite's carrier/code Doppler, code phase and decoded-bit timing, and because it comes with a group-ordering precondition — see **Put the longest-integrating signal first** below. That precondition is not enforced here: violating it costs most of the gain but never makes a measurement wrong, so it is a matter of how the caller assembles the group rather than something to reject a configuration over.
 

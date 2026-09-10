@@ -39,7 +39,7 @@ Fields:
     chunk/epoch origin so the value is relative to the chunk the estimator is
     folding, keeping every satellite on one consistent time grid.
 
-    The only reader inside Tracking is the conventional estimator with
+    The only reader inside Tracking is either estimator with
     `signal_combining = true`, which uses it to decide which of a satellite's
     passenger records fall inside each driver record's loop-update window. It
     has to be comparable **across the signals of one satellite** for that, which

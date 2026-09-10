@@ -389,8 +389,16 @@ $(SIGNATURES)
 
 This signal's differential payload group delay against its satellite's
 estimator-driver signal, as a time (`1.2e-9s`, `-0.3u"ns"`, …), or `nothing`
-when the caller has supplied none. Read by multi-signal code-discriminator
-combining only; set it with [`set_differential_group_delay!`](@ref).
+when the caller has supplied none. Set it with
+[`set_differential_group_delay!`](@ref).
+
+Who reads it depends on who closes the code loop. Wherever this package closes
+it — the conventional estimators, and [`VectorPLLAndDLL`](@ref)'s scalar
+fallback — multi-signal code combining reads the value and refers each
+passenger's discriminator to the driver's code phase. Under vector closure
+(`vt_on`) nothing here reads it: every signal's code discriminator leaves as its
+own measurement ([`mean_code_discr`](@ref)) and the consumer that fuses them
+must apply this value itself.
 
 `nothing` and `0.0s` are deliberately different states — **on a passenger**.
 There, `0.0s` asserts that this signal's code phase *is* the driver's, so its
