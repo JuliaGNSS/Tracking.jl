@@ -14,7 +14,7 @@ Down-conversion and correlation is done in full code blocks meaning from code st
 The factor `N` can be specified, but will be `1` as long as the bit start is unknown — Tracking.jl uses single-code-period integrations to locate the bit edge. Once the bit start is known for every tracked satellite, longer coherent integrations become available and the result is handed over to the code-and-carrier estimation block.
 
 Moreover, Tracking.jl allows tracking of signals from phased antenna arrays meaning that they are down-converted and correlated by the very same replica to conserve phase relationships.
-Multi-signal tracking is supported: a single satellite can be tracked on several signals at once (e.g. GPS L1 C/A together with L1C-D and L1C-P) sharing one carrier downconvert per outer iteration, with a per-signal correlator each.
+Multi-signal tracking is supported: a single satellite can be tracked on several signals at once (e.g. GPS L1 C/A together with L1C-D and L1C-P) sharing one carrier downconvert per outer iteration, with a per-signal correlator each. Those signals' discriminator outputs can be combined into one minimum-variance loop update rather than only the first signal's, so a pilot's longer coherent integration and sharper BOC discriminator benefit the whole satellite.
 
 ## Supported signals
 

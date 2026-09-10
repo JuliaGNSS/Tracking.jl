@@ -47,8 +47,8 @@ satellite's estimator-driver signal (`signals[1]`) completes an integration,
 
     In this mode the DLL and FLL discriminator outputs and the prompt
     magnitude are **accumulated** on the per-sat state for the navigation
-    filter to read and reset — one dump per *signal*, see
-    [Per-signal discriminator dumps](#Per-signal-discriminator-dumps).
+    filter to read and reset — one per *signal*, see
+    [Per-signal discriminator accumulators](#Per-signal-discriminator-accumulators).
 
 A multi-signal satellite can fold its signals' discriminators into one
 minimum-variance loop update here too, with
@@ -63,13 +63,8 @@ which loops this package still closes:
     satellite pulls in with the full combining gain.
   - **`vt_on = true`** — the carrier phase loop alone. The code and carrier
     frequency loops are the navigation filter's, and their discriminators reach
-    it as [one raw dump per signal](#Per-signal-discriminator-dumps), which is
-    where they should be fused: the filter has each signal's measured C/N₀, tap
-    spacing and dump length, so it can weigh them better than a nominal power
-    split can, and fusing here as well would fuse the same measurements twice.
-    For the same reason the differential group delay goes unread in this mode —
-    referring a passenger's code measurement to one ranging datum belongs with
-    the consumer that ranges on it.
+    it as [one raw measurement per signal](#Per-signal-discriminator-accumulators)
+    for it to fuse, differential group delay included.
 
 The satellite-shared carrier/code Doppler is always updated through the same
 carrier-aiding (`aid_dopplers`) used by the conventional estimator, and the
@@ -93,11 +88,10 @@ enable_vt!(track_state, prns_in_lock)
 #    for each vector-loop satellite, then reset the accumulators so the
 #    next block accumulates afresh.
 for (prn, sat) in pairs(get_sat_states(track_state))
-    state = get_doppler_estimator_state(sat)
-    state.vt_on || continue
+    get_doppler_estimator_state(sat).vt_on || continue
     for i in eachindex(get_signals(sat))
-        code_err = mean_code_discr(state, i)      # chips, or `nothing` if no data
-        carrier_err = mean_carrier_discr(state, i) # Hz, or `nothing` if no data
+        code_err = mean_code_discr(sat, i)      # chips, or `nothing` if no data
+        carrier_err = mean_carrier_discr(sat, i) # Hz, or `nothing` if no data
         # … feed this signal's measurements into the navigation filter …
     end
 end
@@ -112,41 +106,61 @@ set_code_freq_updates!(track_state, code_freq_updates)
 set_carrier_freq_updates!(track_state, carrier_freq_updates)
 ```
 
-The accumulators are stored as `(count, sum)` tuples;
-[`mean_code_discr`](@ref) / [`mean_carrier_discr`](@ref) apply
-the averaging convention (`sum / count`, returning `nothing` when nothing has
-accumulated) in one place, so consumers don't each re-implement the divide and
-the `count == 0` guard. Reading and resetting are deliberately separate calls
-so the filter can read at its own (typically slower) rate than `track!`.
+The accumulators are stored as `(count, sum)` tuples, one per signal;
+[`mean_code_discr`](@ref) / [`mean_carrier_discr`](@ref) apply the averaging
+convention (`sum / count`, returning `nothing` when nothing has accumulated) in
+one place, so consumers don't each re-implement the divide and the `count == 0`
+guard. Reading and resetting are deliberately separate calls so the filter can
+read at its own (typically slower) rate than `track!`.
 
-### Per-signal discriminator dumps
+### Per-signal discriminator accumulators
 
 A satellite tracked on several signals accumulates **one `(count, sum)` pair per
 signal**, in `sat.signals` order, and each is that signal's own discriminator —
-never a mean across signals. `mean_code_discr(state, i)` and
-`mean_carrier_discr(state, i)` read slot `i`; both default to `1`, the
-estimator-driver signal, which is the ranging signal and the only slot a
-single-signal satellite has.
+never a mean across signals. [`mean_code_discr`](@ref) and
+[`mean_carrier_discr`](@ref) take the same trailing signal selector as every
+other per-signal accessor — an index or a signal type — which may be omitted
+only when the satellite tracks one signal:
+
+```julia
+mean_code_discr(track_state, :gps_l1, 7, GPSL1C_D)   # by signal type
+mean_code_discr(sat, 2)                              # by index
+mean_code_discr(get_doppler_estimator_state(sat))    # single-signal satellite
+```
+
+The `SatVectorPLLAndDLL` form takes an index rather than a selector, since the
+estimator state holds the accumulators but not the signals and so cannot resolve
+a type. Asking a multi-signal satellite for "the" mean is an error, not a
+driver-only read — the same refusal [`estimate_cn0`](@ref) and the other
+per-signal accessors make.
 
 Fusing them is deliberately left to the navigation filter, because that is where
 the information to do it well already is. A filter that models its own
 measurement noise — as GNSSReceiver.jl's does, from C/N₀, early-late spacing and
-coherent dump length — can weigh each signal by what it actually measured, which
-beats any weighting this package could apply from a nominal ICD power split. It
-also keeps the variance honest: a dump quietly turned into a two-signal mean
-would enter such a filter carrying one signal's variance.
+coherent integration length — can weigh each signal by what it actually
+measured, which beats any weighting this package could apply from a nominal ICD
+power split. It also keeps the variance honest: a measurement quietly turned
+into a two-signal mean would enter such a filter carrying one signal's
+variance.
 
 Two things a consumer owes these measurements:
 
-  - **A ranging datum for the code dumps.** Every signal shares the satellite's
-    one `code_phase`, and their true code phases differ by the satellite's
-    differential payload group delay, so a non-driver signal's code dump
-    measures the driver's error *plus* that offset. Subtract it before fusing —
-    the same quantity [`set_differential_group_delay!`](@ref) takes, which the
-    scalar fallback applies for you and this mode deliberately does not. The
-    carrier dumps need no counterpart: the signals of one satellite share a
-    carrier, so their frequency dumps measure one Doppler.
-  - **Room in the measurement model.** Several dumps from one satellite are
+  - **A ranging datum for the code measurements.** Every signal shares the
+    satellite's one `code_phase`, and their true code phases differ by the
+    satellite's differential payload group delay, so a non-driver signal
+    measures the driver's error *plus* that offset. Reading one is therefore two
+    calls — [`mean_code_discr`](@ref) and
+    [`get_differential_group_delay`](@ref) — and the second decides whether the
+    first is usable: subtract the delay before fusing, and **withhold the
+    measurement entirely where the delay is `nothing`**, rather than assuming
+    zero. That is the same gate the scalar path applies by giving such a record
+    zero code weight, and the asymmetry is deliberate: an unreferred passenger
+    biases the ranging solution invisibly, which is the branch's own argument
+    for never guessing this quantity. The driver (slot 1) needs neither call —
+    its code phase *is* the reference. The carrier side needs no counterpart at
+    all: the signals of one satellite share a carrier, so their frequency
+    measurements are all of one Doppler.
+  - **Room in the measurement model.** Several measurements from one satellite are
     several measurements along **one** line of sight. Whether they enter as
     separate rows sharing a geometry row, or are pre-fused into one row, is the
     filter's design choice; what they must not be is treated as independent
@@ -155,7 +169,7 @@ Two things a consumer owes these measurements:
     atmospheric errors are common-mode — so fusing sharpens the thermal part and
     nothing else.
 
-Both dumps of every signal are cleared together by
+Every signal's accumulators are cleared together by
 [`reset_code_discr_acc!`](@ref) / [`reset_carrier_discr_acc!`](@ref); there is no
 per-signal reset, because the filter reads a satellite's signals in one cycle.
 

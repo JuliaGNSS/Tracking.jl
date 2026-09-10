@@ -39,10 +39,17 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
 
    It must be **pure** (no observable side effects): besides seeding
    real sats, it is also called on the throwaway PRN-0 template sat that
-   fixes a group's slot type at `TrackState` construction, as a type
-   probe when validating pre-built sats, and by
-   [`reset_loop_filters!`](@ref). Register sats into shared state in
-   `update_estimator_on_handoff` (below), never here.
+   fixes a group's slot type at `TrackState` construction, and as a type
+   probe when validating pre-built sats. Register sats into shared state
+   in `update_estimator_on_handoff` (below), never here.
+
+   [`reset_loop_filters!`](@ref) re-seeds through
+   `Tracking._reset_estimator_state(estimator, sat)`, which falls back to
+   `init_estimator_state`. Specialize it if your per-sat state carries
+   *configuration* a reset must keep — both shipped estimators do, to preserve
+   a per-satellite loop bandwidth or `signal_combining` override that going
+   through `init_estimator_state` would silently revert to the estimator's
+   defaults.
 
 4. **(Optional) An [`update_estimator_on_handoff`](@ref) method**, if
    your estimator carries cross-satellite or cross-system shared state
@@ -95,6 +102,21 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
    Doppler should read the satellite's `code_doppler`/`carrier_doppler` (the
    value that generated the chunk), not an intermediate per-output estimate.
 
+   **You own more than the Dopplers.** Nothing else in the pipeline touches a
+   completed record, so per record and *per signal* your fold is also what
+   normalizes the correlator by its sample count, runs the post-correlation
+   filter, records the filtered prompt, advances the [bit
+   buffer](bit_sync.md) and the [C/N₀ estimator](cn0_estimator.md), and moves
+   the record to `last_fully_integrated_*`. Skip that and bit sync, C/N₀ and
+   `get_filtered_prompts` are silently dead for every signal, the driver
+   included. Two satellite-level duties come with it: the C/N₀ estimators read
+   their signal's noise density out of `track_state.noise_estimators` (see
+   [Noise Estimator](noise_estimator.md)), and the iteration on which a signal
+   first reports bit or secondary-code sync is when the shared `code_phase` has
+   to be anchored to that signal's secondary-chip window. The shipped
+   `_apply_correlator_output` and `_update_tracked_sat_doppler` do all of this;
+   reusing them (below) is much less work than restating them.
+
    The matching mutating method
    `estimate_dopplers_and_filter_prompt!(track_state, measurements)`
    is what [`track!`](@ref) calls. To support real-time loops, define
@@ -103,11 +125,11 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
 
    The estimator only needs the per-band **sampling frequency** out of
    `measurements` (to turn each output's `integrated_samples` into an
-   integration time and to normalize the DLL discriminator). The shipped
-   `ConventionalPLLAndDLL` therefore also accepts a bare per-band
-   sampling-frequency source in place of `measurements` — a `NamedTuple`/`Dict`
-   keyed by `get_band_id` — so an external correlator producer can run the
-   estimator with no sample buffer (see
+   integration time and to normalize the DLL discriminator). Both shipped
+   estimators therefore also accept a bare per-band sampling-frequency source in
+   place of `measurements` — a `NamedTuple`/`Dict` keyed by `get_band_id` — so
+   an external correlator producer can run the estimator with no sample buffer
+   (see
    [External correlator producers](track.md#External-correlator-producers)).
    A custom estimator that likewise reads only the rate is encouraged to offer
    the same overload.
@@ -123,7 +145,7 @@ the actual algorithm, but the *structure* — five methods, two structs
 julia> using Tracking, GNSSSignals
 
 julia> using Tracking: AbstractDopplerEstimator, TrackedSat, TrackState,
-                       SignalGroup, BandMeasurements, get_band_id
+                       BandMeasurements
 
 julia> # 1. Estimator type — config + any shared state
        struct MyEstimator <: AbstractDopplerEstimator end
@@ -174,19 +196,44 @@ julia> get_doppler_estimator_state(get_sat_state(track_state, 1))
 SatMyEstimator()
 ```
 
-The existing [`ConventionalPLLAndDLL`](@ref) implementation in
-`src/conventional_pll_and_dll.jl` shows the full pattern, including how
-the immutable and in-place forms share a `_update_tracked_sat_doppler`
-helper so they cannot drift, and how the per-signal walk distinguishes
-the [estimator-driver signal](tracking_state.md#Estimator-driver-signal)
-(`signals[1]`, which closes the conventional PLL/DLL) from the other
-signals (which contribute measurements but do not close a loop of their own).
-That split is narrower than it sounds: the driver signal owns the loop
-*cadence*, *bandwidths* and *carrier-phase reference*, but every signal's
-discriminator output can be folded into the loop update — see
+## Reusing the shipped fold
+
+`src/conventional_pll_and_dll.jl` is worth reading as more than an example: most
+of it is estimator-agnostic and is already shared with
+[`VectorPLLAndDLL`](@ref), which is written as a per-satellite state type plus
+one method. The seams, in the order a chunk passes through them:
+
+  - `_update_tracked_sat_doppler(sat, sampling_frequency, noise, estimator)` —
+    one satellite, pure, and the reason the immutable and in-place forms cannot
+    drift. It does the per-signal walk, the sync-time code-phase snap and the
+    rewrap.
+  - `_process_signals(driver, passengers, sat, state, …)` — how the signals feed
+    the loops. The generic method folds the passengers for their prompts, bits
+    and C/N₀ only and hands the driver to
+    `_process_estimator_driver_signal(driver, sat, state, …)`, dispatched on
+    your per-satellite state type. Defining that one method is the cheap way in.
+  - `_apply_correlator_output` / `_advance_driver_record` — everything one
+    record does before a loop sees it, including the effective-bandwidth
+    handling for an `N`-code-block integration.
+
+None of these are public API and none carry a compatibility promise, but the
+alternative is reimplementing rules — which record's blocks count toward a bit,
+when a pre-sync-correlated prompt must be dropped — whose subtleties are the
+reason they exist.
+
+## What `signals[1]` means
+
+Both shipped estimators give the [estimator-driver
+signal](tracking_state.md#Estimator-driver-signal) the loop *cadence*, the loop
+*bandwidths* and the *carrier-phase reference*, and the satellite ranges on its
+`code_phase`. That is narrower than "the other signals are passengers": with
+`signal_combining = true` every signal's discriminator is folded into the loop
+update, weighted as
 [Multi-signal discriminator combining](tracking_state.md#Multi-signal-discriminator-combining)
-for the weighting and for the differential group delay the combined code loop needs. All of that is a convention `ConventionalPLLAndDLL` chooses; your own
-estimator can use every signal's state any way you like.
+describes, and under [vector tracking](vector_tracking.md) every signal also
+hands the navigation filter its own discriminator accumulator. All of it is convention
+the shipped estimators chose; yours can use every signal's state any way it
+likes.
 
 ## What stays generic
 
