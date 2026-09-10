@@ -1290,9 +1290,12 @@ referred to an unknown datum. [`get_driver_relative_group_delay`](@ref) returns
 the difference the loops apply, and `0.0s` on `signals[1]` whatever it holds.
 A **single-signal** satellite is its own datum and has nothing to set.
 
-Only the conventional estimators read the value. On a `TrackState` driven by
-[`VectorPLLAndDLL`](@ref) it is stored but never used — vector tracking closes
-every satellite's loops on `signals[1]` alone and does not combine.
+The value is read wherever this package closes the code loop: the conventional
+estimators, and [`VectorPLLAndDLL`](@ref)'s scalar fallback. Under vector
+closure it is stored and not applied — every signal's code discriminator leaves
+as its own measurement for the navigation filter, which is then the party that
+must refer them to one ranging datum. Set it regardless: a satellite pulls in
+through the fallback, where it is used.
 
 Where the value comes from is deliberately not this package's concern — Tracking
 neither knows which constellation broadcasts what nor parses navigation messages.

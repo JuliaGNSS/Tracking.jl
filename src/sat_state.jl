@@ -374,6 +374,13 @@ This signal's payload group delay, as a time (`1.2e-9s`, `-0.3u"ns"`, …), or
 `nothing` when the caller has supplied none. Set it with
 [`set_differential_group_delay!`](@ref).
 
+Who reads it depends on who closes the code loop. Wherever this package closes
+it — the conventional estimators, and [`VectorPLLAndDLL`](@ref)'s scalar
+fallback — multi-signal code combining reads it. Under vector closure (`vt_on`)
+nothing here does: every signal's code discriminator leaves as its own
+measurement ([`mean_code_discr`](@ref)) and the consumer that fuses them must
+refer them itself, with [`get_driver_relative_group_delay`](@ref).
+
 **Only differences between the signals of one satellite are ever used**, so the
 datum the values are stated against is yours to choose and cancels: what
 multi-signal code combining applies to a passenger is
