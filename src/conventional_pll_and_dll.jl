@@ -107,17 +107,21 @@ the cap starts to bind, this returns the configured bandwidth unchanged.
 end
 
 # What a satellite's **passenger** signals (`signals[2:end]`) have contributed to
-# the loops the estimator combines, since the estimator-driver signal last closed
-# them. One subtype per set of combined loops — all three
-# (`DiscriminatorAccumulator`), or the carrier phase loop alone
-# (`PLLOnlyAccumulator`, what a vector-closed satellite uses) — plus `nothing`
-# where nothing combines at all.
+# since the estimator-driver signal last closed its loops. One subtype per mode,
+# all four in this file and vector_pll_and_dll.jl: all three loops combined
+# (`DiscriminatorAccumulator`), per-signal measurements collected for a
+# navigation filter and nothing combined (`PerSignalAccumulator`), both at once
+# with the carrier phase loop the one combined (`VectorLoopAccumulator`), and
+# `nothing` for neither — every single-signal satellite, and every multi-signal
+# one with combining off.
 #
 # The passenger walk (`_advance_one_passenger_to`) dispatches on this rather than
 # branching on a flag, so a passenger's prompt, CN0 and bit buffer advance through
 # one code path whatever the estimator does with its discriminators, and an
 # estimator that combines fewer loops never forms the other loops' discriminators
-# at all.
+# at all. `nothing` is a *type*, so with it the discriminator and weight
+# arithmetic folds away entirely and the driver-only path compiles to what it
+# was before combining existed.
 abstract type AbstractDiscriminatorAccumulator end
 
 """
@@ -127,13 +131,13 @@ closed its loops — the state multi-signal discriminator combining threads
 through the fold and parks in each `SatConventionalPLLAndDLL`.
 
 One `(weight, sum)` pair per loop, because the three loops weight a record
-differently (see `_accumulate_passenger_discriminators`). Consumed and
-zeroed at every driver record; carried **across chunk boundaries** in the
-per-satellite estimator state, which is not an optimisation but a requirement:
-the default chunk is the *shortest* code period across all tracked signals, so
-with a 10 ms pilot driver and a 1 ms C/A passenger nine chunks out of ten
-contain passenger records and no driver record at all. A per-chunk accumulator
-would throw those nine away.
+differently (see `_accumulate_passenger_discriminators`). Consumed and zeroed at
+every driver record, and carried **across chunk boundaries** in the
+per-satellite estimator state — a requirement, not an optimisation: the default
+chunk is the *shortest* code period across all tracked signals, so with a 10 ms
+pilot driver and a 1 ms C/A passenger nine chunks out of ten hold passenger
+records and no driver record at all, and a per-chunk accumulator would throw
+those nine away.
 """
 struct DiscriminatorAccumulator <: AbstractDiscriminatorAccumulator
     dll_weight::Float64
@@ -146,53 +150,24 @@ end
 
 DiscriminatorAccumulator() = DiscriminatorAccumulator(0.0, 0.0, 0.0, 0.0, 0.0, 0.0Hz)
 
-# Fold one more measurement into all three loops' running sums. The carrier
-# phase loop alone is `_accumulate_pll`; those two are the only combinations any
-# estimator uses.
-@inline _accumulate_all_loops(
-    acc::DiscriminatorAccumulator,
-    dll_value,
-    dll_weight,
-    pll_value,
-    pll_weight,
-    fll_value,
-    fll_weight,
-) = DiscriminatorAccumulator(
-    acc.dll_weight + dll_weight,
-    acc.dll_sum + dll_weight * dll_value,
-    acc.pll_weight + pll_weight,
-    acc.pll_sum + pll_weight * pll_value,
-    acc.fll_weight + fll_weight,
-    acc.fll_sum + fll_weight * fll_value,
-)
+# Fold one more measurement into all three loops' running sums, taking one
+# record's whole `_weighted_record_contribution` by name so no caller can pair
+# a value with another loop's weight. The carrier phase loop alone is
+# `_accumulate_pll`; those two are the only combinations any estimator uses.
+@inline _accumulate_all_loops(acc::DiscriminatorAccumulator, contribution::NamedTuple) =
+    DiscriminatorAccumulator(
+        acc.dll_weight + contribution.dll_weight,
+        acc.dll_sum + contribution.dll_weight * contribution.dll,
+        acc.pll_weight + contribution.pll_weight,
+        acc.pll_sum + contribution.pll_weight * contribution.pll,
+        acc.fll_weight + contribution.fll_weight,
+        acc.fll_sum + contribution.fll_weight * contribution.fll,
+    )
 
-"""
-The same accumulator, marked "fold the **carrier phase loop only**" — what a
-[`VectorPLLAndDLL`](@ref) satellite uses while `vt_on`. Its code and carrier
-frequency loops are the navigation filter's there, and each signal's
-contribution to those leaves through `code_discr_acc` / `carrier_discr_acc` as
-its own raw dump for the filter to weigh; combining them here as well would fuse
-twice.
-
-A marker around the same sums rather than a narrower struct, because which loops
-a satellite combines follows `vt_on` and therefore changes at run time, while the
-field it is stored in cannot change type. The fold is written once against
-[`AbstractDiscriminatorAccumulator`](@ref) and specialises on the marker, so the
-excluded loops' discriminators are never formed.
-"""
-struct PLLOnlyAccumulator <: AbstractDiscriminatorAccumulator
-    acc::DiscriminatorAccumulator
-end
-
-zero(::Type{PLLOnlyAccumulator}) = PLLOnlyAccumulator(DiscriminatorAccumulator())
-
-# The stored sums, for a caller that has to park or read them.
-@inline _sums(acc::DiscriminatorAccumulator) = acc
-@inline _sums(acc::PLLOnlyAccumulator) = acc.acc
-
-# A fresh window of the same shape, at every driver record.
+# A fresh combining window at every driver record. An accumulator that carries
+# more than the combining sums (`PerSignalAccumulator`,
+# `VectorLoopAccumulator`) specialises this to leave its other half alone.
 @inline _reset_combining_window(::DiscriminatorAccumulator) = DiscriminatorAccumulator()
-@inline _reset_combining_window(::PLLOnlyAccumulator) = zero(PLLOnlyAccumulator)
 
 # Fold one more carrier phase measurement, leaving the other two loops' sums be.
 @inline _accumulate_pll(acc::DiscriminatorAccumulator, pll_value, pll_weight) =
@@ -541,7 +516,7 @@ end
 # `_signal_noise_densities`) — so the driver takes `first(noise)` and the
 # passengers `Base.tail(noise)`, and no signal is ever handed another's floor.
 # It is passed on whole rather than split here, because which signals are folded
-# where is `_process_signals`' decision, not this function's.
+# where is `_seed_and_fold`'s decision, not this function's.
 function _update_tracked_sat_doppler(sat::TrackedSat, sampling_frequency, noise::Tuple)
     # Walk all signals. For each one whose integration completed this
     # iteration, normalize/filter its prompt, advance CN0 and bit buffer,
@@ -549,7 +524,7 @@ function _update_tracked_sat_doppler(sat::TrackedSat, sampling_frequency, noise:
     # estimator-driver signal) additionally runs the PLL/DLL and updates the
     # sat-shared carrier/code Doppler — fed, unless combining is switched off,
     # by every signal's discriminators rather than only its own (see
-    # `_process_signals`). Each signal's coherent-integration length comes from
+    # `_seed_and_fold`). Each signal's coherent-integration length comes from
     # its own `preferred_num_code_blocks_to_integrate`.
     pll_and_dll_state = sat.doppler_estimator_state
     driver = first(sat.signals)
@@ -568,7 +543,7 @@ function _update_tracked_sat_doppler(sat::TrackedSat, sampling_frequency, noise:
     new_passengers,
     new_doppler_estimator_state,
     new_carrier_doppler,
-    new_code_doppler = _process_signals(
+    new_code_doppler = _seed_and_fold(
         driver,
         passenger_signals,
         sat,
@@ -674,7 +649,7 @@ end
 # scaling is the same actual count (floored at 1): the bandwidth must pair with
 # the record's true integration time, so it only switches when the integration
 # actually lengthened — not already on the fold where sync was detected but the
-# records were still single-block (see `_process_estimator_driver_signal`).
+# records were still single-block (see `_advance_driver_record`).
 # `correlated_pre_sync = true` marks a record that follows a bit/secondary sync
 # detected earlier in the same fold, i.e. one that was correlated with a
 # pre-sync replica. Its *prompt* is only unusable where sync changed the replica
@@ -912,128 +887,53 @@ end
     )
 end
 
-# Process the estimator-driver signal (signals[1]): fold over every
-# `CorrelatorOutput` collected during this chunk, in order — running the PLL/DLL
-# plus prompt filter / CN0 / bit-buffer update per record and threading the loop
-# filters and FLL `previous_prompt` across them — then return the new
-# doppler_estimator_state and the *last* record's carrier/code Doppler (the NCO
-# is written once per chunk). With no outputs the Doppler holds. This is where
-# ConventionalPLLAndDLL hard-codes the "signals[1] drives the loop filter" rule —
-# a custom AbstractDopplerEstimator may use any/all signals' state.
-@inline function _process_estimator_driver_signal(
-    tracked_signal::TrackedSignal,
-    sat::TrackedSat,
-    pll_and_dll_state::SatConventionalPLLAndDLL,
-    sampling_frequency,
-    noise_density,
-    noise_density_ready::Bool,
-)
-    outputs = tracked_signal.correlator_outputs
-    if isempty(outputs)
-        return tracked_signal, pll_and_dll_state, sat.carrier_doppler, sat.code_doppler
-    end
-    signal = tracked_signal.signal
-    tsig = tracked_signal
-    carrier_loop_filter = pll_and_dll_state.carrier_loop_filter
-    code_loop_filter = pll_and_dll_state.code_loop_filter
-    carrier_doppler = sat.carrier_doppler
-    code_doppler = sat.code_doppler
-    found_before_chunk = has_bit_or_secondary_code_been_found(tsig.bit_buffer)
-    @inbounds for k in eachindex(outputs)
-        folded = _advance_driver_record(
-            tsig,
-            outputs[k],
-            sat.prn,
-            sampling_frequency,
-            noise_density,
-            noise_density_ready,
-            found_before_chunk,
-            pll_and_dll_state.carrier_loop_filter_bandwidth,
-            pll_and_dll_state.code_loop_filter_bandwidth,
-        )
-        tsig = folded.tracked_signal
-
-        carrier_freq_update, carrier_loop_filter = calculate_carrier_frequency_update(
-            signal,
-            carrier_loop_filter,
-            folded.filtered_correlator,
-            folded.previous_prompt,
-            folded.integration_time,
-            folded.carrier_bandwidth,
-        )
-        # `dll_disc` is fed the chunk-fixed `sat.code_doppler` — the code Doppler
-        # that actually generated this chunk's replicas — for every record;
-        # only the loop-filter *state* threads across records.
-        code_freq_update, code_loop_filter = calculate_code_frequency_update(
-            signal,
-            code_loop_filter,
-            folded.filtered_correlator,
-            sat.code_doppler,
-            sampling_frequency,
-            folded.integration_time,
-            folded.code_bandwidth,
-        )
-        carrier_doppler, code_doppler = aid_dopplers(
-            signal,
-            pll_and_dll_state.init_carrier_doppler,
-            pll_and_dll_state.init_code_doppler,
-            carrier_freq_update,
-            code_freq_update,
-        )
-    end
-    empty!(outputs)
-    new_doppler_estimator_state =
-        SatConventionalPLLAndDLL(pll_and_dll_state; carrier_loop_filter, code_loop_filter)
-    return tsig, new_doppler_estimator_state, carrier_doppler, code_doppler
-end
-
 # ---------------------------------------------------------------------------
-# Signal processing entry point — driver-only vs. multi-signal combining
+# Signal processing entry point
 # ---------------------------------------------------------------------------
 #
-# `_process_signals` is the seam `_update_tracked_sat_doppler` calls; every
-# method returns `(new_driver, new_passengers, new_state, carrier_doppler, code_doppler)`.
-# It dispatches on the per-satellite estimator state — the two shipped estimators
+# `_seed_and_fold` is the seam `_update_tracked_sat_doppler` calls; every method
+# returns `(new_driver, new_passengers, new_state, carrier_doppler, code_doppler)`
+# and gets there through the one shared traversal below
+# (`_fold_satellite_chunk`). All a method decides is which accumulator seeds it,
+# dispatching on the per-satellite estimator state — the two shipped estimators
 # have a state type each, so the `TrackState`'s estimator need not be consulted.
 #
-# The dispatch is deliberately at the *type* level on the passenger tuple, so a
-# single-signal satellite compiles to exactly the driver-only code it always ran
-# — no extra discriminator or weight arithmetic in the N=1 hot path, and
-# bit-identical Dopplers.
+# The empty/non-empty passenger split is at the *type* level, so a single-signal
+# satellite compiles to exactly the driver-only code it always ran — no extra
+# discriminator or weight arithmetic in the N=1 hot path, and bit-identical
+# Dopplers. The combining flag is a runtime branch instead, so that flipping it
+# does not change any container's concrete type; the traversal specialises on
+# each seed behind that branch.
 
-# No passengers: nothing to combine. Also the path every estimator that defines
-# no combining method of its own takes, whatever its per-sat state — it plugs its
-# own `_process_estimator_driver_signal` in through `_process_signals_separately`
-# and gets the passengers' prompts, CN0s and bits advanced for free. The two
-# shipped estimators do define one: see the method below, and
-# `_process_signals` on `SatVectorPLLAndDLL`.
-@inline function _process_signals(
+# No passengers: there is nothing to combine whatever the flag says, so the
+# traversal is seeded with `nothing` and the passenger walk, the weights and the
+# group-delay arithmetic all fold away at compile time.
+@inline _seed_and_fold(
     driver::TrackedSignal,
-    passengers::Tuple,
+    passengers::Tuple{},
     sat::TrackedSat,
-    state,
+    state::SatConventionalPLLAndDLL,
     sampling_frequency,
     noise::Tuple,
     driver_carrier_phase_offset::Real,
+) = _fold_satellite_chunk(
+    driver,
+    passengers,
+    sat,
+    state,
+    sampling_frequency,
+    noise,
+    driver_carrier_phase_offset,
+    nothing,
 )
-    _process_signals_separately(
-        driver,
-        passengers,
-        sat,
-        state,
-        sampling_frequency,
-        noise,
-        driver_carrier_phase_offset,
-    )
-end
 
-# Passengers present: run the interleaved fold if this satellite combines. The
-# flag is read off the per-satellite state, not the shared estimator, so one
-# group can combine while another does not — the driver-ordering precondition is
-# a property of a satellite's signal tuple (see `SatConventionalPLLAndDLL`). The
-# branch is a runtime one rather than a type-level one so that flipping it does
-# not change any container's concrete type.
-@inline function _process_signals(
+# Passengers present: seed with this satellite's pending combining sums if it
+# combines, and with `nothing` if it does not — in which case the passengers
+# still have their prompts, C/N₀s and bit buffers advanced and the loops stay
+# the driver's own. The flag is read off the per-satellite state, not the shared
+# estimator, so one group can combine while another does not (see
+# `SatConventionalPLLAndDLL`).
+@inline function _seed_and_fold(
     driver::TrackedSignal,
     passengers::Tuple{TrackedSignal,Vararg{TrackedSignal}},
     sat::TrackedSat,
@@ -1042,78 +942,28 @@ end
     noise::Tuple,
     driver_carrier_phase_offset::Real,
 )
-    if state.discriminator_combining
-        _process_signals_folded(
-            driver,
-            passengers,
-            sat,
-            state,
-            sampling_frequency,
-            noise,
-            driver_carrier_phase_offset,
-        )
-    else
-        _process_signals_separately(
-            driver,
-            passengers,
-            sat,
-            state,
-            sampling_frequency,
-            noise,
-            driver_carrier_phase_offset,
-        )
-    end
-end
-
-# The pre-combining behaviour, kept intact: fold the driver (loops included),
-# then fold the passengers (prompt / CN0 / bit buffer only).
-@inline function _process_signals_separately(
-    driver::TrackedSignal,
-    passengers::Tuple,
-    sat::TrackedSat,
-    state,
-    sampling_frequency,
-    noise::Tuple,
-    driver_carrier_phase_offset::Real,
-)
-    driver_noise_density, driver_noise_density_ready = first(noise)
-    new_driver, new_state, carrier_doppler, code_doppler = _process_estimator_driver_signal(
+    fold(acc) = _fold_satellite_chunk(
         driver,
+        passengers,
         sat,
         state,
         sampling_frequency,
-        driver_noise_density,
-        driver_noise_density_ready,
+        noise,
+        driver_carrier_phase_offset,
+        acc,
     )
-    # The passengers walk through the very same fold the combining path uses —
-    # one record-handling path rather than two that can drift — with `nothing`
-    # where the accumulator goes and `typemax(Int)` for the window. `nothing` is
-    # a *type*, so the discriminators and weights fold away at compile time.
-    new_passengers, _, _ = _advance_passengers_to(
-        passengers,
-        map(_ -> 1, passengers),
-        _passenger_fold_contexts(
-            passengers,
-            Base.tail(noise),
-            sat.prn,
-            sampling_frequency,
-            sat.code_doppler,
-            driver_carrier_phase_offset,
-            get_differential_group_delay(driver),
-        ),
-        nothing,
-        typemax(Int),
-    )
-    _empty_correlator_outputs!(new_passengers)
-    (new_driver, new_passengers, new_state, carrier_doppler, code_doppler)
+    state.discriminator_combining ? fold(state.pending_discriminators) : fold(nothing)
 end
+
+# ---------------------------------------------------------------------------
+# Per-passenger chunk constants
+# ---------------------------------------------------------------------------
 
 """
 Everything **one** passenger's fold needs that is fixed for the whole chunk, so
 the recursive walk threads one value per passenger instead of four parallel
 tuples and `signals`/`cursors` are the only state it rewrites. One of these per
-passenger, built once per chunk by both callers of that fold — with and without
-combining — since only the accumulator differs.
+passenger, built once per chunk.
 
   - `code_doppler` is chunk-fixed: the Doppler that actually generated this
     chunk's replicas, which is what every `dll_disc` in the chunk must be
@@ -1139,9 +989,16 @@ combining — since only the accumulator differs.
   - `noise_density` / `noise_density_ready` are this signal's own
     `(density, ready)` pair (see `_signal_noise_densities`) — per signal, never
     per band.
+  - `signal_index` is this passenger's position in `sat.signals`, so an
+    accumulator that keeps something per signal (`PerSignalAccumulator`'s
+    per-signal discriminator accumulators) knows which slot it is filling. Fixed
+    for the chunk like everything else here, and carried on the context rather
+    than threaded through the walk because the walk already carries one of these
+    per passenger, in order.
 """
 struct PassengerFoldContext{FS,D}
     prn::Int
+    signal_index::Int
     sampling_frequency::FS
     code_doppler::typeof(1.0Hz)
     derotation::ComplexF64
@@ -1156,6 +1013,7 @@ end
 @inline function PassengerFoldContext(
     tracked_signal::TrackedSignal,
     prn::Integer,
+    signal_index::Integer,
     sampling_frequency,
     code_doppler,
     driver_carrier_phase_offset::Real,
@@ -1170,6 +1028,7 @@ end
     )
     PassengerFoldContext(
         Int(prn),
+        Int(signal_index),
         sampling_frequency,
         code_doppler,
         _carrier_phase_derotation(driver_carrier_phase_offset, signal),
@@ -1184,15 +1043,18 @@ end
 # One context per passenger, in `sat.signals[2:end]` order — paired positionally
 # with `Base.tail(noise)`, which `_signal_noise_densities` builds in that same
 # order. Heterogeneous signal types fold at inference time, so this stays
-# type-stable and allocation-free.
+# type-stable and allocation-free. `signal_index` counts in `sat.signals`
+# coordinates, so the first passenger is 2: the driver holds slot 1 wherever a
+# per-signal quantity is indexed.
 @inline _passenger_fold_contexts(
     ::Tuple{},
     ::Tuple{},
     ::Integer,
-    _,
-    _,
+    sampling_frequency,
+    code_doppler,
     ::Real,
     ::Maybe{typeof(1.0s)},
+    signal_index::Int = 2,
 ) = ()
 @inline function _passenger_fold_contexts(
     passengers::Tuple,
@@ -1202,12 +1064,14 @@ end
     code_doppler,
     driver_carrier_phase_offset::Real,
     group_delay_datum::Maybe{typeof(1.0s)},
+    signal_index::Int = 2,
 )
     noise_density, noise_density_ready = first(noise)
     (
         PassengerFoldContext(
             first(passengers),
             prn,
+            signal_index,
             sampling_frequency,
             code_doppler,
             driver_carrier_phase_offset,
@@ -1223,9 +1087,92 @@ end
             code_doppler,
             driver_carrier_phase_offset,
             group_delay_datum,
+            signal_index + 1,
         )...,
     )
 end
+
+# ---------------------------------------------------------------------------
+# The accumulator hooks
+# ---------------------------------------------------------------------------
+#
+# Four functions, dispatched on the accumulator, are the whole interface between
+# the traversal and an estimator's combining rules:
+#
+#   - `_combined_loop_discriminators` — the `(; pll, fll, dll)` the loop filters
+#     see for one driver record: combined with whatever the passengers
+#     contributed, for the loops this accumulator combines, and the driver's own
+#     raw discriminator for the loops it does not.
+#   - `_accumulate_passenger_discriminators` — fold one passenger record in.
+#   - `_accumulate_signal_measurements` — fold one signal's own two navigation
+#     measurements into its slot, for an accumulator that keeps them per signal.
+#   - `_reset_combining_window` — a driver record has closed its loops, so
+#     whatever was accumulated *for those loops* is spent.
+#
+# The `nothing` accumulator's methods are here; every other accumulator's sit
+# with its type — `DiscriminatorAccumulator`'s below, the vector estimator's two
+# in vector_pll_and_dll.jl.
+
+# Nothing is collected, so every loop closes on the driver's own discriminators —
+# exactly the values the driver-only path computed before this traversal was
+# shared, hence bit-identical Dopplers for a single-signal satellite.
+@inline _combined_loop_discriminators(
+    ::Nothing,
+    signal::AbstractGNSSSignal,
+    carrier_loop_filter::AbstractLoopFilter,
+    folded,
+    ::Integer,
+    code_doppler,
+    sampling_frequency,
+) = (;
+    pll = pll_disc(signal, folded.filtered_correlator),
+    fll = _driver_fll_discriminator(carrier_loop_filter, signal, folded),
+    dll = dll_disc(signal, folded.filtered_correlator, code_doppler, sampling_frequency),
+)
+
+# The FLL discriminator is formed only where something reads it. With nothing
+# accumulated its one consumer is the carrier loop filter's FLL branch, and only
+# the FLL-assisted filter has one — so on every other filter this answers
+# `nothing`, which `_filter_carrier_loop` ignores, and the `atan` is never run.
+# An accumulator that *collects* the value hands it to a navigation filter too
+# and therefore always forms it; that is why this gate lives on the `nothing`
+# method alone rather than in the traversal.
+@inline _driver_fll_discriminator(
+    ::ThirdOrderAssistedBilinearLF,
+    signal::AbstractGNSSSignal,
+    folded,
+) = fll_disc(
+    signal,
+    folded.filtered_correlator,
+    folded.previous_prompt,
+    folded.integration_time,
+)
+@inline _driver_fll_discriminator(::AbstractLoopFilter, ::AbstractGNSSSignal, _) = nothing
+
+# Nothing to accumulate: the fold still has to advance every passenger's prompt,
+# CN0 and bit buffer, but no discriminator of theirs is formed.
+@inline _accumulate_passenger_discriminators(
+    ::Nothing,
+    ::TrackedSignal,
+    ::CorrelatorOutput,
+    _,
+    _,
+    ::PassengerFoldContext,
+    ::Bool,
+) = nothing
+
+# An accumulator that keeps no per-signal navigation measurements — the `nothing`
+# one, and the conventional estimator's, which fuses everything into the loops it
+# closes — leaves this a no-op, so the traversal can call it unconditionally.
+@inline _accumulate_signal_measurements(
+    acc::Maybe{AbstractDiscriminatorAccumulator},
+    ::Integer,
+    _dll,
+    _fll,
+) = acc
+
+# Nothing was accumulated for the window that just closed.
+@inline _reset_combining_window(::Nothing) = nothing
 
 """
 $(SIGNATURES)
@@ -1257,11 +1204,13 @@ nominal post-integration SNR.
 """
 $(SIGNATURES)
 
-Everything one record contributes to the three combined loops, as
-`(dll_value, dll_weight, pll_value, pll_weight, fll_value, fll_weight)` — read
-by the passenger accumulate step and by the driver's own record, so the two
-cannot end up on different scales. That they share one scale is the whole
-premise of the weighted mean.
+Everything one record contributes to the three combined loops, as a named
+`(; dll, dll_weight, pll, pll_weight, fll, fll_weight)` — read by the passenger
+accumulate step and by the driver's own record, so the two cannot end up on
+different scales. That they share one scale is the whole premise of the weighted
+mean. Named rather than positional because two of the three values are bare
+`Float64`s: a swapped pair would type-check, compile and quietly weight one
+loop's error with another's.
 
 Weights are nominal post-integration SNR (`_nominal_record_snr`) over the loop's
 discriminator noise gain. Only *ratios* within one satellite matter, so every
@@ -1271,10 +1220,11 @@ sampling frequency, which is why the FLL's `T²` appears as `N²`.
 `derotation` rotates the correlator onto the driver's phase frame before the
 PLL discriminator (`_derotate_correlator`, with `_carrier_phase_derotation`'s
 value carried per passenger on `PassengerFoldContext`); it is `1 + 0im` for the
-driver itself and for a co-phased passenger. `delay` is
-this signal's differential group delay, `0.0s` for the driver (its code phase
-*is* the reference) and `nothing` for a passenger whose value the caller has not
-supplied — which zeroes the **code** weight only.
+driver itself and for a co-phased passenger. `offset_chips` is how far this
+signal's code phase sits from the driver's, already differenced and converted
+(`PassengerFoldContext.group_delay_chips`): a structural `0.0` for the driver,
+whose code phase *is* the reference, and `nothing` for a signal whose datum or
+own value the caller has not supplied — which zeroes the **code** weight only.
 """
 @inline function _weighted_record_contribution(
     signal::AbstractGNSSSignal,
@@ -1299,7 +1249,7 @@ supplied — which zeroes the **code** weight only.
     # contributes zero weight to the code loop — it still aids the carrier loops
     # below. Zero is *not* substituted: see `set_differential_group_delay!` for
     # why guessing it is the unsafe direction.
-    dll_value, dll_weight = if !isnothing(offset_chips)
+    dll, dll_weight = if !isnothing(offset_chips)
         raw = dll_disc(signal, filtered_correlator, code_doppler, sampling_frequency)
         gain = dll_disc_noise_gain(
             signal,
@@ -1313,7 +1263,7 @@ supplied — which zeroes the **code** weight only.
     end
 
     # --- Carrier phase loop ----------------------------------------------
-    pll_value, pll_weight = _weighted_pll_contribution(
+    pll, pll_weight = _weighted_pll_contribution(
         signal,
         filtered_correlator,
         integrated_samples,
@@ -1328,7 +1278,7 @@ supplied — which zeroes the **code** weight only.
     # equal SNR. A zeroed previous prompt is "no measurement yet", not a
     # measurement of zero, so it contributes nothing rather than pulling the
     # combined frequency error towards 0 Hz.
-    fll_value, fll_weight = if iszero(previous_prompt)
+    fll, fll_weight = if iszero(previous_prompt)
         (0.0Hz, 0.0)
     else
         integration_time = integrated_samples / sampling_frequency
@@ -1338,7 +1288,7 @@ supplied — which zeroes the **code** weight only.
         )
     end
 
-    (dll_value, dll_weight, pll_value, pll_weight, fll_value, fll_weight)
+    (; dll, dll_weight, pll, pll_weight, fll, fll_weight)
 end
 
 # A record `_apply_correlator_output` marked `correlated_pre_sync` on a
@@ -1360,82 +1310,12 @@ end
     correlated_pre_sync::Bool,
 ) = correlated_pre_sync && get_secondary_code_length(signal) > 1
 
-# Fold one passenger record into the running accumulator — every loop, for the
-# conventional estimator.
-@inline function _accumulate_passenger_discriminators(
-    acc::DiscriminatorAccumulator,
-    tracked_signal::TrackedSignal,
-    output::CorrelatorOutput,
-    filtered_correlator,
-    previous_prompt,
-    ctx::PassengerFoldContext,
-    correlated_pre_sync::Bool,
-)
-    signal = tracked_signal.signal
-    _passenger_record_invalidated_by_sync(signal, correlated_pre_sync) && return acc
-    _accumulate_all_loops(
-        acc,
-        _weighted_record_contribution(
-            signal,
-            filtered_correlator,
-            output.integrated_samples,
-            previous_prompt,
-            ctx.derotation,
-            ctx.group_delay_chips,
-            ctx.code_doppler,
-            ctx.sampling_frequency,
-        )...,
-    )
-end
-
-# The same, while only the carrier phase loop combines. Nothing here reads
-# `previous_prompt`, the code Doppler or the differential group delay: those
-# belong to the two loops the marker excludes, and not forming their
-# discriminators is the point of dispatching on it.
-@inline function _accumulate_passenger_discriminators(
-    acc::PLLOnlyAccumulator,
-    tracked_signal::TrackedSignal,
-    output::CorrelatorOutput,
-    filtered_correlator,
-    previous_prompt,
-    ctx::PassengerFoldContext,
-    correlated_pre_sync::Bool,
-)
-    signal = tracked_signal.signal
-    _passenger_record_invalidated_by_sync(signal, correlated_pre_sync) && return acc
-    PLLOnlyAccumulator(
-        _accumulate_pll(
-            acc.acc,
-            _weighted_pll_contribution(
-                signal,
-                filtered_correlator,
-                output.integrated_samples,
-                ctx.derotation,
-            )...,
-        ),
-    )
-end
-
-# Not combining: the fold still has to advance every passenger's prompt, CN0 and
-# bit buffer, but there is nothing to accumulate. Dispatching on `Nothing` (not
-# branching on a flag) is what keeps the discriminators and weights above out of
-# the non-combining path entirely.
-@inline _accumulate_passenger_discriminators(
-    ::Nothing,
-    ::TrackedSignal,
-    ::CorrelatorOutput,
-    _,
-    _,
-    ::PassengerFoldContext,
-    ::Bool,
-) = nothing
-
 # Advance one passenger through every record that completed at or before
 # `window_end`, folding each into the signal (prompt / CN0 / bit buffer) and
-# accumulating whichever discriminators `acc`'s type combines (see
+# accumulating whichever discriminators `acc`'s type collects (see
 # `AbstractDiscriminatorAccumulator`). Returns the rebuilt signal, the new
-# cursor, and the grown accumulator. `window_end = typemax(Int)` takes the whole chunk,
-# which with `acc === nothing` is the non-combining fold.
+# cursor, and the grown accumulator. `window_end = typemax(Int)` takes the whole
+# chunk, which is the drain after the last driver record.
 #
 # Everything that is fixed for the chunk — this signal's noise floor, its
 # chunk-boundary sync state, its de-rotation onto the driver's phase frame —
@@ -1480,8 +1360,9 @@ end
 
 # Tuple-recursive walk of `_advance_one_passenger_to` over all passengers, in
 # lockstep with their cursors and their per-passenger `PassengerFoldContext`s.
-# Heterogeneous signal types fold at inference
-# time, so this stays type-stable and allocation-free.
+# Heterogeneous signal types fold at inference time, so this stays type-stable
+# and allocation-free, and a single-signal satellite's empty tuple compiles it
+# away entirely.
 @inline _advance_passengers_to(
     ::Tuple{},
     ::Tuple{},
@@ -1520,97 +1401,163 @@ end
     _empty_correlator_outputs!(Base.tail(signals))
 end
 
+# Fold one passenger record into the running accumulator — every loop, for the
+# conventional estimator.
+@inline function _accumulate_passenger_discriminators(
+    acc::DiscriminatorAccumulator,
+    tracked_signal::TrackedSignal,
+    output::CorrelatorOutput,
+    filtered_correlator,
+    previous_prompt,
+    ctx::PassengerFoldContext,
+    correlated_pre_sync::Bool,
+)
+    signal = tracked_signal.signal
+    _passenger_record_invalidated_by_sync(signal, correlated_pre_sync) && return acc
+    _accumulate_all_loops(
+        acc,
+        _weighted_record_contribution(
+            signal,
+            filtered_correlator,
+            output.integrated_samples,
+            previous_prompt,
+            ctx.derotation,
+            ctx.group_delay_chips,
+            ctx.code_doppler,
+            ctx.sampling_frequency,
+        ),
+    )
+end
+
 # What the three loop filters see for one driver record: the accumulated
-# passenger sums combined with the driver's own measurement, for the loops this
-# accumulator combines, and the driver's raw discriminator for the loops it does
-# not. Shared by the conventional fold and the vector one so a loop's combining
-# rule is written once.
+# passenger sums combined with the driver's own measurement, all three a mean.
+# The driver's own goes through the same `_weighted_record_contribution` that
+# produced the passengers', with a structural zero offset — its code phase *is*
+# the reference — and the identity rotation, since it de-rotates against itself.
+# One weighting scale and one code-phase datum by construction. The zero is
+# structural rather than read off the field, so the driver is in its own code
+# loop even where its datum is unknown and every passenger is withheld.
 #
-# The driver's own measurements go through the same `_weighted_record_contribution` that
-# produced the passengers' — one weighting scale by construction. It de-rotates
-# against itself, hence the identity rotation, and its code phase *is* the
-# reference the passengers' biases are stated against, hence the `0.0s` bias.
-# `dll_disc` is fed the chunk-fixed `sat.code_doppler` — the code Doppler that
-# actually generated this chunk's replicas — for every record, and so are the
-# passengers' via their contexts' `code_doppler`.
+# `carrier_loop_filter` is unread: this estimator always forms all three
+# discriminators because all three are combined. Only the `nothing` accumulator
+# gates the FLL on the filter type (see `_driver_fll_discriminator`).
+
 @inline function _combined_loop_discriminators(
     acc::DiscriminatorAccumulator,
     signal::AbstractGNSSSignal,
+    ::AbstractLoopFilter,
     folded,
     integrated_samples::Integer,
     code_doppler,
     sampling_frequency,
 )
-    own_dll, own_dll_weight, own_pll, own_pll_weight, own_fll, own_fll_weight =
-        _weighted_record_contribution(
-            signal,
-            folded.filtered_correlator,
-            integrated_samples,
-            folded.previous_prompt,
-            one(ComplexF64),
-            0.0,
-            code_doppler,
-            sampling_frequency,
-        )
-    (
-        _combine_with_own(acc.pll_sum, acc.pll_weight, own_pll, own_pll_weight),
-        _combine_with_own(acc.fll_sum, acc.fll_weight, own_fll, own_fll_weight),
-        _combine_with_own(acc.dll_sum, acc.dll_weight, own_dll, own_dll_weight),
-    )
-end
-
-# Carrier phase combined, the other two the driver's own — and formed by the
-# plain discriminators rather than by `_weighted_record_contribution`, so no weight, no
-# noise gain and no group delay is computed for a value nothing will weigh.
-@inline function _combined_loop_discriminators(
-    marked::PLLOnlyAccumulator,
-    signal::AbstractGNSSSignal,
-    folded,
-    integrated_samples::Integer,
-    code_doppler,
-    sampling_frequency,
-)
-    acc = marked.acc
-    own_pll, own_pll_weight = _weighted_pll_contribution(
+    own = _weighted_record_contribution(
         signal,
         folded.filtered_correlator,
         integrated_samples,
+        folded.previous_prompt,
         one(ComplexF64),
+        0.0,
+        code_doppler,
+        sampling_frequency,
     )
-    (
-        _combine_with_own(acc.pll_sum, acc.pll_weight, own_pll, own_pll_weight),
-        fll_disc(
-            signal,
-            folded.filtered_correlator,
-            folded.previous_prompt,
-            folded.integration_time,
-        ),
-        dll_disc(signal, folded.filtered_correlator, code_doppler, sampling_frequency),
+    (;
+        pll = _combine_with_own(acc.pll_sum, acc.pll_weight, own.pll, own.pll_weight),
+        fll = _combine_with_own(acc.fll_sum, acc.fll_weight, own.fll, own.fll_weight),
+        dll = _combine_with_own(acc.dll_sum, acc.dll_weight, own.dll, own.dll_weight),
     )
 end
 
-# The combining fold: walk the driver's records, and before closing the loops on
-# each one, advance every passenger through the records that completed inside
-# that record's window. So each loop update sees exactly the measurements that
-# belong to its own interval, and passenger records that complete after the last
-# driver record of the chunk stay pending for the next chunk (the common case at
-# the default chunk length — see `DiscriminatorAccumulator`).
-#
-# The per-record driver body shares `_advance_driver_record` with
-# `_process_estimator_driver_signal` above, and its own record goes through the
-# same `_weighted_record_contribution` the passengers do, so neither the record handling
-# nor the weighting can drift between the two paths. The difference is only
-# *what* reaches the filters: combined discriminators here, the driver's own
-# there.
-@inline function _process_signals_folded(
-    driver::TrackedSignal,
-    passengers::Tuple{TrackedSignal,Vararg{TrackedSignal}},
-    sat::TrackedSat,
+# What this estimator does with one record's three discriminators: the plain
+# FLL-assisted scalar PLL/DLL. Signature-compatible with `_close_vector_loops`,
+# because the shared traversal takes one of the two as its loop-closure callback
+# (`_loop_closure`) — that callback is the *only* thing that differs between the
+# two estimators' folds.
+@inline function _close_conventional_loops(
+    ::SatConventionalPLLAndDLL,
+    carrier_loop_filter,
+    code_loop_filter,
+    discriminators,
+    integration_time,
+    carrier_bandwidth,
+    code_bandwidth,
+)
+    carrier_freq_update, carrier_loop_filter = _filter_carrier_loop(
+        carrier_loop_filter,
+        discriminators.pll,
+        discriminators.fll,
+        integration_time,
+        carrier_bandwidth,
+    )
+    code_freq_update, code_loop_filter =
+        filter_loop(code_loop_filter, discriminators.dll, integration_time, code_bandwidth)
+    (; carrier_freq_update, code_freq_update, carrier_loop_filter, code_loop_filter)
+end
+
+@inline _loop_closure(::SatConventionalPLLAndDLL) = _close_conventional_loops
+
+# Where a chunk's accumulator ends up on the per-satellite state. One method per
+# accumulator type, so each mode writes exactly the fields it owns: a satellite
+# that combined nothing must not clear the pending combining sums it is still
+# carrying for the next chunk.
+@inline _park_accumulator(
     state::SatConventionalPLLAndDLL,
+    acc::DiscriminatorAccumulator,
+    carrier_loop_filter,
+    code_loop_filter,
+) = SatConventionalPLLAndDLL(
+    state;
+    carrier_loop_filter,
+    code_loop_filter,
+    pending_discriminators = acc,
+)
+
+@inline _park_accumulator(
+    state::SatConventionalPLLAndDLL,
+    ::Nothing,
+    carrier_loop_filter,
+    code_loop_filter,
+) = SatConventionalPLLAndDLL(state; carrier_loop_filter, code_loop_filter)
+
+# Walk the driver's records, and before closing the loops on each one, advance
+# every passenger through the records that completed inside that record's
+# window. So each loop update sees exactly the measurements that belong to its
+# own interval, and passenger records that complete after the last driver record
+# of the chunk stay pending for the next chunk (the common case at the default
+# chunk length — see `DiscriminatorAccumulator`).
+#
+# This is the *only* chunk traversal in the package. A single-signal satellite
+# reaches it with an empty passenger tuple and a `nothing` accumulator, which
+# erases the passenger walk and all the discriminator weighting at compile time,
+# leaving the plain driver fold it has always run.
+#
+# What stays estimator-specific is `acc`, whose *type* says which loops combine
+# and which per-signal navigation measurements are collected — `nothing`, the
+# plain `DiscriminatorAccumulator`, or one of the vector estimator's two
+# (`vector_pll_and_dll.jl`). The accumulator hooks dispatch on it, and two more
+# hooks dispatch on the per-satellite state:
+#
+#   - `_loop_closure(state)` — the per-record loop closure, called with the same
+#     argument list by both estimators (`_close_conventional_loops` /
+#     `_close_vector_loops`) and returning the two NCO updates plus the two
+#     threaded filters.
+#   - `_park_accumulator(state, acc, carrier_loop_filter, code_loop_filter)` —
+#     one method per accumulator type, so each mode writes exactly the state
+#     fields it owns and leaves every other one as it found it.
+#
+# Returns `(new_driver, new_passengers, new_state, carrier_doppler, code_doppler)`
+# — the chunk's last Dopplers, since the NCO is written once per chunk.
+@inline function _fold_satellite_chunk(
+    driver::TrackedSignal,
+    passengers::Tuple,
+    sat::TrackedSat,
+    state,
     sampling_frequency,
     noise::Tuple,
     driver_carrier_phase_offset::Real,
+    acc::Maybe{AbstractDiscriminatorAccumulator},
 )
+    close_loops = _loop_closure(state)
     signal = driver.signal
     driver_outputs = driver.correlator_outputs
     driver_noise_density, driver_noise_density_ready = first(noise)
@@ -1626,7 +1573,6 @@ end
 
     tsig = driver
     cursors = map(_ -> 1, passengers)
-    acc = state.pending_discriminators
 
     carrier_loop_filter = state.carrier_loop_filter
     code_loop_filter = state.code_loop_filter
@@ -1652,55 +1598,62 @@ end
         )
         tsig = folded.tracked_signal
 
-        pll_discriminator, fll_discriminator, dll_discriminator =
-            _combined_loop_discriminators(
-                acc,
-                signal,
-                folded,
-                output.integrated_samples,
-                sat.code_doppler,
-                sampling_frequency,
-            )
-
-        carrier_freq_update, carrier_loop_filter = _filter_carrier_loop(
+        discriminators = _combined_loop_discriminators(
+            acc,
+            signal,
             carrier_loop_filter,
-            pll_discriminator,
-            fll_discriminator,
+            folded,
+            output.integrated_samples,
+            sat.code_doppler,
+            sampling_frequency,
+        )
+
+        # The driver's own navigation measurements, slot 1. Its passengers' are
+        # folded by the accumulator as the walk reaches them, each into its own
+        # slot, so every signal collects its own discriminator and never a
+        # combination. A no-op for an accumulator that collects none.
+        acc =
+            _accumulate_signal_measurements(acc, 1, discriminators.dll, discriminators.fll)
+
+        closed = close_loops(
+            state,
+            carrier_loop_filter,
+            code_loop_filter,
+            discriminators,
             folded.integration_time,
             folded.carrier_bandwidth,
-        )
-        code_freq_update, code_loop_filter = filter_loop(
-            code_loop_filter,
-            dll_discriminator,
-            folded.integration_time,
             folded.code_bandwidth,
         )
+        carrier_loop_filter = closed.carrier_loop_filter
+        code_loop_filter = closed.code_loop_filter
+
         carrier_doppler, code_doppler = aid_dopplers(
             signal,
             state.init_carrier_doppler,
             state.init_code_doppler,
-            carrier_freq_update,
-            code_freq_update,
+            closed.carrier_freq_update,
+            closed.code_freq_update,
         )
         # This window is closed; the next driver record starts a fresh one.
-        acc = DiscriminatorAccumulator()
+        acc = _reset_combining_window(acc)
     end
 
     # Drain whatever completed after the last driver record (all of it, when the
     # driver had no record this chunk): the signals must still see those records,
-    # and their discriminators stay pending for the next chunk's driver update.
+    # and their combining contributions stay pending for the next chunk's driver
+    # update.
     passengers, _, acc =
         _advance_passengers_to(passengers, cursors, contexts, acc, typemax(Int))
     empty!(driver_outputs)
     _empty_correlator_outputs!(passengers)
 
-    new_state = SatConventionalPLLAndDLL(
-        state;
-        carrier_loop_filter,
-        code_loop_filter,
-        pending_discriminators = acc,
+    (
+        tsig,
+        passengers,
+        _park_accumulator(state, acc, carrier_loop_filter, code_loop_filter),
+        carrier_doppler,
+        code_doppler,
     )
-    (tsig, passengers, new_state, carrier_doppler, code_doppler)
 end
 
 """
@@ -1925,13 +1878,14 @@ end
 
 # Push already-formed carrier discriminators through the carrier loop filter.
 # This is the single place that knows an FLL-assisted filter takes the
-# `(pll, fll)` pair while every other filter takes the PLL discriminator alone —
-# both `calculate_carrier_frequency_update` (driver-only) and the combining fold
-# route through it, so the two cannot disagree about it.
+# `(pll, fll)` pair while every other filter takes the PLL discriminator alone,
+# and both estimators' loop closures route through it.
 #
-# The non-assisted method ignores `fll_discriminator` entirely; the combining
-# fold still accumulates one, which costs an `atan` per passenger record and
-# changes nothing. Not worth a second gate.
+# The non-assisted method ignores `fll_discriminator` entirely, and with nothing
+# accumulated it is handed a literal `nothing` — `_driver_fll_discriminator`
+# does not form a value the filter would drop. An accumulator that collects the
+# FLL discriminator for a navigation filter does form one, and the filter still
+# ignores it.
 @inline _filter_carrier_loop(
     carrier_loop_filter::ThirdOrderAssistedBilinearLF,
     pll_discriminator,
@@ -1952,53 +1906,3 @@ end
     integration_time,
     loop_bandwidth,
 ) = filter_loop(carrier_loop_filter, pll_discriminator, integration_time, loop_bandwidth)
-
-function calculate_carrier_frequency_update(
-    signal::AbstractGNSSSignal,
-    carrier_loop_filter::ThirdOrderAssistedBilinearLF,
-    correlator::AbstractCorrelator,
-    previous_prompt::Complex,
-    integration_time,
-    loop_bandwidth,
-)
-    pll_discriminator = pll_disc(signal, correlator)
-    fll_discriminator = fll_disc(signal, correlator, previous_prompt, integration_time)
-    _filter_carrier_loop(
-        carrier_loop_filter,
-        pll_discriminator,
-        fll_discriminator,
-        integration_time,
-        loop_bandwidth,
-    )
-end
-
-function calculate_carrier_frequency_update(
-    signal::AbstractGNSSSignal,
-    carrier_loop_filter::AbstractLoopFilter,
-    correlator::AbstractCorrelator,
-    previous_prompt::Complex,
-    integration_time,
-    loop_bandwidth,
-)
-    pll_discriminator = pll_disc(signal, correlator)
-    _filter_carrier_loop(
-        carrier_loop_filter,
-        pll_discriminator,
-        nothing,
-        integration_time,
-        loop_bandwidth,
-    )
-end
-
-function calculate_code_frequency_update(
-    signal::AbstractGNSSSignal,
-    code_loop_filter::AbstractLoopFilter,
-    correlator::AbstractCorrelator,
-    code_doppler,
-    sampling_frequency,
-    integration_time,
-    loop_bandwidth,
-)
-    dll_discriminator = dll_disc(signal, correlator, code_doppler, sampling_frequency)
-    filter_loop(code_loop_filter, dll_discriminator, integration_time, loop_bandwidth)
-end

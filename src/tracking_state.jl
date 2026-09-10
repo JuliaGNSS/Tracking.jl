@@ -993,6 +993,24 @@ for fn in (
     end
 end
 
+# The vector estimator's two per-signal readers get the same two `TrackState`
+# rungs, but typed on a vector-tracking `TrackState`: they read a
+# `SatVectorPLLAndDLL` field, so a conventional `TrackState` should say so at
+# the call rather than deep inside. Their satellite rung is in
+# vector_pll_and_dll.jl, next to the accumulators it reads.
+for fn in (:mean_code_discr, :mean_carrier_discr)
+    @eval begin
+        $fn(s::TrackState{<:SignalGroups,<:VectorPLLAndDLL}, id...) =
+            $fn(get_sat_state(s, id...))
+        $fn(
+            s::TrackState{<:SignalGroups,<:VectorPLLAndDLL},
+            group::Union{Symbol,Integer,Val},
+            sat_id,
+            sig::_SignalSelector,
+        ) = $fn(get_sat_state(s, group, sat_id), sig)
+    end
+end
+
 """
 $(SIGNATURES)
 
