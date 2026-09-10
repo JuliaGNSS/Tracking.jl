@@ -992,6 +992,24 @@ for fn in (
     end
 end
 
+# The vector estimator's two per-signal readers get the same two `TrackState`
+# rungs, but typed on a vector-tracking `TrackState`: they read a
+# `SatVectorPLLAndDLL` field, so a conventional `TrackState` should say so at
+# the call rather than deep inside. Their satellite rung is in
+# vector_pll_and_dll.jl, next to the accumulators it reads.
+for fn in (:mean_code_discr, :mean_carrier_discr)
+    @eval begin
+        $fn(s::TrackState{<:SignalGroups,<:VectorPLLAndDLL}, id...) =
+            $fn(get_sat_state(s, id...))
+        $fn(
+            s::TrackState{<:SignalGroups,<:VectorPLLAndDLL},
+            group::Union{Symbol,Integer,Val},
+            sat_id,
+            sig::_SignalSelector,
+        ) = $fn(get_sat_state(s, group, sat_id), sig)
+    end
+end
+
 """
 $(SIGNATURES)
 
@@ -1372,7 +1390,7 @@ end
 
 # The delay refers a *code* discriminator to the driver's code phase, so only an
 # estimator that closes a combined code loop reads it. Under `VectorPLLAndDLL` that is
-# the scalar fallback and not vector closure, where each signal's code dump goes to the
+# the scalar fallback and not vector closure, where each signal's code measurement goes to the
 # navigation filter raw — and the receiver, which ranges on it, is then the party that
 # must refer it to a datum. Say so once when the value is set there, because a receiver
 # that assumes Tracking handles it in both modes has a bias that appears only after
@@ -1383,7 +1401,7 @@ _warn_differential_group_delay_unread(::AbstractDopplerEstimator) = nothing
           `set_differential_group_delay!` under `VectorPLLAndDLL` is read only while a \
           satellite runs the scalar fallback (`vt_on = false`), where the code loop is \
           local and combines. Once `enable_vt!` puts it in the vector loop the code loop \
-          is the navigation filter's, every signal hands it its own raw dump, and \
+          is the navigation filter's, every signal hands it its own raw measurement, and \
           referring those to one ranging datum is the filter's job — this value is not \
           applied to them.""" maxlog = 1
     nothing

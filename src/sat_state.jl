@@ -968,6 +968,11 @@ end
     _assert_no_more_of_type(Base.tail(t), T)
 end
 
+# Number of signals as a `Val`, for building a per-signal tuple whose length has
+# to stay a compile-time constant (see `_num_ants_val` for the same trick on the
+# antenna count).
+@inline _num_signals_val(sat::TrackedSat) = Val(length(sat.signals))
+
 get_signal(s::TrackedSat, sel...) = get_signal(_find_signal(s.signals, sel...))
 get_correlator(s::TrackedSat, sel...) = get_correlator(_find_signal(s.signals, sel...))
 get_last_fully_integrated_correlator(s::TrackedSat, sel...) =
