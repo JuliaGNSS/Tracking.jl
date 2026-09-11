@@ -1253,6 +1253,228 @@ function set_preferred_num_code_blocks_to_integrate!(
     track_state
 end
 
+"""
+$(SIGNATURES)
+
+Turn multi-signal discriminator combining on or off for one satellite, the
+per-satellite counterpart of the `signal_combining` keyword on
+[`ConventionalPLLAndDLL`](@ref) / [`VectorPLLAndDLL`](@ref).
+
+Per satellite rather than per `TrackState` because the precondition combining
+needs — that `signals[1]` is the group's longest-integrating signal — is a
+property of *this* satellite's signal tuple. The estimator's own setting only
+seeds a satellite at handoff; this overrides it afterwards, and survives
+[`reset_loop_filters!`](@ref).
+
+Pending passenger discriminators are dropped on a change, for the reason they
+are dropped on an `enable_vt!` transition: sums gathered under one setting must
+not reach a loop update made under the other.
+
+Addressed like [`set_preferred_num_code_blocks_to_integrate!`](@ref) — the group
+by name or position, then the satellite — with no signal selector, since the
+setting is the satellite's:
+
+```julia
+set_signal_combining!(ts, :gps_l1, 7, true)
+set_signal_combining!(ts, 7, false)          # single-group `TrackState`
+```
+
+Mutates `track_state` in place and returns it.
+"""
+function set_signal_combining!(
+    track_state::TrackState{<:SignalGroups},
+    group::Union{Symbol,Integer,Val},
+    sat_id,
+    signal_combining::Bool,
+)
+    _set_estimator_setting!(
+        track_state,
+        get_sat_states(track_state, group),
+        sat_id,
+        _with_signal_combining,
+        signal_combining,
+    )
+end
+
+function set_signal_combining!(
+    track_state::TrackState{<:SignalGroups{1}},
+    sat_id,
+    signal_combining::Bool,
+)
+    _set_estimator_setting!(
+        track_state,
+        get_sat_states(track_state),
+        sat_id,
+        _with_signal_combining,
+        signal_combining,
+    )
+end
+
+"""
+$(SIGNATURES)
+
+Set one satellite's carrier loop filter bandwidth, overriding the value
+[`init_estimator_state`](@ref) seeded from the estimator (or from
+[`default_carrier_loop_filter_bandwidth`](@ref) for that satellite's driver
+signal). Survives [`reset_loop_filters!`](@ref), which is what makes it an
+override rather than a value the next reset reverts.
+
+The bandwidth is referenced to a one-primary-code-period integration and is
+scaled by `1/N` at filter time when a record integrates `N` blocks, so pass the
+single-period figure here whatever the satellite's integration length.
+Addressed like [`set_signal_combining!`](@ref). Mutates `track_state` in place
+and returns it.
+"""
+function set_carrier_loop_filter_bandwidth!(
+    track_state::TrackState{<:SignalGroups},
+    group::Union{Symbol,Integer,Val},
+    sat_id,
+    bandwidth::Number,
+)
+    _set_estimator_setting!(
+        track_state,
+        get_sat_states(track_state, group),
+        sat_id,
+        _with_carrier_loop_filter_bandwidth,
+        _as_loop_bandwidth(bandwidth),
+    )
+end
+
+function set_carrier_loop_filter_bandwidth!(
+    track_state::TrackState{<:SignalGroups{1}},
+    sat_id,
+    bandwidth::Number,
+)
+    _set_estimator_setting!(
+        track_state,
+        get_sat_states(track_state),
+        sat_id,
+        _with_carrier_loop_filter_bandwidth,
+        _as_loop_bandwidth(bandwidth),
+    )
+end
+
+"""
+$(SIGNATURES)
+
+Set one satellite's code loop filter bandwidth — the code-loop counterpart of
+[`set_carrier_loop_filter_bandwidth!`](@ref), addressed the same way. This one
+is an *absolute* bandwidth: it is not scaled by the integration length but
+capped against each record's own integration time by
+[`effective_code_loop_filter_bandwidth`](@ref).
+"""
+function set_code_loop_filter_bandwidth!(
+    track_state::TrackState{<:SignalGroups},
+    group::Union{Symbol,Integer,Val},
+    sat_id,
+    bandwidth::Number,
+)
+    _set_estimator_setting!(
+        track_state,
+        get_sat_states(track_state, group),
+        sat_id,
+        _with_code_loop_filter_bandwidth,
+        _as_loop_bandwidth(bandwidth),
+    )
+end
+
+function set_code_loop_filter_bandwidth!(
+    track_state::TrackState{<:SignalGroups{1}},
+    sat_id,
+    bandwidth::Number,
+)
+    _set_estimator_setting!(
+        track_state,
+        get_sat_states(track_state),
+        sat_id,
+        _with_code_loop_filter_bandwidth,
+        _as_loop_bandwidth(bandwidth),
+    )
+end
+
+# Shared body for the six addressing overloads above: rebuild the addressed
+# satellite's estimator state through `f`, leaving every other field — and the
+# satellite's concrete type — alone.
+@inline function _set_estimator_setting!(
+    track_state::TrackState,
+    sats,
+    sat_id,
+    f::F,
+    value,
+) where {F}
+    sat = sats[sat_id]
+    sats[sat_id] = TrackedSat(
+        sat;
+        doppler_estimator_state = f(get_doppler_estimator_state(sat), value),
+    )
+    track_state
+end
+
+# One method per shipped per-satellite state. The fallback names the estimator
+# rather than throwing a `MethodError` listing type parameters: a custom
+# estimator's state has no reason to carry either setting, and saying so is more
+# useful than a dispatch failure.
+_with_signal_combining(state::SatConventionalPLLAndDLL, signal_combining::Bool) =
+    SatConventionalPLLAndDLL(
+        state;
+        signal_combining,
+        pending_discriminators = zero(DiscriminatorAccumulator),
+    )
+_with_signal_combining(state::SatVectorPLLAndDLL, signal_combining::Bool) =
+    SatVectorPLLAndDLL(
+        state;
+        signal_combining,
+        pending_discriminators = zero(DiscriminatorAccumulator),
+    )
+_with_signal_combining(state, ::Bool) =
+    _throw_no_estimator_setting(state, "signal_combining")
+
+_with_carrier_loop_filter_bandwidth(state::SatConventionalPLLAndDLL, bandwidth) =
+    SatConventionalPLLAndDLL(state; carrier_loop_filter_bandwidth = bandwidth)
+_with_carrier_loop_filter_bandwidth(state::SatVectorPLLAndDLL, bandwidth) =
+    SatVectorPLLAndDLL(state; carrier_loop_filter_bandwidth = bandwidth)
+_with_carrier_loop_filter_bandwidth(state, _) =
+    _throw_no_estimator_setting(state, "carrier_loop_filter_bandwidth")
+
+_with_code_loop_filter_bandwidth(state::SatConventionalPLLAndDLL, bandwidth) =
+    SatConventionalPLLAndDLL(state; code_loop_filter_bandwidth = bandwidth)
+_with_code_loop_filter_bandwidth(state::SatVectorPLLAndDLL, bandwidth) =
+    SatVectorPLLAndDLL(state; code_loop_filter_bandwidth = bandwidth)
+_with_code_loop_filter_bandwidth(state, _) =
+    _throw_no_estimator_setting(state, "code_loop_filter_bandwidth")
+
+@noinline _throw_no_estimator_setting(state, setting::String) = throw(
+    ArgumentError(
+        "this satellite's Doppler estimator state ($(typeof(state).name.name)) has no " *
+        "`$setting` to set — that setting belongs to `ConventionalPLLAndDLL` and " *
+        "`VectorPLLAndDLL`.",
+    ),
+)
+
+# A loop bandwidth is a frequency and carries its unit, like every other
+# dimensioned quantity here. `Number`-wide so a bare number gets a sentence
+# rather than a `MethodError` listing a page of `TrackState` type parameters.
+_as_loop_bandwidth(bandwidth::Real) = _throw_unitless_loop_bandwidth(bandwidth)
+function _as_loop_bandwidth(bandwidth::Number)
+    dimension(bandwidth) == dimension(1.0Hz) ||
+        _throw_wrong_dimension_loop_bandwidth(bandwidth)
+    float(uconvert(Hz, bandwidth))
+end
+
+@noinline _throw_unitless_loop_bandwidth(bandwidth) = throw(
+    ArgumentError(
+        "a loop filter bandwidth is a frequency and needs its unit: got the bare " *
+        "number $bandwidth. Write `$(bandwidth)Hz`.",
+    ),
+)
+
+@noinline _throw_wrong_dimension_loop_bandwidth(bandwidth) = throw(
+    ArgumentError(
+        "a loop filter bandwidth is a frequency: got $bandwidth, which has dimension " *
+        "$(dimension(bandwidth)). Supply it in hertz — `18.0Hz`.",
+    ),
+)
+
 # Rebuild `sat` with the addressed signal's differential group delay set; every
 # other signal is left untouched, so the satellite's concrete type is preserved.
 function _set_sat_differential_group_delay(

@@ -250,7 +250,7 @@ VectorPLLAndDLL(signal_combining = true)
 ConventionalAssistedPLLAndDLL()
 ```
 
-[`VectorPLLAndDLL`](@ref) takes the same `signal_combining` keyword and everything below applies to it, with one restriction: a satellite already in the vector loop (`vt_on = true`) combines the **carrier phase** discriminator only, because its other two loops are the navigation filter's and each signal's discriminator reaches the filter raw for it to weigh — see [Vector tracking](vector_tracking.md). In its scalar fallback, which is where a satellite pulls in, all three combine exactly as described here. Per satellite or per group the setting is expressed at construction: the `doppler_estimator` keyword of [`TrackedSat`](@ref) and [`add_satellite!`](@ref) seeds that satellite from the estimator passed there, independently of the `TrackState`'s own.
+[`VectorPLLAndDLL`](@ref) takes the same `signal_combining` keyword and everything below applies to it, with one restriction: a satellite already in the vector loop (`vt_on = true`) combines the **carrier phase** discriminator only, because its other two loops are the navigation filter's and each signal's discriminator reaches the filter raw for it to weigh — see [Vector tracking](vector_tracking.md). In its scalar fallback, which is where a satellite pulls in, all three combine exactly as described here. Per satellite the setting is seeded at construction — the `doppler_estimator` keyword of [`TrackedSat`](@ref) and [`add_satellite!`](@ref) seeds that satellite from the estimator passed there, independently of the `TrackState`'s own — and changed afterwards with [`set_signal_combining!`](@ref), which survives [`reset_loop_filters!`](@ref) as the per-satellite loop bandwidths ([`set_carrier_loop_filter_bandwidth!`](@ref), [`set_code_loop_filter_bandwidth!`](@ref)) do.
 
 Combining is opt-in because it changes a multi-signal satellite's carrier/code Doppler, code phase and decoded-bit timing, and because it comes with a group-ordering precondition — see **Put the longest-integrating signal first** below. That precondition is not enforced here: violating it costs most of the gain but never makes a measurement wrong, so it is a matter of how the caller assembles the group rather than something to reject a configuration over.
 
@@ -306,6 +306,9 @@ Which ISCs a decoder can give you depends on the *message*, not the signal it ca
 ```@docs
 set_differential_group_delay!
 get_differential_group_delay
+set_signal_combining!
+set_carrier_loop_filter_bandwidth!
+set_code_loop_filter_bandwidth!
 Tracking.dll_disc_noise_gain
 Tracking.DiscriminatorAccumulator
 ```

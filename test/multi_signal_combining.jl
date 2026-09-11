@@ -63,6 +63,9 @@ using Tracking:
     reset_carrier_discr_acc!,
     reset_code_discr_acc!,
     set_differential_group_delay!,
+    set_carrier_loop_filter_bandwidth!,
+    set_code_loop_filter_bandwidth!,
+    set_signal_combining!,
     track
 using Tracking:
     PassengerFoldContext,
@@ -1688,6 +1691,96 @@ end
         allocated
     end
     @test allocations[1] == allocations[2]
+end
+
+@testset "set_signal_combining! overrides the estimator's setting, per satellite" begin
+    # The per-satellite granularity both estimator docstrings promise needs a
+    # public way to express it after handoff — otherwise a caller that decides
+    # mid-run that one satellite violates the driver-ordering precondition can
+    # only rebuild an internal struct.
+    n = RECORD_SAMPLES
+    for (state_of, one_signal_update) in (
+        (externally_fed_state, one_update),
+        (vt_externally_fed_state, r -> vt_one_update(r)),
+    )
+        ts = state_of(; combining = true)
+        @test Tracking.get_doppler_estimator_state(get_sat_state(ts, 1)).signal_combining
+        set_signal_combining!(ts, 1, 1, false)
+        @test !Tracking.get_doppler_estimator_state(get_sat_state(ts, 1)).signal_combining
+        # …and it is the value the fold reads, not a field nothing consults.
+        append_correlator_output!(
+            ts,
+            CorrelatorOutput(DISAGREEING_PASSENGER_RECORD, n, n),
+            1,
+            1,
+            2,
+        )
+        append_correlator_output!(
+            ts,
+            CorrelatorOutput(DISAGREEING_DRIVER_RECORD, n, n),
+            1,
+            1,
+            1,
+        )
+        estimate_dopplers_and_filter_prompt!(ts, (L1 = FS,))
+        driver_alone = one_signal_update(DISAGREEING_DRIVER_RECORD)
+        @test get_carrier_doppler(ts, 1) ===
+              (driver_alone isa Tuple ? driver_alone[1] : driver_alone.carrier_doppler)
+        # An override survives a loop-filter reset, which is what makes it one.
+        Tracking.reset_loop_filters!(ts)
+        @test !Tracking.get_doppler_estimator_state(get_sat_state(ts, 1)).signal_combining
+    end
+
+    # Turning it off must not leave pending passenger sums behind to arrive at a
+    # later loop update made under the new setting.
+    ts = externally_fed_state(; combining = true)
+    append_correlator_output!(
+        ts,
+        CorrelatorOutput(DISAGREEING_PASSENGER_RECORD, n, n),
+        1,
+        1,
+        2,
+    )
+    estimate_dopplers_and_filter_prompt!(ts, (L1 = FS,))
+    @test Tracking.get_doppler_estimator_state(get_sat_state(ts, 1)).pending_discriminators.pll_weight >
+          0
+    set_signal_combining!(ts, 1, 1, false)
+    @test Tracking.get_doppler_estimator_state(get_sat_state(ts, 1)).pending_discriminators ==
+          zero(DiscriminatorAccumulator)
+
+    # The single-group addressing form, and a group-addressed one.
+    ts = externally_fed_state(; combining = false)
+    set_signal_combining!(ts, 1, true)
+    @test Tracking.get_doppler_estimator_state(get_sat_state(ts, 1)).signal_combining
+end
+
+@testset "the loop bandwidths are settable per satellite too" begin
+    # Same gap as `signal_combining`: seeded per satellite, preserved across a
+    # reset, and until now only expressible by rebuilding the per-sat state.
+    for state_of in (externally_fed_state, vt_externally_fed_state)
+        ts = state_of()
+        set_carrier_loop_filter_bandwidth!(ts, 1, 1, 5.0Hz)
+        set_code_loop_filter_bandwidth!(ts, 1, 0.5Hz)
+        state = Tracking.get_doppler_estimator_state(get_sat_state(ts, 1))
+        @test state.carrier_loop_filter_bandwidth == 5.0Hz
+        @test state.code_loop_filter_bandwidth == 0.5Hz
+        # Integer hertz is accepted and floated, like every other dimensioned
+        # setter in this package.
+        set_carrier_loop_filter_bandwidth!(ts, 1, 12Hz)
+        @test Tracking.get_doppler_estimator_state(get_sat_state(ts, 1)).carrier_loop_filter_bandwidth ===
+              12.0Hz
+        # The override is what a reset preserves — the reason it lives on the
+        # per-satellite state at all.
+        Tracking.reset_loop_filters!(ts)
+        @test Tracking.get_doppler_estimator_state(get_sat_state(ts, 1)).code_loop_filter_bandwidth ==
+              0.5Hz
+    end
+
+    # A bandwidth is a frequency and carries its unit; both wrong shapes get a
+    # sentence rather than a MethodError.
+    ts = externally_fed_state()
+    @test_throws ArgumentError set_carrier_loop_filter_bandwidth!(ts, 1, 5.0)
+    @test_throws ArgumentError set_code_loop_filter_bandwidth!(ts, 1, 5.0s)
 end
 
 end

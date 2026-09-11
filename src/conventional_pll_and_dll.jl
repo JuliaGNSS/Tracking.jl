@@ -209,10 +209,13 @@ The bandwidths and `signal_combining` are *seeded* from the shared
 afterwards, and survive [`reset_loop_filters!`](@ref). A satellite (or a whole
 group) differs from the `TrackState`'s estimator by being built with its own:
 the `doppler_estimator` keyword of [`TrackedSat`](@ref) and
-[`add_satellite!`](@ref) seeds that satellite from the estimator passed there.
-There is no setter to change either afterwards. Combining is per satellite for
-the same reason the bandwidths are: the driver-ordering precondition it needs is
-a property of *this* satellite's signal tuple, not of the `TrackState`.
+[`add_satellite!`](@ref) seeds that satellite from the estimator passed there,
+and [`set_signal_combining!`](@ref),
+[`set_carrier_loop_filter_bandwidth!`](@ref) and
+[`set_code_loop_filter_bandwidth!`](@ref) change it afterwards. Combining is per
+satellite for the same reason the bandwidths are: the driver-ordering
+precondition it needs is a property of *this* satellite's signal tuple, not of
+the `TrackState`.
 """
 @kwdef struct SatConventionalPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     init_carrier_doppler::typeof(1.0Hz)
