@@ -1,5 +1,12 @@
 # Changelog
 
+# [8.3.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v8.2.0...v8.3.0) (2026-09-16)
+
+
+### Features
+
+* **signals:** track Galileo E5a-QP and pin the signal capability matrix ([562c095](https://github.com/JuliaGNSS/Tracking.jl/commit/562c095eb669e9231a45f4c074005ab1c24f57ec)), closes [#234](https://github.com/JuliaGNSS/Tracking.jl/issues/234) [#215](https://github.com/JuliaGNSS/Tracking.jl/issues/215) [#120](https://github.com/JuliaGNSS/Tracking.jl/issues/120) [#151](https://github.com/JuliaGNSS/Tracking.jl/issues/151) [#230](https://github.com/JuliaGNSS/Tracking.jl/issues/230) [#236](https://github.com/JuliaGNSS/Tracking.jl/issues/236)
+
 # [8.2.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v8.1.0...v8.2.0) (2026-09-03)
 
 
