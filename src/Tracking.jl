@@ -121,6 +121,8 @@ export get_early,
     get_default_correlator,
     default_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
+    default_num_code_blocks_to_integrate,
+    max_num_code_blocks_to_integrate,
     AbstractCorrelator,
     AbstractDownconvertAndCorrelator,
     SatelliteDicts,
@@ -243,6 +245,7 @@ include("gps/l5.jl")
 include("galileo/e1b.jl")
 include("galileo/e1c.jl")
 include("galileo/e5a.jl")
+include("galileo/e5a_qp.jl")
 include("galileo/e5b.jl")
 include("galileo/e6.jl")
 include("beidou/b1i.jl")

@@ -110,7 +110,10 @@ plain moment-ratio estimator. See [`default_cn0_estimator`](@ref) for which to
 pick when. Each signal needs its **own** estimator instance: they buffer into a
 shared vector, so handing one instance to two signals corrupts both.
 
-Throws an `ArgumentError` if `preferred_num_code_blocks_to_integrate` is
+`preferred_num_code_blocks_to_integrate` defaults to the signal's recommended
+starting integration length, [`default_num_code_blocks_to_integrate`](@ref) —
+one primary code block for every signal but Galileo E5a-QP, whose 64.5 µs block
+is too short to run a loop on. Throws an `ArgumentError` if the value passed is
 invalid for `signal` (see
 [`set_preferred_num_code_blocks_to_integrate!`](@ref)).
 """
@@ -124,7 +127,9 @@ function TrackedSignal(
         num_prompts_for_cn0_estimation,
     ),
     post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),
-    preferred_num_code_blocks_to_integrate::Int = 1,
+    preferred_num_code_blocks_to_integrate::Int = default_num_code_blocks_to_integrate(
+        signal,
+    ),
 )
     validate_preferred_num_code_blocks_to_integrate(
         signal,

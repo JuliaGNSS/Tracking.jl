@@ -10,6 +10,7 @@ makedocs(
     checkdocs = :exports,  # only complain about undocumented *exported* symbols
     pages = [
         "index.md",
+        "signals.md",
         "track.md",
         "tracking_state.md",
         "bit_sync.md",

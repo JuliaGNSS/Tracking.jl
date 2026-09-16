@@ -2,8 +2,10 @@ module SignalCoverageTest
 
 # Cross-cutting coverage guard: every concrete signal type GNSSSignals defines
 # must either have a complete Tracking.jl per-signal API (correlator default,
-# sync-search buffer width, loop-bandwidth defaults, sync detector) and actually
-# survive a pass through `track`, or be listed in `UNSUPPORTED` with a reason.
+# sync-search buffer width, loop-bandwidth defaults, integration policy, sync
+# detector), actually survive a pass through `track`, and be documented in the
+# capability matrix of `docs/src/signals.md` — or be listed in `UNSUPPORTED`
+# with a reason.
 #
 # The signal list is discovered from the `AbstractGNSSSignal` type tree rather
 # than hard-coded, so a GNSSSignals release that adds a signal fails here — a
@@ -21,6 +23,7 @@ using GNSSSignals:
     get_code_center_frequency_ratio,
     get_code_frequency,
     get_code_length,
+    get_data_frequency,
     get_modulation,
     get_secondary_code_length,
     get_signal_name
@@ -30,31 +33,31 @@ using Tracking:
     NumAnts,
     TrackState,
     TrackedSat,
+    TrackedSignal,
     default_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
+    default_num_code_blocks_to_integrate,
     detect_bit_or_secondary_code_sync,
     get_code_block_buffer_type,
     get_code_phase,
     get_default_correlator,
+    get_num_bits,
+    get_preferred_num_code_blocks_to_integrate,
     get_sat_state,
+    max_num_code_blocks_to_integrate,
     track
 
 # Signals GNSSSignals defines that Tracking.jl deliberately does not support
-# yet, keyed by type name, with the reason. Each needs a design decision, not
-# just a dispatch method — so they fail loudly here rather than silently
+# yet, keyed by type name, with the reason. Each would need a design decision,
+# not just a dispatch method — so they fail loudly here rather than silently
 # tracking with a nonsensical default.
-const UNSUPPORTED = Dict(
-    # Not a tracking signal: E5a-QP is the quick-acquisition aid, a dataless
-    # BPSK(5) quasi-pilot whose 330-chip code repeats every 64.5 µs so a
-    # receiver can find E5a cheaply and hand the satellite over to E5a-I /
-    # E5a-Q (OS SIS ICD v2.2 §2.3.1.4). It carries neither data nor a secondary
-    # code, so there is nothing to sync on, and its 64.5 µs primary code period
-    # is two orders of magnitude shorter than any signal here: one code block —
-    # Tracking's integration and loop-bandwidth unit — would run the loop at
-    # ~15.5 kHz with a 279 Hz carrier bandwidth. Tracking it is not a matter of
-    # adding a dispatch method.
-    :GalileoE5aQP => "acquisition aid, not a tracking signal: no data, no secondary code, 64.5 µs primary code period",
-)
+#
+# Empty as of issue #236: every concrete signal GNSSSignals 4 defines is
+# tracked. Galileo E5a-QP was the last entry — it is an acquisition aid, but
+# that is a statement about how a receiver uses it, not about whether this
+# package can track it, and it now integrates whole 31-block (2 ms) code cycles
+# like any other pilot (`src/galileo/e5a_qp.jl`).
+const UNSUPPORTED = Dict{Symbol,String}()
 
 # Signals excluded from the end-to-end `track` pass only (their per-signal API is
 # still checked), because one code block is too many samples for a unit test.
@@ -135,21 +138,33 @@ end
     @test B <: Unsigned
     @test sizeof(B) * 8 >= get_secondary_code_length(signal)
 
+    # Integration policy: the length a fresh `TrackedSignal` starts at, and the
+    # structural ceiling it may be raised to. The default has to be a divisor of
+    # the ceiling, or `calc_num_code_blocks_to_integrate` would silently clamp
+    # it down to one (issue #128's rule, applied to the default itself).
+    default_blocks = @inferred default_num_code_blocks_to_integrate(signal)
+    max_blocks = @inferred max_num_code_blocks_to_integrate(signal)
+    @test 1 <= default_blocks <= max_blocks
+    @test max_blocks % default_blocks == 0
+    @test get_preferred_num_code_blocks_to_integrate(TrackedSignal(signal)) ==
+          default_blocks
+
     # Loop-bandwidth defaults are derived from the primary code period, so the
     # question is not whether they are positive — `BL = 0.018 / T` always is —
-    # but whether the period they come from is a sane one to run a loop on. The
-    # bounds below are absolute: 100 Hz is already a very wide carrier loop
-    # (reference receivers sit at 5-25 Hz), and a pre-sync update rate above
-    # 2 kHz means the tracker would be filtering faster than any real loop
-    # needs to. Galileo E5a-QP fails both (279 Hz at 15.5 kHz) — which is why
-    # it is in `UNSUPPORTED` rather than here.
+    # but whether the loop that results is a sane one to run. That is a question
+    # about the integration the signal actually *starts* at, not about one
+    # primary block: the estimator scales the carrier bandwidth by `1/N` for an
+    # N-block integration, so both bounds below are taken across `N`. The bounds
+    # are absolute: 100 Hz is already a very wide carrier loop (reference
+    # receivers sit at 5-25 Hz), and an update rate above 2 kHz means the
+    # tracker would be filtering faster than any real loop needs to. Galileo
+    # E5a-QP is what makes the distinction load-bearing — 279 Hz per 64.5 µs
+    # block, but 9 Hz across the 31-block (2 ms) cycle it integrates.
     carrier_bandwidth = @inferred default_carrier_loop_filter_bandwidth(signal)
     code_bandwidth = @inferred default_code_loop_filter_bandwidth(signal)
-    @test 0.0Hz < carrier_bandwidth < 100.0Hz
+    @test 0.0Hz < carrier_bandwidth / default_blocks < 100.0Hz
     @test 0.0Hz < code_bandwidth < 100.0Hz
-    # The pre-sync integration is one primary code period, so its reciprocal is
-    # the fastest rate the loop can be asked to update at.
-    @test get_code_frequency(signal) / get_code_length(signal) < 2000.0Hz
+    @test get_code_frequency(signal) / (get_code_length(signal) * default_blocks) < 2000.0Hz
 
     # The sync detector must accept the signal's own buffer width. Signals
     # without a bespoke method fall through to the soft CFAR path inside
@@ -160,12 +175,18 @@ end
     end
 end
 
-# Four code periods is far short of any detector's horizon (the soft CFAR ones
-# need 2 × the secondary-code period), so this deliberately stops before sync:
-# it is a smoke test that the whole chain — code replica, downconvert/correlate,
-# discriminators, bit buffer, C/N₀ — runs for the signal and leaves the code
-# phase where it was seeded. Sync behaviour is pinned per signal in the
+# Four default integrations is far short of any detector's horizon (the soft
+# CFAR ones need 2 × the secondary-code period), so this deliberately stops
+# before sync for the signals that have something to sync on: it is a smoke test
+# that the whole chain — code replica, downconvert/correlate, discriminators,
+# bit buffer, C/N₀ — runs for the signal and leaves the code phase where it was
+# seeded. Sync behaviour is pinned per signal in the
 # `test/<constellation>_<signal>.jl` files.
+#
+# The length is counted in whole *default integrations* rather than code blocks
+# so Galileo E5a-QP, whose default is a 31-block cycle, gets a pass long enough
+# to complete one; for every other signal the default is one block and this is
+# the same four code periods as before.
 @testset "Runs a clean signal through track — $(get_signal_name(signal))" for signal in
                                                                               END_TO_END
     # PRN 6 is defined for every constellation here: GPS (1-32/63), Galileo
@@ -177,12 +198,15 @@ end
     code_length = get_code_length(signal)
     code_frequency = get_code_frequency(signal)
 
-    # Four whole primary code periods, at zero Doppler so the expected code
+    # Four whole default integrations, at zero Doppler so the expected code
     # phase after the pass is exactly the one we seeded; loop dynamics are
     # `track.jl`'s job.
     samples_per_period = code_length * sampling_frequency / code_frequency
     @test isinteger(upreferred(samples_per_period))
-    num_samples = 4 * round(Int, upreferred(samples_per_period))
+    num_samples =
+        4 *
+        default_num_code_blocks_to_integrate(signal) *
+        round(Int, upreferred(samples_per_period))
 
     code = gen_code(
         num_samples,
@@ -204,6 +228,54 @@ end
     # when the secondary code locked (that is what seeds the position in the
     # tiered-code cycle), so compare modulo the primary code length.
     @test mod(get_code_phase(sat_state), code_length) ≈ start_code_phase atol = 0.1
+
+    # Correlation and tracking are not navigation decoding: a pilot or
+    # acquisition aid must come through the same chain without ever being asked
+    # for a bit. `_calc_num_code_blocks_that_form_a_bit` is 0 for those signals
+    # and the post-sync `buffer` path returns early on it, so `soft_bits` stays
+    # empty no matter how long they track.
+    if iszero(get_data_frequency(signal))
+        @test Tracking._calc_num_code_blocks_that_form_a_bit(signal) == 0
+        @test get_num_bits(sat_state) == 0
+    else
+        # Data-bearing: one bit must be a whole number of primary code blocks,
+        # or every integration length would straddle a bit boundary.
+        blocks_per_bit = Tracking._calc_num_code_blocks_that_form_a_bit(signal)
+        @test blocks_per_bit >= 1
+        @test upreferred(
+            blocks_per_bit * code_length / code_frequency * get_data_frequency(signal),
+        ) ≈ 1
+    end
+end
+
+# The capability matrix in `docs/src/signals.md` is the user-facing answer to
+# "what does Tracking.jl do with this signal", so it has to stay in step with
+# the code. Two things are checked: that every signal GNSSSignals defines has a
+# row (and no row names a signal it no longer defines), and that the one
+# machine-readable cell — the integration policy, the number most likely to
+# drift — matches the traits. The prose cells are left to review.
+@testset "docs/src/signals.md capability matrix is complete and current" begin
+    path = joinpath(@__DIR__, "..", "docs", "src", "signals.md")
+    @test isfile(path)
+    rows = Dict{Symbol,Tuple{Int,Int}}()
+    for line in eachline(path)
+        m = match(r"^\|\s*`(\w+)`\s*\|.*\|\s*(\d+)\s*\(max\s*(\d+)\)\s*\|", line)
+        isnothing(m) && continue
+        rows[Symbol(m[1])] = (parse(Int, m[2]), parse(Int, m[3]))
+    end
+    documented = Set(keys(rows))
+    known = Set(Symbol(string(nameof(T))) for T in _signal_types())
+    # A newly added GNSSSignals signal has no row; a removed one leaves a stale
+    # row behind. Both fail here.
+    @test setdiff(known, documented) == Set{Symbol}()
+    @test setdiff(documented, known) == Set{Symbol}()
+    for signal in SUPPORTED
+        name = Symbol(string(nameof(typeof(signal))))
+        haskey(rows, name) || continue
+        documented_default, documented_max = rows[name]
+        @test documented_default == default_num_code_blocks_to_integrate(signal)
+        @test documented_max == max_num_code_blocks_to_integrate(signal)
+    end
 end
 
 end
