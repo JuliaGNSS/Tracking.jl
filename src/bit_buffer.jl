@@ -647,14 +647,19 @@ end
 """
 $(SIGNATURES)
 
-Shared detector body for signals that broadcast one channel symbol per
-primary code period (GPS L1C-D, Galileo E1B): the buffer of primary-block
-signs is itself the symbol stream — there is no sub-symbol boundary to
-find — so the detector reports `found = true` from the very first
-integration, leaving downstream consumers (GNSSDecoder.jl) to resolve the
-residual ±1 polarity ambiguity via the navigation preamble.
+Shared detector body for signals with no sub-block boundary to find, which
+therefore report `found = true` from the very first integration.
 
-A signal of this shape delegates its `detect_bit_or_secondary_code_sync`
+Two shapes qualify. Most are signals that broadcast one channel symbol per
+primary code period (GPS L1C-D, GPS L2CM, Galileo E1B / E6-B, BeiDou
+B2b-I / B1C-D): the buffer of primary-block signs is itself the symbol
+stream, leaving downstream consumers (GNSSDecoder.jl) to resolve the
+residual ±1 polarity ambiguity via the navigation preamble. The other is
+Galileo E5a-QP, which carries neither data nor an overlay, so every block
+boundary is equivalent and the lock gates only its switch to the
+whole-code-cycle coherent integration.
+
+A signal of either shape delegates its `detect_bit_or_secondary_code_sync`
 method here.
 """
 @inline function _detect_symbol_is_code_block_sync(
@@ -1239,6 +1244,26 @@ function _buffer_find_bit(
             sync.polarity,
             complex(0.0, 0.0),
             sync.phase,
+            bit_buffer.soft_bits,
+            phase_acc,
+        )
+    end
+    if num_code_blocks_that_form_a_bit == 0
+        # A dataless signal that has no overlay either, so the branch above did
+        # not take it: Galileo E5a-QP, whose detector reports the lock on the
+        # first block because there is no boundary to find. There are no data
+        # bits to recover from the buffered pre-sync signs — and the divisions
+        # below would be by zero. `secondary_phase` stays 0: with
+        # `get_secondary_code_length == 1` nothing reads it (the code-phase snap
+        # skips such signals, and the post-sync `buffer` path returns early).
+        return BitBuffer{B}(
+            code_block_buffer,
+            code_block_buffer_length,
+            true,
+            0,
+            sync.polarity,
+            complex(0.0, 0.0),
+            0,
             bit_buffer.soft_bits,
             phase_acc,
         )

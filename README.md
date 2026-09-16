@@ -22,7 +22,7 @@ Multi-band tracking is supported as well: one `track` call can process sample bu
 
 ## Features
 
-* Supports GPS L1 C/A, GPS L1C-D, GPS L1C-P, GPS L5I, and Galileo E1B (including the BOC(1,1) approximation `GalileoE1B_BOC11`)
+* Supports every concrete signal GNSSSignals.jl defines — GPS L1 C/A, L1C, L2C and L5, Galileo E1, E5a (including the E5a-QP acquisition aid), E5b and E6, and BeiDou B1I, B3I, B1C, B2a and B2b — see the [signal support matrix](https://JuliaGNSS.github.io/Tracking.jl/stable/signals.html) for each signal's integration length, sync feature, navigation data and known limitations
 * Multi-band tracking: one `track` call processes measurements from multiple RF bands (e.g. L1 + L5) in lockstep
 * Multi-signal tracking on a single satellite (e.g. L1 C/A + L1C-D + L1C-P together) with a single shared downconvert
 * CN0 estimation
