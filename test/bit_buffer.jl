@@ -1,6 +1,6 @@
 module BitBufferTest
 
-using Test: @test, @testset, @inferred, @test_throws
+using Test: @test, @testset, @inferred, @test_logs, @test_throws
 using Random: MersenneTwister
 using GNSSSignals:
     GPSL1CA, GPSL5I, get_secondary_code, secondary_value, get_secondary_code_length
@@ -669,6 +669,152 @@ end
             @test isempty(get_soft_bits(reset_bit_buffer))
             # Same vector is reused (non-allocating after the first track calls)
             @test get_soft_bits(reset_bit_buffer) === soft_bits
+        end
+    end
+
+    @testset "A record crossing the bit boundary resynchronises (issue #238)" begin
+        # The commit test used to be an equality only, so a record that stepped
+        # the accumulator over the boundary (18 + 3 = 21 for GPS L1 C/A) could
+        # never meet it again: the count climbed forever and not one further bit
+        # was pushed, while tracking and the lock detectors kept looking fine.
+        signal = GPSL1CA()
+
+        @testset "Sync is dropped and the completed bits are kept" begin
+            soft_bits = Float32[1.0, -1.0]
+            bit_buffer = BitBuffer(UInt64(0xff), 8, true, complex(9.0, 1.0), 18, soft_bits)
+            _seed_phase_accumulators!(bit_buffer.phase_acc, 20)
+            bit_buffer.phase_acc.mean_bin_energy[3] = 42.0
+            bit_buffer.phase_acc.last_bin_polarity[3] = Int8(-1)
+
+            next_bit_buffer =
+                @test_logs (:warn, r"past the navigation-bit boundary") match_mode = :any @inferred buffer(
+                    signal,
+                    1,
+                    bit_buffer,
+                    3,
+                    1.0 + 0.0im,
+                )
+
+            @test has_bit_or_secondary_code_been_found(next_bit_buffer) == false
+            @test next_bit_buffer.prompt_accumulator == complex(0.0, 0.0)
+            @test next_bit_buffer.prompt_accumulator_integrated_code_blocks == 0
+            @test next_bit_buffer.code_block_buffer == 0
+            @test next_bit_buffer.code_block_buffer_length == 0
+            @test next_bit_buffer.polarity == 0
+            @test next_bit_buffer.secondary_phase == 0
+            # The straddling record contributes nothing: its energy belongs to
+            # two different bits, so no (soft-corrupted) bit is committed.
+            @test get_soft_bits(next_bit_buffer) === soft_bits
+            @test get_soft_bits(next_bit_buffer) == Float32[1.0, -1.0]
+            # The old lock's bin statistics must not bias the new search.
+            @test all(iszero, next_bit_buffer.phase_acc.mean_bin_energy)
+            @test all(iszero, next_bit_buffer.phase_acc.open_bin_sum)
+            @test all(
+                iszero,
+                next_bit_buffer.phase_acc.bin_energy_sum_of_squared_deviations,
+            )
+            @test all(iszero, next_bit_buffer.phase_acc.last_bin_polarity)
+        end
+
+        @testset "Landing exactly on the boundary still commits a bit" begin
+            # The guard must fire on `>`, not on any multi-block record: a
+            # record that lands on the boundary is the normal post-sync case.
+            bit_buffer = BitBuffer(UInt64(0xff), 8, true, complex(10.0, 0.0), 17)
+            next_bit_buffer = @inferred buffer(signal, 3, bit_buffer, 3, 3.0 + 0.0im)
+            @test has_bit_or_secondary_code_been_found(next_bit_buffer) == true
+            @test get_soft_bits(next_bit_buffer) == Float32[13.0]
+            @test next_bit_buffer.prompt_accumulator_integrated_code_blocks == 0
+        end
+
+        @testset "Secondary-code signals resynchronise too" begin
+            # GPS L5I: 10 primary blocks per bit, and the recovered
+            # secondary-code phase goes with the dropped lock.
+            l5i = GPSL5I()
+            bit_buffer = BitBuffer{UInt16}(
+                UInt16(0x3ff),
+                10,
+                true,
+                4,
+                Int8(1),
+                complex(5.0, 0.0),
+                8,
+                Float32[2.0],
+                PhaseAccumulators(),
+            )
+            next_bit_buffer = @test_logs (:warn,) match_mode = :any @inferred buffer(
+                l5i,
+                4,
+                bit_buffer,
+                3,
+                1.0 + 0.0im,
+            )
+            @test has_bit_or_secondary_code_been_found(next_bit_buffer) == false
+            @test next_bit_buffer.secondary_phase == 0
+            @test next_bit_buffer.polarity == 0
+            @test next_bit_buffer.prompt_accumulator_integrated_code_blocks == 0
+            @test get_soft_bits(next_bit_buffer) == Float32[2.0]
+        end
+
+        @testset "Bits keep coming after the straddling record" begin
+            # End-to-end over a clean ±1 prompt stream: sync, decode bits, take
+            # one 3-block record at 18 accumulated blocks, and keep feeding
+            # single blocks. Before the fix the soft-bit count froze here for
+            # good; now the detector re-locks and bits resume on the true grid.
+            rng = MersenneTwister(1234)
+            data_bits = rand(rng, (-1.0, 1.0), 80)
+            prompts = ComplexF64.(repeat(data_bits, inner = 20))
+
+            bit_buffer = BitBuffer{UInt64}()
+            bits_at_injection = -1
+            bits_at_relock = -1
+            max_accumulated_after = 0
+            injected = false
+            k = 1
+            while k <= length(prompts)
+                if !injected &&
+                   has_bit_or_secondary_code_been_found(bit_buffer) &&
+                   bit_buffer.prompt_accumulator_integrated_code_blocks == 18 &&
+                   k + 2 <= length(prompts)
+                    bits_at_injection = length(get_soft_bits(bit_buffer))
+                    # One record spanning three primary blocks: 18 + 3 = 21.
+                    bit_buffer = @test_logs (:warn,) match_mode = :any buffer(
+                        signal,
+                        5,
+                        bit_buffer,
+                        3,
+                        sum(prompts[k:(k+2)]),
+                    )
+                    @test has_bit_or_secondary_code_been_found(bit_buffer) == false
+                    injected = true
+                    k += 3
+                    continue
+                end
+                bit_buffer = buffer(signal, 5, bit_buffer, 1, prompts[k])
+                if injected
+                    if bits_at_relock < 0 &&
+                       has_bit_or_secondary_code_been_found(bit_buffer)
+                        bits_at_relock = length(get_soft_bits(bit_buffer))
+                    end
+                    max_accumulated_after = max(
+                        max_accumulated_after,
+                        bit_buffer.prompt_accumulator_integrated_code_blocks,
+                    )
+                end
+                k += 1
+            end
+
+            @test injected
+            @test bits_at_injection > 0
+            # The detector ran again from a clean accumulator...
+            @test bits_at_relock >= 0
+            @test has_bit_or_secondary_code_been_found(bit_buffer)
+            # ...and the bit stream resumed rather than starving.
+            @test length(get_soft_bits(bit_buffer)) > bits_at_relock
+            # The accumulator never ran away again.
+            @test max_accumulated_after < 20
+            # Every bit committed after the re-lock is a full coherent sum of 20
+            # equal-sign blocks, i.e. the new lock sits on the true bit grid.
+            @test all(≈(20.0f0), abs.(get_soft_bits(bit_buffer)[(bits_at_relock+1):end]))
         end
     end
 

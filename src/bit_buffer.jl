@@ -195,6 +195,15 @@ function _seed_phase_accumulators!(accumulators::PhaseAccumulators, blocks_per_b
     )
         resize!(vector, blocks_per_bit)
     end
+    _reset_phase_accumulators!(accumulators)
+end
+
+# Zero the accumulators in place, keeping their current length. Used by the
+# boundary-overshoot resync (`_resync_bit_buffer`), where `_is_seeded` is
+# already satisfied at the right length, so the next pre-sync block would
+# otherwise fold into the *old* lock's bin statistics instead of starting a
+# fresh search. A no-op on the hard-decision path, whose vectors stay empty.
+function _reset_phase_accumulators!(accumulators::PhaseAccumulators)
     fill!(accumulators.open_bin_sum, zero(ComplexF64))
     fill!(accumulators.mean_bin_energy, 0.0)
     fill!(accumulators.bin_energy_sum_of_squared_deviations, 0.0)
@@ -1074,6 +1083,13 @@ end
 $(SIGNATURES)
 
 Buffer data bits based on the prompt accumulation and the current prompt value.
+
+Post-sync, `integrated_code_blocks` is added to a running count and one soft bit
+is emitted each time that count reaches the signal's blocks-per-bit. A record
+that carries the count *past* the boundary — which only an external
+`CorrelatorOutput` producer whose records are not bit-aligned can produce —
+drops bit sync instead (`found` returns to `false`, so the detector re-runs from
+a clean accumulator) and warns; see issue #238.
 """
 function buffer(
     signal::AbstractGNSSSignal,
@@ -1107,7 +1123,36 @@ function buffer(
     prompt_accumulator_integrated_code_blocks =
         bit_buffer.prompt_accumulator_integrated_code_blocks + integrated_code_blocks
 
-    if prompt_accumulator_integrated_code_blocks == num_code_blocks_that_form_a_bit
+    if prompt_accumulator_integrated_code_blocks > num_code_blocks_that_form_a_bit
+        # A record whose block count carries the accumulator *past* the bit
+        # boundary (18 accumulated + a 3-block record = 21 for GPS L1 C/A). The
+        # boundary test below is an equality, so once the count has stepped over
+        # it, it can never be met again: the accumulator climbs forever and not
+        # one further bit is pushed, while tracking, C/N₀ and the lock detectors
+        # all keep looking perfect — "ranging-ready, never healthy" (issue #238,
+        # seen on the LiteX-M2SDR hardware-correlator path).
+        #
+        # Only an external `CorrelatorOutput` producer can get here: the
+        # software correlate phase truncates the first post-sync integration to
+        # land on the boundary and then hands over whole bits, so its records
+        # step the accumulator exactly onto it.
+        #
+        # Resynchronise rather than paper over it. The straddling record's
+        # energy belongs to two different bits, so emitting a bit at `>=` and
+        # carrying the overshoot would soft-corrupt that bit and its successor
+        # with no way for a decoder to tell; dropping `found` costs one bit-sync
+        # (the detector re-runs from a clean accumulator, and the caller reverts
+        # to single-block records because `calc_num_code_blocks_for_bit_buffer`
+        # reads the same flag) and hides nothing. The already-decoded
+        # `soft_bits` are untouched — they were complete and correct.
+        _warn_bit_boundary_overshoot(
+            get_signal_id(signal),
+            prn,
+            prompt_accumulator_integrated_code_blocks,
+            num_code_blocks_that_form_a_bit,
+        )
+        return _resync_bit_buffer(bit_buffer)
+    elseif prompt_accumulator_integrated_code_blocks == num_code_blocks_that_form_a_bit
         # Flip the decoded bit if the detector locked at negative polarity:
         # the prompt accumulator's real-part sign is then inverted relative
         # to the data symbol's "0/1" convention.
@@ -1141,6 +1186,50 @@ function buffer(
             bit_buffer.phase_acc,
         )
     end
+end
+
+# Return `bit_buffer` to its pre-sync state after a bit-boundary overshoot: the
+# search window, the lock (`found` / `secondary_phase` / `polarity`) and the
+# partial coherent accumulation are all dropped, and the per-hypothesis
+# statistics are zeroed so the next block starts a clean search. `soft_bits` is
+# kept — those bits completed before the bad record — and so is the vector
+# identity, which the caller may be holding.
+@inline function _resync_bit_buffer(bit_buffer::BitBuffer{B}) where {B<:Unsigned}
+    BitBuffer{B}(
+        zero(B),
+        0,
+        false,
+        0,
+        Int8(0),
+        complex(0.0, 0.0),
+        0,
+        bit_buffer.soft_bits,
+        _reset_phase_accumulators!(bit_buffer.phase_acc),
+    )
+end
+
+# `maxlog` is keyed per callsite, so the `_id` is made signal- and PRN-specific:
+# a record-sizing bug in an external producer hits every satellite it feeds, and
+# silencing all but the first would hide how wide the problem is. Warn rather
+# than throw — one producer's off-by-one should cost a bit-sync, not the
+# receiver — but warn loudly, because the resync also discards the partial bit
+# and the straddling record.
+@noinline function _warn_bit_boundary_overshoot(
+    signal_id::Symbol,
+    prn::Integer,
+    accumulated_blocks::Integer,
+    blocks_per_bit::Integer,
+)
+    @warn """
+          Signal `:$signal_id` PRN $prn: a correlator record carried the bit \
+          accumulator past the navigation-bit boundary ($accumulated_blocks of \
+          $blocks_per_bit code blocks), which only a record not aligned to that \
+          boundary can do. Dropping bit sync and re-running the detector; the \
+          partial bit is discarded, the bits decoded so far are kept. Check the \
+          record sizing of the external `CorrelatorOutput` producer — it must \
+          not straddle a bit boundary.""" _id =
+        Symbol(:bit_boundary_overshoot_, signal_id, :_, prn) maxlog = 1
+    nothing
 end
 
 function _buffer_find_bit(
