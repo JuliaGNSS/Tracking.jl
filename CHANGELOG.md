@@ -1,5 +1,12 @@
 # Changelog
 
+## [8.3.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v8.3.0...v8.3.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* **bit_buffer:** resync when a record crosses the bit boundary ([9cec9b9](https://github.com/JuliaGNSS/Tracking.jl/commit/9cec9b960240576b59a8a120150908cc17a57bb0)), closes [#238](https://github.com/JuliaGNSS/Tracking.jl/issues/238)
+
 # [8.3.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v8.2.0...v8.3.0) (2026-09-16)
 
 
