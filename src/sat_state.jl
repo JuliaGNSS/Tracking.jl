@@ -884,23 +884,28 @@ end
 end
 
 """
-$(SIGNATURES)
+    init_estimator_state(estimator, sat::TrackedSat)
 
-Build the per-satellite Doppler-estimator state used by `estimator` for the
-given satellite. A custom doppler estimator must define this method for its
-[`AbstractDopplerEstimator`](@ref) subtype.
+Build the per-satellite Doppler-estimator state for `sat`: TrackingLoops'
+[`init_estimator_state`](@ref) on the satellite's estimator-driver signal
+(`signals[1]`) and its handover Dopplers. A custom estimator defines either
+this form or TrackingLoops' four-argument one.
 
-This function must be **pure** (free of observable side effects): besides
-seeding each real satellite on entry, it is also called to build the
-throwaway PRN-0 template sat that fixes a group's dictionary slot type at
-[`TrackState`](@ref) construction, as a type probe when validating
-pre-built sats, and by [`reset_loop_filters!`](@ref) to re-seed existing
-satellites. Estimators with cross-satellite shared state must therefore
-not register satellites here — perform shared-state registration in
-[`update_estimator_on_handoff`](@ref), which is called exactly once per
-handoff with the real incoming satellites.
+This function must be **pure**: besides seeding each real satellite on entry,
+it is also called to build the throwaway PRN-0 template sat that fixes a
+group's dictionary slot type at [`TrackState`](@ref) construction, as a type
+probe when validating pre-built sats, and by [`reset_loop_filters!`](@ref) to
+re-seed existing satellites. Estimators with cross-satellite shared state must
+therefore not register satellites here — perform shared-state registration in
+[`update_estimator_on_handoff`](@ref).
 """
-function init_estimator_state end
+init_estimator_state(estimator::AbstractDopplerEstimator, sat::TrackedSat) =
+    init_estimator_state(
+        estimator,
+        first(sat.signals).signal,
+        sat.carrier_doppler,
+        sat.code_doppler,
+    )
 
 """
 $(SIGNATURES)

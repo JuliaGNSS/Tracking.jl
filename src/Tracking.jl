@@ -1,12 +1,10 @@
 module Tracking
 
-using BitIntegers
 using DocStringExtensions
 using FastSinCos
 using GNSSSignals
 using SIMD
 using SinCosLUT
-using SpecialFunctions: erfinv
 using StaticArrays
 using TrackingLoopFilters
 using Dictionaries
@@ -14,13 +12,21 @@ using Accessors
 using Polyester
 using Random: AbstractRNG, Xoshiro
 
-# 1800-bit exact-width unsigned for the 1800-chip overlay-code searches of
-# GPS L1C-P and BeiDou B1C-P.
-# Defined once at module load. Benchmarked at ~71 μs for the full
-# 1800-phase Hamming-distance sweep, ~1.5× faster than a padded
-# UInt1856 variant because no mask is needed on shift/XOR (see the
-# sync-detection-redesign plan in docs/plans for the comparison).
-BitIntegers.@define_integers 1800
+# The device-independent loop core — correlator records, discriminators, the
+# bit buffer and its per-signal sync detectors, the C/N₀ estimators and the
+# noise window, the loop-filter rules and the Doppler estimators' per-record
+# `step` — lives in TrackingLoops.jl, so that a hardware correlator's loop
+# process runs the very same code without this package's sample-domain half.
+# Every one of its bindings is imported here by name, internals included, so
+# `Tracking.X` keeps meaning what it meant before the split for downstream code
+# and for this package's own tests.
+using TrackingLoops
+for name in names(TrackingLoops; all = true, imported = false)
+    name in (:TrackingLoops, :eval, :include) && continue
+    startswith(String(name), "#") && continue
+    isdefined(TrackingLoops, name) || continue
+    @eval import TrackingLoops: $name
+end
 
 using Unitful: upreferred, uconvert, ustrip, dimension, NoUnits, Hz, dBHz, ms, s
 import Base.zero, Base.length, Base.resize!
@@ -87,7 +93,16 @@ export get_early,
     current_code_wrap,
     AbstractDopplerEstimator,
     init_estimator_state,
+    reset_estimator_state,
     update_estimator_on_handoff,
+    NCOReferencedPLLAndDLL,
+    SatNCOReferencedPLLAndDLL,
+    LoopRecord,
+    step_loop,
+    NCOTimeline,
+    FixedNCOWord,
+    NO_LANDING_SAMPLE,
+    mean_nco_word,
     CPUDownconvertAndCorrelator,
     CPUThreadedDownconvertAndCorrelator,
     Int16DownconvertAndCorrelator,
@@ -145,39 +160,7 @@ export get_early,
     get_secondary_code,
     update_accumulator
 
-const Maybe{T} = Union{T,Nothing}
-
-"""
-$(SIGNATURES)
-
-Type parameter wrapper for specifying the number of antennas in the system.
-Use `NumAnts(n)` to create an instance.
-"""
-struct NumAnts{x} end
-
-NumAnts(x) = NumAnts{x}()
-
-"""
-$(SIGNATURES)
-
-Type parameter wrapper for specifying the number of correlator accumulators.
-Use `NumAccumulators(n)` to create an instance.
-"""
-struct NumAccumulators{x} end
-
-NumAccumulators(x) = NumAccumulators{x}()
-
 TupleLike{T<:Tuple} = Union{T,NamedTuple{<:Any,T}}
-
-"""
-$(SIGNATURES)
-
-Abstract supertype for doppler estimators. Concrete subtypes carry estimator
-configuration (and any cross-satellite or cross-system shared state). The
-per-satellite state used by the estimator lives in each [`TrackedSat`](@ref)
-wrapper — see [`init_estimator_state`](@ref) for the extension point.
-"""
-abstract type AbstractDopplerEstimator end
 
 """
 $(SIGNATURES)
@@ -217,42 +200,9 @@ include("band_measurement.jl")
 include("code_replica.jl")
 include("carrier_replica.jl")
 include("downconvert.jl")
-# `cn0_estimators/` after `bit_buffer.jl`: the CN0 estimators' update context
-# carries the navigation-bit state (`BitBuffer`) and reads the signal's
-# blocks-per-bit trait from there. Within the folder the shared file comes
-# first, since every concrete estimator subtypes `AbstractCN0Estimator`.
-include("bit_buffer.jl")
-include("cn0_estimators/cn0_estimator.jl")
-include("cn0_estimators/moments.jl")
-include("cn0_estimators/no_cn0.jl")
-include("cn0_estimators/nwpr.jl")
-include("cn0_estimators/noise_ref.jl")
-include("correlators/correlator.jl")
-include("correlators/early_prompt_late.jl")
-include("correlators/very_early_prompt_late.jl")
-# `noise_estimators/` after `correlators/`: the software source despreads
-# through a real correlator, and `TrackState`'s `NoiseEstimators` field type
-# needs `AbstractNoiseEstimator` to exist before the struct is defined below.
-include("noise_estimators/noise_estimator.jl")
+# The software fill path of the noise reference: despreading an untracked PRN
+# through this package's own kernels (the window itself is TrackingLoops').
 include("noise_estimators/correlator.jl")
-include("discriminators.jl")
-include("post_corr_filter.jl")
-include("gps/l1ca.jl")
-include("gps/l1c_d.jl")
-include("gps/l1c_p.jl")
-include("gps/l2c.jl")
-include("gps/l5.jl")
-include("galileo/e1b.jl")
-include("galileo/e1c.jl")
-include("galileo/e5a.jl")
-include("galileo/e5a_qp.jl")
-include("galileo/e5b.jl")
-include("galileo/e6.jl")
-include("beidou/b1i.jl")
-include("beidou/b3i.jl")
-include("beidou/b2a.jl")
-include("beidou/b2b.jl")
-include("beidou/b1c.jl")
 include("sat_state.jl")
 
 """
