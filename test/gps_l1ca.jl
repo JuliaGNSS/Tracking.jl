@@ -48,16 +48,23 @@ end
 #
 # `Core.eval` is used so the override and its rollback execute at test time
 # rather than at module-parse time (literal method-definition expressions get
-# hoisted to module scope and the last one would win unconditionally).
+# hoisted to module scope and the last one would win unconditionally), and it
+# evaluates into *this* module rather than into `Tracking`, which is where a
+# user's override would live too. The generic belongs to TrackingLoops and the
+# argument type to GNSSSignals, so a method owned by `Tracking` would be type
+# piracy by the package itself, which Aqua rightly refuses.
 @testset "GPS L1 — confidence override" begin
     gpsl1 = GPSL1CA()
     @test get_bit_edge_detection_confidence(gpsl1) ≈ 0.999
-    Core.eval(Tracking, :(get_bit_edge_detection_confidence(::$GPSL1CA) = 0.95))
+    Core.eval(@__MODULE__, :(Tracking.get_bit_edge_detection_confidence(::$GPSL1CA) = 0.95))
     try
         @test get_bit_edge_detection_confidence(gpsl1) ≈ 0.95
     finally
         # Restore the package-wide default for any tests that run after this one.
-        Core.eval(Tracking, :(get_bit_edge_detection_confidence(::$GPSL1CA) = 0.999))
+        Core.eval(
+            @__MODULE__,
+            :(Tracking.get_bit_edge_detection_confidence(::$GPSL1CA) = 0.999),
+        )
     end
     @test get_bit_edge_detection_confidence(gpsl1) ≈ 0.999
 end
