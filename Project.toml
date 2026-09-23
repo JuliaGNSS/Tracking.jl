@@ -23,8 +23,11 @@ VectorizationBase = "3d5dd08c-fd9d-11e8-17fa-ed2836048c2f"
 [weakdeps]
 Acquisition = "d4bbf60b-102b-5ffb-8f97-a7ea5817e69f"
 
+# TrackingLoops 1.0.0 is awaiting registration in General. Once it is there,
+# drop this section: a registered dependency needs no source, and `[sources]`
+# cannot be read by Julia 1.10, which this package still supports.
 [sources]
-TrackingLoops = {rev = "main", url = "https://github.com/JuliaGNSS/TrackingLoops.jl"}
+TrackingLoops = {url = "https://github.com/JuliaGNSS/TrackingLoops.jl"}
 
 [extensions]
 TrackingAcquisitionExt = ["Acquisition"]
