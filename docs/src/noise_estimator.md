@@ -113,6 +113,7 @@ get_noise_density
 CorrelatorNoiseEstimator
 CorrelatorNoiseEstimator()
 Tracking.update_noise!(::CorrelatorNoiseEstimator, ::Tracking.BandMeasurement, ::Integer, ::Integer, ::Tracking.NoiseUpdateContext)
+TrackingLoops.despread_noise!
 ```
 
 Four properties are worth knowing about it.
