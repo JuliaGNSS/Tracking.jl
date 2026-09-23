@@ -151,7 +151,12 @@ _update_tracked_sat_doppler(
     sat::TrackedSat{<:Tuple{Vararg{TrackedSignal}},<:SatConventionalPLLAndDLL},
     sampling_frequency,
     noise::Tuple,
-) = _update_tracked_sat_doppler(sat, ConventionalAssistedPLLAndDLL(), sampling_frequency, noise)
+) = _update_tracked_sat_doppler(
+    sat,
+    ConventionalAssistedPLLAndDLL(),
+    sampling_frequency,
+    noise,
+)
 _update_tracked_sat_doppler(
     sat::TrackedSat{<:Tuple{Vararg{TrackedSignal}},<:SatNCOReferencedPLLAndDLL},
     sampling_frequency,
@@ -187,24 +192,31 @@ _update_tracked_sat_doppler(
     driver_carrier_phase::Real = 0.0;
     correlated_pre_sync::Bool = false,
 )
-    bit_buffer, cn0_estimator, post_corr_filter, prompt, filtered_correlator, bit_block_count, integrated_code_blocks, overshoot =
-        fold_record(
-            tracked_signal.signal,
-            prn,
-            tracked_signal.bit_buffer,
-            get_cn0_estimator(tracked_signal),
-            tracked_signal.post_corr_filter,
-            output,
-            sampling_frequency,
-            noise_density,
-            noise_density_ready,
-            driver_carrier_phase,
-            correlated_pre_sync,
-        )
+    bit_buffer,
+    cn0_estimator,
+    post_corr_filter,
+    prompt,
+    filtered_correlator,
+    bit_block_count,
+    integrated_code_blocks,
+    overshoot = fold_record(
+        tracked_signal.signal,
+        prn,
+        tracked_signal.bit_buffer,
+        get_cn0_estimator(tracked_signal),
+        tracked_signal.post_corr_filter,
+        output,
+        sampling_frequency,
+        noise_density,
+        noise_density_ready,
+        driver_carrier_phase,
+        correlated_pre_sync,
+    )
     overshoot && _warn_bit_boundary_overshoot(
         get_signal_id(tracked_signal.signal),
         prn,
-        tracked_signal.bit_buffer.prompt_accumulator_integrated_code_blocks + bit_block_count,
+        tracked_signal.bit_buffer.prompt_accumulator_integrated_code_blocks +
+        bit_block_count,
         _calc_num_code_blocks_that_form_a_bit(tracked_signal.signal),
     )
     push!(tracked_signal.filtered_prompts, prompt)
@@ -379,7 +391,10 @@ maps `integrated_samples` to an integration time. See
 [External correlator producers](@ref).
 """
 function estimate_dopplers_and_filter_prompt(
-    track_state::TrackState{<:SignalGroups,<:Union{ConventionalPLLAndDLL,NCOReferencedPLLAndDLL}},
+    track_state::TrackState{
+        <:SignalGroups,
+        <:Union{ConventionalPLLAndDLL,NCOReferencedPLLAndDLL},
+    },
     sampling_frequencies::Union{BandMeasurements,NamedTuple,AbstractDict},
 )
     # Detach the slot *values* from the input (sharing the key set), then
@@ -505,7 +520,10 @@ by the software correlate phase or appended by an external producer via
 [`append_correlator_output!`](@ref).
 """
 function estimate_dopplers_and_filter_prompt!(
-    track_state::TrackState{<:SignalGroups,<:Union{ConventionalPLLAndDLL,NCOReferencedPLLAndDLL}},
+    track_state::TrackState{
+        <:SignalGroups,
+        <:Union{ConventionalPLLAndDLL,NCOReferencedPLLAndDLL},
+    },
     sampling_frequencies::Union{BandMeasurements,NamedTuple,AbstractDict},
 )
     _foreach_group!(
