@@ -47,9 +47,9 @@ end
 # `get_bit_edge_detection_confidence`. The detector picks up the override
 # immediately — no TrackState rebuild needed.
 #
-# `Core.eval` is used so the override and its rollback execute at test time
-# rather than at module-parse time (literal method-definition expressions get
-# hoisted to module scope and the last one would win unconditionally), and it
+# `Core.eval` is used so the override executes at test time rather than at
+# module-parse time (a literal method definition is hoisted to module scope and
+# would be in effect for the whole file), and it
 # evaluates into *this* module rather than into `Tracking`, which is where a
 # user's override would live too. The generic belongs to TrackingLoops and the
 # argument type to GNSSSignals, so a method owned by `Tracking` would be type
@@ -57,15 +57,16 @@ end
 @testset "GPS L1 — confidence override" begin
     gpsl1 = GPSL1CA()
     @test get_bit_edge_detection_confidence(gpsl1) ≈ 0.999
-    Core.eval(@__MODULE__, :(Tracking.get_bit_edge_detection_confidence(::$GPSL1CA) = 0.95))
+    Core.eval(
+        @__MODULE__,
+        :(TrackingLoops.get_bit_edge_detection_confidence(::$GPSL1CA) = 0.95),
+    )
     try
         @test get_bit_edge_detection_confidence(gpsl1) ≈ 0.95
     finally
-        # Restore the package-wide default for any tests that run after this one.
-        Core.eval(
-            @__MODULE__,
-            :(Tracking.get_bit_edge_detection_confidence(::$GPSL1CA) = 0.999),
-        )
+        # Remove the override, so the tests after this one see the generic
+        # default again rather than a second override that happens to match it.
+        Base.delete_method(which(get_bit_edge_detection_confidence, (GPSL1CA,)))
     end
     @test get_bit_edge_detection_confidence(gpsl1) ≈ 0.999
 end
