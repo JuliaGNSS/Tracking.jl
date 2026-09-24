@@ -3,7 +3,7 @@ module PostCorrFilterTest
 using Test: @test, @testset, @inferred
 using StaticArrays: SVector, SMatrix
 using Unitful: Hz
-using Tracking:
+using TrackingLoops:
     DefaultPostCorrFilter,
     NumAnts,
     get_weights,

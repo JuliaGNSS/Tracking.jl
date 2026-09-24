@@ -3,7 +3,7 @@ module GalileoE1BTest
 using Test: @test, @testset, @inferred
 using Unitful: Hz
 using GNSSSignals: GalileoE1B, GalileoE1B_BOC11
-using Tracking:
+using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,

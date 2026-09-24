@@ -19,7 +19,9 @@ using Tracking:
     get_signals,
     get_carrier_doppler,
     get_code_doppler,
-    get_last_fully_integrated_filtered_prompt,
+    get_last_fully_integrated_filtered_prompt
+import TrackingLoops
+using TrackingLoops:
     get_default_correlator,
     NumAnts,
     EarlyPromptLateCorrelator,
@@ -185,7 +187,7 @@ end
     )
     @test keys(starved.noise_estimators) == (:GPSL1CA,)
     _ingest_and_fold!(starved; fs)
-    @test Tracking.estimate_cn0(starved, 3) == -Inf * dBHz
+    @test TrackingLoops.estimate_cn0(starved, 3) == -Inf * dBHz
     @test Base.length(Tracking.get_cn0_estimator(starved, 3)) == 0
 
     # Feed the second half of the contract and the same producer reports a real
@@ -206,7 +208,7 @@ end
     )
     _ingest_and_fold!(fed; fs)
     @test Base.length(Tracking.get_cn0_estimator(fed, 3)) == 3
-    @test ustrip(uconvert(dBHz, Tracking.estimate_cn0(fed, 3))) ≈
+    @test ustrip(uconvert(dBHz, TrackingLoops.estimate_cn0(fed, 3))) ≈
           10log10((3000 / 4000)^2 / 1e-6 - 1 / 1e-3) atol = 1e-6
 end
 

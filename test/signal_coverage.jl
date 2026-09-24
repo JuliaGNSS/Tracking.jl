@@ -29,23 +29,25 @@ using GNSSSignals:
     get_signal_name
 import Tracking
 using Tracking:
-    AbstractCorrelator,
-    NumAnts,
     TrackState,
     TrackedSat,
     TrackedSignal,
+    get_code_phase,
+    get_num_bits,
+    get_preferred_num_code_blocks_to_integrate,
+    get_sat_state,
+    track
+import TrackingLoops
+using TrackingLoops:
+    AbstractCorrelator,
+    NumAnts,
     default_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     default_num_code_blocks_to_integrate,
     detect_bit_or_secondary_code_sync,
     get_code_block_buffer_type,
-    get_code_phase,
     get_default_correlator,
-    get_num_bits,
-    get_preferred_num_code_blocks_to_integrate,
-    get_sat_state,
-    max_num_code_blocks_to_integrate,
-    track
+    max_num_code_blocks_to_integrate
 
 # Signals GNSSSignals defines that Tracking.jl deliberately does not support
 # yet, keyed by type name, with the reason. Each would need a design decision,
@@ -129,7 +131,7 @@ end
     for num_ants in (1, 3)
         correlator = @inferred get_default_correlator(signal, NumAnts(num_ants))
         @test correlator isa AbstractCorrelator
-        @test Tracking.get_num_ants(correlator) == num_ants
+        @test TrackingLoops.get_num_ants(correlator) == num_ants
     end
 
     # Sync-search buffer must be an unsigned integer wide enough to hold one
@@ -171,7 +173,7 @@ end
     # `_buffer_find_bit`, which is exercised by the end-to-end pass below.
     if hasmethod(detect_bit_or_secondary_code_sync, Tuple{typeof(signal),Int,B,Int})
         @test detect_bit_or_secondary_code_sync(signal, 6, zero(B), 0) isa
-              Tracking.SyncResult
+              TrackingLoops.SyncResult
     end
 end
 
@@ -235,12 +237,12 @@ end
     # and the post-sync `buffer` path returns early on it, so `soft_bits` stays
     # empty no matter how long they track.
     if iszero(get_data_frequency(signal))
-        @test Tracking._calc_num_code_blocks_that_form_a_bit(signal) == 0
+        @test TrackingLoops._calc_num_code_blocks_that_form_a_bit(signal) == 0
         @test get_num_bits(sat_state) == 0
     else
         # Data-bearing: one bit must be a whole number of primary code blocks,
         # or every integration length would straddle a bit boundary.
-        blocks_per_bit = Tracking._calc_num_code_blocks_that_form_a_bit(signal)
+        blocks_per_bit = TrackingLoops._calc_num_code_blocks_that_form_a_bit(signal)
         @test blocks_per_bit >= 1
         @test upreferred(
             blocks_per_bit * code_length / code_frequency * get_data_frequency(signal),

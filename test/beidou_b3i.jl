@@ -4,7 +4,8 @@ using Test: @test, @testset, @inferred
 using Unitful: Hz
 using GNSSSignals: BeiDouB1I, BeiDouB3I, get_secondary_code_length
 import Tracking
-using Tracking:
+import TrackingLoops
+using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
@@ -28,9 +29,10 @@ const GEO_PRN = 1   # GEO (D2) — carries no overlay
           false
 
     @testset "NH20 search — clean lock at known phase / polarity" begin
-        reference = Tracking._packed_secondary_code(UInt32, b3i, MEO_PRN)
+        reference = TrackingLoops._packed_secondary_code(UInt32, b3i, MEO_PRN)
         # B3I uses the same NH20 overlay as B1I (BDS-SIS-ICD-B3I-1.0 §5.2.1).
-        @test reference == Tracking._packed_secondary_code(UInt32, BeiDouB1I(), MEO_PRN)
+        @test reference ==
+              TrackingLoops._packed_secondary_code(UInt32, BeiDouB1I(), MEO_PRN)
         for r in (0, 13, N - 1)
             received = rotl(reference, r, N)
             res = @inferred detect_bit_or_secondary_code_sync(b3i, MEO_PRN, received, N)
@@ -46,10 +48,10 @@ const GEO_PRN = 1   # GEO (D2) — carries no overlay
 
     # As on B1I, the GEO satellites carry no overlay — modelled as an all-ones
     # column, which the soft detector handles as a data-bit-edge search.
-    @test Tracking._packed_secondary_code(UInt32, b3i, GEO_PRN) ==
+    @test TrackingLoops._packed_secondary_code(UInt32, b3i, GEO_PRN) ==
           (one(UInt32) << N) - one(UInt32)
-    @test Tracking.uses_soft_secondary_code_detection(b3i) == true
-    @test Tracking.uses_soft_bit_edge_detection(b3i) == false
+    @test TrackingLoops.uses_soft_secondary_code_detection(b3i) == true
+    @test TrackingLoops.uses_soft_bit_edge_detection(b3i) == false
 
     # Plain BPSK (`LOC`) → EarlyPromptLate default.
     @test @inferred(get_default_correlator(b3i, NumAnts(1))) ==

@@ -4,7 +4,8 @@ using Test: @test, @testset, @inferred
 using Unitful: Hz
 using GNSSSignals: GPSL1CA
 import Tracking
-using Tracking:
+import TrackingLoops
+using TrackingLoops:
     get_default_correlator,
     get_code_block_buffer_type,
     default_carrier_loop_filter_bandwidth,

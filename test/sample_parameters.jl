@@ -4,10 +4,10 @@ using Test: @test, @testset, @inferred
 using Unitful: MHz, Hz
 using GNSSSignals: GPSL1CA, GPSL1C_P, GPSL5I
 using Tracking:
-    calc_num_code_blocks_to_integrate,
     calc_num_chips_to_integrate,
     calc_num_samples_left_to_integrate,
     calc_signal_samples_to_integrate
+using TrackingLoops: calc_num_code_blocks_to_integrate
 
 @testset "Calculate number of code blocks / chips to integrate" begin
     gpsl1 = GPSL1CA()

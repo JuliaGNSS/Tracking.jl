@@ -21,8 +21,8 @@ using Tracking:
     get_correlator_outputs,
     get_sat_state,
     get_carrier_doppler,
-    get_code_doppler,
-    CorrelatorOutput
+    get_code_doppler
+using TrackingLoops: CorrelatorOutput
 
 @testset "smallest-code-period default resolution" begin
     # `nothing` doppler_update_interval => smallest primary-code period across all

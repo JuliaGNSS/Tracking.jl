@@ -5,7 +5,8 @@ using Unitful: Hz
 using Random: MersenneTwister, randperm
 using GNSSSignals: BeiDouB1C_D, BeiDouB1C_P, get_band_id, get_secondary_code_length
 import Tracking
-using Tracking:
+import TrackingLoops
+using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
@@ -50,8 +51,8 @@ const B1C_P_MAX_ERRORS =
 
     @test @inferred(get_code_block_buffer_type(b1c_d)) === UInt8
 
-    @test Tracking.uses_soft_secondary_code_detection(b1c_d) == false
-    @test Tracking.uses_soft_bit_edge_detection(b1c_d) == false
+    @test TrackingLoops.uses_soft_secondary_code_detection(b1c_d) == false
+    @test TrackingLoops.uses_soft_bit_edge_detection(b1c_d) == false
 end
 
 @testset "BeiDou B1C pilot" begin
@@ -63,7 +64,7 @@ end
     # Like GPS L1C-P's, an 1800-chip / 18 s overlay is far too long to
     # integrate coherently per bin, so B1C pilot stays on the hard-decision
     # rotation sweep rather than the soft CFAR secondary-code detector.
-    @test Tracking.uses_soft_secondary_code_detection(b1c_p) == false
+    @test TrackingLoops.uses_soft_secondary_code_detection(b1c_p) == false
 
     # Below the 1800-block horizon the detector returns `found = false`
     # without running the sweep.
@@ -72,7 +73,7 @@ end
             detect_bit_or_secondary_code_sync(
                 b1c_p,
                 prn,
-                Tracking.UInt1800(0x1),
+                TrackingLoops.UInt1800(0x1),
                 num_blocks,
             )
         ).found == false
@@ -93,13 +94,13 @@ end
 
     # 1800-chip per-PRN overlay → the exact-width UInt1800 that GPS L1C-P's
     # identically sized overlay already introduced.
-    @test @inferred(get_code_block_buffer_type(b1c_p)) === Tracking.UInt1800
+    @test @inferred(get_code_block_buffer_type(b1c_p)) === TrackingLoops.UInt1800
 
     @testset "Overlay search — clean lock at known phase / polarity" begin
         # Unlike GPS L1C-P, B1C pilot needs no bespoke packer: GNSSSignals
         # exposes the overlay as a `PerPRNSecondaryCode`, which the generic
         # `_packed_secondary_code` reads.
-        reference = Tracking._packed_secondary_code(Tracking.UInt1800, b1c_p, prn)
+        reference = TrackingLoops._packed_secondary_code(TrackingLoops.UInt1800, b1c_p, prn)
         rotl(x, r) = r == 0 ? x : ((x << r) | (x >> (1800 - r)))
         for r in (0, 137, 1799)
             received = rotl(reference, r)
@@ -110,8 +111,8 @@ end
         end
 
         all_ones =
-            (Tracking.UInt1800(1) << 1799) |
-            ((Tracking.UInt1800(1) << 1799) - one(Tracking.UInt1800))
+            (TrackingLoops.UInt1800(1) << 1799) |
+            ((TrackingLoops.UInt1800(1) << 1799) - one(TrackingLoops.UInt1800))
         negated = reference ⊻ all_ones
         res = @inferred detect_bit_or_secondary_code_sync(b1c_p, prn, negated, 1800)
         @test res.found == true
@@ -122,13 +123,13 @@ end
     @testset "Overlay search — tolerance" begin
         # 2.5 % of 1800 discretizes to 45 errors, as for GPS L1C-P.
         @test B1C_P_MAX_ERRORS == 45
-        overlay = Tracking._packed_secondary_code(Tracking.UInt1800, b1c_p, prn)
+        overlay = TrackingLoops._packed_secondary_code(TrackingLoops.UInt1800, b1c_p, prn)
         rng = MersenneTwister(42)
 
         flip(x, n) = begin
             corrupted = x
             for idx in randperm(rng, 1800)[1:n]
-                corrupted ⊻= Tracking.UInt1800(1) << (idx - 1)
+                corrupted ⊻= TrackingLoops.UInt1800(1) << (idx - 1)
             end
             corrupted
         end

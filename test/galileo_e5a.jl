@@ -4,7 +4,8 @@ using Test: @test, @testset, @inferred
 using Unitful: Hz
 using GNSSSignals: GalileoE5aI, GalileoE5aQ, get_secondary_code_length
 import Tracking
-using Tracking:
+import TrackingLoops
+using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
@@ -29,7 +30,7 @@ rotl(x::T, r, N) where {T} =
           false
 
     @testset "CS20 search — clean lock at known phase / polarity" begin
-        reference = Tracking._packed_secondary_code(UInt32, e5a_i, prn)
+        reference = TrackingLoops._packed_secondary_code(UInt32, e5a_i, prn)
         for r in (0, 9, N - 1)
             received = rotl(reference, r, N)
             res = @inferred detect_bit_or_secondary_code_sync(e5a_i, prn, received, N)
@@ -55,7 +56,7 @@ rotl(x::T, r, N) where {T} =
     @test @inferred(get_code_block_buffer_type(e5a_i)) === UInt32
 
     # CS20 (20 chips) is short enough for the soft, CFAR secondary-code detector.
-    @test Tracking.uses_soft_secondary_code_detection(e5a_i) == true
+    @test TrackingLoops.uses_soft_secondary_code_detection(e5a_i) == true
 end
 
 @testset "Galileo E5a-Q" begin
@@ -68,7 +69,7 @@ end
           false
 
     @testset "CS100 per-PRN search — clean lock at known phase / polarity" begin
-        reference = Tracking._packed_secondary_code(UInt128, e5a_q, prn)
+        reference = TrackingLoops._packed_secondary_code(UInt128, e5a_q, prn)
         for r in (0, 37, N - 1)
             received = rotl(reference, r, N)
             res = @inferred detect_bit_or_secondary_code_sync(e5a_q, prn, received, N)
@@ -83,8 +84,8 @@ end
     end
 
     # A different PRN uses a different CS100 column, so the reference differs.
-    @test Tracking._packed_secondary_code(UInt128, e5a_q, 1) !=
-          Tracking._packed_secondary_code(UInt128, e5a_q, 2)
+    @test TrackingLoops._packed_secondary_code(UInt128, e5a_q, 1) !=
+          TrackingLoops._packed_secondary_code(UInt128, e5a_q, 2)
 
     @test @inferred(get_default_correlator(e5a_q, NumAnts(1))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
@@ -96,7 +97,7 @@ end
     @test @inferred(get_code_block_buffer_type(e5a_q)) === UInt128
 
     # CS100 (100 chips) is at the soft CFAR secondary-code detector's length cap.
-    @test Tracking.uses_soft_secondary_code_detection(e5a_q) == true
+    @test TrackingLoops.uses_soft_secondary_code_detection(e5a_q) == true
 end
 
 end

@@ -7,6 +7,15 @@ import Unitful
 using GNSSSignals: GPSL1CA, GPSL1C_P, gen_code, get_code_frequency
 import Tracking
 using Tracking:
+    TrackedSignal,
+    TrackedSat,
+    TrackState,
+    add_satellite!,
+    get_cn0_estimator,
+    get_last_fully_integrated_integration_time,
+    track
+import TrackingLoops
+using TrackingLoops:
     MomentsCN0Estimator,
     NWPRCN0Estimator,
     NoiseRefCN0Estimator,
@@ -15,23 +24,16 @@ using Tracking:
     get_prompt_buffer,
     requires_noise_density,
     update,
-    estimate_cn0,
-    TrackedSignal,
-    TrackedSat,
-    TrackState,
-    add_satellite!,
-    get_cn0_estimator,
-    get_last_fully_integrated_integration_time,
-    track
+    estimate_cn0
 
 # A minimal custom estimator: it only proves that the type is stored and its
 # methods are the ones called, so it does no estimating at all.
-struct CountingCN0Estimator <: Tracking.AbstractCN0Estimator
+struct CountingCN0Estimator <: TrackingLoops.AbstractCN0Estimator
     num_prompts::Int
 end
-Tracking.update(estimator::CountingCN0Estimator, prompt) =
+TrackingLoops.update(estimator::CountingCN0Estimator, prompt) =
     CountingCN0Estimator(estimator.num_prompts + 1)
-Tracking.estimate_cn0(estimator::CountingCN0Estimator, integration_time) =
+TrackingLoops.estimate_cn0(estimator::CountingCN0Estimator, integration_time) =
     estimator.num_prompts * dBHz
 
 @testset "custom CN0 estimator is pluggable (issue #217)" begin
