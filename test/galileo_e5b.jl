@@ -4,7 +4,8 @@ using Test: @test, @testset, @inferred
 using Unitful: Hz
 using GNSSSignals: GalileoE5aQ, GalileoE5bI, GalileoE5bQ, get_secondary_code_length
 import Tracking
-using Tracking:
+import TrackingLoops
+using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
@@ -33,7 +34,7 @@ rotl(x::T, r, N) where {T} =
     @testset "CS4 search — clean lock at known phase / polarity" begin
         # CS4 is `1110` (hex E, ICD §3.5.1), shared across SVIDs — so the
         # newest-first packed reference is exactly 0b1110.
-        reference = Tracking._packed_secondary_code(UInt32, e5b_i, prn)
+        reference = TrackingLoops._packed_secondary_code(UInt32, e5b_i, prn)
         @test reference == UInt32(0b1110)
         # All four rotations of `1110` are distinct (and distinct from their
         # negations), so the sweep recovers a unique phase.
@@ -57,7 +58,7 @@ rotl(x::T, r, N) where {T} =
         # rejects (none of the four one-flip neighbours of `1110` is a rotation
         # of it or of its negation). Bits above the window are masked off by the
         # search, so the flip has to land in the low `N`.
-        reference = Tracking._packed_secondary_code(UInt32, e5b_i, prn)
+        reference = TrackingLoops._packed_secondary_code(UInt32, e5b_i, prn)
         @test detect_bit_or_secondary_code_sync(e5b_i, prn, reference, N).found == true
         for bit = 0:(N-1)
             @test detect_bit_or_secondary_code_sync(
@@ -83,7 +84,7 @@ rotl(x::T, r, N) where {T} =
     @test @inferred(get_code_block_buffer_type(e5b_i)) === UInt32
 
     # CS4 (4 chips) is short enough for the soft, CFAR secondary-code detector.
-    @test Tracking.uses_soft_secondary_code_detection(e5b_i) == true
+    @test TrackingLoops.uses_soft_secondary_code_detection(e5b_i) == true
 end
 
 @testset "Galileo E5b-Q" begin
@@ -96,7 +97,7 @@ end
           false
 
     @testset "CS100 search — clean lock at known phase / polarity" begin
-        reference = Tracking._packed_secondary_code(UInt128, e5b_q, prn)
+        reference = TrackingLoops._packed_secondary_code(UInt128, e5b_q, prn)
         for r in (0, 37, N - 1)
             received = rotl(reference, r, N)
             res = @inferred detect_bit_or_secondary_code_sync(e5b_q, prn, received, N)
@@ -114,8 +115,8 @@ end
     # E5b-Q draws the upper half (CS100_51..100) of the same CS100 table
     # Galileo E5a-Q draws the lower half of, so the same SVID must get a
     # different overlay on the two components.
-    @test Tracking._packed_secondary_code(UInt128, e5b_q, prn) !=
-          Tracking._packed_secondary_code(UInt128, GalileoE5aQ(), prn)
+    @test TrackingLoops._packed_secondary_code(UInt128, e5b_q, prn) !=
+          TrackingLoops._packed_secondary_code(UInt128, GalileoE5aQ(), prn)
 
     @test @inferred(get_default_correlator(e5b_q, NumAnts(1))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
@@ -128,7 +129,7 @@ end
     @test @inferred(get_code_block_buffer_type(e5b_q)) === UInt128
 
     # CS100 (100 chips) is at the soft detector's length cap, so still soft.
-    @test Tracking.uses_soft_secondary_code_detection(e5b_q) == true
+    @test TrackingLoops.uses_soft_secondary_code_detection(e5b_q) == true
 end
 
 end

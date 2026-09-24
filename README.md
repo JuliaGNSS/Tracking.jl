@@ -20,6 +20,9 @@ Moreover, Tracking.jl allows tracking of signals from phased antenna arrays mean
 Multi-signal tracking is supported: a single satellite can be tracked on several signals at once (e.g. GPS L1 C/A together with L1C-D and L1C-P) sharing one carrier downconvert per outer iteration, with a per-signal correlator each.
 Multi-band tracking is supported as well: one `track` call can process sample buffers from several RF bands at once (e.g. L1 and L5), each band bundled as a `Measurement` with its own sampling frequency and intermediate frequency.
 
+The per-record loop arithmetic — correlators, discriminators, the bit buffer, the C/N₀ estimators and the Doppler estimators — lives in [TrackingLoops.jl](https://github.com/JuliaGNSS/TrackingLoops.jl), so that a hardware correlator's loop process can run the same code without this package's sample-domain half.
+Reading results needs only Tracking.jl: it re-exports the TrackingLoops functions that read them (`estimate_cn0`, `get_prompt`, `get_soft_bits`, `has_bit_or_secondary_code_been_found`, …). Load TrackingLoops next to it to configure a correlator, a C/N₀ or noise estimator, a Doppler estimator or a post-correlation filter (`using Tracking, TrackingLoops, GNSSSignals`).
+
 ## Features
 
 * Supports every concrete signal GNSSSignals.jl defines — GPS L1 C/A, L1C, L2C and L5, Galileo E1, E5a (including the E5a-QP acquisition aid), E5b and E6, and BeiDou B1I, B3I, B1C, B2a and B2b — see the [signal support matrix](https://JuliaGNSS.github.io/Tracking.jl/stable/signals.html) for each signal's integration length, sync feature, navigation data and known limitations

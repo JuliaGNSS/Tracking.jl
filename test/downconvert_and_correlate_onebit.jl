@@ -20,6 +20,12 @@ using Tracking:
     BandMeasurement,
     get_sat_state,
     get_carrier_doppler,
+    TrackedSignal,
+    CPUThreadedDownconvertAndCorrelator,
+    OneBitDownconvertAndCorrelator,
+    OneBitThreadedDownconvertAndCorrelator
+import TrackingLoops
+using TrackingLoops:
     estimate_cn0,
     MomentsCN0Estimator,
     get_prompt,
@@ -31,12 +37,8 @@ using Tracking:
     EarlyPromptLateCorrelator,
     VeryEarlyPromptLateCorrelator,
     NumAnts,
-    TrackedSignal,
     DefaultPostCorrFilter,
-    ConventionalAssistedPLLAndDLL,
-    CPUThreadedDownconvertAndCorrelator,
-    OneBitDownconvertAndCorrelator,
-    OneBitThreadedDownconvertAndCorrelator
+    ConventionalAssistedPLLAndDLL
 import Tracking
 using StaticArrays: SVector
 
@@ -48,10 +50,10 @@ struct DynShiftsCorrelator{M} <: AbstractCorrelator{M}
     accumulators::Vector
     shifts::Vector{Int}
 end
-Tracking.get_accumulators(c::DynShiftsCorrelator) = c.accumulators
-Tracking.update_accumulator(c::DynShiftsCorrelator{M}, acc) where {M} =
+TrackingLoops.get_accumulators(c::DynShiftsCorrelator) = c.accumulators
+TrackingLoops.update_accumulator(c::DynShiftsCorrelator{M}, acc) where {M} =
     DynShiftsCorrelator{M}(collect(acc), c.shifts)
-Tracking.get_correlator_sample_shifts(
+TrackingLoops.get_correlator_sample_shifts(
     c::DynShiftsCorrelator,
     sampling_frequency,
     code_frequency,

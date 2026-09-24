@@ -6,19 +6,21 @@ using GNSSSignals:
     GPSL1CA, gen_code, get_code_frequency, get_code_center_frequency_ratio, get_code_type
 import Tracking
 using Tracking:
-    AbstractCorrelator,
     CPUDownconvertAndCorrelator,
     CPUThreadedDownconvertAndCorrelator,
-    EarlyPromptLateCorrelator,
-    NumAnts,
     TrackedSat,
     TrackState,
     BandMeasurement,
     downconvert_and_correlate,
-    get_accumulators,
     get_correlator,
     get_correlator_outputs,
-    get_sat_state,
+    get_sat_state
+import TrackingLoops
+using TrackingLoops:
+    AbstractCorrelator,
+    EarlyPromptLateCorrelator,
+    NumAnts,
+    get_accumulators,
     get_correlator_sample_shifts,
     update_accumulator
 
@@ -397,8 +399,8 @@ end
         accumulators::Vector{ComplexF64}
         shifts::Vector{Int}
     end
-    Tracking.get_accumulators(c::DynamicCorrelator) = c.accumulators
-    Tracking.update_accumulator(c::DynamicCorrelator, acc) =
+    TrackingLoops.get_accumulators(c::DynamicCorrelator) = c.accumulators
+    TrackingLoops.update_accumulator(c::DynamicCorrelator, acc) =
         DynamicCorrelator(collect(acc), c.shifts)
 
     gpsl1 = GPSL1CA()
@@ -582,10 +584,10 @@ struct VectorShiftsCorrelator <: AbstractCorrelator{1}
     accumulators::Vector{ComplexF64}
     shifts::Vector{Int}
 end
-Tracking.get_accumulators(c::VectorShiftsCorrelator) = c.accumulators
-Tracking.update_accumulator(c::VectorShiftsCorrelator, acc) =
+TrackingLoops.get_accumulators(c::VectorShiftsCorrelator) = c.accumulators
+TrackingLoops.update_accumulator(c::VectorShiftsCorrelator, acc) =
     VectorShiftsCorrelator(collect(acc), c.shifts)
-Tracking.get_correlator_sample_shifts(
+TrackingLoops.get_correlator_sample_shifts(
     c::VectorShiftsCorrelator,
     sampling_frequency,
     code_frequency,

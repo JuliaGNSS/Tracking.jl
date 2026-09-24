@@ -5,7 +5,8 @@ using Unitful: Hz
 using Random: MersenneTwister
 using GNSSSignals: BeiDouB1I, get_secondary_code, get_secondary_code_length, secondary_value
 import Tracking
-using Tracking:
+import TrackingLoops
+using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
@@ -37,14 +38,14 @@ function soft_sync(prn, blocks_per_symbol; nblocks, amplitude = 3.0, seed = 1)
     N = get_secondary_code_length(signal)
     overlay = get_secondary_code(signal)
     rng = MersenneTwister(seed)
-    accumulators = Tracking.PhaseAccumulators()
-    Tracking._seed_phase_accumulators!(accumulators, N)
+    accumulators = TrackingLoops.PhaseAccumulators()
+    TrackingLoops._seed_phase_accumulators!(accumulators, N)
     symbol = 1.0
     for i = 0:(nblocks-1)
         (i - SYMBOL_OFFSET) % blocks_per_symbol == 0 && (symbol = rand(rng, (-1.0, 1.0)))
         chip = secondary_value(overlay, prn, mod(i - SYMBOL_OFFSET, N))
         prompt = amplitude * symbol * chip + randn(rng, ComplexF64)
-        Tracking._update_secondary_accumulators!(
+        TrackingLoops._update_secondary_accumulators!(
             accumulators,
             ComplexF64(prompt),
             i,
@@ -52,7 +53,7 @@ function soft_sync(prn, blocks_per_symbol; nblocks, amplitude = 3.0, seed = 1)
             signal,
             prn,
         )
-        result = Tracking._detect_secondary_code_cfar(accumulators, N, 0.999, i + 1)
+        result = TrackingLoops._detect_secondary_code_cfar(accumulators, N, 0.999, i + 1)
         result.found && return (block = i + 1, rotation = mod(i + 1, N))
     end
     nothing
@@ -69,7 +70,7 @@ end
           false
 
     @testset "NH20 search — clean lock at known phase / polarity" begin
-        reference = Tracking._packed_secondary_code(UInt32, b1i, MEO_PRN)
+        reference = TrackingLoops._packed_secondary_code(UInt32, b1i, MEO_PRN)
         # NH20 per BDS-SIS-ICD-B1I-3.0 §5.2.1, packed newest-first.
         @test reference == UInt32(0b00000100110101001110)
         for r in (0, 9, N - 1)
@@ -92,14 +93,14 @@ end
         # with an all-ones column, so the tiered code equals the primary code.
         mask = (one(UInt32) << N) - one(UInt32)
         for prn in (1, 5, 59, 63)
-            @test Tracking._packed_secondary_code(UInt32, b1i, prn) == mask
+            @test TrackingLoops._packed_secondary_code(UInt32, b1i, prn) == mask
         end
         # An all-ones reference is rotation-invariant, so the *hard* sweep has
         # nothing to lock — it would match at every phase and report the first
         # one it tried. Pin the degeneracy so a future move to the hard path
         # cannot pass silently; what the soft path (the live one) does with the
         # same column is pinned in the next testset.
-        reference = Tracking._packed_secondary_code(UInt32, b1i, GEO_PRN)
+        reference = TrackingLoops._packed_secondary_code(UInt32, b1i, GEO_PRN)
         @test all(rotl(reference, r, N) == reference for r = 0:(N-1))
     end
 
@@ -133,11 +134,11 @@ end
     # The soft CFAR secondary-code detector is the active path (NH20 is 20
     # chips, inside the 100-chip cap) — on the GEO PRNs too, where it declines
     # to lock rather than falling back to anything else.
-    @test Tracking.uses_soft_secondary_code_detection(b1i) == true
+    @test TrackingLoops.uses_soft_secondary_code_detection(b1i) == true
     # `uses_soft_bit_edge_detection` requires *no* secondary code, and the
     # signal type reports 20 — so B1I never routes to the bit-edge detector,
     # not even for a GEO PRN.
-    @test Tracking.uses_soft_bit_edge_detection(b1i) == false
+    @test TrackingLoops.uses_soft_bit_edge_detection(b1i) == false
 
     # Plain BPSK (`LOC`) → EarlyPromptLate default.
     @test @inferred(get_default_correlator(b1i, NumAnts(1))) ==

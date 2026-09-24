@@ -12,7 +12,7 @@ using GNSSSignals:
     get_code_length
 using StaticArrays: SVector
 using Unitful: Hz, MHz, ms, upreferred
-using Tracking:
+using TrackingLoops:
     EarlyPromptLateCorrelator,
     VeryEarlyPromptLateCorrelator,
     pll_disc,

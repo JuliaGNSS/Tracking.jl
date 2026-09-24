@@ -4,7 +4,8 @@ using Test: @test, @testset, @inferred
 using Unitful: Hz
 using GNSSSignals: GPSL1CA, GalileoE1B, get_code, get_code_frequency
 using StaticArrays: SVector
-using Tracking:
+import TrackingLoops
+using TrackingLoops:
     EarlyPromptLateCorrelator,
     VeryEarlyPromptLateCorrelator,
     NumAnts,
@@ -116,11 +117,11 @@ import Tracking
     @testset "is_zero correlator" begin
         zero_corr =
             EarlyPromptLateCorrelator(SVector(0.0 + 0.0im, 0.0 + 0.0im, 0.0 + 0.0im), 0.5)
-        @test Tracking.is_zero(zero_corr)
+        @test TrackingLoops.is_zero(zero_corr)
 
         nonzero_corr =
             EarlyPromptLateCorrelator(SVector(0.0 + 0.0im, 1.0 + 0.0im, 0.0 + 0.0im), 0.5)
-        @test !Tracking.is_zero(nonzero_corr)
+        @test !TrackingLoops.is_zero(nonzero_corr)
     end
 
     @testset "Zeroing correlator" begin
@@ -163,8 +164,10 @@ import Tracking
         # callable; `DefaultPostCorrFilter` still selects the last antenna.
         default_post_corr_filter = DefaultPostCorrFilter()
         weights = @inferred get_weights(default_post_corr_filter, NumAnts(2))
-        filtered_correlator =
-            @inferred apply(tap -> Tracking._combine_antennas(weights, tap), correlator)
+        filtered_correlator = @inferred apply(
+            tap -> TrackingLoops._combine_antennas(weights, tap),
+            correlator,
+        )
         @test filtered_correlator ==
               EarlyPromptLateCorrelator(SVector(1.0 + 1.0im, 2.0 + 0.0im, 1.0 + 3.0im), 0.5)
 

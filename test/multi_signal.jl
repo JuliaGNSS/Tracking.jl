@@ -25,7 +25,6 @@ using Tracking:
     TrackState,
     add_satellite!,
     track,
-    estimate_cn0,
     get_filtered_prompts,
     get_sat_state,
     get_signal,
@@ -35,11 +34,13 @@ using Tracking:
     get_post_corr_filter,
     get_cn0_estimator,
     get_bit_buffer,
-    get_soft_bits,
     get_num_bits,
     get_integrated_samples,
     get_carrier_doppler,
-    get_code_doppler,
+    get_code_doppler
+using TrackingLoops:
+    estimate_cn0,
+    get_soft_bits,
     has_bit_or_secondary_code_been_found,
     ConventionalAssistedPLLAndDLL,
     EarlyPromptLateCorrelator,

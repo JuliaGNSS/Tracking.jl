@@ -9,7 +9,8 @@ using GNSSSignals:
     secondary_value,
     get_secondary_code_length,
     get_signal_id
-using Tracking:
+using Tracking: _warn_bit_boundary_overshoot
+using TrackingLoops:
     BitBuffer,
     buffer,
     reset,
@@ -26,8 +27,7 @@ using Tracking:
     _update_phase_accumulators!,
     _update_secondary_accumulators!,
     _secondary_code_search,
-    _packed_secondary_code,
-    _warn_bit_boundary_overshoot
+    _packed_secondary_code
 
 @testset "SyncResult" begin
     r = @inferred SyncResult(false, 0, Int8(0))
