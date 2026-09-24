@@ -9,8 +9,8 @@ TrackingLoopFilters = "0814aff9-93cb-554c-9fff-9bf1cfdb5efa"
 TrackingLoops = "89eadfff-3a96-4166-8be0-4e8bed6efc30"
 
 [sources]
-Tracking = {path = "/workspace/Tracking.jl"}
-TrackingLoops = {rev = "main", url = "https://github.com/JuliaGNSS/TrackingLoops.jl"}
+Tracking = {path = ".."}
+TrackingLoops = {url = "https://github.com/JuliaGNSS/TrackingLoops.jl"}
 
 [compat]
 Documenter = "1"
