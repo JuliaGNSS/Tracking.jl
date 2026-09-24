@@ -14,6 +14,9 @@ if haskey(Base.loaded_modules, _TRACKINGLOOPS_ID)
     const TrackingLoops = Base.loaded_modules[_TRACKINGLOOPS_ID]
     using .TrackingLoops
 end
+# Where the loop core's internals live on this revision, for the qualified
+# references below.
+const _LOOP_CORE = isdefined(@__MODULE__, :TrackingLoops) ? TrackingLoops : Tracking
 using Tracking:
     EarlyPromptLateCorrelator,
     get_correlator_sample_shifts,
@@ -647,7 +650,7 @@ if _HAS_BITBUFFER_PHASE_ACC && !_HAS_BITBUFFER_HARD_BITS
         complex(0.0, 0.0),                 # prompt_accumulator
         0,                                 # prompt_accumulator_integrated_code_blocks
         Float32[],                         # soft_bits
-        Tracking.PhaseAccumulators(),      # phase_acc
+        _LOOP_CORE.PhaseAccumulators(),      # phase_acc
     )
 elseif _HAS_BITBUFFER_PHASE_ACC
     _bb_int_type(::Tracking.BitBuffer{B}) where {B<:Unsigned} = B
@@ -662,7 +665,7 @@ elseif _HAS_BITBUFFER_PHASE_ACC
         complex(0.0, 0.0),                 # prompt_accumulator
         0,                                 # prompt_accumulator_integrated_code_blocks
         Float32[],                         # soft_bits
-        Tracking.PhaseAccumulators(),      # phase_acc
+        _LOOP_CORE.PhaseAccumulators(),      # phase_acc
     )
 elseif _HAS_BITBUFFER_SOFT_BITS
     _bb_int_type(::Tracking.BitBuffer{B}) where {B<:Unsigned} = B
@@ -1687,7 +1690,7 @@ if isdefined(Tracking, :CorrelatorNoiseEstimator)
 
     function bench_append_noise_observation()
         estimator = Tracking.CorrelatorNoiseEstimator()
-        observation = Tracking.noise_observation_from_samples(4000.0, 4000, 4e6Hz)
+        observation = _LOOP_CORE.noise_observation_from_samples(4000.0, 4000, 4e6Hz)
         # Fill the window first: the interesting cost is the steady state, where
         # every push is paired with a `popfirst!`.
         for _ = 1:2000
@@ -1713,7 +1716,7 @@ if isdefined(Tracking, :CorrelatorNoiseEstimator)
                     1,
                     0.0,
                     1000Hz;
-                    cn0_estimator = Tracking.NoiseRefCN0Estimator(),
+                    cn0_estimator = _LOOP_CORE.NoiseRefCN0Estimator(),
                 ),
             ],
         )
