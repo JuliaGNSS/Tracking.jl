@@ -1,12 +1,13 @@
 module ExternalCorrelatorProducerTest
 
-using Test: @test, @testset
+using Test: @test, @testset, @test_logs
 using Unitful: Hz, s, dBHz, ustrip, uconvert
 using StaticArrays: SVector
 import Tracking
 using GNSSSignals: GPSL1CA, gen_code, get_code_frequency
 using Tracking:
     TrackedSat,
+    TrackedSignal,
     TrackState,
     BandMeasurement,
     CPUDownconvertAndCorrelator,
@@ -22,6 +23,8 @@ using Tracking:
     get_last_fully_integrated_filtered_prompt
 import TrackingLoops
 using TrackingLoops:
+    BitBuffer,
+    has_bit_or_secondary_code_been_found,
     get_default_correlator,
     NumAnts,
     EarlyPromptLateCorrelator,
@@ -210,6 +213,37 @@ end
     @test Base.length(Tracking.get_cn0_estimator(fed, 3)) == 3
     @test ustrip(uconvert(dBHz, TrackingLoops.estimate_cn0(fed, 3))) ≈
           10log10((3000 / 4000)^2 / 1e-6 - 1 / 1e-3) atol = 1e-6
+end
+
+@testset "a producer record straddling a bit boundary warns and drops sync" begin
+    # The bit buffer only reports the overshoot; this package is what logs it.
+    # A synced L1 C/A signal 18 blocks into its bit, then a three-block record:
+    # 21 of 20 blocks, which only a producer not aligned to the bit grid sends.
+    fs = 4e6Hz
+    ts = Tracking.add_satellite!(
+        TrackState(; signal = GPSL1CA());
+        prn = 1,
+        code_phase = 0.0,
+        carrier_doppler = 0.0Hz,
+    )
+    satellites = first(ts.groups).satellites.values
+    sat = satellites[1]
+    synced = BitBuffer(UInt64(0xff), 8, true, complex(9.0, 1.0), 18, Float32[1.0])
+    satellites[1] = TrackedSat(
+        sat;
+        signals = (TrackedSignal(only(get_signals(sat)); bit_buffer = synced),),
+    )
+    shift =
+        get_default_correlator(GPSL1CA(), NumAnts(1)).preferred_early_late_to_prompt_code_shift
+    prompt = complex(12000.0)
+    raw = EarlyPromptLateCorrelator(SVector(prompt / 6, prompt, prompt / 6), shift)
+    append_correlator_output!(ts, CorrelatorOutput(raw, 12_000, 11_999))
+    @test_logs (:warn, r"past the navigation-bit boundary") match_mode = :any estimate_dopplers_and_filter_prompt!(
+        ts,
+        (L1 = fs,),
+    )
+    signal = only(get_signals(first(ts.groups).satellites.values[1]))
+    @test !has_bit_or_secondary_code_been_found(signal.bit_buffer)
 end
 
 end
