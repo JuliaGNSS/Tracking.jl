@@ -3,7 +3,7 @@ module GPSL1CDTest
 using Test: @test, @testset, @inferred
 using Unitful: Hz
 using GNSSSignals: GPSL1C_D
-using Tracking:
+using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,

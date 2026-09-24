@@ -18,27 +18,29 @@ using Tracking:
     BandMeasurement,
     CPUDownconvertAndCorrelator,
     CPUThreadedDownconvertAndCorrelator,
-    CorrelatorNoiseEstimator,
-    DefaultPostCorrFilter,
-    EarlyPromptLateCorrelator,
     Int16DownconvertAndCorrelator,
-    NWPRCN0Estimator,
-    NoiseDensity,
-    NoiseRefCN0Estimator,
-    NumAnts,
     OneBitDownconvertAndCorrelator,
     TrackState,
     TrackedSat,
     TwoBitDownconvertAndCorrelator,
     add_satellite!,
     downconvert_and_correlate!,
+    track!
+import TrackingLoops
+using TrackingLoops:
+    CorrelatorNoiseEstimator,
+    DefaultPostCorrFilter,
+    EarlyPromptLateCorrelator,
+    NWPRCN0Estimator,
+    NoiseDensity,
+    NoiseRefCN0Estimator,
+    NumAnts,
     get_correlator_sample_shifts,
     estimate_cn0,
     get_noise_density,
     get_weights,
     noise_density_type,
-    noise_window_looks,
-    track!
+    noise_window_looks
 
 const FS = 4e6Hz
 const NUM_SAMPLES = 40_000                      # 10 ms at 4 MHz
@@ -60,7 +62,7 @@ end
 
 # A hardware-style source that keeps no window and therefore reports no look
 # count: the rank gate has nothing to check and must not withhold its density.
-struct UncountedNoiseSource <: Tracking.AbstractNoiseEstimator end
+struct UncountedNoiseSource <: TrackingLoops.AbstractNoiseEstimator end
 
 _to_int16(signal) = Complex{Int16}.(
     round.(Int16, clamp.(real(signal) ./ 4, -2047, 2047)),
@@ -241,12 +243,12 @@ end
     function densities(seed)
         estimator =
             CorrelatorNoiseEstimator(; window_duration = 1000.0s, rng = Xoshiro(seed))
-        Tracking.update_noise!(
+        TrackingLoops.update_noise!(
             estimator,
             m,
             1,
             NUM_SAMPLES,
-            Tracking.NoiseUpdateContext(GPSL1, 0, dc),
+            TrackingLoops.NoiseUpdateContext(GPSL1, 0, dc),
         )
         [ustrip(Hz^-1, o.noise_density) for o in estimator.buffered]
     end
@@ -275,9 +277,9 @@ end
         carrier_dither = 0.0Hz,
         rng = Xoshiro(7),
     )
-    context = Tracking.NoiseUpdateContext(GPSL1, 0, dc)
+    context = TrackingLoops.NoiseUpdateContext(GPSL1, 0, dc)
     for _ = 1:40
-        Tracking.update_noise!(estimator, m, 1, NUM_SAMPLES, context)
+        TrackingLoops.update_noise!(estimator, m, 1, NUM_SAMPLES, context)
     end
     on_seven = [ustrip(Hz^-1, o.noise_density) for o in estimator.buffered if o.prn == 7]
     others = [ustrip(Hz^-1, o.noise_density) for o in estimator.buffered if o.prn != 7]
@@ -646,9 +648,9 @@ end
         # 1-in-20 entries is a long pre-averaged dump among short ones, so the
         # running sums are not adding and removing like-sized numbers.
         duration = uconvert(s, (rand(rng) < 0.05 ? 200.0 : 1.0) * rand(rng) * ms)
-        Tracking.append_noise_observation!(
+        TrackingLoops.append_noise_observation!(
             estimator,
-            Tracking.NoiseObservation(
+            TrackingLoops.NoiseObservation(
                 (1.0 + 5rand(rng)) * 1e-10 / 1.0Hz,
                 rand(rng, 1:64),
                 duration,
@@ -675,14 +677,15 @@ end
     # shared runner; that the cost does not grow with `K` is the property, so
     # assert the walk is gone by its allocation-free, K-independent shape instead.
     estimator = CorrelatorNoiseEstimator(; window_duration = 1.0s)
-    observation = Tracking.NoiseObservation(2e-10 / 1.0Hz, 1, uconvert(s, 0.4ms), Int16(3))
+    observation =
+        TrackingLoops.NoiseObservation(2e-10 / 1.0Hz, 1, uconvert(s, 0.4ms), Int16(3))
     for _ = 1:6000
-        Tracking.append_noise_observation!(estimator, observation)
+        TrackingLoops.append_noise_observation!(estimator, observation)
     end
     @test Base.length(estimator) > 2000        # a full window, not a short one
     get_noise_density(estimator)
     @test (@allocated get_noise_density(estimator)) == 0
-    @test (@allocated Tracking.append_noise_observation!(estimator, observation)) == 0
+    @test (@allocated TrackingLoops.append_noise_observation!(estimator, observation)) == 0
 end
 
 @testset "the reference owns no scratch of its own ($(nameof(DC)))" for (
@@ -789,7 +792,7 @@ end
     array = TrackState(GPSL1, [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; num_ants = NumAnts(3))])
     D = noise_density_type(array.noise_estimators.GPSL1CA)
     @test D <: SMatrix{3,3}
-    @test Tracking._num_ants_of_density_type(D) === NumAnts(3)
+    @test TrackingLoops._num_ants_of_density_type(D) === NumAnts(3)
 end
 
 @testset "an explicitly-passed estimator must match its group's antenna count" begin
@@ -889,7 +892,7 @@ end
         ready_at = 0
         for call = 1:4
             track!((L1 = BandMeasurement(one_ms(M, call), FS),), ts)
-            _, ready = Tracking._noise_density_and_ready(ts.noise_estimators.GPSL1CA)
+            _, ready = TrackingLoops._noise_density_and_ready(ts.noise_estimators.GPSL1CA)
             if ready && ready_at == 0
                 ready_at = call
             end
@@ -905,7 +908,7 @@ end
     # The public reader keeps its contract — it reports what the window holds; only
     # the fold defers.
     @test !isnothing(get_noise_density(est))
-    @test Tracking._noise_window_filling(est)
+    @test TrackingLoops._noise_window_filling(est)
     @test estimate_cn0(ts, 1) == -Inf * dBHz
 
     # A filling window is a normal transient, not a misconfiguration, so it must
@@ -922,15 +925,15 @@ end
     dead_logs, _ = collect_test_logs() do
         track!((L1 = BandMeasurement(zeros(ComplexF32, 4000, 4), FS),), dead)
     end
-    @test !Tracking._noise_window_filling(dead.noise_estimators.GPSL1CA)
+    @test !TrackingLoops._noise_window_filling(dead.noise_estimators.GPSL1CA)
     @test !isempty(filter(r -> r.level == Warn, dead_logs))
 
     # A source that reports no look count is taken at its word rather than gated.
     @test noise_window_looks(UncountedNoiseSource()) === nothing
-    @test Tracking._sufficient_looks(zero(SMatrix{4,4,ComplexF64,16}), nothing)
-    @test !Tracking._sufficient_looks(zero(SMatrix{4,4,ComplexF64,16}), 3)
-    @test Tracking._sufficient_looks(zero(SMatrix{4,4,ComplexF64,16}), 4)
-    @test Tracking._sufficient_looks(1.0 / 1.0Hz, 1)      # a scalar has no rank
+    @test TrackingLoops._sufficient_looks(zero(SMatrix{4,4,ComplexF64,16}), nothing)
+    @test !TrackingLoops._sufficient_looks(zero(SMatrix{4,4,ComplexF64,16}), 3)
+    @test TrackingLoops._sufficient_looks(zero(SMatrix{4,4,ComplexF64,16}), 4)
+    @test TrackingLoops._sufficient_looks(1.0 / 1.0Hz, 1)      # a scalar has no rank
 end
 
 @testset "the default filter's weights reduce the covariance to its own column" begin
@@ -943,13 +946,13 @@ end
     ts_array = _tracked_array(signal, 3)
     R = get_noise_density(ts_array.noise_estimators.GPSL1CA)
     w = get_weights(DefaultPostCorrFilter(), NumAnts(3))
-    @test Tracking._reduce_noise_density(R, w) === real(R[3, 3])
+    @test TrackingLoops._reduce_noise_density(R, w) === real(R[3, 3])
 
     ts_single = _tracked(view(signal, :, 3), CPUDownconvertAndCorrelator())
     scalar = get_noise_density(ts_single.noise_estimators.GPSL1CA)
     # Same samples, same seeded reference draws, same despread — so this is an
     # equality, not a tolerance.
-    @test Tracking._reduce_noise_density(R, w) === scalar
+    @test TrackingLoops._reduce_noise_density(R, w) === scalar
     @test estimate_cn0(ts_array, 1) === estimate_cn0(ts_single, 1)
 end
 

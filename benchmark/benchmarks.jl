@@ -3,6 +3,17 @@ using GNSSSignals
 using GNSSSignals: GalileoE1B
 using Unitful: Hz
 using Tracking
+# From the TrackingLoops split on, the loop core (correlators, estimators, the
+# noise window, ...) is TrackingLoops' API and Tracking no longer exports it.
+# Take it from Tracking's own dependency rather than declaring one here, so the
+# script still loads the revisions from before the split, which export it
+# themselves.
+const _TRACKINGLOOPS_ID =
+    Base.PkgId(Base.UUID("89eadfff-3a96-4166-8be0-4e8bed6efc30"), "TrackingLoops")
+if haskey(Base.loaded_modules, _TRACKINGLOOPS_ID)
+    const TrackingLoops = Base.loaded_modules[_TRACKINGLOOPS_ID]
+    using .TrackingLoops
+end
 using Tracking:
     EarlyPromptLateCorrelator,
     get_correlator_sample_shifts,

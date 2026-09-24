@@ -4,15 +4,9 @@ using Test: @test, @testset, @inferred
 using Unitful: Hz, ms, dBHz
 using GNSSSignals: GPSL1CA, GPSL1C_P
 import Tracking
-using Tracking:
-    NoCN0Estimator,
-    NWPRCN0Estimator,
-    CN0UpdateContext,
-    BitBuffer,
-    update,
-    estimate_cn0,
-    TrackedSat,
-    get_cn0_estimator
+using Tracking: TrackedSat, get_cn0_estimator
+using TrackingLoops:
+    NoCN0Estimator, NWPRCN0Estimator, CN0UpdateContext, BitBuffer, update, estimate_cn0
 
 @testset "NoCN0Estimator measures nothing and says so" begin
     estimator = NoCN0Estimator()

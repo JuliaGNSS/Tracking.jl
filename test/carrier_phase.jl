@@ -10,7 +10,7 @@ module CarrierPhaseTest
 # `real(prompt)` bit decision collapses. The de-rotation restores it.
 
 using Test: @test, @testset
-using Tracking: _carrier_phase_derotation
+using TrackingLoops: _carrier_phase_derotation
 using GNSSSignals:
     get_carrier_phase_offset,
     GPSL5I,

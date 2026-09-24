@@ -14,7 +14,8 @@ using GNSSSignals:
     gen_code,
     get_code_center_frequency_ratio,
     get_code_frequency,
-    get_code
+    get_code,
+    get_code_length
 
 using Tracking:
     TrackedSat,
@@ -26,16 +27,17 @@ using Tracking:
     get_carrier_phase,
     get_code_doppler,
     get_carrier_doppler,
-    get_prompt,
-    estimate_cn0,
     get_signal_start_sample,
     get_last_fully_integrated_filtered_prompt,
     get_last_fully_integrated_correlator,
     get_filtered_prompts,
     get_integrated_samples,
+    get_sat_state
+import TrackingLoops
+using TrackingLoops:
+    get_prompt,
+    estimate_cn0,
     has_bit_or_secondary_code_been_found,
-    get_sat_state,
-    get_code_length,
     NumAnts,
     get_num_ants,
     get_noise_density,
@@ -690,9 +692,9 @@ end
     num_ants = 3
 
     struct MeanBeamformer <: AbstractPostCorrFilter end
-    Tracking.update(f::MeanBeamformer, prompt) = f
-    Tracking.get_weights(::MeanBeamformer, ::NumAnts{1}) = 1.0 + 0.0im
-    Tracking.get_weights(::MeanBeamformer, ::NumAnts{M}) where {M} =
+    TrackingLoops.update(f::MeanBeamformer, prompt) = f
+    TrackingLoops.get_weights(::MeanBeamformer, ::NumAnts{1}) = 1.0 + 0.0im
+    TrackingLoops.get_weights(::MeanBeamformer, ::NumAnts{M}) where {M} =
         SVector{M,ComplexF64}(ntuple(_ -> 1 / M + 0.0im, M))
 
     function make_array_signal(rng)

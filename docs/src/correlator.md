@@ -174,6 +174,7 @@ natural override; see the worked example in
 ```@docs
 AbstractPostCorrFilter
 DefaultPostCorrFilter
+TrackingLoops.update(::DefaultPostCorrFilter, ::Any)
 get_weights
 ```
 
@@ -191,7 +192,7 @@ change `d`. Pass the desired chip fraction via
 `preferred_early_late_to_prompt_code_shift` and hand it to a `TrackedSat`:
 
 ```jldoctest narrow_corr
-julia> using Tracking, GNSSSignals
+julia> using Tracking, TrackingLoops, GNSSSignals
 
 julia> using Tracking: Hz
 
@@ -274,12 +275,14 @@ fits a slope over multiple early/late samples rather than using a single
 E−L difference):
 
 ```jldoctest multitap
-julia> using Tracking, GNSSSignals, StaticArrays
+julia> using Tracking, TrackingLoops, GNSSSignals, StaticArrays
 
-julia> using Tracking: AbstractEarlyPromptLateCorrelator,
-                       get_initial_accumulator,
-                       calc_preferred_code_shift_to_sample_shift,
-                       NumAnts, NumAccumulators
+julia> using TrackingLoops:
+           AbstractEarlyPromptLateCorrelator,
+           get_initial_accumulator,
+           calc_preferred_code_shift_to_sample_shift,
+           NumAnts,
+           NumAccumulators
 
 julia> struct MultiTapCorrelator{M,T} <: AbstractEarlyPromptLateCorrelator{M}
            accumulators::SVector{7,T}
@@ -307,10 +310,10 @@ julia> # Convenience kwarg-only constructor — matches the EPL surface
            )
        end;
 
-julia> Tracking.update_accumulator(c::MultiTapCorrelator, accumulators) =
+julia> TrackingLoops.update_accumulator(c::MultiTapCorrelator, accumulators) =
            MultiTapCorrelator(accumulators, c.tap_spacing_chips);
 
-julia> function Tracking.get_correlator_sample_shifts(
+julia> function TrackingLoops.get_correlator_sample_shifts(
            c::MultiTapCorrelator, sampling_frequency, code_frequency,
        )
            s = calc_preferred_code_shift_to_sample_shift(

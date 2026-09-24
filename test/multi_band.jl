@@ -16,7 +16,6 @@ using GNSSSignals:
 using Tracking:
     TrackState,
     BandMeasurement,
-    NumAnts,
     SignalGroup,
     track,
     track!,
@@ -27,8 +26,8 @@ using Tracking:
     get_intermediate_frequency,
     get_carrier_doppler,
     get_code_doppler,
-    get_num_ants,
     _validate_equal_durations
+using TrackingLoops: NumAnts, get_num_ants
 
 # Build a synthetic complex sample buffer for one PRN at one band, with a
 # given Doppler offset and starting code phase.

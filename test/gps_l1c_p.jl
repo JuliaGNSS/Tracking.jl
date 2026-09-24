@@ -5,7 +5,8 @@ using Unitful: Hz
 using GNSSSignals: GPSL1C_P
 using Random: MersenneTwister, randperm
 import Tracking
-using Tracking:
+import TrackingLoops
+using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
@@ -25,23 +26,23 @@ const L1C_P_MAX_ERRORS =
     # L1C-P's 1800-chip / 18 s overlay is far too long to integrate coherently
     # per bin, so it stays on the hard-decision rotation sweep, not the soft
     # CFAR secondary-code detector.
-    @test Tracking.uses_soft_secondary_code_detection(gpsl1c_p) == false
+    @test TrackingLoops.uses_soft_secondary_code_detection(gpsl1c_p) == false
 
     # Below the 1800-block horizon, the L1C-P detector returns `found =
     # false` without running the sweep. Above it, the sweep runs against
     # the per-PRN overlay.
     prn = 1
     @test @inferred(
-        detect_bit_or_secondary_code_sync(gpsl1c_p, prn, Tracking.UInt1800(0x0), 0)
+        detect_bit_or_secondary_code_sync(gpsl1c_p, prn, TrackingLoops.UInt1800(0x0), 0)
     ).found == false
     @test @inferred(
-        detect_bit_or_secondary_code_sync(gpsl1c_p, prn, Tracking.UInt1800(0x1), 1)
+        detect_bit_or_secondary_code_sync(gpsl1c_p, prn, TrackingLoops.UInt1800(0x1), 1)
     ).found == false
     @test @inferred(
         detect_bit_or_secondary_code_sync(
             gpsl1c_p,
             prn,
-            Tracking.UInt1800(0xffffffff),
+            TrackingLoops.UInt1800(0xffffffff),
             1799,
         )
     ).found == false
@@ -60,14 +61,15 @@ const L1C_P_MAX_ERRORS =
     @test @inferred(default_code_loop_filter_bandwidth(gpsl1c_p)) ≈ 1.0Hz
 
     # 1800-chip per-PRN overlay → exact-width UInt1800.
-    @test @inferred(get_code_block_buffer_type(gpsl1c_p)) === Tracking.UInt1800
+    @test @inferred(get_code_block_buffer_type(gpsl1c_p)) === TrackingLoops.UInt1800
 
     @testset "Overlay search — clean lock at known phase / polarity" begin
         # Build PRN 1's newest-first overlay reference, then rotate it *left*
         # by `r` to emulate a prompt buffer whose upcoming integration is
         # overlay chip `r`. The rotation search recovers `phase == r` (the
         # upcoming chip) at positive polarity (distance 0 ≤ max_errors).
-        reference = Tracking._packed_secondary_code(Tracking.UInt1800, gpsl1c_p, prn)
+        reference =
+            TrackingLoops._packed_secondary_code(TrackingLoops.UInt1800, gpsl1c_p, prn)
         rotl(x, r) = r == 0 ? x : ((x << r) | (x >> (1800 - r)))
         for r in (0, 137, 1799)
             received = rotl(reference, r)
@@ -82,8 +84,8 @@ const L1C_P_MAX_ERRORS =
         # to XOR with all-ones; build that explicitly. No rotation, so the
         # recovered upcoming chip is 0.
         all_ones =
-            (Tracking.UInt1800(1) << 1799) |
-            ((Tracking.UInt1800(1) << 1799) - one(Tracking.UInt1800))
+            (TrackingLoops.UInt1800(1) << 1799) |
+            ((TrackingLoops.UInt1800(1) << 1799) - one(TrackingLoops.UInt1800))
         negated = reference ⊻ all_ones
         res = @inferred detect_bit_or_secondary_code_sync(gpsl1c_p, prn, negated, 1800)
         @test res.found == true
@@ -92,7 +94,8 @@ const L1C_P_MAX_ERRORS =
     end
 
     @testset "Overlay search — tolerance" begin
-        overlay = Tracking._packed_secondary_code(Tracking.UInt1800, gpsl1c_p, prn)
+        overlay =
+            TrackingLoops._packed_secondary_code(TrackingLoops.UInt1800, gpsl1c_p, prn)
         rng = MersenneTwister(42)
 
         # Up to `L1C_P_MAX_ERRORS` bit-flips: still locks.
@@ -100,7 +103,7 @@ const L1C_P_MAX_ERRORS =
             corrupted = overlay
             indices = randperm(rng, 1800)[1:n_errors]
             for idx in indices
-                corrupted ⊻= Tracking.UInt1800(1) << (idx - 1)
+                corrupted ⊻= TrackingLoops.UInt1800(1) << (idx - 1)
             end
             res = detect_bit_or_secondary_code_sync(gpsl1c_p, prn, corrupted, 1800)
             @test res.found == true
@@ -112,7 +115,7 @@ const L1C_P_MAX_ERRORS =
         corrupted = overlay
         indices = randperm(rng, 1800)[1:n_errors]
         for idx in indices
-            corrupted ⊻= Tracking.UInt1800(1) << (idx - 1)
+            corrupted ⊻= TrackingLoops.UInt1800(1) << (idx - 1)
         end
         # Note: with random flips it's *possible* (very small probability)
         # for the corrupted buffer to coincide with the overlay rotated

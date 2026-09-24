@@ -7,7 +7,9 @@ import Unitful
 using GNSSSignals: GPSL1CA, GPSL1C_D, GPSL1C_P, GPSL5I, get_code, gen_code
 using GNSSSignals: get_code_frequency
 import Tracking
-using Tracking:
+using Tracking: TrackedSat, TrackState, get_cn0_estimator, track
+import TrackingLoops
+using TrackingLoops:
     MomentsCN0Estimator,
     NWPRCN0Estimator,
     CN0UpdateContext,
@@ -15,11 +17,7 @@ using Tracking:
     get_fallback_cn0_estimator,
     update,
     estimate_cn0,
-    TrackedSat,
-    TrackState,
-    get_cn0_estimator,
-    has_bit_or_secondary_code_been_found,
-    track
+    has_bit_or_secondary_code_been_found
 
 @testset "NWPR's coherent window is sized from the signal's code period" begin
     # The window caps the coherent sum in *blocks*, so sizing it without knowing
@@ -271,7 +269,7 @@ end
         complex(0.0, 0.0),
         3,
         Float32[],
-        Tracking.PhaseAccumulators(),
+        TrackingLoops.PhaseAccumulators(),
     )
     @test CN0UpdateContext(GPSL1CA(), synced_buffer, 1).bit_code_block_index == 3
     # Records of a fold that follow a sync detected in that same fold were

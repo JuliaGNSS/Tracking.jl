@@ -4,7 +4,8 @@ using Test: @test, @testset, @inferred
 using Unitful: Hz
 using GNSSSignals: BeiDouB2bI, get_band_id, get_secondary_code_length
 import Tracking
-using Tracking:
+import TrackingLoops
+using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
@@ -45,8 +46,8 @@ using Tracking:
     # No sub-symbol boundary to search — the buffer is dead state, UInt8.
     @test @inferred(get_code_block_buffer_type(b2b)) === UInt8
 
-    @test Tracking.uses_soft_secondary_code_detection(b2b) == false
-    @test Tracking.uses_soft_bit_edge_detection(b2b) == false
+    @test TrackingLoops.uses_soft_secondary_code_detection(b2b) == false
+    @test TrackingLoops.uses_soft_bit_edge_detection(b2b) == false
 end
 
 end

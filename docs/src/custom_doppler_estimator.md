@@ -34,7 +34,7 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
    set (acquisition → tracking handoff):
 
    ```julia
-   Tracking.init_estimator_state(::MyEstimator, sat::TrackedSat) = MyPerSatState(...)
+   TrackingLoops.init_estimator_state(::MyEstimator, sat::TrackedSat) = MyPerSatState(...)
    ```
 
    It must be **pure** (no observable side effects): besides seeding
@@ -120,10 +120,16 @@ the actual algorithm, but the *structure* — five methods, two structs
 — is what the rest of `Tracking.jl` dispatches on.
 
 ```jldoctest myestimator
-julia> using Tracking, GNSSSignals
+julia> using Tracking, TrackingLoops, GNSSSignals
 
-julia> using Tracking: AbstractDopplerEstimator, TrackedSat, TrackState,
-                       SignalGroup, BandMeasurements, get_band_id
+julia> using Tracking:
+           TrackedSat,
+           TrackState,
+           SignalGroup,
+           BandMeasurements,
+           get_band_id
+
+julia> using TrackingLoops: AbstractDopplerEstimator
 
 julia> # 1. Estimator type — config + any shared state
        struct MyEstimator <: AbstractDopplerEstimator end
@@ -132,7 +138,7 @@ julia> # 2. Per-sat state struct
        struct SatMyEstimator end
 
 julia> # 3. Seed each sat
-       Tracking.init_estimator_state(::MyEstimator, ::TrackedSat) = SatMyEstimator();
+       TrackingLoops.init_estimator_state(::MyEstimator, ::TrackedSat) = SatMyEstimator();
 
 julia> # 4. (Optional) shared-state update on handoff — default returns
        # `est` unchanged, so estimators with no shared state may skip this.

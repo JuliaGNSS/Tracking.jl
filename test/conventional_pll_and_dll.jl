@@ -8,13 +8,8 @@ using TrackingLoopFilters: ThirdOrderBilinearLF, SecondOrderBilinearLF
 using StaticArrays: SVector
 using Dictionaries: Dictionary
 using Tracking:
-    aid_dopplers,
-    SatConventionalPLLAndDLL,
-    EarlyPromptLateCorrelator,
     TrackedSignal,
     TrackedSat,
-    init_estimator_state,
-    ConventionalPLLAndDLL,
     TrackState,
     BandMeasurement,
     estimate_dopplers_and_filter_prompt,
@@ -24,10 +19,17 @@ using Tracking:
     get_filtered_prompts,
     get_sat_state,
     get_sat_states,
+    merge_sats
+import TrackingLoops
+using TrackingLoops:
+    aid_dopplers,
+    SatConventionalPLLAndDLL,
+    EarlyPromptLateCorrelator,
+    init_estimator_state,
+    ConventionalPLLAndDLL,
     update_accumulator,
     get_default_correlator,
-    CorrelatorOutput,
-    merge_sats
+    CorrelatorOutput
 
 # Build a stub `(L1 = BandMeasurement(...),)` NamedTuple to pass to the
 # estimator. Samples are unused by `estimate_dopplers_and_filter_prompt`
@@ -195,7 +197,7 @@ end
 
     # Same-typed bit buffer with the bit/secondary sync already found
     # (secondary phase 0, polarity +1).
-    synced(::Tracking.BitBuffer{B}) where {B} = Tracking.BitBuffer{B}(
+    synced(::TrackingLoops.BitBuffer{B}) where {B} = TrackingLoops.BitBuffer{B}(
         zero(B),
         0,
         true,
@@ -204,7 +206,7 @@ end
         complex(0.0, 0.0),
         0,
         Float32[],
-        Tracking.PhaseAccumulators(),
+        TrackingLoops.PhaseAccumulators(),
     )
 
     doppler_after(preferred, found, integrated_samples) = begin
@@ -250,19 +252,20 @@ end
 
     # Single 1 ms block, and 10 ms / 20 ms coherent integrations: the cap starts
     # binding only past 18 ms, so the first two run at the full reference.
-    @test Tracking.effective_code_loop_filter_bandwidth(bw, l1ca_period) == bw
-    @test Tracking.effective_code_loop_filter_bandwidth(bw, 10 * l1ca_period) == bw
-    @test Tracking.effective_code_loop_filter_bandwidth(bw, 20 * l1ca_period) ≈ 0.9Hz
+    @test TrackingLoops.effective_code_loop_filter_bandwidth(bw, l1ca_period) == bw
+    @test TrackingLoops.effective_code_loop_filter_bandwidth(bw, 10 * l1ca_period) == bw
+    @test TrackingLoops.effective_code_loop_filter_bandwidth(bw, 20 * l1ca_period) ≈ 0.9Hz
 
     # Where it binds it holds the stability product, not a block ratio.
     for num_blocks in (20, 100, 1500)
         integration_time = num_blocks * l1ca_period
-        @test Tracking.effective_code_loop_filter_bandwidth(bw, integration_time) *
-              integration_time ≈ Tracking.MAX_LOOP_BANDWIDTH_TIME_PRODUCT
+        @test TrackingLoops.effective_code_loop_filter_bandwidth(bw, integration_time) *
+              integration_time ≈ TrackingLoops.MAX_LOOP_BANDWIDTH_TIME_PRODUCT
     end
 
     # An explicit bandwidth below the cap is used verbatim, at any length.
-    @test Tracking.effective_code_loop_filter_bandwidth(0.25Hz, 20 * l1ca_period) == 0.25Hz
+    @test TrackingLoops.effective_code_loop_filter_bandwidth(0.25Hz, 20 * l1ca_period) ==
+          0.25Hz
 
     # End to end through the estimator, on a 4 ms (4-block) integration whose cap
     # sits at 4.5 Hz: two configured bandwidths above the cap must produce the

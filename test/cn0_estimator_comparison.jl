@@ -38,7 +38,7 @@ using Test: @test, @testset
 using Random: Xoshiro, randn
 using Statistics: mean, std
 using Unitful: ms, s, dBHz, ustrip, uconvert
-using Tracking: NWPRCN0Estimator, update, estimate_cn0
+using TrackingLoops: NWPRCN0Estimator, update, estimate_cn0
 
 # Post-correlation prompt model. `λ = (C/N₀)·T` is the per-record post-correlation
 # SNR; noise is CN(0,1) so the noise power is 1 and λ is also the signal power.

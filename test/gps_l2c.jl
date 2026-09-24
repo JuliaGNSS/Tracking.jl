@@ -3,7 +3,7 @@ module GPSL2CTest
 using Test: @test, @testset, @inferred
 using Unitful: Hz, ms, s
 using GNSSSignals: GPSL2CM, GPSL2CL, get_band, get_band_id
-using Tracking:
+using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,

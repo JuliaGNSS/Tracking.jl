@@ -19,6 +19,12 @@ using Tracking:
     BandMeasurement,
     get_sat_state,
     get_carrier_doppler,
+    TrackedSignal,
+    CPUThreadedDownconvertAndCorrelator,
+    Int16DownconvertAndCorrelator,
+    Int16ThreadedDownconvertAndCorrelator
+import TrackingLoops
+using TrackingLoops:
     get_prompt,
     get_early,
     get_late,
@@ -29,12 +35,8 @@ using Tracking:
     EarlyPromptLateCorrelator,
     VeryEarlyPromptLateCorrelator,
     NumAnts,
-    TrackedSignal,
     DefaultPostCorrFilter,
-    ConventionalAssistedPLLAndDLL,
-    CPUThreadedDownconvertAndCorrelator,
-    Int16DownconvertAndCorrelator,
-    Int16ThreadedDownconvertAndCorrelator
+    ConventionalAssistedPLLAndDLL
 import Tracking
 
 # Dynamic-tap-count correlator: sample shifts are a runtime Vector and the
@@ -44,10 +46,10 @@ struct DynShiftsCorrelator <: AbstractCorrelator{1}
     accumulators::Vector{ComplexF64}
     shifts::Vector{Int}
 end
-Tracking.get_accumulators(c::DynShiftsCorrelator) = c.accumulators
-Tracking.update_accumulator(c::DynShiftsCorrelator, acc) =
+TrackingLoops.get_accumulators(c::DynShiftsCorrelator) = c.accumulators
+TrackingLoops.update_accumulator(c::DynShiftsCorrelator, acc) =
     DynShiftsCorrelator(collect(acc), c.shifts)
-Tracking.get_correlator_sample_shifts(
+TrackingLoops.get_correlator_sample_shifts(
     c::DynShiftsCorrelator,
     sampling_frequency,
     code_frequency,
