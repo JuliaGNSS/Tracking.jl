@@ -34,7 +34,7 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
    set (acquisition → tracking handoff):
 
    ```julia
-   Tracking.init_estimator_state(::MyEstimator, sat::TrackedSat) = MyPerSatState(...)
+   TrackingLoops.init_estimator_state(::MyEstimator, sat::TrackedSat) = MyPerSatState(...)
    ```
 
    It must be **pure** (no observable side effects): besides seeding
@@ -120,10 +120,16 @@ the actual algorithm, but the *structure* — five methods, two structs
 — is what the rest of `Tracking.jl` dispatches on.
 
 ```jldoctest myestimator
-julia> using Tracking, GNSSSignals
+julia> using Tracking, TrackingLoops, GNSSSignals
 
-julia> using Tracking: AbstractDopplerEstimator, TrackedSat, TrackState,
-                       SignalGroup, BandMeasurements, get_band_id
+julia> using Tracking:
+           TrackedSat,
+           TrackState,
+           SignalGroup,
+           BandMeasurements,
+           get_band_id
+
+julia> using TrackingLoops: AbstractDopplerEstimator
 
 julia> # 1. Estimator type — config + any shared state
        struct MyEstimator <: AbstractDopplerEstimator end
@@ -132,7 +138,7 @@ julia> # 2. Per-sat state struct
        struct SatMyEstimator end
 
 julia> # 3. Seed each sat
-       Tracking.init_estimator_state(::MyEstimator, ::TrackedSat) = SatMyEstimator();
+       TrackingLoops.init_estimator_state(::MyEstimator, ::TrackedSat) = SatMyEstimator();
 
 julia> # 4. (Optional) shared-state update on handoff — default returns
        # `est` unchanged, so estimators with no shared state may skip this.
@@ -198,7 +204,40 @@ estimator the `TrackState` was built with.
 ```@docs
 AbstractDopplerEstimator
 init_estimator_state
+reset_estimator_state
 update_estimator_on_handoff
 Tracking.estimate_dopplers_and_filter_prompt
 Tracking.estimate_dopplers_and_filter_prompt!
+```
+
+### One record through a loop
+
+The estimator step itself is device-independent and lives in
+[TrackingLoops.jl](https://github.com/JuliaGNSS/TrackingLoops.jl), so that the
+software receiver here and the loop process of a hardware correlator run the
+same arithmetic. `track!` calls it with the chunk's own replica word and no
+landing sample.
+
+```@docs
+step_loop
+LoopRecord
+SatConventionalPLLAndDLL
+```
+
+### The delay-aware loop
+
+`NCOReferencedPLLAndDLL` is for a correlator whose NCO word takes effect some
+records after the record that motivated it, as a hardware replica's does. It
+attributes every record to the word that really ran over it and sizes the
+correction for the sample the new word will land at. Given a fixed word and no
+landing sample — which is what `track!` supplies — it is the conventional loop
+to the bit.
+
+```@docs
+NCOReferencedPLLAndDLL
+SatNCOReferencedPLLAndDLL
+NCOTimeline
+scheduled_words
+mean_nco_word
+FixedNCOWord
 ```

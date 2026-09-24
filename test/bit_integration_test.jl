@@ -18,13 +18,12 @@ using Tracking:
     get_sat_state,
     get_code_phase,
     get_num_bits,
-    get_soft_bits,
     get_filtered_prompts,
     get_last_fully_integrated_filtered_prompt,
     get_last_fully_integrated_num_code_blocks,
-    has_bit_or_secondary_code_been_found,
-    set_preferred_num_code_blocks_to_integrate!,
-    EarlyPromptLateCorrelator
+    set_preferred_num_code_blocks_to_integrate!
+using TrackingLoops:
+    get_soft_bits, has_bit_or_secondary_code_been_found, EarlyPromptLateCorrelator
 
 @testset "Bit detection integration test" begin
     gpsl1 = GPSL1CA()

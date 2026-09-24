@@ -18,6 +18,10 @@ jobs:
       # only needs one of them.
       TRACKING_RUN_INTEGRATION_TEST: ${{ matrix.os == 'ubuntu-latest' && matrix.version == '1' }}
     strategy:
+      # One version failing must not cancel the rest: while a dependency of
+      # this package is still unregistered, `[sources]` keeps the 1.10 job red,
+      # and a cancelled matrix would hide whether every other version passes.
+      fail-fast: false
       matrix:
         version:
           - '1.10'

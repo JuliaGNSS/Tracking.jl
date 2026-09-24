@@ -12,7 +12,6 @@ using Tracking:
     add_satellite!,
     get_signal,
     get_prn,
-    get_num_ants,
     get_code_phase,
     get_code_doppler,
     get_carrier_phase,
@@ -23,32 +22,35 @@ using Tracking:
     get_last_fully_integrated_correlator,
     get_last_fully_integrated_filtered_prompt,
     get_filtered_prompts,
-    VeryEarlyPromptLateCorrelator,
     get_post_corr_filter,
     get_cn0_estimator,
     get_bit_buffer,
-    get_soft_bits,
     get_num_bits,
-    has_bit_or_secondary_code_been_found,
-    estimate_cn0,
     get_sat_state,
     get_sat_states,
     merge_sats,
     remove_satellite!,
     remove_satellite,
+    get_preferred_num_code_blocks_to_integrate,
+    set_preferred_num_code_blocks_to_integrate!,
+    reset_loop_filters!,
+    get_doppler_estimator_state,
+    SignalGroup
+import TrackingLoops
+using TrackingLoops:
+    get_num_ants,
+    VeryEarlyPromptLateCorrelator,
+    get_soft_bits,
+    has_bit_or_secondary_code_been_found,
+    estimate_cn0,
     DefaultPostCorrFilter,
     NWPRCN0Estimator,
     NoiseRefCN0Estimator,
     BitBuffer,
     NumAnts,
-    get_preferred_num_code_blocks_to_integrate,
-    set_preferred_num_code_blocks_to_integrate!,
-    reset_loop_filters!,
-    get_doppler_estimator_state,
     default_carrier_loop_filter_bandwidth,
     ConventionalAssistedPLLAndDLL,
-    ConventionalPLLAndDLL,
-    SignalGroup
+    ConventionalPLLAndDLL
 
 # No real GNSS signal pair mixes chip rates on a single band, so fake one to
 # exercise the SignalGroup chip-rate invariant (issue #129): L1 band like
@@ -435,10 +437,8 @@ end
 
 @testset "TrackedSat helpers" begin
     using Tracking:
-        TrackedSat,
-        get_doppler_estimator_state,
-        reset_start_sample_and_bit_buffer!,
-        SatConventionalPLLAndDLL
+        TrackedSat, get_doppler_estimator_state, reset_start_sample_and_bit_buffer!
+    using TrackingLoops: SatConventionalPLLAndDLL
 
     gpsl1 = GPSL1CA()
     estimator = ConventionalAssistedPLLAndDLL()
@@ -472,7 +472,7 @@ end
 
 @testset "merge_sats invokes update_estimator_on_handoff" begin
     import Tracking
-    using Tracking: AbstractDopplerEstimator
+    using TrackingLoops: AbstractDopplerEstimator
 
     # Immutable estimator with growing shared state held in a resizable
     # Vector. update_estimator_on_handoff mutates the vectors in place
@@ -486,7 +486,7 @@ end
 
     struct SatCountingEstimator end
 
-    Tracking.init_estimator_state(::CountingEstimator, ::TrackedSat) =
+    TrackingLoops.init_estimator_state(::CountingEstimator, ::TrackedSat) =
         SatCountingEstimator()
 
     function Tracking.update_estimator_on_handoff(est::CountingEstimator, new_sats)
@@ -544,7 +544,7 @@ end
 
 @testset "add_satellite! honors a rebuilt estimator on handoff" begin
     import Tracking
-    using Tracking: AbstractDopplerEstimator
+    using TrackingLoops: AbstractDopplerEstimator
 
     # Spec-conforming estimator that *rebuilds itself* on handoff — same
     # concrete type, replaced field — the style the
@@ -555,7 +555,7 @@ end
 
     struct SatRebuildingState end
 
-    Tracking.init_estimator_state(::RebuildingEstimator, ::TrackedSat) =
+    TrackingLoops.init_estimator_state(::RebuildingEstimator, ::TrackedSat) =
         SatRebuildingState()
 
     Tracking.update_estimator_on_handoff(est::RebuildingEstimator, new_sats) =
@@ -759,7 +759,7 @@ end
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 100.0Hz)])
     sats = get_sat_states(ts)
     old = sats[1]
-    overridden_state = Tracking.SatConventionalPLLAndDLL(
+    overridden_state = TrackingLoops.SatConventionalPLLAndDLL(
         get_doppler_estimator_state(old);
         carrier_loop_filter_bandwidth = 5.0Hz,
         code_loop_filter_bandwidth = 0.25Hz,

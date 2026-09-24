@@ -43,7 +43,7 @@ bandwidth is a per-code-period reference. Integrating `N` primary blocks
 coherently scales the carrier bandwidth to `BL/N`, holding its `BL · Δt`
 product at the single-period value, while the code bandwidth is left alone and
 merely capped by the same product against the record's actual integration time
-(`Tracking.effective_code_loop_filter_bandwidth`). That cap is what pulls the
+(`TrackingLoops.effective_code_loop_filter_bandwidth`). That cap is what pulls the
 L2 C primaries down in practice — 0.9 Hz for a 20 ms L2 CM integration,
 0.012 Hz for a 1.5 s L2 CL one — while every integration shorter than 18 ms,
 whatever its signal or block count, runs the DLL at the full 1 Hz.
@@ -68,7 +68,7 @@ ConventionalPLLAndDLL
 ConventionalAssistedPLLAndDLL
 default_carrier_loop_filter_bandwidth
 default_code_loop_filter_bandwidth
-Tracking.effective_code_loop_filter_bandwidth
+TrackingLoops.effective_code_loop_filter_bandwidth
 ```
 
 ## Resetting loop filters
@@ -87,7 +87,7 @@ reset_loop_filters!
 You can customize the loop filters and bandwidths when creating the Doppler estimator:
 
 ```jldoctest custom_loop
-julia> using Tracking, GNSSSignals, TrackingLoopFilters
+julia> using Tracking, TrackingLoops, GNSSSignals, TrackingLoopFilters
 
 julia> using Tracking: Hz
 

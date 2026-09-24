@@ -9,13 +9,10 @@ using Dictionaries: dictionary
 using Tracking:
     SatVectorPLLAndDLL,
     VectorPLLAndDLL,
-    ConventionalAssistedPLLAndDLL,
     TrackedSignal,
     TrackedSat,
     TrackState,
     BandMeasurement,
-    CorrelatorOutput,
-    init_estimator_state,
     estimate_dopplers_and_filter_prompt,
     get_carrier_doppler,
     get_code_doppler,
@@ -23,10 +20,6 @@ using Tracking:
     get_sat_states,
     add_satellite!,
     get_doppler_estimator_state,
-    get_default_correlator,
-    update_accumulator,
-    dll_disc,
-    pll_disc,
     enable_vt!,
     disable_vt!,
     reset_code_discr_acc!,
@@ -36,6 +29,14 @@ using Tracking:
     set_code_freq_updates!,
     set_carrier_freq_updates!,
     reset_loop_filters!
+using TrackingLoops:
+    ConventionalAssistedPLLAndDLL,
+    CorrelatorOutput,
+    init_estimator_state,
+    get_default_correlator,
+    update_accumulator,
+    dll_disc,
+    pll_disc
 
 _meas_l1(fs) = (L1 = BandMeasurement(ComplexF64[], fs),)
 

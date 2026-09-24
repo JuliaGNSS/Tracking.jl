@@ -26,28 +26,30 @@ using GNSSSignals:
     get_secondary_code_length
 import Tracking
 using Tracking:
-    EarlyPromptLateCorrelator,
-    NumAnts,
     SignalGroup,
     TrackState,
     TrackedSat,
     TrackedSignal,
+    get_carrier_doppler,
+    get_code_phase,
+    get_last_fully_integrated_num_code_blocks,
+    get_num_bits,
+    get_preferred_num_code_blocks_to_integrate,
+    get_sat_state,
+    track
+import TrackingLoops
+using TrackingLoops:
+    EarlyPromptLateCorrelator,
+    NumAnts,
     default_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     detect_bit_or_secondary_code_sync,
     estimate_cn0,
-    get_carrier_doppler,
     get_code_block_buffer_type,
-    get_code_phase,
     get_default_correlator,
     default_num_code_blocks_to_integrate,
-    get_last_fully_integrated_num_code_blocks,
     max_num_code_blocks_to_integrate,
-    get_num_bits,
-    get_preferred_num_code_blocks_to_integrate,
-    get_sat_state,
-    has_bit_or_secondary_code_been_found,
-    track
+    has_bit_or_secondary_code_been_found
 
 # 31 primary code blocks = 10230 chips = 2 ms — the ICD's own "repeated 31
 # times within 2 ms", and the unit this package integrates E5a-QP in.
@@ -96,8 +98,8 @@ const BLOCKS_PER_CYCLE = 31
 
         # Neither soft detector applies (one needs a multi-block data bit, the
         # other an overlay), so the hard path above is the one that runs.
-        @test Tracking.uses_soft_bit_edge_detection(e5a_qp) == false
-        @test Tracking.uses_soft_secondary_code_detection(e5a_qp) == false
+        @test TrackingLoops.uses_soft_bit_edge_detection(e5a_qp) == false
+        @test TrackingLoops.uses_soft_secondary_code_detection(e5a_qp) == false
 
         # Nothing to search for, so the packed sign window is dead state.
         @test @inferred(get_code_block_buffer_type(e5a_qp)) === UInt8

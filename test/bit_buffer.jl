@@ -3,8 +3,14 @@ module BitBufferTest
 using Test: @test, @testset, @inferred, @test_logs, @test_throws
 using Random: MersenneTwister
 using GNSSSignals:
-    GPSL1CA, GPSL5I, get_secondary_code, secondary_value, get_secondary_code_length
-using Tracking:
+    GPSL1CA,
+    GPSL5I,
+    get_secondary_code,
+    secondary_value,
+    get_secondary_code_length,
+    get_signal_id
+using Tracking: _warn_bit_boundary_overshoot
+using TrackingLoops:
     BitBuffer,
     buffer,
     reset,
@@ -686,14 +692,10 @@ end
             bit_buffer.phase_acc.mean_bin_energy[3] = 42.0
             bit_buffer.phase_acc.last_bin_polarity[3] = Int8(-1)
 
-            next_bit_buffer =
-                @test_logs (:warn, r"past the navigation-bit boundary") match_mode = :any @inferred buffer(
-                    signal,
-                    1,
-                    bit_buffer,
-                    3,
-                    1.0 + 0.0im,
-                )
+            # The overshoot is *reported* by the bit buffer and logged by the
+            # caller — `Tracking._warn_bit_boundary_overshoot`, from the fold —
+            # so that the loop process can step this code without a logger.
+            next_bit_buffer = @inferred buffer(signal, 1, bit_buffer, 3, 1.0 + 0.0im)
 
             @test has_bit_or_secondary_code_been_found(next_bit_buffer) == false
             @test next_bit_buffer.prompt_accumulator == complex(0.0, 0.0)
@@ -714,6 +716,19 @@ end
                 next_bit_buffer.phase_acc.bin_energy_sum_of_squared_deviations,
             )
             @test all(iszero, next_bit_buffer.phase_acc.last_bin_polarity)
+        end
+
+        @testset "The overshoot is reported to the caller, which warns" begin
+            # The message is the one thing a user sees when an external
+            # correlator sizes its records across a bit boundary, so it is
+            # asserted here rather than left to the fold that emits it. A PRN of
+            # its own, because the warning is `maxlog = 1` per signal and PRN.
+            @test_logs (:warn, r"past the navigation-bit boundary") match_mode = :any _warn_bit_boundary_overshoot(
+                get_signal_id(signal),
+                99,
+                21,
+                20,
+            )
         end
 
         @testset "Landing exactly on the boundary still commits a bit" begin
@@ -741,13 +756,7 @@ end
                 Float32[2.0],
                 PhaseAccumulators(),
             )
-            next_bit_buffer = @test_logs (:warn,) match_mode = :any @inferred buffer(
-                l5i,
-                4,
-                bit_buffer,
-                3,
-                1.0 + 0.0im,
-            )
+            next_bit_buffer = @inferred buffer(l5i, 4, bit_buffer, 3, 1.0 + 0.0im)
             @test has_bit_or_secondary_code_been_found(next_bit_buffer) == false
             @test next_bit_buffer.secondary_phase == 0
             @test next_bit_buffer.polarity == 0
@@ -777,13 +786,7 @@ end
                    k + 2 <= length(prompts)
                     bits_at_injection = length(get_soft_bits(bit_buffer))
                     # One record spanning three primary blocks: 18 + 3 = 21.
-                    bit_buffer = @test_logs (:warn,) match_mode = :any buffer(
-                        signal,
-                        5,
-                        bit_buffer,
-                        3,
-                        sum(prompts[k:(k+2)]),
-                    )
+                    bit_buffer = buffer(signal, 5, bit_buffer, 3, sum(prompts[k:(k+2)]))
                     @test has_bit_or_secondary_code_been_found(bit_buffer) == false
                     injected = true
                     k += 3

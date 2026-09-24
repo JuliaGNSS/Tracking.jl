@@ -5,7 +5,8 @@ using Unitful: Hz
 using GNSSSignals:
     GalileoE5aQ, GalileoE6B, GalileoE6C, get_carrier_phase_offset, get_secondary_code_length
 import Tracking
-using Tracking:
+import TrackingLoops
+using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
@@ -48,8 +49,8 @@ rotl(x::T, r, N) where {T} =
 
     # No secondary code and one block per symbol, so neither soft detector
     # applies: the trivial hard detector above is the whole story.
-    @test Tracking.uses_soft_secondary_code_detection(e6b) == false
-    @test Tracking.uses_soft_bit_edge_detection(e6b) == false
+    @test TrackingLoops.uses_soft_secondary_code_detection(e6b) == false
+    @test TrackingLoops.uses_soft_bit_edge_detection(e6b) == false
 end
 
 @testset "Galileo E6-C" begin
@@ -62,7 +63,7 @@ end
           false
 
     @testset "CS100 search — clean lock at known phase / polarity" begin
-        reference = Tracking._packed_secondary_code(UInt128, e6c, prn)
+        reference = TrackingLoops._packed_secondary_code(UInt128, e6c, prn)
         for r in (0, 61, N - 1)
             received = rotl(reference, r, N)
             res = @inferred detect_bit_or_secondary_code_sync(e6c, prn, received, N)
@@ -80,8 +81,8 @@ end
     # E6-C draws the *same* CS100_1..50 half of the table as Galileo E5a-Q, so
     # for a given SVID the two overlays coincide — pinned here because the
     # detector's per-PRN reference is derived generically from the signal.
-    @test Tracking._packed_secondary_code(UInt128, e6c, prn) ==
-          Tracking._packed_secondary_code(UInt128, GalileoE5aQ(), prn)
+    @test TrackingLoops._packed_secondary_code(UInt128, e6c, prn) ==
+          TrackingLoops._packed_secondary_code(UInt128, GalileoE5aQ(), prn)
 
     @test @inferred(get_default_correlator(e6c, NumAnts(1))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
@@ -93,7 +94,7 @@ end
     # 100-block CS100 window needs UInt128.
     @test @inferred(get_code_block_buffer_type(e6c)) === UInt128
 
-    @test Tracking.uses_soft_secondary_code_detection(e6c) == true
+    @test TrackingLoops.uses_soft_secondary_code_detection(e6c) == true
 
     # E6-C is the anti-phase arm of the E6 composite ((e_B − e_C)/√2, OS SIS
     # ICD Eq. 10). Tracking reads that offset generically when both components

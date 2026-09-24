@@ -6,7 +6,7 @@ using Unitful: kHz, MHz, Hz, ms, dBHz
 using StaticArrays: SVector
 using GNSSSignals: GPSL1CA, get_code
 import Tracking
-using Tracking:
+using TrackingLoops:
     MomentsCN0Estimator,
     get_prompt_buffer,
     get_current_index,

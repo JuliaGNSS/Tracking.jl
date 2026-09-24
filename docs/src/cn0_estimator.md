@@ -83,7 +83,7 @@ Where the density comes from is a separate, pluggable thing: see
 
 ```@docs
 NoiseRefCN0Estimator
-Tracking.default_cn0_estimator
+TrackingLoops.default_cn0_estimator
 ```
 
 ### Getting the low-C/N₀ variance
@@ -321,7 +321,7 @@ pass a `cn0_estimator` instance. It is a type parameter of
 [`TrackedSignal`](@ref), so any [`AbstractCN0Estimator`](@ref) is stored as is:
 
 ```jldoctest cn0_estimator_kwarg
-julia> using Tracking, GNSSSignals
+julia> using Tracking, TrackingLoops, GNSSSignals
 
 julia> using Tracking: Hz
 
@@ -596,7 +596,7 @@ CN0UpdateContext
 You can implement your own estimator by creating a subtype of
 [`AbstractCN0Estimator`](@ref) and implementing:
 
-  - `Tracking.update(cn0_estimator::MyCN0Estimator, prompt)` — return a new
+  - `TrackingLoops.update(cn0_estimator::MyCN0Estimator, prompt)` — return a new
     estimator with the latest prompt added (immutable update).
   - `estimate_cn0(cn0_estimator::MyCN0Estimator, integration_time)` —
     return the CN0 estimate as a `dB-Hz` quantity. `integration_time` is the
@@ -607,16 +607,19 @@ If the estimator can profit from the navigation-bit grid — bit boundaries,
 whether sync has been found, the decoded soft bits — implement the
 three-argument form instead, which is what the tracking loop calls:
 
-  - `Tracking.update(cn0_estimator::MyCN0Estimator, prompt, context::CN0UpdateContext)`
+  - `TrackingLoops.update(cn0_estimator::MyCN0Estimator, prompt, context::CN0UpdateContext)`
 
 The default three-argument method drops the context and calls the two-argument
 one, so implementing only the latter is fine.
 
 ```@docs
-Tracking.update(::MomentsCN0Estimator, ::Any)
-Tracking.update(::Tracking.AbstractCN0Estimator, ::Any, ::CN0UpdateContext)
-Tracking.update(::NWPRCN0Estimator, ::Any, ::CN0UpdateContext)
-Tracking.update(::NWPRCN0Estimator, ::Any)
+TrackingLoops.update(::MomentsCN0Estimator, ::Any)
+TrackingLoops.update(::TrackingLoops.AbstractCN0Estimator, ::Any, ::CN0UpdateContext)
+TrackingLoops.update(::NWPRCN0Estimator, ::Any, ::CN0UpdateContext)
+TrackingLoops.update(::NWPRCN0Estimator, ::Any)
+TrackingLoops.update(::NoiseRefCN0Estimator, ::Any, ::CN0UpdateContext)
+TrackingLoops.update(::NoiseRefCN0Estimator, ::Any)
+TrackingLoops.update(::NoCN0Estimator, ::Any)
 ```
 
 Plug it in with the `cn0_estimator` keyword of [`TrackedSignal`](@ref) or
@@ -624,15 +627,15 @@ Plug it in with the `cn0_estimator` keyword of [`TrackedSignal`](@ref) or
 your type is stored as is:
 
 ```jldoctest custom_cn0
-julia> using Tracking, GNSSSignals
+julia> using Tracking, TrackingLoops, GNSSSignals
 
 julia> using Tracking: Hz
 
-julia> struct MyCN0Estimator <: Tracking.AbstractCN0Estimator end
+julia> struct MyCN0Estimator <: TrackingLoops.AbstractCN0Estimator end
 
-julia> Tracking.update(estimator::MyCN0Estimator, prompt) = estimator;
+julia> TrackingLoops.update(estimator::MyCN0Estimator, prompt) = estimator;
 
-julia> Tracking.estimate_cn0(::MyCN0Estimator, integration_time) = 42.0 * Tracking.dBHz;
+julia> TrackingLoops.estimate_cn0(::MyCN0Estimator, integration_time) = 42.0 * Tracking.dBHz;
 
 julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz; cn0_estimator = MyCN0Estimator());
 

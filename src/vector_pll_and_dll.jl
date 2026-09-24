@@ -264,11 +264,14 @@ end
 @inline function _process_estimator_driver_signal(
     tracked_signal::TrackedSignal,
     sat::TrackedSat,
+    ::VectorPLLAndDLL,
     pll_and_dll_state::SatVectorPLLAndDLL,
     sampling_frequency,
     noise_density,
     noise_density_ready::Bool,
-    driver_carrier_phase::Real = 0.0,
+    driver_carrier_phase::Real,
+    words,
+    landing_sample::Int64,
 )
     outputs = tracked_signal.correlator_outputs
     if isempty(outputs)
@@ -409,6 +412,7 @@ function estimate_dopplers_and_filter_prompt!(
     _foreach_group!(
         _est_one_group!,
         track_state.groups,
+        track_state.doppler_estimator,
         sampling_frequencies,
         track_state.noise_estimators,
     )
@@ -680,3 +684,11 @@ end
 _set_sat_carrier_freq_update(sat, state, carrier_freq_updates) =
     state.vt_on ?
     SatVectorPLLAndDLL(state; carrier_freq_update = carrier_freq_updates[sat.prn]) : state
+
+# The bare-satellite form, as for the conventional estimator: the state implies
+# the estimator, whose configuration the step never reads.
+_update_tracked_sat_doppler(
+    sat::TrackedSat{<:Tuple{Vararg{TrackedSignal}},<:SatVectorPLLAndDLL},
+    sampling_frequency,
+    noise::Tuple,
+) = _update_tracked_sat_doppler(sat, VectorPLLAndDLL(), sampling_frequency, noise)

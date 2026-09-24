@@ -4,7 +4,8 @@ using Test: @test, @testset, @inferred
 using Unitful: Hz
 using GNSSSignals: GalileoE1C, GalileoE1C_BOC11, get_secondary_code_length
 import Tracking
-using Tracking:
+import TrackingLoops
+using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
@@ -35,7 +36,7 @@ rotl(x::T, r, N) where {T} =
     ).found == false
 
     @testset "CS25 search — clean lock at known phase / polarity" begin
-        reference = Tracking._packed_secondary_code(UInt32, galileo_e1c, prn)
+        reference = TrackingLoops._packed_secondary_code(UInt32, galileo_e1c, prn)
         for r in (0, 11, N - 1)
             received = rotl(reference, r, N)
             res = @inferred detect_bit_or_secondary_code_sync(galileo_e1c, prn, received, N)
@@ -65,7 +66,7 @@ rotl(x::T, r, N) where {T} =
     @test @inferred(get_code_block_buffer_type(galileo_e1c)) === UInt32
 
     # CS25 (25 chips) is short enough for the soft, CFAR secondary-code detector.
-    @test Tracking.uses_soft_secondary_code_detection(galileo_e1c) == true
+    @test TrackingLoops.uses_soft_secondary_code_detection(galileo_e1c) == true
 end
 
 end

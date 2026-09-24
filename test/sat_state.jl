@@ -31,10 +31,11 @@ using Tracking:
     TrackState,
     get_signals,
     get_sat_state,
-    has_bit_or_secondary_code_been_found,
     get_bit_buffer,
     to_dictionary,
     max_code_length
+import TrackingLoops
+using TrackingLoops: has_bit_or_secondary_code_been_found
 
 # `_make_acq`: shared Acquisition-version shim for building
 # `AcquisitionResults` — see test/acquisition_test_helpers.jl.
@@ -101,7 +102,7 @@ end
     # After sync the runtime wrap widens to the full data-bit period.
     synced_sig = Tracking.TrackedSignal(
         only(sat.signals);
-        bit_buffer = Tracking.BitBuffer{UInt64}(
+        bit_buffer = TrackingLoops.BitBuffer{UInt64}(
             zero(UInt64),
             0,
             true,                # found
@@ -110,7 +111,7 @@ end
             complex(0.0, 0.0),
             0,
             Float32[],
-            Tracking.PhaseAccumulators(),
+            TrackingLoops.PhaseAccumulators(),
         ),
     )
     synced_signals = (synced_sig,)
@@ -160,7 +161,7 @@ GNSSSignals.get_data_frequency(::FakeWrapSignal) = 0Hz
     # when the shared wrap is an integer multiple of *every* signal's
     # replica wrap — `max` is not a common multiple in general.
     base = Tracking.TrackedSignal(GPSL1CA())
-    synced_buffer(::Tracking.BitBuffer{B}) where {B} = Tracking.BitBuffer{B}(
+    synced_buffer(::TrackingLoops.BitBuffer{B}) where {B} = TrackingLoops.BitBuffer{B}(
         zero(B),
         0,
         true,
@@ -169,7 +170,7 @@ GNSSSignals.get_data_frequency(::FakeWrapSignal) = 0Hz
         complex(0.0, 0.0),
         0,
         Float32[],
-        Tracking.PhaseAccumulators(),
+        TrackingLoops.PhaseAccumulators(),
     )
     fake_tracked_signal(code_length, secondary_length, found) = Tracking.TrackedSignal(
         FakeWrapSignal(code_length, secondary_length),
@@ -219,7 +220,7 @@ end
     @test sigs_on_sat[1].signal isa GPSL1C_P
     @test sigs_on_sat[2].signal isa GPSL1C_D
     @test sigs_on_sat[3].signal isa GPSL1CA
-    @test sat.doppler_estimator_state isa Tracking.SatConventionalPLLAndDLL
+    @test sat.doppler_estimator_state isa TrackingLoops.SatConventionalPLLAndDLL
 
     # A one-tuple builds the same concrete type as the scalar-signal form.
     sat_tuple = @inferred TrackedSat((GPSL1CA(),), 1, 10.0, 500.0Hz)
@@ -230,7 +231,7 @@ end
     # The default (auto-bandwidth) estimator sizes the sat's loop from its
     # own driver signal (signals[1] = GPS L1C-P → 1.8 Hz), not from a fixed
     # value on the estimator (which is `nothing` = auto).
-    estimator = Tracking.ConventionalAssistedPLLAndDLL()
+    estimator = TrackingLoops.ConventionalAssistedPLLAndDLL()
     @test estimator.carrier_loop_filter_bandwidth === nothing
     sat_kw = TrackedSat(
         sigs,
@@ -244,7 +245,7 @@ end
     @test get_carrier_phase(sat_kw) ≈ 0.5
     @test get_code_doppler(sat_kw) == -0.3Hz
     @test sat_kw.doppler_estimator_state.carrier_loop_filter_bandwidth ==
-          Tracking.default_carrier_loop_filter_bandwidth(GPSL1C_P())
+          TrackingLoops.default_carrier_loop_filter_bandwidth(GPSL1C_P())
 end
 
 @testset "Last fully integrated integration time" begin

@@ -16,6 +16,22 @@ The factor `N` can be specified, but will be `1` as long as the bit start is unk
 Moreover, Tracking.jl allows tracking of signals from phased antenna arrays meaning that they are down-converted and correlated by the very same replica to conserve phase relationships.
 Multi-signal tracking is supported: a single satellite can be tracked on several signals at once (e.g. GPS L1 C/A together with L1C-D and L1C-P) sharing one carrier downconvert per outer iteration, with a per-signal correlator each.
 
+The per-record loop arithmetic — correlators, discriminators, the bit buffer,
+the C/N₀ estimators and the Doppler estimators — lives in
+[TrackingLoops.jl](https://github.com/JuliaGNSS/TrackingLoops.jl), so that a
+hardware correlator's loop process can run the same code without this
+package's sample-domain half. Reading results needs only Tracking.jl: it
+re-exports the TrackingLoops functions that read them — [`estimate_cn0`](@ref),
+[`get_prompt`](@ref), `get_soft_bits`, `has_bit_or_secondary_code_been_found`
+and a few more. Load
+TrackingLoops next to it to configure a correlator, a C/N₀ or noise estimator,
+a Doppler estimator or a post-correlation filter. Its API is listed in the
+[Loop core reference](trackingloops.md).
+
+```julia
+using Tracking, TrackingLoops, GNSSSignals
+```
+
 ## Supported signals
 
 Tracking.jl tracks **every** concrete signal type GNSSSignals.jl defines — GPS

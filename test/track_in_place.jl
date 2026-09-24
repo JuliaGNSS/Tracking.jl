@@ -24,7 +24,8 @@ using Tracking:
     get_filtered_prompts,
     get_sat_state,
     CPUDownconvertAndCorrelator,
-    CPUThreadedDownconvertAndCorrelator,
+    CPUThreadedDownconvertAndCorrelator
+using TrackingLoops:
     NumAnts,
     ConventionalAssistedPLLAndDLL,
     NoiseRefCN0Estimator,

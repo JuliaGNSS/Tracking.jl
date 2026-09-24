@@ -4,7 +4,8 @@ using Test: @test, @testset, @inferred
 using Unitful: Hz
 using GNSSSignals: GPSL5I, GPSL5Q, get_secondary_code_length
 import Tracking
-using Tracking:
+import TrackingLoops
+using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
@@ -28,7 +29,7 @@ rotl(x::T, r, N) where {T} =
     # reference is that pattern's complement. Only the reported polarity sign
     # rides on the convention, and it is the same convention the post-sync
     # replica and the soft detector apply.
-    @test Tracking._packed_secondary_code(UInt32, gpsl5, prn) == UInt32(0x3ca)
+    @test TrackingLoops._packed_secondary_code(UInt32, gpsl5, prn) == UInt32(0x3ca)
     res = @inferred(detect_bit_or_secondary_code_sync(gpsl5, prn, UInt32(0x3ca), 50))
     @test res.found == true
     @test res.polarity == +1
@@ -60,12 +61,12 @@ rotl(x::T, r, N) where {T} =
     @test @inferred(get_code_block_buffer_type(gpsl5)) === UInt32
 
     # NH10 (10 chips) is short enough for the soft, CFAR secondary-code detector.
-    @test Tracking.uses_soft_secondary_code_detection(gpsl5) == true
+    @test TrackingLoops.uses_soft_secondary_code_detection(gpsl5) == true
 
     @testset "Hamming tolerance" begin
         # 2.5 % ceiling over a 10-block window discretizes to "exact match"
         # (floor(0.025 × 10) = 0) — any single bit-flip rejects.
-        template = Tracking._packed_secondary_code(UInt32, gpsl5, prn)
+        template = TrackingLoops._packed_secondary_code(UInt32, gpsl5, prn)
         @test detect_bit_or_secondary_code_sync(gpsl5, prn, template, 10).found == true
         @test detect_bit_or_secondary_code_sync(gpsl5, prn, template ⊻ UInt32(0x1), 10).found ==
               false
@@ -84,7 +85,7 @@ end
           false
 
     @testset "NH20 search — clean lock at known phase / polarity" begin
-        reference = Tracking._packed_secondary_code(UInt32, gpsl5q, prn)
+        reference = TrackingLoops._packed_secondary_code(UInt32, gpsl5q, prn)
         for r in (0, 7, N - 1)
             received = rotl(reference, r, N)
             res = @inferred detect_bit_or_secondary_code_sync(gpsl5q, prn, received, N)
@@ -103,7 +104,7 @@ end
     @testset "Hamming tolerance" begin
         # 2.5 % over a 20-block window discretizes to exact match
         # (floor(0.025 × 20) = 0) — any single bit-flip rejects.
-        reference = Tracking._packed_secondary_code(UInt32, gpsl5q, prn)
+        reference = TrackingLoops._packed_secondary_code(UInt32, gpsl5q, prn)
         @test detect_bit_or_secondary_code_sync(gpsl5q, prn, reference, N).found == true
         @test detect_bit_or_secondary_code_sync(gpsl5q, prn, reference ⊻ UInt32(0x1), N).found ==
               false
@@ -123,7 +124,7 @@ end
     @test @inferred(get_code_block_buffer_type(gpsl5q)) === UInt32
 
     # NH20 (20 chips) is short enough for the soft, CFAR secondary-code detector.
-    @test Tracking.uses_soft_secondary_code_detection(gpsl5q) == true
+    @test TrackingLoops.uses_soft_secondary_code_detection(gpsl5q) == true
 end
 
 end

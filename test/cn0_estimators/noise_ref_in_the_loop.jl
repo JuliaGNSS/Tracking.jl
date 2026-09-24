@@ -19,22 +19,24 @@ using GNSSSignals:
 import Tracking
 using Tracking:
     BandMeasurement,
+    CPUDownconvertAndCorrelator,
+    TrackState,
+    TrackedSat,
+    get_cn0_estimator,
+    reset_loop_filters!,
+    set_preferred_num_code_blocks_to_integrate!,
+    track!
+import TrackingLoops
+using TrackingLoops:
     BitBuffer,
     CN0UpdateContext,
-    CPUDownconvertAndCorrelator,
     CorrelatorNoiseEstimator,
     MomentsCN0Estimator,
     NWPRCN0Estimator,
     NoiseRefCN0Estimator,
-    TrackState,
-    TrackedSat,
     estimate_cn0,
-    get_cn0_estimator,
     get_noise_density,
     has_bit_or_secondary_code_been_found,
-    reset_loop_filters!,
-    set_preferred_num_code_blocks_to_integrate!,
-    track!,
     update
 
 _db(x) = ustrip(uconvert(dBHz, x))
@@ -81,7 +83,7 @@ _prompts(λ, n, rng) = sqrt(λ) .+ (randn(rng, n) .+ im .* randn(rng, n)) ./ sqr
             # NWPR buffered nothing at all and is reporting its fallback.
             @test Base.length(nwpr) == 0
             @test estimate_cn0(nwpr, T) ==
-                  estimate_cn0(Tracking.get_fallback_cn0_estimator(nwpr), T)
+                  estimate_cn0(TrackingLoops.get_fallback_cn0_estimator(nwpr), T)
             # The noise reference: inside 1 dB of the truth, with no window and
             # no fallback anywhere in sight.
             @test _db(estimate_cn0(reference, T)) ≈ 30 atol = 1.0
