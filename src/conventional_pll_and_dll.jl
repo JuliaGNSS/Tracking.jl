@@ -146,7 +146,10 @@ end
 
 # The estimator is implied by the state for the shipped estimators — the step
 # reads only the state's filters and bandwidths — so a caller holding a bare
-# satellite (a test, an external producer) may omit it.
+# satellite (a test, an external producer) may omit it. The default-constructed
+# estimator stands in for whichever one built the state: its filter types and
+# bandwidths are not read, and `predict_landing` only matters with a landing
+# sample, which this path never has.
 _update_tracked_sat_doppler(
     sat::TrackedSat{<:Tuple{Vararg{TrackedSignal}},<:SatConventionalPLLAndDLL},
     sampling_frequency,
