@@ -1698,45 +1698,30 @@ end
     return nothing
 end
 
-# A signal with a configured noise estimator that has no *usable* density is a
-# loud *symptom* — every satellite reports `-Inf dB-Hz` on it — but not a loud
-# diagnosis. There are two causes, and the message names both because the fold
-# cannot tell them apart from here:
+# A signal with a configured noise estimator that has no *usable* density makes
+# every satellite report `-Inf dB-Hz`, and the fold cannot tell the two causes
+# apart from here, so the message names both:
 #
-#   - The window is still empty. The likeliest hardware-integration mistake: a
-#     `CorrelatorNoiseEstimator` configured per the docs whose
-#     `append_noise_observation!` is never called, so the static "no source
-#     configured" check does not fire and the runtime skip repeats forever.
-#   - The window holds a floor of zero, i.e. the input carries no power at all —
-#     a front-end dropout or a buffer underrun. `_noise_density_and_ready`
-#     reports that as not-ready rather than dividing by it (see there), so it
-#     arrives here as the same flag. This is the one cause that *can* reach a
-#     software-path caller, and the one that can appear after a signal has been
-#     reporting a real C/N₀ for a while.
+#   - The window is still empty — typically a `CorrelatorNoiseEstimator` whose
+#     `append_noise_observation!` is never called, which the static "no source
+#     configured" check cannot catch.
+#   - The window's floor is zero, i.e. no power at all (front-end dropout,
+#     buffer underrun). `_noise_density_and_ready` reports that as not-ready
+#     rather than dividing by it, so it arrives as the same flag. This is the
+#     one cause that can appear after a signal has been reporting a real C/N₀.
 #
-# This is the only point that knows a fold actually ran *and* the density was
-# unusable, so the warning belongs here. `maxlog` is
-# keyed per callsite rather than per signal, so the `_id` is made
-# signal-specific — otherwise a second misconfigured signal would be silenced by
-# the first, and the message names the signal precisely because a multi-signal
-# setup is where the mistake is most likely.
+# Warn rather than throw, unlike the static case: "no source configured" is
+# unambiguously a mistake, while "no usable density at this instant" has
+# legitimate transient readings (a producer that folds before it appends, a
+# buffer shorter than one sub-integration, a momentary dead input), and making
+# it fatal would break a caller streaming short buffers. `maxlog` is keyed per
+# callsite, so the `_id` is made signal-specific — otherwise the second
+# misconfigured signal would be silenced by the first.
 #
-# Walks the slot type and the density tuple in lockstep: `requires_noise_density`
-# is a compile-time constant per signal, so all that survives is one branch on
-# each signal's runtime `ready` flag.
-#
-# Warn rather than throw, and the asymmetry with the static case is the point:
-# "no source configured" is unambiguously a mistake, whereas "no usable density at
-# this instant" has legitimate transient readings (a producer that folds before it
-# appends, a buffer shorter than one sub-integration, or a momentary dead input),
-# so making it fatal would break a caller streaming short buffers.
-#
-# Takes the estimators as well as the `(density, ready)` pairs, for one reason: a
-# multi-antenna window that is merely *filling* to its own dimension count is
-# not-ready too, and that is a normal startup transient rather than a
-# misconfiguration. Reading `_noise_window_filling` off the estimator keeps the
-# fold's pair two-state — nothing downstream has to learn a third case — while
-# still telling the two apart here, which is the only place that cares.
+# Takes the estimators as well as the `(density, ready)` pairs so it can tell a
+# multi-antenna window merely *filling* to its dimension count — a normal
+# startup transient — from a misconfiguration, without the fold's pair having to
+# carry a third state.
 @inline _warn_noise_density_missing(
     ::Type{<:TrackedSat{Signals}},
     noise::Tuple,
