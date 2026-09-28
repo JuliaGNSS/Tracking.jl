@@ -245,10 +245,12 @@ end
 #
 # The CPU method draws that buffer from the calling backend's per-thread
 # `ScratchBuffers`, so one buffer serves the satellites and the noise reference
-# instead of one being held per noise estimator. The two never overlap: the noise
-# pass runs to completion at the top of `downconvert_and_correlate!`, before the
-# per-group satellite loop that reuses the slot, and the threaded backends index
-# the slot by `threadid()`.
+# instead of one being held per noise estimator. The two never overlap because
+# the slot is indexed per thread and each work item holds it for the duration of
+# one iteration: serially the noise despreads simply run first, and on a
+# `_BatchLoop` backend they ride the satellites' `@batch` as extra items on the
+# end of its index range, where `@batch` pins the thread (see
+# `_dc_group_loop!`).
 #
 # `use_band_cache` is the other half of that ordering, and the one thing the two
 # callers genuinely disagree about: the bit-wise backends pack a band's
