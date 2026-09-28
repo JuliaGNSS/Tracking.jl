@@ -1164,9 +1164,9 @@ end
 # `code_replica_size` is ignored: this backend packs the code sign plane inside
 # the kernel, so there is no replica buffer to size. `use_band_cache` is the one
 # it does read — `_dc_one_group!` packs the band's measurement sign planes once
-# per group and the per-satellite path reads them, while the noise reference,
-# running before any group packs, must pass `false` (the planes would be whichever
-# group ran last).
+# per group and the per-satellite path reads them, while the noise reference must
+# pass `false`: it rides one group's loop but carries its own band measurement,
+# which need not be that group's band (see `_dc_one_group!`).
 @inline _despread_one_signal!(
     dc::_OneBitDC,
     correlator,
@@ -1332,9 +1332,9 @@ end
 
 # Reject non-`Complex{Int16}` sample buffers up front (12-bit ADC contract).
 # Defined as the shared `_check_sample_type` hook rather than inline in
-# `_dc_one_group!` so the per-band noise measurement — which runs before the
-# group loop — rejects them with the same message instead of a `MethodError`
-# from deep inside the kernel.
+# `_dc_one_group!` so the noise measurements riding that group's loop are
+# rejected with the same message instead of a `MethodError` from deep inside the
+# kernel.
 @inline _check_sample_type(::_OneBitDC, m) =
     eltype(m.samples) === Complex{Int16} || throw(
         ArgumentError(
