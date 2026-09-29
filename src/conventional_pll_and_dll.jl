@@ -106,16 +106,16 @@ the cap starts to bind, this returns the configured bandwidth unchanged.
     min(bandwidth, uconvert(Hz, MAX_LOOP_BANDWIDTH_TIME_PRODUCT / integration_time))
 end
 
-# What a satellite's fold collects while it walks a chunk, and the one thing that
-# is estimator-specific about that walk. Three shapes: `nothing` where nothing is
-# collected at all — every single-signal satellite, and every multi-signal one
-# that does not combine — a `DiscriminatorAccumulator` where the passengers'
-# discriminators are being folded into the loops, and the vector estimator's
-# `VectorMeasurements` where a navigation filter is reading instead.
+# What a satellite's **passenger** signals (`signals[2:end]`) have contributed
+# since the estimator-driver signal last closed its loops. The shared fold knows
+# two shapes: `nothing` where nothing is collected at all — every single-signal
+# satellite, and every multi-signal one whose group does not combine — and the
+# plain `DiscriminatorAccumulator` below, which combines all three loops.
 #
-# The distinction is a *type*, so with `nothing` the discriminator and weight
-# arithmetic folds away entirely and the driver-only path compiles to what it was
-# before combining existed.
+# `nothing` is a *type*, so with it the discriminator and weight arithmetic folds
+# away entirely and the driver-only path compiles to what it was before combining
+# existed. An estimator may define its own accumulator type and methods of the
+# four accumulator hooks below; `VectorPLLAndDLL` is one.
 abstract type AbstractDiscriminatorAccumulator end
 
 """
@@ -143,10 +143,6 @@ struct DiscriminatorAccumulator <: AbstractDiscriminatorAccumulator
 end
 
 DiscriminatorAccumulator() = DiscriminatorAccumulator(0.0, 0.0, 0.0, 0.0, 0.0, 0.0Hz)
-
-# A driver record closes the combining window, so whatever the passengers
-# contributed to it is spent.
-@inline _reset_combining_window(::DiscriminatorAccumulator) = DiscriminatorAccumulator()
 
 # Fold one more measurement into all three loops' running sums, taking one
 # record's whole `_weighted_record_contribution` by name so no caller can pair
@@ -947,6 +943,11 @@ same accumulate hook as everyone else's.
     clear it.
   - `noise_floor` is this signal's own measured floor and whether it is usable
     (see `_signal_noise_densities`) — per signal, never per band.
+  - `signal_index` is this signal's position in `sat.signals`, for an
+    accumulator that keeps something per signal — `1` for the driver, which holds
+    that slot wherever a per-signal quantity is indexed. Fixed for the chunk like
+    everything else here, and carried on the context rather than threaded through
+    the walk because the walk already carries one of these per signal, in order.
   - `is_driver` marks the one context that is not a passenger's, and carries the
     two ways the driver's record differs: it is never dropped by the pre-sync
     gate, because it is the record whose loop update is being formed and skipping
@@ -956,6 +957,7 @@ same accumulate hook as everyone else's.
 """
 struct RecordFoldContext{FS,D}
     prn::Int
+    signal_index::Int
     sampling_frequency::FS
     code_doppler::typeof(1.0Hz)
     derotation::ComplexF64
@@ -971,6 +973,7 @@ end
 @inline function RecordFoldContext(
     tracked_signal::TrackedSignal,
     prn::Integer,
+    signal_index::Integer,
     sampling_frequency,
     code_doppler,
     driver_carrier_phase_offset::Real,
@@ -981,6 +984,7 @@ end
     delay = _driver_relative_group_delay(get_group_delay(tracked_signal), group_delay_datum)
     RecordFoldContext(
         Int(prn),
+        Int(signal_index),
         sampling_frequency,
         code_doppler,
         _carrier_phase_derotation(driver_carrier_phase_offset, signal),
@@ -1004,6 +1008,7 @@ end
     noise_floor::NoiseFloor,
 ) = RecordFoldContext(
     Int(prn),
+    1,
     sampling_frequency,
     code_doppler,
     one(ComplexF64),
@@ -1016,7 +1021,9 @@ end
 # One context per passenger, in `sat.signals[2:end]` order — paired positionally
 # with `Base.tail(noise)`, which `_signal_noise_densities` builds in that same
 # order. Heterogeneous signal types fold at inference time, so this stays
-# type-stable and allocation-free.
+# type-stable and allocation-free. `signal_index` counts in `sat.signals`
+# coordinates, so the first passenger is 2: the driver holds slot 1 wherever a
+# per-signal quantity is indexed.
 @inline _passenger_fold_contexts(
     passengers::Tuple,
     noise::Tuple,
@@ -1029,6 +1036,7 @@ end
     i -> RecordFoldContext(
         passengers[i],
         prn,
+        i + 1,
         sampling_frequency,
         code_doppler,
         driver_carrier_phase_offset,
@@ -1043,7 +1051,8 @@ end
 # ---------------------------------------------------------------------------
 #
 # Three functions are the whole interface between the traversal and an estimator's
-# collecting rules, each with a method per accumulator shape:
+# collecting rules, each with a `nothing` method here and one for the plain
+# `DiscriminatorAccumulator`:
 #
 #   - `_accumulate_record` — fold one record in, from any of the satellite's
 #     signals. The driver's goes through it too, carrying a `RecordFoldContext`
@@ -1055,8 +1064,8 @@ end
 #   - `_reset_combining_window` — a driver record has closed its loops, so
 #     whatever was accumulated *for those loops* is spent.
 #
-# The vector estimator's halves sit in vector_pll_and_dll.jl, next to the
-# `VectorMeasurements` they fill.
+# An estimator may define its own accumulator type and methods of the three
+# hooks; `VectorPLLAndDLL` is one.
 
 # Nothing is collected, so every loop closes on the driver's own discriminators —
 # exactly the values the driver-only path computed before this traversal was
@@ -1079,9 +1088,8 @@ end
 # accumulated its one consumer is the carrier loop filter's FLL branch, and only
 # the FLL-assisted filter has one — so on every other filter this answers
 # `nothing`, which `_filter_carrier_loop` ignores, and the `atan` is never run.
-# An accumulator that *collects* the value hands it to a navigation filter too
-# and therefore always forms it; that is why this gate lives on the `nothing`
-# method alone rather than in the traversal.
+# The gate lives on the `nothing` method alone rather than in the traversal, so
+# an accumulator whose own consumers read the value may always form it.
 @inline _driver_fll_discriminator(
     ::ThirdOrderAssistedBilinearLF,
     signal::AbstractGNSSSignal,
@@ -1107,8 +1115,10 @@ end
     ::Bool,
 ) = nothing
 
-# Nothing was accumulated for the window that just closed.
+# Nothing was accumulated for the window that just closed; a combining one starts
+# afresh.
 @inline _reset_combining_window(::Nothing) = nothing
+@inline _reset_combining_window(::DiscriminatorAccumulator) = DiscriminatorAccumulator()
 
 """
 $(SIGNATURES)
@@ -1445,11 +1455,11 @@ end
 # erases the passenger walk and all the discriminator weighting at compile time,
 # leaving the plain driver fold it has always run.
 #
-# What stays estimator-specific is `acc`, whose *type* says what is collected —
-# `nothing`, the plain `DiscriminatorAccumulator` of a combining satellite, or
-# the vector estimator's `VectorMeasurements` (`vector_pll_and_dll.jl`). The
-# accumulator hooks dispatch on it, and two more hooks dispatch on the
-# per-satellite state:
+# What stays estimator-specific is `acc`, whose *type* says what is collected and
+# which loops combine — `nothing`, or the plain `DiscriminatorAccumulator`, here.
+# The accumulator hooks dispatch on it; an estimator may define its own
+# accumulator type and methods of the four hooks, and `VectorPLLAndDLL` is one.
+# Two more hooks dispatch on the per-satellite state:
 #
 #   - `_close_loops(state, …)` — the per-record loop closure, returning the two
 #     NCO updates plus the two threaded filters. Defaulted here to the plain
@@ -1798,13 +1808,12 @@ end
 # Push already-formed carrier discriminators through the carrier loop filter.
 # This is the single place that knows an FLL-assisted filter takes the
 # `(pll, fll)` pair while every other filter takes the PLL discriminator alone,
-# and both estimators' loop closures route through it.
+# so every loop closure should route through it.
 #
 # The non-assisted method ignores `fll_discriminator` entirely, and with nothing
 # accumulated it is handed a literal `nothing` — `_driver_fll_discriminator`
-# does not form a value the filter would drop. An accumulator that collects the
-# FLL discriminator for a navigation filter does form one, and the filter still
-# ignores it.
+# does not form a value the filter would drop. With an accumulator that forms
+# the FLL discriminator anyway, the filter still ignores it.
 @inline _filter_carrier_loop(
     carrier_loop_filter::ThirdOrderAssistedBilinearLF,
     pll_discriminator,

@@ -347,11 +347,14 @@ This signal's payload group delay, as a time (`1.2e-9s`, `-0.3u"ns"`, …), or
 `nothing` when the caller has supplied none. Set it with
 [`set_group_delay!`](@ref).
 
-It is read wherever a code discriminator leaves the fold: the loop update where
-this package closes the code loop, and [`mean_code_discr`](@ref) where a
-navigation filter does. Either way the value that leaves is already referred to
-the driver's code phase, since that is what the satellite's shared `code_phase`
-means and what everything ranging on it assumes.
+It is read at the one place this package closes a **combined** code loop: the
+loop update, under either estimator — for [`VectorPLLAndDLL`](@ref) that means
+its scalar fallback, since a vector-closed satellite's code loop is the
+navigation filter's. What leaves that loop update is referred to the driver's
+code phase, since that is what the satellite's shared `code_phase` means and what
+everything ranging on it assumes. The per-signal accumulators a navigation filter
+reads ([`mean_code_discr`](@ref)) are **not** referred — see
+[`VectorPLLAndDLL`](@ref).
 
 **Only differences between the signals of one satellite are ever used**, so the
 datum the values are stated against is yours to choose and cancels: what
@@ -373,21 +376,22 @@ Sign: positive means this signal is **delayed** relative to the datum — it lea
 the satellite through the longer path, arrives later, and so sits at a *smaller*
 code phase.
 
-`nothing` means unknown, and it withholds only the **code** loop: a signal
-without a value still aids the carrier loops from its first integration. On
-`signals[1]` it withholds every passenger's code contribution, since nothing can
-be referred to an unknown datum — see [Group delay](@ref) in the
-manual for why assuming zero is not the harmless direction.
+`nothing` means unknown, and it withholds only the **combined code** loop: a
+signal without a value still aids the carrier loops from its first integration,
+and still fills its own accumulator under vector closure. On `signals[1]` it
+withholds every passenger's code contribution, since nothing can be referred to
+an unknown datum — see [Group delay](@ref) in the manual for why assuming zero is
+not the harmless direction.
 """
 get_group_delay(t::TrackedSignal) = t.group_delay
 
 # The differencing rule, in one place: what a signal's code discriminator has to
-# have subtracted to be referred to the satellite's shared `code_phase`, which is
-# the estimator-driver signal's. A signal *delayed* relative to the driver
-# (`group_delay` larger) arrives later and so sits at a **smaller** code phase,
-# hence `datum - delay` and not the other way round. `nothing` where either end is
-# unknown — an unreferable measurement is withheld, never referred to a guessed
-# datum.
+# have subtracted before it can enter the *combined* code loop, whose datum is
+# the satellite's shared `code_phase` and so the estimator-driver signal's. A
+# signal *delayed* relative to the driver (`group_delay` larger) arrives later and
+# so sits at a **smaller** code phase, hence `datum - delay` and not the other way
+# round. `nothing` where either end is unknown — an unreferable record is given
+# zero code weight, never referred to a guessed datum.
 #
 # Slot 1 answers `0.0s` whatever it holds, since it is the reference: the fold
 # gives the driver's own record that same structural zero rather than reading the

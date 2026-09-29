@@ -1003,14 +1003,22 @@ for fn in (
     end
 end
 
-# The vector estimator's two per-satellite readers get the same `TrackState`
-# rung, but typed on a vector-tracking `TrackState`: they read a
+# The vector estimator's two per-signal readers get the same two `TrackState`
+# rungs, but typed on a vector-tracking `TrackState`: they read a
 # `SatVectorPLLAndDLL` field, so a conventional `TrackState` should say so at
 # the call rather than deep inside. Their satellite rung is in
 # vector_pll_and_dll.jl, next to the accumulators it reads.
 for fn in (:mean_code_discr, :mean_carrier_discr)
-    @eval $fn(s::TrackState{<:SignalGroups,<:VectorPLLAndDLL}, id...) =
-        $fn(get_sat_state(s, id...))
+    @eval begin
+        $fn(s::TrackState{<:SignalGroups,<:VectorPLLAndDLL}, id...) =
+            $fn(get_sat_state(s, id...))
+        $fn(
+            s::TrackState{<:SignalGroups,<:VectorPLLAndDLL},
+            group::Union{Symbol,Integer,Val},
+            sat_id,
+            sig::_SignalSelector,
+        ) = $fn(get_sat_state(s, group, sat_id), sig)
+    end
 end
 
 """
@@ -1286,10 +1294,12 @@ function _set_sat_group_delay(sat::TrackedSat, delay::Maybe{typeof(1.0s)}, sel..
     )
 end
 
-# Only the conventional estimator combines, so only its state carries sums; every
-# other per-satellite state is left alone.
+# One method per shipped per-satellite state; a custom estimator's state carries
+# no combining sums and is left alone.
 _drop_pending_combining_sums(state::SatConventionalPLLAndDLL) =
     SatConventionalPLLAndDLL(state; pending_combining_sums = DiscriminatorAccumulator())
+_drop_pending_combining_sums(state::SatVectorPLLAndDLL) =
+    SatVectorPLLAndDLL(state; pending_combining_sums = DiscriminatorAccumulator())
 _drop_pending_combining_sums(state) = state
 
 """
@@ -1317,10 +1327,12 @@ difference to form, so whatever you store is kept and never used.
 What the difference is *for*: multi-signal code combining subtracts it from that
 passenger's DLL discriminator, so the satellite-shared `code_phase` keeps meaning
 "the driver signal's code phase", which is what downstream per-signal group-delay
-corrections (e.g. `PositionVelocityTime.jl`'s) already assume. That happens at
-the loop update, so a consumer never has to apply it itself. Only
-[`ConventionalPLLAndDLL`](@ref) combines — under [`VectorPLLAndDLL`](@ref) the
-value is stored and never read.
+corrections (e.g. `PositionVelocityTime.jl`'s) already assume. That is the whole
+of it — the value goes with the combined code loop and is read only where this
+package closes one. Under [`VectorPLLAndDLL`](@ref) that means the scalar
+fallback only: the per-signal accumulators a navigation filter reads
+([`mean_code_discr`](@ref)) are raw, and the filter applies whatever inter-signal
+bias it needs itself.
 
 A signal left at `nothing` aids the **carrier** loops from its first integration
 and only its code contribution waits, so leaving it unset is the safe default.

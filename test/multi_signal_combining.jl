@@ -51,6 +51,7 @@ using Tracking:
     add_satellite!,
     append_correlator_output!,
     dll_disc_noise_gain,
+    disable_vt!,
     enable_vt!,
     estimate_dopplers_and_filter_prompt!,
     get_carrier_doppler,
@@ -58,6 +59,10 @@ using Tracking:
     get_group_delay,
     get_preferred_num_code_blocks_to_integrate,
     get_sat_state,
+    mean_carrier_discr,
+    mean_code_discr,
+    reset_carrier_discr_acc!,
+    reset_code_discr_acc!,
     set_group_delay!,
     set_preferred_num_code_blocks_to_integrate!,
     track
@@ -366,6 +371,7 @@ end
     chips(t) = Tracking.RecordFoldContext(
         get_sat_state(t, :gps_l1, 7).signals[2],
         7,
+        2,
         FS,
         0.0Hz,
         0.0,
@@ -381,6 +387,7 @@ end
         Tracking.RecordFoldContext(
             get_sat_state(ts, :gps_l1, 7).signals[3],
             7,
+            3,
             FS,
             0.0Hz,
             0.0,
@@ -439,9 +446,11 @@ end
 end
 
 @testset "setting a delay under vector tracking is stored and read back" begin
-    # No warning here, by design: the setter is about the satellite's signals,
-    # not about which estimator will read the value, and `VectorPLLAndDLL`
-    # leaving it unread is a documentation matter — see `set_group_delay!`.
+    # No warning here, by design: under `VectorPLLAndDLL` the value is read by
+    # the scalar fallback every satellite pulls in through, so setting it is the
+    # correct call and warning on it would fire on every correct receiver run.
+    # That vector *closure* leaves the datum to the navigation filter is a
+    # documentation matter — see `set_group_delay!`.
     l1cp, l1cd = GPSL1C_P(), GPSL1C_D()
     vector_ts = TrackState(;
         signals = (gps_l1 = (l1cp, l1cd),),
@@ -502,6 +511,7 @@ function passenger_contribution(
     ctx = RecordFoldContext(
         ts,
         1,
+        2,
         FS,
         code_doppler,
         Float64(driver_carrier_phase_offset),
@@ -1284,6 +1294,589 @@ end
         identical_l1ca_track_state(2, prn, carrier_doppler; discriminator_combining = false)
     set_preferred_num_code_blocks_to_integrate!(off, 1, prn, 2, 2)
     @test get_preferred_num_code_blocks_to_integrate(get_sat_state(off, prn), 2) == 2
+end
+
+# --------------------------------------------------------------------------
+# Vector tracking: the combination reaches exactly the loops still closed here
+# --------------------------------------------------------------------------
+#
+# `VectorPLLAndDLL` combines every loop it closes itself and no others, so the
+# reach follows `vt_on`:
+#
+#   * `vt_on = false` — scalar fallback, all three discriminators combine, and
+#     the satellite must behave like the conventional estimator does.
+#   * `vt_on = true` — the carrier phase loop alone. The code and carrier
+#     frequency loops are the navigation filter's, and its dumps must stay the
+#     raw per-signal measurements it expects to weigh itself.
+#
+# Both halves need pinning: a regression in either direction (combining what the
+# filter fuses, or failing to combine a loop this package still closes) is
+# silent otherwise.
+
+# The vector-tracking twin of `externally_fed_state`: the same two-signal L1 C/A
+# satellite fed by an external producer, under `VectorPLLAndDLL`. The passenger
+# carries a `0.0s` differential group delay for the same reason the conventional
+# fixture does — two copies of one signal have none between them — which lets the
+# fallback's code loop combine.
+function vt_externally_fed_state(; combining = true, vt_on = false, passenger_delay = 0.0s)
+    estimator = VectorPLLAndDLL()
+    gpsl1 = GPSL1CA()
+    signals = (
+        TrackedSignal(
+            gpsl1;
+            correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
+            cn0_estimator = NoCN0Estimator(),
+            group_delay = 0.0s,
+        ),
+        TrackedSignal(
+            gpsl1;
+            correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
+            cn0_estimator = NoCN0Estimator(),
+            group_delay = passenger_delay,
+        ),
+    )
+    sat = TrackedSat(signals, 1, 0.0, 1000.0Hz; doppler_estimator = estimator)
+    ts = TrackState(
+        gpsl1,
+        sat;
+        doppler_estimator = estimator,
+        discriminator_combining = combining,
+    )
+    vt_on && enable_vt!(ts, [1])
+    ts
+end
+
+get_vt_state(ts) = Tracking.get_doppler_estimator_state(get_sat_state(ts, 1))
+
+# `one_update`'s twin: one estimate call over one driver record and, optionally,
+# one passenger record completing at the same sample. Returns the Dopplers and
+# the state the navigation filter would read.
+function vt_one_update(driver_record; passenger_record = nothing, kwargs...)
+    ts = vt_externally_fed_state(; kwargs...)
+    n = RECORD_SAMPLES
+    isnothing(passenger_record) ||
+        append_correlator_output!(ts, CorrelatorOutput(passenger_record, n, n), 1, 1, 2)
+    append_correlator_output!(ts, CorrelatorOutput(driver_record, n, n), 1, 1, 1)
+    estimate_dopplers_and_filter_prompt!(ts, (L1 = FS,))
+    state = Tracking.get_doppler_estimator_state(get_sat_state(ts, 1))
+    (
+        carrier_doppler = get_carrier_doppler(ts, 1),
+        code_doppler = get_code_doppler(ts, 1),
+        state = state,
+    )
+end
+
+@testset "the scalar fallback combines every loop, as the conventional estimator does" begin
+    # `vt_on` unset: both loops are local, so the midpoint argument of "the
+    # combined discriminator is what the loop filters see" applies to all three
+    # discriminators. Two equally weighted records that disagree must move the
+    # loops to exactly halfway between what either produces alone.
+    driver_alone = vt_one_update(DISAGREEING_DRIVER_RECORD)
+    passenger_alone = vt_one_update(DISAGREEING_PASSENGER_RECORD)
+    combined = vt_one_update(
+        DISAGREEING_DRIVER_RECORD;
+        passenger_record = DISAGREEING_PASSENGER_RECORD,
+    )
+
+    @test abs(driver_alone.carrier_doppler - passenger_alone.carrier_doppler) > 1.0Hz
+    @test abs(driver_alone.code_doppler - passenger_alone.code_doppler) > 0.1Hz
+    @test combined.carrier_doppler ≈
+          (driver_alone.carrier_doppler + passenger_alone.carrier_doppler) / 2 rtol = 1e-12
+    @test combined.code_doppler ≈
+          (driver_alone.code_doppler + passenger_alone.code_doppler) / 2 rtol = 1e-12
+
+    # The strongest statement available: the same satellite under
+    # `ConventionalAssistedPLLAndDLL`, in a group with `discriminator_combining
+    # = true`, fed the same two records, must land on the same Dopplers. The
+    # fallback is not "like" scalar tracking, it is scalar tracking — same fold,
+    # same weighting, same filters.
+    conventional = one_update(
+        DISAGREEING_DRIVER_RECORD;
+        passenger_record = DISAGREEING_PASSENGER_RECORD,
+    )
+    @test combined.carrier_doppler ≈ conventional[1] rtol = 1e-12
+    @test combined.code_doppler ≈ conventional[2] rtol = 1e-12
+
+    # With combining off the passenger's record must not reach the loop at all,
+    # bit-identically to the run where it was never appended.
+    driver_only_run = vt_one_update(
+        DISAGREEING_DRIVER_RECORD;
+        passenger_record = DISAGREEING_PASSENGER_RECORD,
+        combining = false,
+    )
+    @test driver_only_run.carrier_doppler === driver_alone.carrier_doppler
+    @test driver_only_run.code_doppler === driver_alone.code_doppler
+end
+
+@testset "under vector closure only the carrier phase loop combines" begin
+    # The DLL and FLL discriminators are measurements handed to the navigation
+    # filter, not loop inputs. Combining must move the carrier phase loop and
+    # leave every signal's dump the raw value the filter expects to weigh
+    # itself — fusing them here as well would fuse the same measurements twice.
+    driver_alone = vt_one_update(DISAGREEING_DRIVER_RECORD; vt_on = true)
+    combined = vt_one_update(
+        DISAGREEING_DRIVER_RECORD;
+        passenger_record = DISAGREEING_PASSENGER_RECORD,
+        vt_on = true,
+    )
+
+    @test combined.state.vt_on
+    # Slot 1 is the driver's, and it reads exactly what it reads when it is the
+    # only signal that reported.
+    @test mean_code_discr(combined.state, 1) === mean_code_discr(driver_alone.state, 1)
+    @test mean_carrier_discr(combined.state, 1) ===
+          mean_carrier_discr(driver_alone.state, 1)
+    @test combined.state.code_discr_acc[1] == (1, mean_code_discr(driver_alone.state, 1))
+
+    # …while the carrier phase loop, which is still the satellite's own under
+    # vector closure, did see the passenger.
+    passenger_alone = vt_one_update(DISAGREEING_PASSENGER_RECORD; vt_on = true)
+    @test combined.carrier_doppler ≈
+          (driver_alone.carrier_doppler + passenger_alone.carrier_doppler) / 2 rtol = 1e-12
+end
+
+@testset "every signal dumps its own discriminators for the navigation filter" begin
+    # The passenger's dump must be the passenger's own measurement, in its own
+    # slot — not the driver's, not a mean of the two, and not missing. The two
+    # records disagree about both the code error and the frequency error, so
+    # each of those failures is distinguishable from the others here.
+    driver_alone = vt_one_update(DISAGREEING_DRIVER_RECORD; vt_on = true)
+    passenger_alone = vt_one_update(DISAGREEING_PASSENGER_RECORD; vt_on = true)
+    combined = vt_one_update(
+        DISAGREEING_DRIVER_RECORD;
+        passenger_record = DISAGREEING_PASSENGER_RECORD,
+        vt_on = true,
+    )
+
+    # `passenger_alone` ran the passenger's record through the *driver's* slot,
+    # so its slot-1 dump is what that record measures — the value the passenger
+    # must report from slot 2.
+    @test mean_code_discr(combined.state, 1) === mean_code_discr(driver_alone.state, 1)
+    @test mean_code_discr(combined.state, 2) === mean_code_discr(passenger_alone.state, 1)
+    # A first record has no previous prompt, so both read `fll_disc`'s 0 Hz
+    # placeholder; the testset below is where a real FLL measurement lands in
+    # its own slot.
+    @test mean_carrier_discr(combined.state, 2) ===
+          mean_carrier_discr(passenger_alone.state, 1)
+
+    # …and the same values through the addressing ladder every other per-signal
+    # accessor uses, including by signal type and from the `TrackState`.
+    ts = vt_externally_fed_state(; vt_on = true)
+    n = RECORD_SAMPLES
+    append_correlator_output!(
+        ts,
+        CorrelatorOutput(DISAGREEING_PASSENGER_RECORD, n, n),
+        1,
+        1,
+        2,
+    )
+    append_correlator_output!(
+        ts,
+        CorrelatorOutput(DISAGREEING_DRIVER_RECORD, n, n),
+        1,
+        1,
+        1,
+    )
+    estimate_dopplers_and_filter_prompt!(ts, (L1 = FS,))
+    @test mean_code_discr(ts, 1, 1, 2) === mean_code_discr(combined.state, 2)
+    @test mean_code_discr(get_sat_state(ts, 1), 2) === mean_code_discr(combined.state, 2)
+    @test mean_carrier_discr(ts, 1, 1, 2) === mean_carrier_discr(combined.state, 2)
+    # Both signals are GPS L1 C/A here, so a type selector is ambiguous and must
+    # say so rather than pick one — as it does for every other accessor.
+    @test_throws ArgumentError mean_code_discr(get_sat_state(ts, 1), GPSL1CA)
+    # An unqualified read of a multi-signal satellite is refused for the same
+    # reason: answering with the driver's is the mistake per-signal
+    # accumulation exists to remove.
+    @test_throws ArgumentError mean_code_discr(get_vt_state(ts))
+    # …and they really do disagree, so slot 2 could not have been filled from
+    # the driver.
+    @test mean_code_discr(combined.state, 1) != mean_code_discr(combined.state, 2)
+
+    # One record each, counted separately: the filter divides by these.
+    @test first.(combined.state.code_discr_acc) == (1, 1)
+    @test last.(combined.state.code_discr_acc) ==
+          (mean_code_discr(combined.state, 1), mean_code_discr(combined.state, 2))
+    @test first.(combined.state.carrier_discr_acc) == (1, 1)
+
+    # A satellite still in the scalar fallback dumps nothing at all, on any
+    # slot — the navigation filter is not reading it yet.
+    fallback = vt_one_update(
+        DISAGREEING_DRIVER_RECORD;
+        passenger_record = DISAGREEING_PASSENGER_RECORD,
+    )
+    @test isnothing(mean_code_discr(fallback.state, 1))
+    @test isnothing(mean_code_discr(fallback.state, 2))
+
+    # And both slots reset together.
+    ts = vt_externally_fed_state(; vt_on = true)
+    n = RECORD_SAMPLES
+    append_correlator_output!(
+        ts,
+        CorrelatorOutput(DISAGREEING_PASSENGER_RECORD, n, n),
+        1,
+        1,
+        2,
+    )
+    append_correlator_output!(
+        ts,
+        CorrelatorOutput(DISAGREEING_DRIVER_RECORD, n, n),
+        1,
+        1,
+        1,
+    )
+    estimate_dopplers_and_filter_prompt!(ts, (L1 = FS,))
+    @test !isnothing(mean_code_discr(get_vt_state(ts), 2))
+    reset_code_discr_acc!(ts)
+    reset_carrier_discr_acc!(ts)
+    @test all(
+        isnothing,
+        (
+            mean_code_discr(get_vt_state(ts), 1),
+            mean_code_discr(get_vt_state(ts), 2),
+            mean_carrier_discr(get_vt_state(ts), 1),
+            mean_carrier_discr(get_vt_state(ts), 2),
+        ),
+    )
+end
+
+# Feed one record to each signal of the vector fixture and run one estimate
+# call — `vt_one_update`'s repeatable form, for the properties that only show up
+# across chunks (an FLL measurement needs a previous prompt, so it needs two).
+function vt_feed!(ts, driver_record, passenger_record)
+    n = RECORD_SAMPLES
+    isnothing(passenger_record) ||
+        append_correlator_output!(ts, CorrelatorOutput(passenger_record, n, n), 1, 1, 2)
+    isnothing(driver_record) ||
+        append_correlator_output!(ts, CorrelatorOutput(driver_record, n, n), 1, 1, 1)
+    estimate_dopplers_and_filter_prompt!(ts, (L1 = FS,))
+    get_vt_state(ts)
+end
+
+@testset "a dumped code measurement is raw, whatever group delay is supplied" begin
+    # The group delay belongs to the *combined* code loop, and under `vt_on` that
+    # loop is the navigation filter's — so a dump is what the signal measured, and
+    # setting or clearing a delay must not move it. The scalar fallback's own
+    # referral is pinned by "the scalar fallback combines every loop" above.
+    δt = 4.0e-9s
+
+    with_delay = vt_one_update(
+        DISAGREEING_DRIVER_RECORD;
+        passenger_record = DISAGREEING_PASSENGER_RECORD,
+        vt_on = true,
+        passenger_delay = δt,
+    )
+    aligned = vt_one_update(
+        DISAGREEING_DRIVER_RECORD;
+        passenger_record = DISAGREEING_PASSENGER_RECORD,
+        vt_on = true,
+    )
+    # `===` and not `≈`: the delay reaches no arithmetic at all on this path, so
+    # a tolerance would hide a referral that had merely got small.
+    @test mean_code_discr(with_delay.state, 2) === mean_code_discr(aligned.state, 2)
+    @test mean_code_discr(with_delay.state, 1) === mean_code_discr(aligned.state, 1)
+    @test mean_carrier_discr(with_delay.state, 2) === mean_carrier_discr(aligned.state, 2)
+
+    # And the value is the passenger's own discriminator, not the driver's: a
+    # dump that silently carried the driver's would pass every test above.
+    @test mean_code_discr(aligned.state, 2) ≈ Tracking.dll_disc(
+        GPSL1CA(),
+        DISAGREEING_PASSENGER_RECORD,
+        get_code_doppler(get_sat_state(vt_externally_fed_state(), 1)),
+        FS,
+    )
+
+    # A passenger with no delay supplied is folded like any other — nothing is
+    # withheld, so `count` is the record count and never depends on what the
+    # caller configured.
+    unknown = vt_one_update(
+        DISAGREEING_DRIVER_RECORD;
+        passenger_record = DISAGREEING_PASSENGER_RECORD,
+        vt_on = true,
+        passenger_delay = nothing,
+    )
+    @test mean_code_discr(unknown.state, 2) === mean_code_discr(aligned.state, 2)
+    @test unknown.state.code_discr_acc[2][1] == 1
+    @test mean_carrier_discr(unknown.state, 2) === mean_carrier_discr(aligned.state, 2)
+    @test mean_code_discr(unknown.state, 1) === mean_code_discr(aligned.state, 1)
+end
+
+@testset "every record reaches both accumulators under vector tracking" begin
+    # `fll_disc` answers 0 Hz when there is no previous prompt to difference
+    # against, and that placeholder is counted like any other measurement — the
+    # `(count, sum)` pair carries no notion of a rejected record. What keeps it
+    # out of a navigation filter's mean is when the filter switches the
+    # satellite on: `vt_on` is set once the satellite is decoded, which is many
+    # records after the only one that lacks a prompt pair. Here the flag is set
+    # by hand on the first integration, which is why the placeholder shows.
+    ts = vt_externally_fed_state(; vt_on = true)
+    after_first = vt_feed!(ts, DISAGREEING_DRIVER_RECORD, DISAGREEING_PASSENGER_RECORD)
+
+    @test first.(after_first.code_discr_acc) == (1, 1)
+    @test first.(after_first.carrier_discr_acc) == (1, 1)
+    @test mean_carrier_discr(after_first, 1) == 0.0Hz
+    @test mean_carrier_discr(after_first, 2) == 0.0Hz
+
+    # From the second record on there is a prompt pair on both signals, and the
+    # two loops stay in step: one record in, one record counted, on every
+    # signal and both loops. That is the property the navigation filter relies
+    # on — `count` times its configured integration time is the interval the
+    # mean covers, with nothing dropped in between for it to be wrong about.
+    #
+    # The records are swapped between the slots so each signal's prompt really
+    # rotates and its second FLL measurement is a non-zero one; feeding the same
+    # record twice would leave the prompt where it was and measure 0 Hz, which is
+    # indistinguishable from the placeholder.
+    after_second = vt_feed!(ts, DISAGREEING_PASSENGER_RECORD, DISAGREEING_DRIVER_RECORD)
+    @test first.(after_second.code_discr_acc) == (2, 2)
+    @test first.(after_second.carrier_discr_acc) == (2, 2)
+    @test all(!iszero, last.(after_second.carrier_discr_acc))
+    # The mean is that sum over that count — the first record's 0 Hz placeholder
+    # included, since nothing here rejects a record.
+    for signal_index = 1:2
+        count, discr_sum = after_second.carrier_discr_acc[signal_index]
+        @test mean_carrier_discr(after_second, signal_index) == discr_sum / count
+    end
+end
+
+@testset "measurements are collected under vt_on whether or not signals combine" begin
+    # The two flags answer different questions: `vt_on` says the navigation
+    # filter has this satellite and wants every signal's measurement, while
+    # `discriminator_combining` says only what the loops this package still closes are
+    # fed. So a vector-closed satellite that combines nothing must still hand the
+    # filter its passengers' measurements — and must still track exactly as its
+    # driver alone does.
+    separate = vt_externally_fed_state(; combining = false, vt_on = true)
+    vt_feed!(separate, DISAGREEING_DRIVER_RECORD, DISAGREEING_PASSENGER_RECORD)
+    state = vt_feed!(separate, DISAGREEING_DRIVER_RECORD, DISAGREEING_PASSENGER_RECORD)
+
+    # Every slot filled, each with its own signal's measurement.
+    @test first.(state.code_discr_acc) == (2, 2)
+    @test first.(state.carrier_discr_acc) == (2, 2)
+    @test mean_code_discr(state, 1) != mean_code_discr(state, 2)
+
+    # The passenger's slot holds the passenger's own value — the same value that
+    # record produces when it is the only signal reporting.
+    passenger_alone = vt_externally_fed_state(; combining = false, vt_on = true)
+    vt_feed!(passenger_alone, DISAGREEING_PASSENGER_RECORD, nothing)
+    passenger_state = vt_feed!(passenger_alone, DISAGREEING_PASSENGER_RECORD, nothing)
+    # Approximately, not bit-exactly: in the reference run that record is the
+    # driver, so its own loops moved the code Doppler every `dll_disc` is
+    # evaluated at by a few parts in 1e9. A slot filled from the driver's
+    # measurement instead of the passenger's would be off by 1e-1 here.
+    @test mean_code_discr(state, 2) ≈ mean_code_discr(passenger_state, 1) rtol = 1e-6
+    @test mean_carrier_discr(state, 2) ≈ mean_carrier_discr(passenger_state, 1) rtol = 1e-6
+    @test !isapprox(mean_code_discr(state, 1), mean_code_discr(state, 2), rtol = 1e-6)
+
+    # …and nothing the passengers measured reached the loops, which are still
+    # the driver's alone.
+    driver_alone = vt_externally_fed_state(; combining = false, vt_on = true)
+    vt_feed!(driver_alone, DISAGREEING_DRIVER_RECORD, nothing)
+    vt_feed!(driver_alone, DISAGREEING_DRIVER_RECORD, nothing)
+    @test get_carrier_doppler(separate, 1) === get_carrier_doppler(driver_alone, 1)
+    @test get_code_doppler(separate, 1) === get_code_doppler(driver_alone, 1)
+    # The combining sums stay untouched: nothing is pending for a loop that
+    # combines nothing.
+    @test state.pending_combining_sums == DiscriminatorAccumulator()
+
+    # A satellite outside the vector loop collects nothing, combining or not —
+    # the navigation filter is not reading it.
+    fallback = vt_externally_fed_state(; combining = false, vt_on = false)
+    vt_feed!(fallback, DISAGREEING_DRIVER_RECORD, DISAGREEING_PASSENGER_RECORD)
+    fallback_state =
+        vt_feed!(fallback, DISAGREEING_DRIVER_RECORD, DISAGREEING_PASSENGER_RECORD)
+    @test first.(fallback_state.code_discr_acc) == (0, 0)
+    @test first.(fallback_state.carrier_discr_acc) == (0, 0)
+end
+
+@testset "a pending vector-tracking accumulator survives to the next call" begin
+    # The vector twin of the conventional cross-chunk test: a passenger record
+    # completing with no driver record in the chunk is parked in
+    # `pending_combining_sums` and consumed by the next driver record, so
+    # splitting the two records across two estimate calls must land where one call
+    # seeing both does.
+    n = RECORD_SAMPLES
+    ts = vt_externally_fed_state()
+    append_correlator_output!(
+        ts,
+        CorrelatorOutput(DISAGREEING_PASSENGER_RECORD, n, n),
+        1,
+        1,
+        2,
+    )
+    estimate_dopplers_and_filter_prompt!(ts, (L1 = FS,))
+
+    @test get_carrier_doppler(ts, 1) === 1000.0Hz
+    parked = Tracking.get_doppler_estimator_state(get_sat_state(ts, 1))
+    @test parked.pending_combining_sums.pll_weight > 0
+    @test parked.pending_combining_sums.dll_weight > 0
+
+    append_correlator_output!(
+        ts,
+        CorrelatorOutput(DISAGREEING_DRIVER_RECORD, n, n),
+        1,
+        1,
+        1,
+    )
+    estimate_dopplers_and_filter_prompt!(ts, (L1 = FS,))
+    single_call = vt_one_update(
+        DISAGREEING_DRIVER_RECORD;
+        passenger_record = DISAGREEING_PASSENGER_RECORD,
+    )
+    @test get_carrier_doppler(ts, 1) === single_call.carrier_doppler
+    @test get_code_doppler(ts, 1) === single_call.code_doppler
+    # …and the driver record consumed the accumulator on its way through.
+    @test Tracking.get_doppler_estimator_state(get_sat_state(ts, 1)).pending_combining_sums ==
+          DiscriminatorAccumulator()
+end
+
+@testset "a vt_on transition drops the pending discriminators" begin
+    # The sums mean different things either side of the switch: gathered for
+    # three loops in the fallback, for one under vector closure. Carrying them
+    # across would deliver passenger code and frequency measurements to a driver
+    # record that no longer combines those loops — or, on the way back, deliver a
+    # carrier-phase-only window to one that expects all three.
+    n = RECORD_SAMPLES
+    ts = vt_externally_fed_state()
+    append_correlator_output!(
+        ts,
+        CorrelatorOutput(DISAGREEING_PASSENGER_RECORD, n, n),
+        1,
+        1,
+        2,
+    )
+    estimate_dopplers_and_filter_prompt!(ts, (L1 = FS,))
+    @test Tracking.get_doppler_estimator_state(get_sat_state(ts, 1)).pending_combining_sums.dll_weight >
+          0
+
+    enable_vt!(ts, [1])
+    state = Tracking.get_doppler_estimator_state(get_sat_state(ts, 1))
+    @test state.vt_on
+    @test state.pending_combining_sums == DiscriminatorAccumulator()
+
+    # Re-issuing the same membership is still a no-op — it must not keep wiping
+    # an accumulator that is filling legitimately under the mode now in force.
+    append_correlator_output!(
+        ts,
+        CorrelatorOutput(DISAGREEING_PASSENGER_RECORD, n, n),
+        1,
+        1,
+        2,
+    )
+    estimate_dopplers_and_filter_prompt!(ts, (L1 = FS,))
+    filling = Tracking.get_doppler_estimator_state(get_sat_state(ts, 1))
+    @test filling.pending_combining_sums.pll_weight > 0
+    enable_vt!(ts, [1])
+    @test Tracking.get_doppler_estimator_state(get_sat_state(ts, 1)).pending_combining_sums ==
+          filling.pending_combining_sums
+
+    # Leaving the loop drops it again.
+    disable_vt!(ts, [1])
+    @test Tracking.get_doppler_estimator_state(get_sat_state(ts, 1)).pending_combining_sums ==
+          DiscriminatorAccumulator()
+end
+
+@testset "reset_loop_filters! drops the pending vector-tracking discriminators" begin
+    # Pending measurements belong to the pre-reset cadence, as they do for the
+    # conventional estimator; the `discriminator_combining` flag is configuration and
+    # survives, as the bandwidths and `vt_on` do.
+    n = RECORD_SAMPLES
+    ts = vt_externally_fed_state(; vt_on = true)
+    append_correlator_output!(
+        ts,
+        CorrelatorOutput(DISAGREEING_PASSENGER_RECORD, n, n),
+        1,
+        1,
+        2,
+    )
+    estimate_dopplers_and_filter_prompt!(ts, (L1 = FS,))
+    @test Tracking.get_doppler_estimator_state(get_sat_state(ts, 1)).pending_combining_sums.pll_weight >
+          0
+
+    Tracking.reset_loop_filters!(ts)
+    state = Tracking.get_doppler_estimator_state(get_sat_state(ts, 1))
+    @test state.pending_combining_sums == DiscriminatorAccumulator()
+    @test state.vt_on
+end
+
+@testset "vector combining reads the group's flag, like the conventional estimator" begin
+    # Nothing per-satellite carries the flag under vector tracking either: the
+    # group declares it, and `vt_on` — which *is* per satellite — decides only
+    # which loops the combination reaches.
+    combining_state = vt_externally_fed_state(; combining = true, vt_on = true)
+    driver_only_state = vt_externally_fed_state(; combining = false, vt_on = true)
+    @test only(Tuple(combining_state.groups)).discriminator_combining
+    @test !only(Tuple(driver_only_state.groups)).discriminator_combining
+    @test !hasfield(Tracking.SatVectorPLLAndDLL, :discriminator_combining)
+    @test !hasfield(Tracking.VectorPLLAndDLL, :discriminator_combining)
+    # `vt_on` still lives on the satellite, where it belongs.
+    @test hasfield(Tracking.SatVectorPLLAndDLL, :vt_on)
+end
+
+@testset "a single-signal vector-tracked sat is bit-identical with combining on" begin
+    # The same safety property the conventional estimator has: with no passengers
+    # there is nothing to combine, and `_seed_and_fold` branches on the empty
+    # passenger tuple's type so the flag cannot cost a satellite a single bit.
+    prn, carrier_doppler = 1, 1000.0Hz
+    buf = l1ca_signal(prn, carrier_doppler, 0.0, 20_000)
+
+    dopplers = map((false, true)) do combining
+        ts = TrackState(; signal = GPSL1CA(), doppler_estimator = VectorPLLAndDLL())
+        ts = add_satellite!(ts; prn, code_phase = 0.0, carrier_doppler)
+        enable_vt!(ts, [prn])
+        sat = get_sat_state(track(copy(buf), ts, FS), prn)
+        (get_carrier_doppler(sat), get_code_doppler(sat), Tracking.get_code_phase(sat))
+    end
+    @test dopplers[1] === dopplers[2]
+end
+
+@testset "the vector combining fold is inferable and adds no allocations" begin
+    # The same pin as on the conventional fold: the interleaved walk has to fold
+    # at inference time and stay off `track!`'s allocation budget, including on a
+    # heterogeneous group where a widened or boxed walk would actually show up.
+    prn, carrier_doppler = 1, 1000.0Hz
+    het_fs = 15e6Hz
+    buf = l1ca_signal(prn, carrier_doppler, 0.0, 45_000, het_fs)
+    measurements = (L1 = Tracking.BandMeasurement(buf, het_fs, 0.0Hz),)
+
+    allocations = map((false, true)) do combining
+        estimator = VectorPLLAndDLL()
+        sigs = (
+            TrackedSignal(
+                GPSL1CA();
+                correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
+            ),
+            TrackedSignal(
+                GPSL1C_D();
+                correlator = VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
+            ),
+            TrackedSignal(
+                GPSL1C_P();
+                correlator = VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
+            ),
+        )
+        sat = TrackedSat(sigs, prn, 0.0, carrier_doppler; doppler_estimator = estimator)
+        ts = TrackState(GPSL1CA(), sat; doppler_estimator = estimator)
+        enable_vt!(ts, [prn])
+        dc = Tracking.CPUDownconvertAndCorrelator()
+        Tracking.track!(measurements, ts; downconvert_and_correlator = dc)  # warmup
+        Tracking.track!(measurements, ts; downconvert_and_correlator = dc)
+        allocated = @allocated Tracking.track!(
+            measurements,
+            ts;
+            downconvert_and_correlator = dc,
+        )
+        Tracking.downconvert_and_correlate!(
+            dc,
+            measurements,
+            ts;
+            chunk_index = 0,
+            chunk_duration = 1e-3s,
+            stop_before_partial = true,
+        )
+        @inferred Tracking.estimate_dopplers_and_filter_prompt!(ts, measurements)
+        allocated
+    end
+    @test allocations[1] == allocations[2]
 end
 
 end

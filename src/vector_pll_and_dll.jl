@@ -10,30 +10,63 @@ vector-tracking (VT) interface to an external navigation filter
     DLL discriminator (chips) and the FLL discriminator (Hz) since the
     navigation filter last read and reset them
     ([`reset_code_discr_acc!`](@ref) / [`reset_carrier_discr_acc!`](@ref)).
-    Only accumulated while `vt_on`, and only from the estimator-driver signal
-    (`signals[1]`) — read them with [`mean_code_discr`](@ref) /
-    [`mean_carrier_discr`](@ref).
+    Collected whenever `vt_on`, whatever the group's combining flag says. **One pair per
+    signal and per loop**, in `sat.signals` order, so a multi-signal satellite
+    hands the filter every component's measurement rather than the driver's
+    alone — read them with [`mean_code_discr`](@ref) /
+    [`mean_carrier_discr`](@ref), which take the same signal selector as every
+    other per-signal accessor.
+
+    A count and a sum, with no per-record timing alongside them: every record
+    folded in adds one to the count and its discriminator output to the sum,
+    and `mean_code_discr` / `mean_carrier_discr` divide the two. Which interval
+    the mean covers is therefore the consumer's to know — `count` records of
+    the coherent integration time in force — and that holds while the length
+    does not change under it. See [`VectorPLLAndDLL`](@ref).
+
   - `code_freq_update` / `carrier_freq_update`: the NCO corrections the
     navigation filter feeds back ([`set_code_freq_updates!`](@ref),
     [`set_carrier_freq_updates!`](@ref)). While `vt_on`, they replace the
     scalar DLL loop-filter output and the FLL branch of the carrier loop
     filter respectively.
+
   - `vt_on`: whether the navigation filter controls this satellite's NCOs, and
     therefore whether measurements are collected for it at all. While `false`
     the satellite runs a conventional (scalar) PLL/DLL as a fallback and
     nothing is accumulated. Set by [`enable_vt!`](@ref) /
     [`disable_vt!`](@ref).
+
+`pending_combining_sums` carries multi-signal combining,
+which is an independent question from collecting measurements: `vt_on` decides
+whether the navigation filter is handed every signal's measurement, while the
+group's `discriminator_combining` flag decides only whether the loops *this*
+package still closes are fed a combination. Which loops those are does follow
+`vt_on` in turn: every loop while this satellite runs its own scalar fallback,
+the carrier phase loop alone once the navigation filter has the other two (see
+[`VectorPLLAndDLL`](@ref)). The flag lives on the satellite's `SignalGroup`, not
+here; the sums it gathers are this state's, do not survive
+[`reset_loop_filters!`](@ref), and are dropped on every `vt_on` transition as
+well — sums gathered under one mode's reach must not reach a loop update under
+the other's.
 """
-@kwdef struct SatVectorPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
+@kwdef struct SatVectorPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter,N}
     init_carrier_doppler::typeof(1.0Hz)
     init_code_doppler::typeof(1.0Hz)
     carrier_loop_filter::CA = ThirdOrderAssistedBilinearLF()
     code_loop_filter::CO = SecondOrderBilinearLF()
     carrier_loop_filter_bandwidth::typeof(1.0Hz) = 18.0Hz
     code_loop_filter_bandwidth::typeof(1.0Hz) = 1.0Hz
-    code_discr_acc::Tuple{Int,Float64} = (0, 0.0)
+    pending_combining_sums::DiscriminatorAccumulator = DiscriminatorAccumulator()
+    # No defaults, deliberately: a default would have to pick an `N`, and a
+    # one-slot default silently truncates a multi-signal satellite — slot 2's
+    # measurements would be dropped by `_accumulate_one_discr` and
+    # `mean_code_discr(state, 2)` would throw. `N` is the satellite's signal
+    # count, so it comes from the satellite: use the `SatVectorPLLAndDLL(sat, …)`
+    # constructor below, or pass `_zero_code_discr_acc(sat)` /
+    # `_zero_carrier_discr_acc(sat)` here.
+    code_discr_acc::NTuple{N,Tuple{Int,Float64}}
     code_freq_update::typeof(0.0Hz) = 0.0Hz
-    carrier_discr_acc::Tuple{Int,typeof(0.0Hz)} = (0, 0.0Hz)
+    carrier_discr_acc::NTuple{N,Tuple{Int,typeof(0.0Hz)}}
     carrier_freq_update::typeof(0.0Hz) = 0.0Hz
     vt_on::Bool = false
 end
@@ -52,22 +85,32 @@ function SatVectorPLLAndDLL(
         code_loop_filter,
         carrier_loop_filter_bandwidth,
         code_loop_filter_bandwidth,
+        code_discr_acc = _zero_code_discr_acc(sat),
+        carrier_discr_acc = _zero_carrier_discr_acc(sat),
     )
 end
 
+# One zeroed accumulator per signal of the satellite. The `Val` keeps `N` a
+# compile-time constant, so the state's type is fixed per group — every
+# satellite of a group shares its signal-tuple shape.
+@inline _zero_code_discr_acc(sat::TrackedSat) = ntuple(_ -> (0, 0.0), _num_signals_val(sat))
+@inline _zero_carrier_discr_acc(sat::TrackedSat) =
+    ntuple(_ -> (0, 0.0Hz), _num_signals_val(sat))
+
 function SatVectorPLLAndDLL(
-    sat_vector_pll_and_dll::SatVectorPLLAndDLL{CA,CO};
+    sat_vector_pll_and_dll::SatVectorPLLAndDLL{CA,CO,N};
     carrier_loop_filter::Maybe{CA} = nothing,
     code_loop_filter::Maybe{CO} = nothing,
     carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
     code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
-    code_discr_acc::Maybe{Tuple{Int,Float64}} = nothing,
+    pending_combining_sums::Maybe{DiscriminatorAccumulator} = nothing,
+    code_discr_acc::Maybe{NTuple{N,Tuple{Int,Float64}}} = nothing,
     code_freq_update::Maybe{typeof(0.0Hz)} = nothing,
-    carrier_discr_acc::Maybe{Tuple{Int,typeof(0.0Hz)}} = nothing,
+    carrier_discr_acc::Maybe{NTuple{N,Tuple{Int,typeof(0.0Hz)}}} = nothing,
     carrier_freq_update::Maybe{typeof(0.0Hz)} = nothing,
     vt_on::Maybe{Bool} = nothing,
-) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
-    SatVectorPLLAndDLL{CA,CO}(
+) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter,N}
+    SatVectorPLLAndDLL{CA,CO,N}(
         sat_vector_pll_and_dll.init_carrier_doppler,
         sat_vector_pll_and_dll.init_code_doppler,
         isnothing(carrier_loop_filter) ? sat_vector_pll_and_dll.carrier_loop_filter :
@@ -79,6 +122,8 @@ function SatVectorPLLAndDLL(
         carrier_loop_filter_bandwidth,
         isnothing(code_loop_filter_bandwidth) ?
         sat_vector_pll_and_dll.code_loop_filter_bandwidth : code_loop_filter_bandwidth,
+        isnothing(pending_combining_sums) ? sat_vector_pll_and_dll.pending_combining_sums :
+        pending_combining_sums,
         isnothing(code_discr_acc) ? sat_vector_pll_and_dll.code_discr_acc : code_discr_acc,
         isnothing(code_freq_update) ? sat_vector_pll_and_dll.code_freq_update :
         code_freq_update,
@@ -105,7 +150,9 @@ integration:
 
   - This estimator accumulates each satellite's DLL / FLL discriminator
     outputs for the navigation filter to consume (and reset via
-    [`reset_code_discr_acc!`](@ref) / [`reset_carrier_discr_acc!`](@ref)).
+    [`reset_code_discr_acc!`](@ref) / [`reset_carrier_discr_acc!`](@ref)) —
+    one accumulator per *signal*, so a multi-signal satellite hands the filter
+    every component's measurement and fuses none of them itself.
   - The navigation filter feeds NCO corrections back via
     [`set_code_freq_updates!`](@ref) / [`set_carrier_freq_updates!`](@ref).
     While a satellite's `vt_on` flag is set, its code Doppler follows the
@@ -117,6 +164,10 @@ integration:
     [`enable_vt!`](@ref) puts them in the loop) run a conventional scalar
     PLL/DLL as a fallback.
 
+Collecting those measurements follows `vt_on` alone: a satellite in the vector
+loop hands the filter every signal's measurement whether or not it combines
+anything for its own loops.
+
 !!! note "A `(count, sum)` pair maps to an interval only at one length"
 
     `count × integration_time` is the interval the mean covers only while every
@@ -126,14 +177,36 @@ integration:
     reset the accumulators across such a change or make it with the satellite
     out of the vector loop. The vector-tracking manual works this through.
 
-A multi-signal satellite closes its loops on its estimator-driver signal
-(`signals[1]`) alone under this estimator, in either mode: the other signals are
-correlated, have their prompts filtered and their bits decoded, but contribute
-no discriminator.
+With the group's `discriminator_combining = true` a multi-signal satellite folds its signals'
+discriminators into one minimum-variance weighted mean before the loop filters
+see it, exactly as
 [Multi-signal discriminator combining](@ref Multi-signal-discriminator-combining)
-is a [`ConventionalPLLAndDLL`](@ref) feature — a group's
-`discriminator_combining` is not read here, and a [`set_group_delay!`](@ref)
-value is stored but never used.
+describes for the conventional estimator — same weighting, same de-rotation onto
+the driver's phase frame, same precondition that `signals[1]` must be the group's
+longest-integrating signal.
+
+Which loops it reaches follows `vt_on`, because that is what decides which loops
+this package still closes:
+
+  - **`vt_on = false`.** Every loop is local, so this is scalar tracking and all
+    three discriminators combine — bit-for-bit the conventional estimator's
+    behaviour, [`set_group_delay!`](@ref) included, since the code
+    loop needs each passenger referred to the driver's code phase.
+  - **`vt_on = true`.** Only the carrier phase loop is still closed here, and
+    only it combines. The code and carrier frequency loops are the navigation
+    filter's, and every signal's discriminators reach it as that signal's
+    **own, raw** accumulator ([`mean_code_discr`](@ref) /
+    [`mean_carrier_discr`](@ref)), which is where they should be fused: the
+    filter holds each signal's measured C/N₀, tap spacing and integration
+    length, so it can weigh them better than a nominal power split can, and a
+    mean formed here would reach it carrying one signal's variance.
+    [`set_group_delay!`](@ref) goes with the loop that reads it, so it is
+    **not** applied to these accumulators: the value exists to hold this
+    package's combined code loop on one datum, and that loop is the filter's
+    here. Whatever inter-signal bias the filter needs, it applies itself, from
+    [`get_group_delay`](@ref) or from its own tables — which is also what keeps
+    it from being corrected twice, since a consumer forming pseudoranges applies
+    a per-signal group delay downstream anyway.
 
 Ranging is on the shared `code_phase` of `signals[1]` in either mode.
 
@@ -213,6 +286,8 @@ function init_estimator_state(
         code_loop_filter,
         carrier_loop_filter_bandwidth,
         code_loop_filter_bandwidth,
+        code_discr_acc = _zero_code_discr_acc(sat),
+        carrier_discr_acc = _zero_carrier_discr_acc(sat),
     )
 end
 
@@ -221,8 +296,10 @@ end
 # re-seed the init Dopplers from the sat's current (converged) Dopplers.
 # The NCO corrections must be zeroed together with the init Dopplers: the
 # current Dopplers already contain the last correction, so keeping it would
-# apply it twice after the re-seed. Per-sat bandwidth overrides and the
-# `vt_on` flag survive the reset.
+# apply it twice after the re-seed. Per-sat bandwidth overrides, the
+# `vt_on` flag survives the reset; the pending
+# passenger carrier phase discriminators do not — they are pre-reset history,
+# like the filter integrators and each signal's FLL prompt.
 function _reset_estimator_state(
     ::VectorPLLAndDLL,
     sat::TrackedSat{<:Tuple{Vararg{TrackedSignal}},<:SatVectorPLLAndDLL},
@@ -235,6 +312,8 @@ function _reset_estimator_state(
         code_loop_filter = constructorof(typeof(state.code_loop_filter))(),
         carrier_loop_filter_bandwidth = state.carrier_loop_filter_bandwidth,
         code_loop_filter_bandwidth = state.code_loop_filter_bandwidth,
+        code_discr_acc = map(_ -> (0, 0.0), state.code_discr_acc),
+        carrier_discr_acc = map(_ -> (0, 0.0Hz), state.carrier_discr_acc),
         vt_on = state.vt_on,
     )
 end
@@ -286,92 +365,146 @@ end
     )
 end
 
+# Fold one signal's discriminator into its own `(count, sum)`. `Val(N)` keeps
+# the rebuilt tuple's length a compile-time constant, so this is
+# allocation-free and the slot write costs a predicted branch per signal.
+#
+# Nothing here withholds a value, so `count` is the record count and nothing
+# about the caller's configuration can make one slot's count lag another's. The
+# pre-sync gate in `_accumulate_record` is the one skip, and it drops the whole
+# record — both loops of that slot, never one of them.
+@inline _accumulate_one_discr(accs::NTuple{N,Any}, slot::Integer, value) where {N} =
+    ntuple(k -> k == slot ? (accs[k][1] + 1, accs[k][2] + value) : accs[k], Val(N))
+
 # ---------------------------------------------------------------------------
-# The navigation filter's measurements
+# Multi-signal discriminator combining
 # ---------------------------------------------------------------------------
 
 """
-The navigation measurements of a satellite whose `vt_on` flag is set: one
-`(count, sum)` pair for the DLL and one for the FLL, growing until the
-navigation filter reads and resets them ([`reset_code_discr_acc!`](@ref) /
-[`reset_carrier_discr_acc!`](@ref)).
+What a satellite in the vector loop (`vt_on`) collects during a chunk, as the
+shared fold's accumulator (see `AbstractDiscriminatorAccumulator` in
+conventional_pll_and_dll.jl):
 
-This estimator's `AbstractDiscriminatorAccumulator`: its presence is what tells
-the fold to form the two discriminators at all, and it is seeded only where a
-filter is reading, so a satellite in the scalar fallback folds with `nothing` and
-runs the plain driver path.
+  - `sums`: the conventional seed — the running combining sums where the group
+    combines, `nothing` where it does not — folded by the conventional
+    `_accumulate_record` exactly as the scalar fallback folds it. It fills all
+    three loops' sums, but under `vt_on` the carrier phase loop is the only one
+    this package still closes, so `_close_loops` reads the PLL value alone.
+  - `code_discr_acc` / `carrier_discr_acc`: the state's own per-signal
+    navigation measurements, one `(count, sum)` slot per signal in `sat.signals`
+    order, threaded through the fold and written back when it ends. Every signal
+    accumulates its **own** raw DLL and FLL discriminator here, never a
+    combination across signals — fusing them is the navigation filter's job.
+
+A satellite outside the vector loop does not use this type at all: its scalar
+fallback *is* the conventional fold, seeded with the plain
+`DiscriminatorAccumulator` when it combines and with `nothing` when it does not.
 """
-struct VectorMeasurements <: AbstractDiscriminatorAccumulator
-    code_discr_acc::Tuple{Int,Float64}
-    carrier_discr_acc::Tuple{Int,typeof(1.0Hz)}
+struct VectorAccumulator{S<:Maybe{DiscriminatorAccumulator},N} <:
+       AbstractDiscriminatorAccumulator
+    sums::S
+    code_discr_acc::NTuple{N,Tuple{Int,Float64}}
+    carrier_discr_acc::NTuple{N,Tuple{Int,typeof(1.0Hz)}}
 end
 
-@inline VectorMeasurements(state::SatVectorPLLAndDLL) =
-    VectorMeasurements(state.code_discr_acc, state.carrier_discr_acc)
-
-# This accumulator is seeded only while `vt_on`, and then the only loop this
-# package still closes is the carrier phase one. So the carrier phase
-# discriminator is all this forms: the code and carrier frequency loops are the
-# navigation filter's, it reads them off the accumulator the hook below filled,
-# and `_close_loops` never looks at these two fields under `vt_on`. They are
-# present because the closure's fallback branch names them, and zero because
-# nothing was accumulated for loops this package is not closing.
-@inline _loop_discriminators(
-    ::VectorMeasurements,
-    signal::AbstractGNSSSignal,
-    ::AbstractLoopFilter,
-    folded,
-    ::Integer,
-    _code_doppler,
-    _sampling_frequency,
-) = (; pll = pll_disc(signal, folded.filtered_correlator), fll = 0.0Hz, dll = 0.0)
-
-# Only the driver's record is collected, so this is where the navigation filter's
-# two measurements are formed — the fold calls it for every signal's record and a
-# passenger's returns the accumulator untouched. The FLL value is always formed
-# here, unlike on the `nothing` path: the filter reads it whatever the carrier
-# loop filter's type, so the `_driver_fll_discriminator` gate does not apply.
+# One record under vector closure — any signal's, the driver's included: into
+# the conventional seed exactly as the scalar fallback would fold it, and its raw
+# DLL and FLL discriminators into its own slot for the navigation filter.
+#
+# The pre-sync gate excludes an invalidated record for the same reason it does
+# when combining: a replica the sync had not yet corrected carries no usable
+# phase or delay information, whether the value is about to be averaged or
+# shipped. It rarely fires here (it needs a satellite admitted to the vector loop
+# with a secondary-coded signal still unsynced), and never for the driver.
 @inline function _accumulate_record(
-    acc::VectorMeasurements,
+    acc::VectorAccumulator,
     tracked_signal::TrackedSignal,
     output::CorrelatorOutput,
     filtered_correlator,
     previous_prompt,
     ctx::RecordFoldContext,
-    ::Bool,
+    correlated_pre_sync::Bool,
 )
-    ctx.is_driver || return acc
     signal = tracked_signal.signal
+    _record_invalidated_by_sync(ctx, signal, correlated_pre_sync) && return acc
+    sums = _accumulate_record(
+        acc.sums,
+        tracked_signal,
+        output,
+        filtered_correlator,
+        previous_prompt,
+        ctx,
+        correlated_pre_sync,
+    )
     integration_time = output.integrated_samples / ctx.sampling_frequency
-    VectorMeasurements(
-        acc.code_discr_acc .+ (
-            1,
+    # The raw discriminator, with no group-delay referral: the group delay is a
+    # *loop* quantity, and under `vt_on` the code loop is the navigation filter's
+    # — see `VectorPLLAndDLL`. `ctx.group_delay_chips` is the scalar fallback's
+    # and is not read here.
+    VectorAccumulator(
+        sums,
+        _accumulate_one_discr(
+            acc.code_discr_acc,
+            ctx.signal_index,
             dll_disc(signal, filtered_correlator, ctx.code_doppler, ctx.sampling_frequency),
         ),
-        acc.carrier_discr_acc .+
-        (1, fll_disc(signal, filtered_correlator, previous_prompt, integration_time)),
+        _accumulate_one_discr(
+            acc.carrier_discr_acc,
+            ctx.signal_index,
+            fll_disc(signal, filtered_correlator, previous_prompt, integration_time),
+        ),
     )
 end
 
-# Nothing is accumulated for the loops, so a closing driver record spends nothing.
-@inline _reset_combining_window(acc::VectorMeasurements) = acc
+# What the loop filters see for one driver record under vector closure: the
+# conventional seed's own answer — the weighted means where the group combines,
+# the driver's own discriminators where it does not. `vt_on` is set for every
+# satellite carrying this accumulator, so `_close_loops` reads `pll` alone and
+# takes the NCO corrections for the other two loops; the navigation filter's
+# copies of those two are in the per-signal slots, raw.
+@inline _loop_discriminators(acc::VectorAccumulator, args...) =
+    _loop_discriminators(acc.sums, args...)
 
-# Where a chunk's accumulator ends up on the per-satellite state. A satellite in
-# the scalar fallback collected nothing and must not clear what the navigation
-# filter has not read yet, which is why `nothing` has its own method.
+# A driver record closes the combining window; the per-signal measurements answer
+# to the navigation filter's reading cadence instead and are left alone.
+@inline _reset_combining_window(acc::VectorAccumulator) = VectorAccumulator(
+    _reset_combining_window(acc.sums),
+    acc.code_discr_acc,
+    acc.carrier_discr_acc,
+)
+
+# Where a chunk's accumulator ends up on the per-satellite state. In the vector
+# loop the navigation filter's accumulators go back, and the sums with them where
+# the group combines; where it does not, `sums` is `nothing` and the pending sums
+# stay as they were.
 @inline _park_accumulator(
     state::SatVectorPLLAndDLL,
-    acc::VectorMeasurements,
+    acc::VectorAccumulator,
+    carrier_loop_filter,
+    code_loop_filter,
+) = SatVectorPLLAndDLL(
+    _park_accumulator(state, acc.sums, carrier_loop_filter, code_loop_filter);
+    code_discr_acc = acc.code_discr_acc,
+    carrier_discr_acc = acc.carrier_discr_acc,
+)
+
+# The scalar fallback, combining: the sums go back, and the navigation filter's
+# accumulators — not collected outside the vector loop — are left as they were.
+@inline _park_accumulator(
+    state::SatVectorPLLAndDLL,
+    acc::DiscriminatorAccumulator,
     carrier_loop_filter,
     code_loop_filter,
 ) = SatVectorPLLAndDLL(
     state;
     carrier_loop_filter,
     code_loop_filter,
-    code_discr_acc = acc.code_discr_acc,
-    carrier_discr_acc = acc.carrier_discr_acc,
+    pending_combining_sums = acc,
 )
 
+# Not combining: only the two threaded loop filters are this chunk's output (plus
+# the navigation filter's accumulators, where a `VectorAccumulator` delegated
+# here), and the pending combining sums stay as they were.
 @inline _park_accumulator(
     state::SatVectorPLLAndDLL,
     ::Nothing,
@@ -379,29 +512,50 @@ end
     code_loop_filter,
 ) = SatVectorPLLAndDLL(state; carrier_loop_filter, code_loop_filter)
 
-# `vt_on` alone picks the seed: the measurements where the navigation filter is
-# reading, and `nothing` where it is not — which folds the whole apparatus away
-# and leaves the plain scalar fallback. The group's combining flag is a
-# conventional-estimator setting and is not read here.
-@inline _seed_and_fold(
+# Under vector tracking, `vt_on` and the group's combining flag are independent
+# (see `VectorPLLAndDLL`), and between them they pick the seed: in the vector
+# loop a `VectorAccumulator` wrapping the conventional seed, outside it the
+# conventional seed itself — the plain `DiscriminatorAccumulator` where the
+# group combines and `nothing` where it does not, which folds the whole
+# apparatus away and leaves the plain scalar fallback.
+#
+# No passengers: there is nothing to combine, so the conventional seed is
+# `nothing` whatever the flag says — exactly as for the conventional estimator,
+# so a single-signal satellite is bit-identical with the flag on and off — and
+# only `vt_on` forks. `passengers isa Tuple{}` is decided by the argument's type,
+# so inference prunes the dead branch.
+@inline function _seed_and_fold(
     driver::TrackedSignal,
-    passengers::Tuple,
+    passengers::Tuple{Vararg{TrackedSignal}},
     sat::TrackedSat,
     state::SatVectorPLLAndDLL,
     sampling_frequency,
     noise::Tuple,
     driver_carrier_phase_offset::Real,
-    ::Bool,
-) = _fold_satellite_chunk(
-    driver,
-    passengers,
-    sat,
-    state,
-    sampling_frequency,
-    noise,
-    driver_carrier_phase_offset,
-    state.vt_on ? VectorMeasurements(state) : nothing,
+    discriminator_combining::Bool,
 )
+    fold(acc) = _fold_satellite_chunk(
+        driver,
+        passengers,
+        sat,
+        state,
+        sampling_frequency,
+        noise,
+        driver_carrier_phase_offset,
+        acc,
+    )
+    measuring(sums) = VectorAccumulator(sums, state.code_discr_acc, state.carrier_discr_acc)
+    if passengers isa Tuple{}
+        state.vt_on ? fold(measuring(nothing)) : fold(nothing)
+    elseif state.vt_on
+        discriminator_combining ? fold(measuring(state.pending_combining_sums)) :
+        fold(measuring(nothing))
+    elseif discriminator_combining
+        fold(state.pending_combining_sums)
+    else
+        fold(nothing)
+    end
+end
 
 """
 $(SIGNATURES)
@@ -502,8 +656,16 @@ end
 
 # The per-satellite membership rule shared by `enable_vt!` / `disable_vt!`:
 # write `vt_on` to the addressed PRNs, leave every other satellite as it is.
-_set_sat_vt_on(sat, state, vt_on, prns) =
-    sat.prn in prns ? SatVectorPLLAndDLL(state; vt_on) : state
+# The flag is a plain field write, so re-issuing the same membership every
+# cycle is a no-op for satellites already in that state — including for the
+# pending combining sums, which a *change* of state must drop: `vt_on` decides
+# which loops those sums belong to (see `SatVectorPLLAndDLL`), so passenger
+# measurements gathered for three loops must not arrive at a driver record that
+# now combines one, or the other way round.
+function _set_sat_vt_on(sat, state, vt_on, prns)
+    (sat.prn in prns && vt_on != state.vt_on) || return state
+    SatVectorPLLAndDLL(state; vt_on, pending_combining_sums = DiscriminatorAccumulator())
+end
 
 """
 $(SIGNATURES)
@@ -586,7 +748,9 @@ function reset_code_discr_acc!(
 end
 
 _reset_sat_code_discr_acc(_sat, state) =
-    state.vt_on ? SatVectorPLLAndDLL(state; code_discr_acc = (0, 0.0)) : state
+    state.vt_on ?
+    SatVectorPLLAndDLL(state; code_discr_acc = map(_ -> (0, 0.0), state.code_discr_acc)) :
+    state
 
 """
 $(SIGNATURES)
@@ -609,42 +773,94 @@ function reset_carrier_discr_acc!(
 end
 
 _reset_sat_carrier_discr_acc(_sat, state) =
-    state.vt_on ? SatVectorPLLAndDLL(state; carrier_discr_acc = (0, 0.0Hz)) : state
+    state.vt_on ?
+    SatVectorPLLAndDLL(
+        state;
+        carrier_discr_acc = map(_ -> (0, 0.0Hz), state.carrier_discr_acc),
+    ) : state
 
 """
 $(SIGNATURES)
 
-Mean DLL (code) discriminator accumulated since the last
+Mean DLL (code) discriminator of one signal, accumulated since the last
 [`reset_code_discr_acc!`](@ref), in chips — or `nothing` if nothing has been
 accumulated yet (the `(count, sum)` accumulator's `count` is 0). This is the
 single place the accumulator's averaging convention lives — read it here rather
 than dividing `code_discr_acc` by hand, so a change to how the accumulator is
 stored can't silently diverge between consumers.
 
-A multi-signal satellite accumulates its estimator-driver signal (`signals[1]`)
-only, which is also the signal its shared `code_phase` belongs to, so the value
-is on the datum a pseudorange formed from that phase ranges on.
+Every signal of a satellite accumulates its **own** discriminator, never a
+combination across signals: fusing them is the navigation filter's job, and
+[`VectorPLLAndDLL`](@ref) says why.
+
+The value is the signal's **raw** code discriminator, on that signal's own code
+phase: no [`get_group_delay`](@ref) difference is subtracted. This package
+applies that difference only where it closes the combined code loop itself, and
+under `vt_on` that loop is the consumer's — so the inter-signal bias is the
+consumer's too, to apply with whatever it already applies downstream when it
+forms a pseudorange. [`get_group_delay`](@ref) hands it the per-signal value if
+it wants Tracking's. See [`VectorPLLAndDLL`](@ref).
+
+Nothing is withheld for want of a group delay, so `count` is the number of
+records folded since the reset and `nothing` means none has arrived yet. The one
+record a fold does skip is a passenger's correlated with a replica a mid-chunk
+bit/secondary-code sync had not yet corrected — it carries no usable delay or
+phase — and that can only happen on the fold that *detects* sync, which is long
+before a navigation filter admits the satellite to the vector loop. Both loops'
+counts skip it together, so they never diverge.
+
+Addressed like every other per-signal accessor
+([`estimate_cn0`](@ref), [`get_group_delay`](@ref)): from a
+[`TrackState`](@ref) or a [`TrackedSat`](@ref) with a trailing signal selector —
+an index or a signal type — which may be omitted only when the satellite tracks
+one signal. The `SatVectorPLLAndDLL` form takes an index, since the estimator
+state alone cannot resolve a signal type.
+
+```julia
+mean_code_discr(track_state, :gps_l1, 7, GPSL1C_D)   # by signal type
+mean_code_discr(sat, 2)                              # by index
+mean_code_discr(get_doppler_estimator_state(sat))    # single-signal satellite
+```
 """
-function mean_code_discr(state::SatVectorPLLAndDLL)
-    count, discr_sum = state.code_discr_acc
+function mean_code_discr(state::SatVectorPLLAndDLL, signal_index::Integer)
+    count, discr_sum = state.code_discr_acc[signal_index]
     count == 0 ? nothing : discr_sum / count
 end
 
 """
 $(SIGNATURES)
 
-Mean FLL (carrier) discriminator accumulated since the last
+Mean FLL (carrier) discriminator of one signal, accumulated since the last
 [`reset_carrier_discr_acc!`](@ref), in Hz, or `nothing` if nothing has been
 accumulated yet (`count == 0`). The carrier counterpart to
-[`mean_code_discr`](@ref).
+[`mean_code_discr`](@ref), addressed the same way and per signal for the same
+reason — except that the signals of one satellite share a carrier, so these
+measure one Doppler and need no inter-signal correction to be fused.
 """
-function mean_carrier_discr(state::SatVectorPLLAndDLL)
-    count, discr_sum = state.carrier_discr_acc
+function mean_carrier_discr(state::SatVectorPLLAndDLL, signal_index::Integer)
+    count, discr_sum = state.carrier_discr_acc[signal_index]
     count == 0 ? nothing : discr_sum / count
 end
 
+# A satellite tracking one signal has one slot, so its accumulators need no
+# selector; one tracking several is refused exactly as `_find_signal` refuses an
+# unqualified per-signal read, because silently answering with the driver's is
+# the mistake per-signal accumulation exists to remove.
+@inline _sole_signal_index(::NTuple{1,Any}) = 1
+@inline _sole_signal_index(::Tuple) = _throw_needs_signal_selector()
+
+mean_code_discr(state::SatVectorPLLAndDLL) =
+    mean_code_discr(state, _sole_signal_index(state.code_discr_acc))
+mean_carrier_discr(state::SatVectorPLLAndDLL) =
+    mean_carrier_discr(state, _sole_signal_index(state.carrier_discr_acc))
+
+# The satellite-level rung of the accessor ladder, which is what turns a signal
+# *type* into a slot: the estimator state holds the accumulators but not the
+# signals, so only the satellite can resolve one. The `TrackState` rungs are
+# generated in tracking_state.jl with the other per-signal accessors.
 for fn in (:mean_code_discr, :mean_carrier_discr)
-    @eval $fn(sat::TrackedSat) = $fn(get_doppler_estimator_state(sat))
+    @eval $fn(sat::TrackedSat, sel...) =
+        $fn(get_doppler_estimator_state(sat), _signal_index(sat.signals, sel...))
 end
 
 """
