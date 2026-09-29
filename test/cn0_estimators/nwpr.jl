@@ -496,4 +496,32 @@ end
     @test median_of(capped_cn0) - median_of(full_bit_cn0) > 1
 end
 
+@testset "a window with no power is discarded, not stored as a ratio" begin
+    # `NBP/WBP` is undefined for a window whose prompts are all zero — a component
+    # the satellite does not transmit, or a correlator handed an empty buffer. The
+    # guard drops such a window rather than parking a `(0, 0)` entry in the ring:
+    # a stored zero contributes nothing to the ratio of sums but occupies a slot a
+    # real measurement needed, survives `num_records` windows, and shifts every
+    # later ratio's position in the ring.
+    bit_buffer = BitBuffer{UInt64}()
+    context(bit_block_index) =
+        CN0UpdateContext(GPSL1CA(), 1, 20, bit_block_index, bit_buffer)
+    estimator = NWPRCN0Estimator(; num_records = 100, num_narrowband_code_blocks = 20)
+
+    # A full 20-block bit of zero prompts closes a window with no power at all.
+    for i = 0:19
+        estimator = update(estimator, complex(0.0, 0.0), context(i))
+    end
+    @test Base.length(estimator) == 0
+    @test estimator.num_records_per_ratio == 0
+
+    # So the next live bit lands in the *first* ring slot, not the second.
+    for i = 0:19
+        estimator = update(estimator, complex(1.0, 0.0), context(i))
+    end
+    @test Base.length(estimator) == 1
+    @test Tracking.get_buffered_narrowband_powers(estimator)[1] == 400.0
+    @test Tracking.get_buffered_wideband_powers(estimator)[1] == 20.0
+end
+
 end

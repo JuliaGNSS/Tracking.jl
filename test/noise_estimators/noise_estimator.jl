@@ -145,10 +145,12 @@ end
     D = Tracking.noise_density_type(estimator)
     @test Base.return_types(get_noise_density, (typeof(estimator),)) == [Union{Nothing,D}]
     empty_one = CorrelatorNoiseEstimator()
-    @test @inferred(Tracking._noise_density_and_ready(empty_one)) == (zero(D), false)
-    density, ready = @inferred Tracking._noise_density_and_ready(estimator)
-    @test ready
-    @test density == get_noise_density(estimator)
+    empty_floor = @inferred Tracking._noise_density_and_ready(empty_one)
+    @test empty_floor.density == zero(D)
+    @test !empty_floor.ready
+    floor = @inferred Tracking._noise_density_and_ready(estimator)
+    @test floor.ready
+    @test floor.density == get_noise_density(estimator)
 end
 
 @testset "a zero measured floor is not a floor to divide by" begin
@@ -162,14 +164,16 @@ end
     append_noise_observation!(dead, noise_observation_from_samples(0.0, 4000, 4e6Hz))
     D = Tracking.noise_density_type(dead)
     @test get_noise_density(dead) == zero(D)
-    @test @inferred(Tracking._noise_density_and_ready(dead)) == (zero(D), false)
+    @test @inferred(Tracking._noise_density_and_ready(dead)) ==
+          Tracking.NoiseFloor(zero(D), false)
 
     # A producer's own arithmetic can hand over a non-finite one through the public
     # append path; same answer, and still inferred.
     for bad in (NaN, Inf)
         e = CorrelatorNoiseEstimator()
         append_noise_observation!(e, NoiseObservation(bad / 1.0Hz, 1, 1.0e-3s, Int16(1)))
-        @test @inferred(Tracking._noise_density_and_ready(e)) == (zero(D), false)
+        @test @inferred(Tracking._noise_density_and_ready(e)) ==
+              Tracking.NoiseFloor(zero(D), false)
     end
 end
 
@@ -382,9 +386,9 @@ end
         eltype(only(Tuple(mixed.groups)).satellites),
     )
     @test length(noise) == 2
-    @test last(noise[1]) == false           # provisioned, window still empty
-    @test isnothing(first(noise[2]))        # no source, and none is wanted
-    @test last(noise[2]) == true
+    @test noise[1].ready == false           # provisioned, window still empty
+    @test isnothing(noise[2].density)       # no source, and none is wanted
+    @test noise[2].ready == true
 end
 
 @testset "nothing in this design is a mutable struct" begin

@@ -284,7 +284,7 @@ They are deliberately not the same mechanism:
 | scope      | one **signal** of one satellite                                        | one **signal**, across every satellite tracking it     |
 | payload    | the whole correlator: every tap kept **separate**, complex, per antenna | the taps **pooled** — into one power sum, or into one spatial covariance for an array — plus `M`, the span and the PRN |
 | drives     | discriminators, both loop filters, bit sync, the NCO update, the C/N₀ prompt | the noise floor only                              |
-| timing     | `sample_index` is load-bearing — vector tracking needs a common grid    | none: `N₀` is slowly varying, so only "recent" matters |
+| timing     | `sample_index` is load-bearing — signal combining windows a satellite's records on it | none: `N₀` is slowly varying, so only "recent" matters |
 | lifetime   | **drained** by the fold each chunk, buffer reused                      | **sliding window** bounded in time, never drained      |
 | count      | one per completed coherent integration per signal                      | any granularity; `M` carries the weight                |
 

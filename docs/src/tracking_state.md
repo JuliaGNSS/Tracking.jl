@@ -11,9 +11,11 @@ The tracking state nests as **TrackState → SignalGroup → TrackedSat → Trac
 
 ### Estimator-driver signal
 
-The first signal in each group's tuple is the **estimator-driver signal** — the one the Doppler estimator uses to update the satellite-shared carrier and code Doppler. With the default [`ConventionalPLLAndDLL`](@ref) / [`ConventionalAssistedPLLAndDLL`](@ref), `signals[1]`'s correlator is the input to the PLL/DLL discriminator, and the per-signal default loop bandwidths are sized off this signal's primary-code period. A user-supplied [`AbstractDopplerEstimator`](@ref) is free to use the other signals' state too — `signals[1]`'s privileged role is a convention of the conventional estimators, not a structural constraint of `TrackedSat`.
+The first signal in each group's tuple is the **estimator-driver signal**. With the default [`ConventionalPLLAndDLL`](@ref) / [`ConventionalAssistedPLLAndDLL`](@ref) it sets the loop *cadence* (Dopplers are updated when it completes an integration), the loop *bandwidths* (sized off its primary-code period), and the *carrier-phase reference* the loops lock onto. The per-signal default loop bandwidths are sized off this signal alone.
 
-The driver signal is privileged for the Doppler estimator only. Bit synchronisation, the post-correlation filter and the **CN0 estimator** all run per signal, so a multi-signal satellite produces one C/N₀ per signal rather than one for the driver — see [CN0 Estimator](cn0_estimator.md) for what that costs and for [`NoCN0Estimator`](@ref), the per-signal opt-out.
+What the driver does **not** have to do is monopolise the measurements: with `discriminator_combining = true` every signal's discriminator output is folded into the loop update — see [Multi-signal discriminator combining](#Multi-signal-discriminator-combining). A user-supplied [`AbstractDopplerEstimator`](@ref) is free to use the signals' state any way it likes; `signals[1]`'s privileged role is a convention of the shipped estimators, not a structural constraint of `TrackedSat`.
+
+Bit synchronisation, the post-correlation filter and the **CN0 estimator** all run per signal too, so a multi-signal satellite produces one C/N₀ per signal rather than one for the driver — see [CN0 Estimator](cn0_estimator.md) for what that costs and for [`NoCN0Estimator`](@ref), the per-signal opt-out.
 
 ## Choosing a `TrackState` constructor
 
@@ -229,9 +231,95 @@ julia> get_carrier_doppler(track_state, :modern_gps, 11)
 1234.0 Hz
 ```
 
-Putting a pilot signal first (e.g. `GPSL1C_P()`) is encouraged with the conventional estimators when one is available: pilot signals carry no data-bit modulation, which lets the PLL run longer coherent integrations and reach lower phase-noise floors. The data-bearing signals (L1C-D, L1 C/A) still recover their navigation bits independently — each [`TrackedSignal`](@ref) carries its own `bit_buffer` regardless of which signal drives the estimator.
+Putting a pilot signal first (e.g. `GPSL1C_P()`) is encouraged with the shipped estimators when one is available: pilot signals carry no data-bit modulation, which lets the PLL run longer coherent integrations and reach lower phase-noise floors. The data-bearing signals (L1C-D, L1 C/A) still recover their navigation bits independently — each [`TrackedSignal`](@ref) carries its own `bit_buffer` regardless of which signal drives the estimator.
 
 When a satellite tracks signals with different primary-code lengths (e.g. L1 C/A at 1 ms vs L1C-P at 10 ms), each outer iteration integrates to the **shortest** signal's next primary-code boundary. The shorter signal's correlator completes every iteration; the longer signal's correlator accumulates across multiple iterations and only marks `is_integration_completed = true` on its own boundary. Doppler updates therefore happen at the shortest signal's cadence (1 ms in this example), and longer signals see their integration windows spanned by piecewise Doppler updates — the natural per-iteration-Doppler-correction behaviour of a real receiver.
+
+### Multi-signal discriminator combining
+
+Tracking multiple signals of one satellite and closing the loops on only one of them throws away most of the information. A signal group can therefore combine them: with `discriminator_combining = true`, **every** signal's discriminator output is folded into the driver's before the loop filters see it, as a minimum-variance weighted mean.
+
+It is declared on the group, next to its band and antenna count, because its one precondition — `signals[1]` must be the group's longest-integrating signal — is a property of the group's signal tuple, which every satellite of the group shares:
+
+```julia
+# Every signal's discriminators drive the loops, for every satellite of the group.
+TrackState(; signals = (gps_l1 = (GPSL1C_P(), GPSL1C_D()),), discriminator_combining = true)
+
+# Or on a hand-built group, which then keeps its own setting.
+SignalGroup((GPSL1C_P(), GPSL1C_D()); discriminator_combining = true)
+
+# The default: driver-only.
+TrackState(; signals = (gps_l1 = (GPSL1C_P(), GPSL1C_D()),))
+```
+
+Getting that ordering right is yours, not Tracking's: a mis-ordered group is built and tracked like any other, and [`set_preferred_num_code_blocks_to_integrate!`](@ref) will lengthen a passenger past its driver without complaint. What it costs is gain — the passenger reaches the loop in one update out of `k` — and never a wrong measurement, which is the reason it is a documented precondition rather than a rejected configuration: only the caller holds the reason a group is ordered as it is.
+
+Combining is a [`ConventionalPLLAndDLL`](@ref) feature. [`VectorPLLAndDLL`](@ref) does not read the group flag: it closes the loops it still closes on `signals[1]` alone and accumulates that signal's discriminators for the navigation filter (see [Vector tracking](vector_tracking.md)).
+
+Combining is opt-in because it changes a multi-signal satellite's carrier/code Doppler, code phase and decoded-bit timing.
+
+A single-signal satellite is unaffected — bit-identically so, not merely to within a tolerance.
+
+**How records are weighted.** Each completed record contributes with weight `P · N / G`: the component's **nominal** power share `P` (`GNSSSignals.get_relative_power` — the ICD power split: L1C-P `0.75` against L1C-D `0.25`, E1B/E1C `0.5` each) times the record's sample count `N`, over the discriminator's noise gain [`dll_disc_noise_gain`](@ref Tracking.dll_disc_noise_gain) `G`. `P · N` is the post-integration SNR up to factors common to the satellite's signals, and every such factor — front-end noise density, sampling frequency, code amplitude — cancels and is never formed.
+
+The power is nominal rather than measured because within one constellation and band the ICD ratio is the *stable* quantity: elevation, satellite block, free-space loss, antenna gain and front-end gain are common to the components and cancel out of it, whereas a measured `|P|²` carries the estimator's own noise (biased upward by `σ²/N`) into the loop gain. It also costs nothing — `get_relative_power` folds to a compile-time constant — and needs no C/N₀ estimate, so it works for a signal tracked with [`NoCN0Estimator`](@ref).
+
+`N` is what makes different integration lengths come out right, in one direction. A passenger integrating half as long as the driver completes two records per driver window and each carries half the weight, so its **total** contribution over the window equals a single record of the driver's length: the combination is energy-fair for any passenger whose records are no *longer* than the driver's. The FLL is the one exception, weighted `P · N³`, because `fll_disc` divides an inter-prompt phase difference by `2π·T` — a single 20 ms measurement is worth far more than five 4 ms ones averaged, and the extra `N²` says so.
+
+**Put the longest-integrating signal first.** This is the precondition Tracking checks, and the reason it does: a passenger integrating *longer* than the driver is not energy-fair and costs most of the gain. The accumulator is consumed and zeroed at every driver record, so a passenger reporting once per `k` driver records reaches the loop in one update out of `k` and carries no weight in the other `k − 1`; its influence over the window is about `1/k` of its energy share rather than all of it. Measured on a static Spirent capture over nine satellites, a `(GPSL1CA(), GPSL1C_P(), GPSL1C_D())` group (1 ms driver, 10 ms passengers) cuts carrier-Doppler noise by only 1.05× where the weights promise 1.55×, and the same group with the driver's integration raised to 10 code blocks reaches 1.40× (median; 1.37–1.55 across satellites). Since nothing downstream reads differently — the satellite just tracks noisier — the loss would otherwise be silent, which is why it is an error with combining on rather than a warning. The question does not arise for the intra-band pilot/data pairs GNSSSignals defines: GPS L5, GPS L1C, Galileo E1 and E5a each share one primary code period between their components, and GPS L2C's pilot is the longer one.
+
+What matters is the coherent integration length each signal actually runs at, which is not always one block and not always the caller's doing: a signal may *default* to several, through [`default_num_code_blocks_to_integrate`](@ref). Galileo E5a-QP is the one that does — 31 blocks, since a single 64.5 µs block is too short to run a loop on — so read the precondition as "no passenger integrates longer than the driver", not "nobody called the setter". The ordering question cannot actually arise for E5a-QP today: at 5.115 Mcps it shares a chip rate with no other L5 signal, and [`SignalGroup`](@ref) admits only signals of one chip rate, so it is always tracked alone rather than as a third component beside E5a-I and E5a-Q.
+
+The noise gain is what lets a BOC pilot's very-early-minus-late discriminator outvote a legacy BPSK early-late one at equal C/N₀, as it should: its S-curve is about three times steeper. Mis-weighting costs combining efficiency but never introduces bias, since each discriminator is individually calibrated. There is no generic gain, though: a custom correlator type with its own `dll_disc` method must define `dll_disc_noise_gain` as well before a satellite using it can combine.
+
+The gains are evaluated at the origin of the S-curve, so "never introduces bias" holds while every contributor is inside its own linear range. A sharper discriminator has a *narrower* one — roughly ±0.15 chips for the default VEML taps on a BOC(1,1) peak against ±0.5 for a 1-chip early-late layout — and it is also the one carrying ~8× the weight, so a large starting error is the one condition where the weighting works against you. It does not arise for the pilot/data pairs GNSSSignals defines, where the sharp discriminator sits on the *driver*: the group is either all-BOC (Galileo E1, GPS L1C, BeiDou B1C) or all-BPSK (GPS L5, Galileo E5a, BeiDou B2a). It does arise for a mixed group with a BPSK driver — `(GPSL1CA(), GPSL1C_P(), …)` — which is the same ordering the previous paragraph rules out for an unrelated reason. Either put the BOC signal first or hand off from acquisition inside a fraction of a chip.
+
+**Declare only signals the satellite transmits.** Nominal weights say what a component's power share *should* be; they cannot tell you whether it is being received. That is by design — a signal is in a satellite's tuple only because you put it there — but it does mean a component the satellite does not broadcast contributes noise at its full nominal weight. A pre-Block-III GPS satellite carries no L1C at all, so putting `(GPSL1C_P(), GPSL1C_D(), GPSL1CA())` on one lets two noise channels (`0.75 + 0.25`) outvote the one real signal (C/A, `0.708`). Route such satellites to a C/A-only group instead. Only one kind of record is excluded automatically. On a signal with a secondary code — every pilot component, plus the Neumann-Hoffman-coded data components (GPS L5I, Galileo E5a-I and E5b-I, BeiDou B2a-I, B1I and B3I) — the record still correlated against the pre-sync replica in the chunk where that signal's secondary-code sync was detected has a coherent sum that partially cancels and measures nothing, so it is dropped: one record per signal per sync event.
+
+**Why discriminators and not prompts.** `pll_disc` and `fll_disc` are blind to the unknown ±1 navigation-data sign, so a data component's discriminator can be averaged with a pilot's; summing their *prompts* would let a bit flip cancel the pilot. A passenger transmitted in carrier quadrature with the driver is de-rotated onto the driver's phase frame first — which is not an exotic case: GPS L1 C/A's carrier phase offset is −π/2 while L1C-D/P sit at 0, so in a `(GPSL1C_P(), GPSL1C_D(), GPSL1CA())` group the C/A passenger *is* in quadrature with the driver.
+
+That is the reason for the two *carrier* loops. The code loop's is separate, and it holds even where the data sign is known: `dll_disc` is noncoherent — a function of the tap magnitudes, not of a prompt — and every method calibrates itself against its own signal's correlation shape, a triangular BPSK autocorrelation for the early-late form and a sine-BOC(1,1) envelope for the VEML one. Taps summed across a BOC signal and a BPSK one produce an envelope with no single slope to divide by, so the result would not be calibrated in chips at all — and being calibrated in chips is exactly what makes two signals' code errors averageable. Note also that the ICD power split is not what forces the choice on either side: coherent prompt combining is maximal-ratio combining, whose optimum weight is `sqrt(get_relative_power(signal) · N)` — the same quantity the discriminator weights use, one square root away.
+
+**Timing.** The fold walks the driver's and the passengers' records in sample order, so each loop update sees exactly the passenger records that completed inside its own window. Records that complete after the last driver record of a processing chunk stay pending for the next one — which is the normal case rather than an edge case: the default chunk is one *shortest* code period, so with a 10 ms pilot driver and a 1 ms C/A passenger nine chunks in ten hold C/A records and no driver record at all.
+
+### Group delay
+
+The carrier loops combine from the first integration, lock or no lock: every component rides the same carrier, so once de-rotated each signal's Costas discriminator measures the same phase error the driver's does, and a normalized mean of them during pull-in is no worse than the driver's alone while the loop gain is untouched. The **code** loop needs one number from you first.
+
+A combined DLL drives the satellite-shared `code_phase` towards a weighted average of the signals' code phases — and those differ, by the differences between the signals' payload group delays. Left uncorrected, the shared phase sits at an offset that *moves as the weights move*, and a downstream consumer such as `PositionVelocityTime.jl` (which reads the shared `code_phase` and applies the group-delay correction of whichever ranging signal you name) would apply that correction to a phase that is no longer that signal's. The offset is not negligible where combining helps most: an L1C-P passenger outweighs an L1 C/A driver by roughly 80:1, so a 1–3 ns differential lands as 0.3–0.9 m of bias — more than the jitter the combining just bought.
+
+So each passenger's code discriminator is referred to the driver's code phase using its **group delay** — the signal's own payload delay, larger for the signal that leaves the satellite through the longer path and so arrives later and sits at the *smaller* code phase. This happens at the loop update, so what a consumer reads is always on the driver's datum; under [`VectorPLLAndDLL`](@ref) the value is stored and never read. The value is a **time** and carries its unit, like every other dimensioned quantity here; a bare number is refused rather than assumed to be seconds, and a value in metres gets a sentence naming the conversion, since a realistic value is sub-nanosecond and an assumed unit costs metres. Set it with [`set_group_delay!`](@ref):
+
+```julia
+# Every slot, `signals[1]` included — the datum is yours to choose.
+set_group_delay!(track_state, :modern_gps, 11, GPSL1CA, -1.0e-9s)   # or -1.0u"ns"
+```
+
+Every **passenger** starts at `nothing`, and one left there aids the **carrier** loops only — it joins the code loop the moment a bias is set. Nothing is assumed on your behalf, because assuming zero is the unsafe direction: it is exactly the moving bias above, and it is indistinguishable from a bias you meant to supply and forgot.
+
+**Only differences between a satellite's signals are ever used.** What the code loop applies to passenger `i` is `delay(signals[1]) − delay(i)` — positive where the passenger is *less* delayed than the driver, and so sits at the larger code phase — which means the datum your values are stated against cancels and is yours to choose. Two usages follow, and they are the same rule:
+
+  - **Driver as datum.** Put `0.0s` on `signals[1]` and state each passenger's delay relative to it; a passenger's stored value is then directly its bias.
+  - **Your own datum.** Give every signal its own payload delay on whatever reference you hold, `signals[1]` included — derived as **Where the value comes from** below describes, which for GPS means `−ISC_x` rather than the ISC as it comes. Any term common to the satellite's signals (GPS's `T_GD`) cancels in the difference, so nothing has to be referred on the way in. `set_group_delay!` writes any slot, the driver's included.
+
+[`get_group_delay`](@ref) reads back what you stored — this signal's own delay, not the difference; the difference is formed inside the fold and never has to be built by a caller. A **single-signal** satellite has no difference to form, so a value stored there is kept and never used.
+
+**Every slot starts at `nothing`, `signals[1]` included** — the datum is a statement about the satellite that only you can make, and no slot is treated differently from any other. So the code loop combines once you have supplied a value for the driver *and* for each passenger you want in it. `nothing` on a passenger withholds that one signal's code contribution; `nothing` on `signals[1]` withholds every passenger's, since nothing can be referred to an unknown datum. The carrier loops combine throughout, from the first integration.
+
+**Where the value comes from is deliberately not this package's business.** Tracking neither knows which constellation broadcasts what nor parses navigation messages. Since only differences within a satellite are read, any term the signals share — a per-SV `T_GD`, say — cancels and need not be resolved. A value may be:
+
+  - **The same number on every signal, usually `0.0s`**, justified by the ICD. Every Galileo pair — E1B/E1C, E5aI/E5aQ, E5bI/E5bQ, E6B/E6C — leaves the satellite as one composite modulation out of one payload chain, and the broadcast group delays are cross-band only (E1-to-E5a/E5b), so there is no intra-band difference and never will be. Say so once and the code loop combines from the first integration.
+  - **A broadcast inter-signal correction, per signal.** GPS broadcasts a *per-component* ISC (`ISC_L1CA`, `ISC_L1CD`, `ISC_L1CP`, `ISC_L2C`, `ISC_L5I5`, `ISC_L5Q5`) — precisely a statement that the components are not assumed to share a group delay — and BeiDou does the same for its B1C and B2a pairs (`ISC_B1Cd`, `ISC_B2ad`). Mind the sign, which differs between the two families because they reference their corrections differently. IS-GPS-705/800 has the receiver correct a range on signal `x` by `−T_GD + ISC_x`, so that signal's *delay* is `T_GD − ISC_x`: write **`−ISC_x`** on each signal and let `T_GD` cancel. BeiDou states the pilot's delay as `T_GD` and the data component's as `T_GD + ISC`, so write **`0.0s` on the pilot and `+ISC` on the data component**.
+  - **A ground calibration**, for a signal pair whose ICD broadcasts nothing useful.
+
+Which ISCs a decoder can give you depends on the *message*, not the signal it came from: CNAV-2 (from an L1C-D decoder) carries all six GPS terms; CNAV (L5I / L2C, message type 30) carries everything except the L1C pair; LNAV carries none, so a legacy-only receiver has nothing to derive an L1 C/A + L1C bias from.
+
+```@docs
+set_group_delay!
+get_group_delay
+Tracking.dll_disc_noise_gain
+Tracking.DiscriminatorAccumulator
+```
 
 ### Phased-array tracking
 

@@ -889,8 +889,8 @@ end
         ready_at = 0
         for call = 1:4
             track!((L1 = BandMeasurement(one_ms(M, call), FS),), ts)
-            _, ready = Tracking._noise_density_and_ready(ts.noise_estimators.GPSL1CA)
-            if ready && ready_at == 0
+            floor = Tracking._noise_density_and_ready(ts.noise_estimators.GPSL1CA)
+            if floor.ready && ready_at == 0
                 ready_at = call
             end
         end
@@ -994,6 +994,30 @@ if VERSION >= v"1.11"
         @test measure(dc, measurements, ts) == 0
         @test measure(plain_dc, measurements, plain_ts) == 0
     end
+end
+
+@testset "the window trims at exactly its duration, not one observation later" begin
+    # `_trim_noise_window!` drops the oldest observation as soon as dropping it
+    # still leaves the window covered: `span - oldest >= window_duration`. The
+    # boundary that pins the `>=` is an exactly-full window — four 0.25 s looks in
+    # a 1 s window — where an off-by-one keeps a fifth look and runs the window
+    # 25 % long, averaging a stale observation into every density it reports.
+    estimator = CorrelatorNoiseEstimator(; window_duration = 1.0s)
+    obs(k) = Tracking.NoiseObservation(k * 1e-10 / 1.0Hz, 1, 0.25s, Int16(k))
+    for k = 1:4
+        Tracking.append_noise_observation!(estimator, obs(k))
+    end
+    @test length(estimator.buffered) == 4
+    @test estimator.totals[].span == 1.0s
+
+    # The fifth arrival makes the window one observation too long, so the oldest
+    # goes and the span stays at exactly the configured duration.
+    Tracking.append_noise_observation!(estimator, obs(5))
+    @test length(estimator.buffered) == 4
+    @test estimator.totals[].span == 1.0s
+    @test [Int(o.prn) for o in estimator.buffered] == [2, 3, 4, 5]
+    # …and the reported density is the mean over those four looks, not five.
+    @test Tracking.get_noise_density(estimator) ≈ 3.5e-10 / 1.0Hz
 end
 
 end

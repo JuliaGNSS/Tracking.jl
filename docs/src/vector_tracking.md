@@ -49,6 +49,17 @@ satellite's estimator-driver signal (`signals[1]`) completes an integration,
     magnitude are **accumulated** on the per-sat state for the navigation
     filter to read and reset.
 
+A multi-signal satellite closes its loops on its estimator-driver signal
+(`signals[1]`) alone under this estimator, in either mode, and accumulates that
+signal's discriminators for the navigation filter.
+[Multi-signal discriminator combining](tracking_state.md#Multi-signal-discriminator-combining)
+is a [`ConventionalPLLAndDLL`](@ref) feature: a group's
+`discriminator_combining` is not read here, and neither is a
+[`set_group_delay!`](@ref) value. Ranging is on the shared `code_phase` of
+`signals[1]` in either estimator, so a receiver offering both modes ranges on the
+same signal throughout — only the scalar mode can add the passengers'
+measurements to the loops.
+
 The satellite-shared carrier/code Doppler is always updated through the same
 carrier-aiding (`aid_dopplers`) used by the conventional estimator, and the
 same effective-bandwidth handling applies when a signal integrates `N` primary
@@ -71,11 +82,13 @@ enable_vt!(track_state, prns_in_lock)
 #    for each vector-loop satellite, then reset the accumulators so the
 #    next block accumulates afresh.
 for (prn, sat) in pairs(get_sat_states(track_state))
-    state = get_doppler_estimator_state(sat)
-    state.vt_on || continue
-    code_err = mean_code_discr(state)      # chips, or `nothing` if no data
-    carrier_err = mean_carrier_discr(state) # Hz, or `nothing` if no data
-    # … feed the mean measurements into the navigation filter …
+    get_doppler_estimator_state(sat).vt_on || continue
+    code = mean_code_discr(sat)        # mean DLL discriminator, in chips
+    carrier = mean_carrier_discr(sat)  # mean FLL discriminator, in Hz
+    isnothing(code) && isnothing(carrier) && continue
+    # Each mean covers the records since the last reset, all of one
+    # coherent integration time — the one this receiver configured.
+    # … feed this satellite's measurements into the navigation filter …
 end
 reset_code_discr_acc!(track_state)
 reset_carrier_discr_acc!(track_state)
@@ -88,12 +101,55 @@ set_code_freq_updates!(track_state, code_freq_updates)
 set_carrier_freq_updates!(track_state, carrier_freq_updates)
 ```
 
-The accumulators are stored as `(count, sum)` tuples;
-[`mean_code_discr`](@ref) / [`mean_carrier_discr`](@ref) apply
-the averaging convention (`sum / count`, returning `nothing` when nothing has
-accumulated) in one place, so consumers don't each re-implement the divide and
-the `count == 0` guard. Reading and resetting are deliberately separate calls
-so the filter can read at its own (typically slower) rate than `track!`.
+Each accumulator is a `(count, sum)` pair. [`mean_code_discr`](@ref) /
+[`mean_carrier_discr`](@ref) apply the averaging convention (`sum / count`,
+returning `nothing` when nothing has accumulated) in one place, so consumers
+don't each re-implement the divide and the `count == 0` guard. Reading and
+resetting are deliberately separate calls so the filter can read at its own
+(typically slower) rate than `track!`.
+
+!!! note "What the pair assumes, and when it holds"
+
+    A count and a sum carry no per-record timing, so the consumer places the
+    mean itself: it covers `count` records of the coherent integration time the
+    consumer configured, ending at the last record before it read. That is
+    exact while every record the pair covers has the same length — which is what
+    vector tracking gives it, on two counts.
+
+    Every record is counted. `fll_disc` answers a placeholder 0 Hz when there is
+    no previous prompt to difference against, and nothing rejects a record on
+    that ground or any other, so the carrier `count` never falls behind the
+    code one. The two cases that could produce a gap both sit before the
+    satellite joins the vector loop: only a signal's very first record lacks a
+    prompt pair, and the first after [`reset_loop_filters!`](@ref), which clears
+    the prompt and the accumulators together.
+
+    Every record has the same length. A signal's coherent integration length
+    changes exactly once, when its bit or secondary code is found, and nothing
+    in this package changes it again. A navigation filter admits a satellite to
+    the vector loop only once it is decoded, which implies that sync long
+    since happened, so `vt_on` covers a stretch of constant-length records.
+
+    The one caller-side way out of both is
+    [`set_preferred_num_code_blocks_to_integrate!`](@ref): changing a signal's
+    cadence while `vt_on` is set makes the mean cover records of two lengths
+    with nothing in the pair to say so, and `count` stops mapping to an
+    interval. Reset the accumulators across such a change, or make it while the
+    satellite is out of the vector loop.
+
+!!! note "Counting records is not weighting them"
+
+    `count` is what a filter needs to weigh one signal against another, but the
+    mean's variance is not the single-record variance over `count`, and for the
+    FLL it is *smaller*. Successive FLL measurements are formed from overlapping
+    prompt pairs — each record's prompt is the next one's reference — and the
+    shared prompt enters the two differences with opposite signs, so their
+    errors are negatively correlated and a contiguous run telescopes into one
+    frequency estimate over the whole span: averaging `N` equal-length records
+    buys `N²`, not `N` (independent prompt-phase noise assumed). Under vector
+    tracking the run is contiguous by construction, per the note above. The
+    DLL's records carry no shared prompt and no such term, so `count` is exactly
+    right there.
 
 ### Multi-constellation addressing
 

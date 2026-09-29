@@ -550,15 +550,27 @@ noise_window_looks(::AbstractNoiseEstimator) = nothing
 @inline _sufficient_looks(::StaticMatrix, ::Nothing) = true
 @inline _sufficient_looks(::StaticMatrix{M,M}, looks::Integer) where {M} = looks >= M
 
+"""
+One signal's measured noise floor as the fold reads it: the density and whether it
+is usable. A pair, and a `ready` flag rather than a `Union{Nothing,D}` density, so
+the density stays type-stable through the fold and every consumer asks the same
+question of it — see `_signal_noise_density` for why the not-ready density is a
+zero of the right type rather than `nothing`.
+"""
+struct NoiseFloor{D}
+    density::D
+    ready::Bool
+end
+
 @inline function _noise_density_and_ready(estimator::AbstractNoiseEstimator)
     density = get_noise_density(estimator)
     D = noise_density_type(estimator)
-    isnothing(density) && return (zero(D), false)
+    isnothing(density) && return NoiseFloor(zero(D), false)
     d = density::D
     _finite_density(d) &&
     _positive_density(d) &&
-    _sufficient_looks(d, noise_window_looks(estimator)) || return (zero(D), false)
-    (d, true)
+    _sufficient_looks(d, noise_window_looks(estimator)) || return NoiseFloor(zero(D), false)
+    NoiseFloor(d, true)
 end
 
 # Not ready *because the window is still filling*, as opposed to because nothing
