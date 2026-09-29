@@ -180,11 +180,9 @@ and the multi-signal combining sums ([`DiscriminatorAccumulator`](@ref)).
 
 The bandwidths are *seeded* from the shared [`ConventionalPLLAndDLL`](@ref) by
 [`init_estimator_state`](@ref) and owned here afterwards, so they survive
-[`reset_loop_filters!`](@ref). There is no setter to change them afterwards; a
-satellite differs from the `TrackState`'s estimator by being built with its own,
-via the `doppler_estimator` keyword of [`TrackedSat`](@ref) and
-[`add_satellite!`](@ref). Whether the satellite combines its signals'
-discriminators is not here at all — that is a property of its [`SignalGroup`](@ref), since the
+[`reset_loop_filters!`](@ref); [`set_loop_filter_bandwidths!`](@ref) overrides
+them per satellite. Whether the satellite combines its signals' discriminators is
+not here at all — that is a property of its [`SignalGroup`](@ref), since the
 ordering precondition it needs is a property of the group's signal tuple.
 """
 @kwdef struct SatConventionalPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
@@ -253,8 +251,9 @@ bandwidth fields configure what new satellites are seeded with. Both are copied
 into each satellite's `SatConventionalPLLAndDLL` by
 [`init_estimator_state`](@ref) and read from there afterwards, so this is a
 template rather than a live switch: changing it affects satellites added after
-the change, and a satellite may carry a different value if it was built with its
-own estimator. Each bandwidth field is `Maybe{typeof(1.0Hz)}`: a `nothing`
+the change, and a satellite may carry a different value —
+[`set_loop_filter_bandwidths!`](@ref) overrides one. Each bandwidth field
+is `Maybe{typeof(1.0Hz)}`: a `nothing`
 field (the default) means **auto** — [`init_estimator_state`](@ref) sizes the
 bandwidth per satellite from that sat's estimator-driver signal (`signals[1]`)
 via [`default_carrier_loop_filter_bandwidth`](@ref) /

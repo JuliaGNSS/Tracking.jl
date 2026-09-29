@@ -1268,6 +1268,139 @@ function set_preferred_num_code_blocks_to_integrate!(
     )
 end
 
+"""
+$(SIGNATURES)
+
+Set one satellite's loop filter bandwidths, overriding the values
+[`init_estimator_state`](@ref) seeded from the estimator (or from
+[`default_carrier_loop_filter_bandwidth`](@ref) /
+[`default_code_loop_filter_bandwidth`](@ref) for that satellite's driver signal).
+Both are keywords, and an omitted one is left as it is. The override survives
+[`reset_loop_filters!`](@ref), which is what makes it an override rather than a
+value the next reset reverts.
+
+The **carrier** bandwidth is referenced to a one-primary-code-period integration
+and is scaled by `1/N` at filter time when a record integrates `N` blocks, so
+pass the single-period figure whatever the satellite's integration length. The
+**code** bandwidth is an absolute value: not scaled by the integration length,
+only capped against each record's own integration time by
+[`effective_code_loop_filter_bandwidth`](@ref).
+
+One keyword-based setter rather than one function per field, so a new per-sat
+setting costs a keyword instead of six methods. The satellite is addressed like
+[`set_preferred_num_code_blocks_to_integrate!`](@ref):
+
+```julia
+set_loop_filter_bandwidths!(ts, :gps_l1, 7; carrier = 12.0Hz)
+set_loop_filter_bandwidths!(ts, 7; carrier = 12.0Hz, code = 0.5Hz)  # single-group
+```
+
+Mutates `track_state` in place and returns it.
+"""
+function set_loop_filter_bandwidths!(
+    track_state::TrackState{<:SignalGroups},
+    group::Union{Symbol,Integer,Val},
+    sat_id;
+    carrier::Maybe{Number} = nothing,
+    code::Maybe{Number} = nothing,
+)
+    _set_loop_filter_bandwidths!(
+        track_state,
+        get_sat_states(track_state, group),
+        sat_id,
+        carrier,
+        code,
+    )
+end
+
+function set_loop_filter_bandwidths!(
+    track_state::TrackState{<:SignalGroups{1}},
+    sat_id;
+    carrier::Maybe{Number} = nothing,
+    code::Maybe{Number} = nothing,
+)
+    _set_loop_filter_bandwidths!(
+        track_state,
+        get_sat_states(track_state),
+        sat_id,
+        carrier,
+        code,
+    )
+end
+
+# Shared body: rebuild the addressed satellite's estimator state through the
+# per-state kwarg constructor, leaving every other field — and the satellite's
+# concrete type — alone. An omitted bandwidth arrives as `nothing`, which is
+# exactly what those constructors read as "keep".
+@inline function _set_loop_filter_bandwidths!(
+    track_state::TrackState,
+    sats,
+    sat_id,
+    carrier::Maybe{Number},
+    code::Maybe{Number},
+)
+    sat = sats[sat_id]
+    sats[sat_id] = TrackedSat(
+        sat;
+        doppler_estimator_state = _with_loop_filter_bandwidths(
+            get_doppler_estimator_state(sat),
+            isnothing(carrier) ? nothing : _as_loop_bandwidth(carrier),
+            isnothing(code) ? nothing : _as_loop_bandwidth(code),
+        ),
+    )
+    track_state
+end
+
+# One method per shipped per-satellite state. The fallback names the estimator
+# rather than throwing a `MethodError` listing type parameters: a custom
+# estimator's state has no reason to carry loop bandwidths, and saying so is more
+# useful than a dispatch failure.
+_with_loop_filter_bandwidths(state::SatConventionalPLLAndDLL, carrier, code) =
+    SatConventionalPLLAndDLL(
+        state;
+        carrier_loop_filter_bandwidth = carrier,
+        code_loop_filter_bandwidth = code,
+    )
+_with_loop_filter_bandwidths(state::SatVectorPLLAndDLL, carrier, code) = SatVectorPLLAndDLL(
+    state;
+    carrier_loop_filter_bandwidth = carrier,
+    code_loop_filter_bandwidth = code,
+)
+_with_loop_filter_bandwidths(state, _, _) =
+    _throw_no_estimator_setting(state, "loop filter bandwidths")
+
+@noinline _throw_no_estimator_setting(state, setting::String) = throw(
+    ArgumentError(
+        "this satellite's Doppler estimator state ($(typeof(state).name.name)) has no " *
+        "`$setting` to set — that setting belongs to `ConventionalPLLAndDLL` and " *
+        "`VectorPLLAndDLL`.",
+    ),
+)
+
+# A loop bandwidth is a frequency and carries its unit, like every other
+# dimensioned quantity here. `Number`-wide so a bare number gets a sentence
+# rather than a `MethodError` listing a page of `TrackState` type parameters.
+_as_loop_bandwidth(bandwidth::Real) = _throw_unitless_loop_bandwidth(bandwidth)
+function _as_loop_bandwidth(bandwidth::Number)
+    dimension(bandwidth) == dimension(1.0Hz) ||
+        _throw_wrong_dimension_loop_bandwidth(bandwidth)
+    float(uconvert(Hz, bandwidth))
+end
+
+@noinline _throw_unitless_loop_bandwidth(bandwidth) = throw(
+    ArgumentError(
+        "a loop filter bandwidth is a frequency and needs its unit: got the bare " *
+        "number $bandwidth. Write `$(bandwidth)Hz`.",
+    ),
+)
+
+@noinline _throw_wrong_dimension_loop_bandwidth(bandwidth) = throw(
+    ArgumentError(
+        "a loop filter bandwidth is a frequency: got $bandwidth, which has dimension " *
+        "$(dimension(bandwidth)). Supply it in hertz — `18.0Hz`.",
+    ),
+)
+
 # Rebuild `sat` with the addressed signal's group delay set; every other signal is
 # left untouched, so the satellite's concrete type is preserved.
 function _set_sat_group_delay(sat::TrackedSat, delay::Maybe{typeof(1.0s)}, sel...)

@@ -317,6 +317,7 @@ Which ISCs a decoder can give you depends on the *message*, not the signal it ca
 ```@docs
 set_group_delay!
 get_group_delay
+set_loop_filter_bandwidths!
 Tracking.dll_disc_noise_gain
 Tracking.DiscriminatorAccumulator
 ```
