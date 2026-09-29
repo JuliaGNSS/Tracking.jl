@@ -58,6 +58,7 @@ using Tracking:
     get_sat_state,
     set_group_delay!,
     set_preferred_num_code_blocks_to_integrate!,
+    set_loop_filter_bandwidths!,
     track
 using Tracking: RecordFoldContext, _normalized_mean, _relative_record_snr
 using Tracking:
@@ -1535,6 +1536,36 @@ end
         end
         @test allocations[1] == allocations[2]
     end
+end
+
+@testset "the loop bandwidths are settable per satellite" begin
+    # Seeded per satellite and preserved across a reset — and set through one
+    # keyword-based updater rather than a function per field, so an omitted
+    # keyword leaves that bandwidth as it was.
+    for state_of in (externally_fed_state, vt_externally_fed_state)
+        ts = state_of()
+        set_loop_filter_bandwidths!(ts, 1, 1; carrier = 5.0Hz, code = 0.5Hz)
+        state = Tracking.get_doppler_estimator_state(get_sat_state(ts, 1))
+        @test state.carrier_loop_filter_bandwidth == 5.0Hz
+        @test state.code_loop_filter_bandwidth == 0.5Hz
+        # Integer hertz is accepted and floated, like every other dimensioned
+        # setter in this package; and the omitted `code` is left alone.
+        set_loop_filter_bandwidths!(ts, 1; carrier = 12Hz)
+        state = Tracking.get_doppler_estimator_state(get_sat_state(ts, 1))
+        @test state.carrier_loop_filter_bandwidth === 12.0Hz
+        @test state.code_loop_filter_bandwidth == 0.5Hz
+        # The override is what a reset preserves — the reason it lives on the
+        # per-satellite state at all.
+        Tracking.reset_loop_filters!(ts)
+        @test Tracking.get_doppler_estimator_state(get_sat_state(ts, 1)).code_loop_filter_bandwidth ==
+              0.5Hz
+    end
+
+    # A bandwidth is a frequency and carries its unit; both wrong shapes get a
+    # sentence rather than a MethodError.
+    ts = externally_fed_state()
+    @test_throws ArgumentError set_loop_filter_bandwidths!(ts, 1; carrier = 5.0)
+    @test_throws ArgumentError set_loop_filter_bandwidths!(ts, 1; code = 5.0s)
 end
 
 end

@@ -108,7 +108,15 @@ end
 
 """
 Per-satellite state for the conventional PLL and DLL Doppler estimator.
-Holds initial Doppler values and loop filter states.
+Holds initial Doppler values, loop filter states and the resolved loop
+bandwidths.
+
+The bandwidths are *seeded* from the shared [`ConventionalPLLAndDLL`](@ref) by
+[`init_estimator_state`](@ref) and owned here afterwards, so they survive
+[`reset_loop_filters!`](@ref); [`set_loop_filter_bandwidths!`](@ref) overrides
+them per satellite. Whether the satellite combines its signals' discriminators is
+not here at all — that is a property of its [`SignalGroup`](@ref), since the
+assumption combining rests on is a property of the group's signal tuple.
 """
 @kwdef struct SatConventionalPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     init_carrier_doppler::typeof(1.0Hz)
@@ -166,9 +174,14 @@ Conventional Phase-Locked Loop (PLL) and Delay-Locked Loop (DLL) Doppler
 estimator. Configuration-only — per-satellite state lives in each
 [`TrackedSat`](@ref) wrapper, produced via [`init_estimator_state`](@ref).
 
-Type parameters `CA` and `CO` select the carrier and code loop filter types;
-the bandwidth fields configure the loop bandwidths used when seeding new
-satellites. Each bandwidth field is `Maybe{typeof(1.0Hz)}`: a `nothing`
+Type parameters `CA` and `CO` select the carrier and code loop filter types; the
+bandwidth fields configure what new satellites are seeded with. Both are copied
+into each satellite's `SatConventionalPLLAndDLL` by
+[`init_estimator_state`](@ref) and read from there afterwards, so this is a
+template rather than a live switch: changing it affects satellites added after
+the change, and a satellite may carry a different value —
+[`set_loop_filter_bandwidths!`](@ref) overrides one. Each bandwidth field
+is `Maybe{typeof(1.0Hz)}`: a `nothing`
 field (the default) means **auto** — [`init_estimator_state`](@ref) sizes the
 bandwidth per satellite from that sat's estimator-driver signal (`signals[1]`)
 via [`default_carrier_loop_filter_bandwidth`](@ref) /
