@@ -1,5 +1,7 @@
 # Changelog
 
+# [9.0.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v8.3.1...v9.0.0) (2026-09-29)
+
 ## [8.3.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v8.3.0...v8.3.1) (2026-09-21)
 
 
