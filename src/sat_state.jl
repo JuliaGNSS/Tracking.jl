@@ -48,6 +48,12 @@ struct TrackedSignal{
     # (`preferred_num_code_blocks_to_integrate`) or by an external producer
     # summing dumps. Starts at 1, the pre-sync length.
     last_fully_integrated_num_code_blocks::Int
+    # This signal's payload group delay, as a **time** on whatever datum the
+    # caller states its signals against, or `nothing` (the default) when none has
+    # been supplied. Purely an input, and read only as a *difference* against
+    # `signals[1]`'s — see `set_group_delay!` for the contract, and
+    # `get_group_delay` for why `nothing` and `0.0s` are different states.
+    group_delay::Maybe{typeof(1.0s)}
 end
 
 # Reject a preferred coherent-integration length that cannot work for this
@@ -116,6 +122,11 @@ one primary code block for every signal but Galileo E5a-QP, whose 64.5 µs block
 is too short to run a loop on. Throws an `ArgumentError` if the value passed is
 invalid for `signal` (see
 [`set_preferred_num_code_blocks_to_integrate!`](@ref)).
+
+`group_delay` is this signal's payload group delay as a time (`1.2e-9s`,
+`-0.3u"ns"`), or `nothing` (the default) when it is unknown — see
+[`set_group_delay!`](@ref) for its meaning and sign, and why `nothing` and
+`0.0s` are different statements.
 """
 function TrackedSignal(
     signal::AbstractGNSSSignal;
@@ -130,6 +141,11 @@ function TrackedSignal(
     preferred_num_code_blocks_to_integrate::Int = default_num_code_blocks_to_integrate(
         signal,
     ),
+    # `Number`-wide so that every wrong input — a bare number, a value in metres,
+    # anything that is not a time — reaches `_as_group_delay` and is refused with
+    # a sentence about *that* mistake, rather than dying on a keyword type
+    # assertion.
+    group_delay::Maybe{Number} = nothing,
 )
     validate_preferred_num_code_blocks_to_integrate(
         signal,
@@ -158,6 +174,7 @@ function TrackedSignal(
         correlator_outputs,
         preferred_num_code_blocks_to_integrate,
         1,
+        _as_group_delay(group_delay),
     )
 end
 
@@ -187,6 +204,12 @@ function TrackedSignal(
     correlator_outputs::Maybe{Vector{CorrelatorOutput{C}}} = nothing,
     preferred_num_code_blocks_to_integrate = nothing,
     last_fully_integrated_num_code_blocks = nothing,
+    # Wrapped in `Some` rather than following the plain `Maybe` convention of
+    # every other kwarg here: `nothing` is a *legal value* of this field
+    # ("delay not known"), so the usual `isnothing(x) ? keep : set` test cannot
+    # tell "leave it alone" from "clear it". `Some(nothing)` clears, a bare
+    # `nothing` keeps.
+    group_delay::Maybe{Some{Maybe{typeof(1.0s)}}} = nothing,
 ) where {
     Sig<:AbstractGNSSSignal,
     B<:Unsigned,
@@ -216,6 +239,7 @@ function TrackedSignal(
         t.preferred_num_code_blocks_to_integrate : preferred_num_code_blocks_to_integrate,
         isnothing(last_fully_integrated_num_code_blocks) ?
         t.last_fully_integrated_num_code_blocks : last_fully_integrated_num_code_blocks,
+        isnothing(group_delay) ? t.group_delay : something(group_delay),
     )
 end
 
@@ -293,6 +317,78 @@ has_bit_or_secondary_code_been_found(t::TrackedSignal) =
 get_integrated_samples(t::TrackedSignal) = t.integrated_samples
 get_preferred_num_code_blocks_to_integrate(t::TrackedSignal) =
     t.preferred_num_code_blocks_to_integrate
+
+# A group delay carries its unit, like every dimensioned quantity here: `convert`
+# normalises any time unit to the field's `typeof(1.0s)` and refuses anything that
+# is not a time. Both entry points route through here — the `TrackedSignal`
+# constructors in this file and `set_group_delay!` in tracking_state.jl — so a
+# value is converted once wherever it enters.
+#
+# A **length** gets a sentence of its own rather than `convert`'s dimension
+# mismatch, because it is the likely wrong input rather than an exotic one: "code
+# bias" in the SSR/PPP world (Galileo HAS, IGS, GNSSDecoder.jl's own HAS decoder)
+# is a per-signal pseudorange correction in metres, so a caller arriving from that
+# side holds metres and needs the datum warning as much as the conversion.
+_as_group_delay(::Nothing) = nothing
+_as_group_delay(delay::Number) =
+    dimension(delay) == 𝐋 ? _throw_group_delay_in_metres(delay) :
+    convert(typeof(1.0s), delay)
+
+@noinline _throw_group_delay_in_metres(delay) = throw(
+    ArgumentError(
+        "a group delay is a time: got $delay. A per-signal code bias in metres " *
+        "(the SSR/PPP sense) converts with the speed of light — " *
+        "`$delay / Unitful.c0` — but check the datum first: this field is one " *
+        "signal's group delay, read only as a difference against the satellite's " *
+        "other signals, whereas an SSR code bias is referenced to the product's " *
+        "own clock datum and is not comparable across satellites.",
+    ),
+)
+
+"""
+$(SIGNATURES)
+
+This signal's payload group delay, as a time (`1.2e-9s`, `-0.3u"ns"`, …), or
+`nothing` when the caller has supplied none. Set it with
+[`set_group_delay!`](@ref).
+
+**Only differences between the signals of one satellite are ever used**, so the
+datum the values are stated against is yours to choose and cancels: what is
+applied to a passenger is `signals[1]`'s value minus this signal's. Two usages
+follow from that, and they are the same rule:
+
+  - Put `0.0s` on `signals[1]` and state each passenger relative to it — the
+    driver is then the datum, and a passenger's value is directly its bias.
+  - Or hand every signal its own payload delay on whatever reference you hold.
+    The per-satellite term common to them (GPS's `T_GD`) cancels in the
+    difference, so no referral is needed on the way in.
+
+Every slot starts at `nothing`, `signals[1]` included: the datum is a statement
+about the satellite that only the caller can make, and no slot is treated
+differently from any other.
+
+Sign: positive means this signal is **delayed** relative to the datum — it leaves
+the satellite through the longer path, arrives later, and so sits at a *smaller*
+code phase.
+
+`nothing` means unknown, and `0.0s` is a different statement: it asserts that
+this signal shares the datum's code phase. See [Group delay](@ref) in the manual
+for why assuming zero for an unknown difference is not the harmless direction.
+"""
+get_group_delay(t::TrackedSignal) = t.group_delay
+
+# The differencing rule, in one place: what a signal's code discriminator has to
+# have subtracted before it can be referred to the satellite's shared
+# `code_phase`, which is the estimator-driver signal's. A signal *delayed*
+# relative to the driver (`group_delay` larger) arrives later and so sits at a
+# **smaller** code phase, hence `datum - delay` and not the other way round.
+# `nothing` where either end is unknown — an unreferable record is never referred
+# to a guessed datum.
+@inline _driver_relative_group_delay(::Nothing, _) = nothing
+@inline _driver_relative_group_delay(_, ::Nothing) = nothing
+@inline _driver_relative_group_delay(::Nothing, ::Nothing) = nothing
+@inline _driver_relative_group_delay(delay::typeof(1.0s), datum::typeof(1.0s)) =
+    datum - delay
 
 """
 $(SIGNATURES)
@@ -861,6 +957,7 @@ get_correlator_outputs(s::TrackedSat, sel...) =
     get_correlator_outputs(_find_signal(s.signals, sel...))
 get_preferred_num_code_blocks_to_integrate(s::TrackedSat, sel...) =
     get_preferred_num_code_blocks_to_integrate(_find_signal(s.signals, sel...))
+get_group_delay(s::TrackedSat, sel...) = get_group_delay(_find_signal(s.signals, sel...))
 
 # Append an external `CorrelatorOutput` to one signal of a sat. `output` comes
 # first so an optional trailing signal selector (integer index / signal type)

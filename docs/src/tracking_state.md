@@ -233,6 +233,40 @@ Putting a pilot signal first (e.g. `GPSL1C_P()`) is encouraged with the conventi
 
 When a satellite tracks signals with different primary-code lengths (e.g. L1 C/A at 1 ms vs L1C-P at 10 ms), each outer iteration integrates to the **shortest** signal's next primary-code boundary. The shorter signal's correlator completes every iteration; the longer signal's correlator accumulates across multiple iterations and only marks `is_integration_completed = true` on its own boundary. Doppler updates therefore happen at the shortest signal's cadence (1 ms in this example), and longer signals see their integration windows spanned by piecewise Doppler updates — the natural per-iteration-Doppler-correction behaviour of a real receiver.
 
+### Group delay
+
+A satellite's signals leave it through different payload paths, so their code phases differ by the differences between their **group delays** — nanoseconds, i.e. decimetres to metres of range. Anything that fuses code measurements across one satellite's signals onto the shared `code_phase` needs those differences, and each [`TrackedSignal`](@ref) therefore carries one: its `group_delay`, the signal's own payload delay, larger for the signal that leaves the satellite through the longer path and so arrives later and sits at the *smaller* code phase.
+
+The value is a **time** and carries its unit, like every other dimensioned quantity here; a bare number is refused rather than assumed to be seconds, and a value in metres gets a sentence naming the conversion, since a realistic value is sub-nanosecond and an assumed unit costs metres. Set it with [`set_group_delay!`](@ref), or pass `group_delay` to the `TrackedSignal` constructor:
+
+```julia
+# Every slot, `signals[1]` included — the datum is yours to choose.
+set_group_delay!(track_state, :modern_gps, 11, 1, 0.0s)
+set_group_delay!(track_state, :modern_gps, 11, GPSL1CA, -1.0e-9s)   # or -1.0u"ns"
+```
+
+**Only differences between a satellite's signals are ever used.** What is applied to passenger `i` is `delay(signals[1]) − delay(i)` — positive where the passenger is *less* delayed than the driver, and so sits at the larger code phase — which means the datum your values are stated against cancels and is yours to choose. Two usages follow, and they are the same rule:
+
+  - **Driver as datum.** Put `0.0s` on `signals[1]` and state each passenger's delay relative to it; a passenger's stored value is then directly its bias.
+  - **Your own datum.** Give every signal its own payload delay on whatever reference you hold, `signals[1]` included — derived as **Where the value comes from** below describes, which for GPS means `−ISC_x` rather than the ISC as it comes. Any term common to the satellite's signals (GPS's `T_GD`) cancels in the difference, so nothing has to be referred on the way in.
+
+[`get_group_delay`](@ref) reads back what you stored — this signal's own delay, not the difference. A **single-signal** satellite has no difference to form, so a value stored there is kept and never used.
+
+**Every slot starts at `nothing`, `signals[1]` included** — the datum is a statement about the satellite that only you can make, and no slot is treated differently from any other. `nothing` and `0.0s` are deliberately different states. `0.0s` on every slot asserts that the components share a code phase, which is true by construction for a pilot/data pair out of one payload chain and is yours to state. `nothing` says the difference is unknown, and nothing is assumed on your behalf, because assuming zero is the unsafe direction: fused code measurements would then drive the shared `code_phase` to a weighted average of the signals' phases that wanders as the weights move, and a downstream consumer such as `PositionVelocityTime.jl` — which applies the group-delay correction of whichever ranging signal you name — would apply it to a phase that is no longer that signal's. An unknown difference is also indistinguishable from a value you meant to supply and forgot.
+
+**Where the value comes from is deliberately not this package's business.** Tracking neither knows which constellation broadcasts what nor parses navigation messages. Since only differences within a satellite are read, any term the signals share — a per-SV `T_GD`, say — cancels and need not be resolved. A value may be:
+
+  - **The same number on every signal, usually `0.0s`**, justified by the ICD. Every Galileo pair — E1B/E1C, E5aI/E5aQ, E5bI/E5bQ, E6B/E6C — leaves the satellite as one composite modulation out of one payload chain, and the broadcast group delays are cross-band only (E1-to-E5a/E5b), so there is no intra-band difference to state.
+  - **A broadcast inter-signal correction, per signal.** GPS broadcasts a *per-component* ISC (`ISC_L1CA`, `ISC_L1CD`, `ISC_L1CP`, `ISC_L2C`, `ISC_L5I5`, `ISC_L5Q5`) — precisely a statement that the components are not assumed to share a group delay — and BeiDou does the same for its B1C and B2a pairs (`ISC_B1Cd`, `ISC_B2ad`). Mind the sign, which differs between the two families because they reference their corrections differently. IS-GPS-705/800 has the receiver correct a range on signal `x` by `−T_GD + ISC_x`, so that signal's *delay* is `T_GD − ISC_x`: write **`−ISC_x`** on each signal and let `T_GD` cancel. BeiDou states the pilot's delay as `T_GD` and the data component's as `T_GD + ISC`, so write **`0.0s` on the pilot and `+ISC` on the data component**.
+  - **A ground calibration**, for a signal pair whose ICD broadcasts nothing useful.
+
+Which ISCs a decoder can give you depends on the *message*, not the signal it came from: CNAV-2 (from an L1C-D decoder) carries all six GPS terms; CNAV (L5I / L2C, message type 30) carries everything except the L1C pair; LNAV carries none, so a legacy-only receiver has nothing to derive an L1 C/A + L1C difference from.
+
+```@docs
+set_group_delay!
+get_group_delay
+```
+
 ### Phased-array tracking
 
 To track signals coherently across an antenna array, pass a `Matrix` measurement (rows = samples, columns = antenna elements) and declare the number of antennas at `TrackState` construction:

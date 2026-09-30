@@ -199,6 +199,35 @@ the factors shared across a group.
 """
 $(SIGNATURES)
 
+Convert a group delay difference (a time) to the code-phase offset it produces, in
+chips, at the code frequency actually in effect (chip rate plus the satellite's
+code Doppler).
+
+The argument is the *difference* `_driver_relative_group_delay` forms — the
+driver's [`get_group_delay`](@ref) minus this signal's — not the stored field.
+A signal *less* delayed than the driver gives a positive difference, arrives
+earlier, and so sits at a **larger** code phase by `δ · f_code` chips: exactly the
+amount to subtract from its code discriminator to refer that discriminator to the
+driver's code phase.
+
+That much is fixed by the loop's own stability rather than by any ICD: a positive
+`dll_disc` raises the code frequency, which advances the replica phase, so
+`dll_disc` carries the sign of `(true phase − replica phase)`. A passenger whose
+code phase exceeds the driver's therefore reads `e_driver + δ`, and `δ` comes off.
+
+See [`set_group_delay!`](@ref) for the stored field's own sign, and for deriving
+it from broadcast inter-signal corrections, whose conventions differ between the
+GPS and BeiDou ICDs.
+"""
+# Both arguments carry their units, so this is a plain multiply; `uconvert(NoUnits,
+# …)` strips the (already dimensionless) product back to a `Float64` in chips that
+# the discriminators can be corrected with directly.
+@inline _group_delay_to_chips(delay, code_frequency) =
+    uconvert(NoUnits, delay * code_frequency)
+
+"""
+$(SIGNATURES)
+
 Noise gain `G` of the code discriminator for `correlator`, i.e. the constant in
 `σ²_chips ≈ G / SNR`. Multi-signal combining weights each signal's
 DLL discriminator by `SNR / G`, so this is what lets a BOC signal's VEML

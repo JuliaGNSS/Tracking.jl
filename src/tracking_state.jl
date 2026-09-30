@@ -979,6 +979,7 @@ for fn in (
     :has_bit_or_secondary_code_been_found,
     :estimate_cn0,
     :get_preferred_num_code_blocks_to_integrate,
+    :get_group_delay,
 )
     @eval begin
         $fn(s::TrackState, id...) = $fn(get_sat_state(s, id...))
@@ -1232,6 +1233,110 @@ function set_preferred_num_code_blocks_to_integrate!(
     sat_id = only(keys(sats))
     sats[sat_id] = _set_sat_signal_preferred_blocks(sats[sat_id], Int(num_code_blocks))
     track_state
+end
+
+# Rebuild `sat` with the addressed signal's group delay set; every other signal is
+# left untouched, so the satellite's concrete type is preserved.
+function _set_sat_group_delay(sat::TrackedSat, delay::Maybe{typeof(1.0s)}, sel...)
+    idx = _signal_index(sat.signals, sel...)
+    idx_tuple = ntuple(identity, length(sat.signals))
+    # `Some` because `nothing` is a legal value here — see the `TrackedSignal`
+    # kwarg-update constructor. Spelled with the full parameter because `Some` is
+    # invariant: `Some(1.0s)` is a `Some{typeof(1.0s)}`, which is *not* a
+    # `Some{Maybe{typeof(1.0s)}}`.
+    wrapped = Some{Maybe{typeof(1.0s)}}(delay)
+    new_signals = map(sat.signals, idx_tuple) do s, i
+        i == idx ? TrackedSignal(s; group_delay = wrapped) : s
+    end
+    TrackedSat(sat; signals = new_signals)
+end
+
+"""
+$(SIGNATURES)
+
+Set the **group delay** of one signal on one satellite — the `group_delay` field
+of the addressed [`TrackedSignal`](@ref). Pass `nothing` to mark it unknown again.
+
+The value is this signal's payload group delay on **any datum shared by the
+satellite's signals**, positive when this signal is *delayed* relative to that
+datum — it leaves the satellite through the longer path, arrives later, and so
+sits at a smaller code phase. It is a **time** and must carry its unit:
+`1.2e-9s`, `-0.3u"ns"`. A bare number, and a value in metres, are both refused —
+a realistic value is sub-nanosecond, the scale at which an assumed unit costs
+metres.
+
+**Only differences between one satellite's own signals are ever read**, so the
+datum cancels and is yours to choose: put `0.0s` on `signals[1]` and every
+passenger's value is directly its bias, or write each signal's own payload delay
+on whatever reference you hold and let the common term cancel. Two consequences
+follow. Every slot starts at `nothing` — the driver's included, and none is
+treated differently — and on a **single-signal** satellite there is no
+difference to form, so whatever you store is kept and never used.
+
+`nothing` and `0.0s` are different statements: `0.0s` on every slot asserts that
+the signals share a code phase, `nothing` that the difference is unknown. See
+[Group delay](@ref) in the manual for what each costs.
+
+Where the value comes from is deliberately not this package's concern — Tracking
+neither knows which constellation broadcasts what nor parses navigation messages.
+What it *does* fix, and all it fixes, is the meaning of the number:
+
+> `group_delay` is this signal's payload group delay, on a datum you choose. It
+> is larger for the signal that leaves the satellite through the **longer** path,
+> and so arrives later and sits at the smaller code phase.
+
+That statement is checkable without any ICD, and mapping a broadcast correction
+onto it is the caller's one job — including its sign, which the GPS and BeiDou
+ICD families reference differently and which is invisible in every tracking
+metric when wrong. See [Group delay](@ref) in the manual for the three sources
+and their conventions.
+
+The satellite is addressed exactly like
+[`set_preferred_num_code_blocks_to_integrate!`](@ref), and a **signal selector is
+required**, since a multi-signal satellite has no sensible default. The selector
+is either the signal type or its index in the tuple, and the group is either its
+name or its position:
+
+```julia
+set_group_delay!(ts, :gps_l1, 7, GPSL1C_D, 1.2e-9s)  # (group, prn, signal)
+set_group_delay!(ts, :gps_l1, 7, 2, 1.2e-9s)         # (group, prn, index)
+set_group_delay!(ts, 1, 7, GPSL1C_D, 1.2u"ns")       # group by position
+set_group_delay!(ts, 7, GPSL1C_D, 1.2e-9s)           # single-group `TrackState`
+```
+
+Mutates `track_state` in place and returns it.
+"""
+function set_group_delay!(
+    track_state::TrackState{<:SignalGroups},
+    group::Union{Symbol,Integer,Val},
+    sat_id,
+    sig::_SignalSelector,
+    delay::Maybe{Number},
+)
+    _set_group_delay!(get_sat_states(track_state, group), sat_id, delay, sig)
+    track_state
+end
+
+# Single-group `TrackState`: the group name is the only thing that may be
+# dropped. The *signal* selector cannot be — the only signal it could default to
+# is the driver, and a multi-signal satellite has no sensible default.
+function set_group_delay!(
+    track_state::TrackState{<:SignalGroups{1}},
+    sat_id,
+    sig::_SignalSelector,
+    delay::Maybe{Number},
+)
+    _set_group_delay!(get_sat_states(track_state), sat_id, delay, sig)
+    track_state
+end
+
+# Shared body for the addressing overloads above.
+@inline function _set_group_delay!(sats, sat_id, delay::Maybe{Number}, sel...)
+    # `_as_group_delay` is the single conversion point: it normalizes any time
+    # unit to the field's `typeof(1.0s)` and refuses everything else with its own
+    # message — hence `Maybe{Number}` on every overload above.
+    sats[sat_id] = _set_sat_group_delay(sats[sat_id], _as_group_delay(delay), sel...)
+    nothing
 end
 
 # Re-seed one satellite's Doppler-estimator state from its current Doppler via

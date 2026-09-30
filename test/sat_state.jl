@@ -184,6 +184,7 @@ GNSSSignals.get_data_frequency(::FakeWrapSignal) = 0Hz
         base.correlator_outputs,
         base.preferred_num_code_blocks_to_integrate,
         base.last_fully_integrated_num_code_blocks,
+        base.group_delay,
     )
 
     # Pre-sync wraps 4 and 6: the shared wrap must be 12 (max would give 6,
@@ -290,6 +291,171 @@ end
     track_state = TrackState(gpsl1, [sat])
     @test get_last_fully_integrated_num_code_blocks(track_state, 1) == 1
     @test get_last_fully_integrated_integration_time(track_state, 1) ≈ code_period
+end
+
+# --------------------------------------------------------------------------
+# Per-signal group delay
+# --------------------------------------------------------------------------
+
+using Test: @test_logs, @test_throws
+using Unitful: @u_str, DimensionError, s
+using GNSSSignals: GPSL5I, GPSL5Q, GalileoE1B, GalileoE1C, GalileoE5aI, GalileoE5aQ
+using Tracking: TrackedSignal, add_satellite!, get_group_delay, set_group_delay!
+
+@testset "group delay: default, plumbing, and addressing" begin
+    # Every signal starts unknown, whatever its constellation: this package holds
+    # no table of per-signal values, because deciding one needs constellation
+    # knowledge and usually a decoded navigation message. A signal defaulting to
+    # `0.0` here would be this package guessing on the caller's behalf.
+    for signal in (
+        GPSL1CA(),
+        GPSL1C_D(),
+        GPSL1C_P(),
+        GPSL5I(),
+        GPSL5Q(),
+        GalileoE1B(),
+        GalileoE1C(),
+        GalileoE5aI(),
+        GalileoE5aQ(),
+    )
+        @test get_group_delay(TrackedSignal(signal)) === nothing
+    end
+
+    l1cp, l1cd, l1ca = GPSL1C_P(), GPSL1C_D(), GPSL1CA()
+    ts = TrackState(; signals = (gps_l1 = (l1cp, l1cd, l1ca),))
+    ts = add_satellite!(
+        ts;
+        group = :gps_l1,
+        prn = 7,
+        code_phase = 0.0,
+        carrier_doppler = 1000.0Hz,
+    )
+
+    # Addressed by signal type …
+    set_group_delay!(ts, :gps_l1, 7, GPSL1C_D, -1.5e-9s)
+    @test get_group_delay(get_sat_state(ts, :gps_l1, 7), GPSL1C_D) === -1.5e-9s
+    # … and readable straight off the `TrackState`, like every other per-signal
+    # setting.
+    @test get_group_delay(ts, :gps_l1, 7, GPSL1C_D) === -1.5e-9s
+    # … and by index, and the other signals are untouched.
+    set_group_delay!(ts, :gps_l1, 7, 3, 3.0e-9s)
+    @test get_group_delay(get_sat_state(ts, :gps_l1, 7), 3) === 3.0e-9s
+    # Slot 1 is an ordinary slot: untouched by the writes above, it is still the
+    # `nothing` every slot starts at, and it is settable like any other.
+    @test isnothing(get_group_delay(get_sat_state(ts, :gps_l1, 7), GPSL1C_P))
+    set_group_delay!(ts, :gps_l1, 7, GPSL1C_P, 0.0s)
+    @test get_group_delay(get_sat_state(ts, :gps_l1, 7), GPSL1C_P) === 0.0s
+    # The group by position, and the single-group form without a group.
+    set_group_delay!(ts, 1, 7, GPSL1C_P, 0.5e-9s)
+    @test get_group_delay(ts, 1, 7, 1) === 0.5e-9s
+    set_group_delay!(ts, 7, GPSL1C_P, 0.0s)
+    @test get_group_delay(ts, :gps_l1, 7, 1) === 0.0s
+
+    # `nothing` marks it unknown again — the one case a plain `Maybe` kwarg could
+    # not express, hence the `Some` wrapper inside.
+    set_group_delay!(ts, :gps_l1, 7, GPSL1C_D, nothing)
+    @test get_group_delay(get_sat_state(ts, :gps_l1, 7), GPSL1C_D) === nothing
+
+    # Any time unit is accepted and normalized to seconds as a Float64 quantity,
+    # so the field type stays concrete however the caller spells the value.
+    set_group_delay!(ts, :gps_l1, 7, GPSL1CA, -1200u"ps")
+    @test get_group_delay(get_sat_state(ts, :gps_l1, 7), GPSL1CA) === -1.2e-9s
+    set_group_delay!(ts, :gps_l1, 7, GPSL1CA, 0s)
+    @test get_group_delay(get_sat_state(ts, :gps_l1, 7), GPSL1CA) === 0.0s
+
+    # A bare number, and a quantity that is not a time, are both refused: the
+    # field carries its unit like every dimensioned quantity here, and at
+    # sub-nanosecond scale an assumed unit is a metre-scale mistake.
+    @test_throws DimensionError set_group_delay!(ts, :gps_l1, 7, GPSL1CA, 1.2e-9)
+    @test_throws DimensionError TrackedSignal(GPSL1CA(); group_delay = 1.2e-9)
+    @test_throws DimensionError set_group_delay!(ts, :gps_l1, 7, GPSL1CA, 1.2Hz)
+    # …except a length, which gets a sentence naming the conversion and the datum
+    # trap that comes with it: an SSR/PPP "code bias" in metres is the likely
+    # wrong input here, not an exotic one.
+    @test_throws ArgumentError set_group_delay!(ts, :gps_l1, 7, GPSL1CA, 0.45u"m")
+    @test_throws ArgumentError TrackedSignal(GPSL1CA(); group_delay = 0.45u"m")
+    @test occursin("Unitful.c0", sprint(showerror, try
+        Tracking._as_group_delay(0.45u"m")
+    catch e
+        e
+    end))
+    # A signal selector is required on a multi-signal satellite.
+    @test_throws MethodError set_group_delay!(ts, :gps_l1, 7, 1.0e-9s)
+end
+
+@testset "the datum is whichever slot you state, and only differences are read" begin
+    # `_driver_relative_group_delay` is the one place the differencing rule is
+    # written: datum minus delay, so a passenger delayed relative to the driver
+    # (larger value) comes out negative, and either end unknown is `nothing`.
+    @test Tracking._driver_relative_group_delay(3.0e-9s, 1.0e-9s) ≈ -2.0e-9s
+    @test Tracking._driver_relative_group_delay(1.0e-9s, 3.0e-9s) ≈ 2.0e-9s
+    @test isnothing(Tracking._driver_relative_group_delay(nothing, 1.0e-9s))
+    @test isnothing(Tracking._driver_relative_group_delay(1.0e-9s, nothing))
+    @test isnothing(Tracking._driver_relative_group_delay(nothing, nothing))
+    # Shifting both ends by one constant changes nothing — the datum cancels.
+    offset = 5.0e-9s
+    @test Tracking._driver_relative_group_delay(1.2e-9s + offset, offset) ≈
+          Tracking._driver_relative_group_delay(1.2e-9s, 0.0s)
+    # Converted to chips at the code frequency in effect.
+    @test Tracking._group_delay_to_chips(1.0e-6s, 1.023e6Hz) ≈ 1.023
+end
+
+@testset "a pre-built signals tuple states its own datum" begin
+    # The `TrackedSignal`-tuple constructor is the full-control form and seeds
+    # nothing, so a caller using it owns the datum as it owns the correlators.
+    l1cp, l1cd = GPSL1C_P(), GPSL1C_D()
+    sat = TrackedSat((TrackedSignal(l1cp), TrackedSignal(l1cd)), 1, 0.0, 1000.0Hz)
+    @test isnothing(get_group_delay(sat, 1))
+    @test isnothing(get_group_delay(sat, 2))
+
+    sat = Tracking._set_sat_group_delay(sat, 2.0e-9s, 2)
+    @test get_group_delay(sat, 2) == 2.0e-9s
+    rebuilt = TrackedSat(
+        sat;
+        # `Some` because `nothing` is a legal value of this field, so the
+        # copy-update constructor cannot read a bare `nothing` as "clear it".
+        signals = (
+            TrackedSignal(
+                sat.signals[1];
+                group_delay = Some{Union{Nothing,typeof(1.0s)}}(1.0e-9s),
+            ),
+            sat.signals[2],
+        ),
+    )
+    @test get_group_delay(rebuilt, 1) == 1.0e-9s
+    @test get_group_delay(rebuilt, 2) == 2.0e-9s
+
+    # A value on slot 1 at construction is kept as given: no normalisation and
+    # nothing refused.
+    sat = TrackedSat(
+        (
+            TrackedSignal(l1cp; group_delay = 1.0e-9s),
+            TrackedSignal(l1cd; group_delay = -1.0e-9s),
+        ),
+        7,
+        0.0,
+        1000.0Hz,
+    )
+    @test get_group_delay(sat, GPSL1C_P) == 1.0e-9s
+    @test get_group_delay(sat, GPSL1C_D) == -1.0e-9s
+    fresh = TrackedSat((l1cp, l1cd), 7, 0.0, 1000.0Hz)
+    @test isnothing(get_group_delay(fresh, GPSL1C_P))
+end
+
+@testset "setting a group delay is estimator-agnostic and silent" begin
+    l1cp, l1cd = GPSL1C_P(), GPSL1C_D()
+    for estimator in (Tracking.ConventionalAssistedPLLAndDLL(), Tracking.VectorPLLAndDLL())
+        ts = TrackState(; signals = (gps_l1 = (l1cp, l1cd),), doppler_estimator = estimator)
+        ts = add_satellite!(
+            ts;
+            group = :gps_l1,
+            prn = 7,
+            code_phase = 0.0,
+            carrier_doppler = 1000.0Hz,
+        )
+        @test_logs set_group_delay!(ts, :gps_l1, 7, GPSL1C_D, 1.0e-9s)
+        @test get_group_delay(ts, :gps_l1, 7, GPSL1C_D) == 1.0e-9s
+    end
 end
 
 end
