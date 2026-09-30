@@ -288,6 +288,8 @@ That is the reason for the two *carrier* loops. The code loop's is separate, and
 
 The setting is independent of the estimator: [`VectorPLLAndDLL`](@ref) reads the same group flag, with one restriction — a satellite already in the vector loop (`vt_on = true`) combines the **carrier phase** discriminator only, because its other two loops are the navigation filter's and each signal's discriminator reaches the filter as its own raw measurement for it to weigh (see [Vector tracking](vector_tracking.md)). In its scalar fallback, which is where a satellite pulls in, all three combine exactly as described here.
 
+The design, and what the coincidence rule gives up against accumulating every passenger record inside a driver record's window, is recorded in `docs/plans/2026-09-30-simple-discriminator-combining.md`.
+
 ### Group delay
 
 The carrier loops combine from the first integration: every component rides the same carrier, so once de-rotated each signal's Costas discriminator measures the same phase error the driver's does. The **code** loop needs one number from you first.
