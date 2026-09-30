@@ -1,23 +1,29 @@
 module DiscriminatorsTest
 
-using Test: @test, @testset, @inferred
+using Test: @test, @testset, @inferred, @test_throws
 using GNSSSignals:
     GPSL1CA,
     GPSL1C_P,
     GalileoE1B,
     GalileoE1B_BOC11,
     GalileoE1C,
+    GalileoE5aI,
+    GalileoE5aQ,
+    GPSL1C_D,
     get_code,
+    get_relative_power,
     get_code_frequency,
     get_code_length
 using StaticArrays: SVector
 using Unitful: Hz, MHz, ms, upreferred
 using Tracking:
+    Tracking,
     EarlyPromptLateCorrelator,
     VeryEarlyPromptLateCorrelator,
     pll_disc,
     fll_disc,
     dll_disc,
+    dll_disc_noise_gain,
     get_correlator_sample_shifts,
     get_early_late_sample_spacing,
     get_prompt,
@@ -149,6 +155,109 @@ end
     @test dll_disc_s_curve_slope(GalileoE1B(), veml, 20MHz) ≈ 1.0 atol = 0.1
     @test dll_disc_s_curve_slope(GPSL1C_P(), veml, 20MHz) ≈ 1.0 atol = 0.1
     @test dll_disc_s_curve_slope(GalileoE1C(), veml, 20MHz) ≈ 1.0 atol = 0.2
+end
+
+# A correlator type with no `dll_disc_noise_gain` method: there is no generic gain
+# to fall back to.
+struct UnmodelledCorrelator <: Tracking.AbstractCorrelator{1} end
+
+@testset "DLL discriminator noise gains" begin
+    fs = 5e6Hz
+    # A BOC VEML discriminator is several times more accurate than a 1-chip BPSK
+    # early-late one at equal SNR, so its noise gain must be correspondingly
+    # smaller — that is what lets a pilot outvote a legacy signal.
+    veml = VeryEarlyPromptLateCorrelator()
+    epl = EarlyPromptLateCorrelator()
+    g_veml = dll_disc_noise_gain(GPSL1C_P(), veml, 0.0Hz, fs)
+    g_epl = dll_disc_noise_gain(GPSL1CA(), epl, 0.0Hz, fs)
+    @test 0 < g_veml < g_epl
+
+    # The documented values, not just their ordering. `d / 4` is Kaplan & Hegarty's
+    # tracking-jitter constant for the noncoherent early-minus-late envelope
+    # discriminator with early-late spacing `d` chips, pinned at the two sampling
+    # frequencies where the preferred chip shift lands on a whole number of
+    # samples and `d` is therefore exactly what it was asked for — which also pins
+    # the linear `d` dependence.
+    @test dll_disc_noise_gain(
+        GPSL1CA(),
+        EarlyPromptLateCorrelator(),                  # ±0.5 chips
+        0.0Hz,
+        2.046e6Hz,                                    # 0.5 chips = 1 sample
+    ) === 0.25
+    @test dll_disc_noise_gain(
+        GPSL1CA(),
+        EarlyPromptLateCorrelator([complex(0.0), complex(0.0), complex(0.0)], 0.25),
+        0.0Hz,
+        4.092e6Hz,                                    # 0.25 chips = 1 sample
+    ) === 0.125
+    # The VEML gain for the default ±0.15/±0.6 taps: `1 / (2 · (3 + 1)²)`, about
+    # 8× the precision of the 1-chip early-late layout.
+    @test g_veml ≈ 0.03125 rtol = 1e-12
+    @test dll_disc_noise_gain(GPSL1C_P(), veml, 0.0Hz, 20e6Hz) ≈ 0.03125 rtol = 1e-9
+
+    # A degenerate tap layout — both pairs past the 1-chip correlation support —
+    # carries no delay information and must come out as `Inf`, so a record gets
+    # weight *zero*. Not `NaN`: the envelope sum is what the S-curve slope divides
+    # by, so `-0.0 / 0.0` is one line away, and `NaN` compares equal to nothing.
+    # Real accumulator values, because an all-zero correlator is a separate `0/0`.
+    degenerate = VeryEarlyPromptLateCorrelator(
+        [
+            complex(0.60, 0.0),
+            complex(0.90, 0.0),
+            complex(1.00, 0.0),
+            complex(0.80, 0.0),
+            complex(0.50, 0.0),
+        ],
+        2.0,
+        3.0,
+    )
+    @test dll_disc_noise_gain(GalileoE1C(), degenerate, 0.0Hz, 20e6Hz) === Inf
+    @test Tracking._veml_discriminator_slope(2.0, 3.0) === 0.0
+    # The paired guard in the discriminator itself: an uncalibrated raw value
+    # rather than a division by a zero (or NaN) slope.
+    @test isfinite(dll_disc(GalileoE1C(), degenerate, 0.0Hz, 20e6Hz))
+
+    # No generic gain: a correlator type without a `dll_disc_noise_gain` method is
+    # a `MethodError`, like one without `dll_disc`.
+    @test_throws MethodError dll_disc_noise_gain(
+        GPSL1CA(),
+        UnmodelledCorrelator(),
+        0.0Hz,
+        fs,
+    )
+end
+
+@testset "the shared tap-offset helpers are what dll_disc reads" begin
+    # `dll_disc` and `dll_disc_noise_gain` must be evaluated at the same tap
+    # offsets, or the gain is not the noise gain of that discriminator.
+    fs = 5e6Hz
+    code_doppler = 3.0Hz
+    epl = EarlyPromptLateCorrelator()
+    d = Tracking._early_late_spacing(GPSL1CA(), epl, code_doppler, fs)
+    code_frequency = code_doppler + get_code_frequency(GPSL1CA())
+    @test d ≈
+          get_early_late_sample_spacing(epl, fs, code_frequency) *
+          upreferred(code_frequency / fs)
+    @test dll_disc_noise_gain(GPSL1CA(), epl, code_doppler, fs) === d / 4
+
+    veml = VeryEarlyPromptLateCorrelator()
+    inner, outer = Tracking._veml_tap_offsets(GalileoE1B(), veml, 0.0Hz, 20e6Hz)
+    # ±3 / ±12 samples at 20 MHz and 1.023 MHz.
+    @test inner ≈ 3 * 1.023e6 / 20e6
+    @test outer ≈ 12 * 1.023e6 / 20e6
+end
+
+@testset "relative record SNR is the nominal power share times the sample count" begin
+    # The prompt does not enter it at all: the weight is nominal.
+    @test Tracking._relative_record_snr(GPSL1CA(), 100) ===
+          get_relative_power(GPSL1CA()) * 100
+    @test Tracking._relative_record_snr(GPSL1CA(), 200) ===
+          get_relative_power(GPSL1CA()) * 200
+    # GPS L1C's 75/25 pilot/data split is the one asymmetric intra-band case.
+    @test get_relative_power(GPSL1C_P()) / get_relative_power(GPSL1C_D()) === 3.0
+    # Galileo's intra-band pairs split evenly.
+    @test get_relative_power(GalileoE1B()) === get_relative_power(GalileoE1C()) === 0.5
+    @test get_relative_power(GalileoE5aI()) === get_relative_power(GalileoE5aQ()) === 0.5
 end
 
 end
