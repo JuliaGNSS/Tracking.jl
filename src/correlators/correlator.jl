@@ -24,20 +24,30 @@ Fields:
     Fill it with the accumulator scaling `normalize` expects — the raw
     sum-of-products over `integrated_samples` — which an external producer gets
     for free by reusing [`EarlyPromptLateCorrelator`](@ref) / `update_accumulator`.
+
   - `integrated_samples`: samples integrated into this output (for `normalize`,
     the loop-filter `integration_time`, and the bit-buffer block count). For an
     external producer this is the true sample count of that integration.
+
   - `sample_index`: sample index at which this integration ended, on the time
-    grid the Doppler estimator and vector tracking read. The software correlate
+    grid the Doppler estimator reads. The software correlate
     phase writes it **buffer-relative** — the end sample within the current
     `track!` measurement (`signal_start_sample` returns to 1 at the top of every
     `track!` call). An external producer with a free-running **global** sample
     counter must therefore map its global timestamp onto the same per-chunk
     origin before storing it here: subtract the sample index of the current
     chunk/epoch origin so the value is relative to the chunk the estimator is
-    folding, keeping every satellite on one consistent time grid. The estimator
-    itself does not read `sample_index` (the loop filters key off
-    `integrated_samples`); it is preserved for downstream vector/Kalman tracking.
+    folding, keeping every satellite on one consistent time grid.
+
+    The one reader inside Tracking is either shipped estimator in a group with
+    `discriminator_combining = true`, which compares it **across the signals of
+    one satellite**: a passenger record is combined into a driver record's loop
+    update only if the two ended on the same `sample_index`. A producer must
+    therefore keep every signal of a satellite on the one per-chunk origin, as
+    the software path does. Getting it wrong does not break tracking — a
+    passenger record whose index matches no driver record is still applied to
+    its signal, it is simply not combined. The loop filters key off
+    `integrated_samples`, so a driver-only or single-signal setup never reads it.
 """
 struct CorrelatorOutput{C<:AbstractCorrelator}
     correlator::C

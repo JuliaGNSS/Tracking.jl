@@ -352,6 +352,12 @@ This signal's payload group delay, as a time (`1.2e-9s`, `-0.3u"ns"`, …), or
 `nothing` when the caller has supplied none. Set it with
 [`set_group_delay!`](@ref).
 
+It is read where a passenger's code discriminator enters a **combined** code
+loop — the loop update of a satellite whose [`SignalGroup`](@ref) has
+`discriminator_combining = true` — and referred there to the driver's code
+phase, since that is what the satellite's shared `code_phase` means and what
+everything ranging on it assumes.
+
 **Only differences between the signals of one satellite are ever used**, so the
 datum the values are stated against is yours to choose and cancels: what is
 applied to a passenger is `signals[1]`'s value minus this signal's. Two usages
@@ -372,8 +378,12 @@ the satellite through the longer path, arrives later, and so sits at a *smaller*
 code phase.
 
 `nothing` means unknown, and `0.0s` is a different statement: it asserts that
-this signal shares the datum's code phase. See [Group delay](@ref) in the manual
-for why assuming zero for an unknown difference is not the harmless direction.
+this signal shares the datum's code phase. `nothing` withholds only the
+**combined code** loop: a signal without a value still aids the carrier loops
+from its first integration. On `signals[1]` it withholds every passenger's code
+contribution, since nothing can be referred to an unknown datum — see
+[Group delay](@ref) in the manual for why assuming zero is not the harmless
+direction.
 """
 get_group_delay(t::TrackedSignal) = t.group_delay
 
@@ -1059,6 +1069,10 @@ Fields:
   - `satellites`: `Dictionary{Int, <:TrackedSat}` keyed by PRN
   - `signals`: the signal-instance tuple (e.g. `(GPSL1C_P(), GPSL1C_D(), GPSL1CA())`)
   - `num_ants`: the antenna count for this group's band
+  - `discriminator_combining`: whether a satellite's passenger signals
+    (`signals[2:end]`) aid the driver's loop update — see
+    [Multi-signal discriminator combining](@ref Multi-signal-discriminator-combining).
+    `false` by default.
 """
 struct SignalGroup{
     B,                                             # GNSSSignals Band instance
@@ -1070,7 +1084,13 @@ struct SignalGroup{
     satellites::S
     signals::Sigs
     num_ants::NA
+    discriminator_combining::Bool
 end
+
+# Combining defaults off, and the four-positional form keeps every existing
+# construction site working.
+SignalGroup(band, satellites, signals, num_ants) =
+    SignalGroup(band, satellites, signals, num_ants, false)
 
 # Kwarg-update constructor — produces a new SignalGroup sharing concrete types
 # with `g`. The `satellites` field uses `Maybe{S}` so `nothing` stays
@@ -1081,6 +1101,7 @@ function SignalGroup(
     satellites::Maybe{S} = nothing,
     signals::Maybe{Sigs} = nothing,
     num_ants::Maybe{NA} = nothing,
+    discriminator_combining::Maybe{Bool} = nothing,
 ) where {
     B,
     S<:Dictionary{<:Any,<:TrackedSat},
@@ -1092,6 +1113,8 @@ function SignalGroup(
         isnothing(satellites) ? g.satellites : satellites,
         isnothing(signals) ? g.signals : signals,
         isnothing(num_ants) ? g.num_ants : num_ants,
+        isnothing(discriminator_combining) ? g.discriminator_combining :
+        discriminator_combining,
     )
 end
 
@@ -1177,13 +1200,22 @@ alone.
 ```julia
 SignalGroup((GPSL1CA(),))                              # band L1(), 1 antenna
 SignalGroup((GPSL5I(),); num_ants = NumAnts(2))        # 2-antenna L5
+SignalGroup((GalileoE1C(), GalileoE1B()); discriminator_combining = true)
 ```
+
+`discriminator_combining = true` lets every satellite's passenger records aid the
+driver's loop update where they coincide with a driver record — see
+[Multi-signal discriminator combining](@ref Multi-signal-discriminator-combining).
+It is a property of the group because it is one of the group's signal tuple:
+combining assumes `signals[1]` integrates at least as long as every passenger,
+which this constructor documents rather than checks.
 """
 function SignalGroup(
     signals::Tuple{Vararg{AbstractGNSSSignal}};
     band = get_band(first(signals)),
     num_ants::NumAnts = NumAnts(1),
     doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
+    discriminator_combining::Bool = false,
 )
     _validate_signal_group(signals, band)
     # Build a template TrackedSat so the dict's value type is concrete.
@@ -1192,7 +1224,7 @@ function SignalGroup(
     # storage's outer shape.
     template = _make_template_tracked_sat(signals, doppler_estimator, num_ants)
     sats = Dictionary{Int,typeof(template)}(Int[], typeof(template)[])
-    SignalGroup(band, sats, signals, num_ants)
+    SignalGroup(band, sats, signals, num_ants, discriminator_combining)
 end
 
 """

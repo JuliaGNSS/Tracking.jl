@@ -49,6 +49,13 @@ other signal, so a state that stays on [`NWPRCN0Estimator`](@ref) runs no
 despread at all. Pass an explicit NamedTuple to configure the window, or to
 declare a signal's source on a correlator-ingest path where you fill it with
 [`append_noise_observation!`](@ref) rather than from samples.
+
+`discriminator_combining = true` lets the passenger signals of every group
+declared by a signal tuple aid its driver's loop update (see
+[Multi-signal discriminator combining](@ref Multi-signal-discriminator-combining));
+a pre-built [`SignalGroup`](@ref) entry keeps its own setting. It is `false` by
+default, and single-signal groups are unaffected either way. The positional
+`TrackState` constructors take the same keyword.
 """
 function TrackState(;
     signal::Maybe{AbstractGNSSSignal} = nothing,
@@ -56,6 +63,7 @@ function TrackState(;
     doppler_estimator::Maybe{AbstractDopplerEstimator} = nothing,
     num_ants::NumAnts = NumAnts(1),
     noise_estimators::Maybe{NamedTuple} = nothing,
+    discriminator_combining::Bool = false,
 )
     if isnothing(signal) && isnothing(signals)
         throw(
@@ -87,7 +95,7 @@ function TrackState(;
     #   - a pre-built `SignalGroup` instance (carries its own band /
     #     num_ants — used when the user wants per-band overrides).
     groups = map(sig_groups_nt) do entry
-        _normalize_group_entry(entry, estimator, num_ants)
+        _normalize_group_entry(entry, estimator, num_ants, discriminator_combining)
     end
     _validate_same_band_num_ants(groups)
     TrackState(groups, estimator, _resolve_noise_estimators(noise_estimators, groups))
@@ -231,12 +239,13 @@ end
     sig_tuple::Tuple{Vararg{AbstractGNSSSignal}},
     doppler_estimator::AbstractDopplerEstimator,
     num_ants::NumAnts,
+    discriminator_combining::Bool = false,
 )
     band = get_band(first(sig_tuple))
     _validate_signal_group(sig_tuple, band)
     template = _make_template_tracked_sat(sig_tuple, doppler_estimator, num_ants)
     sats = Dictionary{Int,typeof(template)}(Int[], typeof(template)[])
-    SignalGroup(band, sats, sig_tuple, num_ants)
+    SignalGroup(band, sats, sig_tuple, num_ants, discriminator_combining)
 end
 
 # Pre-built SignalGroup → pass through, but if its `satellites` dict
@@ -244,10 +253,13 @@ end
 # rebuild the template so the slot type lines up. The common case where
 # the user built the SignalGroup with `SignalGroup((sigs,); num_ants =
 # ..., doppler_estimator = same)` then it just passes through.
+# A pre-built `SignalGroup` carries its own flag, as it carries its own band and
+# antenna count — the `TrackState` kwarg is only the default for bare tuples.
 @inline function _normalize_group_entry(
     g::SignalGroup,
     doppler_estimator::AbstractDopplerEstimator,
     _num_ants::NumAnts,
+    ::Bool = false,
 )
     # If the existing slot type already matches the estimator, keep it.
     # Otherwise rebuild the empty dict with a fresh template that uses
@@ -266,7 +278,7 @@ end
         return g
     end
     new_sats = Dictionary{Int,typeof(template)}(Int[], typeof(template)[])
-    SignalGroup(g.band, new_sats, g.signals, g.num_ants)
+    SignalGroup(g.band, new_sats, g.signals, g.num_ants, g.discriminator_combining)
 end
 
 # Same-band groups must declare identical `num_ants`. Two groups on the
@@ -324,6 +336,7 @@ function TrackState(
     tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}};
     doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
     noise_estimators::Maybe{NamedTuple} = nothing,
+    discriminator_combining::Bool = false,
 )
     # `signal` is implied by each sat's `signals[1].signal` in the new design;
     # the positional argument is kept for backward-compatible construction but
@@ -331,7 +344,7 @@ function TrackState(
     # bandwidth from its own driver signal.
     sats_dict = to_dictionary(tracked_sats)
     _assert_doppler_estimator_types_match(sats_dict, doppler_estimator)
-    groups = (default = _signal_group_from_dict(sats_dict),)
+    groups = (default = _signal_group_from_dict(sats_dict, discriminator_combining),)
     TrackState(
         groups,
         doppler_estimator,
@@ -343,9 +356,10 @@ function TrackState(
     tracked_sats::Dictionary{<:Any,<:TrackedSat};
     doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
     noise_estimators::Maybe{NamedTuple} = nothing,
+    discriminator_combining::Bool = false,
 )
     _assert_doppler_estimator_types_match(tracked_sats, doppler_estimator)
-    groups = (default = _signal_group_from_dict(tracked_sats),)
+    groups = (default = _signal_group_from_dict(tracked_sats, discriminator_combining),)
     TrackState(
         groups,
         doppler_estimator,
@@ -387,12 +401,13 @@ function TrackState(
     satellites::SatelliteDicts;
     doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
     noise_estimators::Maybe{NamedTuple} = nothing,
+    discriminator_combining::Bool = false,
 )
     foreach(
         d -> _assert_doppler_estimator_types_match(d, doppler_estimator),
         Tuple(satellites),
     )
-    groups = map(_signal_group_from_dict, satellites)
+    groups = map(d -> _signal_group_from_dict(d, discriminator_combining), satellites)
     TrackState(
         groups,
         doppler_estimator,
@@ -423,7 +438,10 @@ end
 # the positional `TrackState(signal, sats)` / `TrackState(satellites)`
 # constructors. Empty dicts can't be recovered this way (no sats to inspect)
 # — requires at least one sat in the dict.
-@inline function _signal_group_from_dict(dict::Dictionary{<:Any,<:TrackedSat})
+@inline function _signal_group_from_dict(
+    dict::Dictionary{<:Any,<:TrackedSat},
+    discriminator_combining::Bool = false,
+)
     isempty(dict) && throw(
         ArgumentError(
             "Cannot recover the signal-instance tuple from an empty " *
@@ -435,7 +453,7 @@ end
     sig_tuple = map(s -> s.signal, sat.signals)
     band = get_band(first(sig_tuple))
     num_ants = NumAnts(get_num_ants(sat))
-    SignalGroup(band, dict, sig_tuple, num_ants)
+    SignalGroup(band, dict, sig_tuple, num_ants, discriminator_combining)
 end
 
 # Immutable reset — the first copy `track` makes of the caller's live
@@ -1273,8 +1291,19 @@ follow. Every slot starts at `nothing` — the driver's included, and none is
 treated differently — and on a **single-signal** satellite there is no
 difference to form, so whatever you store is kept and never used.
 
+What the difference is *for*: multi-signal discriminator combining (a
+[`SignalGroup`](@ref) with `discriminator_combining = true`) subtracts it from a
+passenger's DLL discriminator at the loop update, so the satellite-shared
+`code_phase` keeps meaning "the driver signal's code phase", which is what
+downstream per-signal group-delay corrections (e.g. `PositionVelocityTime.jl`'s)
+already assume. A consumer never has to apply it itself.
+
 `nothing` and `0.0s` are different statements: `0.0s` on every slot asserts that
-the signals share a code phase, `nothing` that the difference is unknown. See
+the signals share a code phase, `nothing` that the difference is unknown. A
+passenger left at `nothing` aids the **carrier** loops from its first
+integration and only its code contribution waits, so leaving it unset is the
+safe default; `nothing` on `signals[1]` withholds *every* passenger's code
+contribution, since nothing can be referred to an unknown datum. See
 [Group delay](@ref) in the manual for what each costs.
 
 Where the value comes from is deliberately not this package's concern — Tracking

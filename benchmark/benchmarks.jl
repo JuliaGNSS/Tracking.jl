@@ -1,7 +1,7 @@
 using BenchmarkTools
 using GNSSSignals
 using GNSSSignals: GalileoE1B
-using Unitful: Hz
+using Unitful: Hz, s
 using Tracking
 using Tracking:
     EarlyPromptLateCorrelator,
@@ -928,16 +928,36 @@ end
 # Stacking N copies of GPSL1CA on one sat is not a real-world scenario
 # (a real sat carries one signal of each kind), but it isolates the
 # tuple-walk cost on identical N for a clean per-signal-cost comparison.
+# Whether this revision has multi-signal discriminator combining, so the sweep
+# below can price it. Probed by field, since `SignalGroup` long predates the
+# flag.
+const _HAS_DISCRIMINATOR_COMBINING =
+    _HAS_TRACKED_SIGNAL &&
+    isdefined(Tracking, :SignalGroup) &&
+    :discriminator_combining in fieldnames(Tracking.SignalGroup)
+
 if _HAS_TRACKED_SIGNAL
-    function _make_multi_signal_track_state(; n_signals, nsamp, sfreq)
+    function _make_multi_signal_track_state(;
+        n_signals,
+        nsamp,
+        sfreq,
+        discriminator_combining = false,
+    )
         gpsl1 = GPSL1CA()
         estimator = Tracking.ConventionalAssistedPLLAndDLL()
+        combining_kw = _HAS_DISCRIMINATOR_COMBINING ? (; discriminator_combining) : (;)
+        # A zero group delay says these components share a code phase, which two
+        # copies of one signal do by construction — without it a combining row
+        # would price the carrier loops only, since a passenger with an unknown
+        # delay abstains from the code loop.
+        delay_kw = _HAS_DISCRIMINATOR_COMBINING ? (; group_delay = 0.0s) : (;)
         signals = ntuple(
             _ -> Tracking.TrackedSignal(
                 gpsl1;
                 num_ants = NumAnts(1),
                 correlator = Tracking.EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
                 post_corr_filter = Tracking.DefaultPostCorrFilter(),
+                delay_kw...,
             ),
             n_signals,
         )
@@ -983,7 +1003,7 @@ if _HAS_TRACKED_SIGNAL
                     de_state,
                 )
             end
-        ts = TrackState(gpsl1, sat; doppler_estimator = estimator)
+        ts = TrackState(gpsl1, sat; doppler_estimator = estimator, combining_kw...)
         signal = rand(Complex{Float32}, nsamp)
         ts, signal
     end
@@ -1011,6 +1031,30 @@ if _HAS_TRACKED_SIGNAL
                 $(5e6Hz);
                 downconvert_and_correlator = $dc_ip,
             )
+            # The same fixture with discriminator combining on. Paired with the
+            # row above — the same fold with the combining walk compiled out — so
+            # the difference is exactly the interleaved walk plus the coincident
+            # records' discriminators and weights (every record coincides here),
+            # and either row allocating is a regression the
+            # `allocations[1] == allocations[2]` assertion in
+            # test/multi_signal_combining.jl cannot see. Only from N = 2, since
+            # at N = 1 the two are the same code by dispatch.
+            if _HAS_DISCRIMINATOR_COMBINING && n_signals > 1
+                ts_c, signal_c = _make_multi_signal_track_state(;
+                    n_signals,
+                    nsamp = 5000,
+                    sfreq = 5e6Hz,
+                    discriminator_combining = true,
+                )
+                dc_c = _make_cpu_dc(5e6Hz)
+                SUITE["track"]["$prefix – in-place, combining, Float32"] =
+                    @benchmarkable Tracking.track!(
+                        $signal_c,
+                        $ts_c,
+                        $(5e6Hz);
+                        downconvert_and_correlator = $dc_c,
+                    )
+            end
         end
     end
 end

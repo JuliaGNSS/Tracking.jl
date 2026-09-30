@@ -65,6 +65,66 @@ function _precompile_signal(system)
     signal_f32, Complex{Int16}.(round.(signal_f32 .* 512)), sampling_frequency
 end
 
+# One multi-signal satellite's workload under one estimator. Nothing in the
+# single-signal workload below reaches the shared fold's passenger walk or its
+# combining arithmetic — so without this a receiver compiles all of that on its
+# first pilot/data satellite, which is exactly the "after the stream has started"
+# cost the rest of this file exists to remove.
+#
+# Galileo E1C+E1B because it is the shortest path through the machinery that has
+# both a pilot and a data component: one band, one sampling frequency, a real
+# secondary code on the pilot, equal code periods so every passenger record
+# coincides with a driver record, and the pilot first as the combining
+# assumption wants. `vt_on` is left unset — a meaningful `vt_on` pass needs a
+# navigation filter's corrections, and the `VectorPLLAndDLL` call below already
+# compiles the state type and the traversal.
+#
+# Called once per estimator rather than looped over them, for the same reason
+# `_precompile_track` is: a loop over a heterogeneous tuple dispatches
+# dynamically and the methods compiled that way are not all cached.
+function _precompile_track_multi_signal(estimator, signal_f32, sampling_frequency)
+    signals = (GalileoE1C(), GalileoE1B())
+    sat = TrackedSat(signals, 1, 0.0, 180.0Hz; doppler_estimator = estimator)
+    state = TrackState(
+        first(signals),
+        sat;
+        doppler_estimator = estimator,
+        discriminator_combining = true,
+    )
+    for _ = 1:3
+        track!(signal_f32, state, sampling_frequency)
+    end
+    # Via the satellite rather than the `TrackState`, so the signal selector is
+    # unambiguously a selector and not a group index.
+    sat = get_sat_state(state, 1)
+    estimate_cn0(sat, GalileoE1C)
+    get_soft_bits(sat, GalileoE1B)
+    get_code_phase(sat)
+    nothing
+end
+
+# A clean E1B+E1C composite: both components carry real power, so neither
+# component's prompt collapses to the all-zero correlation that turns a
+# discriminator into a NaN (see the BeiDou B2b exclusion above).
+function _precompile_multi_signal(sampling_frequency)
+    num_samples = round(
+        Int,
+        get_code_length(GalileoE1B()) * sampling_frequency /
+        get_code_frequency(GalileoE1B()),
+    )
+    samples = 0:(num_samples-1)
+    carrier = cis.(2π .* 200.0 .* samples ./ ustrip(Hz, sampling_frequency))
+    component(system) = gen_code(
+        num_samples,
+        system,
+        1,
+        sampling_frequency,
+        200.0Hz * get_code_center_frequency_ratio(system) + get_code_frequency(system),
+        0.0,
+    )
+    ComplexF32.(carrier .* (component(GalileoE1B()) .+ component(GalileoE1C())))
+end
+
 # One signal's workload, as a function so every call inside it is statically
 # dispatched on the concrete signal type — the specialisations then land in
 # the package image. Iterating the signal tuple in a loop instead dispatches
@@ -94,6 +154,8 @@ end
 @setup_workload begin
     signals = map(_precompile_signal, _PRECOMPILE_SIGNALS)
     backend16 = Int16ThreadedDownconvertAndCorrelator(2^12)
+    e1_sampling_frequency = _precompile_sampling_frequency(GalileoE1B())
+    e1_signal_f32 = _precompile_multi_signal(e1_sampling_frequency)
     @compile_workload begin
         # `map` over tuples unrolls, so each call below is a static dispatch.
         map(
@@ -102,5 +164,15 @@ end
         ) do system, (signal_f32, signal_i16, sampling_frequency)
             _precompile_track(system, signal_f32, signal_i16, sampling_frequency, backend16)
         end
+        _precompile_track_multi_signal(
+            ConventionalAssistedPLLAndDLL(),
+            e1_signal_f32,
+            e1_sampling_frequency,
+        )
+        _precompile_track_multi_signal(
+            VectorPLLAndDLL(),
+            e1_signal_f32,
+            e1_sampling_frequency,
+        )
     end
 end
