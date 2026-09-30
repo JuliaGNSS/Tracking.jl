@@ -1,6 +1,8 @@
 # Changelog
 
-# [9.0.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v8.3.1...v9.0.0) (2026-09-29)
+## [8.3.2](https://github.com/JuliaGNSS/Tracking.jl/compare/v8.3.1...v8.3.2) (2026-09-30)
+
+No changes to the package. Replaces the accidental 9.0.0 release.
 
 ## [8.3.1](https://github.com/JuliaGNSS/Tracking.jl/compare/v8.3.0...v8.3.1) (2026-09-21)
 
