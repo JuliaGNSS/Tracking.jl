@@ -354,9 +354,12 @@ This signal's payload group delay, as a time (`1.2e-9s`, `-0.3u"ns"`, …), or
 
 It is read where a passenger's code discriminator enters a **combined** code
 loop — the loop update of a satellite whose [`SignalGroup`](@ref) has
-`discriminator_combining = true` — and referred there to the driver's code
-phase, since that is what the satellite's shared `code_phase` means and what
-everything ranging on it assumes.
+`discriminator_combining = true`, under either estimator (for
+[`VectorPLLAndDLL`](@ref), its scalar fallback) — and referred there to the
+driver's code phase, since that is what the satellite's shared `code_phase`
+means and what everything ranging on it assumes. The per-signal accumulators a
+navigation filter reads ([`mean_code_discr`](@ref)) are **not** referred — see
+[`VectorPLLAndDLL`](@ref).
 
 **Only differences between the signals of one satellite are ever used**, so the
 datum the values are stated against is yours to choose and cancels: what is
@@ -939,6 +942,11 @@ end
     )
     _assert_no_more_of_type(Base.tail(t), T)
 end
+
+# Number of signals as a `Val`, for building a per-signal tuple whose length has
+# to stay a compile-time constant (see `_num_ants_val` for the same trick on the
+# antenna count).
+@inline _num_signals_val(sat::TrackedSat) = Val(length(sat.signals))
 
 get_signal(s::TrackedSat, sel...) = get_signal(_find_signal(s.signals, sel...))
 get_correlator(s::TrackedSat, sel...) = get_correlator(_find_signal(s.signals, sel...))

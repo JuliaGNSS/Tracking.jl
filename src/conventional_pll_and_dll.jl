@@ -695,7 +695,7 @@ parallel tuples, and `signals`/`cursors` are the only state it rewrites. One of
 these per signal, built once per chunk — the driver's included.
 
   - `signal_index` is this signal's position in `sat.signals` — `1` for the
-    driver — for anything that keeps a per-signal quantity.
+    driver — for a measurement collector that keeps a per-signal quantity.
   - `code_doppler` is chunk-fixed: the Doppler that actually generated this
     chunk's replicas, which is what every `dll_disc` in the chunk must be
     evaluated at, driver and passengers alike.

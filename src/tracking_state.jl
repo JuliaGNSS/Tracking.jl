@@ -1010,6 +1010,24 @@ for fn in (
     end
 end
 
+# The vector estimator's two per-signal readers get the same two `TrackState`
+# rungs, but typed on a vector-tracking `TrackState`: they read a
+# `SatVectorPLLAndDLL` field, so a conventional `TrackState` should say so at
+# the call rather than deep inside. Their satellite rung is in
+# vector_pll_and_dll.jl, next to the accumulators it reads.
+for fn in (:mean_code_discr, :mean_carrier_discr)
+    @eval begin
+        $fn(s::TrackState{<:SignalGroups,<:VectorPLLAndDLL}, id...) =
+            $fn(get_sat_state(s, id...))
+        $fn(
+            s::TrackState{<:SignalGroups,<:VectorPLLAndDLL},
+            group::Union{Symbol,Integer,Val},
+            sat_id,
+            sig::_SignalSelector,
+        ) = $fn(get_sat_state(s, group, sat_id), sig)
+    end
+end
+
 """
 $(SIGNATURES)
 
@@ -1296,7 +1314,10 @@ What the difference is *for*: multi-signal discriminator combining (a
 passenger's DLL discriminator at the loop update, so the satellite-shared
 `code_phase` keeps meaning "the driver signal's code phase", which is what
 downstream per-signal group-delay corrections (e.g. `PositionVelocityTime.jl`'s)
-already assume. A consumer never has to apply it itself.
+already assume. A consumer never has to apply it itself. Under
+[`VectorPLLAndDLL`](@ref) that is the scalar fallback only: the per-signal
+accumulators a navigation filter reads ([`mean_code_discr`](@ref)) are raw, and
+the filter applies whatever inter-signal bias it needs itself.
 
 `nothing` and `0.0s` are different statements: `0.0s` on every slot asserts that
 the signals share a code phase, `nothing` that the difference is unknown. A

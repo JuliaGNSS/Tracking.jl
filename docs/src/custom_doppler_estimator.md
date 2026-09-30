@@ -225,8 +225,10 @@ signal](tracking_state.md#Estimator-driver-signal) the loop *cadence*, the loop
 `discriminator_combining = true` a passenger record that ends on the same sample
 as a driver record is folded into that record's loop update, weighted as
 [Multi-signal discriminator combining](tracking_state.md#Multi-signal-discriminator-combining)
-describes. All of it is convention the shipped estimators chose; yours can use
-every signal's state any way it likes.
+describes, and under [vector tracking](vector_tracking.md) every signal also
+hands the navigation filter its own discriminator accumulator. All of it is
+convention the shipped estimators chose; yours can use every signal's state any
+way it likes.
 
 ## What stays generic
 
