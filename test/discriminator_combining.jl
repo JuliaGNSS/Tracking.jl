@@ -2,9 +2,29 @@ module DiscriminatorCombiningTest
 
 using Test: @test, @testset, @test_throws
 using Unitful: Hz, s, ns, m
-using GNSSSignals: GalileoE1B, GalileoE1C
+using StaticArrays: SVector
+using Logging: with_logger, NullLogger
+using GNSSSignals:
+    GalileoE1B, GalileoE1C, GPSL5I, GPSL5Q, GPSL1C_D, GPSL1C_P, get_carrier_phase_offset
 using Tracking:
-    Tracking, TrackedSignal, TrackState, add_satellite!, get_group_delay, set_group_delay!
+    Tracking,
+    TrackedSignal,
+    TrackState,
+    ConventionalPLLAndDLL,
+    ConventionalAssistedPLLAndDLL,
+    CorrelatorOutput,
+    EarlyPromptLateCorrelator,
+    VeryEarlyPromptLateCorrelator,
+    add_satellite!,
+    append_correlator_output!,
+    estimate_dopplers_and_filter_prompt!,
+    get_carrier_doppler,
+    get_code_doppler,
+    get_correlator,
+    get_correlator_outputs,
+    get_filtered_prompts,
+    get_group_delay,
+    set_group_delay!
 
 @testset "group delay" begin
     @test isnothing(get_group_delay(TrackedSignal(GalileoE1B())))
@@ -29,6 +49,195 @@ using Tracking:
     # A group delay is a time.
     @test_throws Exception set_group_delay!(ts, 11, 2, 1.0m)
     @test_throws Exception set_group_delay!(ts, 11, 2, 1.0)
+end
+
+const FS = 5e6Hz
+const SAMPLES = 5000
+
+function combining_state(signals; combining = true, assisted = false)
+    estimator =
+        assisted ? ConventionalAssistedPLLAndDLL(; discriminator_combining = combining) :
+        ConventionalPLLAndDLL(; discriminator_combining = combining)
+    ts = TrackState(; signals = (g = signals,), doppler_estimator = estimator)
+    add_satellite!(ts; prn = 1, group = :g, code_phase = 0.0, carrier_doppler = 0.0Hz)
+end
+
+with_taps(c::EarlyPromptLateCorrelator, taps) = EarlyPromptLateCorrelator(
+    SVector(taps[2], taps[3], taps[4]),
+    c.preferred_early_late_to_prompt_code_shift,
+)
+with_taps(c::VeryEarlyPromptLateCorrelator, taps) = VeryEarlyPromptLateCorrelator(
+    SVector(taps...),
+    c.preferred_early_late_to_prompt_code_shift,
+    c.preferred_very_early_late_to_prompt_code_shift,
+)
+
+# One record for signal `i` with carrier phase error `phase_error` against the
+# driver's frame: the signal's own nominal carrier phase offset is on its taps,
+# exactly as the correlate phase would see it. `late` skews the late taps to
+# give the DLL something to read.
+function append_record!(
+    ts,
+    i,
+    phase_error;
+    sample_index = SAMPLES,
+    late = 1.0,
+    samples = SAMPLES,
+)
+    signal = Tracking.get_signal(Tracking.get_sat_state(ts, :g, 1), i)
+    rotation = SAMPLES * cis(phase_error + get_carrier_phase_offset(signal))
+    taps = (0.25, 0.5, 1.0, 0.5 * late, 0.25 * late) .* rotation
+    output = CorrelatorOutput(
+        with_taps(get_correlator(ts, :g, 1, i), taps),
+        samples,
+        sample_index,
+    )
+    append_correlator_output!(ts, output, :g, 1, i)
+end
+
+# The records carry no noise observations; the C/N₀ warning that follows is beside
+# the point here.
+estimate!(ts) = with_logger(NullLogger()) do
+    estimate_dopplers_and_filter_prompt!(ts, (L5 = FS, L1 = FS))
+end
+
+@testset "discriminator combining" begin
+    @testset "off, or single-signal: bit-identical to the driver alone" begin
+        alone = combining_state((GPSL5Q(),); combining = false)
+        single = combining_state((GPSL5Q(),))
+        off = combining_state((GPSL5Q(), GPSL5I()); combining = false)
+        for ts in (alone, single, off)
+            append_record!(ts, 1, 0.1; late = 1.2)
+        end
+        append_record!(off, 2, -0.3; late = 0.8)
+        foreach(estimate!, (alone, single, off))
+        for ts in (single, off)
+            @test get_carrier_doppler(ts, :g, 1) == get_carrier_doppler(alone, :g, 1)
+            @test get_code_doppler(ts, :g, 1) == get_code_doppler(alone, :g, 1)
+        end
+        # The passenger's record was still applied to the passenger.
+        @test length(get_filtered_prompts(off, :g, 1, 2)) == 1
+    end
+
+    @testset "carrier: power-weighted mean in the driver's phase frame" begin
+        # L5Q (−π/2) drives, L5I (0) passes: equal power, so the PLL reads the
+        # plain mean of the two phase errors once L5I is de-rotated.
+        both = combining_state((GPSL5Q(), GPSL5I()))
+        append_record!(both, 1, 0.1)
+        append_record!(both, 2, 0.3)
+        mean_alone = combining_state((GPSL5Q(),))
+        append_record!(mean_alone, 1, 0.2)
+        foreach(estimate!, (both, mean_alone))
+        @test get_carrier_doppler(both, :g, 1) ≈ get_carrier_doppler(mean_alone, :g, 1)
+        @test isempty(get_correlator_outputs(both, :g, 1, 2))
+        @test length(get_filtered_prompts(both, :g, 1, 2)) == 1
+
+        # L1C-P 0.75, L1C-D 0.25.
+        l1c = combining_state((GPSL1C_P(), GPSL1C_D()))
+        append_record!(l1c, 1, 0.1)
+        append_record!(l1c, 2, 0.5)
+        l1c_alone = combining_state((GPSL1C_P(),))
+        append_record!(l1c_alone, 1, 0.75 * 0.1 + 0.25 * 0.5)
+        foreach(estimate!, (l1c, l1c_alone))
+        @test get_carrier_doppler(l1c, :g, 1) ≈ get_carrier_doppler(l1c_alone, :g, 1)
+    end
+
+    @testset "records that do not coincide are not combined" begin
+        for (index, samples) in ((SAMPLES - 1, SAMPLES), (SAMPLES, SAMPLES - 1))
+            ts = combining_state((GPSL5Q(), GPSL5I()))
+            append_record!(ts, 1, 0.1)
+            append_record!(ts, 2, 0.3; sample_index = index, samples)
+            alone = combining_state((GPSL5Q(),))
+            append_record!(alone, 1, 0.1)
+            foreach(estimate!, (ts, alone))
+            @test get_carrier_doppler(ts, :g, 1) == get_carrier_doppler(alone, :g, 1)
+            @test length(get_filtered_prompts(ts, :g, 1, 2)) == 1
+            @test isempty(get_correlator_outputs(ts, :g, 1, 2))
+        end
+    end
+
+    @testset "code: only with group delays on both ends, referred to the driver" begin
+        function code_doppler(delays; passenger_late = 1.2)
+            ts = combining_state((GPSL5Q(), GPSL5I()))
+            for (i, delay) in enumerate(delays)
+                set_group_delay!(ts, :g, 1, i, delay)
+            end
+            append_record!(ts, 1, 0.0; late = 1.2)
+            append_record!(ts, 2, 0.0; late = passenger_late)
+            estimate!(ts)
+            get_code_doppler(ts, :g, 1)
+        end
+        alone = combining_state((GPSL5Q(),))
+        append_record!(alone, 1, 0.0; late = 1.2)
+        estimate!(alone)
+        driver_only = get_code_doppler(alone, :g, 1)
+
+        # Unknown on either end: the passenger stays out of the code loop.
+        @test code_doppler((nothing, nothing); passenger_late = 0.8) == driver_only
+        @test code_doppler((0.0s, nothing); passenger_late = 0.8) == driver_only
+        @test code_doppler((nothing, 0.0s); passenger_late = 0.8) == driver_only
+        # Known and equal, identical taps: the mean is the driver's value.
+        @test code_doppler((0.0s, 0.0s)) ≈ driver_only
+        # Known and different, and a different passenger reading: it takes part.
+        @test !(code_doppler((0.0s, 0.0s); passenger_late = 0.8) ≈ driver_only)
+        # A passenger *less* delayed than the driver sits at a larger code phase,
+        # so its reading is lowered before averaging: with identical taps the
+        # combined code error, hence the code Doppler, drops.
+        @test code_doppler((1.0ns, 0.0s)) < driver_only
+        @test code_doppler((0.0s, 1.0ns)) > driver_only
+    end
+
+    @testset "assisted carrier loop combines the FLL too" begin
+        # Two records per chunk so the second has a previous prompt.
+        function carrier_doppler(signals, errors)
+            ts = combining_state(signals; assisted = true)
+            for (i, (first_error, second_error)) in enumerate(errors)
+                append_record!(ts, i, first_error; sample_index = SAMPLES)
+                append_record!(ts, i, second_error; sample_index = 2SAMPLES)
+            end
+            estimate!(ts)
+            get_carrier_doppler(ts, :g, 1)
+        end
+        both = carrier_doppler((GPSL5Q(), GPSL5I()), ((0.0, 0.1), (0.0, 0.3)))
+        alone = carrier_doppler((GPSL5Q(),), ((0.0, 0.2),))
+        @test both ≈ alone
+    end
+end
+
+# Fold `n` coincident record pairs through the per-satellite update, as the
+# estimate phase does. A function, not module scope, so `@allocated` measures the
+# fold rather than global lookups.
+function fold_records!(ts, outputs, n)
+    sats = Tracking.get_sat_states(ts, :g)
+    for _ = 1:n
+        sat = sats[1]
+        foreach(sat.signals, outputs) do signal, output
+            push!(Tracking.get_correlator_outputs(signal), output)
+            empty!(get_filtered_prompts(signal))
+        end
+        sats[1] = Tracking._update_tracked_sat_doppler(
+            sat,
+            FS,
+            ((nothing, false), (nothing, false)),
+        )
+    end
+end
+
+@static if VERSION >= v"1.11"
+    @testset "combining is allocation-free (assisted = $assisted)" for assisted in
+                                                                       (false, true)
+        ts = combining_state((GPSL5Q(), GPSL5I()); assisted)
+        set_group_delay!(ts, :g, 1, 1, 0.0s)
+        set_group_delay!(ts, :g, 1, 2, 0.5ns)
+        sat = Tracking.get_sat_state(ts, :g, 1)
+        outputs = map(sat.signals) do signal
+            rotation = SAMPLES * cis(0.1 + get_carrier_phase_offset(signal.signal))
+            taps = (0.25, 0.5, 1.0, 0.6, 0.25) .* rotation
+            CorrelatorOutput(with_taps(signal.correlator, taps), SAMPLES, SAMPLES)
+        end
+        fold_records!(ts, outputs, 10)
+        @test (@allocated fold_records!(ts, outputs, 100)) == 0
+    end
 end
 
 end

@@ -233,6 +233,27 @@ Putting a pilot signal first (e.g. `GPSL1C_P()`) is encouraged with the conventi
 
 When a satellite tracks signals with different primary-code lengths (e.g. L1 C/A at 1 ms vs L1C-P at 10 ms), each outer iteration integrates to the **shortest** signal's next primary-code boundary. The shorter signal's correlator completes every iteration; the longer signal's correlator accumulates across multiple iterations and only marks `is_integration_completed = true` on its own boundary. Doppler updates therefore happen at the shortest signal's cadence (1 ms in this example), and longer signals see their integration windows spanned by piecewise Doppler updates — the natural per-iteration-Doppler-correction behaviour of a real receiver.
 
+### Discriminator combining
+
+By default only the driver (`signals[1]`) closes the loops; the passengers recover their own bits and C/N₀. With `discriminator_combining = true` on the conventional estimator, the passengers' discriminators are averaged into the driver's at every loop update — the natural use being a pilot/data pair such as Galileo E1C + E1B, E5aQ + E5aI or GPS L5Q + L5I:
+
+```julia
+track_state = TrackState(;
+    signals = (galileo_e1 = (GalileoE1C(), GalileoE1B()),),
+    doppler_estimator = ConventionalAssistedPLLAndDLL(; discriminator_combining = true),
+)
+```
+
+The rules:
+
+- **Only coincident records combine.** Within one chunk, a passenger takes part only if its records are the driver's: as many, each ending on the same sample after the same number of samples. Record `k` of each is then one measurement of the same interval. This holds by default for every pilot/data pair GNSSSignals defines except GPS L2CM/L2CL, since the components share one primary code period. A passenger with a different code period (GPS L1 C/A next to L1C), or integrating longer or shorter than the driver, is simply not combined for that chunk.
+- **Weights are the ICD power split** (`GNSSSignals.get_relative_power`): L1C-P 0.75 against L1C-D 0.25, the even pairs 0.5 each. Each loop reads the weighted *mean*, so its gain does not change with the number of signals. The weights assume the group's signals use one kind of discriminator; a different one costs efficiency, never bias.
+- **Carrier loops combine immediately.** A passenger is rotated onto the driver's carrier phase frame by the difference of the two nominal offsets `get_carrier_phase_offset` reports, so a quadrature component does not read `±π/2`. A record without a previous prompt (a signal's first, or the first after [`reset_loop_filters!`](@ref)) stays out of the FLL.
+- **The code loop needs group delays.** The signals' code phases differ by the payload's group delay difference, which Tracking cannot know. A passenger takes part in the code loop only once both it and the driver carry a group delay ([`set_group_delay!`](@ref)); its DLL reading is then referred to the driver's code phase, so the shared `code_phase` keeps meaning the driver's. An unknown delay is not treated as zero.
+- A passenger record correlated without the secondary-code wipe-off a sync in the same chunk has just established is left out, as it is from the bit buffer.
+
+With the flag off, and on a single-signal satellite, the loops are bit-identical to the driver-only update. [`VectorPLLAndDLL`](@ref) does not combine.
+
 ### Phased-array tracking
 
 To track signals coherently across an antenna array, pass a `Matrix` measurement (rows = samples, columns = antenna elements) and declare the number of antennas at `TrackState` construction:
