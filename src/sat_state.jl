@@ -48,6 +48,10 @@ struct TrackedSignal{
     # (`preferred_num_code_blocks_to_integrate`) or by an external producer
     # summing dumps. Starts at 1, the pre-sync length.
     last_fully_integrated_num_code_blocks::Int
+    # This signal's payload group delay on a datum the caller chooses, or
+    # `nothing` while unknown. Only read as a difference against `signals[1]`'s,
+    # by discriminator combining — see `set_group_delay!`.
+    group_delay::Maybe{typeof(1.0s)}
 end
 
 # Reject a preferred coherent-integration length that cannot work for this
@@ -116,6 +120,9 @@ one primary code block for every signal but Galileo E5a-QP, whose 64.5 µs block
 is too short to run a loop on. Throws an `ArgumentError` if the value passed is
 invalid for `signal` (see
 [`set_preferred_num_code_blocks_to_integrate!`](@ref)).
+
+`group_delay` is the signal's payload group delay as a time, or `nothing` (the
+default) while unknown — see [`set_group_delay!`](@ref).
 """
 function TrackedSignal(
     signal::AbstractGNSSSignal;
@@ -130,6 +137,7 @@ function TrackedSignal(
     preferred_num_code_blocks_to_integrate::Int = default_num_code_blocks_to_integrate(
         signal,
     ),
+    group_delay::Maybe{Number} = nothing,
 )
     validate_preferred_num_code_blocks_to_integrate(
         signal,
@@ -158,6 +166,7 @@ function TrackedSignal(
         correlator_outputs,
         preferred_num_code_blocks_to_integrate,
         1,
+        _as_group_delay(group_delay),
     )
 end
 
@@ -187,6 +196,9 @@ function TrackedSignal(
     correlator_outputs::Maybe{Vector{CorrelatorOutput{C}}} = nothing,
     preferred_num_code_blocks_to_integrate = nothing,
     last_fully_integrated_num_code_blocks = nothing,
+    # Wrapped in `Some`, because `nothing` is a legal value of this field:
+    # `Some(nothing)` clears it, a bare `nothing` keeps it.
+    group_delay::Maybe{Some{<:Maybe{typeof(1.0s)}}} = nothing,
 ) where {
     Sig<:AbstractGNSSSignal,
     B<:Unsigned,
@@ -216,6 +228,7 @@ function TrackedSignal(
         t.preferred_num_code_blocks_to_integrate : preferred_num_code_blocks_to_integrate,
         isnothing(last_fully_integrated_num_code_blocks) ?
         t.last_fully_integrated_num_code_blocks : last_fully_integrated_num_code_blocks,
+        isnothing(group_delay) ? t.group_delay : something(group_delay),
     )
 end
 
@@ -293,6 +306,19 @@ has_bit_or_secondary_code_been_found(t::TrackedSignal) =
 get_integrated_samples(t::TrackedSignal) = t.integrated_samples
 get_preferred_num_code_blocks_to_integrate(t::TrackedSignal) =
     t.preferred_num_code_blocks_to_integrate
+
+# Every entry point converts through here: any time unit becomes the field's
+# `typeof(1.0s)`, and anything that is not a time is refused by `convert`.
+_as_group_delay(::Nothing) = nothing
+_as_group_delay(delay::Number) = convert(typeof(1.0s), delay)
+
+"""
+$(SIGNATURES)
+
+This signal's payload group delay as a time, or `nothing` while unknown. Set it
+with [`set_group_delay!`](@ref).
+"""
+get_group_delay(t::TrackedSignal) = t.group_delay
 
 """
 $(SIGNATURES)
@@ -861,6 +887,7 @@ get_correlator_outputs(s::TrackedSat, sel...) =
     get_correlator_outputs(_find_signal(s.signals, sel...))
 get_preferred_num_code_blocks_to_integrate(s::TrackedSat, sel...) =
     get_preferred_num_code_blocks_to_integrate(_find_signal(s.signals, sel...))
+get_group_delay(s::TrackedSat, sel...) = get_group_delay(_find_signal(s.signals, sel...))
 
 # Append an external `CorrelatorOutput` to one signal of a sat. `output` comes
 # first so an optional trailing signal selector (integer index / signal type)

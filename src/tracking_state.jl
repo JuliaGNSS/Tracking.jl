@@ -979,6 +979,7 @@ for fn in (
     :has_bit_or_secondary_code_been_found,
     :estimate_cn0,
     :get_preferred_num_code_blocks_to_integrate,
+    :get_group_delay,
 )
     @eval begin
         $fn(s::TrackState, id...) = $fn(get_sat_state(s, id...))
@@ -1125,17 +1126,21 @@ function _signal_index(signals::Tuple, ::Type{T}) where {T<:AbstractGNSSSignal}
     idx
 end
 
-# Rebuild `sat` with the addressed signal's coherent-integration length set
-# to `N`; the other signals are left untouched (types unchanged, so the
-# satellite's concrete type is preserved).
-function _set_sat_signal_preferred_blocks(sat::TrackedSat, N::Int, sel...)
+# Rebuild `sat` with the addressed signal replaced by `f(signal)`; the other
+# signals are left untouched (types unchanged, so the satellite's concrete type
+# is preserved).
+function _update_sat_signal(f::F, sat::TrackedSat, sel...) where {F}
     idx = _signal_index(sat.signals, sel...)
     idx_tuple = ntuple(identity, length(sat.signals))
-    new_signals = map(sat.signals, idx_tuple) do s, i
-        i == idx ? TrackedSignal(s; preferred_num_code_blocks_to_integrate = N) : s
-    end
+    new_signals = map((s, i) -> i == idx ? f(s) : s, sat.signals, idx_tuple)
     TrackedSat(sat; signals = new_signals)
 end
+
+_set_sat_signal_preferred_blocks(sat::TrackedSat, N::Int, sel...) = _update_sat_signal(
+    s -> TrackedSignal(s; preferred_num_code_blocks_to_integrate = N),
+    sat,
+    sel...,
+)
 
 """
 $(SIGNATURES)
@@ -1231,6 +1236,59 @@ function set_preferred_num_code_blocks_to_integrate!(
     sats = get_sat_states(track_state)
     sat_id = only(keys(sats))
     sats[sat_id] = _set_sat_signal_preferred_blocks(sats[sat_id], Int(num_code_blocks))
+    track_state
+end
+
+_set_sat_group_delay(sat::TrackedSat, delay::Maybe{typeof(1.0s)}, sel...) =
+    _update_sat_signal(s -> TrackedSignal(s; group_delay = Some(delay)), sat, sel...)
+
+"""
+$(SIGNATURES)
+
+Set the payload **group delay** of one signal on one satellite, as a time
+(`1.2e-9s`, `-0.3u"ns"`), or `nothing` to mark it unknown again. Every signal
+starts at `nothing`.
+
+It is read only by discriminator combining (`ConventionalPLLAndDLL(; discriminator_combining = true)`), and only as a **difference** against the
+satellite's estimator-driver signal (`signals[1]`), so the datum is yours to
+choose: put `0.0s` on the driver and each passenger's value is its bias
+relative to it. Positive means delayed — the signal arrives later and sits at a
+smaller code phase. A passenger's code discriminator has
+`(delay(signals[1]) − delay(passenger)) · f_code` chips subtracted before it is
+combined, so the shared `code_phase` keeps meaning the driver's code phase.
+
+`nothing` is not `0.0s`: a passenger whose delay is unknown stays out of the
+combined **code** loop and still aids the carrier loops; an unknown delay on
+`signals[1]` keeps every passenger out of the code loop.
+
+```julia
+set_group_delay!(ts, :galileo_e1, 11, GalileoE1B, 0.0s)  # (group, prn, signal)
+set_group_delay!(ts, :gps_l5, 7, 2, -0.5u"ns")           # (group, prn, index)
+set_group_delay!(ts, 7, GPSL5I, -0.5u"ns")               # single-group state
+```
+
+Mutates `track_state` in place and returns it.
+"""
+function set_group_delay!(
+    track_state::TrackState{<:SignalGroups},
+    group::Union{Symbol,Integer,Val},
+    sat_id::Integer,
+    sig::_SignalSelector,
+    delay::Maybe{Number},
+)
+    sats = get_sat_states(track_state, group)
+    sats[sat_id] = _set_sat_group_delay(sats[sat_id], _as_group_delay(delay), sig)
+    track_state
+end
+
+function set_group_delay!(
+    track_state::TrackState{<:SignalGroups{1}},
+    sat_id::Integer,
+    sig::_SignalSelector,
+    delay::Maybe{Number},
+)
+    sats = get_sat_states(track_state)
+    sats[sat_id] = _set_sat_group_delay(sats[sat_id], _as_group_delay(delay), sig)
     track_state
 end
 

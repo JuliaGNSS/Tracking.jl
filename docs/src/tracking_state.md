@@ -553,6 +553,8 @@ get_doppler_estimator_state(::TrackedSat)
 ```@docs
 TrackedSignal
 get_last_fully_integrated_integration_time(::TrackedSignal)
+set_group_delay!
+get_group_delay(::TrackedSignal)
 ```
 
 The per-signal accessors in the table under [Addressing satellites and signals](#Addressing-satellites-and-signals) all dispatch directly on a `TrackedSignal` too. Additionally:
