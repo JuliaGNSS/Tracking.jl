@@ -1,6 +1,7 @@
 include("aqua.jl")
 include("conventional_pll_and_dll.jl")
 include("vector_pll_and_dll.jl")
+include("vector_multi_signal.jl")
 include("sat_state.jl")
 include("discriminator_combining.jl")
 include("sample_parameters.jl")
