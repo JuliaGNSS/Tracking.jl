@@ -10,6 +10,12 @@ using Unitful: Hz, s, ms, dBHz, ustrip, uconvert
 using GNSSSignals: GPSL1CA, GPSL5I
 import Tracking
 using Tracking:
+    TrackState,
+    TrackedSat,
+    append_correlator_output!,
+    estimate_dopplers_and_filter_prompt!,
+    get_cn0_estimator
+using TrackingLoops:
     BitBuffer,
     CN0UpdateContext,
     CorrelatorNoiseEstimator,
@@ -19,13 +25,8 @@ using Tracking:
     NWPRCN0Estimator,
     NoCN0Estimator,
     NoiseRefCN0Estimator,
-    TrackState,
-    TrackedSat,
-    append_correlator_output!,
     append_noise_observation!,
     estimate_cn0,
-    estimate_dopplers_and_filter_prompt!,
-    get_cn0_estimator,
     noise_observation_from_samples,
     requires_noise_density,
     update,

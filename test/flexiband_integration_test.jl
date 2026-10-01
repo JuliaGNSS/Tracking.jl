@@ -51,13 +51,8 @@ using Unitful: Hz, ustrip
 using GNSSSignals: GPSL1CA, GPSL5I, GalileoE1B
 using Acquisition: acquire, is_detected
 using Tracking:
-    Tracking,
-    TrackState,
-    BandMeasurement,
-    add_satellite!,
-    track!,
-    get_carrier_doppler,
-    estimate_cn0
+    Tracking, TrackState, BandMeasurement, add_satellite!, track!, get_carrier_doppler
+using TrackingLoops: estimate_cn0
 
 # ── Download / cache ───────────────────────────────────────────────────────
 

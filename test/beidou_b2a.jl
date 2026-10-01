@@ -4,7 +4,8 @@ using Test: @test, @testset, @inferred
 using Unitful: Hz
 using GNSSSignals: BeiDouB2aI, BeiDouB2aQ, get_band_id, get_secondary_code_length
 import Tracking
-using Tracking:
+import TrackingLoops
+using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
@@ -30,7 +31,7 @@ rotl(x::T, r, N) where {T} =
     @testset "Secondary-code search — clean lock at known phase / polarity" begin
         # The 5-chip code is `00010` (BDS-SIS-ICD-B2a-1.0 §5.2.1), shared
         # across PRNs, packed newest-first.
-        reference = Tracking._packed_secondary_code(UInt32, b2a_i, prn)
+        reference = TrackingLoops._packed_secondary_code(UInt32, b2a_i, prn)
         @test reference == UInt32(0b00010)
         for r = 0:(N-1)
             received = rotl(reference, r, N)
@@ -61,7 +62,7 @@ rotl(x::T, r, N) where {T} =
     @test @inferred(get_code_block_buffer_type(b2a_i)) === UInt32
 
     # 5 chips is inside the soft detector's 100-chip cap.
-    @test Tracking.uses_soft_secondary_code_detection(b2a_i) == true
+    @test TrackingLoops.uses_soft_secondary_code_detection(b2a_i) == true
 end
 
 @testset "BeiDou B2a pilot" begin
@@ -74,7 +75,7 @@ end
           false
 
     @testset "Secondary-code search — clean lock at known phase / polarity" begin
-        reference = Tracking._packed_secondary_code(UInt128, b2a_q, prn)
+        reference = TrackingLoops._packed_secondary_code(UInt128, b2a_q, prn)
         for r in (0, 44, N - 1)
             received = rotl(reference, r, N)
             res = @inferred detect_bit_or_secondary_code_sync(b2a_q, prn, received, N)
@@ -100,7 +101,7 @@ end
     # 100-block overlay window needs UInt128.
     @test @inferred(get_code_block_buffer_type(b2a_q)) === UInt128
 
-    @test Tracking.uses_soft_secondary_code_detection(b2a_q) == true
+    @test TrackingLoops.uses_soft_secondary_code_detection(b2a_q) == true
 end
 
 end

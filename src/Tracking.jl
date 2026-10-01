@@ -1,12 +1,10 @@
 module Tracking
 
-using BitIntegers
 using DocStringExtensions
 using FastSinCos
 using GNSSSignals
 using SIMD
 using SinCosLUT
-using SpecialFunctions: erfinv
 using StaticArrays
 using TrackingLoopFilters
 using Dictionaries
@@ -14,21 +12,90 @@ using Accessors
 using Polyester
 using Random: AbstractRNG, Xoshiro
 
-# 1800-bit exact-width unsigned for the 1800-chip overlay-code searches of
-# GPS L1C-P and BeiDou B1C-P.
-# Defined once at module load. Benchmarked at ~71 μs for the full
-# 1800-phase Hamming-distance sweep, ~1.5× faster than a padded
-# UInt1856 variant because no mask is needed on shift/XOR (see the
-# sync-detection-redesign plan in docs/plans for the comparison).
-BitIntegers.@define_integers 1800
+# The device-independent loop core — correlator records, discriminators, the
+# bit buffer and its per-signal sync detectors, the C/N₀ estimators and the
+# noise window, the loop-filter rules and the Doppler estimators' per-record
+# `step_loop` — lives in TrackingLoops.jl, so that a hardware correlator's loop
+# process runs the very same code without this package's sample-domain half.
+# Its API is its own: users load it next to Tracking to configure a correlator,
+# an estimator or a filter, and this package does not re-export it — except the
+# functions a user reads this package's results with, below the export list.
+# Only what the code here calls, extends or re-exports is imported, by name, so
+# that a binding TrackingLoops renames or drops fails at precompile rather than
+# on the first call that reaches it.
+import TrackingLoops
+import TrackingLoops:
+    AbstractCN0Estimator,
+    AbstractCorrelator,
+    AbstractDopplerEstimator,
+    AbstractNoiseEstimator,
+    AbstractPostCorrFilter,
+    aid_dopplers,
+    append_noise_observation!,
+    BitBuffer,
+    buffer,
+    _calc_num_code_blocks_that_form_a_bit,
+    calc_num_code_blocks_to_integrate,
+    ConventionalAssistedPLLAndDLL,
+    ConventionalPLLAndDLL,
+    CorrelatorNoiseEstimator,
+    CorrelatorOutput,
+    default_carrier_loop_filter_bandwidth,
+    default_cn0_estimator,
+    default_code_loop_filter_bandwidth,
+    default_num_code_blocks_to_integrate,
+    DefaultPostCorrFilter,
+    dll_disc,
+    EarlyPromptLateCorrelator,
+    effective_code_loop_filter_bandwidth,
+    estimate_cn0,
+    FixedNCOWord,
+    fll_disc,
+    fold_record,
+    get_accumulators,
+    get_code_block_buffer_type,
+    get_correlator_sample_shifts,
+    get_default_correlator,
+    get_early,
+    get_late,
+    get_num_ants,
+    get_prompt,
+    get_soft_bits,
+    has_bit_or_secondary_code_been_found,
+    init_estimator_state,
+    LoopRecord,
+    Maybe,
+    MomentsCN0Estimator,
+    NCOReferencedPLLAndDLL,
+    _next_noise_prn,
+    NO_LANDING_SAMPLE,
+    _noise_density_and_ready,
+    noise_density_type,
+    _noise_observation,
+    _noise_window_filling,
+    NoiseEstimators,
+    NoiseObservation,
+    NoiseUpdateContext,
+    _num_ants,
+    _num_ants_of_density_type,
+    _num_ants_val,
+    NumAnts,
+    pll_disc,
+    _pool_taps,
+    requires_noise_density,
+    reset,
+    reset_estimator_state,
+    SatConventionalPLLAndDLL,
+    SatNCOReferencedPLLAndDLL,
+    step_loop,
+    update,
+    update_accumulator,
+    update_noise!
 
 using Unitful: upreferred, uconvert, ustrip, dimension, NoUnits, Hz, dBHz, ms, s
 import Base.zero, Base.length, Base.resize!
 
-export get_early,
-    get_prompt,
-    get_late,
-    get_prn,
+export get_prn,
     get_code_phase,
     get_code_doppler,
     get_carrier_phase,
@@ -46,38 +113,10 @@ export get_early,
     get_filtered_prompts,
     get_correlator_outputs,
     append_correlator_output!,
-    CorrelatorOutput,
     get_bit_buffer,
     get_num_bits,
-    get_soft_bits,
-    get_accumulators,
-    get_early_late_sample_spacing,
-    get_num_ants,
-    has_bit_or_secondary_code_been_found,
     track,
     track!,
-    NumAnts,
-    NumAccumulators,
-    MomentsCN0Estimator,
-    NWPRCN0Estimator,
-    NoCN0Estimator,
-    NoiseRefCN0Estimator,
-    AbstractCN0Estimator,
-    CN0UpdateContext,
-    requires_noise_density,
-    AbstractNoiseEstimator,
-    CorrelatorNoiseEstimator,
-    NoiseObservation,
-    noise_observation,
-    noise_observation_from_correlator,
-    noise_observation_from_samples,
-    append_noise_observation!,
-    update_noise!,
-    get_noise_density,
-    EarlyPromptLateCorrelator,
-    VeryEarlyPromptLateCorrelator,
-    AbstractPostCorrFilter,
-    get_weights,
     TrackedSignal,
     TrackedSat,
     get_signal,
@@ -85,8 +124,6 @@ export get_early,
     get_doppler_estimator_state,
     max_code_length,
     current_code_wrap,
-    AbstractDopplerEstimator,
-    init_estimator_state,
     update_estimator_on_handoff,
     CPUDownconvertAndCorrelator,
     CPUThreadedDownconvertAndCorrelator,
@@ -96,8 +133,6 @@ export get_early,
     OneBitThreadedDownconvertAndCorrelator,
     TwoBitDownconvertAndCorrelator,
     TwoBitThreadedDownconvertAndCorrelator,
-    ConventionalPLLAndDLL,
-    ConventionalAssistedPLLAndDLL,
     VectorPLLAndDLL,
     SatVectorPLLAndDLL,
     enable_vt!,
@@ -108,7 +143,6 @@ export get_early,
     mean_carrier_discr,
     set_code_freq_updates!,
     set_carrier_freq_updates!,
-    DefaultPostCorrFilter,
     TrackState,
     add_satellite!,
     add_satellite,
@@ -117,67 +151,33 @@ export get_early,
     merge_sats,
     get_sat_states,
     get_sat_state,
-    estimate_cn0,
-    get_default_correlator,
-    default_carrier_loop_filter_bandwidth,
-    default_code_loop_filter_bandwidth,
-    default_num_code_blocks_to_integrate,
-    max_num_code_blocks_to_integrate,
-    AbstractCorrelator,
     AbstractDownconvertAndCorrelator,
     SatelliteDicts,
     SignalGroup,
     SignalGroups,
     BandMeasurement,
     BandMeasurements,
-    get_band_id,
     band_keys,
     get_samples,
     get_sampling_frequency,
     get_intermediate_frequency,
-    get_num_accumulators,
-    get_correlator_sample_shifts,
-    calc_signal_samples_to_integrate,
-    get_code_frequency,
-    get_code_length,
-    get_codes,
-    get_modulation,
-    get_secondary_code,
-    update_accumulator
+    calc_signal_samples_to_integrate
 
-const Maybe{T} = Union{T,Nothing}
-
-"""
-$(SIGNATURES)
-
-Type parameter wrapper for specifying the number of antennas in the system.
-Use `NumAnts(n)` to create an instance.
-"""
-struct NumAnts{x} end
-
-NumAnts(x) = NumAnts{x}()
-
-"""
-$(SIGNATURES)
-
-Type parameter wrapper for specifying the number of correlator accumulators.
-Use `NumAccumulators(n)` to create an instance.
-"""
-struct NumAccumulators{x} end
-
-NumAccumulators(x) = NumAccumulators{x}()
+# TrackingLoops functions a user of this package reads its results with: the
+# ones this package implements for its states, satellites and signals, and the
+# accessors of the correlators it hands back. Re-exported so reading a C/N₀, a
+# prompt or the decoded bits needs no second package.
+export estimate_cn0,
+    get_soft_bits,
+    has_bit_or_secondary_code_been_found,
+    get_num_ants,
+    append_noise_observation!,
+    get_prompt,
+    get_early,
+    get_late,
+    get_accumulators
 
 TupleLike{T<:Tuple} = Union{T,NamedTuple{<:Any,T}}
-
-"""
-$(SIGNATURES)
-
-Abstract supertype for doppler estimators. Concrete subtypes carry estimator
-configuration (and any cross-satellite or cross-system shared state). The
-per-satellite state used by the estimator lives in each [`TrackedSat`](@ref)
-wrapper — see [`init_estimator_state`](@ref) for the extension point.
-"""
-abstract type AbstractDopplerEstimator end
 
 """
 $(SIGNATURES)
@@ -217,42 +217,9 @@ include("band_measurement.jl")
 include("code_replica.jl")
 include("carrier_replica.jl")
 include("downconvert.jl")
-# `cn0_estimators/` after `bit_buffer.jl`: the CN0 estimators' update context
-# carries the navigation-bit state (`BitBuffer`) and reads the signal's
-# blocks-per-bit trait from there. Within the folder the shared file comes
-# first, since every concrete estimator subtypes `AbstractCN0Estimator`.
-include("bit_buffer.jl")
-include("cn0_estimators/cn0_estimator.jl")
-include("cn0_estimators/moments.jl")
-include("cn0_estimators/no_cn0.jl")
-include("cn0_estimators/nwpr.jl")
-include("cn0_estimators/noise_ref.jl")
-include("correlators/correlator.jl")
-include("correlators/early_prompt_late.jl")
-include("correlators/very_early_prompt_late.jl")
-# `noise_estimators/` after `correlators/`: the software source despreads
-# through a real correlator, and `TrackState`'s `NoiseEstimators` field type
-# needs `AbstractNoiseEstimator` to exist before the struct is defined below.
-include("noise_estimators/noise_estimator.jl")
+# The software fill path of the noise reference: despreading an untracked PRN
+# through this package's own kernels (the window itself is TrackingLoops').
 include("noise_estimators/correlator.jl")
-include("discriminators.jl")
-include("post_corr_filter.jl")
-include("gps/l1ca.jl")
-include("gps/l1c_d.jl")
-include("gps/l1c_p.jl")
-include("gps/l2c.jl")
-include("gps/l5.jl")
-include("galileo/e1b.jl")
-include("galileo/e1c.jl")
-include("galileo/e5a.jl")
-include("galileo/e5a_qp.jl")
-include("galileo/e5b.jl")
-include("galileo/e6.jl")
-include("beidou/b1i.jl")
-include("beidou/b3i.jl")
-include("beidou/b2a.jl")
-include("beidou/b2b.jl")
-include("beidou/b1c.jl")
 include("sat_state.jl")
 
 """

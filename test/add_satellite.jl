@@ -22,14 +22,15 @@ using Tracking:
     TrackedSat,
     TrackedSignal,
     SignalGroup,
-    NumAnts,
     add_satellite!,
     add_satellite,
     get_sat_state,
     get_sat_states,
     get_prn,
     get_carrier_doppler,
-    get_code_doppler,
+    get_code_doppler
+using TrackingLoops:
+    NumAnts,
     ConventionalAssistedPLLAndDLL,
     ConventionalPLLAndDLL,
     SatConventionalPLLAndDLL,

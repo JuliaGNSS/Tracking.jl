@@ -87,7 +87,7 @@ TrackedSat(
     carrier_phase         = 0.0,
     code_doppler          = carrier_doppler * get_code_center_frequency_ratio(signal),
     num_prompts_for_cn0_estimation = 100,
-    cn0_estimator         = Tracking.default_cn0_estimator(signal, num_prompts_for_cn0_estimation),
+    cn0_estimator         = TrackingLoops.default_cn0_estimator(signal, num_prompts_for_cn0_estimation),
     post_corr_filter      = DefaultPostCorrFilter(),
 )
 ```
@@ -107,18 +107,20 @@ path reduce the measured noise covariance through those same weights (see
 [CN0 Estimator](cn0_estimator.md)):
 
 ```jldoctest power_user
-julia> using Tracking, GNSSSignals, StaticArrays
+julia> using Tracking, TrackingLoops, GNSSSignals, StaticArrays
 
-julia> using Tracking: Hz, NumAnts, AbstractPostCorrFilter
+julia> using Tracking: Hz
+
+julia> using TrackingLoops: NumAnts, AbstractPostCorrFilter
 
 julia> # Trivial beamformer — averages across antenna elements
        struct MyBeamformer <: AbstractPostCorrFilter end
 
-julia> Tracking.update(f::MyBeamformer, prompt) = f;
+julia> TrackingLoops.update(f::MyBeamformer, prompt) = f;
 
-julia> Tracking.get_weights(::MyBeamformer, ::NumAnts{1}) = 1.0 + 0.0im;
+julia> TrackingLoops.get_weights(::MyBeamformer, ::NumAnts{1}) = 1.0 + 0.0im;
 
-julia> Tracking.get_weights(::MyBeamformer, ::NumAnts{M}) where {M} =
+julia> TrackingLoops.get_weights(::MyBeamformer, ::NumAnts{M}) where {M} =
            SVector{M,ComplexF64}(ntuple(_ -> 1 / M + 0.0im, M));
 
 julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
@@ -238,7 +240,7 @@ When a satellite tracks signals with different primary-code lengths (e.g. L1 C/A
 To track signals coherently across an antenna array, pass a `Matrix` measurement (rows = samples, columns = antenna elements) and declare the number of antennas at `TrackState` construction:
 
 ```jldoctest phased_array
-julia> using Tracking, GNSSSignals
+julia> using Tracking, TrackingLoops, GNSSSignals
 
 julia> using Tracking: Hz
 
@@ -256,18 +258,20 @@ julia> get_num_ants(track_state, 1)
 By default the track function uses the last antenna channel as the reference signal to drive the discriminators. An appropriate beamforming algorithm will probably suit better — construct a [`TrackedSat`](@ref) with a custom `post_corr_filter` and build the `TrackState` from it (so the slot type takes the custom filter type rather than the default). A filter supplies its combining weights through [`get_weights`](@ref); Tracking applies them to the correlator and reduces the measured noise covariance through the same weights, so the C/N₀ stays correct for whatever the beamformer does:
 
 ```jldoctest beamformer_array
-julia> using Tracking, GNSSSignals, StaticArrays
+julia> using Tracking, TrackingLoops, GNSSSignals, StaticArrays
 
-julia> using Tracking: Hz, NumAnts, AbstractPostCorrFilter
+julia> using Tracking: Hz
+
+julia> using TrackingLoops: NumAnts, AbstractPostCorrFilter
 
 julia> # Same trivial mean-of-antennas filter as the power-user example above
        struct MyBeamformer <: AbstractPostCorrFilter end
 
-julia> Tracking.update(f::MyBeamformer, prompt) = f;
+julia> TrackingLoops.update(f::MyBeamformer, prompt) = f;
 
-julia> Tracking.get_weights(::MyBeamformer, ::NumAnts{1}) = 1.0 + 0.0im;
+julia> TrackingLoops.get_weights(::MyBeamformer, ::NumAnts{1}) = 1.0 + 0.0im;
 
-julia> Tracking.get_weights(::MyBeamformer, ::NumAnts{M}) where {M} =
+julia> TrackingLoops.get_weights(::MyBeamformer, ::NumAnts{M}) where {M} =
            SVector{M,ComplexF64}(ntuple(_ -> 1 / M + 0.0im, M));
 
 julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
@@ -405,9 +409,9 @@ The keys (`:L1`, `:L5`) come from `GNSSSignals.get_band_id(L1())` and `GNSSSigna
 Different bands often come from different front-ends with different antenna arrangements. To declare per-band antenna counts, pass [`SignalGroup`](@ref) instances directly as the entries — the bare-tuple shortcut uses the constructor's single `num_ants` kwarg for all groups, but the `SignalGroup` form lets each group set its own:
 
 ```jldoctest per_band_ants
-julia> using Tracking, GNSSSignals
+julia> using Tracking, TrackingLoops, GNSSSignals
 
-julia> using Tracking: NumAnts
+julia> using TrackingLoops: NumAnts
 
 julia> track_state = TrackState(;
            signals = (

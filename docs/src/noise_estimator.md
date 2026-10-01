@@ -112,7 +112,8 @@ get_noise_density
 ```@docs
 CorrelatorNoiseEstimator
 CorrelatorNoiseEstimator()
-Tracking.update_noise!(::CorrelatorNoiseEstimator, ::Tracking.BandMeasurement, ::Integer, ::Integer, ::Tracking.NoiseUpdateContext)
+TrackingLoops.update_noise!(::CorrelatorNoiseEstimator, ::Tracking.BandMeasurement, ::Integer, ::Integer, ::TrackingLoops.NoiseUpdateContext)
+TrackingLoops.despread_noise!
 ```
 
 Four properties are worth knowing about it.
@@ -310,15 +311,15 @@ that is neither of the shipped paths — a front-end power monitor read over a
 sideband, say — is a subtype away:
 
 ```julia
-struct MyPowerMonitor <: Tracking.AbstractNoiseEstimator
+struct MyPowerMonitor <: TrackingLoops.AbstractNoiseEstimator
     densities::Vector{typeof(1.0 / 1.0Hz)}
 end
 
 # fed from outside, so the sample-driven path is a no-op (that is the default,
 # and it is why `update_noise!` need not be implemented at all here)
-Tracking.append_noise_observation!(e::MyPowerMonitor, obs) =
+TrackingLoops.append_noise_observation!(e::MyPowerMonitor, obs) =
     (push!(e.densities, obs.noise_density); e)
-Tracking.get_noise_density(e::MyPowerMonitor) =
+TrackingLoops.get_noise_density(e::MyPowerMonitor) =
     isempty(e.densities) ? nothing : sum(e.densities) / length(e.densities)
 ```
 
@@ -330,13 +331,13 @@ TrackState(; signal = GPSL1CA(), noise_estimators = (GPSL1CA = MyPowerMonitor(..
 
 Two contracts to keep. The window must be mutated **in place** and the struct
 returned unchanged — `TrackState` is immutable and never rebuilt for a noise
-update. And [`Tracking.noise_density_type`](@ref) must name the concrete type
+update. And [`TrackingLoops.noise_density_type`](@ref) must name the concrete type
 `get_noise_density` returns, so the fold can split off the `nothing` once per
 signal per chunk and keep everything below it monomorphic; it defaults to
 `typeof(1.0/1.0Hz)`, which every shipped builder produces.
 
 ```@docs
-Tracking.noise_density_type
-Tracking.NoiseUpdateContext
+TrackingLoops.noise_density_type
+TrackingLoops.NoiseUpdateContext
 requires_noise_density
 ```

@@ -6,15 +6,15 @@ using StaticArrays: SVector, SMatrix
 using Unitful: Hz, s, ms, ustrip, uconvert
 using GNSSSignals: GPSL1CA, GPSL1C_P, GPSL5I, GalileoE1B
 import Tracking
-using Tracking:
+using Tracking: TrackState, TrackedSat
+import TrackingLoops
+using TrackingLoops:
     AbstractNoiseEstimator,
     CorrelatorNoiseEstimator,
     NoiseObservation,
     NoiseRefCN0Estimator,
     NWPRCN0Estimator,
     NumAnts,
-    TrackState,
-    TrackedSat,
     append_noise_observation!,
     get_noise_density,
     noise_observation,
@@ -142,11 +142,11 @@ end
     # goes through the internal splitter instead — and *that* has to be
     # concretely inferred, in both states, or the density threaded down to
     # `_apply_correlator_output` would box.
-    D = Tracking.noise_density_type(estimator)
+    D = TrackingLoops.noise_density_type(estimator)
     @test Base.return_types(get_noise_density, (typeof(estimator),)) == [Union{Nothing,D}]
     empty_one = CorrelatorNoiseEstimator()
-    @test @inferred(Tracking._noise_density_and_ready(empty_one)) == (zero(D), false)
-    density, ready = @inferred Tracking._noise_density_and_ready(estimator)
+    @test @inferred(TrackingLoops._noise_density_and_ready(empty_one)) == (zero(D), false)
+    density, ready = @inferred TrackingLoops._noise_density_and_ready(estimator)
     @test ready
     @test density == get_noise_density(estimator)
 end
@@ -160,16 +160,16 @@ end
     # with no misuse at all.
     dead = CorrelatorNoiseEstimator()
     append_noise_observation!(dead, noise_observation_from_samples(0.0, 4000, 4e6Hz))
-    D = Tracking.noise_density_type(dead)
+    D = TrackingLoops.noise_density_type(dead)
     @test get_noise_density(dead) == zero(D)
-    @test @inferred(Tracking._noise_density_and_ready(dead)) == (zero(D), false)
+    @test @inferred(TrackingLoops._noise_density_and_ready(dead)) == (zero(D), false)
 
     # A producer's own arithmetic can hand over a non-finite one through the public
     # append path; same answer, and still inferred.
     for bad in (NaN, Inf)
         e = CorrelatorNoiseEstimator()
         append_noise_observation!(e, NoiseObservation(bad / 1.0Hz, 1, 1.0e-3s, Int16(1)))
-        @test @inferred(Tracking._noise_density_and_ready(e)) == (zero(D), false)
+        @test @inferred(TrackingLoops._noise_density_and_ready(e)) == (zero(D), false)
     end
 end
 
@@ -181,7 +181,7 @@ end
     # fell through to the abstract no-op and was dropped SILENTLY — the documented
     # hardware fill path, leaving the window empty forever and C/N₀ at -Inf.
     f32 = noise_observation(complex(1.0f0, 0.0f0), 4000, 4.0f6Hz)
-    @test f32 isa NoiseObservation{Tracking.NoiseDensity,typeof(1.0s)}
+    @test f32 isa NoiseObservation{TrackingLoops.NoiseDensity,typeof(1.0s)}
     e32 = CorrelatorNoiseEstimator()
     append_noise_observation!(e32, f32)
     @test Base.length(e32) == 1
@@ -189,12 +189,12 @@ end
 
     # An `Int`-spelled one, and a duration given in `ms`, land on the same type.
     mixed = noise_observation_from_correlator(1.0, 1, 4000, 4_000_000Hz; duration = 1ms)
-    @test mixed isa NoiseObservation{Tracking.NoiseDensity,typeof(1.0s)}
+    @test mixed isa NoiseObservation{TrackingLoops.NoiseDensity,typeof(1.0s)}
 
     # And an observation assembled by hand — never through a builder — is retyped
     # on append instead of being dropped.
     hand = NoiseObservation(1.0f-10 / 1.0f0Hz, 1, 1.0f-3s, Int16(3))
-    @test !(hand isa NoiseObservation{Tracking.NoiseDensity,typeof(1.0s)})
+    @test !(hand isa NoiseObservation{TrackingLoops.NoiseDensity,typeof(1.0s)})
     ehand = CorrelatorNoiseEstimator()
     append_noise_observation!(ehand, hand)
     @test Base.length(ehand) == 1
@@ -404,7 +404,7 @@ end
         CorrelatorNoiseEstimator,
         NoiseObservation,
         NoiseRefCN0Estimator,
-        Tracking.NoiseUpdateContext,
+        TrackingLoops.NoiseUpdateContext,
     )
         @test !ismutabletype(T)
     end

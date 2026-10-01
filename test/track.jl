@@ -14,7 +14,8 @@ using GNSSSignals:
     gen_code,
     get_code_center_frequency_ratio,
     get_code_frequency,
-    get_code
+    get_code,
+    get_code_length
 
 using Tracking:
     TrackedSat,
@@ -26,16 +27,19 @@ using Tracking:
     get_carrier_phase,
     get_code_doppler,
     get_carrier_doppler,
-    get_prompt,
-    estimate_cn0,
     get_signal_start_sample,
     get_last_fully_integrated_filtered_prompt,
     get_last_fully_integrated_correlator,
     get_filtered_prompts,
     get_integrated_samples,
-    has_bit_or_secondary_code_been_found,
     get_sat_state,
-    get_code_length,
+    get_doppler_estimator_state,
+    reset_loop_filters!
+import TrackingLoops
+using TrackingLoops:
+    get_prompt,
+    estimate_cn0,
+    has_bit_or_secondary_code_been_found,
     NumAnts,
     get_num_ants,
     get_noise_density,
@@ -43,7 +47,9 @@ using Tracking:
     AbstractPostCorrFilter,
     DefaultPostCorrFilter,
     ConventionalPLLAndDLL,
-    ConventionalAssistedPLLAndDLL
+    ConventionalAssistedPLLAndDLL,
+    NCOReferencedPLLAndDLL,
+    SatNCOReferencedPLLAndDLL
 import Tracking
 using StaticArrays: SVector
 using Unitful: ustrip, uconvert
@@ -149,6 +155,49 @@ _unit_code(c) = (m = maximum(abs, c); m == 0 ? float(c) : c ./ m)
     #    figure("Prompt")
     #    plot(real.(tracked_prompts))
     #    plot(imag.(tracked_prompts))
+end
+
+@testset "Through track, the NCO-referenced loop is the conventional assisted loop" begin
+    # `track` hands the estimator the chunk's own replica word and no landing
+    # sample, so the delay-aware estimator must reproduce the conventional one
+    # exactly — including after its loop filters are reset.
+    gpsl1 = GPSL1CA()
+    fs = 4e6Hz
+    num_samples = 4000 * 200
+    carrier_doppler = 1000.0Hz
+    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
+    t = (0:(num_samples-1)) ./ ustrip(Hz, fs)
+    code =
+        gen_code(num_samples, gpsl1, 1, fs, get_code_frequency(gpsl1) + code_doppler, 100.0)
+    rng = Random.Xoshiro(1)
+    signal =
+        ComplexF32.(code .* cis.(2π .* ustrip(Hz, carrier_doppler) .* t .+ 0.3)) .+
+        0.5f0 .* randn(rng, ComplexF32, num_samples)
+    function run(estimator)
+        track_state = TrackState(; signal = gpsl1, doppler_estimator = estimator)
+        track_state = add_satellite!(
+            track_state;
+            prn = 1,
+            code_phase = 100.2,
+            carrier_doppler = 1005.0Hz,
+        )
+        history = Tuple{typeof(1.0Hz),Float64}[]
+        for k = 1:200
+            track_state = track(signal[((k-1)*4000+1):(k*4000)], track_state, fs)
+            sat_state = get_sat_state(track_state, 1)
+            push!(history, (get_carrier_doppler(sat_state), get_code_phase(sat_state)))
+        end
+        track_state = track(signal[1:4000], reset_loop_filters!(track_state), fs)
+        sat_state = get_sat_state(track_state, 1)
+        push!(history, (get_carrier_doppler(sat_state), get_code_phase(sat_state)))
+        history, track_state
+    end
+    conventional, _ = run(ConventionalAssistedPLLAndDLL())
+    referenced, track_state = run(NCOReferencedPLLAndDLL())
+    @test referenced == conventional
+    @test get_doppler_estimator_state(get_sat_state(track_state, 1)) isa
+          SatNCOReferencedPLLAndDLL
+    @test abs(conventional[200][1] - carrier_doppler) < 5Hz
 end
 
 @testset "Tracking with large initial Doppler offset" begin
@@ -690,9 +739,9 @@ end
     num_ants = 3
 
     struct MeanBeamformer <: AbstractPostCorrFilter end
-    Tracking.update(f::MeanBeamformer, prompt) = f
-    Tracking.get_weights(::MeanBeamformer, ::NumAnts{1}) = 1.0 + 0.0im
-    Tracking.get_weights(::MeanBeamformer, ::NumAnts{M}) where {M} =
+    TrackingLoops.update(f::MeanBeamformer, prompt) = f
+    TrackingLoops.get_weights(::MeanBeamformer, ::NumAnts{1}) = 1.0 + 0.0im
+    TrackingLoops.get_weights(::MeanBeamformer, ::NumAnts{M}) where {M} =
         SVector{M,ComplexF64}(ntuple(_ -> 1 / M + 0.0im, M))
 
     function make_array_signal(rng)
