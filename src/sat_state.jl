@@ -309,7 +309,10 @@ Doppler. With the default [`ConventionalPLLAndDLL`](@ref) /
 correlator is what the PLL/DLL discriminator runs on, and per-satellite
 Doppler updates happen at the rate of the first signal's integration
 boundary; other signals filter their own prompts and update their own CN0
-estimates and bit buffers on their own boundaries. A user-supplied
+estimates and bit buffers on their own boundaries. With
+`combine_discriminators = true` they keep `signals[1]` as the driver — it sets the update rate, the loop bandwidths
+and the carrier and code phase reference — but averages the other signals'
+discriminators into its loop update as well. A user-supplied
 [`AbstractDopplerEstimator`](@ref) is free to use the other signals' state
 too — `signals[1]`'s privileged role is a convention of the conventional
 estimators, not a structural constraint of the type.

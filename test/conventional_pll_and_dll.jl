@@ -66,6 +66,7 @@ end
     pll_and_dll = @inferred SatConventionalPLLAndDLL(
         init_carrier_doppler = 500.0Hz,
         init_code_doppler = 100.0Hz,
+        group_delays = (nothing,),
     )
 
     @test pll_and_dll.init_carrier_doppler == 500.0Hz

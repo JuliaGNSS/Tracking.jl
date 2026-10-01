@@ -36,6 +36,8 @@ export get_early,
     get_integrated_samples,
     get_preferred_num_code_blocks_to_integrate,
     set_preferred_num_code_blocks_to_integrate!,
+    get_group_delay,
+    set_group_delay!,
     reset_loop_filters!,
     get_signal_start_sample,
     get_correlator,
@@ -310,6 +312,7 @@ include("downconvert_and_correlate_int16.jl")
 include("downconvert_and_correlate_onebit.jl")
 include("downconvert_and_correlate_twobit.jl")
 include("conventional_pll_and_dll.jl")
+include("discriminator_combining.jl")
 include("vector_pll_and_dll.jl")
 include("tracking_state.jl")
 include("track.jl")

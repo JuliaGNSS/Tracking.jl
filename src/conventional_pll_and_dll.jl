@@ -107,43 +107,82 @@ the cap starts to bind, this returns the configured bandwidth unchanged.
 end
 
 """
-Per-satellite state for the conventional PLL and DLL Doppler estimator.
-Holds initial Doppler values and loop filter states.
+Per-satellite state for the conventional PLL and DLL Doppler estimator
+([`ConventionalPLLAndDLL`](@ref)): initial Doppler values, loop filter states
+and loop bandwidths, plus one group delay per signal of the satellite
+(`sat.signals` order) — see [`set_group_delay!`](@ref).
+
+Type parameter `N` is the satellite's signal count and `C` whether the
+estimator combines the satellite's discriminators (`combine_discriminators`):
+fixed per satellite when it is seeded, so the per-record fold dispatches on it.
+
+A group delay is stored as a time, with `NaN` standing for "unknown", so the
+state stays a concrete type; the constructors and [`get_group_delay`](@ref)
+speak `nothing` for an unknown one. Build the state by keyword with
+`group_delays`, one entry per signal (`nothing` for unknown), or from the
+satellite, which starts every delay unknown.
 """
-@kwdef struct SatConventionalPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
+struct SatConventionalPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter,N,C}
     init_carrier_doppler::typeof(1.0Hz)
     init_code_doppler::typeof(1.0Hz)
-    carrier_loop_filter::CA = ThirdOrderBilinearLF()
-    code_loop_filter::CO = SecondOrderBilinearLF()
-    carrier_loop_filter_bandwidth::typeof(1.0Hz) = 18.0Hz
-    code_loop_filter_bandwidth::typeof(1.0Hz) = 1.0Hz
+    carrier_loop_filter::CA
+    code_loop_filter::CO
+    carrier_loop_filter_bandwidth::typeof(1.0Hz)
+    code_loop_filter_bandwidth::typeof(1.0Hz)
+    group_delays::NTuple{N,typeof(1.0s)}
 end
 
-function SatConventionalPLLAndDLL(
-    sat::TrackedSat,
-    carrier_loop_filter::CA,
-    code_loop_filter::CO;
-    carrier_loop_filter_bandwidth::typeof(1.0Hz) = 18.0Hz,
-    code_loop_filter_bandwidth::typeof(1.0Hz) = 1.0Hz,
+function SatConventionalPLLAndDLL(;
+    init_carrier_doppler,
+    init_code_doppler,
+    carrier_loop_filter::CA = ThirdOrderBilinearLF(),
+    code_loop_filter::CO = SecondOrderBilinearLF(),
+    carrier_loop_filter_bandwidth = 18.0Hz,
+    code_loop_filter_bandwidth = 1.0Hz,
+    group_delays::Tuple,
+    combine_discriminators::Bool = false,
 ) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
-    SatConventionalPLLAndDLL(
-        sat.carrier_doppler,
-        sat.code_doppler,
+    stored_group_delays = map(_stored_group_delay, group_delays)
+    SatConventionalPLLAndDLL{CA,CO,length(stored_group_delays),combine_discriminators}(
+        init_carrier_doppler,
+        init_code_doppler,
         carrier_loop_filter,
         code_loop_filter,
         carrier_loop_filter_bandwidth,
         code_loop_filter_bandwidth,
+        stored_group_delays,
     )
 end
 
 function SatConventionalPLLAndDLL(
-    sat_conventional_pll_and_dll::SatConventionalPLLAndDLL{CA,CO};
+    sat::TrackedSat,
+    carrier_loop_filter::AbstractLoopFilter,
+    code_loop_filter::AbstractLoopFilter;
+    carrier_loop_filter_bandwidth::typeof(1.0Hz) = 18.0Hz,
+    code_loop_filter_bandwidth::typeof(1.0Hz) = 1.0Hz,
+    combine_discriminators::Bool = false,
+)
+    SatConventionalPLLAndDLL(;
+        init_carrier_doppler = sat.carrier_doppler,
+        init_code_doppler = sat.code_doppler,
+        carrier_loop_filter,
+        code_loop_filter,
+        carrier_loop_filter_bandwidth,
+        code_loop_filter_bandwidth,
+        group_delays = map(_ -> nothing, sat.signals),
+        combine_discriminators,
+    )
+end
+
+function SatConventionalPLLAndDLL(
+    sat_conventional_pll_and_dll::SatConventionalPLLAndDLL{CA,CO,N,C};
     carrier_loop_filter::Maybe{CA} = nothing,
     code_loop_filter::Maybe{CO} = nothing,
     carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
     code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
-) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
-    SatConventionalPLLAndDLL{CA,CO}(
+    group_delays::Maybe{NTuple{N,typeof(1.0s)}} = nothing,
+) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter,N,C}
+    SatConventionalPLLAndDLL{CA,CO,N,C}(
         sat_conventional_pll_and_dll.init_carrier_doppler,
         sat_conventional_pll_and_dll.init_code_doppler,
         isnothing(carrier_loop_filter) ? sat_conventional_pll_and_dll.carrier_loop_filter :
@@ -156,8 +195,12 @@ function SatConventionalPLLAndDLL(
         isnothing(code_loop_filter_bandwidth) ?
         sat_conventional_pll_and_dll.code_loop_filter_bandwidth :
         code_loop_filter_bandwidth,
+        isnothing(group_delays) ? sat_conventional_pll_and_dll.group_delays : group_delays,
     )
 end
+
+# Whether a per-sat state combines its satellite's discriminators.
+_combines_discriminators(::SatConventionalPLLAndDLL{<:Any,<:Any,<:Any,C}) where {C} = C
 
 """
 $(SIGNATURES)
@@ -190,8 +233,27 @@ bandwidth change. The **code** bandwidth is an absolute value that longer
 integration does not narrow; it is only capped by the same stability product
 against the record's actual integration time — see
 [`effective_code_loop_filter_bandwidth`](@ref).
+
+`combine_discriminators = true` **combines the discriminators of every signal
+of a satellite** into the loop update: the same loops, filters and bandwidths,
+but at each loop update the passengers' (`signals[2:end]`) PLL, FLL and DLL
+discriminators are averaged into the driver's, weighted by their power share.
+Only records that coincide with the driver's combine, the carrier loops combine
+at once, and the code loop needs a group delay on both ends
+([`set_group_delay!`](@ref)); see [Discriminator combining](@ref) for the rules.
+A single-signal satellite, or one whose passengers never coincide with the
+driver, closes its loops exactly as without combining. Off by default. The flag
+is the type parameter `C`, so a `TrackState` combines for all of its satellites
+or for none.
+
+```julia
+TrackState(;
+    signals = (galileo_e1 = (GalileoE1C(), GalileoE1B()),),
+    doppler_estimator = ConventionalAssistedPLLAndDLL(; combine_discriminators = true),
+)
+```
 """
-struct ConventionalPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter} <:
+struct ConventionalPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter,C} <:
        AbstractDopplerEstimator
     carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)}
     code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)}
@@ -202,8 +264,12 @@ function ConventionalPLLAndDLL(
     ::Type{CO} = SecondOrderBilinearLF;
     carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
     code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
+    combine_discriminators::Bool = false,
 ) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
-    ConventionalPLLAndDLL{CA,CO}(carrier_loop_filter_bandwidth, code_loop_filter_bandwidth)
+    ConventionalPLLAndDLL{CA,CO,combine_discriminators}(
+        carrier_loop_filter_bandwidth,
+        code_loop_filter_bandwidth,
+    )
 end
 
 """
@@ -217,27 +283,30 @@ improved tracking under high dynamics.
 Bandwidths default to `nothing` (auto): each satellite is seeded with the
 loop bandwidth recommended for its own estimator-driver signal — see
 [`ConventionalPLLAndDLL`](@ref). Pass explicit bandwidths to override.
+`combine_discriminators` is as for [`ConventionalPLLAndDLL`](@ref).
 """
 function ConventionalAssistedPLLAndDLL(
     ::Type{CO} = SecondOrderBilinearLF;
     carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
     code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
+    combine_discriminators::Bool = false,
 ) where {CO<:AbstractLoopFilter}
     ConventionalPLLAndDLL(
         ThirdOrderAssistedBilinearLF,
         CO;
         carrier_loop_filter_bandwidth,
         code_loop_filter_bandwidth,
+        combine_discriminators,
     )
 end
 
 # Kwarg-update constructor for tweaking bandwidths in place.
 function ConventionalPLLAndDLL(
-    pll_and_dll::ConventionalPLLAndDLL{CA,CO};
+    pll_and_dll::ConventionalPLLAndDLL{CA,CO,C};
     carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
     code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
-) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
-    ConventionalPLLAndDLL{CA,CO}(
+) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter,C}
+    ConventionalPLLAndDLL{CA,CO,C}(
         isnothing(carrier_loop_filter_bandwidth) ?
         pll_and_dll.carrier_loop_filter_bandwidth : carrier_loop_filter_bandwidth,
         isnothing(code_loop_filter_bandwidth) ? pll_and_dll.code_loop_filter_bandwidth :
@@ -259,9 +328,9 @@ bandwidth per group even though it carries one shared estimator. An explicit
 bandwidth on the estimator is used verbatim for every satellite.
 """
 function init_estimator_state(
-    estimator::ConventionalPLLAndDLL{CA,CO},
+    estimator::ConventionalPLLAndDLL{CA,CO,C},
     sat::TrackedSat,
-) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
+) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter,C}
     carrier_loop_filter = constructorof(CA)()
     code_loop_filter = constructorof(CO)()
     driver_signal = first(sat.signals).signal
@@ -273,13 +342,20 @@ function init_estimator_state(
         isnothing(estimator.code_loop_filter_bandwidth) ?
         default_code_loop_filter_bandwidth(driver_signal) :
         estimator.code_loop_filter_bandwidth
-    SatConventionalPLLAndDLL(
+    # Every signal starts with an unknown group delay.
+    SatConventionalPLLAndDLL{
+        typeof(carrier_loop_filter),
+        typeof(code_loop_filter),
+        length(sat.signals),
+        C,
+    }(
         sat.carrier_doppler,
         sat.code_doppler,
         carrier_loop_filter,
         code_loop_filter,
         carrier_loop_filter_bandwidth,
         code_loop_filter_bandwidth,
+        map(_ -> _UNKNOWN_GROUP_DELAY, sat.signals),
     )
 end
 
@@ -292,7 +368,7 @@ _reset_estimator_state(estimator::AbstractDopplerEstimator, sat::TrackedSat) =
 
 # Conventional PLL/DLL: zero the loop-filter integrators and re-seed the
 # init Dopplers from the sat's current (converged) Dopplers, but keep the
-# bandwidths from the EXISTING per-sat state — a per-sat
+# bandwidths and group delays from the EXISTING per-sat state — a per-sat
 # `SatConventionalPLLAndDLL` bandwidth override must survive the reset
 # (going through `init_estimator_state` would silently revert it to the
 # estimator-level defaults).
@@ -301,13 +377,14 @@ function _reset_estimator_state(
     sat::TrackedSat{<:Tuple{Vararg{TrackedSignal}},<:SatConventionalPLLAndDLL},
 )
     state = sat.doppler_estimator_state
-    SatConventionalPLLAndDLL(
+    typeof(state)(
         sat.carrier_doppler,
         sat.code_doppler,
         constructorof(typeof(state.carrier_loop_filter))(),
         constructorof(typeof(state.code_loop_filter))(),
         state.carrier_loop_filter_bandwidth,
         state.code_loop_filter_bandwidth,
+        state.group_delays,
     )
 end
 
@@ -841,6 +918,12 @@ end
 # defines a method.
 _with_loop_filters(state::SatConventionalPLLAndDLL, carrier_loop_filter, code_loop_filter) =
     SatConventionalPLLAndDLL(state; carrier_loop_filter, code_loop_filter)
+
+# The group delays a per-sat state holds, and the state with them replaced: what
+# the group-delay API and the passenger contexts read.
+_group_delays(state::SatConventionalPLLAndDLL) = state.group_delays
+_with_group_delays(state::SatConventionalPLLAndDLL, group_delays) =
+    SatConventionalPLLAndDLL(state; group_delays)
 
 # Process the non-driver signals (signals[2:end]): the shared per-signal
 # advance only — no loop-filter work. Walks the tuple recursively to keep

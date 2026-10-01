@@ -11,7 +11,7 @@ The tracking state nests as **TrackState → SignalGroup → TrackedSat → Trac
 
 ### Estimator-driver signal
 
-The first signal in each group's tuple is the **estimator-driver signal** — the one the Doppler estimator uses to update the satellite-shared carrier and code Doppler. With the default [`ConventionalPLLAndDLL`](@ref) / [`ConventionalAssistedPLLAndDLL`](@ref), `signals[1]`'s correlator is the input to the PLL/DLL discriminator, and the per-signal default loop bandwidths are sized off this signal's primary-code period. A user-supplied [`AbstractDopplerEstimator`](@ref) is free to use the other signals' state too — `signals[1]`'s privileged role is a convention of the conventional estimators, not a structural constraint of `TrackedSat`.
+The first signal in each group's tuple is the **estimator-driver signal** — the one the Doppler estimator uses to update the satellite-shared carrier and code Doppler. With the default [`ConventionalPLLAndDLL`](@ref) / [`ConventionalAssistedPLLAndDLL`](@ref), `signals[1]`'s correlator is the input to the PLL/DLL discriminator, and the per-signal default loop bandwidths are sized off this signal's primary-code period. With `combine_discriminators = true` they keep `signals[1]` as the driver — update rate, loop bandwidths, carrier and code phase reference — but averages the other signals' discriminators into its loop update as well (see [Discriminator combining](#Discriminator-combining)). A user-supplied [`AbstractDopplerEstimator`](@ref) is free to use the other signals' state too — `signals[1]`'s privileged role is a convention of the conventional estimators, not a structural constraint of `TrackedSat`.
 
 The driver signal is privileged for the Doppler estimator only. Bit synchronisation, the post-correlation filter and the **CN0 estimator** all run per signal, so a multi-signal satellite produces one C/N₀ per signal rather than one for the driver — see [CN0 Estimator](cn0_estimator.md) for what that costs and for [`NoCN0Estimator`](@ref), the per-signal opt-out.
 
@@ -232,6 +232,31 @@ julia> get_carrier_doppler(track_state, :modern_gps, 11)
 Putting a pilot signal first (e.g. `GPSL1C_P()`) is encouraged with the conventional estimators when one is available: pilot signals carry no data-bit modulation, which lets the PLL run longer coherent integrations and reach lower phase-noise floors. The data-bearing signals (L1C-D, L1 C/A) still recover their navigation bits independently — each [`TrackedSignal`](@ref) carries its own `bit_buffer` regardless of which signal drives the estimator.
 
 When a satellite tracks signals with different primary-code lengths (e.g. L1 C/A at 1 ms vs L1C-P at 10 ms), each outer iteration integrates to the **shortest** signal's next primary-code boundary. The shorter signal's correlator completes every iteration; the longer signal's correlator accumulates across multiple iterations and only marks `is_integration_completed = true` on its own boundary. Doppler updates therefore happen at the shortest signal's cadence (1 ms in this example), and longer signals see their integration windows spanned by piecewise Doppler updates — the natural per-iteration-Doppler-correction behaviour of a real receiver.
+
+### Discriminator combining
+
+By default only the driver (`signals[1]`) closes the loops; the passengers recover their own bits and C/N₀. With `combine_discriminators = true`, [`ConventionalPLLAndDLL`](@ref) and [`ConventionalAssistedPLLAndDLL`](@ref) close the same loops but average the passengers' discriminators into the driver's at every loop update — the natural use being a pilot/data pair such as Galileo E1C + E1B, E5aQ + E5aI or GPS L5Q + L5I:
+
+```julia
+track_state = TrackState(;
+    signals = (galileo_e1 = (GalileoE1C(), GalileoE1B()),),
+    doppler_estimator = ConventionalAssistedPLLAndDLL(; combine_discriminators = true),
+)
+```
+
+The rules:
+
+- **Only coincident records combine.** Within one chunk, a passenger takes part only if its records are the driver's: as many, each ending on the same sample after the same number of samples. Record `k` of each is then one measurement of the same interval. This holds by default for every pilot/data pair GNSSSignals defines except GPS L2CM/L2CL, since the components share one primary code period. A passenger with a different code period (GPS L1 C/A next to L1C), or integrating longer or shorter than the driver, is simply not combined for that chunk.
+- **Weights are the ICD power split** (`GNSSSignals.get_relative_power`): L1C-P 0.75 against L1C-D 0.25, the even pairs 0.5 each. Each loop reads the weighted *mean*, so its gain does not change with the number of signals. The weights assume the group's signals use one kind of discriminator; a different one costs efficiency, never bias.
+- **Carrier loops combine immediately.** A passenger is rotated onto the driver's carrier phase frame by the difference of the two nominal offsets `get_carrier_phase_offset` reports, so a quadrature component does not read `±π/2`. A record without a previous prompt (a signal's first, or the first after [`reset_loop_filters!`](@ref)) stays out of the FLL.
+- **The code loop needs group delays.** A passenger's received code sits off the satellite's one shared replica code phase by the payload's group delay difference, which Tracking cannot know. A passenger takes part in the code loop only once both it and the driver carry a group delay ([`set_group_delay!`](@ref)); its DLL reading is then referred to the driver's code phase, so the shared `code_phase` keeps meaning the driver's. An unknown delay is not treated as zero.
+
+A single-signal satellite, or one with nothing to combine, closes its loops bit-identically to the same estimator without combining.
+
+```@docs
+set_group_delay!
+get_group_delay
+```
 
 ### Phased-array tracking
 

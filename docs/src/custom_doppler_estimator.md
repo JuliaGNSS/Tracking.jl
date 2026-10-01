@@ -26,8 +26,8 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
 
 2. **A per-satellite state struct** (any name and shape you like). For
    the conventional estimator it is `SatConventionalPLLAndDLL` holding
-   the loop filters and seed Dopplers; for a Kalman filter it might be
-   the Kalman state vector.
+   the loop filters, seed Dopplers and per-signal group delays; for a
+   Kalman filter it might be the Kalman state vector.
 
 3. **An [`init_estimator_state`](@ref) method** for your estimator.
    It produces the initial per-sat state for a sat entering the track
