@@ -6,7 +6,14 @@ using StaticArrays: SVector
 using Logging: with_logger, NullLogger
 using Dictionaries: dictionary
 using GNSSSignals:
-    GalileoE1B, GalileoE1C, GPSL5I, GPSL5Q, GPSL1C_D, GPSL1C_P, get_carrier_phase_offset
+    GPSL1CA,
+    GalileoE1B,
+    GalileoE1C,
+    GPSL5I,
+    GPSL5Q,
+    GPSL1C_D,
+    GPSL1C_P,
+    get_carrier_phase_offset
 using Tracking:
     Tracking,
     TrackedSignal,
@@ -360,6 +367,42 @@ end
         fold_records!(ts, outputs, 10)
         @test (@allocated fold_records!(ts, outputs, 100)) == 0
     end
+end
+
+@testset "a record correlated before a same-chunk sync is excluded" begin
+    # Synced by a record earlier in this chunk: the bit buffer reports `found`
+    # although the chunk started unsynced (`found_before_fold = false`).
+    synced(t) = TrackedSignal(
+        t;
+        bit_buffer = typeof(t.bit_buffer)(
+            zero(typeof(t.bit_buffer.code_block_buffer)),
+            0,
+            true,
+            0,
+            Int8(+1),
+            complex(0.0, 0.0),
+            0,
+            Float32[],
+            Tracking.PhaseAccumulators(),
+        ),
+    )
+    excluded(signal; found_before_fold) = last(
+        Tracking._apply_passenger_record(
+            synced(TrackedSignal(signal)),
+            CorrelatorOutput(get_correlator(TrackedSignal(signal)), SAMPLES, SAMPLES),
+            found_before_fold,
+            1,
+            FS,
+            nothing,
+            false,
+            0.0,
+        ),
+    )
+    # GPS L5I carries a secondary code, whose wipe-off the record lacked.
+    @test excluded(GPSL5I(); found_before_fold = false)
+    @test !excluded(GPSL5I(); found_before_fold = true)
+    # GPS L1 C/A has none, so its record correlated the same either side.
+    @test !excluded(GPSL1CA(); found_before_fold = false)
 end
 
 end
