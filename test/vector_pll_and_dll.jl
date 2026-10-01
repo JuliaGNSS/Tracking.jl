@@ -1,7 +1,7 @@
 module VectorPLLAndDLLTest
 
 using Test: @test, @testset, @inferred
-using Unitful: Hz
+using Unitful: Hz, MHz
 using GNSSSignals: GPSL1CA, GalileoE1B, get_code_center_frequency_ratio
 using TrackingLoopFilters: ThirdOrderAssistedBilinearLF, SecondOrderBilinearLF, filter_loop
 using StaticArrays: SVector
@@ -17,6 +17,7 @@ using Tracking:
     CorrelatorOutput,
     init_estimator_state,
     estimate_dopplers_and_filter_prompt,
+    estimate_dopplers_and_filter_prompt!,
     get_carrier_doppler,
     get_code_doppler,
     get_sat_state,
@@ -242,6 +243,34 @@ end
     # With count == 0 the mean accessors return `nothing`.
     @test mean_code_discr(state) === nothing
     @test mean_carrier_discr(state) === nothing
+end
+
+@testset "Vector closure accepts a sampling frequency in any frequency unit" begin
+    # The FLL reading takes the sampling frequency's unit, while the accumulator
+    # holds `Hz`; a frequency given in `MHz` used to be refused there.
+    gpsl1 = GPSL1CA()
+    num_samples = 5000
+    accumulators = (1000.0 + 10im, 2000.0 + 20im, 750.0 + 10im)
+    function accumulated(sampling_frequency)
+        doppler_estimator = VectorPLLAndDLL()
+        sat = TrackedSat(gpsl1, 1, 0.5, 100.0Hz; doppler_estimator)
+        track_state = TrackState(gpsl1, sat; doppler_estimator)
+        enable_vt!(track_state, (1,))
+        # Two integrations, the second rotated, so the FLL reads a nonzero error.
+        for k = 0:1
+            sats = get_sat_states(track_state)
+            sats[1] =
+                _with_full_integration(sats[1], accumulators .* cis(0.1k), num_samples)
+            estimate_dopplers_and_filter_prompt!(track_state, (L1 = sampling_frequency,))
+        end
+        state = get_doppler_estimator_state(get_sat_state(track_state, 1))
+        mean_code_discr(state), mean_carrier_discr(state)
+    end
+    code_in_hz, carrier_in_hz = accumulated(5e6Hz)
+    code_in_mhz, carrier_in_mhz = accumulated(5.0MHz)
+    @test !iszero(carrier_in_hz)
+    @test code_in_mhz ≈ code_in_hz
+    @test carrier_in_mhz ≈ carrier_in_hz
 end
 
 @testset "Vector tracking state management" begin
