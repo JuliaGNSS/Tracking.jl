@@ -252,7 +252,7 @@ The rules:
 - **The code loop needs group delays.** The signals' code phases differ by the payload's group delay difference, which Tracking cannot know. A passenger takes part in the code loop only once both it and the driver carry a group delay ([`set_group_delay!`](@ref)); its DLL reading is then referred to the driver's code phase, so the shared `code_phase` keeps meaning the driver's. An unknown delay is not treated as zero.
 - A passenger record correlated without the secondary-code wipe-off a sync in the same chunk has just established is left out, as it is from the bit buffer.
 
-With the flag off, and on a single-signal satellite, the loops are bit-identical to the driver-only update. [`VectorPLLAndDLL`](@ref) does not combine.
+With the flag off, and on a single-signal satellite, the loops are bit-identical to the driver-only update. [`VectorPLLAndDLL`](@ref) takes the same keyword; see [Vector Tracking](vector_tracking.md) for which loops it combines.
 
 ### Phased-array tracking
 

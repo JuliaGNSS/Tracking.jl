@@ -4,6 +4,7 @@ using Test: @test, @testset, @test_throws
 using Unitful: Hz, s, ns, m
 using StaticArrays: SVector
 using Logging: with_logger, NullLogger
+using Dictionaries: dictionary
 using GNSSSignals:
     GalileoE1B, GalileoE1C, GPSL5I, GPSL5Q, GPSL1C_D, GPSL1C_P, get_carrier_phase_offset
 using Tracking:
@@ -24,7 +25,13 @@ using Tracking:
     get_correlator_outputs,
     get_filtered_prompts,
     get_group_delay,
-    set_group_delay!
+    set_group_delay!,
+    VectorPLLAndDLL,
+    enable_vt!,
+    set_code_freq_updates!,
+    set_carrier_freq_updates!,
+    mean_code_discr,
+    mean_carrier_discr
 
 @testset "group delay" begin
     @test isnothing(get_group_delay(TrackedSignal(GalileoE1B())))
@@ -54,10 +61,14 @@ end
 const FS = 5e6Hz
 const SAMPLES = 5000
 
-function combining_state(signals; combining = true, assisted = false)
-    estimator =
-        assisted ? ConventionalAssistedPLLAndDLL(; discriminator_combining = combining) :
-        ConventionalPLLAndDLL(; discriminator_combining = combining)
+function combining_state(
+    signals;
+    combining = true,
+    assisted = false,
+    estimator = assisted ?
+                ConventionalAssistedPLLAndDLL(; discriminator_combining = combining) :
+                ConventionalPLLAndDLL(; discriminator_combining = combining),
+)
     ts = TrackState(; signals = (g = signals,), doppler_estimator = estimator)
     add_satellite!(ts; prn = 1, group = :g, code_phase = 0.0, carrier_doppler = 0.0Hz)
 end
@@ -229,6 +240,117 @@ end
         ts = combining_state((GPSL5Q(), GPSL5I()); assisted)
         set_group_delay!(ts, :g, 1, 1, 0.0s)
         set_group_delay!(ts, :g, 1, 2, 0.5ns)
+        sat = Tracking.get_sat_state(ts, :g, 1)
+        outputs = map(sat.signals) do signal
+            rotation = SAMPLES * cis(0.1 + get_carrier_phase_offset(signal.signal))
+            taps = (0.25, 0.5, 1.0, 0.6, 0.25) .* rotation
+            CorrelatorOutput(with_taps(signal.correlator, taps), SAMPLES, SAMPLES)
+        end
+        fold_records!(ts, outputs, 10)
+        @test (@allocated fold_records!(ts, outputs, 100)) == 0
+    end
+end
+
+@testset "vector tracking" begin
+    signals = (GPSL5Q(), GPSL5I())
+    # Two chunks of two records each, so the FLL has a previous prompt and the
+    # passenger is applied across chunk boundaries.
+    function feed!(ts, errors; late = (1.2, 0.8), passenger_index = SAMPLES, chunks = 2)
+        for chunk = 1:chunks
+            for (i, phase_error) in enumerate(errors)
+                index = i == 1 ? SAMPLES : passenger_index
+                append_record!(ts, i, phase_error; sample_index = index, late = late[i])
+                append_record!(
+                    ts,
+                    i,
+                    phase_error + 0.05;
+                    sample_index = index + SAMPLES,
+                    late = late[i],
+                )
+            end
+            estimate!(ts)
+        end
+        ts
+    end
+    vector_state(signals; combining = true) = combining_state(
+        signals;
+        estimator = VectorPLLAndDLL(; discriminator_combining = combining),
+    )
+    function with_delays!(ts)
+        foreach(i -> set_group_delay!(ts, :g, 1, i, (i - 1) * 1.0ns), 1:2)
+        ts
+    end
+    function vt_on!(ts)
+        enable_vt!(ts, (1,))
+        set_carrier_freq_updates!(ts, dictionary((1 => 3.0Hz,)))
+        set_code_freq_updates!(ts, dictionary((1 => -0.5Hz,)))
+        ts
+    end
+
+    @testset "vt_on = false combines exactly like the conventional estimator" begin
+        conventional =
+            feed!(with_delays!(combining_state(signals; assisted = true)), (0.1, 0.3))
+        vector = feed!(with_delays!(vector_state(signals)), (0.1, 0.3))
+        @test get_carrier_doppler(vector, :g, 1) == get_carrier_doppler(conventional, :g, 1)
+        @test get_code_doppler(vector, :g, 1) == get_code_doppler(conventional, :g, 1)
+        # Nothing is accumulated while the scalar fallback runs.
+        @test isnothing(mean_code_discr(vector, :g, 1, 2))
+    end
+
+    @testset "vt_on = true combines only the carrier phase" begin
+        both = feed!(vt_on!(with_delays!(vector_state(signals))), (0.1, 0.3))
+        alone = feed!(vt_on!(vector_state((GPSL5Q(),))), (0.2,))
+        # PLL: the mean phase error; FLL and code: the navigation filter's.
+        @test get_carrier_doppler(both, :g, 1) ≈ get_carrier_doppler(alone, :g, 1)
+        @test get_code_doppler(both, :g, 1) ≈ get_code_doppler(alone, :g, 1)
+    end
+
+    @testset "every signal accumulates its own raw discriminators" begin
+        # The passenger's slot must hold what the passenger reads tracked alone,
+        # unshifted by the group delay, whether it was combined or not. One
+        # chunk, so both satellites read with the same code Doppler.
+        passenger_alone =
+            feed!(vt_on!(vector_state((GPSL5I(),))), (0.3,); late = (0.8,), chunks = 1)
+        driver_alone = feed!(vt_on!(vector_state((GPSL5Q(),))), (0.1,); chunks = 1)
+        for (combining, passenger_index) in
+            ((true, SAMPLES), (false, SAMPLES), (true, SAMPLES - 1))
+            ts = feed!(
+                vt_on!(with_delays!(vector_state(signals; combining))),
+                (0.1, 0.3);
+                passenger_index,
+                chunks = 1,
+            )
+            sat = Tracking.get_sat_state(ts, :g, 1)
+            state = Tracking.get_doppler_estimator_state(sat)
+            @test state.code_discr_acc[1][1] == 2
+            @test state.code_discr_acc[2][1] == 2
+            @test state.carrier_discr_acc[2][1] == 2
+            @test mean_code_discr(ts, :g, 1, GPSL5Q) == mean_code_discr(driver_alone, :g, 1)
+            if passenger_index == SAMPLES
+                @test mean_code_discr(ts, :g, 1, GPSL5I) ==
+                      mean_code_discr(passenger_alone, :g, 1)
+                @test mean_carrier_discr(sat, 2) ==
+                      mean_carrier_discr(passenger_alone, :g, 1)
+            end
+        end
+        # A multi-signal satellite needs a signal selector.
+        multi = feed!(vt_on!(vector_state(signals)), (0.1, 0.3))
+        @test_throws Exception mean_code_discr(
+            Tracking.get_doppler_estimator_state(Tracking.get_sat_state(multi, :g, 1)),
+        )
+    end
+end
+
+@static if VERSION >= v"1.11"
+    @testset "vector combining is allocation-free (vt_on = $vt_on)" for vt_on in
+                                                                        (false, true)
+        ts = combining_state(
+            (GPSL5Q(), GPSL5I());
+            estimator = VectorPLLAndDLL(; discriminator_combining = true),
+        )
+        set_group_delay!(ts, :g, 1, 1, 0.0s)
+        set_group_delay!(ts, :g, 1, 2, 0.5ns)
+        vt_on && enable_vt!(ts, (1,))
         sat = Tracking.get_sat_state(ts, :g, 1)
         outputs = map(sat.signals) do signal
             rotation = SAMPLES * cis(0.1 + get_carrier_phase_offset(signal.signal))

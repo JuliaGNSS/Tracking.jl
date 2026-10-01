@@ -490,7 +490,7 @@ end
 # scaling is the same actual count (floored at 1): the bandwidth must pair with
 # the record's true integration time, so it only switches when the integration
 # actually lengthened — not already on the fold where sync was detected but the
-# records were still single-block (see `_process_estimator_driver_signal`).
+# records were still single-block (see `_fold_driver`).
 # `correlated_pre_sync = true` marks a record that follows a bit/secondary sync
 # detected earlier in the same fold, i.e. one that was correlated with a
 # pre-sync replica. Its *prompt* is only unusable where sync changed the replica
@@ -649,34 +649,6 @@ end
     )
 end
 
-# Seam between the shared per-sat update and the estimators' driver folds. Only
-# the conventional estimator combines passenger records into its loop update;
-# every other per-sat state folds the driver alone and hands the passengers back
-# untouched, for `_process_passenger_signals`.
-@inline function _fold_driver(
-    tracked_signal::TrackedSignal,
-    passengers::Tuple,
-    sat::TrackedSat,
-    state,
-    sampling_frequency,
-    noise::Tuple,
-    driver_carrier_phase::Real,
-)
-    noise_density, noise_density_ready = first(noise)
-    (
-        _process_estimator_driver_signal(
-            tracked_signal,
-            sat,
-            state,
-            sampling_frequency,
-            noise_density,
-            noise_density_ready,
-            driver_carrier_phase,
-        )...,
-        passengers,
-    )
-end
-
 # Process the estimator-driver signal (signals[1]): fold over every
 # `CorrelatorOutput` collected during this chunk, in order — running the PLL/DLL
 # plus prompt filter / CN0 / bit-buffer update per record and threading the loop
@@ -691,6 +663,9 @@ end
 # driver's record `k`, and its discriminators averaged into that loop update
 # (`_combined_discriminator`). The other passengers are returned with their
 # records untouched.
+#
+# Every per-sat state type `_update_tracked_sat_doppler` serves defines its own
+# `_fold_driver` method; this is the conventional estimator's.
 @inline function _fold_driver(
     tracked_signal::TrackedSignal,
     passengers::Tuple,

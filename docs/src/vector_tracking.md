@@ -45,9 +45,9 @@ satellite's estimator-driver signal (`signals[1]`) completes an integration,
         plain PLL filter the `carrier_freq_update` has no input path and the
         vector carrier closure degrades to PLL-only.)
 
-    In this mode the DLL and FLL discriminator outputs and the prompt
-    magnitude are **accumulated** on the per-sat state for the navigation
-    filter to read and reset.
+    In this mode every signal's DLL and FLL discriminator outputs are
+    **accumulated** on the per-sat state, one pair per signal, for the
+    navigation filter to read and reset.
 
 The satellite-shared carrier/code Doppler is always updated through the same
 carrier-aiding (`aid_dopplers`) used by the conventional estimator, and the
@@ -75,6 +75,7 @@ for (prn, sat) in pairs(get_sat_states(track_state))
     state.vt_on || continue
     code_err = mean_code_discr(state)      # chips, or `nothing` if no data
     carrier_err = mean_carrier_discr(state) # Hz, or `nothing` if no data
+    # A multi-signal satellite names the signal: mean_code_discr(sat, 2).
     # … feed the mean measurements into the navigation filter …
 end
 reset_code_discr_acc!(track_state)
@@ -94,6 +95,27 @@ the averaging convention (`sum / count`, returning `nothing` when nothing has
 accumulated) in one place, so consumers don't each re-implement the divide and
 the `count == 0` guard. Reading and resetting are deliberately separate calls
 so the filter can read at its own (typically slower) rate than `track!`.
+
+### Multi-signal satellites
+
+A satellite tracking several signals (a pilot/data pair such as Galileo
+E1C + E1B) hands the navigation filter **every signal's own measurement**: each
+signal has its own accumulator pair, filled by every record that signal
+produces, with its raw discriminator on its own code phase. Nothing is combined
+across signals and no group-delay difference is applied; fusing the signals and
+applying their inter-signal biases is the filter's job. Read one signal with a
+selector, as with the other per-signal accessors:
+
+```julia
+mean_code_discr(track_state, :galileo_e1, 11, GalileoE1B)   # by signal type
+mean_carrier_discr(get_sat_state(track_state, :galileo_e1, 11), 2)  # by index
+```
+
+`VectorPLLAndDLL(; discriminator_combining = true)` additionally combines the
+passengers into the loops Tracking still closes, by the rules in
+[Discriminator combining](@ref): all three loops in the scalar fallback, where
+it behaves exactly like the conventional estimator, and only the carrier phase
+loop under vector closure. The accumulators are filled either way.
 
 ### Multi-constellation addressing
 
