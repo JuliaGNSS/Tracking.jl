@@ -4,9 +4,10 @@
 
 Releases are fully automated: every push to `master` runs semantic-release
 (`.github/workflows/Release.yml`), which derives the version bump, the
-changelog, and the JuliaRegistrator call from the commit messages. Rebase
-merge is enforced, so **every commit in a PR lands verbatim on `master`** and
-must follow [Conventional Commits](https://www.conventionalcommits.org):
+changelog, and the JuliaRegistrator call from the commit messages. TagBot
+creates the tag and the GitHub release once the General registry has merged
+the registration. Rebase merge is enforced, so **every commit in a PR lands
+verbatim on `master`** and must follow [Conventional Commits](https://www.conventionalcommits.org):
 
 ```
 type(scope): short imperative summary
