@@ -30,7 +30,6 @@ import TrackingLoops:
     AbstractDopplerEstimator,
     AbstractNoiseEstimator,
     AbstractPostCorrFilter,
-    aid_dopplers,
     append_noise_observation!,
     BitBuffer,
     buffer,
@@ -40,17 +39,12 @@ import TrackingLoops:
     ConventionalPLLAndDLL,
     CorrelatorNoiseEstimator,
     CorrelatorOutput,
-    default_carrier_loop_filter_bandwidth,
     default_cn0_estimator,
-    default_code_loop_filter_bandwidth,
     default_num_code_blocks_to_integrate,
     DefaultPostCorrFilter,
-    dll_disc,
     EarlyPromptLateCorrelator,
-    effective_code_loop_filter_bandwidth,
     estimate_cn0,
     FixedNCOWord,
-    fll_disc,
     fold_record,
     get_accumulators,
     get_code_block_buffer_type,
@@ -80,7 +74,6 @@ import TrackingLoops:
     _num_ants_of_density_type,
     _num_ants_val,
     NumAnts,
-    pll_disc,
     _pool_taps,
     requires_noise_density,
     reset,
@@ -133,16 +126,6 @@ export get_prn,
     OneBitThreadedDownconvertAndCorrelator,
     TwoBitDownconvertAndCorrelator,
     TwoBitThreadedDownconvertAndCorrelator,
-    VectorPLLAndDLL,
-    SatVectorPLLAndDLL,
-    enable_vt!,
-    disable_vt!,
-    reset_code_discr_acc!,
-    reset_carrier_discr_acc!,
-    mean_code_discr,
-    mean_carrier_discr,
-    set_code_freq_updates!,
-    set_carrier_freq_updates!,
     TrackState,
     add_satellite!,
     add_satellite,
@@ -277,7 +260,6 @@ include("downconvert_and_correlate_int16.jl")
 include("downconvert_and_correlate_onebit.jl")
 include("downconvert_and_correlate_twobit.jl")
 include("conventional_pll_and_dll.jl")
-include("vector_pll_and_dll.jl")
 include("tracking_state.jl")
 include("track.jl")
 include("precompile.jl")
