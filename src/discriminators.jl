@@ -117,11 +117,13 @@ end
 $(SIGNATURES)
 
 Calculates the carrier frequency error in Hz.
+
+The result is always in `Hz`, whatever unit the integration time carries.
 """
 function fll_disc(signal::AbstractGNSSSignal, correlator, previous_prompt, integration_time)
     if previous_prompt == 0
         # return 0 when there is no previous prompt
-        return 0.0/integration_time
+        return uconvert(Hz, 0.0/integration_time)
     end
 
     current_prompt = get_prompt(correlator)
@@ -131,5 +133,5 @@ function fll_disc(signal::AbstractGNSSSignal, correlator, previous_prompt, integ
     dot = real(result)
 
     # atan(+-Int) produces valid outputs (+-π / 2)
-    return atan(cross / dot) / (2 * pi * integration_time)
+    return uconvert(Hz, atan(cross / dot) / (2 * pi * integration_time))
 end

@@ -68,6 +68,17 @@ end
     ) == -250Hz
     @test @inferred(fll_disc(gpsl1, correlator_0off, get_prompt(correlator_empty), 1ms)) ==
           0Hz
+    # An integration time from a sampling frequency in MHz still yields Hz.
+    in_mhz = @inferred fll_disc(
+        gpsl1,
+        correlator_0off,
+        get_prompt(correlator_minus60off),
+        5000 / 5.0MHz,
+    )
+    @test in_mhz isa typeof(1.0Hz)
+    @test in_mhz ≈ (166 + 2 / 3) * 1Hz
+    @test fll_disc(gpsl1, correlator_0off, get_prompt(correlator_empty), 5000 / 5.0MHz) isa
+          typeof(1.0Hz)
 end
 
 @testset "DLL discriminator" begin
