@@ -949,8 +949,8 @@ get_signal_start_sample(s::TrackState, id...) =
 #
 # The per-signal form always names the group explicitly, even on a
 # single-group TrackState, to keep the API unambiguous. Use `:default`
-# (or `1`) as the group key in the single-group case.
-const _SignalSelector = Union{Integer,Type{<:AbstractGNSSSignal}}
+# (or `1`) as the group key in the single-group case. `_SignalSelector` (the
+# index-or-type selector) is defined in sat_state.jl, next to `_find_signal`.
 
 # Each accessor in the loop below gets two `TrackState` overloads:
 #   * `(s, id...)` — varargs forward to `get_sat_state`, covering the

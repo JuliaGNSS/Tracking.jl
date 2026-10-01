@@ -799,6 +799,7 @@ get_doppler_estimator_state(s::TrackedSat) = s.doppler_estimator_state
 #
 # Type-based selection walks the signals tuple recursively and folds at
 # compile time when the sat's `Signals` type is concrete.
+const _SignalSelector = Union{Integer,Type{<:AbstractGNSSSignal}}
 @noinline _throw_needs_signal_selector() = throw(
     ArgumentError(
         "satellite tracks multiple signals — pass a signal selector " *
