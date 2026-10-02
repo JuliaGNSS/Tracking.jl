@@ -7,6 +7,7 @@ using TrackingLoopFilters: ThirdOrderAssistedBilinearLF, SecondOrderBilinearLF, 
 using StaticArrays: SVector
 using Dictionaries: dictionary
 using Tracking:
+    get_group_delay,
     SatVectorPLLAndDLL,
     VectorPLLAndDLL,
     ConventionalAssistedPLLAndDLL,
@@ -80,6 +81,8 @@ _with_state(sat, state) = TrackedSat(sat; doppler_estimator_state = state)
     @test state.carrier_discr_acc == ((0, 0.0Hz),)
     @test state.carrier_freq_update == 0.0Hz
     @test state.vt_on == false
+    # Every group delay unknown unless given.
+    @test isnothing(get_group_delay(state, 1))
 
     # Kwarg-update constructor preserves what isn't overridden.
     updated = @inferred SatVectorPLLAndDLL(

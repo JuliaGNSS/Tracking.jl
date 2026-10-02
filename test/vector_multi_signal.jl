@@ -1,7 +1,7 @@
 module VectorMultiSignalTest
 
 using Test: @test, @testset, @test_throws
-using Unitful: Hz, MHz
+using Unitful: Hz, MHz, s, ns
 using StaticArrays: SVector
 using Logging: with_logger, NullLogger
 using Dictionaries: dictionary
@@ -11,6 +11,10 @@ using Tracking:
     TrackedSignal,
     TrackState,
     VectorPLLAndDLL,
+    ConventionalAssistedPLLAndDLL,
+    get_carrier_doppler,
+    get_code_doppler,
+    set_group_delay!,
     CorrelatorOutput,
     EarlyPromptLateCorrelator,
     add_satellite!,
@@ -30,8 +34,11 @@ using Tracking:
 const FS = 5e6Hz
 const SAMPLES = 5000
 
-function vector_state(signals; vt_on = true)
-    ts = TrackState(; signals = (g = signals,), doppler_estimator = VectorPLLAndDLL())
+function vector_state(signals; vt_on = true, combining = false)
+    ts = TrackState(;
+        signals = (g = signals,),
+        doppler_estimator = VectorPLLAndDLL(; combine_discriminators = combining),
+    )
     add_satellite!(ts; prn = 1, group = :g, code_phase = 0.0, carrier_doppler = 0.0Hz)
     if vt_on
         enable_vt!(ts, (1,))
@@ -147,6 +154,75 @@ end
     @test Tracking.get_code_doppler(pair, :g, 1) == Tracking.get_code_doppler(alone, :g, 1)
 end
 
+# Driver at the datum, passenger 1 ns earlier, so the code loop combines with a
+# nonzero referral.
+function with_delays!(ts)
+    set_group_delay!(ts, :g, 1, 1, 0.0s)
+    set_group_delay!(ts, :g, 1, 2, -1.0ns)
+    ts
+end
+
+@testset "discriminator combining" begin
+    pair = (GPSL5Q(), GPSL5I())
+    @testset "the scalar fallback combines as ConventionalAssistedPLLAndDLL" begin
+        reference = TrackState(;
+            signals = (g = pair,),
+            doppler_estimator = ConventionalAssistedPLLAndDLL(;
+                combine_discriminators = true,
+            ),
+        )
+        add_satellite!(
+            reference;
+            prn = 1,
+            group = :g,
+            code_phase = 0.0,
+            carrier_doppler = 0.0Hz,
+        )
+        vector = vector_state(pair; vt_on = false, combining = true)
+        for ts in (reference, vector)
+            feed!(with_delays!(ts), (0.1, 0.3), (1.2, 0.8))
+        end
+        @test get_carrier_doppler(vector, :g, 1) == get_carrier_doppler(reference, :g, 1)
+        @test get_code_doppler(vector, :g, 1) == get_code_doppler(reference, :g, 1)
+    end
+
+    @testset "under vector closure only the carrier phase combines" begin
+        # Equal power: the PLL reads the mean of the two phase errors; the code
+        # and FLL updates are the navigation filter's.
+        both = feed!(
+            with_delays!(vector_state(pair; combining = true)),
+            (0.1, 0.3),
+            (1.2, 0.8),
+        )
+        alone = feed!(vector_state((GPSL5Q(),)), (0.2,), (1.2,))
+        @test get_carrier_doppler(both, :g, 1) ≈ get_carrier_doppler(alone, :g, 1)
+        @test get_code_doppler(both, :g, 1) ≈ get_code_doppler(alone, :g, 1)
+    end
+
+    @testset "every signal's measurements are unchanged by combining" begin
+        for passenger_offset in (0, -1)
+            measured = map((false, true)) do combining
+                ts = feed!(
+                    with_delays!(vector_state(pair; combining)),
+                    (0.1, 0.3),
+                    (1.2, 0.8);
+                    passenger_offset,
+                )
+                state = get_doppler_estimator_state(get_sat_state(ts, :g, 1))
+                (state.code_discr_acc, state.carrier_discr_acc)
+            end
+            @test measured[2] == measured[1]
+        end
+    end
+
+    @testset "group delays survive a reset and are read per signal" begin
+        ts = with_delays!(vector_state(pair; combining = true))
+        Tracking.reset_loop_filters!(ts)
+        @test Tracking.get_group_delay(ts, :g, 1, 2) ≈ -1.0e-9s
+        @test Tracking.get_group_delay(ts, :g, 1, GPSL5Q) === 0.0s
+    end
+end
+
 # Fold `n` record pairs through the per-satellite update, as the estimate phase
 # does. A function, not module scope, so `@allocated` measures the fold rather
 # than global lookups.
@@ -167,8 +243,14 @@ function fold_records!(ts, outputs, n)
 end
 
 @static if VERSION >= v"1.11"
-    @testset "per-signal accumulation is allocation-free" begin
-        ts = vector_state((GPSL5Q(), GPSL5I()))
+    @testset "per-signal accumulation is allocation-free (combining = $combining, vt_on = $vt_on)" for (
+        combining,
+        vt_on,
+    ) in Iterators.product(
+        (false, true),
+        (false, true),
+    )
+        ts = with_delays!(vector_state((GPSL5Q(), GPSL5I()); vt_on, combining))
         sat = get_sat_state(ts, :g, 1)
         outputs = map(sat.signals) do signal
             rotation = SAMPLES * cis(0.1 + get_carrier_phase_offset(signal.signal))

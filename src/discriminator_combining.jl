@@ -1,7 +1,8 @@
 # Discriminator combining: a multi-signal satellite's passengers (`signals[2:end]`)
 # aid the loops its driver (`signals[1]`) closes. Used by `ConventionalPLLAndDLL`
-# with `combine_discriminators`; see "Discriminator combining" in the docs for
-# the rules. Also home of the group-delay API.
+# and `VectorPLLAndDLL` with `combine_discriminators`; see "Discriminator
+# combining" in the docs for the rules. Also home of the group-delay API those
+# per-sat states share.
 
 # The stored form of an unknown group delay.
 const _UNKNOWN_GROUP_DELAY = NaN * 1.0s
@@ -332,7 +333,10 @@ Set the payload **group delay** of one signal on one satellite, as a time
 (`1.2e-9s`, `-0.3u"ns"`), or `nothing` to mark it unknown again. Every signal
 starts at `nothing`, and the value survives [`reset_loop_filters!`](@ref). Only
 an estimator with `combine_discriminators` reads it (see
-[`ConventionalPLLAndDLL`](@ref)); the others store it all the same.
+[`ConventionalPLLAndDLL`](@ref)); the others store it all the same. Under
+[`VectorPLLAndDLL`](@ref) only the scalar fallback reads it: a satellite in
+vector closure (`vt_on`) ignores it, since the navigation filter gets every
+signal's raw code discriminator and removes inter-signal biases itself.
 
 It is read only as a **difference** against the satellite's estimator-driver
 signal (`signals[1]`), so the datum is yours to choose: put `0.0s` on the driver

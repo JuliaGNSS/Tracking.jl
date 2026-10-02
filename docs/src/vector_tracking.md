@@ -114,6 +114,24 @@ mean_code_discr(track_state, :galileo_e1, 11, GalileoE1B)          # by signal t
 mean_carrier_discr(get_sat_state(track_state, :galileo_e1, 11), 2)  # by index
 ```
 
+With `VectorPLLAndDLL(; combine_discriminators = true)` the passengers also
+aid the loops this package still closes, by the same rules as for the
+conventional estimators (see [Discriminator combining](@ref)). Under vector
+closure that is only the **carrier phase** loop: each coincident passenger's
+phase error is power-weighted into the driver's PLL, while the code and FLL
+loops stay the navigation filter's. While `vt_on` is unset the scalar fallback
+combines all three loops, exactly as
+`ConventionalAssistedPLLAndDLL(; combine_discriminators = true)`. The
+per-signal accumulators hold every
+signal's raw readings either way: combining never changes what the filter
+sees.
+
+[`set_group_delay!`](@ref) **has no effect under vector closure.** The group
+delays refer a passenger's code discriminator to the driver's only in the
+scalar fallback's combined code loop; a satellite with `vt_on` ignores them,
+and its passengers' code readings still include the inter-signal bias, which
+the navigation filter has to estimate or remove itself.
+
 ### Multi-constellation addressing
 
 Each state manager has an all-groups form and a **group-scoped** form that
