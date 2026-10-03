@@ -973,6 +973,28 @@ struct SignalGroup{
     satellites::S
     signals::Sigs
     num_ants::NA
+
+    # Unchecked, for rebuilding a group from one already validated; the positional
+    # `SignalGroup(band, satellites, signals, num_ants)` validates.
+    SignalGroup{B,S,Sigs,NA}(band, satellites, signals, num_ants) where {B,S,Sigs,NA} =
+        new{B,S,Sigs,NA}(band, satellites, signals, num_ants)
+end
+
+# Every group formed from its parts is validated here, also one built positionally
+# rather than through the keyword constructor.
+function SignalGroup(
+    band::B,
+    satellites::S,
+    signals::Sigs,
+    num_ants::NA,
+) where {
+    B,
+    S<:Dictionary{<:Any,<:TrackedSat},
+    Sigs<:Tuple{Vararg{AbstractGNSSSignal}},
+    NA<:NumAnts,
+}
+    _validate_signal_group(signals, band)
+    SignalGroup{B,S,Sigs,NA}(band, satellites, signals, num_ants)
 end
 
 # Kwarg-update constructor — produces a new SignalGroup sharing concrete types
@@ -1007,9 +1029,40 @@ end
 # (b) every signal shares one chip rate — the shared `code_phase` advances
 #     at `signals[1]`'s code frequency (see `update` in
 #     downconvert_and_correlate.jl), so a signal with a different chip
-#     rate would silently mistrack.
+#     rate would silently mistrack; and
+# (c) every signal comes from one constellation (issue #224) — a group's
+#     satellites carry one PRN and one Doppler, so e.g. GPS L1 C/A and
+#     Galileo E1B (same band and chip rate) would track two different
+#     satellites. The constellation stands in for the PRN namespace; should a
+#     constellation sharing GPS's code space with disjoint PRNs (QZSS, SBAS)
+#     be tracked, swap it for a PRN-namespace trait. A one-signal group needs
+#     no constellation; in a larger one a user-defined signal without
+#     `get_constellation_id` is rejected rather than left unchecked.
 # Bands compare by id (`GNSSSignals.get_band_id`, not instance) so a
 # user-defined band that aliases an existing measurement key still validates.
+# The instance method is generic and forwards to the type, so look for the latter.
+_has_constellation_id(s::AbstractGNSSSignal) =
+    hasmethod(get_constellation_id, Tuple{Type{typeof(s)}})
+
+function _require_constellation_id(s::AbstractGNSSSignal)
+    _has_constellation_id(s) || throw(
+        ArgumentError(
+            string(
+                "Every signal in a SignalGroup of more than one signal must ",
+                "declare its constellation, so that the group cannot mix ",
+                "constellations, but `",
+                get_signal_id(s),
+                "` has no `get_constellation_id` method. Define ",
+                "`GNSSSignals.get_constellation_id(::Type{",
+                nameof(typeof(s)),
+                "})`, or subtype `AbstractGPSSignal`, ",
+                "`AbstractGalileoSignal` or `AbstractBeiDouSignal`.",
+            ),
+        ),
+    )
+    nothing
+end
+
 function _validate_signal_group(signals::Tuple{Vararg{AbstractGNSSSignal}}, band)
     driver = first(signals)
     foreach(signals) do s
@@ -1049,6 +1102,31 @@ function _validate_signal_group(signals::Tuple{Vararg{AbstractGNSSSignal}}, band
             )
         end
     end
+    length(signals) > 1 && _require_constellation_id(driver)
+    foreach(Base.tail(signals)) do s
+        _require_constellation_id(s)
+        if get_constellation_id(s) !== get_constellation_id(driver)
+            throw(
+                ArgumentError(
+                    string(
+                        "All signals in a SignalGroup must come from one ",
+                        "constellation: `",
+                        get_signal_id(s),
+                        "` is a `:",
+                        get_constellation_id(s),
+                        "` signal but `",
+                        get_signal_id(driver),
+                        "` a `:",
+                        get_constellation_id(driver),
+                        "` one. A group's satellites carry one PRN and one ",
+                        "Doppler, so a second constellation's signal would track a ",
+                        "different satellite. Put them into separate groups, e.g. ",
+                        "`signals = (gps_l1 = (GPSL1CA(),), galileo_e1 = (GalileoE1B(),))`.",
+                    ),
+                ),
+            )
+        end
+    end
     nothing
 end
 
@@ -1060,9 +1138,12 @@ tuple with band and antenna count as kwargs. `band` defaults to
 `get_band(first(signals))` (so users only override for the rare case of
 naming a band differently); `num_ants` defaults to `NumAnts(1)`.
 
-All signals must live on `band` and share one chip rate — signals on other
-bands or with other chip rates belong in their own group (the constructor
-throws an `ArgumentError` otherwise).
+All signals must live on `band`, share one chip rate and come from one
+constellation (a group's satellites carry one PRN and one Doppler); the
+constructor throws an `ArgumentError` otherwise. In a group of more than one
+signal, a user-defined signal type therefore needs a
+`GNSSSignals.get_constellation_id(::Type{MySignal})` method, or to subtype
+`AbstractGPSSignal`, `AbstractGalileoSignal` or `AbstractBeiDouSignal`.
 
 The `satellites` dictionary is left empty — populate it via
 [`add_satellite!`](@ref) after the enclosing [`TrackState`](@ref) is
@@ -1088,6 +1169,8 @@ function SignalGroup(
     num_ants::NumAnts = NumAnts(1),
     doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
 )
+    # Before the template satellite, which an invalid signal would fail with a
+    # less telling error; the positional constructor checks again.
     _validate_signal_group(signals, band)
     # Build a template TrackedSat so the dict's value type is concrete.
     # Reuses the existing helper from tracking_state.jl, which is fine

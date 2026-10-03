@@ -431,7 +431,7 @@ A single-band receiver doesn't need to type any of this. The bare-buffer call `t
 
 ## SignalGroup
 
-A group of satellites that all track the same tuple of GNSS signal types, on the same RF band, observed by the same antenna array. Groups are the unit of type stability — every `TrackedSat` inside a `SignalGroup` shares the same concrete signal-tuple shape, so the satellites dictionary has a concrete value type and the hot loop sees no dynamic dispatch.
+A group of satellites that all track the same tuple of GNSS signal types, of one constellation and on the same RF band, observed by the same antenna array. Each satellite carries one PRN and one Doppler for all its signals, so GPS L1 C/A and Galileo E1B belong in separate groups. Groups are the unit of type stability — every `TrackedSat` inside a `SignalGroup` shares the same concrete signal-tuple shape, so the satellites dictionary has a concrete value type and the hot loop sees no dynamic dispatch.
 
 Two groups may share a band: e.g. a `:legacy_gps` group tracking `(GPSL1CA(),)` and a `:galileo` group tracking `(GalileoE1B(),)` both report `band = L1()`. The grouping is by signal-tuple shape, not by band — `band` is metadata each group carries so `track` can route the right measurement to it.
 

@@ -3,7 +3,20 @@ module TrackingStateTest
 using Test: @test, @testset, @inferred, @test_throws
 using Unitful: Hz
 using GNSSSignals:
-    GNSSSignals, AbstractGNSSSignal, GPSL1CA, GPSL1C_D, GPSL1C_P, GPSL5I, GalileoE1B
+    GNSSSignals,
+    AbstractGNSSSignal,
+    BeiDouB1C_D,
+    BeiDouB2aQ,
+    BeiDouB2bI,
+    GPSL1CA,
+    GPSL1C_D,
+    GPSL1C_P,
+    GPSL5I,
+    GalileoE1B,
+    GalileoE1C,
+    GalileoE5aI,
+    GalileoE5aQ,
+    GalileoE5bI
 using Dictionaries: Dictionary, dictionary
 import Tracking
 using Tracking:
@@ -59,6 +72,17 @@ struct FakeDoubleRateL1Signal <: AbstractGNSSSignal{Matrix{Int16}} end
 GNSSSignals.get_band(::FakeDoubleRateL1Signal) = GNSSSignals.L1()
 GNSSSignals.get_code_frequency(::FakeDoubleRateL1Signal) = 2_046_000Hz
 
+# User-defined L1 signals at the GPS L1 C/A chip rate, without and with a constellation.
+struct FakeL1Signal <: AbstractGNSSSignal{Matrix{Int16}} end
+GNSSSignals.get_band(::FakeL1Signal) = GNSSSignals.L1()
+GNSSSignals.get_code_frequency(::FakeL1Signal) = 1_023_000Hz
+
+struct FakeGPSConstellationL1Signal <: AbstractGNSSSignal{Matrix{Int16}} end
+GNSSSignals.get_band(::FakeGPSConstellationL1Signal) = GNSSSignals.L1()
+GNSSSignals.get_code_frequency(::FakeGPSConstellationL1Signal) = 1_023_000Hz
+GNSSSignals.get_constellation_id(::Type{FakeGPSConstellationL1Signal}) =
+    GNSSSignals.get_constellation_id(GPSL1CA)
+
 @testset "SignalGroup rejects mixed bands and mixed chip rates (issue #129)" begin
     # (a) Band homogeneity: every signal in a group is downconverted against
     # the single band measurement the group's `band` routes to, so an L5
@@ -80,6 +104,48 @@ GNSSSignals.get_code_frequency(::FakeDoubleRateL1Signal) = 2_046_000Hz
     ts =
         TrackState(; signals = (l1 = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()), l5 = (GPSL5I(),)))
     @test ts isa TrackState
+end
+
+@testset "SignalGroup rejects mixed constellations (issue #224)" begin
+    # Same band and chip rate, but two different satellites per PRN.
+    for signals in (
+        (GPSL1CA(), GalileoE1B()),
+        (GalileoE1C(), GPSL1C_P()),
+        (GPSL1C_D(), BeiDouB1C_D()),
+        (GPSL5I(), GalileoE5aI()),
+        (GalileoE5aQ(), BeiDouB2aQ()),
+        (GalileoE5bI(), BeiDouB2bI()),
+    )
+        @test_throws "one constellation" SignalGroup(signals)
+        @test_throws ArgumentError TrackState(; signals = (mix = signals,))
+    end
+    # A user-defined signal without a constellation forms a one-signal group…
+    @test Tracking._validate_signal_group((FakeL1Signal(),), GNSSSignals.L1()) === nothing
+    # …but next to another signal must declare one, in either position.
+    for signals in ((GPSL1CA(), FakeL1Signal()), (FakeL1Signal(), GPSL1CA()))
+        @test_throws "get_constellation_id(::Type{FakeL1Signal})" SignalGroup(signals)
+    end
+    # Once declared, it is checked like the built-in signals.
+    @test Tracking._validate_signal_group(
+        (GPSL1CA(), FakeGPSConstellationL1Signal()),
+        GNSSSignals.L1(),
+    ) === nothing
+    @test_throws "one constellation" SignalGroup((
+        GalileoE1B(),
+        FakeGPSConstellationL1Signal(),
+    ))
+    # Also a group built positionally, as a receiver may build it.
+    empty_sats = Dictionary{Int,Tracking.TrackedSat}()
+    @test_throws "one constellation" SignalGroup(
+        GNSSSignals.L1(),
+        empty_sats,
+        (GPSL1CA(), GalileoE1B()),
+        NumAnts(1),
+    )
+    # Each constellation in its own group is fine.
+    ts = TrackState(; signals = (gps_l1 = (GPSL1CA(),), galileo_e1 = (GalileoE1B(),)))
+    @test ts isa TrackState
+    @test SignalGroup((GalileoE1C(), GalileoE1B())) isa SignalGroup
 end
 
 @testset "Tracking state" begin
