@@ -4,7 +4,7 @@ using Test: @test, @testset, @inferred, @test_throws
 using Random: Xoshiro, randn
 using StaticArrays: SVector, SMatrix
 using Unitful: Hz, s, ms, ustrip, uconvert
-using GNSSSignals: GPSL1CA, GPSL1C_P, GPSL5I, GalileoE1B
+using GNSSSignals: GPSL1CA, GPSL1C_D, GPSL1C_P, GPSL5I, GalileoE1B
 import Tracking
 using Tracking: TrackState, TrackedSat
 import TrackingLoops
@@ -365,15 +365,15 @@ end
     # one requiring and one non-requiring signal gets a *different* entry for each
     # — `nothing` (statically no source, surface it at the first record) beside a
     # real slot. Reading one signal's floor for the other is what this prevents.
-    gpsl1, e1b = GPSL1CA(), GalileoE1B()
+    gpsl1, l1cd = GPSL1CA(), GPSL1C_D()
     mixed = TrackState(
         gpsl1,
         TrackedSat(
-            (gpsl1, e1b),
+            (gpsl1, l1cd),
             1,
             0.0,
             0.0Hz;
-            cn0_estimator = (NoiseRefCN0Estimator(), NWPRCN0Estimator(e1b)),
+            cn0_estimator = (NoiseRefCN0Estimator(), NWPRCN0Estimator(l1cd)),
         ),
     )
     @test keys(mixed.noise_estimators) == (:GPSL1CA,)
