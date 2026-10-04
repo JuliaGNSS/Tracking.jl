@@ -219,6 +219,8 @@ end
     vt_state = SatVectorPLLAndDLL(;
         init_carrier_doppler = 0.0Hz,
         init_code_doppler = 0.0Hz,
+        code_discr_accs = ((0, 0.0),),
+        carrier_discr_accs = ((0, 0.0Hz),),
         vt_on = true,
     )
     # A 120° advance in 1 ms: 333 Hz four-quadrant, -167 Hz two-quadrant.

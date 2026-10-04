@@ -70,18 +70,63 @@ SignalCombiningSums() = SignalCombiningSums(
 @inline _locally_closed_loops(state) = (pll = true, fll = true, dll = true)
 
 # The loops the passengers are combined into for one fold, the one place this is
-# decided: those `_locally_closed_loops` leaves open, the FLL only while it is
-# formed. The passengers read the two-quadrant discriminators, so the loop
-# closures combine their sums into a four-quadrant one only within that range
-# (see `_gated_mean`).
-@inline function _loops_to_combine(state)
+# decided: none without `combine_signals`, else those `_locally_closed_loops`
+# leaves open, the FLL only while it is formed. The passengers read the
+# two-quadrant discriminators, so the loop closures combine their sums into a
+# four-quadrant one only within that range (see `_gated_mean`).
+@inline function _loops_to_combine(state, combine_signals::Bool)
     loops = _locally_closed_loops(state)
     (
-        pll = loops.pll,
-        fll = loops.fll &&
+        pll = combine_signals && loops.pll,
+        fll = combine_signals &&
+              loops.fll &&
               _uses_fll(state.carrier_loop_filter) &&
               !state.frequency_lock.locked,
-        dll = loops.dll,
+        dll = combine_signals && loops.dll,
+    )
+end
+
+# Whether the estimator also measures on the passengers' records, which then come
+# through the driver fold even without combining, and its per-passenger
+# `(code, carrier)` `(count, sum)` accumulator pairs. By default it does not and
+# has none.
+@inline _measures_passengers(state) = false
+@inline _passenger_measurement_accs(state, passengers::Tuple) =
+    map(_ -> nothing, passengers)
+@inline _with_passenger_measurements(state, _) = state
+
+# One passenger record's raw readings added to its accumulator pair: the DLL
+# against the shared replica, and the FLL four-quadrant where its prompt is wiped
+# off. Nothing without accumulators or while not measuring.
+@inline _measured(::Nothing, _...) = nothing
+@inline function _measured(
+    (code_acc, carrier_acc)::Tuple,
+    measure::Bool,
+    signal::AbstractGNSSSignal,
+    correlator::AbstractCorrelator,
+    previous_prompt::Complex,
+    integration_time,
+    context,
+    code_doppler,
+    sampling_frequency,
+)
+    measure || return (code_acc, carrier_acc)
+    (
+        _accumulated(
+            code_acc,
+            dll_disc(signal, correlator, code_doppler, sampling_frequency),
+        ),
+        _accumulated_fll(
+            carrier_acc,
+            fll_disc(
+                signal,
+                correlator,
+                previous_prompt,
+                integration_time;
+                four_quadrant = context.wiped_off,
+            ),
+            previous_prompt,
+        ),
     )
 end
 
@@ -129,8 +174,10 @@ const _TWO_QUADRANT_PLL_RANGE = 0.25
     differential_group_delay_chips =
         known ?
         ustrip(NoUnits, (passenger.group_delay - driver.group_delay) * code_frequency) : NaN
+    found_before_fold = has_bit_or_secondary_code_been_found(passenger.bit_buffer)
     (;
-        found_before_fold = has_bit_or_secondary_code_been_found(passenger.bit_buffer),
+        found_before_fold,
+        wiped_off = _is_wiped_off(passenger.signal, found_before_fold),
         noise_density,
         noise_density_ready,
         derotation = _carrier_phase_derotation(
@@ -142,50 +189,59 @@ const _TWO_QUADRANT_PLL_RANGE = 0.25
 end
 
 # Apply each passenger's records that end by sample `until`, from its cursor on,
-# adding their discriminators to `sums`. Recursive over the tuple for type
-# stability.
+# adding their discriminators to `sums` and their raw readings to its
+# measurement accumulators. Recursive over the tuples for type stability.
 @inline _advance_passengers(
+    ::Tuple{},
     ::Tuple{},
     ::Tuple{},
     ::Tuple{},
     ::Integer,
     sums::SignalCombiningSums,
     ::Vararg{Any,N},
-) where {N} = ((), (), sums)
+) where {N} = ((), (), (), sums)
 @inline function _advance_passengers(
     passengers::Tuple,
     cursors::Tuple,
+    measurements::Tuple,
     contexts::Tuple,
     until::Integer,
     sums::SignalCombiningSums,
     args::Vararg{Any,N},
 ) where {N}
-    passenger, cursor, sums = _advance_passenger(
+    passenger, cursor, measurement, sums = _advance_passenger(
         first(passengers),
         first(cursors),
+        first(measurements),
         first(contexts),
         until,
         sums,
         args...,
     )
-    rest, rest_cursors, sums = _advance_passengers(
+    rest, rest_cursors, rest_measurements, sums = _advance_passengers(
         Base.tail(passengers),
         Base.tail(cursors),
+        Base.tail(measurements),
         Base.tail(contexts),
         until,
         sums,
         args...,
     )
-    (passenger, rest...), (cursor, rest_cursors...), sums
+    (passenger, rest...),
+    (cursor, rest_cursors...),
+    (measurement, rest_measurements...),
+    sums
 end
 
 @inline function _advance_passenger(
     tracked_signal::TrackedSignal,
     cursor::Int,
+    measurement,
     context,
     until::Integer,
     sums::SignalCombiningSums,
     loops_to_combine,
+    measure::Bool,
     prn::Integer,
     sampling_frequency,
     driver_carrier_phase_offset::Real,
@@ -196,6 +252,7 @@ end
     @inbounds while cursor <= length(outputs) && outputs[cursor].sample_index <= until
         output = outputs[cursor]
         previous_prompt = _fll_previous_prompt(ts, output, sampling_frequency)
+        integration_time = output.integrated_samples / sampling_frequency
         ts, filtered_correlator = _apply_passenger_record(
             ts,
             output,
@@ -211,15 +268,26 @@ end
             ts.signal,
             filtered_correlator,
             previous_prompt,
-            output.integrated_samples / sampling_frequency,
+            integration_time,
             context,
             loops_to_combine,
             code_doppler,
             sampling_frequency,
         )
+        measurement = _measured(
+            measurement,
+            measure,
+            ts.signal,
+            filtered_correlator,
+            previous_prompt,
+            integration_time,
+            context,
+            code_doppler,
+            sampling_frequency,
+        )
         cursor += 1
     end
-    ts, cursor, sums
+    ts, cursor, measurement, sums
 end
 
 # One passenger record's weighted discriminators, formed only for the loops it

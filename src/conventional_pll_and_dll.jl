@@ -386,7 +386,7 @@ function _update_tracked_sat_doppler(
     driver_carrier_phase_offset = get_carrier_phase_offset(head.signal)
 
     driver_noise_density, driver_noise_density_ready = first(noise)
-    if combine_signals && !isempty(tail_signals)
+    if (combine_signals || _measures_passengers(estimator_state)) && !isempty(tail_signals)
         # The passengers come back with their records consumed.
         new_head,
         new_doppler_estimator_state,
@@ -402,6 +402,7 @@ function _update_tracked_sat_doppler(
             driver_carrier_phase_offset,
             tail_signals,
             Base.tail(noise),
+            combine_signals,
         )
     else
         new_head, new_doppler_estimator_state, new_carrier_doppler, new_code_doppler, _ =
@@ -661,8 +662,9 @@ end
 # the Doppler holds. How a record closes the loops is `_close_loops`, dispatched
 # on the per-sat state. A custom AbstractDopplerEstimator may use any signal.
 #
-# `passengers` (with their `(density, ready)` pairs) are the passengers to
-# combine, empty without signal combining. Before each driver record the
+# `passengers` (with their `(density, ready)` pairs) are folded here where they
+# are combined into the driver's loops (`combine_signals`) or the estimator
+# measures on them, and are empty otherwise. Before each driver record the
 # passenger records ending by then are applied (`_advance_passengers`), the rest
 # after the last one, their sums left pending. They are returned with their
 # records consumed.
@@ -676,6 +678,7 @@ end
     driver_carrier_phase_offset::Real = 0.0,
     passengers::Tuple = (),
     passenger_noise::Tuple = (),
+    combine_signals::Bool = false,
 )
     outputs = tracked_signal.correlator_outputs
     if isempty(outputs) && isempty(passengers)
@@ -696,7 +699,7 @@ end
     # state from before the fold decides which carrier discriminators apply.
     wiped_off = _is_wiped_off(signal, found_before_fold)
     polarity = _sync_polarity(signal, ts.bit_buffer, sat.prn)
-    loops_to_combine = _loops_to_combine(estimator_state)
+    loops_to_combine = _loops_to_combine(estimator_state, combine_signals)
     code_frequency = get_code_frequency(signal) + sat.code_doppler
     contexts = map(passengers, passenger_noise) do passenger, noise
         _passenger_context(
@@ -708,9 +711,11 @@ end
         )
     end
     cursors = map(_ -> 1, passengers)
+    measurements = _passenger_measurement_accs(estimator_state, passengers)
     combining_sums = estimator_state.signal_combining_sums
     passenger_args = (
         loops_to_combine,
+        _measures_passengers(estimator_state),
         sat.prn,
         sampling_frequency,
         driver_carrier_phase_offset,
@@ -718,9 +723,10 @@ end
     )
     @inbounds for k in eachindex(outputs)
         output = outputs[k]
-        passengers, cursors, combining_sums = _advance_passengers(
+        passengers, cursors, measurements, combining_sums = _advance_passengers(
             passengers,
             cursors,
+            measurements,
             contexts,
             output.sample_index,
             combining_sums,
@@ -784,17 +790,20 @@ end
     end
     empty!(outputs)
     if !isempty(passengers)
-        passengers, _, combining_sums = _advance_passengers(
+        passengers, _, measurements, combining_sums = _advance_passengers(
             passengers,
             cursors,
+            measurements,
             contexts,
             typemax(Int),
             combining_sums,
             passenger_args...,
         )
         foreach(passenger -> empty!(passenger.correlator_outputs), passengers)
-        estimator_state =
-            _with_loop_state(estimator_state; signal_combining_sums = combining_sums)
+        estimator_state = _with_passenger_measurements(
+            _with_loop_state(estimator_state; signal_combining_sums = combining_sums),
+            measurements,
+        )
     end
     return ts, estimator_state, carrier_doppler, code_doppler, passengers
 end

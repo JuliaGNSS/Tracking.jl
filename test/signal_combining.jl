@@ -1,6 +1,6 @@
 module SignalCombiningTest
 
-using Test: @test, @testset, @inferred
+using Test: @test, @testset, @inferred, @test_throws
 using Unitful: Hz, ns, s, ustrip
 using StaticArrays: SVector
 using Random: Xoshiro
@@ -30,7 +30,13 @@ using Tracking:
     TrackState,
     TrackedSignal,
     ConventionalAssistedPLLAndDLL,
+    VectorPLLAndDLL,
     add_satellite!,
+    enable_vt!,
+    mean_carrier_discr,
+    mean_code_discr,
+    reset_carrier_discr_accs!,
+    reset_code_discr_accs!,
     append_correlator_output!,
     dll_disc,
     estimate_dopplers_and_filter_prompt!,
@@ -222,24 +228,28 @@ include("frequency_lock_test_helpers.jl")  # `_locked`
         init_code_doppler = 0.0Hz,
         carrier_loop_filter = ThirdOrderAssistedBilinearLF(),
     )
-    @test loops_to_combine(assisted) == (pll = true, fll = true, dll = true)
+    @test loops_to_combine(assisted, true) == (pll = true, fll = true, dll = true)
     # Not into an FLL that is not formed: after frequency lock, or without an
     # FLL-assisted carrier filter.
     locked = SatConventionalPLLAndDLL(assisted; frequency_lock = _locked())
-    @test !loops_to_combine(locked).fll
+    @test !loops_to_combine(locked, true).fll
     plain = SatConventionalPLLAndDLL(;
         init_carrier_doppler = 0.0Hz,
         init_code_doppler = 0.0Hz,
         carrier_loop_filter = ThirdOrderBilinearLF(),
     )
-    @test !loops_to_combine(plain).fll
+    @test !loops_to_combine(plain, true).fll
+    # Without signal combining into none.
+    @test loops_to_combine(assisted, false) == (pll = false, fll = false, dll = false)
     # Under vector closure only into the PLL.
     vt = SatVectorPLLAndDLL(;
         init_carrier_doppler = 0.0Hz,
         init_code_doppler = 0.0Hz,
+        code_discr_accs = ((0, 0.0),),
+        carrier_discr_accs = ((0, 0.0Hz),),
         vt_on = true,
     )
-    @test loops_to_combine(vt) == (pll = true, fll = false, dll = false)
+    @test loops_to_combine(vt, true) == (pll = true, fll = false, dll = false)
 end
 
 @testset "The loop closure mixes the passengers in" begin
@@ -309,6 +319,8 @@ end
     vt = SatVectorPLLAndDLL(;
         init_carrier_doppler = 0.0Hz,
         init_code_doppler = 0.0Hz,
+        code_discr_accs = ((0, 0.0),),
+        carrier_discr_accs = ((0, 0.0Hz),),
         vt_on = true,
     )
     @test Tracking._locally_closed_loops(vt) == (pll = true, fll = false, dll = false)
@@ -322,8 +334,8 @@ end
     combined_carrier, _, combined_vt = close(vt, mixed)
     alone_carrier, _, alone_vt = close(vt, SignalCombiningSums())
     @test combined_carrier != alone_carrier
-    @test combined_vt.code_discr_acc == alone_vt.code_discr_acc
-    @test combined_vt.carrier_discr_acc == alone_vt.carrier_discr_acc
+    @test combined_vt.code_discr_accs == alone_vt.code_discr_accs
+    @test combined_vt.carrier_discr_accs == alone_vt.carrier_discr_accs
     @test first(
         close(
             vt,
@@ -435,6 +447,78 @@ end
     estimate_dopplers_and_filter_prompt!(uncombined, (L1 = fs,))
     @test get_doppler_estimator_state(get_sat_state(uncombined, :e1, 11)).signal_combining_sums ===
           SignalCombiningSums()
+end
+
+@testset "Vector tracking hands the navigation filter every signal's readings" begin
+    fs = 16.368e6Hz
+    n = 65472
+    record(p, sample_index; early = 0.7, late = 0.7) =
+        CorrelatorOutput(_veml(p * n; early, late), n, sample_index)
+    function vt_state(; combining)
+        track_state = TrackState(;
+            signals = (e1 = (GalileoE1C(), GalileoE1B()),),
+            doppler_estimator = VectorPLLAndDLL(; combine_signals = combining),
+        )
+        add_satellite!(
+            track_state;
+            group = :e1,
+            prn = 11,
+            code_phase = 0.0,
+            carrier_doppler = 0.0Hz,
+        )
+        track_state
+    end
+    function step!(track_state)
+        append_correlator_output!(track_state, record(cis(0.0), n), :e1, 11, GalileoE1C)
+        append_correlator_output!(
+            track_state,
+            record(cis(0.1), n ÷ 2; early = 0.8, late = 0.6),
+            :e1,
+            11,
+            GalileoE1B,
+        )
+        append_correlator_output!(
+            track_state,
+            record(cis(0.1), n; early = 0.8, late = 0.6),
+            :e1,
+            11,
+            GalileoE1B,
+        )
+        estimate_dopplers_and_filter_prompt!(track_state, (L1 = fs,))
+    end
+    state(track_state) = get_doppler_estimator_state(get_sat_state(track_state, :e1, 11))
+
+    for combining in (false, true)
+        track_state = vt_state(; combining)
+        # Outside the vector loop nothing is accumulated.
+        step!(track_state)
+        @test state(track_state).code_discr_accs == ((0, 0.0), (0, 0.0))
+        enable_vt!(track_state, :e1, (11,))
+        step!(track_state)
+        accs = state(track_state).code_discr_accs
+        # One reading per record: the driver's, and the passenger's two.
+        @test first.(accs) == (1, 2)
+        @test first.(state(track_state).carrier_discr_accs) == (1, 2)
+        passenger_dll =
+            dll_disc(GalileoE1B(), _veml(cis(0.1); early = 0.8, late = 0.6), 0.0Hz, fs)
+        @test abs(passenger_dll) > 0.01
+        @test mean_code_discr(track_state, :e1, 11, GalileoE1B) ≈ passenger_dll
+        @test mean_code_discr(get_sat_state(track_state, :e1, 11), 2) ≈ passenger_dll
+        @test mean_carrier_discr(track_state, :e1, 11, 2) isa typeof(1.0Hz)
+        @test_throws ArgumentError mean_code_discr(state(track_state))
+        reset_code_discr_accs!(track_state)
+        reset_carrier_discr_accs!(track_state)
+        @test state(track_state).code_discr_accs == ((0, 0.0), (0, 0.0))
+        @test state(track_state).carrier_discr_accs == ((0, 0.0Hz), (0, 0.0Hz))
+    end
+
+    # A record without a previous prompt has no FLL reading and is not counted:
+    # here the driver's first and the passenger's first.
+    track_state = vt_state(; combining = false)
+    enable_vt!(track_state, :e1, (11,))
+    step!(track_state)
+    @test first.(state(track_state).code_discr_accs) == (1, 2)
+    @test first.(state(track_state).carrier_discr_accs) == (0, 1)
 end
 
 # Galileo E1 with E1C (pilot) driving and E1B (data) combined, E1B delayed by

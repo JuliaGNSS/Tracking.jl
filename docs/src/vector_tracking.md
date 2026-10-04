@@ -80,14 +80,13 @@ enable_vt!(track_state, prns_in_lock)
 #    for each vector-loop satellite, then reset the accumulators so the
 #    next block accumulates afresh.
 for (prn, sat) in pairs(get_sat_states(track_state))
-    state = get_doppler_estimator_state(sat)
-    state.vt_on || continue
-    code_err = mean_code_discr(state)      # chips, or `nothing` if no data
-    carrier_err = mean_carrier_discr(state) # Hz, or `nothing` if no data
+    get_doppler_estimator_state(sat).vt_on || continue
+    code_err = mean_code_discr(sat)      # chips, or `nothing` if no data
+    carrier_err = mean_carrier_discr(sat) # Hz, or `nothing` if no data
     # … feed the mean measurements into the navigation filter …
 end
-reset_code_discr_acc!(track_state)
-reset_carrier_discr_acc!(track_state)
+reset_code_discr_accs!(track_state)
+reset_carrier_discr_accs!(track_state)
 
 # 3. Run the navigation filter, then feed its per-satellite NCO
 #    corrections back. Both setters take anything indexable by PRN
@@ -96,6 +95,13 @@ reset_carrier_discr_acc!(track_state)
 set_code_freq_updates!(track_state, code_freq_updates)
 set_carrier_freq_updates!(track_state, carrier_freq_updates)
 ```
+
+Every signal of a satellite has its own accumulator pair, in `sat.signals`
+order, filled with that signal's raw readings: pass a signal selector on a
+multi-signal satellite, e.g. `mean_code_discr(sat, GalileoE1B)` or
+`mean_code_discr(track_state, :e1, 11, 2)`. A passenger's DLL reading includes
+the inter-signal bias (see [`mean_code_discr`](@ref)); [Signal combining](@ref)
+does not change these readings.
 
 The accumulators are stored as `(count, sum)` tuples;
 [`mean_code_discr`](@ref) / [`mean_carrier_discr`](@ref) apply
@@ -154,8 +160,8 @@ enable_vt!
 disable_vt!
 set_code_freq_updates!
 set_carrier_freq_updates!
-reset_code_discr_acc!
-reset_carrier_discr_acc!
+reset_code_discr_accs!
+reset_carrier_discr_accs!
 mean_code_discr
 mean_carrier_discr
 ```

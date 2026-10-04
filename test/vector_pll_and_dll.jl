@@ -30,8 +30,8 @@ using Tracking:
     pll_disc,
     enable_vt!,
     disable_vt!,
-    reset_code_discr_acc!,
-    reset_carrier_discr_acc!,
+    reset_code_discr_accs!,
+    reset_carrier_discr_accs!,
     mean_code_discr,
     mean_carrier_discr,
     set_code_freq_updates!,
@@ -65,6 +65,8 @@ _with_state(sat, state) = TrackedSat(sat; doppler_estimator_state = state)
     state = @inferred SatVectorPLLAndDLL(
         init_carrier_doppler = 500.0Hz,
         init_code_doppler = 100.0Hz,
+        code_discr_accs = ((0, 0.0),),
+        carrier_discr_accs = ((0, 0.0Hz),),
     )
 
     @test state.init_carrier_doppler == 500.0Hz
@@ -73,20 +75,20 @@ _with_state(sat, state) = TrackedSat(sat; doppler_estimator_state = state)
     @test state.code_loop_filter == SecondOrderBilinearLF()
     @test state.carrier_loop_filter_bandwidth == 18.0Hz
     @test state.code_loop_filter_bandwidth == 1.0Hz
-    @test state.code_discr_acc == (0, 0.0)
+    @test state.code_discr_accs == ((0, 0.0),)
     @test state.code_freq_update == 0.0Hz
-    @test state.carrier_discr_acc == (0, 0.0Hz)
+    @test state.carrier_discr_accs == ((0, 0.0Hz),)
     @test state.carrier_freq_update == 0.0Hz
     @test state.vt_on == false
 
     # Kwarg-update constructor preserves what isn't overridden.
     updated = @inferred SatVectorPLLAndDLL(
         state;
-        code_discr_acc = (2, 0.5),
+        code_discr_accs = ((2, 0.5),),
         carrier_freq_update = 3.0Hz,
         vt_on = true,
     )
-    @test updated.code_discr_acc == (2, 0.5)
+    @test updated.code_discr_accs == ((2, 0.5),)
     @test updated.carrier_freq_update == 3.0Hz
     @test updated.vt_on == true
     @test updated.init_carrier_doppler == 500.0Hz
@@ -162,8 +164,8 @@ end
     new_track_state =
         estimate_dopplers_and_filter_prompt(track_state, _meas_l1(sampling_frequency))
     state = get_doppler_estimator_state(get_sat_state(new_track_state, prn))
-    @test state.code_discr_acc == (0, 0.0)
-    @test state.carrier_discr_acc == (0, 0.0Hz)
+    @test state.code_discr_accs == ((0, 0.0),)
+    @test state.carrier_discr_accs == ((0, 0.0Hz),)
     @test state.code_freq_update == 0.0Hz
     @test state.carrier_freq_update == 0.0Hz
     # But the scalar loop still updates the Doppler (the DLL/PLL ran).
@@ -225,8 +227,8 @@ end
 
     # Discriminator outputs are accumulated for the navigation filter; without
     # a previous prompt there is no FLL reading, and the record is not counted.
-    @test state.code_discr_acc == (1, dll_discriminator)
-    @test state.carrier_discr_acc == (0, 0.0Hz)
+    @test state.code_discr_accs == ((1, dll_discriminator),)
+    @test state.carrier_discr_accs == ((0, 0.0Hz),)
     # The mean accessors divide sum by count (one sample here).
     @test mean_code_discr(state) == dll_discriminator
     @test mean_carrier_discr(state) === nothing
@@ -239,15 +241,15 @@ end
     sats[prn] = _with_full_integration(sats[prn], cis(0.1) .* accumulators, num_samples)
     estimate_dopplers_and_filter_prompt!(new_track_state, _meas_l1(sampling_frequency))
     state = get_doppler_estimator_state(get_sat_state(new_track_state, prn))
-    @test first(state.carrier_discr_acc) == 1
+    @test first(only(state.carrier_discr_accs)) == 1
     @test mean_carrier_discr(state) > 0.0Hz
 
     # The accumulator-reset functions bring the accumulators back to zero.
-    reset_code_discr_acc!(new_track_state)
-    reset_carrier_discr_acc!(new_track_state)
+    reset_code_discr_accs!(new_track_state)
+    reset_carrier_discr_accs!(new_track_state)
     state = get_doppler_estimator_state(get_sat_state(new_track_state, prn))
-    @test state.code_discr_acc == (0, 0.0)
-    @test state.carrier_discr_acc == (0, 0.0Hz)
+    @test state.code_discr_accs == ((0, 0.0),)
+    @test state.carrier_discr_accs == ((0, 0.0Hz),)
     # With count == 0 the mean accessors return `nothing`.
     @test mean_code_discr(state) === nothing
     @test mean_carrier_discr(state) === nothing
@@ -388,17 +390,17 @@ end
             sats[5],
             SatVectorPLLAndDLL(
                 get_doppler_estimator_state(sats[5]);
-                code_discr_acc = (2, 0.5),
-                carrier_discr_acc = (2, 4.0Hz),
+                code_discr_accs = ((2, 0.5),),
+                carrier_discr_accs = ((2, 4.0Hz),),
             ),
         )
     end
-    reset_code_discr_acc!(track_state, :gps)
-    reset_carrier_discr_acc!(track_state, :gps)
-    @test _state(:gps).code_discr_acc == (0, 0.0)
-    @test _state(:gps).carrier_discr_acc == (0, 0.0Hz)
-    @test _state(:galileo).code_discr_acc == (2, 0.5)
-    @test _state(:galileo).carrier_discr_acc == (2, 4.0Hz)
+    reset_code_discr_accs!(track_state, :gps)
+    reset_carrier_discr_accs!(track_state, :gps)
+    @test _state(:gps).code_discr_accs == ((0, 0.0),)
+    @test _state(:gps).carrier_discr_accs == ((0, 0.0Hz),)
+    @test _state(:galileo).code_discr_accs == ((2, 0.5),)
+    @test _state(:galileo).carrier_discr_accs == ((2, 4.0Hz),)
 end
 
 @testset "reset_loop_filters! preserves VT flags and zeroes corrections" begin
@@ -407,8 +409,8 @@ end
     sat = TrackedSat(gpsl1, 1, 0.5, 100.0Hz; doppler_estimator)
     dirty_state = SatVectorPLLAndDLL(
         get_doppler_estimator_state(sat);
-        code_discr_acc = (3, 0.7),
-        carrier_discr_acc = (3, 2.0Hz),
+        code_discr_accs = ((3, 0.7),),
+        carrier_discr_accs = ((3, 2.0Hz),),
         code_freq_update = 0.5Hz,
         carrier_freq_update = 4.0Hz,
         carrier_loop_filter_bandwidth = 12.0Hz,
@@ -417,8 +419,8 @@ end
     track_state = TrackState(gpsl1, _with_state(sat, dirty_state); doppler_estimator)
     reset_loop_filters!(track_state, 1)
     state = get_doppler_estimator_state(get_sat_state(track_state, 1))
-    @test state.code_discr_acc == (0, 0.0)
-    @test state.carrier_discr_acc == (0, 0.0Hz)
+    @test state.code_discr_accs == ((0, 0.0),)
+    @test state.carrier_discr_accs == ((0, 0.0Hz),)
     @test state.code_freq_update == 0.0Hz
     @test state.carrier_freq_update == 0.0Hz
     # Per-sat bandwidth override and the vt_on flag survive the reset.

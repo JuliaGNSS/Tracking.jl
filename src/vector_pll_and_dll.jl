@@ -6,11 +6,15 @@ On top of the conventional loop-filter state it carries the
 vector-tracking (VT) interface to an external navigation filter
 (e.g. GNSSReceiver.jl's VDFLL):
 
-  - `code_discr_acc` / `carrier_discr_acc`: `(count, sum)` accumulators of
+  - `code_discr_accs` / `carrier_discr_accs`: `(count, sum)` accumulators of
     the DLL discriminator (chips) and the FLL discriminator (Hz) since the
     navigation filter last read and reset them
-    ([`reset_code_discr_acc!`](@ref) / [`reset_carrier_discr_acc!`](@ref)).
-    Only accumulated while `vt_on`.
+    ([`reset_code_discr_accs!`](@ref) / [`reset_carrier_discr_accs!`](@ref)),
+    **one per signal**, in `sat.signals` order; read them with
+    [`mean_code_discr`](@ref) / [`mean_carrier_discr`](@ref). Only
+    accumulated while `vt_on`. They have no default, as their number is the
+    satellite's signal count: build the state from the satellite
+    (`SatVectorPLLAndDLL(sat, …)`) or through [`init_estimator_state`](@ref).
   - `code_freq_update` / `carrier_freq_update`: the NCO corrections the
     navigation filter feeds back ([`set_code_freq_updates!`](@ref),
     [`set_carrier_freq_updates!`](@ref)). While `vt_on`, they replace the
@@ -25,16 +29,16 @@ vector-tracking (VT) interface to an external navigation filter
   - `signal_combining_sums`: the passengers' pending
     [`SignalCombiningSums`](@ref).
 """
-@kwdef struct SatVectorPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
+@kwdef struct SatVectorPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter,N}
     init_carrier_doppler::typeof(1.0Hz)
     init_code_doppler::typeof(1.0Hz)
     carrier_loop_filter::CA = ThirdOrderAssistedBilinearLF()
     code_loop_filter::CO = SecondOrderBilinearLF()
     carrier_loop_filter_bandwidth::typeof(1.0Hz) = 18.0Hz
     code_loop_filter_bandwidth::typeof(1.0Hz) = 1.0Hz
-    code_discr_acc::Tuple{Int,Float64} = (0, 0.0)
+    code_discr_accs::NTuple{N,Tuple{Int,Float64}}
     code_freq_update::typeof(0.0Hz) = 0.0Hz
-    carrier_discr_acc::Tuple{Int,typeof(0.0Hz)} = (0, 0.0Hz)
+    carrier_discr_accs::NTuple{N,Tuple{Int,typeof(0.0Hz)}}
     carrier_freq_update::typeof(0.0Hz) = 0.0Hz
     vt_on::Bool = false
     frequency_lock::FrequencyLockIndicator = FrequencyLockIndicator()
@@ -55,24 +59,32 @@ function SatVectorPLLAndDLL(
         code_loop_filter,
         carrier_loop_filter_bandwidth,
         code_loop_filter_bandwidth,
+        code_discr_accs = map(_ -> (0, 0.0), sat.signals),
+        carrier_discr_accs = map(_ -> (0, 0.0Hz), sat.signals),
     )
 end
 
+# The same accumulators emptied.
+@inline _zeroed(accs::Tuple) = map(acc -> zero.(acc), accs)
+
+# One reading added to a `(count, sum)` accumulator.
+@inline _accumulated(acc::Tuple, reading) = acc .+ (1, reading)
+
 function SatVectorPLLAndDLL(
-    sat_vector_pll_and_dll::SatVectorPLLAndDLL{CA,CO};
+    sat_vector_pll_and_dll::SatVectorPLLAndDLL{CA,CO,N};
     carrier_loop_filter::Maybe{CA} = nothing,
     code_loop_filter::Maybe{CO} = nothing,
     carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
     code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
-    code_discr_acc::Maybe{Tuple{Int,Float64}} = nothing,
+    code_discr_accs::Maybe{NTuple{N,Tuple{Int,Float64}}} = nothing,
     code_freq_update::Maybe{typeof(0.0Hz)} = nothing,
-    carrier_discr_acc::Maybe{Tuple{Int,typeof(0.0Hz)}} = nothing,
+    carrier_discr_accs::Maybe{NTuple{N,Tuple{Int,typeof(0.0Hz)}}} = nothing,
     carrier_freq_update::Maybe{typeof(0.0Hz)} = nothing,
     vt_on::Maybe{Bool} = nothing,
     frequency_lock::Maybe{FrequencyLockIndicator} = nothing,
     signal_combining_sums::Maybe{SignalCombiningSums} = nothing,
-) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
-    SatVectorPLLAndDLL{CA,CO}(
+) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter,N}
+    SatVectorPLLAndDLL{CA,CO,N}(
         sat_vector_pll_and_dll.init_carrier_doppler,
         sat_vector_pll_and_dll.init_code_doppler,
         isnothing(carrier_loop_filter) ? sat_vector_pll_and_dll.carrier_loop_filter :
@@ -84,11 +96,12 @@ function SatVectorPLLAndDLL(
         carrier_loop_filter_bandwidth,
         isnothing(code_loop_filter_bandwidth) ?
         sat_vector_pll_and_dll.code_loop_filter_bandwidth : code_loop_filter_bandwidth,
-        isnothing(code_discr_acc) ? sat_vector_pll_and_dll.code_discr_acc : code_discr_acc,
+        isnothing(code_discr_accs) ? sat_vector_pll_and_dll.code_discr_accs :
+        code_discr_accs,
         isnothing(code_freq_update) ? sat_vector_pll_and_dll.code_freq_update :
         code_freq_update,
-        isnothing(carrier_discr_acc) ? sat_vector_pll_and_dll.carrier_discr_acc :
-        carrier_discr_acc,
+        isnothing(carrier_discr_accs) ? sat_vector_pll_and_dll.carrier_discr_accs :
+        carrier_discr_accs,
         isnothing(carrier_freq_update) ? sat_vector_pll_and_dll.carrier_freq_update :
         carrier_freq_update,
         isnothing(vt_on) ? sat_vector_pll_and_dll.vt_on : vt_on,
@@ -111,9 +124,10 @@ a navigation filter (living outside this package, e.g. in GNSSReceiver.jl)
 instead of by per-satellite loop filters. The division of labor per
 integration:
 
-  - This estimator accumulates each satellite's DLL / FLL discriminator
-    outputs for the navigation filter to consume (and reset via
-    [`reset_code_discr_acc!`](@ref) / [`reset_carrier_discr_acc!`](@ref)).
+  - This estimator accumulates every signal's DLL / FLL discriminator
+    outputs, one accumulator pair per signal, for the navigation filter to
+    consume (and reset via
+    [`reset_code_discr_accs!`](@ref) / [`reset_carrier_discr_accs!`](@ref)).
     The FLL readings are four-quadrant on a wiped-off prompt, see
     [The per-integration contract](@ref).
   - The navigation filter feeds NCO corrections back via
@@ -200,11 +214,10 @@ function init_estimator_state(
         isnothing(estimator.code_loop_filter_bandwidth) ?
         default_code_loop_filter_bandwidth(driver_signal) :
         estimator.code_loop_filter_bandwidth
-    SatVectorPLLAndDLL(;
-        init_carrier_doppler = sat.carrier_doppler,
-        init_code_doppler = sat.code_doppler,
+    SatVectorPLLAndDLL(
+        sat,
         carrier_loop_filter,
-        code_loop_filter,
+        code_loop_filter;
         carrier_loop_filter_bandwidth,
         code_loop_filter_bandwidth,
     )
@@ -233,6 +246,8 @@ function _reset_estimator_state(
         code_loop_filter = constructorof(typeof(state.code_loop_filter))(),
         carrier_loop_filter_bandwidth = state.carrier_loop_filter_bandwidth,
         code_loop_filter_bandwidth = state.code_loop_filter_bandwidth,
+        code_discr_accs = _zeroed(state.code_discr_accs),
+        carrier_discr_accs = _zeroed(state.carrier_discr_accs),
         vt_on = state.vt_on,
     )
 end
@@ -300,11 +315,21 @@ end
     SatVectorPLLAndDLL(
         state;
         carrier_loop_filter,
-        code_discr_acc = state.code_discr_acc .+ (1, dll_discriminator),
-        carrier_discr_acc = _accumulated_fll(
-            state.carrier_discr_acc,
-            fll_discriminator,
-            previous_prompt,
+        # The driver's own readings, in its slot; the passengers' follow in the
+        # driver fold.
+        code_discr_accs = Base.setindex(
+            state.code_discr_accs,
+            _accumulated(first(state.code_discr_accs), dll_discriminator),
+            1,
+        ),
+        carrier_discr_accs = Base.setindex(
+            state.carrier_discr_accs,
+            _accumulated_fll(
+                first(state.carrier_discr_accs),
+                fll_discriminator,
+                previous_prompt,
+            ),
+            1,
         ),
     )
 end
@@ -312,7 +337,7 @@ end
 # A record without a previous prompt has no FLL reading (`fll_disc` reads 0 Hz)
 # and is left out of the accumulator, as the scalar loop leaves it out.
 @inline _accumulated_fll(acc::Tuple, fll_discriminator, previous_prompt::Complex) =
-    iszero(previous_prompt) ? acc : acc .+ (1, fll_discriminator)
+    iszero(previous_prompt) ? acc : _accumulated(acc, fll_discriminator)
 
 @inline _with_loop_state(state::SatVectorPLLAndDLL; kwargs...) =
     SatVectorPLLAndDLL(state; kwargs...)
@@ -471,8 +496,8 @@ end
 """
 $(SIGNATURES)
 
-Reset the code (DLL) discriminator accumulator of every satellite in the
-vector loop — called by the navigation filter after it has consumed the
+Reset the code (DLL) discriminator accumulators, one per signal, of every
+satellite in the vector loop — called by the navigation filter after it has consumed the
 accumulated values via [`mean_code_discr`](@ref). Satellites outside
 the vector loop are left untouched (they accumulate nothing).
 
@@ -480,71 +505,138 @@ The one-argument form walks every group; pass a `group` (Symbol or index) to
 reset a single group's satellites. Mutates `track_state` in place and returns
 it.
 """
-function reset_code_discr_acc!(track_state::TrackState{<:SignalGroups,<:VectorPLLAndDLL})
-    _map_vt_states!(_reset_sat_code_discr_acc, track_state)
+function reset_code_discr_accs!(track_state::TrackState{<:SignalGroups,<:VectorPLLAndDLL})
+    _map_vt_states!(_reset_sat_code_discr_accs, track_state)
 end
 
-function reset_code_discr_acc!(
+function reset_code_discr_accs!(
     track_state::TrackState{<:SignalGroups,<:VectorPLLAndDLL},
     group::Union{Symbol,Integer,Val},
 )
-    _map_vt_states_in_group!(_reset_sat_code_discr_acc, track_state, group)
+    _map_vt_states_in_group!(_reset_sat_code_discr_accs, track_state, group)
 end
 
-_reset_sat_code_discr_acc(_sat, state) =
-    state.vt_on ? SatVectorPLLAndDLL(state; code_discr_acc = (0, 0.0)) : state
+_reset_sat_code_discr_accs(_sat, state) =
+    state.vt_on ?
+    SatVectorPLLAndDLL(state; code_discr_accs = _zeroed(state.code_discr_accs)) : state
 
 """
 $(SIGNATURES)
 
-Reset the carrier (FLL) discriminator accumulator of every satellite in the
-vector loop — called by the navigation filter after it has consumed the
+Reset the carrier (FLL) discriminator accumulators, one per signal, of every
+satellite in the vector loop — called by the navigation filter after it has consumed the
 accumulated values via [`mean_carrier_discr`](@ref). Addressed exactly
-like [`reset_code_discr_acc!`](@ref): every group, or only `group` when
+like [`reset_code_discr_accs!`](@ref): every group, or only `group` when
 one is given. Mutates `track_state` in place and returns it.
 """
-function reset_carrier_discr_acc!(track_state::TrackState{<:SignalGroups,<:VectorPLLAndDLL})
-    _map_vt_states!(_reset_sat_carrier_discr_acc, track_state)
+function reset_carrier_discr_accs!(
+    track_state::TrackState{<:SignalGroups,<:VectorPLLAndDLL},
+)
+    _map_vt_states!(_reset_sat_carrier_discr_accs, track_state)
 end
 
-function reset_carrier_discr_acc!(
+function reset_carrier_discr_accs!(
     track_state::TrackState{<:SignalGroups,<:VectorPLLAndDLL},
     group::Union{Symbol,Integer,Val},
 )
-    _map_vt_states_in_group!(_reset_sat_carrier_discr_acc, track_state, group)
+    _map_vt_states_in_group!(_reset_sat_carrier_discr_accs, track_state, group)
 end
 
-_reset_sat_carrier_discr_acc(_sat, state) =
-    state.vt_on ? SatVectorPLLAndDLL(state; carrier_discr_acc = (0, 0.0Hz)) : state
+_reset_sat_carrier_discr_accs(_sat, state) =
+    state.vt_on ?
+    SatVectorPLLAndDLL(state; carrier_discr_accs = _zeroed(state.carrier_discr_accs)) :
+    state
 
 """
 $(SIGNATURES)
 
-Mean DLL (code) discriminator accumulated on `state` since the last
-[`reset_code_discr_acc!`](@ref), in chips, or `nothing` if nothing has been
-accumulated yet (`count == 0`). Use this rather than dividing `code_discr_acc` by
-hand, so consumers do not depend on how the accumulator is stored.
+Mean DLL (code) discriminator of one signal accumulated since the last
+[`reset_code_discr_accs!`](@ref), in chips, or `nothing` if nothing has been
+accumulated yet (`count == 0`). Use this rather than dividing `code_discr_accs` by
+hand, so consumers do not depend on how the accumulators are stored.
+
+Every signal of a satellite has its own accumulator, filled with that signal's
+raw readings. A passenger's DLL reads its received code against the satellite's
+one shared replica code phase, so its reading includes the inter-signal bias
+(see [`set_group_delay!`](@ref)); removing it and fusing the signals is the
+navigation filter's job.
+
+Addressed like the other per-signal accessors: from a [`TrackState`](@ref) or a
+[`TrackedSat`](@ref) with a trailing signal selector, an index or a signal type,
+which may be omitted only for a single-signal satellite. The
+`SatVectorPLLAndDLL` form takes an index.
+
+```julia
+mean_code_discr(track_state, :e1, 11, GalileoE1B)        # by signal type
+mean_code_discr(sat, 2)                                  # by index
+mean_code_discr(get_doppler_estimator_state(sat))        # single-signal satellite
+```
 """
-function mean_code_discr(state::SatVectorPLLAndDLL)
-    count, discr_sum = state.code_discr_acc
+function mean_code_discr(state::SatVectorPLLAndDLL, signal_index::Integer)
+    count, discr_sum = state.code_discr_accs[signal_index]
     count == 0 ? nothing : discr_sum / count
 end
 
 """
 $(SIGNATURES)
 
-Mean FLL (carrier) discriminator accumulated on `state` since the last
-[`reset_carrier_discr_acc!`](@ref), in Hz, or `nothing` if nothing has been
+Mean FLL (carrier) discriminator of one signal accumulated since the last
+[`reset_carrier_discr_accs!`](@ref), in Hz, or `nothing` if nothing has been
 accumulated yet (`count == 0`). The carrier counterpart to
-[`mean_code_discr`](@ref). A record without a previous prompt (the first after
+[`mean_code_discr`](@ref), addressed the same way. A signal's reading is
+four-quadrant where its prompt is wiped off, see [The per-integration
+contract](@ref). A record without a previous prompt (the first after
 [`add_satellite!`](@ref), [`reset_loop_filters!`](@ref) or a pilot's
 secondary-code sync, or one whose length differs from the previous record's) has
 no FLL reading and is not counted.
 """
-function mean_carrier_discr(state::SatVectorPLLAndDLL)
-    count, discr_sum = state.carrier_discr_acc
+function mean_carrier_discr(state::SatVectorPLLAndDLL, signal_index::Integer)
+    count, discr_sum = state.carrier_discr_accs[signal_index]
     count == 0 ? nothing : discr_sum / count
 end
+
+# A single-signal satellite needs no selector; a multi-signal one is refused, as
+# an unqualified per-signal read is.
+mean_code_discr(state::SatVectorPLLAndDLL) =
+    mean_code_discr(state, _sole_signal_index(state))
+mean_carrier_discr(state::SatVectorPLLAndDLL) =
+    mean_carrier_discr(state, _sole_signal_index(state))
+_sole_signal_index(::SatVectorPLLAndDLL{<:Any,<:Any,N}) where {N} =
+    N == 1 ? 1 : _throw_needs_signal_selector()
+
+# The satellite form turns a signal type into an index, since the estimator
+# state holds the accumulators but not the signals; the `TrackState` forms
+# forward to it like the other per-signal accessors.
+for fn in (:mean_code_discr, :mean_carrier_discr)
+    @eval begin
+        $fn(sat::TrackedSat, sel...) =
+            $fn(get_doppler_estimator_state(sat), _signal_index(sat.signals, sel...))
+        $fn(s::TrackState{<:SignalGroups,<:VectorPLLAndDLL}, id...) =
+            $fn(get_sat_state(s, id...))
+        $fn(
+            s::TrackState{<:SignalGroups,<:VectorPLLAndDLL},
+            group::Union{Symbol,Integer,Val},
+            sat_id,
+            sig::Union{Integer,Type{<:AbstractGNSSSignal}},
+        ) = $fn(get_sat_state(s, group, sat_id), sig)
+    end
+end
+
+# The passengers' records come through the driver fold while `vt_on`, each adding
+# its raw DLL and FLL readings to that passenger's own accumulators.
+@inline _measures_passengers(state::SatVectorPLLAndDLL) = state.vt_on
+@inline _passenger_measurement_accs(state::SatVectorPLLAndDLL, passengers::Tuple) = map(
+    (_, code_acc, carrier_acc) -> (code_acc, carrier_acc),
+    passengers,
+    Base.tail(state.code_discr_accs),
+    Base.tail(state.carrier_discr_accs),
+)
+@inline _with_passenger_measurements(state::SatVectorPLLAndDLL, accs::Tuple) =
+    SatVectorPLLAndDLL(
+        state;
+        code_discr_accs = (first(state.code_discr_accs), map(first, accs)...),
+        carrier_discr_accs = (first(state.carrier_discr_accs), map(last, accs)...),
+    )
 
 """
 $(SIGNATURES)

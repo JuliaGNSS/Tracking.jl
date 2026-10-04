@@ -185,9 +185,9 @@ than a sum, so the loop gain does not change with the number of signals.
     not assumed. Its discriminator is referred to the driver's code phase by the
     difference of the two, in chips.
   - **Vector tracking:** with `vt_on` unset the scalar fallback combines as
-    above. With `vt_on` passengers are combined into the PLL only: the code loop and the FLL
-    branch belong to the navigation filter, which keeps getting the driver's own
-    raw readings (see [Vector Tracking](vector_tracking.md)).
+    above. With `vt_on` passengers are combined into the PLL only: the code loop
+    and the FLL branch belong to the navigation filter, which gets every signal's
+    own raw readings instead (see [Vector Tracking](vector_tracking.md)).
 
 ```@docs
 Tracking.SignalCombiningSums

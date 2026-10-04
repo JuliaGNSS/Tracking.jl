@@ -181,7 +181,8 @@ helper so they cannot drift, and how the per-signal walk distinguishes
 the [estimator-driver signal](tracking_state.md#Estimator-driver-signal)
 (`signals[1]`, which drives the conventional PLL/DLL) from the other
 signals (whose prompts are filtered and, with [Signal combining](@ref),
-whose discriminators join the driver's loops).
+whose discriminators join the driver's loops; [`VectorPLLAndDLL`](@ref)
+also hands their raw readings to the navigation filter).
 That split is a convention `ConventionalPLLAndDLL` chooses — your own
 estimator can use every signal's state any way you like.
 
