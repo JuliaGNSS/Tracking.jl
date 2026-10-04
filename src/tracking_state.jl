@@ -854,6 +854,7 @@ for fn in (
     :has_bit_or_secondary_code_been_found,
     :estimate_cn0,
     :get_preferred_num_code_blocks_to_integrate,
+    :get_group_delay,
 )
     @eval begin
         $fn(s::TrackState, id...) = $fn(get_sat_state(s, id...))
@@ -1094,6 +1095,81 @@ function set_preferred_num_code_blocks_to_integrate!(
     sats = get_sat_states(track_state)
     sat_id = only(keys(sats))
     sats[sat_id] = _set_sat_signal_preferred_blocks(sats[sat_id], Int(num_code_blocks))
+    track_state
+end
+
+# Rebuild `sat` with the addressed signal's group delay set to `delay`, or keep it
+# where the signal has that delay already.
+function _set_sat_signal_group_delay(sat::TrackedSat, delay, sel...)
+    isequal(get_group_delay(sat, sel...), convert(Union{Nothing,typeof(1.0s)}, delay)) &&
+        return sat
+    idx = _signal_index(sat.signals, sel...)
+    idx_tuple = ntuple(identity, length(sat.signals))
+    new_signals = map(sat.signals, idx_tuple) do s, i
+        i == idx ? TrackedSignal(s; group_delay = Some(delay)) : s
+    end
+    TrackedSat(sat; signals = new_signals)
+end
+
+"""
+$(SIGNATURES)
+
+Set the group delay of one signal on one satellite, in units of time, or
+`nothing` to mark it unknown again (the default). Read it back with
+`get_group_delay`.
+
+A signal with the larger group delay arrives later. Unknown is not zero: a
+consumer must use only the delays that are set. Setting the delay a signal has
+already leaves its satellite as it is.
+
+Addressed like [`set_preferred_num_code_blocks_to_integrate!`](@ref):
+
+```julia
+set_group_delay!(ts, :e1, 11, GalileoE1B, 0.0u"ns")  # (group, prn, signal)
+set_group_delay!(ts, :e1, 11, 0.0u"ns")              # single-signal sat
+set_group_delay!(ts, 11, 0.0u"ns")                   # single-group state
+set_group_delay!(ts, 0.0u"ns")                       # 1 group, 1 sat, 1 signal
+```
+
+Mutates `track_state` in place and returns it.
+"""
+function set_group_delay!(
+    track_state::TrackState{<:SignalGroups},
+    group::Union{Symbol,Integer,Val},
+    sat_id::Integer,
+    sig::_SignalSelector,
+    delay,
+)
+    sats = get_sat_states(track_state, group)
+    sats[sat_id] = _set_sat_signal_group_delay(sats[sat_id], delay, sig)
+    track_state
+end
+
+function set_group_delay!(
+    track_state::TrackState{<:SignalGroups},
+    group::Union{Symbol,Integer,Val},
+    sat_id::Integer,
+    delay,
+)
+    sats = get_sat_states(track_state, group)
+    sats[sat_id] = _set_sat_signal_group_delay(sats[sat_id], delay)
+    track_state
+end
+
+function set_group_delay!(
+    track_state::TrackState{<:SignalGroups{1}},
+    sat_id::Integer,
+    delay,
+)
+    sats = get_sat_states(track_state)
+    sats[sat_id] = _set_sat_signal_group_delay(sats[sat_id], delay)
+    track_state
+end
+
+function set_group_delay!(track_state::TrackState{<:SignalGroups{1}}, delay)
+    sats = get_sat_states(track_state)
+    sat_id = only(keys(sats))
+    sats[sat_id] = _set_sat_signal_group_delay(sats[sat_id], delay)
     track_state
 end
 

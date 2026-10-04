@@ -496,6 +496,7 @@ The trailing `sig` selector is either:
 | `get_bit_buffer` / `get_soft_bits` / `get_num_bits` | Bit buffer, decoded soft bits (sign = the hard bit), bit count. |
 | `get_integrated_samples` | Number of samples accumulated into the current integration so far. |
 | `has_bit_or_secondary_code_been_found` | `true` once bit/secondary-code synchronization has been achieved. |
+| `get_group_delay` | The signal's group delay, `nothing` while unknown; set with [`set_group_delay!`](@ref). |
 
 The per-signal form always names the group explicitly, even on a single-group `TrackState`. Use `:default` as the group key in that case — `estimate_cn0(track_state, :default, 11, GPSL1C_P)`.
 
@@ -555,6 +556,7 @@ get_doppler_estimator_state(::TrackedSat)
 ```@docs
 TrackedSignal
 get_last_fully_integrated_integration_time(::TrackedSignal)
+set_group_delay!
 ```
 
 The per-signal accessors in the table under [Addressing satellites and signals](#Addressing-satellites-and-signals) all dispatch directly on a `TrackedSignal` too. Additionally:
