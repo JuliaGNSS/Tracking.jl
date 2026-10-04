@@ -40,10 +40,8 @@ using Tracking:
 import Tracking
 using StaticArrays: SVector
 
-# Dynamic-tap-count correlator: sample shifts are a runtime Vector and the
-# accumulators are a Vector (issue #126 (b) extension point), to exercise the
-# one-bit backend's AbstractVector-shifts fallback. Parametric over the antenna
-# count M so both the M=1 and M>1 fallback branches can be tested.
+# Runtime-`Vector` shifts and accumulators (issue #126 (b)), to exercise the one-bit
+# backend's AbstractVector-shifts fallback; parametric in M for both its branches.
 struct DynShiftsCorrelator{M} <: AbstractCorrelator{M}
     accumulators::Vector
     shifts::Vector{Int}
@@ -93,23 +91,17 @@ function correlate_once(
     _completed_or_partial_correlator(first(get_sat_state(ts2, 1).signals))
 end
 
-# A bare `downconvert_and_correlate` treats the whole buffer as one chunk. If a
-# code period completed, its (raw) correlator was snapshotted into
-# `correlator_outputs` and the live correlator holds only the residue — return
-# the first completed integration. If the buffer was shorter than one code
-# period (e.g. Galileo E1B's 4 ms period in a 1 ms buffer) nothing completed, so
-# the live correlator holds the whole partial integration — return that. Either
-# way this matches the value the old single-step call left in the live correlator.
+# First completed integration, or the live partial correlator if none completed
+# (see the same helper in downconvert_and_correlate_int16.jl).
 function _completed_or_partial_correlator(sig)
     outs = sig.correlator_outputs
     isempty(outs) ? sig.correlator : first(outs).correlator
 end
 
-# Track a noisy GPS L1CA capture at a known C/N0 with backend `dc`, returning the
-# post-settle carrier-Doppler samples and the final C/N0 estimate. Carrier and code
-# phase run continuously across 1 ms epochs; the capture is Complex{Int16} so the
-# Float32 and one-bit backends see the identical bits. `amp`/`noise_std` follow the
-# C/N0 recipe of the CN0-estimation tests (signal ×10^(C/N0/20), noise ×√fs).
+# Track a noisy GPS L1CA capture at a known C/N0 with backend `dc`; returns the
+# post-settle carrier Dopplers and the final C/N0 estimate. The capture is
+# Complex{Int16}, so Float32 and one-bit backends see identical bits; the C/N0
+# scaling follows the CN0-estimation tests.
 function _track_noisy(
     dc,
     cn0_dbhz,
@@ -129,11 +121,8 @@ function _track_noisy(
     amp = 10^(cn0_dbhz / 20)
     noise_std = sqrt(fs / 1Hz)
     rng = MersenneTwister(seed)
-    # The C/N0 margins recorded below measure the *backend's* quantisation loss,
-    # so the estimator is pinned to the moment estimator instead of following
-    # the default: NWPR's coherent narrowband sum reacts to the residual phase
-    # noise the quantisation also causes, which would fold a second effect into
-    # the same number.
+    # Pin the moment estimator: NWPR also reacts to the quantisation's residual
+    # phase noise, which would fold a second effect into the measured C/N0 loss.
     ts = TrackState(
         gpsl1,
         [
@@ -168,11 +157,8 @@ _mean(x) = sum(x) / length(x)
 _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
 
 @testset "One-bit downconvert and correlate" begin
-    # The code is ±1 in both the float and 1-bit pipelines, so the E/P·L/P magnitude
-    # ratios (the correlation-triangle shape) survive 1-bit quantisation at high SNR;
-    # only the amplitude and (square-wave) carrier phase change. Compare ratios to the
-    # Float32 backend; the prompt phase gets a loose bound (the 1-bit carrier adds a
-    # systematic phase bias the PLL absorbs — see the convergence test).
+    # With a ±1 code the E/P·L/P ratios survive 1-bit quantisation at high SNR; the
+    # prompt phase gets a loose bound (the square-wave carrier adds a phase bias).
     @testset "ratios match Float32: $(nameof(typeof(sig))) @ $(fs/1e6Hz) MHz" for (
         sig,
         fs,
@@ -211,11 +197,8 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
     end
 
     @testset "high sampling rate: tap span ≥ 64 words uncorrupted (regression)" begin
-        # At high fs the early/late sample-shift offset exceeds 64 (one UInt64 word), so
-        # deriving a tap plane from the prompt-extended plane needs a whole-word + sub-word
-        # funnel shift. A single-word-only shift silently corrupted any tap with offset ≥ 64
-        # (right-shift ≥ 64 clamps to 0; the compensating left-shift wraps negative). Verify
-        # every tap matches Float32 and E/L symmetry holds, in that ≥ 64 regime.
+        # At 100 MHz the tap offsets exceed one UInt64 word, exercising the whole-word
+        # part of `_ob_shift_plane!`.
         sig, fs = GPSL1CA(), 100e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         fc = 200Hz * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
@@ -318,8 +301,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
     end
 
     @testset "multi-signal-per-sat (N=$N) matches single signal" for N in (2, 3)
-        # A sat carrying N GPS L1 signals; the 1-bit backend correlates each in turn,
-        # so each signal's correlator is identical to correlating it alone.
+        # Each signal's correlator must equal correlating it alone.
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
@@ -362,10 +344,8 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
     @testset "multi-signal-per-sat × multi-antenna (N=$N, M=$M) matches single" for N in
                                                                                     (2, 3),
         M in (2, 4)
-        # Exercises the tile-share kernel's M>1 path: N signals sharing one carrier +
-        # measurement, each with M antennas. The shared carrier/measurement downconvert
-        # is bit-identical, so every signal's per-antenna correlator (an SVector{M}) must
-        # equal correlating that signal alone.
+        # Tile-share kernel's M>1 path: the shared downconvert is bit-identical, so
+        # each signal's per-antenna correlator must equal correlating it alone.
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         dc = OneBitThreadedDownconvertAndCorrelator()
@@ -405,10 +385,8 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
     end
 
     @testset "dynamic Vector-shifts correlator matches static EPL" begin
-        # A DynShiftsCorrelator with the same shifts as EPL must produce identical
-        # accumulators through the one-bit backend's AbstractVector-shifts fallback as
-        # the static @generated EPL kernel — the fallback sums each popcount chunk into
-        # Int64 totals, which is bit-exact with the @generated kernel's Vec-then-sum.
+        # The AbstractVector-shifts fallback must be bit-exact with the static
+        # @generated EPL kernel (both sum integer popcounts).
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         fc = 200Hz * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
@@ -459,9 +437,8 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
     end
 
     @testset "dynamic Vector-shifts, band-shared (>1 sat) matches per-sat" begin
-        # ≥2 sats with dynamic correlators trip the band-shared measurement path in the
-        # AbstractVector fallback (`_ob_realign_meas!`); the shared pack is bit-identical,
-        # so each sat must equal correlating that PRN alone (1 sat → direct pack).
+        # ≥2 sats trip the fallback's band-shared measurement path
+        # (`_ob_realign_meas!`); each sat must equal correlating that PRN alone.
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         fc = 200Hz * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
@@ -500,10 +477,8 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
     end
 
     @testset "band-shared measurement (>1 sat) matches per-sat packing" begin
-        # ≥2 sats on one band trip the pack-measurement-once-per-band path
-        # (`_ob_pack_band!` + per-sat `_ob_realign_meas!`); a single sat uses the
-        # per-sat pack. The shared pack is bit-identical, so every sat's correlator
-        # must exactly equal correlating that PRN alone.
+        # ≥2 sats trip the pack-once-per-band path (`_ob_pack_band!` +
+        # `_ob_realign_meas!`); each sat must equal correlating that PRN alone.
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
@@ -547,11 +522,8 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
     end
 
     @testset "errors on CBOC (non-binary) code" begin
-        # CBOC (e.g. Galileo E1B) carries an amplitude — a multi-level weighted sum of
-        # two BOCs — so keeping only the code sign loses information; the modulation gate
-        # rejects it (regardless of whether the replica is Float or a quantised integer).
-        # Binary ±1 codes (BPSK, BOC, TMBOC) are accepted; the converging GPS L1 C/A test
-        # below covers the BPSK case. E1B's BOC(6,1) needs fs ≥ code_freq·12 = 12.276 MHz.
+        # The CBOC modulation gate (see `_onebit_hybrid_blocked!`). E1B's BOC(6,1)
+        # needs fs ≥ 12.276 MHz.
         sig, fs = GalileoE1B(), 15e6Hz
         cap = make_capture(sig, 1, fs, 5000, 200Hz, 100.0)
         meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
@@ -561,9 +533,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             meas,
             ts,
         )
-        # The message names the signal the way its ICD does
-        # (`GNSSSignals.get_signal_name`), not by its internal parametrised
-        # type (`GalileoE1B{Matrix{Int16}}`).
+        # Named via `get_signal_name`, not the parametrised type.
         @test_throws "Galileo E1B" downconvert_and_correlate(
             OneBitThreadedDownconvertAndCorrelator(),
             meas,
@@ -572,15 +542,13 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
     end
 
     @testset "1-bit SNR loss vs Float32: tracking jitter and C/N0" begin
-        # At a fixed 45 dB-Hz C/N0, the one-bit backend locks the same true Doppler as the
-        # Float32 backend but with more jitter and a lower C/N0 estimate — the ≈2–3 dB cost
-        # of 1-bit quantisation (≈2 dB measurement + ≈1 dB square-wave carrier). Pin the
-        # *bounded* degradation (a fixed seed keeps it deterministic), not exact numbers.
+        # Pin the bounded ≈2–3 dB 1-bit loss (see the header of
+        # src/downconvert_and_correlate_onebit.jl), not exact numbers; fixed seed.
         cn0_in = 45.0
         f = _track_noisy(CPUThreadedDownconvertAndCorrelator(), cn0_in, 1234)
         b = _track_noisy(OneBitThreadedDownconvertAndCorrelator(), cn0_in, 1234)
 
-        # Both lock to the true 300 Hz Doppler — the 1-bit loss is jitter, not a bias.
+        # The 1-bit loss is jitter, not a bias.
         @test abs(_mean(f.dopplers) - 300) < 3
         @test abs(_mean(b.dopplers) - 300) < 3
 
@@ -588,8 +556,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         jitter_ratio = _std(b.dopplers) / _std(f.dopplers)
         @test 1.0 < jitter_ratio < 3.0
 
-        # Float32 recovers the input C/N0; the one-bit estimate is biased low by the
-        # quantisation loss (measured ≈2.5–2.9 dB), not wildly off.
+        # One-bit C/N0 is biased low by the loss (measured ≈2.5–2.9 dB).
         @test abs(f.cn0 - cn0_in) < 2.0
         @test b.cn0 < f.cn0
         @test 1.0 < (f.cn0 - b.cn0) < 5.0
@@ -607,8 +574,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             fs;
             downconvert_and_correlator = OneBitThreadedDownconvertAndCorrelator(),
         )
-        # 1-bit tracking is noisier than the integer/float paths; still pulls in from
-        # the 20 Hz offset toward the true Doppler.
+        # Noisier than the integer/float paths, hence the wider tolerance.
         @test get_carrier_doppler(get_sat_state(ts, 1)) ≈ cdopp atol = 15Hz
     end
 end

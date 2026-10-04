@@ -85,15 +85,9 @@ end
     @test returned === track_state
 end
 
-# Per-stage allocation measurement. `@allocated` in module scope will
-# pick up boxing overhead from non-typed local lookups, so the work is
-# done inside typed helper functions — that matches what `track!` looks
-# like when called from real user code (a function with concrete
-# argument types) and what BenchmarkTools' `@benchmark $signal $ts ...`
-# measures.
-#
-# Each helper does a few warmup calls first so Bumper.jl's slab buffer
-# is paged in and `push!` to `filtered_prompts` has its capacity settled.
+# Per-stage allocation measurement. Measured inside typed helper functions, since
+# `@allocated` at module scope picks up boxing from untyped globals. Warmup calls page in
+# Bumper.jl's slab buffer and settle `filtered_prompts`' capacity.
 
 function measure_reset!(track_state)
     for _ = 1:8
@@ -111,8 +105,7 @@ function measure_dc!(dc, signal, track_state, sampling_frequency)
 end
 
 function measure_est!(track_state, sampling_frequency)
-    # Estimator only reads `sampling_frequency` off the measurement;
-    # samples are unused.
+    # Estimator only reads `sampling_frequency` off the measurement.
     measurements = (L1 = BandMeasurement(ComplexF64[], sampling_frequency),)
     for _ = 1:8
         estimate_dopplers_and_filter_prompt!(track_state, measurements)
@@ -127,11 +120,8 @@ end
     sampling_frequency = 4e6Hz
     signal, gpsl1, carrier_doppler, start_code_phase = make_signal(sampling_frequency)
 
-    # Pinned to an estimator that reads no noise density, so this measures what it
-    # was written to measure: the correlate and estimate stages themselves. The
-    # library default is noise-referenced and adds a per-signal despread, which has
-    # its own allocation test below — and that one is gated to Julia >= 1.11,
-    # where the despread is allocation-free.
+    # Pinned to an estimator that reads no noise density, to measure the correlate and
+    # estimate stages alone; the noise-referenced default is tested below (Julia >= 1.11).
     track_state = TrackState(
         gpsl1,
         [
@@ -146,19 +136,14 @@ end
     )
     dc = DC()
 
-    # Run the full track! several times so all stages compile, the bit
-    # buffer is in its steady-state shape, and `filtered_prompts`'
-    # capacity is settled (the first call grows it via `push!`).
+    # Warm up: compile, reach steady-state bit buffer and `filtered_prompts` capacity.
     for _ = 1:8
         track!(signal, track_state, sampling_frequency; downconvert_and_correlator = dc)
     end
 
     @test measure_reset!(track_state) == 0
-    # Single-threaded backend: every per-stage call is now genuinely
-    # allocation-free. The threaded backend still pays a small residual
-    # for `@batch`'s ManualMemory.Reference + Bumper SlabCheckpoints
-    # that don't elide through Polyester's task closure. Cap loosely so
-    # a regression to genuine per-sat allocations would still fire.
+    # The threaded backend keeps a small Polyester `@batch` launch residual; the loose
+    # cap still catches per-sat allocations.
     @test measure_est!(track_state, sampling_frequency) == 0
     if DC === CPUDownconvertAndCorrelator
         @test measure_dc!(dc, signal, track_state, sampling_frequency) == 0
@@ -167,18 +152,10 @@ end
     end
 end
 
-# Same measurement with a per-signal noise reference in play, so the two pieces
-# this adds to the hot path are held to the same contract as everything else:
-# `_update_signal_noise!`'s tuple-recursive walk over the `noise_estimators`
-# NamedTuple (in the correlate step) and the per-signal density tuple plus the
-# extra arguments threaded through the fold (in the estimate step). Both are
-# measured through `downconvert_and_correlate!` /
-# `estimate_dopplers_and_filter_prompt!` as wholes rather than in isolation,
-# which is where a regression would actually show up.
-# Gated to Julia >= 1.11 for the same reason as the software-measurement test in
-# `test/noise_estimators/correlator.jl`: the despread is allocation-free on
-# 1.11+, and on 1.10 the compiler leaves a few hundred bytes per sub-integration
-# inside the correlate call that it elides from 1.11 on.
+# Same measurement with a per-signal noise reference: `_update_signal_noise!` (correlate
+# step) and the per-signal density tuple (estimate step) must not allocate either.
+# Julia >= 1.11 only, as in `test/noise_estimators/correlator.jl` (1.10 leaves a small
+# per-sub-integration allocation in the despread).
 @static if VERSION >= v"1.11"
     @testset "a noise-referenced signal adds no allocation ($DC)" for DC in (
         CPUDownconvertAndCorrelator,
@@ -215,19 +192,11 @@ end
     end
 end
 
-# What the noise reference costs the *threaded* backend at launch, which the loose
-# cap above cannot see. Polyester heap-allocates one argument tuple per `@batch`
-# launch, sized by what the region references and copying an immutable struct into
-# it by value — so a noise descriptor reached by value put the estimator (48 B), the
-# band measurement (24 B) and the signal instance (56 B) in there and took the
-# launch from ~96 B to 240 B. Reached through one box it costs a pointer, and the
-# contract is that it costs nothing measurable at all.
-#
-# Asserted as equality against an otherwise identical state whose C/N₀ estimator
-# reads no density, not against a byte count: the count is Polyester's and Julia's
-# to change, "the reference is free at launch" is ours. Two satellites, so the
-# comparison is not made at the one satellite count where the loop has a single
-# item and no residual to speak of.
+# The noise reference must add nothing to the threaded `@batch` launch residual, which
+# the loose cap above cannot see (Polyester copies by-value captures into its argument
+# tuple, so the descriptors are reached through one box; see `_park_noise_items!`).
+# Compared against an identical state without one rather than a byte count, which is
+# Polyester's to change. Two satellites so the loop has more than one item.
 @static if VERSION >= v"1.11"
     @testset "the noise reference adds nothing to the threaded launch residual" begin
         sampling_frequency = 4e6Hz
@@ -269,9 +238,8 @@ end
         @test measure_dc!(noise_dc, signal, noise_state, sampling_frequency) ==
               measure_dc!(plain_dc, signal, plain_state, sampling_frequency)
 
-        # The box the descriptors are parked in is provisioned once and reused —
-        # which is what makes the launch cost flat rather than merely smaller — and
-        # it has to survive the `TrackState` copies `track` and `track!` make of it.
+        # The box is provisioned once and must survive the `TrackState` copies made by
+        # `track` and `track!`.
         box = noise_state.noise_descriptor[]
         @test box isa Base.RefValue
         track!(
@@ -288,67 +256,28 @@ end
             downconvert_and_correlator = noise_dc,
         ).noise_descriptor === noise_state.noise_descriptor
 
-        # Nothing to measure parks nothing: a state whose C/N₀ estimators read no
-        # density never provisions a box, so the loop has nothing extra to root.
+        # No density-reading estimator ⇒ no box.
         @test isnothing(plain_state.noise_descriptor[])
     end
 end
 
-# Acquisition (pre-sync) allocation guard. Before bit sync, `track!` runs the
-# per-code-block bit-edge search (`_buffer_find_bit`) once per code block. A
-# regression there — e.g. a closure-capture `Core.Box` + boxed `SyncResult`
-# (~80 B/block) — makes `track!` allocate in proportion to the signal length
-# instead of staying allocation-free after the first (buffer-seating) call.
-# This is exactly the "allocates per completed integration, scales with signal
-# length" symptom reported in #198: measuring at two chunk lengths and asserting
-# both are 0 pins the allocation flat across completion counts (a per-block leak
-# would grow 10× from 2 to 20 blocks). The box shows up at any runtime thread
-# count on the single-threaded backend, so this single-threaded `== 0` catches
-# it on CI without needing a multi-threaded run. The
-# per-stage test above does NOT catch it: it tracks a real signal that reaches
-# bit sync within the warmup, so by the time it measures it exercises only the
-# post-sync path, where `_buffer_find_bit` is no longer called.
+# Pre-sync allocation guard (issue #198): before bit sync, `track!` searches for the bit
+# edge on every code block, so a leak there scales with signal length. The per-stage
+# test above misses it, since its real signal syncs during warmup. Noise never syncs, so
+# the search runs on every block; a warm call must allocate nothing at any length.
 #
-# Feed noise instead — its prompts never form a consistent energy peak, so the
-# CFAR bit-edge detector never locks and the pre-sync search runs on every code
-# block. After one warmup call (which seats the per-satellite buffers), a warm
-# call must allocate nothing, at any signal length. Measuring both a short and a
-# long chunk makes a per-block leak fail loudly: with the box it allocated ~80 B
-# per block (160 B at 2 blocks, 1600 B at 20), so the 20-block assertion below
-# would have caught it. Single-threaded backend so the assertion is a clean
-# `== 0` (the threaded backend keeps a small Polyester residual — see above).
+# `_detect_bit_edge_cfar` scores only once `num_blocks >= 2 * blocks_per_bit` (40 for
+# L1 C/A), so 2 and 20 blocks cover the search alone and 200 / 900 also cover the CFAR
+# statistic and Student-t threshold. The measured (second) call sweeps blocks n+1 … 2n,
+# i.e. `dof ≈ n/20 … n/10`; 200 and 900 hit the `dof` ranges where an allocating
+# `beta_inc_inv` once slipped past this guard.
 #
-# The chunk lengths have to straddle the detector's own arming point, not just
-# `_buffer_find_bit`'s. `_detect_bit_edge_cfar` returns before scoring anything
-# while `num_blocks < 2 * blocks_per_bit` (40 for L1 C/A), so at 2 and 20 blocks
-# the statistic — and with it the threshold quantile — is never reached: a leak
-# in the *scoring* path is invisible there. That is exactly how an allocating
-# `SpecialFunctions.beta_inc_inv` in the Student-t threshold shipped past this
-# guard once. It allocated internal `zeros(31)` scratch inside the
-# incomplete-beta asymptotic expansions, ~600 B per code block — but only over
-# parts of the `dof = peak_bin_count - 1` range it was called at: around
-# `dof = 11`, then continuously from `dof ≈ 42` up.
-#
-# The measured call is the *second* one, so `measure_track_alloc(n)` sweeps
-# blocks `n+1 … 2n`, i.e. `dof ≈ n/20 … n/10`. The two lengths below are picked
-# to land in those two stretches: 200 blocks sweeps `dof ≈ 9…19` (catching the
-# `dof = 11` spike, ~8 kB) and 900 blocks sweeps `dof ≈ 44…89` (catching the
-# whole upper stretch, ~3.5 MB). Both were verified to fail against the
-# allocating implementation. They cost ~5 ms / ~40 ms.
-#
-# Gated to Julia ≥ 1.11. On 1.10 the compiler leaves a per-block allocation in
-# the pre-sync soft-bit path (~770 B/block — measured 2144 B at 2 blocks vs
-# 15968 B at 20; unrelated to the box, which was ~80 B/block) that 1.11+ elides,
-# so `== 0` only holds on 1.11+. The box regression this guards against still
-# shows up on 1.11+ (and in the benchmark suite's memory table, which runs on
-# the release Julia), so the guard is not lost.
+# Julia >= 1.11 only: 1.10 leaves a per-block allocation in the pre-sync soft-bit path.
 if VERSION >= v"1.11"
     @testset "track! is allocation-free during acquisition (pre-sync bit search)" begin
         sampling_frequency = 5e6Hz
         samples_per_block = 5000               # 1 ms GPS L1CA code period @ 5 MHz
-        # Build a fresh pre-sync tracker, warm it once, then measure one more call.
-        # `nblocks` sets the chunk length (and thus the pre-sync loop-iteration
-        # count); the RNG is seeded per length so the signal is deterministic.
+        # Fresh pre-sync tracker, warmed once; `nblocks` sets the chunk length.
         function measure_track_alloc(nblocks)
             gpsl1 = GPSL1CA()
             track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 10.5, 1000.0Hz)])
@@ -365,23 +294,14 @@ if VERSION >= v"1.11"
         end
         @test measure_track_alloc(2) == 0
         @test measure_track_alloc(20) == 0
-        # Past `2 * blocks_per_bit`, so the CFAR statistic and its Student-t
-        # threshold are actually scored on every block (see above).
+        # Past `2 * blocks_per_bit`: the CFAR statistic is scored (see above).
         @test measure_track_alloc(200) == 0
         @test measure_track_alloc(900) == 0
     end
 
-    # Same guard for the soft *secondary-code* detector (GPS L5I: NH10, 10
-    # blocks/period), which shares `_cfar_decide` / `_t_quantile` but has its own
-    # per-rotation accumulator update `_update_secondary_accumulators!` and
-    # front-end `_detect_secondary_code_cfar`. A `rand` signal carries no real
-    # NH10 structure, so the soft detector never locks (it rejects noise) and the
-    # tracker stays in the pre-sync search, scoring every block past `2 × N`. Both
-    # lengths are past `2 × 10`, so the scoring path (overlay-wiped energy folding,
-    # Welford update, peak/runner-up scan, Student-t threshold) runs on every
-    # block — where an allocation would otherwise hide. `dof = peak_bin_count − 1`
-    # sweeps ≈ 9…19 (200) and ≈ 44…89 (900), the same stretches that caught the
-    # allocating quantile for L1 C/A above.
+    # Same guard for the secondary-code detector (GPS L5I, NH10), whose own accumulator
+    # update `_update_secondary_accumulators!` is scored past `2 × 10` blocks; noise
+    # never locks, and 200 / 900 blocks hit the same `dof` ranges as above.
     @testset "track! is allocation-free during acquisition (pre-sync secondary-code search)" begin
         sampling_frequency = 25e6Hz
         samples_per_block = 25000              # 1 ms GPS L5I code period @ 25 MHz

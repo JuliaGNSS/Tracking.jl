@@ -105,13 +105,8 @@ Tracking.estimate_cn0(estimator::CountingCN0Estimator, integration_time) =
 end
 
 @testset "estimate_cn0 overloads on TrackState" begin
-    # Multi-group + sat-id and single-group + sat-id variants. The
-    # no-argument variant is already covered by the integration test
-    # above; these two specialize on the group key / sat identifier
-    # forwarding paths. An unseeded estimator reports `-Inf dB-Hz` — the house
-    # convention that a missing estimate is never `NaN` and never a finite
-    # number a lock detector might clear — so we only assert the methods
-    # dispatch and run.
+    # The group-key / sat-id forwarding paths. An unseeded estimator reports
+    # `-Inf dB-Hz` (see `NoCN0Estimator`), so this only checks dispatch.
     ts = TrackState(; signal = GPSL1CA())
     ts = add_satellite!(ts; prn = 1, carrier_doppler = 0Hz)
     @test estimate_cn0(ts, :default, 1) == -Inf * dBHz
@@ -119,27 +114,17 @@ end
 end
 
 @testset "estimate_cn0 divides by the record's real integration time" begin
-    # C/N₀ has units of Hz and belongs to the signal, not to how long the
-    # correlate step chose to integrate. The estimator buffers *sample-normalized*
-    # prompts, so a record spanning N code blocks arrives with N times the SNR of
-    # a one-block record; `estimate_cn0` therefore has to divide by N × the code
-    # period, not by the code period alone. It used to do the latter, which
-    # over-reported by 10·log₁₀(N) — 13 dB at a full GPS L1 C/A bit — for anything
-    # driven above one block by `set_preferred_num_code_blocks_to_integrate!` or
-    # by an external correlator producer handing over longer records.
+    # A record spanning N code blocks carries N times the SNR of a one-block
+    # record, so `estimate_cn0` must divide by N × the code period; dividing by
+    # the code period alone over-reports by 10·log₁₀(N).
     gpsl1 = GPSL1CA()
     prn = 1
 
-    # A prompt whose amplitude is fixed and whose noise shrinks as √N is exactly
-    # what a longer coherent integration delivers after sample normalization, so
-    # feeding the same shape at two different block counts must report the same
-    # C/N₀ once the divisor is right.
-    # Pinned to `MomentsCN0Estimator`, because this is a property of the
-    # estimators that fold a bare prompt stream and are handed one `T` at
-    # `estimate_cn0` time. The default `NoiseRefCN0Estimator` applies each
-    # record's own `T` at update time instead — see "records of different length
-    # are each divided by their own T" in `cn0_estimators/noise_ref.jl`, which is
-    # the same contract expressed the other way round.
+    # Fixed amplitude with noise shrinking as √N is what a longer coherent
+    # integration delivers, so both block counts must report the same C/N₀.
+    # Pinned to `MomentsCN0Estimator`, which takes one `T` at `estimate_cn0`
+    # time; `NoiseRefCN0Estimator` applies `T` per record (tested in
+    # `cn0_estimators/noise_ref.jl`).
     function cn0_at(num_blocks, prompts)
         tsig = Tracking.TrackedSignal(gpsl1; cn0_estimator = MomentsCN0Estimator(100))
         estimator = get_cn0_estimator(tsig)
@@ -175,12 +160,8 @@ end
     same_prompts_20 = linear_cn0(cn0_at(20, one_block))
     @test 10 * log10(same_prompts_1 / same_prompts_20) ≈ 10 * log10(20) atol = 0.01
 
-    # `estimate_cn0` and `get_last_fully_integrated_integration_time` are the two
-    # halves of one contract: C/N₀ is per-Hz and says nothing on its own about
-    # whether a record's peak clears the noise. Their product does — it is the
-    # post-integration SNR — so a consumer gating on detectability multiplies
-    # them. Same buffered prompts at 1 and 20 blocks: C/N₀ moves by 10·log₁₀(20)
-    # and T moves by 20, so the SNR is unchanged.
+    # C/N₀ × `get_last_fully_integrated_integration_time` is the
+    # post-integration SNR, so it must not depend on the block count.
     function snr_at(num_blocks, prompts)
         tsig = Tracking.TrackedSignal(gpsl1; cn0_estimator = MomentsCN0Estimator(100))
         estimator = get_cn0_estimator(tsig)

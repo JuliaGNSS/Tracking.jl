@@ -21,13 +21,8 @@ rotl(x::T, r, N) where {T} =
 @testset "GPS L5I" begin
     gpsl5 = GPSL5I()
     prn = 1
-    # NH10 packed newest-first from `get_secondary_code` — `0x3ca`
-    # (= 1111001010), matched at positive polarity. The ICD writes NH10 as
-    # `0000110101`; GNSSSignals carries the ±1 chips, and
-    # `_packed_secondary_code` sets a bit per `+1` chip, so the packed
-    # reference is that pattern's complement. Only the reported polarity sign
-    # rides on the convention, and it is the same convention the post-sync
-    # replica and the soft detector apply.
+    # Packed NH10 is `0x3ca`, the complement of the ICD's `0000110101`, since
+    # `_packed_secondary_code` sets a bit per `+1` chip (see its docstring).
     @test Tracking._packed_secondary_code(UInt32, gpsl5, prn) == UInt32(0x3ca)
     res = @inferred(detect_bit_or_secondary_code_sync(gpsl5, prn, UInt32(0x3ca), 50))
     @test res.found == true
@@ -57,12 +52,10 @@ rotl(x::T, r, N) where {T} =
     # 20-block sync window (2 × NH10) fits in a UInt32.
     @test @inferred(get_code_block_buffer_type(gpsl5)) === UInt32
 
-    # NH10 (10 chips) is short enough for the soft, CFAR secondary-code detector.
     @test Tracking.uses_soft_secondary_code_detection(gpsl5) == true
 
     @testset "Hamming tolerance" begin
-        # 2.5 % ceiling over a 10-block window discretizes to "exact match"
-        # (floor(0.025 × 10) = 0) — any single bit-flip rejects.
+        # floor(0.025 × 10) = 0: exact match only.
         template = Tracking._packed_secondary_code(UInt32, gpsl5, prn)
         @test detect_bit_or_secondary_code_sync(gpsl5, prn, template, 10).found == true
         @test detect_bit_or_secondary_code_sync(gpsl5, prn, template ⊻ UInt32(0x1), 10).found ==
@@ -99,15 +92,14 @@ end
     end
 
     @testset "Hamming tolerance" begin
-        # 2.5 % over a 20-block window discretizes to exact match
-        # (floor(0.025 × 20) = 0) — any single bit-flip rejects.
+        # floor(0.025 × 20) = 0: exact match only.
         reference = Tracking._packed_secondary_code(UInt32, gpsl5q, prn)
         @test detect_bit_or_secondary_code_sync(gpsl5q, prn, reference, N).found == true
         @test detect_bit_or_secondary_code_sync(gpsl5q, prn, reference ⊻ UInt32(0x1), N).found ==
               false
     end
 
-    # L5Q is BPSK on L5 — EarlyPromptLate default, same as L5I.
+    # BPSK → EarlyPromptLate.
     @test @inferred(get_default_correlator(gpsl5q, NumAnts(1))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
     @test @inferred(get_default_correlator(gpsl5q, NumAnts(3))) ==
@@ -120,7 +112,6 @@ end
     # 20-block NH20 window fits in a UInt32.
     @test @inferred(get_code_block_buffer_type(gpsl5q)) === UInt32
 
-    # NH20 (20 chips) is short enough for the soft, CFAR secondary-code detector.
     @test Tracking.uses_soft_secondary_code_detection(gpsl5q) == true
 end
 

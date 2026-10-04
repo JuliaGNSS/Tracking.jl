@@ -15,11 +15,8 @@ using Polyester
 using Random: AbstractRNG, Xoshiro
 
 # 1800-bit exact-width unsigned for the 1800-chip overlay-code searches of
-# GPS L1C-P and BeiDou B1C-P.
-# Defined once at module load. Benchmarked at ~71 μs for the full
-# 1800-phase Hamming-distance sweep, ~1.5× faster than a padded
-# UInt1856 variant because no mask is needed on shift/XOR (see the
-# sync-detection-redesign plan in docs/plans for the comparison).
+# GPS L1C-P and BeiDou B1C-P; ~1.5× faster than a padded UInt1856 since
+# shift/XOR need no mask.
 BitIntegers.@define_integers 1800
 
 using Unitful: upreferred, uconvert, ustrip, dimension, NoUnits, Hz, dBHz, ms, s
@@ -186,17 +183,13 @@ Abstract downconverter and correlator type. Structs for
 downconversion and correlation must have this abstract type as a
 parent.
 
-The per-sat correlation loop, per-group body, and public
-`downconvert_and_correlate(!)` entry points are defined once on this abstract
-type (see `downconvert_and_correlate_cpu.jl`); a subtype customises behaviour by
-overriding the dispatch hooks it needs — `_despread_one_signal!` (the one
-correlation primitive, which both the per-satellite path and the noise reference
-go through), `_correlate_signals` / `_scratch_buffers` (multi-signal kernel +
-scratch), `_threading` (serial vs. Polyester `@batch`, default serial), and
-`_check_sample_type` (per-backend sample-type check, default no-op). A subtype
-that overrides none inherits the single-threaded CPU plumbing rather than getting
-a `MethodError`; one that overrides only `_despread_one_signal!` gets a working
-single-signal path, satellites and noise measurement alike.
+The correlation loop and the public `downconvert_and_correlate(!)` entry points
+are defined once on this abstract type (see `downconvert_and_correlate_cpu.jl`); a
+subtype overrides only the hooks it needs: `_despread_one_signal!` (the one
+correlation primitive, also used for the noise reference), `_correlate_signals` /
+`_scratch_buffers` (multi-signal kernel + scratch), `_threading` (default serial)
+and `_check_sample_type` (default no-op). Overriding none inherits the
+single-threaded CPU plumbing.
 """
 abstract type AbstractDownconvertAndCorrelator end
 
@@ -217,10 +210,7 @@ include("band_measurement.jl")
 include("code_replica.jl")
 include("carrier_replica.jl")
 include("downconvert.jl")
-# `cn0_estimators/` after `bit_buffer.jl`: the CN0 estimators' update context
-# carries the navigation-bit state (`BitBuffer`) and reads the signal's
-# blocks-per-bit trait from there. Within the folder the shared file comes
-# first, since every concrete estimator subtypes `AbstractCN0Estimator`.
+# `cn0_estimators/` after `bit_buffer.jl`: their update context carries a `BitBuffer`.
 include("bit_buffer.jl")
 include("cn0_estimators/cn0_estimator.jl")
 include("cn0_estimators/moments.jl")
@@ -230,9 +220,8 @@ include("cn0_estimators/noise_ref.jl")
 include("correlators/correlator.jl")
 include("correlators/early_prompt_late.jl")
 include("correlators/very_early_prompt_late.jl")
-# `noise_estimators/` after `correlators/`: the software source despreads
-# through a real correlator, and `TrackState`'s `NoiseEstimators` field type
-# needs `AbstractNoiseEstimator` to exist before the struct is defined below.
+# `noise_estimators/` after `correlators/` (it despreads through one) and before
+# the `TrackState` struct, whose field type needs `NoiseEstimators`.
 include("noise_estimators/noise_estimator.jl")
 include("noise_estimators/correlator.jl")
 include("discriminators.jl")
@@ -267,22 +256,14 @@ per-group `satellites` dictionary, signal-instance tuple, band, and
 antenna count.
 
 `noise_estimators` is a NamedTuple of [`AbstractNoiseEstimator`](@ref)s keyed by
-**signal** id (`GNSSSignals.get_signal_id` — `:GPSL1CA`, `:GalileoE1B`, …), the
-same NamedTuple idiom [`BandMeasurements`](@ref) uses for bands, so a lookup
-folds to a compile-time constant. Keyed by signal and not by band because the
-floor a record divides by is the *post-correlation* one, which depends on the
-despreading modulation (see [`AbstractNoiseEstimator`](@ref)). A signal gets an
-entry only where its C/N₀ estimator reads a noise density (see
-[`requires_noise_density`](@ref)); signals with no such estimator get none, and
-then the noise measurement costs exactly nothing. Each estimator averages **in
-place**, so `TrackState` itself is never rebuilt for a noise update.
+**signal** id (`GNSSSignals.get_signal_id`, see [`AbstractNoiseEstimator`](@ref)
+for why per signal). By default only signals whose C/N₀ estimator reads a noise
+density get one (see [`requires_noise_density`](@ref)), so others pay nothing.
+Estimators average in place, so `TrackState` is never rebuilt for a noise update.
 
-`noise_descriptor` is per-call **scratch**, not state: one reusable heap cell in
-which the correlate step parks the chunk's noise descriptors so that a threaded
-backend's parallel loop can reach them through a single pointer instead of a
-by-value copy (see `_park_noise_items!`). It is shared — not copied — by every
-`TrackState` derived from this one, exactly as the per-satellite scratch vectors
-are, and nothing outside one `downconvert_and_correlate!` call reads it.
+`noise_descriptor` is per-call **scratch**, not state: a reusable cell where the
+correlate step parks the chunk's noise descriptors for a threaded backend (see
+`_park_noise_items!`). It is shared by every `TrackState` derived from this one.
 """
 struct TrackState{G<:SignalGroups,DE<:AbstractDopplerEstimator,NE<:NoiseEstimators}
     groups::G
@@ -291,11 +272,8 @@ struct TrackState{G<:SignalGroups,DE<:AbstractDopplerEstimator,NE<:NoiseEstimato
     noise_descriptor::Base.RefValue{Any}
 end
 
-# Three-argument construction: the descriptor cell is scratch, so a freshly built
-# `TrackState` starts with an empty one and fills it on its first correlate call.
-# Every *derived* state (`TrackState(track_state; …)` and the in-place mutators)
-# threads the existing cell through instead, which is what keeps the box inside it
-# alive across `track!`'s copies and the steady state allocation-free.
+# Fresh `TrackState` with an empty descriptor cell. Derived states thread the
+# existing cell through instead, keeping the steady state allocation-free.
 TrackState(
     groups::SignalGroups,
     doppler_estimator::AbstractDopplerEstimator,

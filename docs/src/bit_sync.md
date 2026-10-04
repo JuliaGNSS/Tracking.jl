@@ -65,10 +65,11 @@ There are three detector families:
 | GPS L1C-D | trivial | n/a | `UInt8` (unused) | always | 0 | 1 |
 | GPS L1C-P | **hard** rotation sweep | 1800 blocks | `UInt1800` (exact width) | 45 errors (2.5 %) | `0..1799` | n/a (pilot) |
 | GPS L2CM | trivial | n/a | `UInt8` (unused) | always | 0 | 1 |
-| GPS L2CL | never fires | `UInt8` (unused) | none (dataless pilot) | n/a | 0 | n/a (pilot) |
+| GPS L2CL | never fires | n/a | `UInt8` (unused) | n/a (dataless pilot) | 0 | n/a (pilot) |
 | Galileo E1C | soft secondary CFAR | 50 blocks (2 × CS25) | `UInt32` (vestigial) | confidence 0.999 | 0 | 25 (pilot) |
 | Galileo E5a-I | soft secondary CFAR | 40 blocks (2 × CS20) | `UInt32` (vestigial) | confidence 0.999 | 0 | 20 |
 | Galileo E5a-Q | soft secondary CFAR | 200 blocks (2 × CS100) | `UInt128` (vestigial) | confidence 0.999 | 0 | 100 (pilot) |
+| Galileo E5a-QP | trivial | n/a | `UInt8` (unused) | always | 0 | n/a (pilot, 31-block integration) |
 | Galileo E5b-I | soft secondary CFAR | 8 blocks (2 × CS4) | `UInt32` (vestigial) | confidence 0.999 | 0 | 4 |
 | Galileo E5b-Q | soft secondary CFAR | 200 blocks (2 × CS100) | `UInt128` (vestigial) | confidence 0.999 | 0 | 100 (pilot) |
 | Galileo E6-B | trivial | n/a | `UInt8` (unused) | always | 0 | 1 |

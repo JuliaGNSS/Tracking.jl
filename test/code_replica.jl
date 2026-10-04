@@ -5,11 +5,9 @@ using Unitful: Hz
 using GNSSSignals: GPSL1CA, get_code
 using Tracking: gen_code_replica!, update_code_phase, get_current_code_frequency
 
-# GNSSSignals' embedded-LUT `gen_code!` (PR #90) may round a chip-boundary sample
-# differently from the per-chip `get_code` oracle — at most ~1 sample per code
-# period, and only where the code transitions. That sub-sample edge is irrelevant
-# to tracking, so assert the replica matches the oracle everywhere except such
-# boundary samples (which must coincide with a code transition).
+# GNSSSignals' LUT `gen_code!` (PR #90) may round up to ~1 chip-boundary sample per
+# period differently from the `get_code` oracle; irrelevant to tracking, so allow
+# mismatches only at code transitions.
 function agrees_except_chip_boundaries(gen, ref, samples_per_period)
     @assert length(gen) == length(ref)
     mism = findall(gen .!= ref)

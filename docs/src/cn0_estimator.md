@@ -278,22 +278,24 @@ A bit-aligned window does not have to span the whole bit, and it should not: the
 straddles a flip *and* none runs past the coherence time of the loop that
 produced the prompts. The longest flip-free window is not the best one — a longer
 coherent window buys only a little (the same `num_records` records are combined
-either way, so only their partition changes: at a true 25 dB-Hz, going from a
-5-record to a 20-record window buys 0.8 dB of spread), while decoherence over a
-long window costs a *bias*, the one error more averaging cannot remove.
+either way, so only their partition changes), while decoherence over a long
+window costs a *bias*, the one error more averaging cannot remove.
 
 The case that shows it is a satellite that fades **after** bit sync was found,
 which is the normal way a receiver reaches low C/N₀. Locked in at 45 dB-Hz, then
-faded to a true 25 dB-Hz, medians over 96 runs:
+faded to a true 25 dB-Hz, medians over 96 runs with the default FLL-assisted
+carrier loop:
 
 | coherent window       | reported C/N₀ | p10  | runs reading `-Inf` |
 |:--------------------- | -------------:| ----:| -------------------:|
-| 5 blocks (default)    | **23.6**      | 19.5 | 1 / 96              |
-| one full 20-block bit | 21.0          | 12.0 | 17 / 96             |
+| 5 blocks (default)    | **24.3**      | 21.5 | 0 / 96              |
+| one full 20-block bit | 21.5          | 9.5  | 8 / 96              |
 
-A whole-bit coherent sum reports "no signal" on a satellite that is being
-tracked. Raise `num_narrowband_code_blocks` for a pilot, a narrow carrier loop,
-or a signal that is never weak; lower it if the loop is noisier than the default.
+A whole-bit coherent sum can report "no signal" on a satellite that is being
+tracked. The plain [`ConventionalPLLAndDLL`](@ref) holds phase over the whole bit
+(24.7 dB-Hz, p10 22.6, no `-Inf`), whereas the FLL assist decoheres it. Raise
+`num_narrowband_code_blocks` for a plain PLL, a pilot, or a signal that is never
+weak; lower it if the loop is noisier than the default.
 
 ## Configuring the estimator
 

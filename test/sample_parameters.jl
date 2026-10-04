@@ -18,18 +18,14 @@ using Tracking:
     @test @inferred(calc_num_code_blocks_to_integrate(gpsl1, 20, true)) == 20
     @test @inferred(calc_num_code_blocks_to_integrate(gpsl1, 21, true)) == 20
 
-    # A preferred value that doesn't divide the 20 blocks per bit is clamped
-    # to the largest divisor below it — an integration that straddled a bit
-    # boundary would never emit a bit again (issue #128).
+    # A non-divisor of the 20 blocks per bit is clamped to the largest divisor
+    # below it, so no integration straddles a bit boundary (issue #128).
     @test @inferred(calc_num_code_blocks_to_integrate(gpsl1, 3, true)) == 2
     @test @inferred(calc_num_code_blocks_to_integrate(gpsl1, 7, true)) == 5
     @test @inferred(calc_num_code_blocks_to_integrate(gpsl1, 19, true)) == 10
 
-    # Pilot signals (data_frequency == 0) are capped by their secondary-code
-    # period once the secondary code has been found — not clamped to one
-    # block (issue #134; `set_preferred_num_code_blocks_to_integrate!` used
-    # to be a silent no-op for GPS L1C-P). The same divisor clamp as the
-    # data-bit path applies (1800 = 2³·3²·5², so 10 and 1800 are exact).
+    # Pilots are capped by the secondary-code period once it is found (issue #134),
+    # with the same divisor clamp (1800 = 2³·3²·5², so 10 and 1800 are exact).
     gpsl1c_p = GPSL1C_P()
     @test @inferred(calc_num_code_blocks_to_integrate(gpsl1c_p, 10, false)) == 1
     @test @inferred(calc_num_code_blocks_to_integrate(gpsl1c_p, 10, true)) == 10

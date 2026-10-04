@@ -16,10 +16,8 @@ using Tracking:
 rotl(x::T, r, N) where {T} =
     r == 0 ? x : ((x << r) | (x >> (N - r))) & ((one(T) << N) - one(T))
 
-# `GalileoE1C` (full CBOC) and `GalileoE1C_BOC11` (BOC(1,1) approximation)
-# share primary code, code length, code rate, CS25 secondary code, and band
-# — only the modulation differs — so all tracking-side traits behave
-# identically. Parameterise over both.
+# CBOC and its BOC(1,1) approximation differ only in modulation, so all
+# tracking-side traits must match.
 @testset "Galileo E1C ($(nameof(typeof(galileo_e1c))))" for galileo_e1c in (
     GalileoE1C(),
     GalileoE1C_BOC11(),
@@ -28,8 +26,7 @@ rotl(x::T, r, N) where {T} =
     N = get_secondary_code_length(galileo_e1c)  # 25 (CS25)
     @test N == 25
 
-    # E1C is the E1 pilot: no data, a 25-chip CS25 secondary code is the sync
-    # feature. Below one full period the detector returns `found = false`.
+    # Pilot; CS25 is the sync feature. No lock below one full period.
     @test @inferred(
         detect_bit_or_secondary_code_sync(galileo_e1c, prn, UInt32(0x0), N - 1)
     ).found == false
@@ -50,7 +47,7 @@ rotl(x::T, r, N) where {T} =
         @test res.polarity == -1
     end
 
-    # E1C shares the E1 modulation family with E1B → VeryEarlyPromptLate default.
+    # Same E1 modulation as E1B → VeryEarlyPromptLate.
     @test @inferred(get_default_correlator(galileo_e1c, NumAnts(1))) ==
           VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(1))
     @test @inferred(get_default_correlator(galileo_e1c, NumAnts(3))) ==
@@ -63,7 +60,6 @@ rotl(x::T, r, N) where {T} =
     # 25-block CS25 window fits in a UInt32.
     @test @inferred(get_code_block_buffer_type(galileo_e1c)) === UInt32
 
-    # CS25 (25 chips) is short enough for the soft, CFAR secondary-code detector.
     @test Tracking.uses_soft_secondary_code_detection(galileo_e1c) == true
 end
 

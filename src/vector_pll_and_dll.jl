@@ -119,15 +119,8 @@ The FLL-assisted `ThirdOrderAssistedBilinearLF` carrier filter is the
 default — with any non-assisted filter the navigation filter's
 `carrier_freq_update` has no input path into the carrier loop.
 
-Each bandwidth field is `Maybe{typeof(1.0Hz)}`: a `nothing` field (the
-default) means **auto** — [`init_estimator_state`](@ref) sizes the bandwidth
-per satellite from that sat's estimator-driver signal (`signals[1]`) via
-[`default_carrier_loop_filter_bandwidth`](@ref) /
-[`default_code_loop_filter_bandwidth`](@ref) — the same sizing as the
-conventional estimator, which the scalar fallback loop is. Like the
-conventional estimator, both bandwidths are capped at filter time against the
-record's actual integration time (see
-[`effective_carrier_loop_filter_bandwidth`](@ref)).
+Bandwidths (auto by default) are sized and capped exactly as for
+[`ConventionalPLLAndDLL`](@ref).
 """
 struct VectorPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter} <:
        AbstractDopplerEstimator
@@ -162,12 +155,10 @@ end
 $(SIGNATURES)
 
 Build the per-satellite estimator state stored in a [`TrackedSat`](@ref) for a
-satellite tracked under [`VectorPLLAndDLL`](@ref). Auto bandwidths (`nothing`
-on the estimator) are resolved here, per satellite, from the sat's
-estimator-driver signal (`signals[1]`).
-
-New satellites start with `vt_on = false` — the scalar fallback loop —
-until [`enable_vt!`](@ref) puts them into the vector loop.
+satellite tracked under [`VectorPLLAndDLL`](@ref). Auto bandwidths are resolved
+as for [`ConventionalPLLAndDLL`](@ref). New satellites start with
+`vt_on = false` (the scalar fallback loop) until [`enable_vt!`](@ref) puts them
+into the vector loop.
 """
 function init_estimator_state(
     estimator::VectorPLLAndDLL{CA,CO},
@@ -194,13 +185,10 @@ function init_estimator_state(
     )
 end
 
-# Re-seed hook used by `reset_loop_filters!`: zero the loop-filter
-# integrators, the discriminator accumulators, and the NCO corrections, and
-# re-seed the init Dopplers from the sat's current (converged) Dopplers.
-# The NCO corrections must be zeroed together with the init Dopplers: the
+# Re-seed hook used by `reset_loop_filters!`, as for the conventional estimator,
+# plus zeroing the discriminator accumulators and the NCO corrections: the
 # current Dopplers already contain the last correction, so keeping it would
-# apply it twice after the re-seed. Per-sat bandwidth overrides and the
-# `vt_on` flag survive the reset.
+# apply it twice. Bandwidths and `vt_on` survive the reset.
 function _reset_estimator_state(
     ::VectorPLLAndDLL,
     sat::TrackedSat{<:Tuple{Vararg{TrackedSignal}},<:SatVectorPLLAndDLL},
@@ -217,11 +205,9 @@ function _reset_estimator_state(
     )
 end
 
-# Carrier loop filtering with an explicit FLL-branch input: the raw FLL
-# discriminator in the scalar fallback, or the navigation filter's
-# `carrier_freq_update` under vector closure. Only the FLL-assisted filter
-# has an input path for it; any other filter runs on the PLL discriminator
-# alone (and the vector carrier closure degrades to PLL-only).
+# Carrier loop filtering with an explicit FLL-branch input (the raw FLL
+# discriminator, or the navigation filter's `carrier_freq_update` under vector
+# closure). Non-assisted filters ignore it and run PLL-only.
 function _filter_vector_carrier_loop(
     carrier_loop_filter::ThirdOrderAssistedBilinearLF,
     pll_discriminator,
@@ -247,21 +233,12 @@ function _filter_vector_carrier_loop(
     filter_loop(carrier_loop_filter, pll_discriminator, integration_time, loop_bandwidth)
 end
 
-# Process the estimator-driver signal (signals[1]) under vector tracking.
-# Mirrors the conventional driver fold (dispatching on the per-sat state type
-# plugs this into the shared `_update_tracked_sat_doppler`): fold over every
-# `CorrelatorOutput` collected during this chunk, threading the loop filters,
-# the FLL `previous_prompt`, and the discriminator accumulators across records,
-# then return the *last* record's carrier/code Doppler (the NCO is written once
-# per chunk). With no outputs the Doppler holds.
-#
-# The vector closure per record: while `vt_on`, the navigation filter's NCO
-# corrections drive the loops — `code_freq_update` directly (code loop filter
-# bypassed) and `carrier_freq_update` through the FLL branch of the carrier
-# loop filter (the PLL branch still runs on this satellite's own discriminator)
-# — and the raw DLL/FLL discriminator outputs are accumulated for the
-# navigation filter. With `vt_on` unset it is a conventional FLL-assisted
-# scalar PLL/DLL.
+# The vector counterpart of the conventional driver fold (see that method in
+# conventional_pll_and_dll.jl), additionally threading the discriminator
+# accumulators. While `vt_on`, the navigation filter's corrections replace the
+# code loop filter output and the FLL branch input (see `VectorPLLAndDLL`) and
+# the raw DLL/FLL discriminators are accumulated; otherwise it is the scalar
+# fallback.
 @inline function _process_estimator_driver_signal(
     tracked_signal::TrackedSignal,
     sat::TrackedSat,
@@ -286,12 +263,8 @@ end
     found_before_fold = has_bit_or_secondary_code_been_found(ts.bit_buffer)
     @inbounds for k in eachindex(outputs)
         output = outputs[k]
-        # FLL needs the previous record's filtered prompt; the first record of
-        # the chunk chains from the sat's carried-over
-        # `last_fully_integrated_filtered_prompt`. Read it off `ts` BEFORE the
-        # advance overwrites it.
+        # Read BEFORE the advance overwrites it (as in the conventional fold).
         previous_prompt = get_last_fully_integrated_filtered_prompt(ts)
-        # Per-record integration time — the block time, NOT the chunk time.
         integration_time = output.integrated_samples / sampling_frequency
         synced_earlier_in_fold =
             !found_before_fold && has_bit_or_secondary_code_been_found(ts.bit_buffer)
@@ -319,8 +292,7 @@ end
         pll_discriminator = pll_disc(signal, filtered_correlator)
         fll_discriminator =
             fll_disc(signal, filtered_correlator, previous_prompt, integration_time)
-        # `dll_disc` is fed the chunk-fixed `sat.code_doppler` — the code Doppler
-        # that generated this chunk's replicas — for every record.
+        # The chunk-fixed code Doppler, as in the conventional fold.
         dll_discriminator =
             dll_disc(signal, filtered_correlator, sat.code_doppler, sampling_frequency)
 
@@ -354,11 +326,8 @@ end
         )
     end
     empty!(outputs)
-    # Neither NCO-correction field (`code_freq_update` / `carrier_freq_update`)
-    # is written back: both are owned by the navigation filter (set via
-    # `set_code_freq_updates!` / `set_carrier_freq_updates!`) and read as this
-    # fold's inputs, so overwriting them with a per-record loop output would
-    # clobber the navigation filter's value between two of its calls.
+    # The NCO-correction fields are not written back: they are owned by the
+    # navigation filter, and overwriting them would clobber its value.
     new_doppler_estimator_state = SatVectorPLLAndDLL(
         pll_and_dll_state;
         carrier_loop_filter,
@@ -383,9 +352,7 @@ function estimate_dopplers_and_filter_prompt(
     track_state::TrackState{<:SignalGroups,<:VectorPLLAndDLL},
     sampling_frequencies::Union{BandMeasurements,NamedTuple,AbstractDict},
 )
-    # Detach the slot *values* (sharing the key set) then delegate to the
-    # in-place form — same key-sharing copy the conventional estimator uses;
-    # see its `estimate_dopplers_and_filter_prompt` for the rationale.
+    # See the conventional `estimate_dopplers_and_filter_prompt`.
     new_track_state =
         TrackState(track_state; groups = _copy_groups_slot_vectors(track_state.groups))
     estimate_dopplers_and_filter_prompt!(new_track_state, sampling_frequencies)
@@ -413,24 +380,15 @@ function estimate_dopplers_and_filter_prompt!(
     return track_state
 end
 
-# Shared in-place walker for the vector-tracking state managers below:
-# overwrite each satellite's `doppler_estimator_state` with the per-sat rule
-# `f(sat, sat.doppler_estimator_state, args...)`, threading each manager's own
-# arguments (`prns`, a freq-update table, …) through unchanged — the same
-# named-worker-plus-trailing-args pattern `_foreach_group!` uses. `f` must
-# return the same concrete `SatVectorPLLAndDLL` type (guaranteed by the
-# kwarg-update constructor).
+# Shared in-place walker for the vector-tracking state managers below: replace
+# each satellite's `doppler_estimator_state` with
+# `f(sat, sat.doppler_estimator_state, args...)`, which must return the same
+# concrete `SatVectorPLLAndDLL` type.
 #
-# Two entry points give the managers their two addressing forms:
-# `_map_vt_states!` walks every group; `_map_vt_states_in_group!` walks only the
-# addressed group (Symbol / Integer / Val). Keeping them as distinct names —
-# rather than one function overloaded on the group position — is what lets a
-# threaded `Symbol`/`Integer` argument not be mistaken for a group selector.
-# `Bool <: Integer` makes that a real hazard for the `vt_on` flag `enable_vt!` /
-# `disable_vt!` thread through, which is precisely why that flag never appears
-# in a public signature. The group-scoped form is what makes the managers usable
-# in a multi-constellation receiver, where PRNs alone are ambiguous (GPS PRN 5
-# and Galileo PRN 5 are different satellites in different groups).
+# `_map_vt_states!` walks every group, `_map_vt_states_in_group!` only the
+# addressed one. They are distinct names, not overloads on the group position,
+# so a threaded `Symbol`/`Integer` argument (including the `vt_on` Bool, since
+# `Bool <: Integer`) is never mistaken for a group selector.
 @inline function _map_vt_states!(
     f::F,
     track_state::TrackState{<:SignalGroups,<:VectorPLLAndDLL},
@@ -466,10 +424,7 @@ end
     return nothing
 end
 
-# The per-satellite membership rule shared by `enable_vt!` / `disable_vt!`:
-# write `vt_on` to the addressed PRNs, leave every other satellite as it is.
-# The flag is a plain field write, so re-issuing the same membership every
-# cycle is a no-op for satellites already in that state.
+# Shared by `enable_vt!` / `disable_vt!`: write `vt_on` to the addressed PRNs.
 _set_sat_vt_on(sat, state, vt_on, prns) =
     sat.prn in prns ? SatVectorPLLAndDLL(state; vt_on) : state
 
@@ -584,10 +539,8 @@ $(SIGNATURES)
 
 Mean DLL (code) discriminator accumulated on `state` since the last
 [`reset_code_discr_acc!`](@ref), in chips, or `nothing` if nothing has been
-accumulated yet (the `(count, sum)` accumulator's `count` is 0). This is the
-single place the accumulator's averaging convention lives — read it here
-rather than dividing `code_discr_acc` by hand, so a change to how the
-accumulator is stored can't silently diverge between consumers.
+accumulated yet (`count == 0`). Use this rather than dividing `code_discr_acc` by
+hand, so consumers do not depend on how the accumulator is stored.
 """
 function mean_code_discr(state::SatVectorPLLAndDLL)
     count, discr_sum = state.code_discr_acc
@@ -650,10 +603,8 @@ Feed the navigation filter's carrier-frequency NCO corrections back into the
 tracking loops. `carrier_freq_updates` maps PRN to the correction (anything
 indexable by PRN, e.g. a `Dictionary`) and must have an entry for every
 satellite in the vector loop; satellites with `vt_on` unset are skipped.
-Walks every group, or only `group` when one is given — the group-scoped form
-is required in a multi-constellation receiver, where each group carries its
-own corrections and PRNs collide across groups. Mutates `track_state` in
-place and returns it.
+Addressed like [`set_code_freq_updates!`](@ref). Mutates `track_state` in place
+and returns it.
 """
 function set_carrier_freq_updates!(
     track_state::TrackState{<:SignalGroups,<:VectorPLLAndDLL},

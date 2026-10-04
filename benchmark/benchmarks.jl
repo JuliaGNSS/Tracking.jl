@@ -14,11 +14,9 @@ using Tracking:
     BitBuffer
 using StaticArrays
 
-# GNSSSignals v1 → v2 signal-name shims. AirspeedVelocity uses HEAD's
-# `benchmark/benchmarks.jl` to bench *every* rev (via `--bench-on`), so
-# this file must work against both v1 (loaded for master's Tracking
-# 1.5.0) and v2 (loaded for HEAD's Tracking 2.0.0). Alias the v2 names
-# to v1's symbols when v2 isn't loaded.
+# AirspeedVelocity benches every rev with HEAD's copy of this file (`--bench-on`),
+# so it must load against every Tracking/GNSSSignals version in use; the shims
+# below detect the loaded API. GNSSSignals v1 → v2 signal names:
 const GPSL1CA =
     isdefined(GNSSSignals, :GPSL1CA) ? getfield(GNSSSignals, :GPSL1CA) :
     getfield(GNSSSignals, :GPSL1)
@@ -31,13 +29,8 @@ const GPSL5I =
 # Detect the era so this script builds against both (AirspeedVelocity diffs revs).
 _code_buf_type(sig) = isdefined(GNSSSignals, :code_engine) ? Int8 : get_code_type(sig)
 
-# Branch-portable per-system storage construction. Three flavours coexist:
-#   * Master:           `SystemSatsState(sys, ::Vector{SatState})`
-#   * Wrapper branch:   `TrackedSystem(estimator, sys, ::Vector{SatState})`
-#   * Multi-signal:     plain `Dictionary{Int, TrackedSat}` (no per-system
-#                       container struct at all)
-# Detect at load time so the script runs unchanged across all three via
-# AirspeedVelocity's `--bench-on=$HEAD_SHA`.
+# Per-system storage: `SystemSatsState` (master), `TrackedSystem` (wrapper branch),
+# or a plain `Dictionary{Int, TrackedSat}` (multi-signal).
 const _HAS_TRACKED_SIGNAL = isdefined(Tracking, :TrackedSignal)
 const _HAS_TRACKED_SAT = isdefined(Tracking, :TrackedSat)
 const _HAS_SAT_STATE = isdefined(Tracking, :SatState)
@@ -48,15 +41,9 @@ if !_HAS_TRACKED_SIGNAL
         Tracking.SystemSatsState
 end
 
-# Field / property name on `TrackState` for the per-system tuple.
-# Three flavours of branch coexist:
-#   * Master:                       real field `multiple_system_sats_state`
-#   * Wrapper branch:               real field `satellites`
-#   * Multi-band branch (current):  real field `groups`, where each entry is a
-#                                   `SignalGroup` bundling a `satellites` dict
-#                                   (plus band / signals / num_ants).
-# On the multi-band branch the bench needs a NamedTuple-of-dicts shape — derive
-# it inline from `groups` and rebuild via fresh `SignalGroup`s after the map.
+# `TrackState` field for the per-system tuple: `multiple_system_sats_state`
+# (master), `satellites` (wrapper branch), or `groups` of `SignalGroup`s
+# (multi-band), which is mapped to and from a NamedTuple of dicts.
 const _MULTIBAND = _HAS_TRACKED_SIGNAL
 const _SYSTEMS_FIELD =
     _MULTIBAND ? :groups :
@@ -77,15 +64,9 @@ const _SYSTEMS_FIELD =
     end
 end
 
-# Branch-portable per-sat construction. Returns an object suitable for
-# whatever the loaded Tracking expects in its per-system storage:
-#   * Master / wrapper branch: a `SatState`.
-#   * Multi-signal branch: a `TrackedSat` (with one TrackedSignal inside,
-#     and the doppler_estimator_state already seeded).
-# `cn0_estimator = nothing` leaves the package default in place, which is what
-# every caller but `bench_downconvert_and_correlate` wants. Forwarded through a
-# splat rather than a positional default so that revisions whose sat constructor
-# has no `cn0_estimator` keyword still see the exact call they saw before.
+# Per-sat construction: a `SatState` (master / wrapper branch) or a seeded
+# `TrackedSat` (multi-signal). `cn0_estimator = nothing` keeps the package
+# default and is splatted away, so revisions without that keyword still work.
 function _make_initial_sat(
     sys,
     prn,
@@ -177,8 +158,7 @@ end
 
 # ── Branch-portable constructors ──────────────────────────────────────────
 # Tracking ≥ 2.0 dropped the `Val{MESF}` arg from `CPUDownconvertAndCorrelator`,
-# `CPUThreadedDownconvertAndCorrelator`, and `gen_code_replica!`. Detect at
-# load time and dispatch.
+# `CPUThreadedDownconvertAndCorrelator`, and `gen_code_replica!`.
 
 const _NEEDS_VAL = !applicable(Tracking.CPUDownconvertAndCorrelator)
 
@@ -231,27 +211,12 @@ end
 
 # ── High-level downconvert_and_correlate (one PRN's pipeline) ──────────────
 #
-# What this group measures is the per-satellite pipeline — quantise,
-# downconvert, despread, accumulate — for ONE PRN, one step above the raw
-# `fused kernel` rows and one step below the end-to-end `track` rows. That is the
-# only reason it is worth a row of its own, and it only stays comparable against
-# `fused kernel/*` if nothing else rides along.
-#
-# So the satellite is built with a C/N₀ estimator that reads no noise density.
-# `downconvert_and_correlate!` also runs the per-signal noise measurement, and
-# with the default `NoiseRefCN0Estimator` a `CorrelatorNoiseEstimator` is
-# provisioned and the reference is despread on every call — a whole second
-# correlator channel inside the measured region, which roughly DOUBLED these
-# rows and left a future regression in the correlate path showing at half size.
-# The noise reference's own cost is measured by the `noise estimation` group, and
-# its cost in context by the `track` rows; it does not belong here as well.
-#
-# `MomentsCN0Estimator(N)` is the vehicle because it has the same signature on
-# every revision benchpkg runs this script against, so base and head build the
-# same state with no `isdefined` branch. Any estimator with
-# `requires_noise_density == false` would do — the estimator is never *invoked*
-# here, since C/N₀ is updated in the Doppler fold and not in this function. It is
-# named only to keep `TrackState` from provisioning a noise source.
+# The per-satellite pipeline (quantise, downconvert, despread, accumulate) for one
+# PRN, between the `fused kernel` and `track` rows. The sat uses
+# `MomentsCN0Estimator` (same signature on every rev) so no noise reference is
+# provisioned: the default `NoiseRefCN0Estimator` would despread a second
+# correlator channel here, roughly doubling these rows. That cost is measured by
+# the `noise estimation` group and the `track` rows.
 function bench_downconvert_and_correlate(;
     signal_type = Float32,
     num_samples = 2000,
@@ -277,22 +242,15 @@ function bench_downconvert_and_correlate(;
         num_ants == 1 ? rand(Complex{signal_type}, num_samples) :
         rand(Complex{signal_type}, num_samples, num_ants)
 
-    # Multi-band branch uses `BandMeasurement(samples, fs, if)` (named
-    # `Measurement` before the issue-#132 rename). The
-    # coherent-integration length used to be a trailing argument
-    # (`downconvert_and_correlate(dc, measurements, ts, prefer)`) but moved
-    # to a per-signal `TrackedSignal` field, leaving a 3-arg call. Pick the
-    # name and arity that exist so the script benches both shapes across revs.
-    # Master / wrapper branches use the legacy 6-arg form.
+    # Measurement type (`BandMeasurement`, `Measurement` before #132) and call
+    # arity (3-arg, or 4-arg with a trailing integration length) differ by rev;
+    # master / wrapper branches use the legacy 6-arg form.
     @static if isdefined(Tracking, :BandMeasurement) || isdefined(Tracking, :Measurement)
         measurement_type =
             isdefined(Tracking, :BandMeasurement) ? Tracking.BandMeasurement :
             Tracking.Measurement
-        # Measurement NamedTuple key = the running revision's band id. benchpkg
-        # runs HEAD's script against every rev, and the key spelling is a
-        # breaking change: Tracking ≤ 2.3 keyed by its own `Tracking.band_key`
-        # (`:l1`), HEAD keys by `GNSSSignals.get_band_id` (`:L1`). Derive it from
-        # whichever accessor the loaded Tracking has so both revs resolve.
+        # Band key: `Tracking.band_key` (`:l1`, Tracking ≤ 2.3) or
+        # `GNSSSignals.get_band_id` (`:L1`).
         band = get_band(gnss_signal)
         @static if isdefined(Tracking, :band_key)
             band_id = Tracking.band_key(band)
@@ -344,10 +302,8 @@ function bench_fused_kernel(;
 )
     s = setup_benchmark(; signal_type, num_samples, num_ants)
     sample_shifts = shifts == :static ? s.static_shifts : s.dynamic_shifts
-    # The dynamic-shifts fallback now requires caller-supplied SoA tile
-    # buffers (`tile_re`/`tile_im`). Master's signature is the old 9-arg
-    # form (Bumper allocates the tiles inside the kernel); the new
-    # branch requires 11 args. Detect via `hasmethod`.
+    # Dynamic shifts: newer revs take caller-supplied SoA tile buffers (11 args);
+    # master uses the 9-arg form.
     static_arg_types = Tuple{
         typeof(s.correlator),
         typeof(s.signal),
@@ -449,8 +405,7 @@ function bench_track(;
 end
 SUITE["track"]["GPS L1CA, 1 sat, 2K @ 5 MHz – out-of-place, Float32"] = bench_track()
 
-# In-place track! (only on branches that define it). Mirrors bench_track so
-# the comparison report shows them side by side.
+# In-place track! (only on branches that define it).
 function bench_track_inplace(;
     signal_type = Float32,
     num_samples = 2000,
@@ -483,11 +438,7 @@ if isdefined(Tracking, :downconvert_and_correlate_fused!)
 end
 
 # ── Tuple-kernel microbenchmark (multi-signal tile-share path) ─────────
-# Exercises `downconvert_and_correlate_fused_tuple!` directly: one
-# downconvert into the SoA tile, one sample-outer correlate pass over
-# all N×NC accumulators. Covers single-antenna (the existing hot path
-# for multi-signal-per-sat) and multi-antenna (the extended path), so a
-# PR comparison surfaces regressions on either side.
+# `downconvert_and_correlate_fused_tuple!` directly, single- and multi-antenna.
 function bench_fused_tuple_kernel(;
     signal_type = Float32,
     num_samples = 2000,
@@ -564,24 +515,11 @@ end
 
 # ── Per-system multi-satellite track / track! benchmarks ─────────────────
 #
-# These exercise the full tracking pipeline (downconvert + correlate +
-# doppler estimator) on realistic per-system workloads, with
-# `bit_buffer.found = true` so the doppler estimator's post-bit-edge
-# code path is hit. Four variants are registered per system: the
-# {immutable, in-place} × {single-threaded, threaded} cross product.
-# The same setup pipeline feeds all four; the only differences between
-# entries are the `Tracking.track` vs `Tracking.track!` call and the
-# choice of CPU backend.
-#
-# The `track!` variants are gated on `isdefined(Tracking, :track!)` so
-# the script also loads cleanly against master (which has neither
-# `track!` nor `CPUThreadedDownconvertAndCorrelator()` zero-arg form).
+# Full pipeline on realistic per-system workloads, with `bit_buffer.found = true`
+# so the post-bit-edge path is hit. Variants: {out-of-place, in-place} ×
+# {single-threaded, threaded}; `track!` rows are gated on `isdefined`.
 
-# Branch-portable per-system container construction. Master accepts a raw
-# `Vector{SatState}` via `SystemSatsState(sys, sats)`; the wrapper branch
-# needs an estimator to wrap each sat into a `TrackedSat` first via
-# `TrackedSystem(estimator, sys, sats)`; the multi-signal branch stores a
-# plain `Dictionary{Int, TrackedSat}` directly.
+# Per-system container; see the storage-flavour note at the top.
 function _build_tracked_system(sys, sats)
     if _HAS_TRACKED_SIGNAL
         return Tracking.to_dictionary(sats)
@@ -592,24 +530,14 @@ function _build_tracked_system(sys, sats)
     end
 end
 
-# Branch-portable "set bit_buffer.found = true" on whatever the dict holds.
-# Master holds SatState directly; the wrapper branch holds TrackedSat that
-# itself holds SatState; the multi-signal branch holds flat TrackedSat with
-# the bit_buffer on `signals[1]`.
-#
-# BitBuffer has five historical layouts:
-#   1. Non-parametric, 7 fields (master + early multi-signal commits).
-#   2. Parametric `BitBuffer{B<:Unsigned}`, still 7 fields (Step 1 of the
-#      sync-detection redesign).
-#   3. Parametric, 9 fields with `secondary_phase::Int` and `polarity::Int8`
-#      inserted between `found` and `buffer` (Step 4 of the redesign).
-#   4. Parametric, 10 fields with a trailing `soft_bits::Vector{Float32}`.
-#   5. Parametric, 11 fields with a further trailing
-#      `phase_acc::PhaseAccumulators` (soft-decision L1CA bit-edge
-#      detector, issue #124).
-#   6. Parametric, 9 fields: the hard-bit `buffer::UInt128` / `length::Int`
-#      pair is gone, soft bits being the single store.
-# Detect at load time via `hasfield`.
+# Branch-portable "set bit_buffer.found = true" (on `signals[1]` for the
+# multi-signal branch). BitBuffer layouts across revs, detected via `hasfield`:
+#   1. Non-parametric, 7 fields.
+#   2. Parametric `BitBuffer{B<:Unsigned}`, 7 fields.
+#   3. + `secondary_phase`, `polarity` after `found` (9 fields).
+#   4. + trailing `soft_bits` (10).
+#   5. + trailing `phase_acc` (11, issue #124).
+#   6. Hard-bit `buffer` / `length` pair removed (9).
 const _HAS_PARAMETRIC_BITBUFFER = _HAS_TRACKED_SIGNAL && Tracking.BitBuffer isa UnionAll
 const _HAS_BITBUFFER_PHASE_FIELDS =
     _HAS_PARAMETRIC_BITBUFFER && hasfield(Tracking.BitBuffer, :secondary_phase)
@@ -617,14 +545,10 @@ const _HAS_BITBUFFER_SOFT_BITS =
     _HAS_PARAMETRIC_BITBUFFER && hasfield(Tracking.BitBuffer, :soft_bits)
 const _HAS_BITBUFFER_PHASE_ACC =
     _HAS_PARAMETRIC_BITBUFFER && hasfield(Tracking.BitBuffer, :phase_acc)
-# Layout 6 drops the packed hard-bit pair; `soft_bits` is the only store.
 const _HAS_BITBUFFER_HARD_BITS =
     _HAS_PARAMETRIC_BITBUFFER && hasfield(Tracking.BitBuffer, :buffer)
 
-# Rebuild a `found = true` BitBuffer matching the existing buffer's
-# layout. On parametric branches we pull `B` off the live buffer; on the
-# non-parametric branch the type is just `BitBuffer` and the integer
-# fields default to `UInt128`.
+# Rebuild a `found = true` BitBuffer in the live buffer's layout (and `B`).
 if _HAS_BITBUFFER_PHASE_ACC && !_HAS_BITBUFFER_HARD_BITS
     _bb_int_type(::Tracking.BitBuffer{B}) where {B<:Unsigned} = B
     @inline _make_found_bit_buffer(old_bb) = typeof(old_bb)(
@@ -753,10 +677,7 @@ function _make_multi_sat_state(;
     _make_track_state(all_sss), rand(ComplexF32, nsamp), total_sats
 end
 
-# Branch-portable `TrackState(...)` from a list of per-system / per-group
-# storage entries. The multi-band branch's `SignalGroups` type parameter
-# requires a `NamedTuple` (not a plain `Tuple`), so build one with
-# auto-generated keys. Master / wrapper branches accept either.
+# `TrackState` from per-system storage; the multi-band branch needs a NamedTuple.
 if _HAS_TRACKED_SIGNAL
     @inline function _make_track_state(all_sss)
         n = length(all_sss)
@@ -767,16 +688,11 @@ else
     @inline _make_track_state(all_sss) = TrackState(Tuple(all_sss))
 end
 
-# Build a `TrackState` for the given system mix with `bit_buffer.found = true`
-# on every sat, ready to feed `track` / `track!` for steady-state-style
-# benchmarks.
+# `TrackState` for the given system mix with `bit_buffer.found = true` on every sat.
 function _make_steady_state_track_state(; systems, nsats_list, nsamp, prn_max, code_dop)
     ts, signal, _ = _make_multi_sat_state(; systems, nsats_list, nsamp, prn_max, code_dop)
-    # Pre-multi-signal branches share a single found-true `BitBuffer`
-    # across sats; the multi-signal branch builds a per-signal-typed one
-    # inside `_with_found_bit_buffer` (parametric `B` per signal). Pass a
-    # plain non-parametric template for the older branches and `nothing`
-    # for the new one (the new path ignores its second argument).
+    # Older branches share one found-true template; parametric ones build their
+    # own in `_with_found_bit_buffer` and ignore it.
     found_bb =
         _HAS_PARAMETRIC_BITBUFFER ? nothing :
         BitBuffer(UInt128(0), 20, true, UInt128(0), 0, complex(0.0, 0.0), 0)
@@ -821,55 +737,17 @@ function bench_track_steady_state(
     end
 end
 
-# Three per-system workloads exercised across four entry-point variants
-# (out-of-place / in-place × single-threaded / threaded).
-#
 # Naming convention for every leaf under the "track" group:
 #
 #   <constellation>, <Nsats> sats[, <extra>], <Nsamp> @ <rate> – <variant>
 #
-# where `<variant>` is `out-of-place` (`track`, returns a new state) or
-# `in-place` (`track!`), then the backend (`Float32` / `Int16` / `OneBit` /
-# `TwoBit`), then `, threaded` on the rows that are. Both entry points are named
-# rather than leaving `track`'s rows bare: an unsuffixed row reads as "the
-# default" instead of "the other variant", which is the ambiguity the suffix is
-# there to remove in the first place.
-#
-# The **backend is always named**, `Float32` included, for the same reason one
-# level down: it has four values and no reading of a bare label says which one a
-# row measured, so "the default" is knowledge the label was relying on the reader
-# already having. Threading stays marked only when on — there the pair is a
-# binary, both halves of it sit adjacent in the table, and an unmarked row
-# genuinely does read as "the other one".
-#
-# The scenario carries the satellite count, the sample count and the sampling
-# rate, because the comparison table is read by people who have not opened this
-# file — "8 sats" is the number that explains why one row moved 1.1× and another
-# 2×.
-#
-# No numeric prefixes. The table sorts leaves alphabetically on the "/"-joined
-# path, so the scenario text alone has to produce a sensible order — which it
-# does: the constellation groups the rows, the variant suffix keeps each
-# scenario's variants adjacent, and the bit-sync block counts sort 2 / 20 / 200
-# because " " precedes "0". Numbering added nothing the text does not, drifted
-# out of order as cases were added (two different cases both called themselves
-# "7."), and read as a rank rather than as an index.
-#
-# Naming the backend also fixes the sort: `– in-place, threaded` used to land
-# *after* `– in-place, TwoBit` (lowercase `t` sorts above the uppercase backend
-# names), so a scenario's Float32 pair was split by three other backends. As
-# `– in-place, Float32` / `– in-place, Float32, threaded` they lead the group and
-# stay adjacent.
-#
-# The one place a lexicographic sort still reads oddly is sample counts of
-# different digit lengths: "500K" precedes "5K", so the 8-sat rows list the long
-# buffer first. Left as is — the rows that must be adjacent to be compared (a
-# scenario's variants, and a backend against its Float32 sibling) are, and
-# zero-padding the counts to fix the rest would cost more legibility than it buys.
-#
-# Master only registers the out-of-place variants (no `track!`); the threaded
-# suffix is also master-compatible since the underlying
-# `CPUThreadedDownconvertAndCorrelator` exists in both.
+# where `<variant>` is `out-of-place` (`track`) or `in-place` (`track!`), then the
+# backend (`Float32` / `Int16` / `OneBit` / `TwoBit`, always named), then
+# `, threaded` on the rows that are. The scenario carries sat count, sample count
+# and rate because the comparison table is read without this file. No numeric
+# prefixes: the table sorts leaves alphabetically on the "/"-joined path, and this
+# text keeps each scenario's variants (and a backend's Float32 sibling) adjacent.
+# ("500K" sorts before "5K"; left as is.)
 const _TRACK_BENCH_CASES = let gpsl1 = GPSL1CA(), gal = GalileoE1B()
     [
         (
@@ -915,19 +793,8 @@ for (key, kw) in _TRACK_BENCH_CASES
 end
 
 # ── Multi-signal-per-sat track benchmark ─────────────────────────────────
-# Measures track cost as N signals stack on a single satellite (the new
-# multi-signal hot path). Only registered when TrackedSignal is available.
-#
-# Step 3 ships the fused-N-times baseline: one independent
-# `downconvert_and_correlate_fused!` call per signal in the sat's
-# `signals` tuple. Linear scaling with N. Step 4 will add a tile-share
-# kernel that does one downconvert + N correlate-from-tile passes,
-# expected to save ~20% at N=2 and ~38% at N=3 — see the design doc and
-# the microbenchmark probes in `claude_scratch/`.
-#
-# Stacking N copies of GPSL1CA on one sat is not a real-world scenario
-# (a real sat carries one signal of each kind), but it isolates the
-# tuple-walk cost on identical N for a clean per-signal-cost comparison.
+# Track cost as N signals stack on one satellite. N identical GPSL1CA copies are
+# not realistic but isolate the per-signal cost of the tuple walk.
 if _HAS_TRACKED_SIGNAL
     function _make_multi_signal_track_state(; n_signals, nsamp, sfreq)
         gpsl1 = GPSL1CA()
@@ -942,10 +809,7 @@ if _HAS_TRACKED_SIGNAL
             n_signals,
         )
         carrier_doppler = 1000.0Hz
-        # Prefer the public multi-signal `TrackedSat((sigs...), prn, ...)`
-        # constructor (added in #133); fall back to the hand-rolled
-        # bare-sat → init_estimator_state → rebuild build on revisions that
-        # predate it, so this script still benchmarks the baseline.
+        # Public tuple constructor (#133), or a hand-rolled build on older revs.
         sat =
             if hasmethod(
                 Tracking.TrackedSat,
@@ -989,8 +853,7 @@ if _HAS_TRACKED_SIGNAL
     end
 
     for n_signals = 1:3
-        # One satellite carrying N stacked signals — the sat count is 1 and the
-        # thing being swept is signals-per-sat, so the label says both.
+        # Sweeps signals per sat, so the label carries both counts.
         prefix = "GPS L1CA, 1 sat, $n_signals signal$(n_signals == 1 ? "" : "s"), 5K @ 5 MHz"
         ts, signal =
             _make_multi_signal_track_state(; n_signals, nsamp = 5000, sfreq = 5e6Hz)
@@ -1016,35 +879,14 @@ if _HAS_TRACKED_SIGNAL
 end
 
 # ── Multi-code-period allocation guard (track!) ───────────────────────────────
-# `track!`'s inner loop runs once per coherent integration, so a signal spanning
-# many primary-code blocks iterates it many times. The steady-state contract is
-# that `track!` allocates only on its FIRST call (one-time buffer seating) and is
-# per-iteration allocation-free thereafter — so `memory` (in the memory table)
-# must stay flat as the block count grows. A per-iteration allocation — e.g. a
-# closure-capture `Core.Box` / boxed `SyncResult` on the pre-sync bit-edge search
-# path — instead makes `memory` scale with the block count. Registering a short
-# and a long length side by side turns that scaling into a visible jump: with the
-# leak, `20 blk` allocates ~10× the per-iteration bytes of `2 blk`; without it,
-# both sit at the same one-time-seed floor.
-#
-# The presync lengths run out to 200 blocks because the CFAR detector scores
-# nothing — and so never evaluates its Student-t threshold — until
-# `num_blocks ≥ 2 * blocks_per_bit` = 40: a leak in the scoring path is
-# invisible at 2 and 20 blocks. An allocating `beta_inc_inv` in that threshold
-# is exactly how one slipped through once. `test/track_in_place.jl`'s pre-sync
-# guard makes the same point as a hard assertion; see the comment there for the
-# `dof` ranges each length sweeps.
-#
-# Two states per length: `presync` (bit not yet found — exercises the
-# per-code-block bit-edge search every iteration, the path that regressed) and
-# `synced` (`bit_buffer.found = true` — the post-sync steady state). To measure
-# the STEADY-STATE (not the one-time-seed) allocation, `setup` builds a fresh
-# state AND warms it with one `track!` call, so the *measured* call is the second
-# call on that state — cold-call buffer seating is already done, and a warm call
-# must be allocation-free at any length. `evals = 1` pins one measured call per
-# sample; with the fresh+warm state rebuilt every sample, tracking these random
-# samples can't drift the loop filter to a NaN across evals (same reasoning as
-# the Int16-vs-Float32 rows above).
+# A warm `track!` must be allocation-free per iteration, so `memory` must stay flat
+# as the block count grows; a per-iteration leak shows as a jump between lengths.
+# Pre-sync runs to 200 blocks because the CFAR detector only scores (and evaluates
+# its Student-t threshold) from `2 * blocks_per_bit` = 40 blocks; the hard
+# assertion is the pre-sync guard in test/track_in_place.jl. `setup` builds a fresh
+# state and warms it with one call, so the measured call is the second; with
+# `evals = 1` every measured call gets a fresh state, which keeps the loop filter
+# from drifting to NaN (see the Int16 rows).
 if _HAS_TRACKED_SIGNAL && isdefined(Tracking, :track!)
     let sfreq = 5e6Hz, gpsl1 = GPSL1CA()
         samples_per_block = 5000               # 1 ms GPS L1CA code period @ 5 MHz
@@ -1066,8 +908,7 @@ if _HAS_TRACKED_SIGNAL && isdefined(Tracking, :track!)
                 ),
                 evals = 1,
             )
-            # The synced rows stay short: post-sync there is no per-block search
-            # to leak from, so the extra length would only cost runtime.
+            # Post-sync there is no per-block search to leak from.
             n_blocks == 200 && continue
             SUITE["track"]["GPS L1CA, 1 sat, bit sync found, $(n_blocks) blk @ 5 MHz – in-place, Float32"] = @benchmarkable(
                 Tracking.track!($sig, ts, $sfreq; downconvert_and_correlator = $dc),
@@ -1090,16 +931,10 @@ if _HAS_TRACKED_SIGNAL && isdefined(Tracking, :track!)
 end
 
 # ── Int16 vs Float32 backend, full track! ─────────────────────────────────────
-# Head-to-head of the Float32 default (CPUThreadedDownconvertAndCorrelator) and
-# the integer Complex{Int16} backend (Int16ThreadedDownconvertAndCorrelator)
-# through the full `track!` pipeline, on the SAME Complex{Int16} (12-bit ADC)
-# capture so the comparison is apples-to-apples. Both accept Complex{Int16}: the
-# Float32 path widens to Float32; the integer path requires it (and is the point
-# of the backend). Threaded — the real-time default. Each case registers
-# "Float32" and "Int16" under `track! Int16 vs Float32/<case>` so the benchmark
-# comment can pair them into one Int16-vs-Float32 speedup row. Only registered on
-# branches with the Int16 backend (skipped against master so AirspeedVelocity can
-# still diff).
+# Threaded backends through the full `track!` on the same Complex{Int16} (12-bit
+# ADC) capture. Each case registers sibling leaves under
+# `track! Int16 vs Float32/<case>`, which the benchmark comment pairs into
+# speedup rows.
 if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
     # Random 12-bit-ADC samples. The kernel's run time is content-independent, but
     # the magnitude must stay within the ±2^11 range the Int16 carrier wipe assumes.
@@ -1108,10 +943,7 @@ if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
         complex.(rand((-lim):(lim-one(Int16)), nsamp), rand((-lim):(lim-one(Int16)), nsamp))
     end
 
-    # Branch-portable Int16 backend construction. `max_meas` (the front end's
-    # full-scale) became a required positional argument; older Tracking took it
-    # only as a keyword with a default. AirspeedVelocity benches HEAD's suite
-    # against every rev, so dispatch on which signature the loaded Tracking has.
+    # `max_meas` is positional now; older revs took it as a keyword.
     _make_int16_threaded_dc(max_meas) =
         applicable(Tracking.Int16ThreadedDownconvertAndCorrelator, max_meas) ?
         Tracking.Int16ThreadedDownconvertAndCorrelator(max_meas) :
@@ -1121,20 +953,10 @@ if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
         Tracking.Int16DownconvertAndCorrelator(max_meas) :
         Tracking.Int16DownconvertAndCorrelator(; max_meas)
 
-    # Self-explanatory scenario names (system · sat count · sampling rate). NO
-    # "/" in a name — the benchmark-table script keys leaves by "/"-joined path,
-    # so a slash would be read as an extra nesting level. Each scenario registers
-    # a "Float32" and an "Int16" leaf under the same parent, so they sort
-    # adjacently and the table pairs them into one Int16-vs-Float32 speedup row.
-    # Phase/Doppler-matched 8-PRN GPS L1CA composite capture for the long-buffer
-    # scenario below. The 1 ms scenarios can use pure noise because `setup`
-    # rebuilds a fresh state per call — but one 100 ms call runs ~100 loop
-    # updates back-to-back, and over noise the filters can drift to a NaN
-    # Doppler (InexactError on the next sample-count round) WITHIN the call.
-    # Track a real signal matching `_make_multi_sat_state`'s per-sat pattern
-    # (PRN i, code phase 10.5 + 0.1i, Doppler (1000 + 10i) Hz) so the loops
-    # stay locked. Amplitude 64/sat + noise σ=32 stays well inside the ±2048
-    # full-scale the Int16 carrier wipe assumes.
+    # Scenario names must not contain "/" (the table script nests on it).
+    # 8-PRN GPS L1CA capture matching `_make_multi_sat_state`'s per-sat pattern, for
+    # the 100 ms case: its ~100 loop updates in one call would drift to a NaN
+    # Doppler over pure noise. Amplitudes stay well inside ±2048.
     function _l1ca_composite_capture(nsamp, sfreq)
         sys = GPSL1CA()
         fsn = sfreq / Hz
@@ -1155,10 +977,8 @@ if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
         complex.(round.(Int16, real.(acc)), round.(Int16, imag.(acc)))
     end
 
-    # The 100 ms case spans ~100 integration steps in ONE track! call: it is the
-    # post-processing-style workload where the bit backends' shared band pack
-    # must be built once per call, not once per step — a per-step repack is
-    # invisible at 1 ms (one step = one pack either way) but dominates here.
+    # The 100 ms case catches a per-step (instead of per-call) band repack in the
+    # bit backends, invisible at 1 ms.
     for (name, systems, nsats_list, sfreq, nsamp, prn_max, capture) in (
         ("GPS L1CA, 8 sats @ 5 MHz", (GPSL1CA(),), [8], 5e6Hz, 5000, 32, _int16_capture),
         (
@@ -1186,14 +1006,9 @@ if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
         # max_meas = 2^11 matches the ±2048 full-scale of `_int16_capture` above.
         dc_i = _make_int16_threaded_dc(2^11)
         g = SUITE["track! Int16 vs Float32"][name]
-        # `track!` mutates its state, and tracking these random (non-signal) samples
-        # drifts the loop filter — after enough iterations to a NaN doppler, which then
-        # throws `InexactError` when the next iteration rounds a sample count. `tune!`/
-        # `run` call the kernel hundreds of times, and the fast backends run the most, so
-        # a plain reuse-and-mutate benchmark diverges nondeterministically. Rebuild a
-        # fresh steady-state (`bit_buffer.found = true`) state per sample via `setup` and
-        # pin `evals = 1`: every measured call then starts from the same valid state and
-        # runs exactly once. `setup` isn't timed, so the reported min time is unaffected.
+        # Tracking random samples drifts the loop filter to a NaN Doppler
+        # (`InexactError`) over many evals, so `setup` rebuilds a fresh synced state
+        # per sample and `evals = 1` runs each measured call once.
         g["Float32"] = @benchmarkable(
             Tracking.track!($sig16, ts, $sfreq; downconvert_and_correlator = $dc_f),
             setup = (
@@ -1269,21 +1084,11 @@ if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
 end
 
 # ── Backend axes: multi-signal / multi-antenna / dynamic taps ─────────────────
-# More Float32 / Int16 / OneBit head-to-head rows, over the three axes the backends
-# generalise over — a satellite carrying several signals on one carrier (tile-share),
-# several antennas, and a runtime (dynamic) correlator tap count. Registered under the
-# SAME `INT16_GROUP` ("track! Int16 vs Float32") the `track!` scenarios use, so
-# `bench_table.jl` pairs each scenario into one head-to-head row (Float32 / backend > 1
-# ⇒ that backend is faster) with the base branch's existing table script — the
-# benchmark workflow runs `bench_table.jl` from the (trusted) base ref, so a NEW table
-# group would not be rendered until that script also lands on the base.
-#
-# These rows time the shared `downconvert_and_correlate` (not `track!`): multi-signal
-# and multi-antenna go through the uniform pipeline for all three backends. Dynamic
-# (runtime `AbstractVector`) tap counts are NOT reachable through the pipeline (EPL/VEPL
-# correlators only ever hand the kernel `SVector` shifts), so that row times the kernel
-# fallback directly — Float32 fused, Int16 hybrid-blocked, and the one-bit dynamic
-# fallback — all three backends. Only registered when all three backends exist.
+# Head-to-head rows over multi-signal, multi-antenna and dynamic tap counts, under
+# the existing `INT16_GROUP` because the workflow runs the base ref's
+# `bench_table.jl`, which would not render a new group. Multi-signal / multi-antenna
+# time `downconvert_and_correlate`; dynamic taps are unreachable through the pipeline
+# (correlators pass `SVector` shifts), so that row times the kernel fallbacks.
 if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
    isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
     const _AXES_SIG = GPSL1CA()
@@ -1313,9 +1118,7 @@ if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
         [_make_initial_sat(_AXES_SIG, 1, 10.5, 1000.0Hz; num_ants = NumAnts(num_ants))],
     )
 
-    # This block only registers when the one-bit backend exists (HEAD rev), which is
-    # the `GNSSSignals.get_band_id` era — key the measurement by it (`:L1`), not the
-    # old lowercase `Tracking.band_key` (`:l1`).
+    # Revs with the one-bit backend key bands by `GNSSSignals.get_band_id` (`:L1`).
     _axes_dc(dc, cap, ts) =
         let meas = NamedTuple{(get_band_id(_AXES_SIG),)}((
                 Tracking.BandMeasurement(cap, _AXES_FS, 0.0Hz),
@@ -1465,22 +1268,13 @@ if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
 end
 
 # ── Int16 / OneBit `track!` in the base-vs-head regression table ───────────────
-# The `track! Int16 vs Float32` group above is rendered head-only (a Float32-relative
-# table), so it can't reveal an Int16/OneBit *kernel* speedup against the base branch.
-# Register a few `track!` benchmarks with those backends under the plain `track` group
-# instead: `bench_table.jl` diffs every non-`track! Int16 vs Float32` leaf base-vs-head,
-# so these land in the regression table next to the Float32 `track!` rows and a backend
-# speedup shows directly. Unlike a new *table* group, this needs no `bench_table.jl`
-# change — the base ref's script (which the workflow runs) already diffs this group. Same
-# rebuild-state-per-eval pattern as the head-to-head group (random samples drift `track!`
-# to a NaN doppler otherwise).
+# The head-to-head group is rendered head-only, so register a few Int16/OneBit
+# `track!` rows under `track`, which `bench_table.jl` diffs base-vs-head. Same
+# rebuild-state-per-eval pattern as above.
 if isdefined(Tracking, :Int16DownconvertAndCorrelator) && isdefined(Tracking, :track!)
-    # The "7." 100 ms case spans ~100 integration steps in one call — the
-    # workload where the bit backends' shared band pack must be built once per
-    # call rather than once per step. It lives in THIS group (unlike the
-    # head-to-head-only 100 ms scenario above) so the base-vs-head ratio table
-    # tracks it across revisions. It uses the locked composite capture for the
-    # same NaN reason as above, and additionally registers a TwoBit leaf.
+    # The 100 ms case (per-call band pack, see above) is repeated here so the
+    # base-vs-head table tracks it; it uses the locked composite capture and adds
+    # a TwoBit leaf.
     for (key, systems, nsats_list, sfreq, nsamp, prn_max, onebit, twobit, capture) in (
         (
             "GPS L1CA, 8 sats, 5K @ 5 MHz",
@@ -1573,29 +1367,10 @@ if isdefined(Tracking, :Int16DownconvertAndCorrelator) && isdefined(Tracking, :t
 end
 
 # ── Per-signal noise estimation ──────────────────────────────────────────────
-# Feature-gated like every other group here, so the file keeps running unchanged
-# against revisions that predate the noise reference (AirspeedVelocity diffs two
-# revs with one script).
-#
-# Two things are worth watching separately. `update_noise!` is the O(N) despread
-# the software source adds per *signal* per chunk — one correlation against
-# n_sats of them for that signal, so it should sit near a per-satellite correlate
-# and not near a whole `track!`. Keying by signal rather than by band multiplies
-# this by the number of noise-referenced signals sharing a band, which is what
-# this number is here to keep honest. `append_noise_observation!` is the hardware
-# ingest path and the FIFO's steady state, which the design requires to be
-# allocation-free.
-#
-# `SUITE["track"]` above is deliberately left alone, but for the opposite reason to
-# the `downconvert and correlate` rows: those states are built with the package
-# default, which this PR moves to `NoiseRefCN0Estimator`, so a noise source *is*
-# provisioned and the per-chunk despread runs inside every `track` row. That is
-# intentional — `track` is the end-to-end number, and the noise reference is now
-# part of what a default `track!` does, so its cost belongs there. Expect those
-# rows to move against a pre-reference base revision; the reference's cost in
-# isolation is what the rows below are for, and the comparison that has to stay
-# flat is `downconvert and correlate/*`, which is held to one PRN's pipeline by
-# naming an estimator that reads no density.
+# `update_noise!` is the per-signal, per-chunk O(N) despread; it should sit near a
+# per-satellite correlate, not a whole `track!`. `append_noise_observation!` is the
+# hardware ingest path and must be allocation-free. The default `track` rows
+# include the noise reference on purpose (end-to-end cost).
 if isdefined(Tracking, :CorrelatorNoiseEstimator)
     function bench_update_noise(; num_samples = 4000, sampling_frequency = 4e6Hz)
         gnss_signal = GPSL1CA()
@@ -1619,32 +1394,11 @@ if isdefined(Tracking, :CorrelatorNoiseEstimator)
     SUITE["noise estimation"]["update_noise! – 1 ms @ 20 MHz"] =
         bench_update_noise(; num_samples = 20_000, sampling_frequency = 20e6Hz)
 
-    # The antenna-array reference, which is the one cost the spatial covariance
-    # raises by construction: it despreads **all** `M` columns where the
-    # single-antenna reference despread one.
-    #
-    # It is markedly **sub-linear** in `M`, which is the point of measuring it
-    # rather than assuming it. Against the 1-antenna row above: `M = 4` costs
-    # **≈2×**, not ≈4× — measured at 2.08× on the x86 runner and 2.05× on Apple
-    # Silicon, so it is the algorithm rather than one machine's vector width. The
-    # despread is bandwidth-bound and the kernel vectorises across the antenna
-    # dimension, so four columns cost about twice one column. Sweeping wider on one
-    # x86 host: `M = 2` ≈1.3×, `M = 8` ≈3.3×.
-    #
-    # What this row is here to catch is that ratio *degrading* — the per-tap
-    # `Σ b·bᴴ` pooling is `M²` work on top of an `M · N` despread, so a change that
-    # stops the despread dominating would show up here first.
-    #
-    # `M = 4` also happens to be the last size that stays allocation-free: an 8×8
-    # covariance is 1 kB of `SMatrix`, past the size StaticArrays keeps on the
-    # stack, and `M = 8` picks up two allocations per call. Arrays that large want a
-    # different representation, not a bigger `SMatrix`.
-    #
-    # Registers only where the constructor takes `num_ants`, so it appears as new on
-    # the PR that introduces it rather than inventing a base counterpart. The rows
-    # above deliberately stay single-antenna: they are the long-running series, and
-    # re-keying them to an array would break comparability with every earlier
-    # revision.
+    # Antenna-array reference: despreads all `M` columns. Sub-linear in `M`
+    # (`M = 4` ≈2× the 1-antenna row; bandwidth-bound and vectorised across
+    # antennas); this row catches that ratio degrading, e.g. if the `M²` per-tap
+    # `Σ b·bᴴ` pooling stops being dominated by the despread. `M = 4` is the
+    # largest allocation-free size (an 8×8 `SMatrix` leaves the stack).
     if hasmethod(Tracking.CorrelatorNoiseEstimator, Tuple{}, (:num_ants,))
         function bench_update_noise_array(;
             num_samples = 4000,

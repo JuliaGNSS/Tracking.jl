@@ -26,15 +26,12 @@ using Tracking:
     fold(estimator, 10)
     @test @allocated(fold(estimator, 1000)) == 0
 
-    # `-Inf dB-Hz`, not `NaN dB-Hz`: `NaN dB-Hz >= threshold` is `true` for every
-    # threshold with Unitful's `Level` comparison, so a NaN would clear every lock
-    # detector it met. `-Inf` is the safe answer to "is this signal locked?".
+    # `-Inf dB-Hz`, not `NaN dB-Hz`; see `NoCN0Estimator`.
     @test @inferred(estimate_cn0(estimator, 1ms)) == -Inf * dBHz
     @test !(estimate_cn0(estimator, 1ms) >= 20dBHz)
     @test NaN * dBHz >= 20dBHz          # ... which is why NaN is not used
 
-    # It is a legal `fallback`, which is the point: it replaces the moment ratio's
-    # noise floor with "no estimate" for the phases that admit no coherent window.
+    # It is a legal NWPR `fallback`, replacing the moment ratio's noise floor.
     honest = NWPRCN0Estimator(; num_narrowband_code_blocks = 20, fallback = estimator)
     @test @inferred(estimate_cn0(honest, 1ms)) == -Inf * dBHz
     for _ = 1:19

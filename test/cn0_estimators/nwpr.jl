@@ -22,11 +22,7 @@ using Tracking:
     track
 
 @testset "NWPR's coherent window is sized from the signal's code period" begin
-    # The window caps the coherent sum in *blocks*, so sizing it without knowing
-    # the code period gets it wrong by the period's ratio: ~5 ms is 5 blocks of
-    # L1 C/A's 1 ms code and 2 of L1C-P's 10 ms one. This is the form to reach
-    # for on a correlator-ingest path, which is the one place NWPR is still the
-    # estimator to choose over the default.
+    # ~5 ms: 5 blocks of L1 C/A's 1 ms code, 2 of L1C-P's 10 ms one.
     @test NWPRCN0Estimator(GPSL1CA()).num_narrowband_code_blocks == 5
     @test NWPRCN0Estimator(GPSL1C_P()).num_narrowband_code_blocks == 2
     @test NWPRCN0Estimator(GPSL1CA(); num_records = 40).num_records == 40
@@ -73,11 +69,9 @@ end
 end
 
 @testset "NWPR CN0 estimator noise floor beats the moment ratio (issue #217)" begin
-    # The whole point of NWPR being the default: the moment ratio manufactures
-    # signal power out of noise at a finite window, so it reports ~27.6 dB-Hz on
-    # PURE NOISE at its default 100-prompt window and cannot separate a true
-    # 20 dB-Hz signal from noise at all. Prompt model of the tests above and of
-    # the docs: amplitude √(C/N₀·T) in unit-total-variance complex noise.
+    # The moment ratio reads ~27.6 dB-Hz on pure noise; NWPR does not (see
+    # "Why not the moment method" in docs/src/cn0_estimator.md). Prompts:
+    # amplitude √(C/N₀·T) in unit-total-variance complex noise.
     T = 1ms
     db(x) = ustrip(uconvert(dBHz, x))
     fold(estimator, prompts) = foldl(update, prompts; init = estimator)
@@ -157,9 +151,7 @@ end
     @test Base.length(wide) == 2
     @test wide.num_records_per_ratio == 20
 
-    # Not synced yet (bit grid unknown): a short unaligned window is used, since
-    # the bit-edge detector needs seconds to lock at low C/N₀ and the moment
-    # ratio's noise floor is useless there. Five blocks by default.
+    # Not synced yet: a short unaligned window, five blocks by default.
     estimator = fresh()
     for _ = 1:20
         estimator = update(estimator, 1.0 + 0.0im, context(GPSL1CA(), 20, -1))
@@ -185,10 +177,8 @@ end
     @test Base.length(estimator) == 1
     @test estimator.num_records_per_ratio == 20
 
-    # Even at an unchanged window length, the buffered pre-sync windows are
-    # dropped when the first bit-aligned one completes: they ran unaligned, so
-    # some of them straddled a flip, and averaging them with clean windows would
-    # drag the estimate down for a whole `num_records` after sync.
+    # Even at an unchanged window length, the pre-sync windows are dropped when
+    # the first bit-aligned one completes (see `_update_nwpr`).
     same_length = NWPRCN0Estimator(; num_records = 100, num_narrowband_code_blocks = 5)
     for _ = 1:20
         same_length = update(same_length, 1.0 + 0.0im, context(GPSL1CA(), 20, -1))
@@ -204,11 +194,9 @@ end
     @test same_length.ratios_are_bit_aligned
     @test Base.length(same_length) == 1              # ... yet the ring restarted
 
-    # A pre-sync window that is still open when sync arrives is dropped, not
-    # carried into the bit-aligned window: it was opened at the free pre-sync
-    # length and now sits at an unknown offset inside a bit, so continuing it
-    # would sum across a data-bit transition. Nine unaligned records leave four
-    # in an open five-block window; sync then reports offset 5.
+    # A pre-sync window still open when sync arrives is dropped, not continued.
+    # Nine unaligned records leave four in an open five-block window; sync then
+    # reports offset 5.
     estimator = fresh()
     for _ = 1:9
         estimator = update(estimator, 1.0 + 0.0im, context(GPSL1CA(), 20, -1))
@@ -284,13 +272,8 @@ end
     context(num_code_blocks, bit_block_index) =
         CN0UpdateContext(GPSL1CA(), num_code_blocks, 20, bit_block_index, bit_buffer)
 
-    # `set_preferred_num_code_blocks_to_integrate!` at a whole navigation bit
-    # closes every window on a single record, where `NBP == WBP` by construction
-    # and the window carries no information. The windows buffered before the
-    # switch have to go with it: keeping them would freeze the estimate on
-    # windows formed at the old record length for good — `estimate_cn0` consults
-    # the `fallback` only while the ring is empty — and report them against the
-    # new record's integration time on top of that.
+    # Records grown to a whole bit close every window on one record; the ring
+    # must then empty so the `fallback` takes over (see `_update_nwpr`).
     rng = Xoshiro(1)
     # A true ~35 dB-Hz at T = 1 ms, so the ring holds a finite value that is
     # distinguishable from the fallback's.
@@ -310,10 +293,8 @@ end
 end
 
 @testset "NWPR CN0 estimator skips a record spanning no whole code block" begin
-    # The fractional record right after a sync phase-snap resets the accumulator
-    # covers no whole code block, so it has no position on the bit grid: it
-    # leaves the open window untouched rather than closing it one record over the
-    # block count the inversion assumes. Its prompt still reaches the fallback.
+    # The fractional record after a sync phase-snap leaves the open window
+    # untouched (see `_update_nwpr`); its prompt still reaches the fallback.
     bit_buffer = BitBuffer{UInt64}()
     context(num_code_blocks, bit_block_index) =
         CN0UpdateContext(GPSL1CA(), num_code_blocks, 20, bit_block_index, bit_buffer)
@@ -372,29 +353,23 @@ end
         track_state = @inferred track(signal, track_state, sampling_frequency)
     end
     cn0_estimate = @inferred estimate_cn0(track_state)
-    # 100 records is 20 windows at the default five-block pre-sync window, and a
-    # 45 dB-Hz signal sits near NWPR's upper limit (`µ̂ → M`), where the dB
-    # resolution per unit `µ̂` is poor — so a single realization spreads more than
-    # the moment ratio did here. Measured over 300 seeds: median 44.4, extremes
-    # 42.9 and 46.1, worst deviation 2.1 dB.
+    # 20 pre-sync windows near NWPR's upper limit (`µ̂ → M`), where one
+    # realisation spreads widely. Over 300 seeds: median 44.4, extremes 42.9 and
+    # 46.1.
     @test cn0_estimate ≈ 45dBHz atol = 2.5dBHz
 end
 
 @testset "NWPR CN0 estimator in the loop (issue #217)" begin
-    # End to end through `track`, on a data-modulated GPS L1 C/A signal: the
-    # aligned post-sync window has to actually engage, and the estimate has to
-    # land on the true C/N₀ — while pure noise must NOT read like a signal, which
-    # is what the moment estimator does at any window length.
+    # End to end through `track` on data-modulated GPS L1 C/A: the aligned
+    # post-sync window engages, the estimate lands on the truth, and pure noise
+    # does not read like a signal.
     gpsl1 = GPSL1CA()
     sampling_frequency = 4e6Hz
     num_samples = 4000
     code_frequency = get_code_frequency(gpsl1)
 
-    # `fade_to` continues the same satellite at another C/N₀ for `fade_blocks`
-    # more records, which is how the post-sync regime is reached at a C/N₀ where
-    # the bit-edge detector would never have locked from cold.
-    # NWPR is no longer the library default, so it is configured explicitly here
-    # — sized for the signal, which is what `NWPRCN0Estimator(signal)` is for.
+    # `fade_to` continues at another C/N₀ for `fade_blocks` more records, to
+    # reach post-sync at a C/N₀ where bit sync would never lock from cold.
     function track_noisy(
         cn0_db,
         num_blocks;
@@ -437,22 +412,15 @@ end
     @test estimator.num_records_per_ratio == 5
     @test estimator.ratios_are_bit_aligned
     @test Base.length(estimator) > 0
-    # A median over seeds, not one run — it is an estimate of a statistical
-    # quantity. Measured over 120 seeds: median 44.4, extremes 43.4 and 45.7, and
-    # the worst five-seed median 0.96 dB off, so 1.5 dB is a real bound rather than
-    # a generous one. (Before JuliaGNSS/Tracking.jl#219 was fixed this had a ~2 %
-    # tail down to 36.5 dB-Hz, from a navigation-bit grid that had slipped a block
-    # — which made every window that followed the grid straddle a flip.)
+    # Over 120 seeds: median 44.4, extremes 43.4 and 45.7, worst five-seed
+    # median 0.96 dB off (issue #219 regression guard).
     median_of(xs) = sort(collect(xs))[div(length(xs) + 1, 2)]
     @test median_of(
         ustrip(uconvert(dBHz, estimate_cn0(track_noisy(45.0, 900; seed), 1))) for seed = 1:5
     ) ≈ 45 atol = 1.5
 
-    # Pure noise, still pre-sync (which is where a code-lock detector has to
-    # make its call): the moment estimator reports a signal that is not there,
-    # NWPR does not. The bound is 25 dB-Hz rather than 20 on purpose — a short
-    # pre-sync window has a heavy upper tail on noise (a few per cent of updates
-    # clear 20 dB-Hz), which is what a lock threshold has to be set against.
+    # Pure noise, pre-sync: moments reports a signal, NWPR does not. 25 rather
+    # than 20 dB-Hz because a short pre-sync window has a heavy upper tail.
     noise_state = track_noisy(nothing, 200)
     noise_cn0 = ustrip(uconvert(dBHz, estimate_cn0(noise_state, 1)))
     @test !has_bit_or_secondary_code_been_found(noise_state, 1)
@@ -461,13 +429,8 @@ end
         track_noisy(nothing, 200; cn0_estimator = MomentsCN0Estimator(100))
     @test ustrip(uconvert(dBHz, estimate_cn0(moments_noise_state, 1))) > 25
 
-    # A signal that faded after bit sync was found is the case the coherence cap
-    # exists for: the loop stops holding phase over a whole navigation bit long
-    # before the signal becomes untrackable, so a bit-long coherent sum reads far
-    # too low — often `-Inf`, i.e. "no signal", on a satellite that is being
-    # tracked — while the capped window stays close to the truth. Locked in at
-    # 45 dB-Hz (so bit sync is found in every run) and faded to 25 dB-Hz; a
-    # median over seeds, since a single run of a low-C/N₀ estimate says little.
+    # Faded after bit sync: the case the coherence cap exists for (see
+    # `NWPRCN0Estimator`). Locked in at 45 dB-Hz, faded to 25 dB-Hz.
     fade = (; fade_to = 25.0, fade_blocks = 400)
     seeds = 1:16
     faded = [track_noisy(45.0, 1500; seed, fade...) for seed in seeds]
@@ -485,13 +448,9 @@ end
     @test get_cn0_estimator(full_bit[1], 1).num_records_per_ratio == 20
     capped_cn0 = [ustrip(uconvert(dBHz, estimate_cn0(state, 1))) for state in faded]
     full_bit_cn0 = [ustrip(uconvert(dBHz, estimate_cn0(state, 1))) for state in full_bit]
-    # Margins from 96 seeds split into disjoint groups of 16: the capped median
-    # never left 22.4–24.8 and the gap to the whole-bit window never fell below
-    # 1.5 dB. Over all 96, capped reads a median 23.6 dB-Hz (p10 19.5) against the
-    # whole-bit window's 21.0 (p10 12.0), and the whole-bit window reports `-Inf` —
-    # "no signal" on a satellite that is being tracked — in 17 of 96 runs against
-    # 1. Eight seeds are not enough for either bound: on some groups of eight the
-    # whole-bit window happens to win.
+    # Over 96 seeds in groups of 16: the capped median stayed in 23.4–24.8 and
+    # beat the whole-bit window by 1.1–6.1 dB (4.5 dB for these seeds). Eight
+    # seeds are not enough.
     @test median_of(capped_cn0) ≈ 25 atol = 3.5
     @test median_of(capped_cn0) - median_of(full_bit_cn0) > 1
 end

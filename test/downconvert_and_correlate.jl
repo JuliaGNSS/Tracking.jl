@@ -23,9 +23,7 @@ using Tracking:
     update_accumulator
 
 @testset "Downconvert and Correlator" begin
-    # Both backends own long-lived `ScratchBuffers` (one per thread for
-    # the threaded backend) that grow lazily on first use, so default
-    # construction is cheap and valid without any further setup.
+    # Scratch grows lazily, so default construction needs no setup.
     @test CPUDownconvertAndCorrelator() isa CPUDownconvertAndCorrelator
     @test CPUThreadedDownconvertAndCorrelator() isa CPUThreadedDownconvertAndCorrelator
 end
@@ -42,13 +40,10 @@ end
 
     downconvert_and_correlator = DC()
 
-    # A bare `downconvert_and_correlate` (no `doppler_update_interval`) treats the whole
-    # buffer as one chunk. Here one code period (~4949 samples) completes, so it
-    # is snapshotted into `correlator_outputs`; the small residue stays in the
-    # live accumulator. The completed integration's correlator equals the old
-    # single-step value — only its location moved (from `get_correlator` to the
-    # recorded output). Each check uses its own single-sat TrackState so the
-    # (shared, reused) `correlator_outputs` buffer is not carried between calls.
+    # One code period (~4949 samples) completes in the 5000-sample buffer, so the
+    # result is read from `correlator_outputs` (see `update` in
+    # src/downconvert_and_correlate.jl). Each check uses its own TrackState so the
+    # reused `correlator_outputs` buffer is not carried between calls.
     only_output(track_state, prn) =
         only(get_correlator_outputs(only(get_sat_state(track_state, prn).signals)))
 
@@ -124,8 +119,7 @@ end
     @test get_correlator(result_skip, 1).accumulators ==
           get_correlator(sat_past_end).accumulators
 
-    # In-place form takes the same `signal_samples_to_integrate == 0` early
-    # return per sat. The TrackedSat is reassigned to itself unchanged.
+    # In-place form takes the same early return; the sat stays unchanged.
     Tracking.downconvert_and_correlate!(downconvert_and_correlator, measurements, ts_skip)
     @test get_correlator(ts_skip, 1).accumulators ==
           get_correlator(sat_past_end).accumulators
@@ -479,10 +473,8 @@ end
 end
 
 @testset "Fused dynamic-shifts kernel with start_sample > 1" begin
-    # Issue #126 (a): the AbstractVector-shifts fused kernel must read the
-    # code replica at the absolute window offset, matching where
-    # gen_code_replica! writes it (index start_sample), like the static
-    # in-register kernel and the tuple tile-share kernel do.
+    # Issue #126 (a): the AbstractVector-shifts kernel must read the code replica at
+    # the absolute window offset `start_sample`, like the static kernels.
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     code_phase = 10.5
@@ -593,9 +585,8 @@ Tracking.get_correlator_sample_shifts(
 
 @testset "Vector-shifts correlator through CPU backend paths" begin
     # Issue #126 (b): both CPU backends and the public single-satellite
-    # downconvert_and_correlate! must handle correlators whose sample
-    # shifts are a runtime-sized Vector, and produce correct results for
-    # windows that do not start at sample 1.
+    # `downconvert_and_correlate!` must handle `Vector` shifts on a window not
+    # starting at sample 1.
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     code_phase = 10.5
@@ -673,9 +664,7 @@ Tracking.get_correlator_sample_shifts(
     )
     @test get_accumulators(public_result) ≈ ref_accumulators rtol = 1e-4
 
-    # Both backends' despread primitive — the one every despread goes through,
-    # satellites and noise reference alike. It draws its replica buffer from the
-    # backend's own scratch, so the size is all the caller supplies.
+    # Both backends' despread primitive `_despread_one_signal!`.
     for dc in (CPUDownconvertAndCorrelator(), CPUThreadedDownconvertAndCorrelator())
         backend_result = Tracking._despread_one_signal!(
             dc,
@@ -696,9 +685,7 @@ Tracking.get_correlator_sample_shifts(
         @test get_accumulators(backend_result) ≈ ref_accumulators rtol = 1e-4
     end
 
-    # The same public entry point with a standard SVector-shifts correlator
-    # must route through the in-register kernel and agree with the scalar
-    # reference (covers the static branch of the standalone fused dispatch).
+    # Same entry point with SVector shifts: covers the static (in-register) branch.
     epl_static = EarlyPromptLateCorrelator()
     static_code_replica = zeros(Int8, code_replica_length)
     static_result = Tracking.downconvert_and_correlate!(

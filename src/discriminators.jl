@@ -61,7 +61,7 @@ Calculates the code phase error in chips using the noncoherent very early minus 
 envelope normalized discriminator `(VE + E - VL - L) / (VE + E + VL + L)` for
 BOC(1,1)-dominant signals (Galileo E1, GPS L1C), divided by its S-curve slope so the
 output is calibrated in chips — the contract the early-prompt-late method above keeps
-with its `(2 - d) / 2` factor. The slope (≈ 4.3 for the default ±0.15/±0.6 chip taps)
+with its `(2 - d) / 2` factor. The slope (≈ 4.2 for the default ±0.15/±0.6 chip taps)
 is evaluated on the piecewise-linear sine-BOC(1,1) autocorrelation envelope at the
 actual sample-quantized tap offsets, the calibration GNSS-SDR applies where it wants
 chips from a BOC discriminator (`CalculateSlopeAbs` on `SinBocCorrelationFunction`).

@@ -5,10 +5,7 @@
 #   * v2.5+         — added secondary_code_phase (after code_phase) and
 #                     num_secondary_rotations (last) → 15 fields.
 #
-# `include`d by each test module that hands acquisition results to the
-# tracking API (test/add_satellite.jl, test/sat_state.jl), so the version
-# shim is maintained in exactly one place. Expects `Acquisition` and
-# `AcquisitionResults` to be imported by the including module.
+# The including module must import `Acquisition` and `AcquisitionResults`.
 function _make_acq(signal, prn, code_phase, carrier_doppler; noise_power = 1.0)
     args = (
         signal,

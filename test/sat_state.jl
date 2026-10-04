@@ -36,9 +36,7 @@ using Tracking:
     to_dictionary,
     max_code_length
 
-# `_make_acq`: shared Acquisition-version shim for building
-# `AcquisitionResults` — see test/acquisition_test_helpers.jl.
-include("acquisition_test_helpers.jl")
+include("acquisition_test_helpers.jl")  # `_make_acq`
 
 @testset "Satellite state" begin
     gpsl1 = GPSL1CA()
@@ -55,8 +53,6 @@ include("acquisition_test_helpers.jl")
     @test has_bit_or_secondary_code_been_found(sat_state) == false
     @test length(get_bit_buffer(sat_state)) == 0
 
-    # `_make_acq` is the shared Acquisition-version shim — see
-    # test/acquisition_test_helpers.jl.
     acq = _make_acq(gpsl1, 5, 524.6, 100.0Hz)
     sat_state = @inferred TrackedSat(acq)
     @test get_prn(sat_state) == 5
@@ -88,14 +84,10 @@ end
     # `get_sat_state(::Dictionary)` (no identifier) returns the only sat.
     @test get_sat_state(d).prn == 11
 
-    # `max_code_length` is the upper-bound wrap for L1 C/A: 1023 chips
-    # × 20 blocks per data bit = 20460. The runtime wrap returned by
-    # `current_code_wrap` shrinks to 1023 until bit-edge sync, then
-    # widens to 20460 — exercised below.
+    # Upper bound for L1 C/A: 1023 chips × 20 blocks per data bit.
     @test @inferred(max_code_length(sat.signals)) == 20460
 
-    # Before sync `bit_buffer.found == false`, so `current_code_wrap`
-    # returns just the primary code length.
+    # Before sync `current_code_wrap` is just the primary code length.
     @test @inferred(Tracking.current_code_wrap(sat.signals)) == 1023
 
     # After sync the runtime wrap widens to the full data-bit period.
@@ -116,10 +108,7 @@ end
     synced_signals = (synced_sig,)
     @test @inferred(Tracking.current_code_wrap(synced_signals)) == 20460
 
-    # `_max_code_length` recursion terminator on an empty tuple — 1, the
-    # lcm identity. Not reachable via TrackedSat itself (signals tuple is
-    # always non-empty), but exercised here so the base case counts as
-    # covered.
+    # `_max_code_length` base case (lcm identity); unreachable via TrackedSat.
     @test Tracking._max_code_length(()) == 1
     @test Tracking._current_code_wrap(()) == 1
 
@@ -141,11 +130,8 @@ end
     end
 end
 
-# Pilot-style signal (data frequency 0) with arbitrary primary / secondary
-# code lengths. All real signal pairings have wrap periods that divide each
-# other, so the lcm-vs-max distinction in the shared code wrap (issue #129)
-# is only observable with fabricated lengths. Pre-sync the signal
-# contributes `code_length`; post-sync `code_length × secondary_code_length`.
+# Pilot-style signal with arbitrary code lengths: real signal pairings have wraps
+# that divide each other, so lcm vs max (issue #129) needs fabricated lengths.
 struct FakeWrapSignal <: AbstractGNSSSignal{Matrix{Int16}}
     code_length::Int
     secondary_code_length::Int
@@ -155,10 +141,7 @@ GNSSSignals.get_secondary_code_length(s::FakeWrapSignal) = s.secondary_code_leng
 GNSSSignals.get_data_frequency(::FakeWrapSignal) = 0Hz
 
 @testset "shared code wrap is a common multiple, not a max (issue #129)" begin
-    # The per-signal code phase is re-derived as
-    # `mod(code_phase, _replica_code_wrap(signal))`, which is only correct
-    # when the shared wrap is an integer multiple of *every* signal's
-    # replica wrap — `max` is not a common multiple in general.
+    # Why lcm and not max: see `_max_code_length` / `_current_code_wrap`.
     base = Tracking.TrackedSignal(GPSL1CA())
     synced_buffer(::Tracking.BitBuffer{B}) where {B} = Tracking.BitBuffer{B}(
         zero(B),
@@ -186,9 +169,7 @@ GNSSSignals.get_data_frequency(::FakeWrapSignal) = 0Hz
         base.last_fully_integrated_num_code_blocks,
     )
 
-    # Pre-sync wraps 4 and 6: the shared wrap must be 12 (max would give 6,
-    # under which a phase of e.g. 5 re-derives as 1 for the 4-chip signal —
-    # but so does a phase of 9, silently corrupting the 4-chip signal).
+    # Pre-sync wraps 4 and 6: lcm 12 (max would give 6).
     s4 = fake_tracked_signal(4, 5, false)
     s6 = fake_tracked_signal(6, 1, false)
     @test @inferred(Tracking.current_code_wrap((s4, s6))) == 12
@@ -202,9 +183,7 @@ GNSSSignals.get_data_frequency(::FakeWrapSignal) = 0Hz
 end
 
 @testset "Public multi-signal TrackedSat constructor" begin
-    # Issue #133 item 2: a tuple of signals must be constructible directly,
-    # without hand-rolling the bare-sat → init_estimator_state → rebuild
-    # two-stage build.
+    # Issue #133 item 2: a tuple of signals is constructible directly.
     sigs = (GPSL1C_P(), GPSL1C_D(), GPSL1CA())
     sat = @inferred TrackedSat(sigs, 11, 1234.5, 500.0Hz)
     @test get_prn(sat) == 11
@@ -227,8 +206,7 @@ end
     @test typeof(sat_tuple) === typeof(sat_scalar)
 
     # Kwargs flow through: explicit carrier phase, code doppler, estimator.
-    # The default (auto-bandwidth) estimator sizes the sat's loop from its
-    # driver signal (signals[1] = GPS L1C-P), not from the estimator (`nothing`).
+    # The default estimator sizes the loop from the driver signal (signals[1]).
     estimator = Tracking.ConventionalAssistedPLLAndDLL()
     @test estimator.carrier_loop_filter_bandwidth === nothing
     sat_kw = TrackedSat(
@@ -247,19 +225,14 @@ end
 end
 
 @testset "Last fully integrated integration time" begin
-    # C/N₀ is processing-independent, so a consumer asking a *detectability*
-    # question of the last record — is the peak still above the noise? — needs
-    # the record's own integration time, because post-integration SNR is
-    # C/N₀ · T. Before these accessors that number was only reachable as a
-    # private field, and the obvious public stand-in is a trap: see the
-    # `get_integrated_samples` check below.
+    # Post-integration SNR is C/N₀ · T, so detectability checks need the last
+    # record's own integration time.
     gpsl1 = GPSL1CA()
     code_period = get_code_length(gpsl1) / get_code_frequency(gpsl1)
     @test upreferred(code_period) ≈ 1ms
 
     tsig = Tracking.TrackedSignal(gpsl1)
-    # A fresh signal has completed nothing, so it reports one block — the
-    # divisor `estimate_cn0` used before it knew any better.
+    # A fresh signal has completed nothing, so it reports one block.
     @test get_last_fully_integrated_num_code_blocks(tsig) == 1
     @test get_last_fully_integrated_integration_time(tsig) ≈ code_period
 
@@ -273,10 +246,8 @@ end
     twenty = Tracking.TrackedSignal(tsig; last_fully_integrated_num_code_blocks = 20)
     @test upreferred(get_last_fully_integrated_integration_time(twenty)) ≈ 20ms
 
-    # Not the same thing as `get_integrated_samples`, which counts the record
-    # *currently* accumulating and is reset to zero whenever one completes — so
-    # at the moment a consumer reads a completed record it is not the length of
-    # anything.
+    # Not `get_integrated_samples`, which counts the record still accumulating
+    # (zero right after one completes).
     @test get_integrated_samples(twenty) == 0
 
     # Forwarded at the satellite and track-state levels like its siblings.

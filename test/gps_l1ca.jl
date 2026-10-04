@@ -32,20 +32,14 @@ using Tracking:
     @test @inferred(get_code_block_buffer_type(gpsl1)) === UInt64
 
     @testset "Soft bit-edge detection traits" begin
-        # GPS L1 C/A uses the soft, maximum-energy CFAR bit-edge detector.
         @test @inferred(uses_soft_bit_edge_detection(gpsl1)) == true
-        # Default confidence target.
         @test @inferred(get_bit_edge_detection_confidence(gpsl1)) ≈ 0.999
     end
 end
 
-# User override of the bit-edge detection confidence via dispatch on
-# `get_bit_edge_detection_confidence`. The detector picks up the override
-# immediately — no TrackState rebuild needed.
-#
-# `Core.eval` is used so the override and its rollback execute at test time
-# rather than at module-parse time (literal method-definition expressions get
-# hoisted to module scope and the last one would win unconditionally).
+# Users override the confidence by dispatch; the detector picks it up without a
+# TrackState rebuild. `Core.eval` runs the override and its rollback at test time
+# (literal method definitions are hoisted, so the last one would always win).
 @testset "GPS L1 — confidence override" begin
     gpsl1 = GPSL1CA()
     @test get_bit_edge_detection_confidence(gpsl1) ≈ 0.999
@@ -53,7 +47,7 @@ end
     try
         @test get_bit_edge_detection_confidence(gpsl1) ≈ 0.95
     finally
-        # Restore the package-wide default for any tests that run after this one.
+        # Restore the default for later tests.
         Core.eval(Tracking, :(get_bit_edge_detection_confidence(::$GPSL1CA) = 0.999))
     end
     @test get_bit_edge_detection_confidence(gpsl1) ≈ 0.999

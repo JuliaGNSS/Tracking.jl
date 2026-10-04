@@ -1,14 +1,8 @@
-# Per-thread scratch byte buffers. The code-replica path uses
-# `code_replica` for the first signal of a sat; multi-signal sats grow
-# `extra_code_replicas` lazily to add slots 2..N. The fused kernel's
-# `AbstractVector`-shifts fallback uses `tile_re` / `tile_im`
-# concurrently; the multi-signal tile-share kernel shares them too.
-# Holding separate buffers per role (instead of bump-arena offset math
-# on one) keeps the call sites simple. Both CPU backends share this
-# struct: the single-threaded one holds a single `ScratchBuffers`, the
-# threaded one holds a `Vector{ScratchBuffers}` (one per thread).
-# Immutable: the buffers are only ever `resize!`d / `push!`ed in place (their
-# fields are never reassigned), so no mutability is needed.
+# Per-thread scratch byte buffers, one per role: `code_replica` for a sat's first
+# signal, `extra_code_replicas` (grown lazily) for signals 2..N, and `tile_re` /
+# `tile_im` for the dynamic-shifts fused kernel and the multi-signal tile-share
+# kernel. The single-threaded backend holds one, the threaded backend one per
+# thread. Buffers are only `resize!`d / `push!`ed in place, hence immutable.
 struct ScratchBuffers
     code_replica::Vector{UInt8}
     extra_code_replicas::Vector{Vector{UInt8}}
@@ -18,11 +12,9 @@ end
 
 ScratchBuffers() = ScratchBuffers(UInt8[], Vector{UInt8}[], UInt8[], UInt8[])
 
-# Bitstype pointer-and-length view over a `Vector{UInt8}` slot, used as
-# the typed handle the kernels accept. Implements just enough of the
-# `AbstractArray` interface for the call sites: linear indexing,
-# `length`/`size`, and `pointer` (so SIMD `vstore` works). The struct is
-# fully isbits, so building one in `_with_scratch_buffer` is free.
+# Isbits pointer-and-length typed view over a `Vector{UInt8}` slot (free to
+# build). Implements just enough `AbstractArray` for the kernels: linear
+# indexing, `size`, and `pointer` (for SIMD `vstore`).
 struct ScratchView{T} <: DenseVector{T}
     ptr::Ptr{T}
     len::Int
@@ -45,12 +37,9 @@ Base.elsize(::Type{ScratchView{T}}) where {T} = sizeof(T)
 """
 $(SIGNATURES)
 
-CPU-based implementation of downconversion and correlation. Holds one
-`ScratchBuffers` — three long-lived `Vector{UInt8}` byte
-buffers, one per scratch role (code replica + the fused kernel's two
-tile halves). Buffers grow lazily on first use and are reused
-thereafter, so a hoisted instance has zero allocations per `track!`
-call in steady state.
+CPU-based implementation of downconversion and correlation. Holds one set of
+long-lived scratch buffers (code replica and tile) that grow lazily on first use,
+so a hoisted instance has zero allocations per `track!` call in steady state.
 
 For real-time loops, construct the correlator **once outside** the
 `track!` loop and pass it via the `downconvert_and_correlator` keyword
@@ -62,76 +51,27 @@ end
 
 CPUDownconvertAndCorrelator() = CPUDownconvertAndCorrelator(ScratchBuffers())
 
+# Residual allocation of the threaded backend: Polyester copies everything a
+# `@batch` region references into one argument tuple per launch, elided only if
+# every member is `isbits` (bare `Array`s become `PtrArray`s); otherwise it is
+# heap-allocated at its `sizeof`, immutable structs by value, mutable objects as
+# one pointer. Here the non-`isbits` member is the GNSS signal (a code `Matrix` and
+# a `SignalLUT`), needed for code-replica generation: ~96 B per launch. Noise
+# despreads ride the same loop through one pointer (`_park_noise_items!`), at no
+# extra residual. Measured alternatives: generating from the LUT's bare arrays
+# inside the loop reaches 0 B/launch at full throughput but needs a bare-array
+# `gen_code!` in GNSSSignals; a serial code-gen pre-pass reaches 0 B but
+# serializes ~30 % of the work. Neither is worth ~96 B per code block.
 """
 $(SIGNATURES)
 
 Multi-threaded CPU downconvert and correlate, parallelized over the
-satellites (PRNs) of each group. Holds one `ScratchBuffers` per thread,
-indexed by `Threads.threadid()` inside `@batch` (which pins each iteration
-to a fixed thread). Buffers grow lazily on first use and are reused
-thereafter, so a hoisted instance's scratch is allocation-free in steady
-state.
-
-One `@batch` is launched per code block (once per `downconvert_and_correlate!`
-call inside `track!`'s inner loop). When the process runs with more than one
-thread *and* the loop has more than one work item, each launch keeps a small
-Polyester allocation, so the total scales with the number of completed code
-blocks in the chunk rather than staying flat per `track!` call. With a single
-thread or the single-threaded `CPUDownconvertAndCorrelator` there is no such
-residual.
-
-The residual measures ~96 B per launch, and a `TrackState` whose C/N₀ estimators
-read a measured noise density measures the **same** ~96 B: the chunk's noise
-despreads ride the same loop as extra work items (see `_dc_group_loop!`), but the
-loop reaches their descriptors through one pointer into a reusable box rather than
-by value — see `_park_noise_items!` for why by-value copies cost 152 B of
-Polyester argument tuple and a pointer costs 8. The one thing the noise reference
-still changes is that a **single**-satellite state pays the residual where it
-previously paid none, because the loop then has two items rather than one. What
-that buys is the despread's wall time: as one more item in the parallel loop it
-usually costs a fraction of the ~1.75 µs it costs as a serial pass, and full
-price only when it happens to open a new scheduling step. The figure is per launch
-and bounded; it does not scale with the input buffer.
-
-Why it allocates at all — Polyester copies everything the `@batch` region
-references into **one** argument tuple per launch and heap-allocates that tuple
-(`ManualMemory.Reference`) so the worker tasks can read it. Two rules decide what
-that costs:
-
-  - A tuple whose every member is `isbits` (bare `Array`s become `PtrArray`s, so
-    they qualify) does not escape and is elided outright — that is why a
-    `Vector{Float64}` kernel allocates nothing.
-  - As soon as one member is not, the whole tuple is allocated at its `sizeof`,
-    and each member is copied by *value* if it is an immutable struct, or as a
-    single pointer if it is a mutable object.
-
-Which is why "capture a struct or its bare arrays" is not a wash: a plain struct
-whose fields are `Matrix`es and isbits scalars costs its own `sizeof` in the
-tuple, where the same arrays passed separately cost 0. The culprit here is the
-GNSS **signal**: `GPSL1CA`, for instance, is not `isbits` — it wraps a
-`Matrix{Int16}` code table and a (also non-`isbits`) `SignalLUT` — and each
-satellite's code-replica generation needs it. (The per-satellite `TrackedSat` is
-likewise non-`isbits`, but it is reached *through* `Vector{TrackedSat}`, which is
-mutable and so costs one pointer; it is the loop's other captures that put the
-tuple over the isbits line.)
-
-Note that merely *hoisting* the `SignalLUT` out of the signal does not help — a
-`SignalLUT` is itself a non-`isbits` struct (it wraps `Matrix{Int8}` fields), so
-capturing it costs the same as capturing the whole `GPSL1CA`. What removes the
-cost entirely is a code-generation entry point that takes the LUT's bare arrays
-and isbits fields as *separate arguments* (`padded`, `secondary`,
-`subchip_factor`, …) rather than a struct: the `@batch` closure then captures
-only bare `Array`s and isbits values, which Polyester roots for free. A
-prototype of exactly this — generating from the raw `padded` matrix, done
-*inside* the parallel loop — is bit-faithful and measures **0 B/launch**, and
-because generation stays in the `@batch` region it keeps the full parallel
-throughput. Realizing it needs a GNSSSignals-side API that threads the bare
-arrays down to the resample kernel without re-wrapping them in a struct inside
-the region (reconstructing one there sends the generator dynamic and allocates
-far more). Absent that, the only in-tree way to reach 0 is a serial code-gen
-pre-pass, which is allocation-free but serializes ~30 % of the work and slows
-the threaded pipeline — the inferior fallback. Neither is currently worth
-~96 B/block, which is bounded per call and dwarfed by the caller's input buffer.
+satellites (PRNs) of each group. Holds one set of scratch buffers per thread,
+indexed by `Threads.threadid()` (stable within a `@batch` iteration), so a
+hoisted instance's scratch is allocation-free in steady state, apart from a
+small residual (~96 B per completed code block, with more than one thread and
+more than one work item in a group's loop; a measured noise density counts as
+one).
 
 For real-time loops, construct the correlator **once outside** the
 `track!` loop and pass it via the `downconvert_and_correlator` keyword
@@ -145,24 +85,17 @@ end
 CPUThreadedDownconvertAndCorrelator() =
     CPUThreadedDownconvertAndCorrelator([ScratchBuffers() for _ = 1:Threads.maxthreadid()],)
 
-# Look up the active `ScratchBuffers` for this thread. Single-threaded
-# backend has just one; threaded backend indexes by `Threads.threadid()`
-# (stable under Polyester `@batch`). The index stays bounds-checked:
-# `Threads.maxthreadid()` at construction time is not a lifetime bound —
-# foreign threads adopted via `@ccallable`/`jl_adopt_thread` after the
-# correlator was built get larger ids, which must fail loudly here
-# rather than read out of bounds.
+# The active `ScratchBuffers` for this thread. The index stays bounds-checked:
+# foreign threads adopted (`jl_adopt_thread`) after construction can exceed
+# `Threads.maxthreadid()` and must fail loudly rather than read out of bounds.
 @inline _scratch_buffers(dc::CPUDownconvertAndCorrelator) = dc.buffers
 @inline _scratch_buffers(dc::CPUThreadedDownconvertAndCorrelator) =
     dc.buffers[Threads.threadid()]
 
-# Grow the role's byte buffer to fit `n` elements of `T` and hand a
-# typed `ScratchView` of exactly that size to `f`. The view is bitstype,
-# so building one is free; the underlying `Vector{UInt8}` is reused
-# across calls — once the buffer has reached its working size every
-# subsequent call is allocation-free. `GC.@preserve` keeps the byte
-# vector rooted while `f` runs (the view holds a raw `Ptr`, untracked
-# by GC).
+# Grow the role's byte buffer to fit `n` elements of `T` and hand a typed
+# `ScratchView` of exactly that size to `f`; allocation-free once the buffer has
+# reached its working size. `GC.@preserve` roots the buffer while `f` runs, since
+# the view holds a raw `Ptr`.
 @inline function _with_scratch_view(f, buf::Vector{UInt8}, ::Type{T}, n::Int) where {T}
     nbytes = n * sizeof(T)
     length(buf) < nbytes && resize!(buf, nbytes)
@@ -196,9 +129,8 @@ end
     bufs.extra_code_replicas[i-1]
 end
 
-# Multi-signal tile-share scratch handle: yields ScratchViews over the
-# shared `tile_re` / `tile_im` SoA buffers, sized for `M * num_samples`
-# Float32s each (M antennas laid out back-to-back).
+# Yields `ScratchView`s over the `tile_re` / `tile_im` SoA buffers, sized for
+# `num_ants * num_samples` Float32s each (antennas back-to-back).
 @inline function _with_tile_buffers(
     f,
     dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
@@ -214,49 +146,29 @@ end
     end
 end
 
-# THE per-backend correlation primitive: one despread of one signal over one
-# range of samples, accumulating into `correlator` and returning a value of the
-# same correlator type. Every despread in the package goes through it — the
-# per-satellite single-signal path (`_correlate_signals`) and the open-loop noise
-# reference (`update_noise!`) alike.
+# THE per-backend correlation primitive: one despread of one signal over one range
+# of samples, returning the updated correlator (same type). Every despread goes
+# through it — the per-satellite single-signal path (`_correlate_signals`) and the
+# open-loop noise reference (`update_noise!`) alike. That makes the noise
+# measurement model-free by construction: the reference takes the identical
+# quantise → downconvert → despread → accumulate path as the prompt, so `N₀`
+# carries the quantisation loss and code amplitude with no per-backend correction
+# (and is on the same scale even where the one-/two-bit accumulators are popcount
+# counts rather than sample sums).
 #
-# That is what makes the noise measurement **model-free** structurally rather
-# than by agreement: the reference traverses the identical quantise →
-# downconvert → despread → accumulate path as the prompt because there is only
-# one path to traverse, so the measured `N₀` already carries the quantisation
-# loss, the quantiser's operating point under load and the code amplitude with no
-# per-backend correction. It is also the only thing that *can* work: the one- and
-# two-bit accumulators are popcount **counts** rather than sample sums, so a
-# float-kernel reference would compare `|P|²` and `N̂₀` on incompatible scales.
-# Four adapters kept in step by hand would have had to be re-verified on every
-# kernel change; one primitive cannot drift.
+# `code_phase` is modded into the signal's code wrap; `carrier_phase` is the NCO's
+# phase on the satellite path and `0.0` for the noise reference.
 #
-# Args are per-signal scalars: the caller picks the `signal_type`, `correlator`,
-# `code_phase` (modded into the signal's primary period), `code_frequency` and
-# `sample_shifts`. `carrier_phase` is where the caller's carrier stands — the
-# per-satellite path continues its NCO, the open-loop reference passes `0.0`.
+# `code_replica_size` is only used by backends that generate a replica (the CPU
+# ones; Int16 and bit-wise pack the code inside the kernel). Size it for the whole
+# sample buffer plus the tap spread, not the slice: `gen_code_replica!` writes at
+# `start_sample` and the kernel reads offset by `start_sample - 1`. The replica
+# comes from the per-thread `ScratchBuffers`, shared by satellites and the noise
+# reference; each work item uses it only within its own iteration on its thread.
 #
-# `code_replica_size` is what the backend needs *if* it generates a code replica
-# at all: the CPU kernels do, while the Int16 and bit-wise kernels pack the code
-# sign plane inside the kernel and ignore the argument. Size it against the whole
-# sample buffer plus the tap spread, not the slice — `gen_code_replica!` writes
-# *at* `start_sample` while the kernel reads the replica offset by
-# `start_sample - 1`.
-#
-# The CPU method draws that buffer from the calling backend's per-thread
-# `ScratchBuffers`, so one buffer serves the satellites and the noise reference
-# instead of one being held per noise estimator. The two never overlap: the noise
-# pass runs to completion at the top of `downconvert_and_correlate!`, before the
-# per-group satellite loop that reuses the slot, and the threaded backends index
-# the slot by `threadid()`.
-#
-# `use_band_cache` is the other half of that ordering, and the one thing the two
-# callers genuinely disagree about: the bit-wise backends pack a band's
-# measurement sign planes once per group and share them across its satellites, so
-# the per-satellite path may read that cache while the noise reference — running
-# *before* any group packs — must not, since the planes belong to whichever group
-# ran last, possibly on another band or another buffer. Backends without such a
-# cache ignore it.
+# `use_band_cache = false` (noise reference) keeps the bit-wise backends from
+# reading their per-group packed band sign planes, which may belong to another
+# band or buffer. Backends without such a cache ignore it.
 @inline function _despread_one_signal!(
     dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
     correlator,
@@ -274,11 +186,9 @@ end
     code_replica_size,
     use_band_cache::Bool = true,
 )
-    # GNSSSignals' embedded-LUT `gen_code!` is Int8-only (the legacy fixed-point
-    # generator that emitted `get_code_type(s)` — Int16/Float32 — was removed),
-    # so the code replica buffer is `Int8`. The fused kernel reads the replica as
-    # generic `CT = eltype(code_replica)` and widens to Float32, so Int8 works
-    # unchanged; CBOC (Galileo E1B) is the Int8 integer-amplitude approximation.
+    # GNSSSignals' embedded-LUT `gen_code!` is Int8-only, so the replica is `Int8`
+    # (the fused kernel widens it to Float32); CBOC (Galileo E1B) is its Int8
+    # integer-amplitude approximation.
     _with_code_replica_buffer(dc, Int8, code_replica_size) do code_replica
         gen_code_replica!(
             code_replica,
@@ -306,13 +216,9 @@ end
     end
 end
 
-# Dispatch helper for the fused kernel that hands SoA tile buffers from
-# the calling correlator's `ScratchBuffers` to the kernel — when the
-# kernel actually needs them. The `@generated` overload of
-# `downconvert_and_correlate_fused!` (for `SVector{NC}` shifts) ignores
-# tiles entirely; only the `AbstractVector`-shifts fallback uses them.
-# Picking the right path here keeps the fused kernel's existing
-# dispatch shape and lets the SoA-tile path be allocation-free.
+# Fused-kernel dispatch: static (`SVector`) shifts use the in-register kernel,
+# which needs no tiles; dynamic (`AbstractVector`) shifts get SoA tile buffers
+# from the backend's `ScratchBuffers`, keeping that path allocation-free.
 @inline function _fused_with_tile_scratch!(
     dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
     correlator::AbstractCorrelator{M},
@@ -325,7 +231,6 @@ end
     start_sample,
     num_samples,
 ) where {M}
-    # Static-shifts overload: no tile buffers needed.
     downconvert_and_correlate_fused!(
         correlator,
         signal,
@@ -351,9 +256,6 @@ end
     start_sample,
     num_samples,
 ) where {M}
-    # Dynamic-shifts fallback: pull SoA tile buffers from the calling
-    # correlator's per-thread `ScratchBuffers` (one re-half + one
-    # im-half) so the fused kernel doesn't allocate them per call.
     _with_tile_buffers(dc, num_samples, M) do tile_re, tile_im
         downconvert_and_correlate_fused!(
             correlator,
@@ -371,13 +273,9 @@ end
     end
 end
 
-# Backend-less standalone fused dispatch for the public single-satellite
-# `downconvert_and_correlate!`, which has no `ScratchBuffers` to draw on.
-# Static (`SVector`) shifts use the allocation-free in-register kernel;
-# dynamic (`AbstractVector`) shifts need SoA tile buffers, allocated per
-# call here. This is a convenience entry point — the hot paths run through
-# `_fused_with_tile_scratch!` with pooled scratch instead, so the dynamic
-# fused kernel itself stays buffer-taking only (no allocating overload).
+# Backend-less variant of `_fused_with_tile_scratch!` for the public
+# single-satellite `downconvert_and_correlate!`: dynamic shifts allocate their
+# tile buffers per call here (convenience path; the hot paths use pooled scratch).
 @inline function _fused_standalone!(
     correlator::AbstractCorrelator{M},
     signal,
@@ -430,17 +328,11 @@ end
     )::typeof(correlator)
 end
 
-# Per-sat downconvert+correlate. Pure: returns the updated TrackedSat. Shared
-# by `downconvert_and_correlate` and `downconvert_and_correlate!` across every
-# backend (`AbstractDownconvertAndCorrelator`); the per-backend differences
-# (kernel choice) are dispatched via `_correlate_signals` / `_correlate_one_signal!`.
-#
-# For multi-signal sats, the iteration window is the MIN samples-to-next-
-# boundary across all signals (or buffer end, whichever is sooner). Each
-# signal in `sat.signals` then runs its own (gen_code_replica +
-# fused-kernel) call over that shared window — the carrier/code Doppler
-# and start sample are sat-shared; the signal type, correlator, code
-# replica buffer, and per-signal code phase differ.
+# Per-sat downconvert+correlate, shared by every backend; returns the updated
+# `TrackedSat`. Kernel choice is dispatched via `_correlate_signals` /
+# `_despread_one_signal!`. Each sub-step's window is the MIN samples-to-next-
+# boundary across the sat's signals, clamped to the chunk end; carrier/code
+# Doppler and start sample are sat-shared, code phase and correlator per signal.
 function _update_tracked_sat_correlator(
     sat::TrackedSat,
     dc::AbstractDownconvertAndCorrelator,
@@ -451,28 +343,12 @@ function _update_tracked_sat_correlator(
     intermediate_frequency,
     stop_before_partial::Bool = false,
 )
-    # Integrate this sat forward through the current chunk. Each sub-step
-    # advances to the next code-block boundary of any signal (or the chunk
-    # end, whichever is nearer); `update` snapshots a `CorrelatorOutput` and
-    # resets the accumulator for every signal that just completed, so a chunk
-    # can yield 0, 1, or several outputs per signal. The NCO Doppler is
-    # untouched here. A partial integration at the chunk (or buffer) boundary
-    # carries in the accumulator.
-    #
-    # `stop_before_partial = true` stops at the last code-block boundary inside
-    # the chunk instead of integrating the trailing partial up to the chunk
-    # end. `track!`'s per-chunk pass uses this: the residue is left for the
-    # NEXT chunk's pass, which runs boundary → boundary in one kernel window,
-    # entirely at the Doppler the estimator wrote in between — so every
-    # completed integration is produced by a single Doppler and the NCO
-    # correction takes effect right at the completing boundary, like the
-    # pre-chunking per-completion update. A final pass without the flag drains
-    # the buffer's trailing partial into the accumulator.
+    # `update` snapshots a `CorrelatorOutput` and resets the accumulator for each
+    # signal completing on a sub-step, so a chunk yields 0..n outputs per signal;
+    # a partial integration carries in the accumulator. The NCO Doppler is
+    # untouched here. For `stop_before_partial`, see `downconvert_and_correlate!`:
+    # it makes every completed integration run at a single Doppler.
     while sat.signal_start_sample <= chunk_last_sample
-        # MIN samples-to-next-boundary across all signals on this sat, clamped
-        # to the chunk end. Each signal's coherent-integration length comes from
-        # its own `preferred_num_code_blocks_to_integrate`; replica sizing still
-        # uses the true buffer length `num_samples_signal`.
         samples_to_integrate, per_signal_completed = _calc_min_samples_and_completed(
             sat.signals,
             sat.signal_start_sample,
@@ -513,10 +389,8 @@ function _update_tracked_sat_correlator(
     return sat
 end
 
-# Compute (samples_to_integrate, per_signal_completed_tuple) via tuple
-# recursion. Returns the MIN across all signals' samples-to-next-boundary,
-# clamped to the current chunk end. Per-signal `completed` flags are
-# derived after the MIN is known.
+# `(samples_to_integrate, per_signal_completed)`: the MIN samples-to-next-boundary
+# across signals, clamped to the chunk end, and which signals it completes.
 @inline function _calc_min_samples_and_completed(
     signals::Tuple,
     signal_start_sample,
@@ -535,17 +409,15 @@ end
         num_samples_signal,
     )
     samples_to_integrate = _min_of_tuple(per_signal_to_boundary)
-    # Clamp the integration to the end of the current chunk (not the buffer):
-    # the boundary calc / replica sizing above still see the true buffer length.
+    # Clamp to the chunk end; replica sizing still uses the true buffer length.
     samples_left = chunk_last_sample - signal_start_sample + 1
     samples_to_integrate = min(samples_to_integrate, samples_left)
     per_signal_completed = _flag_completed(per_signal_to_boundary, samples_to_integrate)
     return samples_to_integrate, per_signal_completed
 end
 
-# For each signal, return its samples-to-next-primary-code-boundary using
-# the signal-specific primary-code-relative phase. Tuple recursion keeps
-# the heterogeneous walk inline / inference-friendly.
+# Per-signal samples to the end of its current integration window. Tuple
+# recursion keeps the heterogeneous walk inferable.
 @inline _per_signal_samples_to_boundary(::Tuple{}, _, _, _, _, _) = ()
 @inline function _per_signal_samples_to_boundary(
     signals::Tuple,
@@ -556,14 +428,8 @@ end
     num_samples_signal,
 )
     head = first(signals)
-    # Chips-to-next-boundary must be measured against the same wrap the
-    # multi-block window aligns to. For an `n_blocks > 1` window past sync it
-    # must land on the secondary-/bit-period boundary (one NH10 period = one
-    # L5I data symbol), so `_signal_replica_params` uses the secondary-aware
-    # wrap; otherwise an N-block window started off the snapped secondary
-    # phase straddles the data-symbol boundary and the coherent sum cancels
-    # on data transitions. For a single block (or pre-sync) this is just the
-    # primary code length.
+    # Measured against the secondary-aware wrap (see `_replica_code_wrap`) so a
+    # multi-block window ends on a data-symbol boundary.
     p = _signal_replica_params(
         head,
         code_doppler,
@@ -602,36 +468,21 @@ end
 @inline _flag_completed(t::Tuple, chosen) =
     (first(t) == chosen, _flag_completed(Base.tail(t), chosen)...)
 
-# Code-phase wrap to use when generating a signal's code replica / sizing its
-# integration window. Past sync the wrap is the full secondary-/bit-period
-# length so that `gen_code!` bakes the secondary code at the correct chip for
-# the current primary-code period: the replica's start phase carries the
-# secondary-period offset, so the secondary sign is wiped per block right in
-# the replica. This holds at ANY integration length — including the default
-# `num_blocks == 1`. The previous code kept the N=1 replica primary-only and
-# left the per-block secondary sign for the bit buffer to handle, but the
-# post-sync bit decoder never did that wipe, so a `data × Σ(secondary signs)`
-# collapse cost ~14 dB of decision margin at the default 1-block integration
-# (issue #125). Wiping in the replica matches what `master` did via
-# `update_code_phase` and is correct for multi-block windows too (otherwise the
-# N blocks sum against a misaligned overlay and the coherent sum cancels).
-# The boundary calc is unaffected at N=1: `calc_num_chips_to_integrate` re-mods
-# the phase by the primary length, so the wider wrap yields the same per-block
-# boundary. Before sync only the primary phase is known, so the wrap stays at
-# the primary length. (Signals without a baked secondary code — e.g. GPS L1
-# C/A — are unaffected: the primary repeats every `get_code_length` chips,
-# secondary length 1.) `num_blocks` is retained for call-site symmetry.
+# Code-phase wrap for replica generation and integration-window sizing. Past sync
+# it is the full secondary-/bit-period length, so `gen_code!` bakes the secondary
+# code at the right chip and its sign is wiped per block in the replica — at any
+# integration length, including one block (issue #125); a multi-block window then
+# also ends on a data-symbol boundary instead of summing against a misaligned
+# overlay. At one block the boundary is unchanged, as `calc_num_chips_to_integrate`
+# re-mods by the primary length. Pre-sync only the primary phase is known, so the
+# wrap is the primary length. `num_blocks` is kept for call-site symmetry.
 @inline _replica_code_wrap(tsig::TrackedSignal, num_blocks::Integer) =
     has_bit_or_secondary_code_been_found(tsig) ? _post_sync_code_length(tsig) :
     get_code_length(tsig.signal)
 
-# All per-signal replica/kernel parameters, derived in exactly one place
-# so the boundary calc, replica sizing/generation, and kernel tap offsets
-# can never diverge (issue #133): the code frequency (sat code Doppler +
-# this signal's chip rate), the correlator tap `sample_shifts` for that
-# frequency, the replica buffer size covering the worst-case tap spread,
-# the coherent-integration length `n_blocks`, and the signal-relative
-# `code_phase` modded by the secondary-aware `_replica_code_wrap`.
+# All per-signal replica/kernel parameters, derived in one place so the boundary
+# calc, replica sizing/generation and kernel tap offsets cannot diverge
+# (issue #133).
 @inline function _signal_replica_params(
     tsig::TrackedSignal,
     code_doppler,
@@ -653,16 +504,10 @@ end
     (; code_frequency, sample_shifts, code_replica_size, n_blocks, signal_code_phase)
 end
 
-# Single-signal path, shared by **every** backend: derive this signal's replica
-# parameters, then hand them to the one despread primitive. Returns a one-tuple
-# of `(new_correlator, is_integration_completed)`. This is the hot path for N=1 —
-# on the CPU backends the fused kernel keeps downconverted samples in registers
-# and is ~24% faster than the tile-share kernel below at N=1.
-#
-# Untyped `dc`: the per-backend difference is entirely inside
-# `_despread_one_signal!`, so there is nothing left for a backend to override
-# here. Only the multi-signal method below is still per-backend, because the
-# tile-share kernels take all N signals at once and have no single-signal form.
+# Single-signal path, shared by every backend (untyped `dc`; the backend
+# difference lives in `_despread_one_signal!`). Returns a one-tuple of
+# `(new_correlator, is_integration_completed)`. Not routed through the tile-share
+# kernel: the in-register fused kernel is ~24% faster at N=1.
 @inline function _correlate_signals(
     signals::Tuple{TrackedSignal},
     per_signal_completed::Tuple{Bool},
@@ -705,10 +550,8 @@ end
     ((new_corr, per_signal_completed[1]),)
 end
 
-# Multi-signal path (N >= 2): gen N code replicas, then call the tile-
-# share fused kernel that does one downconvert + a sample-outer fused
-# correlate over all N×NC accumulators. Beats fused-N-times by ~40% at
-# N=2 and ~53% at N=3 — see the design doc.
+# Multi-signal path (N >= 2): generate N code replicas, then one tile-share
+# kernel call (see `downconvert_and_correlate_fused_tuple!`).
 @inline function _correlate_signals(
     signals::Tuple{TrackedSignal,TrackedSignal,Vararg{TrackedSignal}},
     per_signal_completed::Tuple,
@@ -724,11 +567,8 @@ end
     prn,
     num_samples_signal,
 )
-    # Generate each signal's code replica into its per-thread slot, then
-    # call the tuple kernel with N replicas + the shared tile buffers.
-    # The replica views carry raw pointers into `dc`'s scratch byte
-    # vectors, so root `dc` for their entire lifetime — generation
-    # through the kernel call.
+    # The replica views hold raw pointers into `dc`'s scratch, so root `dc` from
+    # generation through the kernel call.
     new_correlators = GC.@preserve dc begin
         code_replicas = _gen_all_code_replicas(
             signals,
@@ -771,15 +611,9 @@ end
     _zip_correlators_with_completed(new_correlators, per_signal_completed)
 end
 
-# Generate code replicas for each signal into the per-thread scratch
-# slots. Returns a tuple of `ScratchView`s suitable for passing to
-# `downconvert_and_correlate_fused_tuple!`. The buffer for signal `i`
-# comes from `_code_replica_slot(_, i)`.
-#
-# Implemented via an enumerated `map` over the heterogeneous signals
-# tuple — this stays type-stable and inlines across tuple lengths,
-# whereas recursive splatting bails out of the small-N inline path
-# around N=3 and introduces per-call boxing.
+# Generate each signal's code replica into its per-thread slot
+# (`_code_replica_slot(_, i)`) and return the `ScratchView`s. An enumerated `map`
+# stays type-stable across tuple lengths; recursive splatting boxed around N=3.
 @inline function _gen_all_code_replicas(
     signals::Tuple,
     dc,
@@ -803,13 +637,10 @@ end
             num_samples_signal,
         )
         slot = _code_replica_slot(bufs, i)
-        CT = Int8  # embedded-LUT `gen_code!` is Int8-only; see `_correlate_signals`
+        CT = Int8  # embedded-LUT `gen_code!` is Int8-only; see `_despread_one_signal!`
         nbytes = p.code_replica_size * sizeof(CT)
         length(slot) < nbytes && resize!(slot, nbytes)
-        # The raw pointer in this view outlives this function — the caller
-        # (`_correlate_signals`) wraps replica generation and the kernel in
-        # `GC.@preserve dc`, which roots `slot` (reachable through the
-        # correlator's ScratchBuffers) for the views' entire lifetime.
+        # The pointer outlives this function; the caller's `GC.@preserve dc` roots it.
         view = ScratchView{CT}(Ptr{CT}(pointer(slot)), p.code_replica_size)
         gen_code_replica!(
             view,
@@ -857,31 +688,23 @@ Downconvert and correlate all available satellites. Defined on
 one and both bit-wise ones — is served by this method; a backend customises
 what happens inside it through `_despread_one_signal!`, `_dc_one_group!`,
 `_check_sample_type` and `_threading`. Returns a new
-`TrackState` whose slot *values* are detached from the input (the input's
-per-sat tracking values are left untouched), but whose key set
-(`Indices`) is *shared* with the input — this step never changes the key
-set, so sharing avoids copying the hash table on every `track` loop
-iteration. Detaching the key set happens once at the `track` boundary
-(`reset_start_sample_and_bit_buffer`); do not
+`TrackState` whose slot *values* are detached from the input, but whose key set
+(`Indices`) is *shared* with it to avoid copying the hash table every iteration;
+the key set is detached once at the `track` boundary
+(`reset_start_sample_and_bit_buffer`). Do not
 `add_satellite!`/`remove_satellite!` on this function's direct output, or
 you will corrupt the input's keys (#123). The copy is otherwise shallow:
-per-sat scratch vectors are shared, see [`track`](@ref). Per-call
-code-replica scratch comes from the correlator's (per-thread)
-`ScratchBuffers` so the kernel itself stays allocation-free; the only
-per-call allocation is the slot-value copy.
+per-sat scratch vectors are shared, see [`track`](@ref). The only per-call
+allocation is the slot-value copy.
 
 The **noise estimators are shared too**, and this call advances them: a
-[`CorrelatorNoiseEstimator`](@ref)'s sliding window and its RNG stream are
-written in place through the immutable `TrackState` (that is what lets per-signal
-state live in one), so the input's window grows and its draws advance even though
-its per-sat values do not. They are deliberately not copied — a window holds
-~1000 observations per signal, and duplicating it per call would put an O(K) cost
-on the very `K` the estimator's accuracy is bought with, plus reset the reference's
-PRN rotation. Two consequences worth knowing:
+[`CorrelatorNoiseEstimator`](@ref)'s sliding window and RNG stream are written in
+place, so the input's window grows and its draws advance. They are deliberately
+not copied: a window holds ~1000 observations per signal, and copying it per call
+would cost O(K) and reset the reference's PRN rotation. Consequently:
 
-  - Branching two outputs from one input does not give them independent noise
-    references. They keep sharing the input's, so the same samples enter one window
-    twice and every branch divides by the same figure.
+  - Branching two outputs from one input leaves them sharing one noise reference;
+    the same samples enter its window twice.
   - Advancing two such states **concurrently** races on that window and RNG. Give
     each thread its own `TrackState` (built separately, not branched), or its own
     `noise_estimators` entry.
@@ -930,22 +753,16 @@ band sign planes). `track!` passes it on every chunk after the first so the
 pack happens once per call; leave it `false` (the default) whenever the
 buffers may have been refilled.
 
-`measure_noise = false` skips the per-signal noise measurement for this call,
-leaving every configured [`CorrelatorNoiseEstimator`](@ref)'s window untouched.
-Pass it on a call that re-covers samples an earlier call already measured —
-which is exactly what `track!` does on its final drain pass, where the whole
-buffer arrives as one unchunked chunk. Measuring there would enter every sample
-of the buffer into the window a second time. It has no effect on a
-`TrackState` whose C/N₀ estimators read no noise density, since nothing is
-measured on those at all.
+`measure_noise = false` skips the per-signal noise measurement, leaving every
+[`CorrelatorNoiseEstimator`](@ref)'s window untouched. Pass it on a call that
+re-covers already-measured samples, as `track!`'s final drain pass does.
 
-A band that is **absent** from `measurements` is not measured either, and does not
-throw: a multi-band `TrackState` may be advanced one band at a time. Groups that
-hold satellites on a band still require that band's measurement, as before.
+A band **absent** from `measurements` is not measured either, and does not throw:
+a multi-band `TrackState` may be advanced one band at a time. Groups holding
+satellites on a band still require that band's measurement.
 
-Note that the per-signal noise estimators are **mutable state shared with the
-input** on the out-of-place `downconvert_and_correlate` and
-[`track`](@ref) — see there.
+The per-signal noise estimators are mutable state shared with the input on the
+out-of-place `downconvert_and_correlate` and [`track`](@ref) — see there.
 """
 function downconvert_and_correlate!(
     dc::AbstractDownconvertAndCorrelator,
@@ -957,16 +774,10 @@ function downconvert_and_correlate!(
     samples_unchanged::Bool = false,
     measure_noise::Bool = true,
 )
-    # `measure_noise = false` skips the *resolution* and not merely the execution.
-    # Resolving descriptors for work that will not run wastes the sample-type check
-    # and the box park on every drain pass, and — because a descriptor names its
-    # signal's band — it also made a call that hands over only some bands' samples
-    # throw for the bands it left out, which is a legitimate shape (see
-    # `_noise_item`). The branch sits here rather than inside `_noise_items` so both
-    # arms call `_dc_groups!` with a concretely typed `_NoiseWork`: the empty arm is
-    # the `()` specialisation the group tail already instantiates, so it costs no
-    # extra compilation and the descriptor tuple's type still never depends on a
-    # runtime value.
+    # `measure_noise = false` skips resolving the descriptors, not just running
+    # them. Branching here (not in `_noise_items`) keeps the descriptor tuple's type
+    # independent of a runtime value; the `()` arm reuses the group-tail
+    # specialisation.
     groups = Tuple(track_state.groups)
     if measure_noise
         noise_items =
@@ -998,22 +809,12 @@ function downconvert_and_correlate!(
     return track_state
 end
 
-# Walk the groups, handing the chunk's noise work to the first of them. The items
-# do not *belong* to that group — each carries its own band measurement and its own
-# signal — they only ride its per-satellite loop, which is the whole point: on a
-# threaded backend the despread then runs *alongside* the satellite correlations
-# instead of serially in front of them, and its cost is hidden wherever that loop
-# has a spare thread. Any group would serve equally; the first is the one that
-# needs no runtime choice over a heterogeneous tuple.
-#
-# Exactly-once still holds, and more simply than before: the items are resolved
-# once from `noise_estimators` (keyed by signal) and executed in one group's loop,
-# so a signal carried by two groups is still despread once however the satellites
-# are grouped. That is why the noise work is not simply pushed into every
-# `_dc_one_group!` — that fires once per *group*.
-#
-# A `TrackState` with no groups has no noise estimators either (they are derived
-# from the groups' slot types), so nothing is dropped here.
+# Walk the groups, handing the chunk's noise work to the first. The items do not
+# belong to that group (each carries its own band measurement and signal); they
+# only ride its per-satellite loop, so a threaded backend runs them alongside the
+# satellite correlations. Resolving once and running in one loop keeps each
+# signal despread exactly once however satellites are grouped. A `TrackState` with
+# no groups has no noise estimators, so nothing is dropped.
 @inline _dc_groups!(::Tuple{}, args::Vararg{Any,8}) = nothing
 @inline function _dc_groups!(
     groups::Tuple{SignalGroup,Vararg{SignalGroup}},
@@ -1050,32 +851,17 @@ end
     )
 end
 
-# The chunk's noise work, resolved once: one descriptor per measured signal,
-# carrying everything the despread needs and nothing it does not. Resolved here,
-# on the caller's thread, rather than inside the parallel region it will run in —
-# which is what keeps `_check_sample_type` in front of every kernel (so a wrong
-# sample type still throws the curated `ArgumentError` rather than surfacing as a
-# `MethodError` from a worker), and keeps what the `@batch` closure captures down
-# to one pointer (see `_park_noise_items!`).
+# The chunk's noise work: one descriptor per measured signal, keyed off
+# `noise_estimators` (so one per signal however satellites are grouped). Resolved
+# on the caller's thread, so `_check_sample_type` throws its `ArgumentError` there
+# rather than from a worker, and the `@batch` closure captures one pointer (see
+# `_park_noise_items!`).
 #
-# Resolution is per *signal*, keyed off `noise_estimators`, which is what makes
-# "exactly once" structural: two groups carrying the same signal share the one
-# estimator that key names, so one descriptor is produced for it however the
-# satellites are grouped.
-#
-# The NamedTuple is walked by tuple recursion rather than by
-# `for (k, v) in pairs(...)`: different signals may hold different estimator
-# types, so a runtime loop over the values is type-unstable and would allocate on
-# every chunk. Recursion unrolls it and each `update_noise!` devirtualises, and the
-# resulting tuple's *length* is a property of the types alone — a signal with no
-# estimator, and a key naming a signal no group tracks, both contribute nothing.
-#
-# Note what is deliberately *not* decided here: whether to measure at all. An
-# out-of-range chunk is left to `update_noise!`'s own `num_samples > 0` guard, and
-# `measure_noise` is decided by the caller — which skips this function outright —
-# because either one folded in here would make the tuple's type depend on a runtime
-# value. What *is* decided here is only ever type-domain: a signal no group tracks,
-# and a band this call brought no samples for, both contribute nothing.
+# Walked by tuple recursion because estimator types differ per signal; a runtime
+# loop would be type-unstable and allocate. Only type-domain decisions are made
+# here (signal not tracked, band absent), so the tuple's length depends on types
+# alone; runtime ones (`measure_noise`, an empty chunk via `update_noise!`'s
+# `num_samples > 0` guard) are left to the caller and the callee.
 @inline function _noise_items(
     dc::AbstractDownconvertAndCorrelator,
     track_state::TrackState,
@@ -1098,36 +884,17 @@ end
     )
 end
 
-# Park the descriptors in the `TrackState`'s reusable cell and hand back the box
-# holding them — because *how* the parallel loop reaches its descriptors is what
-# the launch costs, not what they contain.
+# Park the descriptors in the `TrackState`'s reusable cell and return the box
+# holding them. Polyester copies immutable `@batch` captures by value into its
+# per-launch argument tuple (see `CPUThreadedDownconvertAndCorrelator`): the
+# descriptors by value cost 152 B (~96 → 240 B per launch), a mutable box 8 B.
 #
-# Polyester copies every value the `@batch` region references into one argument
-# tuple it heap-allocates per launch, and the copy is by *value* for an immutable
-# struct: a descriptor carrying a `CorrelatorNoiseEstimator` (48 B), the band's
-# `BandMeasurement` (24 B) and the signal instance (`GPSL1CA` is 56 B) is 152 B of
-# argument tuple, which measured as a rise from ~96 B to 240 B per launch. A
-# *mutable* object is copied as a pointer instead — 8 B whatever it holds — so
-# handing the loop one box costs the launch 8 B and nothing per descriptor.
-#
-# The box has to outlive the launch and be reused across launches, or its own
-# allocation would cost more than the copy it replaces. It cannot be provisioned
-# up front: its type names the caller's `BandMeasurement`, which the `TrackState`
-# does not know until the first correlate call. So the cell is a type-erased
-# `Base.RefValue{Any}` filled on that call and reused thereafter; the *box* inside
-# it is concretely typed, so both the write here and the read in the loop are
-# type-stable, and a caller who changes sample types simply gets a new box once.
-#
-# Writing a descriptor tuple into the box is a store into an existing object —
-# allocation-free — and the box roots everything the descriptors point at, so
-# nothing here relies on the caller keeping anything alive. The flip side is that
-# the box keeps the *last* chunk's `BandMeasurement` — and so the caller's sample
-# buffer — reachable until the next call overwrites it. That is one buffer, and a
-# caller who hands `track!` a fresh buffer per chunk was holding this one anyway.
-#
-# Nothing to measure stays `()`: an empty descriptor set gives the loop nothing to
-# root at all, so a `TrackState` whose C/N₀ estimators read no noise density pays
-# exactly the launch cost it paid before any of this existed.
+# The box's type names the caller's `BandMeasurement`, unknown until the first
+# call, so the cell is a type-erased `Base.RefValue{Any}` holding a concretely
+# typed box, created once and reused (a new one only if the sample type changes).
+# Storing into it is allocation-free and it roots the descriptors; it keeps the
+# last chunk's sample buffer reachable until the next call. Nothing to measure
+# stays `()`, adding no launch cost.
 @inline _park_noise_items!(::Base.RefValue{Any}, ::Tuple{}) = ()
 @inline function _park_noise_items!(
     cell::Base.RefValue{Any},
@@ -1211,33 +978,20 @@ end
     chunk_index::Int,
     chunk_duration,
 ) where {K}
-    # An instance of signal `K`, from whichever group happens to carry it. A key
-    # naming a signal no group tracks measures nothing — that is the
-    # correlator-ingest case, where the window is filled by
-    # `append_noise_observation!` instead.
+    # A signal no group tracks measures nothing (the correlator-ingest case, filled
+    # by `append_noise_observation!` instead).
     found = _first_signal_with_id(Tuple(groups), Val(K))
     isempty(found) && return ()
     signal = first(found)
-    # The samples are still a *band* property — one front end feeds every signal
-    # on it. Only the despreading code, and therefore the measured floor, is per
-    # signal.
-    #
-    # A band this call brings no samples for measures nothing. That is not a
-    # mistake to report: a multi-band `TrackState` may legitimately be advanced one
-    # band at a time, and indexing for the absent band threw a `FieldError` out of
-    # the noise pass for a group the caller never asked to advance. Nothing is
-    # hidden by skipping — a group that *does* hold satellites on that band still
-    # indexes its own measurement in `_dc_one_group!` and throws there. Decided in
-    # the type domain (a `BandMeasurements` NamedTuple's keys are part of its type),
-    # so the descriptor tuple's length stays a property of the types alone.
+    # Samples are per band, the despreading code per signal. A band absent from
+    # `measurements` measures nothing (bands may be advanced one at a time); a
+    # group with satellites on it still throws in `_dc_one_group!`.
     found_m =
         _band_measurement_if_present(measurements, Val(_signal_band_id(typeof(signal))))
     isempty(found_m) && return ()
     m = first(found_m)
     _check_sample_type(dc, m)
     num_samples = get_num_samples(m)
-    # No tracked-PRN set is threaded through: the reference randomises its code
-    # phase, so it has no reason to know which PRNs are in use.
     ((
         estimator,
         m,
@@ -1248,10 +1002,8 @@ end
     ),)
 end
 
-# The `NoiseUpdateContext` is built here rather than stored in the descriptor: the
-# backend is one of the things it carries, and the backend is already captured by
-# the loop this runs in, so storing it would give the `@batch` closure a second
-# reference to root for nothing.
+# The `NoiseUpdateContext` is built here, not stored in the descriptor, because it
+# carries the backend, which the `@batch` closure already captures.
 @inline _apply_noise_item!(item::Tuple, dc) = (
     update_noise!(
         item[1],
@@ -1264,10 +1016,7 @@ end
 )
 
 # Run the `j`-th descriptor. `j` is a runtime index into a heterogeneous tuple, so
-# the walk is a chain of compile-time-known steps rather than an index — it unrolls
-# to `n` comparisons for `n` measured signals, which is one or two in practice.
-# Reading the box is the one dereference the whole scheme costs, and it happens
-# inside the parallel region, on the thread that runs the item.
+# the walk unrolls to `n` comparisons (one or two in practice).
 @inline _run_noise_item!(::Int, ::Tuple{}, ::Any) = nothing
 @inline _run_noise_item!(j::Int, box::Base.RefValue{<:Tuple}, dc) =
     _run_noise_item!(j, box[], dc)
@@ -1275,29 +1024,21 @@ end
     j == 1 ? _apply_noise_item!(first(items), dc) :
     _run_noise_item!(j - 1, Base.tail(items), dc)
 
-# All of them, in order — the serial backends' path, where there is no parallel
-# region to hide the despread in.
+# All of them, in order (serial loop).
 @inline _run_noise_items!(::Tuple{}, ::Any) = nothing
 @inline _run_noise_items!(box::Base.RefValue{<:Tuple}, dc) = _run_noise_items!(box[], dc)
 @inline _run_noise_items!(items::Tuple, dc) =
     (_apply_noise_item!(first(items), dc); _run_noise_items!(Base.tail(items), dc))
 
-# Band `B`'s measurement as a 0- or 1-tuple — the same "absent stays in the type
-# domain" shape as `_first_signal_with_id` below, and for the same reason: the
-# descriptor tuple's length has to be a property of the types alone. Both `B` and
-# the NamedTuple's key set are type parameters here, so the branch folds at compile
-# time and nothing about it survives into the chunk.
+# Band `B`'s measurement as a 0- or 1-tuple, so absence stays in the type domain;
+# folds at compile time.
 @inline _band_measurement_if_present(
     measurements::NamedTuple{K,<:Tuple{Vararg{BandMeasurement}}},
     ::Val{B},
 ) where {K,B} = B in K ? (measurements[B],) : ()
 
-# An instance of signal `K`, searched groups-then-signals and returned as a 0- or
-# 1-tuple so the not-found case stays type-stable instead of widening to
-# `Union{Nothing,…}`. The instance is all anyone wants: the band it is measured on
-# comes from the signal *type* (`_signal_band_id`) and the estimator is already in
-# hand, so *which* group carries the signal — and how many do — changes nothing.
-# Folds at compile time; a group's signal ids are constants of its type.
+# An instance of signal `K` from any group, as a 0- or 1-tuple so not-found stays
+# type-stable. Which group carries it does not matter. Folds at compile time.
 @inline _first_signal_with_id(::Tuple{}, ::Val) = ()
 @inline function _first_signal_with_id(
     groups::Tuple{SignalGroup,Vararg{SignalGroup}},
@@ -1315,13 +1056,9 @@ end
     _first_signal_with_id(Base.tail(signals), Val(K))
 end
 
-# Last sample index (inclusive) this satellite may integrate up to in the
-# current chunk. `chunk_duration === nothing` means "no chunking" — consume the
-# whole buffer, i.e. today's behavior and the default for direct callers. When a
-# chunk duration is given, the boundary lies on a shared per-band time grid; it
-# is re-anchored to the absolute `chunk_index` each call (not accumulated) so
-# rounding never drifts and different bands stay time-aligned to within a
-# sample.
+# Last sample (inclusive) of the current chunk; `nothing` means no chunking.
+# Re-anchored to the absolute `chunk_index` so rounding never drifts and bands
+# stay time-aligned.
 @inline _chunk_last_sample(::Nothing, chunk_index, sampling_frequency, num_samples) =
     num_samples
 @inline function _chunk_last_sample(
@@ -1334,33 +1071,20 @@ end
     min(round(Int, grid), num_samples)
 end
 
-# First sample (inclusive) of the same chunk — where the per-band noise
-# measurement starts. Not simply `_chunk_last_sample(…, chunk_index - 1, …) + 1`:
-# without chunking that clamps to `num_samples + 1` and the whole-buffer pass
-# would measure nothing at all.
+# First sample (inclusive) of the chunk, where the noise measurement starts. The
+# `nothing` method is needed: the generic one would yield `num_samples + 1`.
 @inline _chunk_first_sample(::Nothing, chunk_index, sampling_frequency, num_samples) = 1
 @inline _chunk_first_sample(chunk_duration, chunk_index, sampling_frequency, num_samples) =
     _chunk_last_sample(chunk_duration, chunk_index - 1, sampling_frequency, num_samples) + 1
 
-# Optional per-backend sample-type check, run once per group before the
-# per-sat loop. No-op by default; the integer backends override it to reject
-# non-`Complex{Int16}` sample buffers with a helpful `ArgumentError` (see
-# `downconvert_and_correlate_int16.jl`). Named distinctly from the top-level
-# `_validate_measurements` (band-set/shape/duration check in `track`).
+# Optional per-backend sample-type check, run once per group and once per noise
+# item. No-op by default; the integer backends reject non-`Complex{Int16}` samples
+# with an `ArgumentError`.
 @inline _check_sample_type(::AbstractDownconvertAndCorrelator, m) = nothing
 
-# Per-group body shared by every backend. Pulled out so `_dc_groups!` can call it
-# on each `SignalGroup` in the (possibly heterogeneous) `groups` tuple without
-# dynamic dispatch / boxing. Routes to this group's band's `BandMeasurement` for
-# the signal buffer and front-end metadata; the serial-vs-`@batch` loop choice is
-# dispatched via `_threading` in `_dc_group_loop!`, and any backend-specific
-# sample-type check runs in `_check_sample_type`.
-#
-# `noise_items` / `n_noise` are the chunk's noise despreads, non-empty for exactly
-# one group (see `_dc_groups!`). They ride this group's loop without belonging to
-# it: each item carries its own band measurement, so a group's `m` below has
-# nothing to do with them. An empty group still runs when it carries them — there
-# would otherwise be no loop for the despread to ride.
+# Per-group body shared by every backend: runs the group's loop on its band's
+# `BandMeasurement`. `noise_items` / `n_noise` are non-empty for one group only
+# (see `_dc_groups!`); an empty group still runs when it carries them.
 @inline function _dc_one_group!(
     g::SignalGroup,
     dc::AbstractDownconvertAndCorrelator,
@@ -1395,10 +1119,8 @@ end
     )
 end
 
-# Threading strategy for the per-sat group loop. Each backend declares one via
-# `_threading`; `_dc_group_loop!` then keeps exactly two bodies (serial and
-# Polyester `@batch`) shared across every backend, instead of one loop per
-# concrete correlator type.
+# Threading strategy for the per-sat group loop, declared per backend via
+# `_threading`, so `_dc_group_loop!` has just two bodies shared by all backends.
 struct _SerialLoop end
 struct _BatchLoop end
 
@@ -1414,8 +1136,7 @@ struct _BatchLoop end
     args::Vararg{Any,6},
 ) = _dc_group_loop!(_threading(dc), dc, vals, noise_items, n_noise, args...)
 
-# Serial: nothing to hide the despread behind, so run it first — the order it had
-# when the measurement was a pass of its own.
+# Serial: noise despreads first, then the satellites.
 @inline function _dc_group_loop!(
     ::_SerialLoop,
     dc,
@@ -1431,21 +1152,11 @@ struct _BatchLoop end
     return nothing
 end
 
-# Threaded: the noise despreads are extra work items on the end of the satellites'
-# index range, so `@batch` schedules them across the same threads. A despread of one
-# chunk costs about what one satellite's correlation does, so they are well-sized
-# items rather than stragglers — and wherever the satellite range does not already
-# fill every thread, the despread costs close to nothing in wall time.
-#
-# The branch is on a runtime `i` but is loop-invariant per thread block and
-# perfectly predicted; both arms are compiled, and `_run_noise_item!` resolves its
-# heterogeneous tuple by an unrolled walk rather than an index.
-#
-# Thread-safety rests on two things already true: each item is the only writer of
-# its own estimator's window, `totals` and RNG stream — so no two threads touch one
-# estimator, and the seeded draw order within an item is unchanged, keeping runs
-# reproducible — and `_despread_one_signal!` takes its replica scratch from the
-# backend's per-thread slot, which `@batch` pins for the duration of an iteration.
+# Threaded: the noise despreads are extra work items after the satellites' index
+# range, each costing about one satellite's correlation, so `@batch` spreads them
+# across idle threads. Thread-safe because each item is the sole writer of its
+# estimator's window, totals and RNG (draw order, hence reproducibility, is
+# unchanged), and replica scratch is per-thread.
 @inline function _dc_group_loop!(
     ::_BatchLoop,
     dc,

@@ -22,14 +22,12 @@ rotl(x::T, r, N) where {T} =
     N = get_secondary_code_length(b2a_i)  # 5
     @test N == 5
 
-    # B2a carries B-CNAV2 at 200 sym/s; one 5-chip secondary period is one
-    # symbol. Below one full period the detector returns `found = false`.
+    # One 5-chip secondary period is one B-CNAV2 symbol. No lock below it.
     @test @inferred(detect_bit_or_secondary_code_sync(b2a_i, prn, UInt32(0x0), N - 1)).found ==
           false
 
     @testset "Secondary-code search — clean lock at known phase / polarity" begin
-        # The 5-chip code is `00010` (BDS-SIS-ICD-B2a-1.0 §5.2.1), shared
-        # across PRNs, packed newest-first.
+        # `00010` (BDS-SIS-ICD-B2a-1.0 §5.2.1), shared across PRNs.
         reference = Tracking._packed_secondary_code(UInt32, b2a_i, prn)
         @test reference == UInt32(0b00010)
         for r = 0:(N-1)

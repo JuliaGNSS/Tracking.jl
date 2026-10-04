@@ -12,11 +12,10 @@ Fields:
   - `samples::S`: complex sample buffer (`Vector` for one antenna, `Matrix`
     with rows = samples and columns = antennas for an antenna array).
     Must be densely laid out in memory (unit row stride, columns packed
-    back-to-back) — the SIMD downconvert/correlate kernels read the buffer
-    through raw pointers with dense column-stride math, so a non-contiguous
-    strided view would silently correlate the wrong samples. The constructor
-    validates this and rejects non-dense buffers with an `ArgumentError`;
-    contiguous `view`s (e.g. `view(buf, 1:4000)`) remain fine.
+    back-to-back): the SIMD kernels read it through raw pointers, so a
+    non-contiguous view would silently correlate the wrong samples. The
+    constructor rejects such buffers with an `ArgumentError`; contiguous
+    `view`s (e.g. `view(buf, 1:4000)`) are fine.
   - `sampling_frequency::F`: the buffer's sample rate (e.g. `4e6Hz`)
   - `intermediate_frequency::F`: the band's IF (defaults to `0.0Hz`)
 
@@ -45,12 +44,8 @@ struct BandMeasurement{S<:AbstractVecOrMat,F}
     end
 end
 
-# The downconvert/correlate kernels read `samples` via `pointer` with
-# dense column-stride math, so the buffer must be unit-strided with
-# packed columns. Dense arrays trivially qualify; strided views qualify
-# only when contiguous. Anything else (a `1:2:end` view, a transpose, a
-# row-selected matrix view, …) would silently correlate the wrong data —
-# reject it here at construction.
+# See the `samples` field in the `BandMeasurement` docstring. Dense arrays
+# qualify trivially, strided views only when contiguous.
 @inline _assert_dense_layout(::DenseVecOrMat) = nothing
 function _assert_dense_layout(samples::AbstractVecOrMat)
     if samples isa StridedVecOrMat &&
@@ -108,8 +103,7 @@ $(SIGNATURES)
 
 Type alias for a NamedTuple of `BandMeasurement`s — the multi-band input
 shape of `track` / `track!`. Keys are the bands' `GNSSSignals.get_band_id`
-symbols (e.g. `:L1`, `:L5`) — `nameof` of the band type, folding to a
-compile-time constant, so the per-call NamedTuple lookup is free and new
-bands work without any Tracking-side registration.
+symbols (e.g. `:L1`, `:L5`), compile-time constants, so the lookup is free and
+new bands need no Tracking-side registration.
 """
 const BandMeasurements = NamedTuple{<:Any,<:Tuple{Vararg{BandMeasurement}}}

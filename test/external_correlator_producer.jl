@@ -165,17 +165,10 @@ function _ingest_and_fold!(ts; fs = 4e6Hz, prn = 3, num_records = 3, period = 40
 end
 
 @testset "the ingest path's C/N₀ needs a noise observation under the default" begin
-    # The default C/N₀ estimator is noise-referenced, so a correlator-ingest
-    # producer has TWO things to feed, not one. Doppler tracking works off the
-    # outputs alone — the testset above — and this is the part that does not: with
-    # no noise observation the fold skips every C/N₀ update and the satellite
-    # reports `-Inf dB-Hz` forever, which downstream reads as loss of lock.
-    #
-    # Asserted rather than merely documented because it is invisible from the
-    # ingest path itself: nothing here throws, nothing returns an error, and the
-    # one warning is `maxlog = 1`. This is also the assertion that makes a future
-    # move of `default_cn0_estimator` show up in CI as a behavior change on this
-    # path instead of as silence.
+    # The default C/N₀ estimator is noise-referenced, so without a noise observation
+    # C/N₀ stays `-Inf dB-Hz` (see docs/src/noise_estimator.md). Asserted because
+    # nothing on the ingest path throws, and so a change of `default_cn0_estimator`
+    # shows up here.
     fs = 4e6Hz
     starved = Tracking.add_satellite!(
         TrackState(; signal = GPSL1CA());
@@ -188,10 +181,8 @@ end
     @test Tracking.estimate_cn0(starved, 3) == -Inf * dBHz
     @test Base.length(Tracking.get_cn0_estimator(starved, 3)) == 0
 
-    # Feed the second half of the contract and the same producer reports a real
-    # figure. `Σ|x|²` over `n` samples at a per-sample variance of `σ² = 1e-6·f_s`
-    # gives `N₀ = 1e-6 Hz⁻¹`, against a normalised prompt power of
-    # `(3000/4000)² = 0.5625`.
+    # With a noise observation it reports a real figure: `σ² = 1e-6·f_s` per sample
+    # gives `N₀ = 1e-6 Hz⁻¹`, against a normalised prompt power of `(3000/4000)²`.
     fed = Tracking.add_satellite!(
         TrackState(; signal = GPSL1CA());
         prn = 3,

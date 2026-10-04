@@ -34,15 +34,10 @@ using Tracking:
     CorrelatorOutput,
     merge_sats
 
-# Build a stub `(L1 = BandMeasurement(...),)` NamedTuple to pass to the
-# estimator. Samples are unused by `estimate_dopplers_and_filter_prompt`
-# (it only reads `sampling_frequency` per group), so an empty buffer
-# suffices.
+# Stub band measurement: the estimator only reads `sampling_frequency`.
 _meas_l1(fs) = (L1 = BandMeasurement(ComplexF64[], fs),)
 
-# Build a signal carrying one completed integration as a `CorrelatorOutput`
-# record — the estimate phase folds over `correlator_outputs`. `sample_index`
-# is metadata here (no vector-tracking consumer).
+# A signal carrying one completed integration as a `CorrelatorOutput` record.
 _completed_signal(sig, correlator, num_samples) = TrackedSignal(
     sig;
     correlator_outputs = [CorrelatorOutput(correlator, num_samples, num_samples)],
@@ -321,8 +316,7 @@ end
         sat2_initial;
         signals = (_completed_signal(only(sat2_initial.signals), correlator, num_samples),),
     )
-    # Bump sat2's bandwidths by replacing its doppler estimator state with a
-    # custom-configured SatConventionalPLLAndDLL.
+    # Give sat2 different bandwidths via its estimator state.
     sat1_de = sat1.doppler_estimator_state
     sat2_de = SatConventionalPLLAndDLL(
         sat2_pre.doppler_estimator_state;
@@ -393,8 +387,7 @@ end
     sat1 = TrackedSat(gpsl1, 1, 0.5, 100.0Hz; doppler_estimator = estimator)
     track_state = TrackState(gpsl1, sat1; doppler_estimator = estimator)
 
-    # The incoming sat must be constructed with the same estimator
-    # (TrackState's slot type pins the doppler_estimator_state type).
+    # Same estimator: the slot type pins the estimator-state type.
     sat2 = TrackedSat(gpsl1, 2, 0.25, 200.0Hz; doppler_estimator = estimator)
     merged = merge_sats(track_state, sat2)
 
@@ -412,8 +405,7 @@ end
     sat1 = TrackedSat(gpsl1, 1, 0.5, 100.0Hz; doppler_estimator = estimator)
     track_state = TrackState(gpsl1, sat1; doppler_estimator = estimator)
 
-    # Default estimator is ConventionalAssistedPLLAndDLL — produces a
-    # different concrete state type than the TrackState's estimator.
+    # The default (assisted) estimator yields a different state type.
     bad_sat = TrackedSat(gpsl1, 2, 0.25, 200.0Hz)
     @test_throws ArgumentError merge_sats(track_state, bad_sat)
 end

@@ -159,8 +159,8 @@ import Tracking
             ),
             0.5,
         )
-        # The post-corr filter reaches `apply` through its weights now, not as a
-        # callable; `DefaultPostCorrFilter` still selects the last antenna.
+        # The post-corr filter reaches `apply` through its weights;
+        # `DefaultPostCorrFilter` selects the last antenna.
         default_post_corr_filter = DefaultPostCorrFilter()
         weights = @inferred get_weights(default_post_corr_filter, NumAnts(2))
         filtered_correlator =
@@ -239,9 +239,7 @@ import Tracking
             0.5,
         )
 
-        # The optional third argument additionally divides out the code amplitude
-        # (`GNSSSignals.get_code_amplitude`), so a multi-level (CBOC) correlator lands on
-        # the same unit-power scale as a ±1 one. Divisor is integrated_samples · amplitude.
+        # The optional third argument (code amplitude) also divides out; see `normalize`.
         correlator = EarlyPromptLateCorrelator(
             SVector(20.0 + 0.0im, 20.0 + 0.0im, 20.0 + 0.0im),
             0.5,

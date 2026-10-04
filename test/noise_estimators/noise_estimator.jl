@@ -22,9 +22,8 @@ using Tracking:
     noise_observation_from_samples,
     update_noise!
 
-# One dump of `n` samples of CN(0, σ²) noise despread by a ±1 code, as the three
-# shapes a producer can report it in. `σ²` is the per-sample variance, so the
-# density every one of them must land on is `σ²/f_s`.
+# One dump of `n` samples of CN(0, σ²) noise despread by a ±1 code; every builder
+# must land on `σ²/f_s`.
 function _white_dump(σ², n, fs, seed)
     rng = Xoshiro(seed)
     accumulation = complex(0.0, 0.0)
@@ -43,16 +42,14 @@ end
     σ² = 3.0
     n = 4000
 
-    # `noise_observation_from_samples` is the low-variance one — `M = n` looks —
-    # so it pins the scale essentially exactly on a single dump.
+    # `M = n` looks, so one dump pins the scale.
     d = _white_dump(σ², n, fs, 20260806)
     from_samples = noise_observation_from_samples(d.sample_power, n, fs)
     @test ustrip(Hz^-1, from_samples.noise_density) ≈ ustrip(Hz^-1, σ² / fs) rtol = 0.05
     @test from_samples.num_sub_integrations == n
     @test from_samples.duration ≈ uconvert(s, n / fs)
 
-    # A single despread dump is one look, so it carries 100 % relative error —
-    # average many before comparing, which is the whole reason `M` is the weight.
+    # A single despread dump is one look (100 % relative error), so average many.
     estimator = CorrelatorNoiseEstimator(; window_duration = 10.0s)
     for seed = 1:400
         dump = _white_dump(σ², 400, fs, seed)
@@ -60,31 +57,25 @@ end
     end
     @test ustrip(Hz^-1, get_noise_density(estimator)) ≈ ustrip(Hz^-1, σ² / fs) rtol = 0.15
 
-    # Pre-summing `M` dumps incoherently is the same density with `M` times the
-    # weight, and reduces to the single-dump builder at `M = 1`.
+    # The pre-summed builder reduces to the single-dump one at `M = 1`.
     one = noise_observation(d.accumulation, n, fs)
     presummed = noise_observation_from_correlator(abs2(d.accumulation), 1, n, fs)
     @test presummed.noise_density == one.noise_density
     @test presummed.num_sub_integrations == one.num_sub_integrations
     @test presummed.duration == one.duration
 
-    # `code_amplitude` undoes a multi-level code's integer scale, so a replica
-    # scaled by `a` reports the same density.
+    # `code_amplitude` undoes a multi-level code's integer scale.
     scaled = noise_observation(3.0 * d.accumulation, n, fs; code_amplitude = 3)
     @test ustrip(Hz^-1, scaled.noise_density) ≈ ustrip(Hz^-1, one.noise_density)
 
-    # The sampling frequency may be spelled in any unit; the window's element
-    # type must not depend on that.
+    # The observation type must not depend on how `f_s` is spelled.
     @test typeof(noise_observation(d.accumulation, n, 4.0e3Hz * 1000)) ===
           typeof(noise_observation(d.accumulation, n, fs))
 end
 
 @testset "simultaneous looks report their own span, not M times it" begin
-    # The software source's `M` looks are the reference correlator's taps, which
-    # all integrate the *same* N samples. Their density divides by `M·N` — three
-    # taps are three looks at one scalar — but their wall-clock span is `N/f_s`,
-    # and the window is bounded in time. Defaulting `duration` here would shrink
-    # the window threefold.
+    # Three taps over the same N samples: density divides by `M·N`, but the span
+    # is `N/f_s`; defaulting `duration` would shrink the time-bounded window 3×.
     fs = 4e6Hz
     obs = noise_observation_from_correlator(3.0, 3, 3 * 4000, fs; duration = 4000 / fs)
     @test obs.num_sub_integrations == 3
@@ -103,20 +94,18 @@ end
         )
     end
     @test Base.length(estimator) == 10
-    # Every entry carries the same `M`, so the mean is the plain mean of the last
-    # ten densities — `k = 41 … 50`, i.e. `k̄ = 45.5` times `1/f_s`.
+    # Equal `M`, so the plain mean of `k = 41 … 50`: `45.5/f_s`.
     @test ustrip(Hz^-1, get_noise_density(estimator)) ≈ ustrip(Hz^-1, 45.5 / fs)
 
-    # An observation longer than the whole window is still kept: the window is a
-    # lower bound on what it spans, never a reason to report nothing.
+    # An observation longer than the window is still kept: the window is a lower
+    # bound on the span, never a reason to report nothing.
     long = CorrelatorNoiseEstimator(; window_duration = 1.0ms)
     append_noise_observation!(long, noise_observation_from_samples(1.0e5, 100_000, fs))
     @test Base.length(long) == 1
     @test !isnothing(get_noise_density(long))
 
-    # `M` is what makes observations from different producers combinable: one
-    # 4000-sample power-monitor look (M = 4000) against one despread dump
-    # (M = 1) must come out essentially at the power monitor's value.
+    # `M` weighting combines producers: a power-monitor look (M = 4000) dominates
+    # one despread dump (M = 1).
     mixed = CorrelatorNoiseEstimator(; window_duration = 10.0s)
     append_noise_observation!(mixed, noise_observation_from_samples(4000.0, 4000, fs))
     append_noise_observation!(
@@ -137,11 +126,9 @@ end
     )
     @test !isnothing(get_noise_density(estimator))
 
-    # The public reader carries the `nothing` in its return type, which is what
-    # makes it comfortable to call. The fold must never see that union, so it
-    # goes through the internal splitter instead — and *that* has to be
-    # concretely inferred, in both states, or the density threaded down to
-    # `_apply_correlator_output` would box.
+    # The public reader returns `Union{Nothing,D}`; the fold's splitter
+    # `_noise_density_and_ready` must infer concretely in both states, or the
+    # density would box on the hot path.
     D = Tracking.noise_density_type(estimator)
     @test Base.return_types(get_noise_density, (typeof(estimator),)) == [Union{Nothing,D}]
     empty_one = CorrelatorNoiseEstimator()
@@ -152,20 +139,17 @@ end
 end
 
 @testset "a zero measured floor is not a floor to divide by" begin
-    # `get_noise_density` keeps its documented contract — the window is not empty,
-    # so it reports what it holds. The fold's splitter is what decides whether the
-    # figure is usable, and a zero density is not: `|P|²/0` is `Inf`, or `NaN` for
-    # the zero prompt the same all-zero buffer produces, and a `NaN dB-Hz` passes
-    # every lock threshold. A front-end dropout or buffer underrun reaches this
-    # with no misuse at all.
+    # `get_noise_density` reports what the window holds; `_noise_density_and_ready`
+    # rejects a zero or non-finite floor (`|P|²/0` would pass every lock
+    # threshold as `+Inf dB-Hz`). A front-end
+    # dropout reaches this with no misuse.
     dead = CorrelatorNoiseEstimator()
     append_noise_observation!(dead, noise_observation_from_samples(0.0, 4000, 4e6Hz))
     D = Tracking.noise_density_type(dead)
     @test get_noise_density(dead) == zero(D)
     @test @inferred(Tracking._noise_density_and_ready(dead)) == (zero(D), false)
 
-    # A producer's own arithmetic can hand over a non-finite one through the public
-    # append path; same answer, and still inferred.
+    # A non-finite density via the public append path: same answer.
     for bad in (NaN, Inf)
         e = CorrelatorNoiseEstimator()
         append_noise_observation!(e, NoiseObservation(bad / 1.0Hz, 1, 1.0e-3s, Int16(1)))
@@ -174,12 +158,9 @@ end
 end
 
 @testset "an observation lands whatever number type the producer used" begin
-    # The builders' shared core `convert`s to the canonical `{NoiseDensity,
-    # typeof(1.0s)}` rather than only `uconvert`ing the units, because a window
-    # matches on the *type*: a producer spelling their sampling frequency `4f6Hz`
-    # built a `Float32` observation that matched no method for the `Float64` window,
-    # fell through to the abstract no-op and was dropped SILENTLY — the documented
-    # hardware fill path, leaving the window empty forever and C/N₀ at -Inf.
+    # Builders convert to the canonical `{NoiseDensity, typeof(1.0s)}` (see
+    # `_noise_observation`); a `Float32` observation used to be dropped silently by
+    # the abstract no-op, leaving C/N₀ at -Inf.
     f32 = noise_observation(complex(1.0f0, 0.0f0), 4000, 4.0f6Hz)
     @test f32 isa NoiseObservation{Tracking.NoiseDensity,typeof(1.0s)}
     e32 = CorrelatorNoiseEstimator()
@@ -191,8 +172,7 @@ end
     mixed = noise_observation_from_correlator(1.0, 1, 4000, 4_000_000Hz; duration = 1ms)
     @test mixed isa NoiseObservation{Tracking.NoiseDensity,typeof(1.0s)}
 
-    # And an observation assembled by hand — never through a builder — is retyped
-    # on append instead of being dropped.
+    # A hand-built observation is retyped on append instead of being dropped.
     hand = NoiseObservation(1.0f-10 / 1.0f0Hz, 1, 1.0f-3s, Int16(3))
     @test !(hand isa NoiseObservation{Tracking.NoiseDensity,typeof(1.0s)})
     ehand = CorrelatorNoiseEstimator()
@@ -202,20 +182,15 @@ end
 end
 
 @testset "the estimator is mutated in place, never rebuilt" begin
-    # This is what lets per-signal state live in an immutable `TrackState`: the
-    # window is a `Vector` field written in place, and the struct that comes back
-    # is the identical object.
+    # What lets per-signal state live in an immutable `TrackState`.
     estimator = CorrelatorNoiseEstimator()
     obs = noise_observation_from_samples(4000.0, 4000, 4e6Hz)
     @test append_noise_observation!(estimator, obs) === estimator
 end
 
 @testset "appending is allocation-free in steady state" begin
-    # The four-times `sizehint!` headroom is what makes the FIFO's
-    # `push!`/`popfirst!` pair measure exactly zero: at 1× or 2× Julia
-    # periodically shifts the front offset back and reallocates. Wrapped in a
-    # function because `@allocated` at module scope picks up boxing from untyped
-    # global lookups.
+    # Relies on the `sizehint!` headroom (see `CorrelatorNoiseEstimator`). Wrapped
+    # in a function so `@allocated` does not see global-lookup boxing.
     function push_many(estimator, obs, n)
         for _ = 1:n
             append_noise_observation!(estimator, obs)
@@ -226,12 +201,8 @@ end
     obs = noise_observation_from_samples(4000.0, 4000, 4e6Hz)
     push_many(estimator, obs, 5_000)          # warm up + fill the window
 
-    # The contract is that nothing scales with the number of pushes. Asserting a
-    # bare `== 0` would instead assert something about the compiler: on Julia
-    # 1.10 the measurement carries a fixed ~16 B per *call* to the harness, which
-    # does not move between ten thousand pushes and a million. Two very different
-    # counts separate a per-push allocation — which would grow a hundredfold —
-    # from a per-call one, which does not move at all.
+    # Nothing may scale with the push count. Not `== 0`: Julia 1.10 adds a fixed
+    # ~16 B per harness call, so compare two very different counts instead.
     few = @allocated push_many(estimator, obs, 10_000)
     many = @allocated push_many(estimator, obs, 1_000_000)
     @test many == few
@@ -248,10 +219,8 @@ end
 end
 
 @testset "update_noise! defaults to a no-op for a source fed from outside" begin
-    # The two fill paths live on disjoint call graphs, so a source that is filled
-    # by `append_noise_observation!` simply never reaches `update_noise!` — but
-    # the default has to be a no-op rather than a `MethodError` so a user-defined
-    # `AbstractNoiseEstimator` need only implement what it uses.
+    # A no-op rather than a `MethodError`, so a user-defined
+    # `AbstractNoiseEstimator` need only implement the fill path it uses.
     struct ExternalOnlyNoiseEstimator <: AbstractNoiseEstimator end
     estimator = ExternalOnlyNoiseEstimator()
     @test update_noise!(estimator, nothing, 1, 10, nothing) === estimator
@@ -271,14 +240,12 @@ end
     @test append_noise_observation!(single, obs) === single
     @test !isnothing(get_noise_density(single.noise_estimators.GPSL1CA))
     @test append_noise_observation!(single, obs, :GPSL1CA) === single
-    # The signal type and an instance of it address the same window — a producer
-    # usually holds one of those rather than the bare symbol.
+    # The signal type and an instance address the same window as the symbol.
     @test append_noise_observation!(single, obs, GPSL1CA) === single
     @test append_noise_observation!(single, obs, gpsl1) === single
 
-    # A signal with no consumer has no estimator, and saying so beats a bare
-    # NamedTuple `KeyError`. Reached by configuring an estimator that reads no
-    # density, since the library default does read one.
+    # A signal with no consumer has no estimator: `ArgumentError`, not a bare
+    # `KeyError`.
     nwpr_only = TrackState(
         gpsl1,
         [TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = NWPRCN0Estimator(gpsl1))],
@@ -287,9 +254,7 @@ end
     @test_throws ArgumentError append_noise_observation!(nwpr_only, obs, :GPSL1CA)
     @test_throws ArgumentError append_noise_observation!(nwpr_only, obs)
 
-    # Multi-signal: the bare form refuses to guess, and the two windows stay
-    # apart. Across bands here, but see below for the case that per-band keying
-    # could not express at all.
+    # Multi-signal: the bare form refuses to guess, and the windows stay apart.
     multi = TrackState(;
         signals = (l1 = (gpsl1,), l5 = (GPSL5I(),)),
         noise_estimators = (
@@ -301,8 +266,7 @@ end
     append_noise_observation!(multi, obs, :GPSL1CA)
     @test !isnothing(get_noise_density(multi.noise_estimators.GPSL1CA))
     @test isnothing(get_noise_density(multi.noise_estimators.GPSL5I))
-    # ... including at different sampling rates, which is the point of storing a
-    # density rather than a power.
+    # ... including at different sampling rates (a density, not a power).
     append_noise_observation!(
         multi,
         noise_observation_from_samples(20_000.0, 20_000, 20e6Hz),
@@ -313,10 +277,8 @@ end
 end
 
 @testset "two signals on one band keep separate windows" begin
-    # The case the per-band key could not express: GPS L1 C/A and Galileo E1B
-    # share the L1 band, one antenna and one front end, but not a post-correlation
-    # noise floor — BPSK(1) peaks where BOC(1,1) nulls. A producer must be able to
-    # report a different density for each, and each consumer must read its own.
+    # Same band, different post-correlation floors (see `AbstractNoiseEstimator`),
+    # so a producer reports one density per signal.
     gpsl1 = GPSL1CA()
     e1b = GalileoE1B()
     ts = TrackState(; signals = (gps = (gpsl1,), galileo = (e1b,)))
@@ -332,17 +294,13 @@ end
     e1b_density = get_noise_density(ts.noise_estimators.GalileoE1B)
     @test !isnothing(l1ca_density)
     @test !isnothing(e1b_density)
-    # Twice the accumulated power over the same samples ⇒ twice the density, and
-    # the two do not leak into one another.
+    # Twice the power ⇒ twice the density, with no leak between the windows.
     @test e1b_density ≈ 2 * l1ca_density
 end
 
 @testset "the per-signal density tuple folds and pairs positionally" begin
-    # Replacing the fold's single `(density, ready)` pair with one pair per signal
-    # is the only thing per-signal keying costs on the hot path, so it has to stay
-    # a compile-time-shaped tuple: a `Union` here would box the density on its way
-    # down to `_apply_correlator_output` and undo the allocation contracts in
-    # `test/track_in_place.jl`.
+    # `_signal_noise_densities` must return a concrete tuple: a `Union` would box
+    # the density and break the allocation contracts in `test/track_in_place.jl`.
     ts = TrackState(;
         signals = (modern = (GPSL1C_P(), GPSL1CA()), galileo = (GalileoE1B(),)),
     )
@@ -361,10 +319,8 @@ end
         ) isa returned
     end
 
-    # And the pairing is positional against the slot type, so a satellite carrying
-    # one requiring and one non-requiring signal gets a *different* entry for each
-    # — `nothing` (statically no source, surface it at the first record) beside a
-    # real slot. Reading one signal's floor for the other is what this prevents.
+    # Pairing is positional against the slot type: a non-requiring signal gets
+    # `nothing` beside the requiring one's real slot, never the other's floor.
     gpsl1, l1cd = GPSL1CA(), GPSL1C_D()
     mixed = TrackState(
         gpsl1,
@@ -388,9 +344,8 @@ end
 end
 
 @testset "nothing in this design is a mutable struct" begin
-    # The whole per-signal design is shaped by this constraint — the
-    # length-managed FIFO, the PRN carried in the observation, averaging in the
-    # window rather than in a scalar — and nothing else enforces it.
+    # The per-signal design depends on this and nothing else enforces it (see
+    # `NoiseWindowTotals`).
     src = joinpath(dirname(dirname(@__DIR__)), "src")
     mutable_lines = String[]
     for (root, _, files) in walkdir(src), file in files
@@ -411,10 +366,8 @@ end
 end
 
 @testset "the builders take per-antenna input" begin
-    # A producer with `M` elements reports all `M`: the same three shapes as the
-    # scalar case, one dimension up. Collapsing them to a scalar first is what
-    # the covariance exists to avoid — a beamformer's floor is `wᴴR̂w`, which a
-    # single number cannot answer.
+    # The three builders, one dimension up: a beamformer's floor is `wᴴR̂w`, so
+    # the full covariance is kept (see `CorrelatorNoiseEstimator`).
     fs = 4e6Hz
     n = 4000
     M = 3
@@ -450,8 +403,7 @@ end
     append_noise_observation!(estimator, obs)
     @test get_noise_density(estimator) ≈ R
 
-    # A hand-built observation whose number type is not the canonical one is
-    # still converted onto the window's, exactly as in the scalar case.
+    # A non-canonical hand-built observation is converted, as in the scalar case.
     hand_built = NoiseObservation(
         SMatrix{M,M,ComplexF32,M * M}(b * b') / 4.0f6Hz,
         1,

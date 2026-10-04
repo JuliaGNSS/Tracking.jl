@@ -8,16 +8,9 @@
 """
 $(SIGNATURES)
 
-Secondary-code sync detector for GPS L5I — the generic
-[`_detect_secondary_code_sync`](@ref) rotation search over the NH10
-secondary code (window 10; the default 2.5 % tolerance discretizes to 0,
-i.e. exact match). The negated-polarity (data-bit-1) case is handled
-inside the search, so the detector locks after a single NH10 period in the
-worst case and reports the upcoming integration's NH10 chip in
-`SyncResult.phase`. Returns [`SyncResult`](@ref).
-
-The packed reference is derived generically from `get_secondary_code`
-(see [`_packed_secondary_code`](@ref)); no bespoke packing is needed.
+Hard-path secondary-code sync detector for GPS L5I over the shared NH10 code —
+see [`_detect_secondary_code_sync`](@ref). The default detector is the soft one
+([`uses_soft_secondary_code_detection`](@ref)).
 """
 @inline function detect_bit_or_secondary_code_sync(
     signal::GPSL5I,
@@ -31,16 +24,9 @@ end
 """
 $(SIGNATURES)
 
-Secondary-code sync detector for GPS L5Q — the generic
-[`_detect_secondary_code_sync`](@ref) rotation search over the NH20
-secondary code (window 20; the default 2.5 % tolerance discretizes to 0,
-i.e. exact match). L5Q is a pilot (no navigation data); the 20-chip
-Neuman-Hoffman overlay is the only sync feature, so the detector locks
-after a single NH20 period in the worst case and reports the upcoming
-integration's NH20 chip in `SyncResult.phase`. Returns [`SyncResult`](@ref).
-
-The packed reference is derived generically from `get_secondary_code`
-(see [`_packed_secondary_code`](@ref)); no bespoke packing is needed.
+Hard-path secondary-code sync detector for the GPS L5Q pilot over the shared
+NH20 code — see [`_detect_secondary_code_sync`](@ref). The default detector is
+the soft one ([`uses_soft_secondary_code_detection`](@ref)).
 """
 @inline function detect_bit_or_secondary_code_sync(
     signal::GPSL5Q,
@@ -57,8 +43,6 @@ function get_default_correlator(::Union{GPSL5I,GPSL5Q}, num_ants::NumAnts = NumA
     EarlyPromptLateCorrelator(; num_ants)
 end
 
-# L5I sync-search window is one NH10 period (10 blocks); L5Q's is one NH20
-# period (20 blocks). UInt32 holds either with room to spare (the rotation
-# search masks down to the low 10 / 20 bits).
+# Holds one NH10 / NH20 period (see `get_code_block_buffer_type`).
 @inline get_code_block_buffer_type(::GPSL5I) = UInt32
 @inline get_code_block_buffer_type(::GPSL5Q) = UInt32

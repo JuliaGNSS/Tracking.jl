@@ -59,9 +59,8 @@ end
 end
 
 @testset "TrackState rebuilds SignalGroup slot when estimator types differ" begin
-    # `_normalize_group_entry` for a pre-built `SignalGroup` rebuilds the
-    # empty dict when the template's estimator-state type doesn't match
-    # the TrackState's `doppler_estimator` kwarg.
+    # `_normalize_group_entry` rebuilds an empty pre-built group's dict when its
+    # estimator-state type doesn't match the `doppler_estimator` kwarg.
     custom = ConventionalPLLAndDLL(;
         carrier_loop_filter_bandwidth = 22.0Hz,
         code_loop_filter_bandwidth = 1.5Hz,
@@ -74,8 +73,7 @@ end
 end
 
 @testset "TrackState passes through pre-populated SignalGroup unchanged" begin
-    # A SignalGroup whose dict is already populated is trusted as-is — the
-    # `!isempty(sats)` branch in `_normalize_group_entry`.
+    # A populated SignalGroup is trusted as-is (`_normalize_group_entry`).
     using Dictionaries: insert!
     estimator = ConventionalAssistedPLLAndDLL()
     sat = TrackedSat(GPSL1CA(), 1, 10.5, 10.0Hz; doppler_estimator = estimator)
@@ -165,8 +163,7 @@ end
 end
 
 @testset "Escape-hatch add_satellite! rejects sat of wrong slot type" begin
-    # `_assert_sat_matches_slot_type` should raise an ArgumentError when
-    # the sat's concrete type doesn't match the group's fixed slot type.
+    # See `_assert_sat_matches_slot_type`.
     track_state = TrackState(; signal = GPSL1CA())
     galileo_sat = TrackedSat(GalileoE1B(), 1, 10.5, 100.0Hz)
     @test_throws ArgumentError add_satellite!(track_state, :default, galileo_sat)
@@ -185,9 +182,7 @@ end
     @test de_state.code_loop_filter_bandwidth == 1.5Hz
 end
 
-# `_make_acq`: shared Acquisition-version shim for building
-# `AcquisitionResults` — see test/acquisition_test_helpers.jl.
-include("acquisition_test_helpers.jl")
+include("acquisition_test_helpers.jl")  # `_make_acq`
 
 @testset "add_satellite!(ts, acq) — single-group shortcut" begin
     ts = TrackState(; signal = GPSL1CA())
@@ -284,10 +279,8 @@ end
 end
 
 @testset "add_satellite!(ts, acq) requires longest-code signal in mixed group" begin
-    # Group containing GPS L1 C/A (1023 chips) + GPS L1C-P (10230 chips):
-    # the longest primary is L1C-P, so handing over an L1CA acquisition
-    # would alias its 1023-chip code-phase inside L1C-P's 10230-chip
-    # primary period. Reject.
+    # The group's longest primary is L1C-P; an L1 C/A code phase would alias
+    # inside its 10230-chip period.
     ts = TrackState(; signal = GPSL1C_P())  # placeholder single-group reset
     ts = TrackState(; signals = (mix = (GPSL1C_P(), GPSL1CA()),))
     short_acq = _make_acq(GPSL1CA(), 7, 100.0, 50.0Hz)
@@ -299,10 +292,8 @@ end
 end
 
 @testset "add_satellite!(ts, acq) accepts code-length ties (issue #134)" begin
-    # GPS L1C-D and L1C-P share a 10230-chip primary code. Either
-    # acquisition is a valid handoff — the code-phase scaling is identical
-    # — so the longest-code match must be by code length, not by being
-    # the one signal `_longest_code_signal` happens to pick first.
+    # L1C-D and L1C-P share a 10230-chip primary code, so either acquisition
+    # is valid: the match is by code length, not by `_longest_code_signal`'s pick.
     ts = TrackState(; signals = (mix = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),))
     d_acq = _make_acq(GPSL1C_D(), 8, 100.0, 50.0Hz)
     ts = add_satellite!(ts, d_acq; group = :mix)
@@ -317,11 +308,8 @@ end
 end
 
 @testset "add_satellite!(ts, acq) matches signals by id, not by code-matrix type" begin
-    # A signal's code-matrix type parameter is not part of its identity, so
-    # routing compares `GNSSSignals.get_signal_id` rather than `typeof`: an
-    # acquisition whose `system` holds the same signal over a differently
-    # typed code matrix (here a `SubArray` view instead of the `Matrix` the
-    # zero-arg constructor builds) still matches the declaring group.
+    # Routing compares `GNSSSignals.get_signal_id`, not `typeof`, so a signal
+    # over a differently typed code matrix (a `SubArray` view) still matches.
     l1ca = GPSL1CA()
     aliased = GPSL1CA(@view(get_codes(l1ca)[:, :]), l1ca.lut)
     @test typeof(aliased) !== typeof(l1ca)
@@ -336,9 +324,8 @@ end
 end
 
 @testset "add_satellite!(ts, acq) errors on ambiguous group routing (issue #134)" begin
-    # Two groups with the same longest-code signal type: silently routing
-    # to the first declared group would be a footgun — auto-routing must
-    # error and ask for an explicit `group =`.
+    # Two groups with the same longest-code signal: auto-routing must error
+    # and ask for an explicit `group =`.
     ts = TrackState(; signals = (a = (GPSL1CA(),), b = (GPSL1CA(),)))
     acq = _make_acq(GPSL1CA(), 5, 10.0, 100.0Hz)
     @test_throws ArgumentError add_satellite!(ts, acq)

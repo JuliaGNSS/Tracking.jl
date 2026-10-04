@@ -17,8 +17,7 @@ using Tracking:
     b2b = BeiDouB2bI()
     prn = 6   # the ICD defines ranging codes for PRN 6-58 only
 
-    # One B-CNAV3 symbol per 1 ms primary code period (1000 sym/s) and no
-    # secondary code, so the detector fires immediately and unconditionally.
+    # One symbol per 1 ms primary period, no secondary code: immediate sync.
     @test get_secondary_code_length(b2b) == 1
     for num_blocks in (1, 2, 33)
         res = @inferred detect_bit_or_secondary_code_sync(b2b, prn, UInt8(0x0), num_blocks)
@@ -27,12 +26,11 @@ using Tracking:
         @test res.polarity == +1
     end
 
-    # B2b shares the 1207.14 MHz carrier with Galileo E5b, and GNSSSignals v4
-    # names that band `E5b` for both constellations. Pin it: the band id is
-    # what Tracking keys per-band antenna counts and measurements off.
+    # Shares the E5b carrier with Galileo; the band id keys per-band antenna
+    # counts and measurements.
     @test get_band_id(b2b) === :E5b
 
-    # Plain BPSK(10) (`LOC`) → EarlyPromptLate default.
+    # BPSK(10) → EarlyPromptLate.
     @test @inferred(get_default_correlator(b2b, NumAnts(1))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
     @test @inferred(get_default_correlator(b2b, NumAnts(3))) ==
@@ -42,7 +40,7 @@ using Tracking:
     @test @inferred(default_carrier_loop_filter_bandwidth(b2b)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(b2b)) ≈ 1.0Hz
 
-    # No sub-symbol boundary to search — the buffer is dead state, UInt8.
+    # Sync buffer is dead state.
     @test @inferred(get_code_block_buffer_type(b2b)) === UInt8
 
     @test Tracking.uses_soft_secondary_code_detection(b2b) == false

@@ -1,19 +1,12 @@
 module FlexibandIntegrationTest
 
-# End-to-end integration test on a *real* multi-band GNSS recording.
+# End-to-end test on the real Fraunhofer IIS "Flexiband" capture
+# `20171017_09-51-43_III-7a_short.zip`: acquires and tracks GPS L1 C/A, Galileo E1B
+# (L1 band) and GPS L5I (L5 band) through the multi-band `track!` path, with two
+# front-ends at different sample rates.
 #
-# It downloads the Fraunhofer IIS "Flexiband" reference capture
-# `20171017_09-51-43_III-7a_short.zip` (recorded in Hanoi, 2017-10-17),
-# demultiplexes the three frequency bands it interleaves, then acquires and
-# tracks satellites on GPS L1 C/A, Galileo E1B (both on the L1 band) and
-# GPS L5I (on the L5 band) — exercising the multi-band `track!` path with two
-# front-ends running at different sample rates.
-#
-# The test is OPT-IN: it is skipped unless
-# `ENV["TRACKING_RUN_INTEGRATION_TEST"] = "true"` is set, so a plain `]test`
-# never triggers the 1.6 GB download. CI enables it on a single matrix job.
-# The zip is cached in a Scratch.jl scratchspace so it is only downloaded
-# once.
+# Opt-in via `ENV["TRACKING_RUN_INTEGRATION_TEST"] = "true"` (1.6 GB download, cached
+# in a Scratch.jl scratchspace). CI enables it on one matrix job.
 #
 # ── Capture format (Flexiband / ION SDR-metadata standard) ─────────────────
 # The `.usb` file is a stream of fixed 1024-byte USB frames:
@@ -34,8 +27,8 @@ module FlexibandIntegrationTest
 #     I/Q packed as I=high nibble, Q=low nibble, two's complement.
 #   • L5 (40.5 MHz, GPS L5) — 2 samples/chunk packed into one byte: 2-bit
 #     signed I/Q, sample 0 in the high bits (wordshift=Left). The 2-bit
-#     levels are sign-magnitude {00,01,10,11} → {+1,+3,-3,-1} (NOT two's
-#     complement — that would carry a -0.5 DC bias and spawn false peaks).
+#     levels are sign-magnitude {00,01,10,11} → {+1,+3,-3,-1} (two's
+#     complement would add a DC bias and false peaks).
 #
 # Band metadata is in the companion `.xml` (ION SDR-metadata standard):
 #   L1: center 1580.0 MHz       → GPS L1 / Galileo E1 IF = 1575.42 - 1580.0  = -4.58   MHz
@@ -133,15 +126,9 @@ nframes(seconds) = ceil(Int, seconds * FREQBASE / CYCLES)
 # the zip, strip the per-frame header/footer, and return the concatenated
 # payload bytes. Reading only the prefix avoids inflating the full 1.9 GB file.
 #
-# The stream is *self-terminating*: only the first 1_638_984 frames (~13.68 s)
-# of this capture are well-formed. From there to the nominal ~15.7 s end the
-# `.usb` is corrupt — broken `0x55 0xAA` preambles and garbage frame counters —
-# and demuxing those bytes yields noise rather than signal. A tracking loop fed
-# that noise loses lock in the final ~2 s, which is exactly the L5 "lock loss"
-# of issue #157 (a capture-tail artifact, not a loop-robustness bug). So the
-# reader stops at the first malformed frame and returns only the valid prefix
-# instead of trusting the frame count; pass a large `nblocks` to get the whole
-# valid span. The returned length therefore caps at the valid extent.
+# Stops at the first malformed frame: only the first 1_638_984 frames (~13.68 s) are
+# well-formed, and the corrupt ~2 s tail demuxes to noise (the "lock loss" of
+# issue #157). Pass a large `nblocks` to get the whole valid span.
 function read_payload(zippath, nblocks)
     reader = ZipFile.Reader(zippath)
     try
@@ -218,28 +205,23 @@ else
         zippath = download_capture()
         @test filesize(zippath) == ZIP_SIZE
 
-        # Acquire on the first 40 ms, then track in `n_chunks` consecutive
-        # 100 ms chunks so we can confirm each loop has *settled* (its Doppler
-        # estimate stops changing), not merely that it lands near the coarse
-        # acquisition value (issue #152).
+        # Acquire on the first 40 ms, then track `n_chunks` 100 ms chunks to check each
+        # loop has settled, not merely that it lands near acquisition (issue #152).
         n_chunks = 3
         chunk_seconds = 0.100
         payload = read_payload(zippath, nframes(n_chunks * chunk_seconds + 0.005))
         l1 = demux_l1(payload)
         l5 = demux_l5(payload)
 
-        # The 81:40.5 MHz rate ratio is exactly 2:1, so the two bands span the
-        # same wall-clock duration sample-for-sample — required by the
-        # multi-band `track!` boundary check.
+        # Exact 2:1 rate ratio ⇒ equal durations, as multi-band `track!` requires.
         @test length(l1) == 2 * length(l5)
         @test length(l1) / ustrip(Hz, FS_L1) ≈ length(l5) / ustrip(Hz, FS_L5)
 
         n_acq_l1 = round(Int, ustrip(Hz, FS_L1) * 0.040)   # 40 ms
         n_acq_l5 = round(Int, ustrip(Hz, FS_L5) * 0.040)
 
-        # Coherent integration time sets the acquired-Doppler resolution that
-        # is handed to tracking: ≥4 ms for L1 C/A and E1B, and a full 10 ms
-        # NH10 secondary-code period for L5I.
+        # Coherent integration sets the acquired-Doppler resolution handed to tracking:
+        # 4 ms for L1 C/A and E1B, a full 10 ms NH10 period for L5I.
         detected(acqs) = filter(a -> is_detected(a; pfa = 1e-8), acqs)
         acq_l1 = detected(
             acquire(
@@ -281,22 +263,16 @@ else
         @info "Flexiband acquisition" GPS_L1CA = prns_l1 Galileo_E1B = prns_e1 GPS_L5I =
             prns_l5
 
-        # Deterministic capture + fixed acquisition params → a fixed satellite
-        # set. Assert it exactly so a regression in the demux, the band
-        # parameters, or acquisition shows up as a changed PRN list.
-        #   GPS L5 is only carried by Block IIF satellites (Oct 2017), so of the
-        #   six L1 C/A satellites only PRN 6 (IIF) also appears on L5; PRN 9 (IIF)
-        #   is below the L1 detection threshold but acquires on L5.
+        # Exact PRN sets, so a demux, band-parameter or acquisition regression shows.
+        # Only Block IIF carried L5 in 2017: PRN 6 on both bands; PRN 9 is below the L1
+        # threshold but acquires on L5.
         @test prns_l1 == [2, 5, 6, 12, 17, 19]
         @test prns_e1 == [1, 7, 8, 26]
         @test prns_l5 == [6, 9]
-        # GPS PRN 6 is visible on both the L1 and L5 bands — a cross-band check
-        # that both demuxes are correct and time-aligned.
+        # Cross-band check that both demuxes are correct and time-aligned.
         @test 6 in prns_l1 && 6 in prns_l5
 
-        # Multi-band TrackState: GPS L1 C/A and Galileo E1B share the L1 band;
-        # GPS L5I is its own band. `track!` walks each group against its band's
-        # measurement.
+        # GPS L1 C/A and Galileo E1B share the L1 band; GPS L5I is on L5.
         track_state = TrackState(;
             signals = (
                 gps_l1 = (GPSL1CA(),),
@@ -314,10 +290,8 @@ else
             track_state = add_satellite!(track_state, a; group = :gps_l5)
         end
 
-        # Track the chunks in sequence on the persistent state (each `track!`
-        # resets the hard-bit buffer, which caps at 128 bits, so the whole span
-        # cannot go through a single call). Record each satellite's carrier
-        # Doppler after every chunk so we can check it has settled.
+        # Chunked to record each satellite's carrier Doppler per chunk and check it
+        # has settled.
         groups_acqs = ((:gps_l1, acq_l1), (:galileo, acq_e1), (:gps_l5, acq_l5))
         nl1 = round(Int, ustrip(Hz, FS_L1) * chunk_seconds)
         nl5 = nl1 ÷ 2
@@ -341,21 +315,10 @@ else
             end
         end
 
-        # Every acquired satellite — on all three signals — must:
-        #
-        #   1. HOLD LOCK near acquisition. The acquired Doppler is only coarse:
-        #      the 4 ms L1 C/A and E1B coherent integration (and the 10 ms L5I
-        #      NH10 period) give a 250 Hz acquisition bin, so a correctly
-        #      tracking loop can legitimately sit up to ~125 Hz (half a bin)
-        #      from it — the tracked value is the *refinement* of acquisition,
-        #      not the other way round. A 150 Hz tolerance covers the half-bin
-        #      plus margin. (A tighter bound is meaningless here and was only
-        #      ever met on AVX-512 by a since-fixed Float32 rounding artifact —
-        #      issue #152.)
-        #   2. BE SETTLED. The last two 100 ms Doppler estimates must agree to
-        #      well within an acquisition bin, i.e. the loop has converged and
-        #      is holding — not drifting or losing lock. This is the real
-        #      "tracks correctly" check, independent of the coarse acquisition.
+        # Every acquired satellite must:
+        #   1. stay within 150 Hz of acquisition: half the 250 Hz acquisition bin plus
+        #      margin, since tracking refines the coarse acquired Doppler (issue #152);
+        #   2. be settled: the last two Doppler estimates agree well within a bin;
         #   3. have C/N0 well above the noise floor.
         for (group, acqs) in groups_acqs
             for a in acqs
@@ -368,34 +331,15 @@ else
     end
 
     # ── Full-span lock-hold regression, all signals (issue #157) ────────────
-    # Track GPS L1 C/A, Galileo E1B and GPS L5I across the *entire valid*
-    # capture in 0.2 s chunks and assert every loop holds lock the whole way.
+    # Track all three signals across the entire valid capture (see `read_payload` for
+    # the corrupt tail) in 0.2 s chunks; every loop must hold lock the whole way.
     #
-    # The original report was an L5 lock loss in the final ~1 s; it turned out
-    # the `.usb` stream's well-formed frames stop at ~13.68 s and the file's
-    # trailing ~2 s is corrupt. The corruption is in the band-interleaved 6-byte
-    # chunk, so it feeds *every* band noise from the same instant — L1 C/A and
-    # Galileo E1B lose lock there too (their C/N0 collapses identically; only
-    # their carrier Doppler stays nearer nominal, because the wider-band loops
-    # are not the point — C/N0 is). `read_payload` now truncates at the first
-    # malformed frame, so the span tracked here covers only valid data and every
-    # loop must stay locked across all of it; a tail-robustness regression would
-    # resurface here as a chunk that drifts or collapses.
-    #
-    # Demuxing the whole valid span at once would materialize ~13 GB of samples
-    # (81 MHz + 40.5 MHz × ComplexF32) and OOM the runner, so each band is
-    # demuxed one 0.2 s window at a time from a `@view` into the retained ~1.7 GB
-    # of packed payload bytes; only one window of samples (~0.2 GB) is live at a
-    # time.
+    # Demuxing the whole span at once would need ~13 GB, so each 0.2 s window is
+    # demuxed from a `@view` into the ~1.7 GB of packed payload bytes.
     @testset "All signals hold lock across the full valid capture (#157)" begin
         zippath = download_capture()
 
-        # Read the whole valid span *once* as packed bytes (`read_payload` caps
-        # at the valid prefix, dropping the corrupt tail); demux is done
-        # per-window below to bound memory. The per-chunk lock-hold checks are
-        # the real assertions here — they confirm Tracking.jl, not the reader:
-        # if `read_payload` ever regressed and handed back the garbage tail, the
-        # C/N0 checks on those chunks would fail.
+        # Whole valid span as packed bytes; demuxed per window below.
         payload = read_payload(zippath, num_usb_frames(zippath))
         total_cycles = length(payload) ÷ CHUNK        # base-clock cycles (6 B each)
 
@@ -461,19 +405,13 @@ else
 
         groups_acqs = ((:gps_l1, acq_l1), (:galileo, acq_e1), (:gps_l5, acq_l5))
         chunk_seconds = 0.2
-        # One 6-byte cycle carries 4 L1 + 2 L5 samples, so a window expressed in
-        # whole cycles keeps both bands sample-for-sample time-aligned (the rate
-        # ratio is exactly 2:1) — required by the multi-band `track!` check.
+        # Whole 6-byte cycles (4 L1 + 2 L5 samples) keep both bands time-aligned.
         cycles_per_chunk = round(Int, FREQBASE * chunk_seconds)
         n_chunks = total_cycles ÷ cycles_per_chunk
         # The valid span is ~13.68 s, so 0.2 s chunks give a long track.
         @test n_chunks >= 60
 
-        # Every chunk over the whole valid span must hold lock, on every signal:
-        # Doppler within half an acquisition bin (+margin) of the coarse
-        # acquisition and C/N0 well above the noise floor. With the corrupt tail
-        # removed no chunk fails; before the `read_payload` fix the final chunks
-        # collapsed to ~20-30 dB-Hz on all three signals at once (t ≈ 13.8 s).
+        # Every chunk, every signal: lock criteria 1 and 3 of the test above.
         for c = 1:n_chunks
             window =
                 @view payload[((c-1)*cycles_per_chunk*CHUNK+1):(c*cycles_per_chunk*CHUNK)]

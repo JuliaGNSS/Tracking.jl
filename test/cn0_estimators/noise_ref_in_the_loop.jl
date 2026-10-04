@@ -40,8 +40,7 @@ using Tracking:
 _db(x) = ustrip(uconvert(dBHz, x))
 _median(xs) = (v = sort(collect(xs)); v[div(length(v) + 1, 2)])
 
-# Float64, matching what the tracking loop actually builds — see the note in
-# `cn0_estimators/noise_ref.jl`.
+# Float64, as in `cn0_estimators/noise_ref.jl`.
 const T = 1.0ms
 const N₀ = uconvert(Hz^-1, T)              # `E|P|² = N₀/T`, so a unit-noise prompt
 
@@ -50,11 +49,9 @@ const N₀ = uconvert(Hz^-1, T)              # `E|P|² = N₀/T`, so a unit-nois
 _prompts(λ, n, rng) = sqrt(λ) .+ (randn(rng, n) .+ im .* randn(rng, n)) ./ sqrt(2)
 
 @testset "the signals NWPR cannot serve at all (issue #217)" begin
-    # NWPR needs a coherent window of at least two records tiling a navigation
-    # bit. Three configurations admit none, ever, and there it reports its
-    # fallback for good — a *different* estimator with a different bias and, at
-    # the default `MomentsCN0Estimator`, a ≈27.6 dB-Hz floor on pure noise. The
-    # noise reference has no window, so all three are ordinary records to it.
+    # Three configurations where NWPR never gets a window and reports its
+    # fallback (see the table in `NWPRCN0Estimator`); the noise reference has no
+    # window, so they are ordinary records to it.
     bit_buffer = BitBuffer{UInt64}()
     cases = (
         # (signal, blocks per bit, this record's offset in the bit)
@@ -82,13 +79,10 @@ _prompts(λ, n, rng) = sqrt(λ) .+ (randn(rng, n) .+ im .* randn(rng, n)) ./ sqr
             @test Base.length(nwpr) == 0
             @test estimate_cn0(nwpr, T) ==
                   estimate_cn0(Tracking.get_fallback_cn0_estimator(nwpr), T)
-            # The noise reference: inside 1 dB of the truth, with no window and
-            # no fallback anywhere in sight.
+            # The noise reference: inside 1 dB of the truth.
             @test _db(estimate_cn0(reference, T)) ≈ 30 atol = 1.0
 
-            # ... and on **pure noise** the difference is the floor #217 is
-            # about: NWPR's fallback manufactures signal power out of the sample
-            # moments, the reference divides by a floor it was told.
+            # ... and on **pure noise**, the moment-ratio floor of #217.
             noise = _prompts(0.0, 400, rng)
             nwpr_noise =
                 foldl((e, p) -> update(e, p, context), noise; init = NWPRCN0Estimator())
@@ -138,33 +132,17 @@ function _track_noisy(cn0_db, num_blocks; seed = 1, cn0_estimator, blocks = 1)
 end
 
 @testset "in the loop, against NWPR" begin
-    # The gate on flipping the default. Medians over seeds, because every number
-    # here is an estimate of a statistical quantity.
-    #
-    # Measured over 9 seeds and 1200 blocks (this runs 5 and 700 to stay quick):
-    #
-    # |true| NWPR 1-block      | NoiseRef      | NWPR 20-block  | NoiseRef      |
-    # |----|-------------------|---------------|----------------|---------------|
-    # | 25 | 11.2 dB, 56 % -Inf| 23.4, 0 %     | —              | —             |
-    # | 30 | 29.3 ± 1.40       | 29.6 ± 0.62   | —              | —             |
-    # | 40 | 39.7 ± 0.35       | 39.9 ± 0.19   | 27.1 ± 5.79    | 39.8 ± 0.37   |
-    # | 45 | 44.7 ± 0.30       | 44.9 ± 0.13   | 32.9 ± 2.00    | 44.7 ± 0.30   |
+    # A quick version (5 seeds, 700 blocks) of the table in
+    # `default_cn0_estimator`'s docstring. Medians over seeds.
     seeds = 1:5
     gpsl1 = GPSL1CA()
     run(cn0, est; blocks = 1) = [
         _db(estimate_cn0(_track_noisy(cn0, 700; seed, cn0_estimator = est(), blocks), 1)) for seed in seeds
     ]
 
-    # 1-block records, 25 dB-Hz — the regime lock and loss decisions are made in.
-    # What is asserted here is the *structural* claim: the noise reference cannot
-    # produce a degenerate output, because it has no `1 < μ̂ < M` bound to fall
-    # outside of, and it lands near the truth.
-    #
-    # NWPR's degenerate rate here is real and large — 56 % over 9 seeds × 1200
-    # blocks — but five seeds of 700 blocks cannot pin it, and the RNG stream
-    # differs between Julia versions, so the same seeds give 1 in 5 degenerate on
-    # 1.12 and 0 in 5 on 1.10. Asserting an inequality on that count would be
-    # testing the RNG. The long-record collapse below is the robust comparison.
+    # 1-block records, 25 dB-Hz: the noise reference has no `1 < μ̂ < M` bound,
+    # so it never degenerates. NWPR's degenerate count is not asserted: five
+    # seeds cannot pin it and it varies with the Julia version's RNG stream.
     ref_low = run(25.0, () -> NoiseRefCN0Estimator())
     @test count(!isfinite, ref_low) == 0
     @test _median(ref_low) ≈ 25 atol = 3.0
@@ -176,11 +154,8 @@ end
     @test abs(_median(ref_high) - 45) <= abs(_median(nwpr_high) - 45) + 0.1
     @test std(ref_high) < std(nwpr_high)
 
-    # 20-block records — a whole GPS L1 C/A navigation bit. NWPR's window closes
-    # on a single record, where `NBP ≡ WBP` and no window exists at all, so it
-    # falls back for good. The non-coherent reference does not notice: this is
-    # the phase-noise wash the plan deliberately left out of its model, and the
-    # one number that had to come from a real loop.
+    # 20-block records (a whole L1 C/A bit): NWPR falls back for good, the
+    # non-coherent reference is unaffected by the loop's phase noise.
     nwpr_long = run(45.0, () -> NWPRCN0Estimator(gpsl1); blocks = 20)
     ref_long = run(45.0, () -> NoiseRefCN0Estimator(); blocks = 20)
     @test _median(ref_long) ≈ 45 atol = 1.5
@@ -190,14 +165,9 @@ end
 end
 
 @testset "the reference's self-leakage is the size the design says" begin
-    # The one bias this estimator carries and NWPR does not: the reference
-    # despreads with a *wrong* PRN, so it also collects the tracked satellite's
-    # own power, `ε_self = C/f_chip`. Measured as a paired comparison — the same
-    # noise realisation, the same PRN rotation, the same code-phase and carrier
-    # draws, with and without the satellite — so the loop's own σ cancels and the
-    # prediction is testable at a few per cent rather than needing hundreds of
-    # seeds. The reference's `rng` is what makes the last of those hold: the
-    # draws are random but seeded, so the two runs despread identically.
+    # `ε_self = C/f_chip`; see `NoiseRefCN0Estimator`. A paired comparison with
+    # and without the satellite (same noise, same seeded draws), so the loop's σ
+    # cancels.
     gpsl1 = GPSL1CA()
     fs = 4e6Hz
     num_samples = 40_000

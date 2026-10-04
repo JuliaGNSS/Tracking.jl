@@ -38,11 +38,8 @@ a batch of acquisition results.
     signal. Errors on an empty vector (no signal to infer).
   - **Multi-group**: pass `signals = (group_a = (...), group_b = (...))` as
     in the regular [`TrackState`](@ref) constructor. Each acquisition is
-    routed to the group whose longest-primary-code signal matches
-    `acq.system` (signals tied at the maximum code length all qualify).
-    Errors on an acq whose system doesn't match any group, and on an acq
-    that matches more than one group (use `add_satellite!` with an
-    explicit `group =` instead).
+    routed as by [`add_satellite!`](@ref); an acq matching no group or more
+    than one group errors.
 
 Other `kwargs` (`doppler_estimator`, `num_ants`, ...) forward to the
 regular `TrackState` constructor.
@@ -103,26 +100,17 @@ function Tracking.TrackState(
     ts
 end
 
-# Does `system` qualify as a handoff signal for a group declaring
-# `sig_tuple`? It must appear in the tuple with a primary code length
-# equal to the group's longest — the code-phase scaling is unambiguous
-# for any signal tied at the maximum length (e.g. GPS L1C-D and L1C-P
-# are both 10230 chips, so either acquisition is a valid handoff).
-# Signals compare by id (`GNSSSignals.get_signal_id`), not by `typeof`:
-# the signal's code-matrix type parameter is not part of its identity, so
-# an acquisition carrying e.g. `GPSL1CA{Matrix{Int16}}` still matches a
-# group declaring the same signal over a differently-typed code matrix.
+# Does `system` qualify as a handoff signal for `sig_tuple`, i.e. is it one of
+# the signals tied at the longest primary code length? Compared by signal id, not
+# `typeof`: the code-matrix type parameter is not part of a signal's identity.
 @inline function _acq_signal_matches(sig_tuple::Tuple, system::AbstractGNSSSignal)
     longest_len = get_code_length(_longest_code_signal(sig_tuple))
     sys_id = get_signal_id(system)
     any(s -> get_signal_id(s) === sys_id && get_code_length(s) == longest_len, sig_tuple)
 end
 
-# Walk the TrackState's groups and return the key of the one whose
-# longest-code signal matches `acq.system` (code-length ties all
-# qualify). Errors if no group matches, and also if more than one group
-# matches — silently routing to the first declared group would be a
-# footgun when two groups share a signature.
+# Key of the unique group `acq.system` qualifies for; errors on no match and on
+# an ambiguous match rather than silently picking the first group.
 @inline function _find_group_for_acq(track_state::TrackState, acq::AcquisitionResults)
     keys_tuple = keys(track_state.groups)
     acq_name = get_signal_name(acq.system)
@@ -168,17 +156,13 @@ remaining tracking state (correlator, post-corr filter, doppler-estimator
 state) is initialized to the group's defaults.
 
 `acq.system` must be a signal with the **longest code** in the
-group's signal tuple — its code-phase scaling is the only one that's
-unambiguous when the group tracks multiple signals on shared chips.
+group's signal tuple — its code phase is the only unambiguous one.
 For a group tracking `(GPS L1C-P, GPS L1C-D, GPS L1 C/A)`, hand over a
 GPS L1C-P or L1C-D acquisition (both 10230 chips); L1CA's 1023-chip
 period would alias inside the 10230-chip primary.
 
-If `group` is left as `nothing` (the default), the routing is inferred
-by matching `acq.system` against each group's longest-primary-code
-signal — the same rule the [`TrackState(acqs; signals = ...)`](@ref)
-constructor uses. Passing an explicit `group =` keyword bypasses the
-inference and asserts the match against that specific group.
+With `group = nothing` (the default) the group is inferred by this rule;
+an explicit `group =` bypasses the inference and asserts the match.
 """
 function Tracking.add_satellite!(
     track_state::TrackState,
@@ -204,9 +188,7 @@ function Tracking.add_satellite(
     Tracking.add_satellite(track_state, resolved, sat)
 end
 
-# Shared body of the mutable/immutable acq pair above: resolve (or assert)
-# the target group for `acq.system`, then build the group's
-# default-correlator TrackedSat from the acquisition handoff values.
+# Shared body of the acq pair above: resolve the group and build its default sat.
 @inline function _group_and_sat_for_acq(
     track_state::TrackState,
     acq::AcquisitionResults,
@@ -227,15 +209,11 @@ end
 """
     add_satellite!(track_state, acqs::AbstractVector{<:AcquisitionResults}; group = nothing)
 
-Batch variant: add each entry of `acqs` to `track_state`. Same validation
-as the single-acq form runs per entry. With `group = nothing` (the
-default) each acq is routed to the matching group by signal id, so a
-mixed `Vector{AcquisitionResults}` from multiple constellations lands in
-the right place. Passing an explicit `group =` keyword applies that
-group to every entry (use the single-acq form per entry if your vector
-mixes groups). Returns the track state carrying the estimator after all
-per-entry [`Tracking.update_estimator_on_handoff`](@ref) updates — keep
-using the return value.
+Batch variant: add each entry of `acqs` to `track_state`, validated and (with
+`group = nothing`) routed per entry like the single-acq form, so a vector mixing
+constellations lands in the right groups. An explicit `group =` applies to every
+entry. Keep using the returned track state; it carries the estimator after
+all [`Tracking.update_estimator_on_handoff`](@ref) updates.
 """
 function Tracking.add_satellite!(
     track_state::TrackState,
@@ -265,11 +243,8 @@ function Tracking.add_satellite(
     end
 end
 
-# Check that `acq.system` is a longest-code signal of the group's
-# signal tuple (ties at the maximum code length all qualify). The
-# longest signals are what define the group's `max_code_length` wrap
-# point — feeding code_phase from a shorter signal would alias into the
-# wrong place inside the longer signal's primary code period.
+# Check that `acq.system` is a longest-code signal of the group (see the
+# `add_satellite!` docstring above).
 @inline function _assert_acq_matches_group(
     track_state::TrackState,
     group::Symbol,
@@ -298,19 +273,11 @@ end
     )
 end
 
-# Recursive walk to find the signal with the largest primary code
-# length in a signal tuple. Secondary codes are negotiated by tracking
-# itself, so the wrap point that matters for handoff is the primary.
-# Type-stable on concrete tuple types, folds at compile time.
-#
-# The physically meaningful criterion is the longest code *period* (in
-# time): a shorter-period code's phase is ambiguous about which
-# repetition it sits in within a longer-period code. Comparing raw code
-# *length* (chips) is equivalent only because every signal in a group
-# shares one chip rate (enforced by the SignalGroup constructor — see
-# `_validate_signal_group` in sat_state.jl), so period ∝ length. If that
-# equal-chip-rate invariant is ever relaxed (see issue #151), switch this
-# to compare `get_code_length(s) / get_code_frequency(s)`.
+# The signal with the longest primary code (secondary codes are resolved by
+# tracking itself); folds at compile time. What matters is the code *period*;
+# comparing chips is equivalent only because a group shares one chip rate (see
+# `_validate_signal_group` in sat_state.jl). If that is relaxed (issue #151),
+# compare `get_code_length(s) / get_code_frequency(s)` instead.
 @inline _longest_code_signal(t::Tuple{AbstractGNSSSignal}) = only(t)
 @inline function _longest_code_signal(
     t::Tuple{AbstractGNSSSignal,AbstractGNSSSignal,Vararg{AbstractGNSSSignal}},

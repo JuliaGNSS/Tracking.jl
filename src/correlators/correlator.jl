@@ -6,38 +6,25 @@ $(SIGNATURES)
 
 A single completed correlator output produced within one processing chunk.
 
-`track!` processes each measurement in fixed-size time chunks. Every time a
-signal's coherent integration completes inside a chunk, the (raw,
-un-normalized) accumulator is snapshotted into a [`CorrelatorOutput`] and
-appended to that signal's `correlator_outputs` array; the Doppler estimator
-then folds over those records after the chunk. Storing the raw correlator plus
-`integrated_samples` lets the estimator normalize it (dividing by the sample
-count) and matches `last_fully_integrated_correlator`.
+Every time a signal's coherent integration completes inside a `track!` chunk,
+the raw (un-normalized) accumulator is snapshotted into a `CorrelatorOutput` and
+appended to that signal's `correlator_outputs`; the Doppler estimator folds over
+those records after the chunk.
 
 An **external correlator producer** (e.g. an FPGA) can build these itself and
 feed them straight to the estimator with [`append_correlator_output!`](@ref);
-see [External correlator producers](@ref).
+see [External correlator producers](@ref) for the caller contract.
 
 Fields:
 
-  - `correlator`: the raw accumulated correlator at completion (not normalized).
-    Fill it with the accumulator scaling `normalize` expects — the raw
-    sum-of-products over `integrated_samples` — which an external producer gets
-    for free by reusing [`EarlyPromptLateCorrelator`](@ref) / `update_accumulator`.
+  - `correlator`: the raw sum-of-products over `integrated_samples` (what
+    `normalize` expects), as produced by
+    [`EarlyPromptLateCorrelator`](@ref) / `update_accumulator`.
   - `integrated_samples`: samples integrated into this output (for `normalize`,
-    the loop-filter `integration_time`, and the bit-buffer block count). For an
-    external producer this is the true sample count of that integration.
-  - `sample_index`: sample index at which this integration ended, on the time
-    grid the Doppler estimator and vector tracking read. The software correlate
-    phase writes it **buffer-relative** — the end sample within the current
-    `track!` measurement (`signal_start_sample` returns to 1 at the top of every
-    `track!` call). An external producer with a free-running **global** sample
-    counter must therefore map its global timestamp onto the same per-chunk
-    origin before storing it here: subtract the sample index of the current
-    chunk/epoch origin so the value is relative to the chunk the estimator is
-    folding, keeping every satellite on one consistent time grid. The estimator
-    itself does not read `sample_index` (the loop filters key off
-    `integrated_samples`); it is preserved for downstream vector/Kalman tracking.
+    the loop-filter `integration_time`, and the bit-buffer block count).
+  - `sample_index`: sample at which this integration ended, relative to the
+    start of the sample buffer passed to `track!`. Not read by the estimator;
+    preserved for downstream vector/Kalman tracking.
 """
 struct CorrelatorOutput{C<:AbstractCorrelator}
     correlator::C
@@ -66,10 +53,8 @@ Get number of antennas from correlator
 """
 get_num_ants(correlator::AbstractCorrelator{M}) where {M} = M
 
-# The same count as a **type-stable** `NumAnts{M}`, taken off the correlator's own
-# type parameter. `NumAnts(get_num_ants(c))` would route the count through a
-# runtime `Int` and lose inference, which costs an allocation per record on every
-# path that dispatches on it.
+# The same count as a type-stable `NumAnts{M}`; `NumAnts(get_num_ants(c))` would
+# go through a runtime `Int`, lose inference and allocate per record.
 @inline _num_ants_val(::AbstractCorrelator{M}) where {M} = NumAnts{M}()
 
 """

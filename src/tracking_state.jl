@@ -2,15 +2,10 @@
 $(SIGNATURES)
 
 Construct a fresh `TrackState` from a declaration of which signals each
-group tracks. A *group* is a set of satellites that share the same
-signal-tuple shape (and therefore the same concrete `TrackedSat` type,
-which is what gives the hot loop type stability). Each entry in `signals`
-is a tuple of `AbstractGNSSSignal` instances; the first signal is the
-estimator-driver signal — the one the Doppler estimator uses to update the
-satellite-shared carrier and code Doppler (with the conventional PLL/DLL,
-it's the signal the discriminator runs on). The group key
-(`:modern_gps`, `:legacy_gps`, …) is what `add_satellite!` later refers
-to.
+group tracks. Each entry in `signals` is a tuple of `AbstractGNSSSignal`s
+whose first signal is the [Estimator-driver signal](@ref), whose correlator feeds
+the Doppler estimator;
+the group key (`:modern_gps`, …) is what `add_satellite!` later refers to.
 
 ```julia
 track_state = TrackState(;
@@ -32,13 +27,9 @@ track_state = TrackState(; signal = GPSL1CA())
 This is equivalent to `TrackState(; signals = (default = (GPSL1CA(),),))`.
 `add_satellite!` may then omit the `group=` keyword.
 
-`TrackState` is parameterized on the per-group `TrackedSat` value type,
-which captures the correlator type, post-corr-filter type, and
-doppler-estimator-state type — these are frozen at construction.
-`add_satellite!` cannot change these types; it can only fill in
-satellites of the already-fixed shape. Power users who need non-default
-correlator or PCF *types* should construct `TrackedSat`s themselves and
-hand them to the `add_satellite!(track_state, group, sat)` overload.
+Each group's `TrackedSat` type (correlator, post-corr filter, estimator state)
+is frozen at construction; for non-default correlator or PCF *types*, build the
+`TrackedSat`s yourself and use `add_satellite!(track_state, group, sat)`.
 
 `noise_estimators` declares the per-signal noise sources
 ([`AbstractNoiseEstimator`](@ref)s keyed by signal id, `GNSSSignals.get_signal_id`
@@ -75,17 +66,12 @@ function TrackState(;
     end
     sig_groups_nt =
         isnothing(signal) ? _normalize_signal_groups(signals) : (default = (signal,),)
-    # Default estimator: the auto-bandwidth `ConventionalAssistedPLLAndDLL`.
-    # Each group's satellites are then seeded (via `init_estimator_state`)
-    # with the loop bandwidth recommended for that group's own driver signal,
-    # so every group gets the right bandwidth without a cross-group compromise.
+    # Auto-bandwidth default: `init_estimator_state` sizes each sat's loop from
+    # its own group's driver signal, so groups need no cross-group compromise.
     estimator =
         isnothing(doppler_estimator) ? ConventionalAssistedPLLAndDLL() : doppler_estimator
-    # Each entry of `sig_groups_nt` is either:
-    #   - a bare `Tuple{Vararg{AbstractGNSSSignal}}` (the common case,
-    #     uses the constructor's `num_ants` kwarg); or
-    #   - a pre-built `SignalGroup` instance (carries its own band /
-    #     num_ants — used when the user wants per-band overrides).
+    # Entries are bare signal tuples (use the `num_ants` kwarg) or pre-built
+    # `SignalGroup`s (carry their own band / num_ants).
     groups = map(sig_groups_nt) do entry
         _normalize_group_entry(entry, estimator, num_ants)
     end
@@ -93,10 +79,8 @@ function TrackState(;
     TrackState(groups, estimator, _resolve_noise_estimators(noise_estimators, groups))
 end
 
-# Resolve the `noise_estimators` kwarg. `nothing` provisions one
-# `CorrelatorNoiseEstimator` per *signal* asking for a density — and nothing at
-# all for the others, which is what keeps the despread off the bill of anyone who
-# does not consume it.
+# Resolve the `noise_estimators` kwarg; `nothing` provisions a
+# `CorrelatorNoiseEstimator` only for signals that need a density.
 @inline function _resolve_noise_estimators(
     noise_estimators::NamedTuple,
     groups::SignalGroups,
@@ -112,16 +96,10 @@ end
     )
 end
 
-# Every provisioned estimator must despread as many antennas as its signal's
-# group carries, or the floor it measures and the prompt it is divided into
-# describe different arrays. The count is not free-standing configuration — it
-# comes off the group — so an auto-provisioned estimator simply takes it.
-#
-# An explicitly-passed estimator cannot, so it is checked instead, and checked
-# here rather than at the first record: this is where both halves are known, and
-# a shape error inside the per-chunk fold names nothing a user can act on. The
-# check reads the estimator's count off `noise_density_type` alone, so it holds
-# for any `AbstractNoiseEstimator`, a custom hardware source included.
+# An explicitly passed noise estimator must cover as many antennas as its signal's
+# group, or the measured floor and the prompt describe different arrays. Checked at
+# construction (not in the per-chunk fold) for an actionable error; reads the count
+# off `noise_density_type`, so it works for any `AbstractNoiseEstimator`.
 @inline function _validate_noise_estimator_num_ants(
     noise_estimators::NamedTuple,
     groups::SignalGroups,
@@ -156,15 +134,9 @@ end
 @inline _num_ants_count(::NumAnts{M}) where {M} = M
 
 # `(signal id, num_ants)` for the signals that need a noise density, deduplicated
-# and in first-encounter order across all groups. Deduplicated because two groups
-# may carry the same signal (the same modulation has the same noise floor however
-# it is grouped), and the reference is despread once per signal per chunk.
-#
-# Pairing each id with its group's `num_ants` is unambiguous even across groups:
-# a signal type determines its band, and `_validate_same_band_num_ants` already
-# forces groups sharing a band to agree on the antenna count.
-#
-# Tuple recursion, so it folds at compile time out of the groups' types.
+# (one despread per signal per chunk) in first-encounter order. The pairing is
+# unambiguous: a signal fixes its band, and `_validate_same_band_num_ants` makes
+# same-band groups agree on `num_ants`. Tuple recursion folds at compile time.
 @inline _noise_reference_signal_entries(::Tuple{}, acc::Tuple) = acc
 @inline _noise_reference_signal_entries(t::Tuple, acc::Tuple) =
     _noise_reference_signal_entries(
@@ -173,25 +145,16 @@ end
     )
 
 # Which of a group's signals use a C/N₀ estimator that reads a noise density?
-#
-# Asked of the group's **slot type**, never of a satellite value, and that is
-# load-bearing rather than tidy: the slot type is fixed at `TrackState`
-# construction — from the user's own `TrackedSat`s where the group was handed
-# some, and from `_make_template_tracked_sat` (i.e. `default_cn0_estimator`)
-# where it was declared empty — so it is already the right answer either way,
-# *and* it is a compile-time constant. Branching on `isempty(satellites)`
-# instead would leave the whole `noise_estimators` NamedTuple, keys included,
-# inferring as a union of "provisioned" and "not", which would infect
-# `TrackState`'s own type.
+# Asked of the group's slot type, never of a satellite value: the slot type is
+# right for empty and populated groups alike and is a compile-time constant, so
+# the `noise_estimators` NamedTuple (and thus `TrackState`'s type) stays inferable.
 @inline _group_noise_reference_keys(
     ::Type{<:TrackedSat{Signals}},
     num_ants::NumAnts,
     acc::Tuple,
 ) where {Signals} = _signal_type_noise_reference_keys(Signals, num_ants, acc)
 
-# Recurse down the signals' tuple type. Both the signal id and the C/N₀ estimator
-# type are parameters of `TrackedSignal`, and `NumAnts` is a singleton, so the
-# whole walk collapses to a literal tuple of `(Symbol, NumAnts)` pairs.
+# Recurse down the signals' tuple type; folds to a literal `(Symbol, NumAnts)` tuple.
 @inline _signal_type_noise_reference_keys(::Type{Tuple{}}, ::NumAnts, acc::Tuple) = acc
 @inline function _signal_type_noise_reference_keys(
     ::Type{T},
@@ -213,10 +176,8 @@ end
     ::Type{<:TrackedSignal{Sig,B,C,PCF,CN0}},
 ) where {Sig,B,C,PCF,CN0} = CN0
 
-# The band a signal type sits on, as a compile-time constant. `get_band` is
-# defined on the signal *type* and every band is a singleton, so this folds to a
-# literal symbol — which is what lets the noise walk index `BandMeasurements`
-# from a signal key without a runtime lookup.
+# The band id of a signal type, folded to a literal symbol at compile time so the
+# noise walk can index `BandMeasurements` without a runtime lookup.
 @inline _signal_band_id(::Type{Sig}) where {Sig<:AbstractGNSSSignal} =
     get_band_id(get_band(Sig))
 
@@ -239,25 +200,17 @@ end
     SignalGroup(band, sats, sig_tuple, num_ants)
 end
 
-# Pre-built SignalGroup → pass through, but if its `satellites` dict
-# value type doesn't match the estimator the user passed to TrackState,
-# rebuild the template so the slot type lines up. The common case where
-# the user built the SignalGroup with `SignalGroup((sigs,); num_ants =
-# ..., doppler_estimator = same)` then it just passes through.
+# Pre-built SignalGroup → pass through, unless it is empty and its slot type
+# doesn't match the TrackState's estimator; then rebuild the empty dict. The
+# group's own `num_ants` wins over the TrackState kwarg.
 @inline function _normalize_group_entry(
     g::SignalGroup,
     doppler_estimator::AbstractDopplerEstimator,
     _num_ants::NumAnts,
 )
-    # If the existing slot type already matches the estimator, keep it.
-    # Otherwise rebuild the empty dict with a fresh template that uses
-    # the TrackState's estimator. The user's `num_ants` on the
-    # SignalGroup wins — the TrackState's `num_ants` kwarg is only the
-    # default for bare-tuple entries.
     sats = g.satellites
     if !isempty(sats)
-        # Pre-populated SignalGroup — the slot type is fixed by the
-        # existing sats, so it must already match the estimator.
+        # Populated: the slot type is fixed by the sats, so it must already match.
         _assert_doppler_estimator_types_match(sats, doppler_estimator)
         return g
     end
@@ -269,11 +222,8 @@ end
     SignalGroup(g.band, new_sats, g.signals, g.num_ants)
 end
 
-# Same-band groups must declare identical `num_ants`. Two groups on the
-# same physical band can't be sampled by front-ends with different
-# antenna counts. Walked over the concrete-typed groups tuple at
-# construction; O(num_groups²) but folded at compile time when the
-# groups type is known.
+# Same-band groups must declare identical `num_ants` (one front-end per band).
+# O(num_groups²), folded at compile time for a concrete groups type.
 @inline function _validate_same_band_num_ants(groups::NamedTuple)
     _check_same_band_num_ants(Tuple(groups), ())
 end
@@ -306,10 +256,9 @@ end
 """
 $(SIGNATURES)
 
-Internal helper: build a template `TrackedSat` for a group declared
-as `signal_tuple = (GPSL1C_P(), GPSL1C_D(), GPSL1CA())`. The template's
-data is meaningless (PRN 0, zero Doppler); only its concrete type is
-used to fix the dictionary value type at TrackState construction.
+Internal helper: build a template `TrackedSat` for a group's signal tuple. Its
+data is meaningless (PRN 0, zero Doppler); only its type is used, to fix the
+dictionary value type at TrackState construction.
 """
 function _make_template_tracked_sat(
     signal_tuple::Tuple{Vararg{AbstractGNSSSignal}},
@@ -325,10 +274,8 @@ function TrackState(
     doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
     noise_estimators::Maybe{NamedTuple} = nothing,
 )
-    # `signal` is implied by each sat's `signals[1].signal` in the new design;
-    # the positional argument is kept for backward-compatible construction but
-    # is otherwise unused — the default estimator auto-sizes each sat's loop
-    # bandwidth from its own driver signal.
+    # `signal` is unused (implied by each sat's driver signal); kept for
+    # backward compatibility.
     sats_dict = to_dictionary(tracked_sats)
     _assert_doppler_estimator_types_match(sats_dict, doppler_estimator)
     groups = (default = _signal_group_from_dict(sats_dict),)
@@ -353,11 +300,8 @@ function TrackState(
     )
 end
 
-# Verify every sat in `dict` has a `doppler_estimator_state` matching
-# what `estimator` would produce. The check is type-only so it has no
-# runtime cost in the typed-correct case. Throws an ArgumentError that
-# names the mismatched concrete types if the user built sats with a
-# different estimator than the one configured on the TrackState.
+# Type-only check that the sats' `doppler_estimator_state` matches what
+# `estimator` would produce; throws an ArgumentError naming both types.
 @inline function _assert_doppler_estimator_types_match(
     dict::Dictionary{<:Any,<:TrackedSat},
     estimator::AbstractDopplerEstimator,
@@ -400,10 +344,8 @@ function TrackState(
     )
 end
 
-# Copy-with-overrides constructor: rebuild a TrackState reusing the
-# input's groups / estimator unless an override is supplied. The
-# overrides are constrained to the input's concrete `G` / `DE` types so
-# the result's type parameters are preserved.
+# Copy-with-overrides constructor; overrides are constrained to the input's
+# concrete types so the result's type parameters are preserved.
 function TrackState(
     track_state::TrackState{G,DE,NE};
     groups::Maybe{G} = nothing,
@@ -418,11 +360,8 @@ function TrackState(
     )
 end
 
-# Build a SignalGroup from a non-empty satellites dictionary by recovering
-# the signal-instance tuple, band, and antenna count from any sat. Used by
-# the positional `TrackState(signal, sats)` / `TrackState(satellites)`
-# constructors. Empty dicts can't be recovered this way (no sats to inspect)
-# — requires at least one sat in the dict.
+# Build a SignalGroup from a non-empty satellites dictionary, recovering the
+# signal tuple, band and antenna count from its first sat.
 @inline function _signal_group_from_dict(dict::Dictionary{<:Any,<:TrackedSat})
     isempty(dict) && throw(
         ArgumentError(
@@ -438,13 +377,9 @@ end
     SignalGroup(band, dict, sig_tuple, num_ants)
 end
 
-# Immutable reset — the first copy `track` makes of the caller's live
-# `TrackState`. Detaches the key set (`Indices`) as well as the values
-# (`_detach_groups_slot_vectors`, #123) so that a later
-# `add_satellite!`/`remove_satellite!` on the returned state (or on `track`'s
-# output, which derives from it) cannot corrupt the input's key set. The
-# per-iteration loop steps inside `track` reuse this already-detached key set
-# via the cheaper, key-sharing `_copy_groups_slot_vectors`.
+# Immutable reset — the first copy `track` makes of the caller's state. Detaches
+# keys and values (`_detach_groups_slot_vectors`, #123) so later
+# `add_satellite!`/`remove_satellite!` on the result cannot corrupt the input.
 function reset_start_sample_and_bit_buffer(track_state::TrackState)
     new_groups = _detach_groups_slot_vectors(track_state.groups)
     reset_start_sample_and_bit_buffer!(new_groups)
@@ -455,10 +390,6 @@ function reset_start_sample_and_bit_buffer!(track_state::TrackState)
     reset_start_sample_and_bit_buffer!(track_state.groups)
     return track_state
 end
-
-# Loop-termination helper for `track`/`track!` lives in `track.jl` as
-# `_chunks_left` — it iterates the per-band measurement lengths so the
-# chunk grid terminates against each band's own buffer end.
 
 """
 $(SIGNATURES)
@@ -495,11 +426,8 @@ end
 """
 $(SIGNATURES)
 
-Return the first signal of the given group — useful when the caller
-needs the signal instance (for `gen_code`, frequency lookups, …) but
-doesn't already have a sat in hand. The dictionary's value type carries
-the signal type, so this resolves at compile time when `group_idx` is a
-literal `Symbol` / `Integer`.
+Return the first (driver) signal of the given group, read off the group's
+declared signal tuple, so it also works on groups without satellites.
 
 For a single-group `TrackState` the index can be omitted.
 """
@@ -507,8 +435,6 @@ function get_signal(
     track_state::TrackState{<:SignalGroups{N}},
     group_idx::Union{Symbol,Integer,Val},
 ) where {N}
-    # Read the signal off the group's declared signal tuple (not off a
-    # tracked sat) so this also works on declared-but-unpopulated groups.
     first(_index_group(track_state.groups, group_idx).signals)
 end
 
@@ -531,10 +457,6 @@ end
 function get_sat_state(track_state::TrackState{<:SignalGroups{1}})
     only(get_sat_states(track_state, 1))
 end
-
-# `estimate_cn0` follows the same dispatch ladder as the per-signal
-# accessors — its `TrackState` overloads are generated alongside them
-# in the `@eval` loop further down (search for `:estimate_cn0`).
 
 """
 $(SIGNATURES)
@@ -599,14 +521,10 @@ otherwise throws an `ArgumentError` naming the available groups. If a
 satellite with the same `prn` already exists in that group's dictionary,
 it is overwritten.
 
-The satellite dictionary is mutated in place, but callers should keep
-using the *returned* `TrackState`: when the configured estimator's
-[`update_estimator_on_handoff`](@ref) returns a rebuilt estimator (rather
-than mutating in place), the rebuilt estimator is carried by the returned
-`TrackState` — `track_state.doppler_estimator` cannot be replaced in
-place because `TrackState` is immutable. For estimators that update in
-place (including the default conventional ones), the very same
-`track_state` comes back.
+The satellite dictionary is mutated in place, but keep using the *returned*
+`TrackState`: if [`update_estimator_on_handoff`](@ref) rebuilds the estimator,
+only the returned (immutable) `TrackState` carries it. Estimators that update in
+place get the same `track_state` back.
 
 ```julia
 track_state = TrackState(; signals = (modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),))
@@ -637,11 +555,9 @@ end
 """
 $(SIGNATURES)
 
-In-place add (or replace) with a pre-built [`TrackedSat`](@ref) — the
-escape hatch for power users who need non-default correlator or
-post-corr-filter types. The sat's type must match the group's slot type
-already fixed at [`TrackState`](@ref) construction; passing a sat of the
-wrong type errors at dispatch time.
+In-place add (or replace) with a pre-built [`TrackedSat`](@ref), for non-default
+correlator or post-corr-filter types. The sat's type must match the group's slot
+type fixed at [`TrackState`](@ref) construction, or an `ArgumentError` is thrown.
 
 Like the keyword form, the returned `TrackState` carries the estimator
 returned by [`update_estimator_on_handoff`](@ref) — keep using the
@@ -658,10 +574,7 @@ function add_satellite!(
         track_state.doppler_estimator,
         dictionary((sat.prn => sat,)),
     )
-    # `TrackState` is immutable, so a rebuilt estimator can only be honored
-    # through the return value. Estimators that update in place return the
-    # identical object (the contract guarantees the concrete type either
-    # way), and then the input `track_state` is handed back unchanged.
+    # A rebuilt estimator can only be honored through the return value.
     new_estimator === track_state.doppler_estimator && return track_state
     TrackState{G,DE,NE}(
         track_state.groups,
@@ -671,11 +584,8 @@ function add_satellite!(
     )
 end
 
-# Verify that `sat` has exactly the concrete type the group's
-# dictionary slot expects. Throws a clear ArgumentError that names the
-# mismatching types if not; called from the escape-hatch overloads so
-# the user gets a useful message before Dictionaries.jl's `set!` raises
-# a deep MethodError about `convert`.
+# Check `sat` has exactly the group's slot type, with a clear ArgumentError
+# instead of Dictionaries.jl's deep `convert` MethodError.
 @inline function _assert_sat_matches_slot_type(
     track_state::TrackState,
     group::Symbol,
@@ -701,10 +611,7 @@ end
     )
 end
 
-# Dictionary-level variant used by `merge_sats`: the incoming dict's
-# value type must match the group's slot type exactly (not just the
-# estimator-state type) so correlator / PCF / signal-shape mismatches
-# also get the curated error instead of a confusing MethodError.
+# Dictionary-level variant of `_assert_sat_matches_slot_type`, for `merge_sats`.
 @inline function _assert_sats_match_slot_type(
     g::SignalGroup,
     new_sats_dict::Dictionary{<:Any,<:TrackedSat},
@@ -731,8 +638,7 @@ end
     )
 end
 
-# Dictionaries.jl: `insert!` errors on existing key; `set!` overwrites.
-# We want overwrite semantics, matching `merge_sats`.
+# Overwrite semantics (matching `merge_sats`); `insert!` would error on a key.
 @inline insert_or_set!(d::Dictionary, k, v) = set!(d, k, v)
 
 """
@@ -844,14 +750,9 @@ function remove_satellite(
 end
 
 # Collect the `(keys, values)` of every satellite except `prn` into fresh,
-# concretely-typed vectors — the hole-free basis both removal paths rebuild from.
-#
-# Removal must be hole-free (issue #182): `Dictionaries.delete!` only compacts
-# the backing `values` vector once deletions force a rehash; below that threshold
-# it leaves a `#undef` slot that the tracking hot paths (`_reset_one_group!`,
-# `_dc_group_loop!`, `_est_one_group!`) iterate straight into an `UndefRefError`
-# on the next `track!`. The explicit `Vector{I}`/`Vector{T}` (not a `map`/`filter`
-# round trip) keeps the value type concrete, so the result stays type-stable.
+# concretely-typed vectors. Removal must be hole-free (issue #182):
+# `Dictionaries.delete!` can leave a `#undef` slot in `values` that the hot paths
+# (which iterate `values` directly) hit as an `UndefRefError`.
 function _satellites_without(dict::Dictionary{I,T}, prn) where {I,T}
     keys_kept = Vector{I}(undef, 0)
     sats_kept = Vector{T}(undef, 0)
@@ -865,20 +766,12 @@ function _satellites_without(dict::Dictionary{I,T}, prn) where {I,T}
     return keys_kept, sats_kept
 end
 
-# Compile-time dispatch helper: hand back the dictionary slot for the
-# given group key. Bounds and existence are checked at TrackState
-# construction time (the NamedTuple only contains declared keys), so an
-# unknown `group` here triggers the standard NamedTuple KeyErrors.
+# The satellites dictionary of group `group`; unknown keys raise NamedTuple errors.
 @inline _dict_for_group(track_state::TrackState, group::Symbol) =
     track_state.groups[group].satellites
 
-# Resolve the `group=` keyword for the `add_satellite`/`remove_satellite`
-# entry points. `nothing` (the default) means "infer": a single-group
-# TrackState uses its only group regardless of its name; a multi-group
-# TrackState requires an explicit key and otherwise errors with the
-# candidate names (mirroring the Acquisition-handoff routing). A passed
-# Symbol is returned as-is. The single-group branch folds to a constant
-# Symbol at compile time, so it preserves the accessors' type stability.
+# Resolve the `group=` keyword: `nothing` picks the only group of a single-group
+# TrackState (folds to a constant, keeping type stability) and errors otherwise.
 @inline _resolve_group(::TrackState, group::Symbol) = group
 @inline function _resolve_group(track_state::TrackState, ::Nothing)
     g = keys(track_state.groups)
@@ -896,11 +789,8 @@ end
     )
 end
 
-# Build a default-correlator, default-PCF TrackedSat whose
-# signal-tuple shape matches the group's slot in `track_state`. Reads the
-# signal-instance tuple and antenna count straight off the SignalGroup.
-# Carries the acquisition-handoff kwarg defaults for both `add_satellite!`
-# and `add_satellite`, which forward their kwargs here verbatim.
+# Build a default TrackedSat for the group's signals and antenna count. Holds the
+# handoff kwarg defaults for `add_satellite!` / `add_satellite`.
 function _make_default_tracked_sat_for_group(
     track_state::TrackState,
     group::Symbol;
@@ -934,34 +824,17 @@ get_carrier_doppler(s::TrackState, id...) = get_carrier_doppler(get_sat_state(s,
 get_signal_start_sample(s::TrackState, id...) =
     get_signal_start_sample(get_sat_state(s, id...))
 
-# Per-signal accessors. Each takes a trailing signal selector
-# (`Integer` index or `Type{<:AbstractGNSSSignal}`) to disambiguate
-# between the signals tracked on a multi-signal sat. Without a selector
-# they fall back through `get_sat_state` → `only(sat.signals)` and so
-# are only valid on single-signal sats.
-#
-# Addressing forms (using `get_correlator` as the example — applies to
-# every accessor in this block):
+# Per-signal accessors. Addressing forms (e.g. `get_correlator`):
 #   * `get_correlator(track_state)` — 1 group, 1 sat, 1 signal.
 #   * `get_correlator(track_state, prn)` — 1 group, 1 signal.
 #   * `get_correlator(track_state, group, prn)` — multi-group, 1 signal.
-#   * `get_correlator(track_state, group, prn, sig)` — per-signal.
-#
-# The per-signal form always names the group explicitly, even on a
-# single-group TrackState, to keep the API unambiguous. Use `:default`
-# (or `1`) as the group key in the single-group case.
+#   * `get_correlator(track_state, group, prn, sig)` — per-signal; `sig` is an
+#     `Integer` index or a signal type. Always names the group, even on a
+#     single-group TrackState (use `:default` or `1`).
 const _SignalSelector = Union{Integer,Type{<:AbstractGNSSSignal}}
 
-# Each accessor in the loop below gets two `TrackState` overloads:
-#   * `(s, id...)` — varargs forward to `get_sat_state`, covering the
-#     no-arg, prn-only, and (group, prn) shapes via that function's own
-#     dispatch ladder. Sat-level fallback when no signal selector is given.
-#   * `(s, group, prn, sig)` — the per-signal form. `sig` is `Integer` or
-#     `Type{<:AbstractGNSSSignal}`; the lookup goes via the sat-level
-#     accessor (which routes through `_find_signal`).
-#
-# Generated via `@eval` at module load — methods bake into the precompile
-# image, indistinguishable from hand-written ones at runtime.
+# `(s, id...)` forwards to `get_sat_state` (the sat-level forms);
+# `(s, group, prn, sig)` is the per-signal form.
 for fn in (
     :get_integrated_samples,
     :get_correlator,
@@ -1028,17 +901,11 @@ Append an externally built [`NoiseObservation`](@ref) to the addressed
   - `append_noise_observation!(track_state, obs, GPSL1CA)` — or the signal type /
     an instance of it, which is what a caller usually has to hand.
 
-This is the hardware/FPGA fill path, and it is symmetric with what such a
-producer already does for the taps: [`append_correlator_output!`](@ref) per
-signal, `append_noise_observation!` per signal, then
-[`estimate_dopplers_and_filter_prompt!`](@ref) to fold. The two are deliberately
-*not* the same mechanism — see [`append_noise_observation!`](@ref)'s
-estimator-level method for the table of differences.
-
-Per signal and not per band because the floor a record divides by is the
-*post-correlation* one, and that depends on the despreading modulation: a noise
-channel is a tracking channel with a wrong PRN, so it is configured with a code
-exactly like the ones it serves. See [`AbstractNoiseEstimator`](@ref).
+This is the hardware/FPGA fill path, used alongside
+[`append_correlator_output!`](@ref) before
+[`estimate_dopplers_and_filter_prompt!`](@ref) folds; see the estimator-level
+method for how the two differ. Keyed per signal (not per band) because the noise
+floor is post-correlation; see [`AbstractNoiseEstimator`](@ref).
 
 The signal must have a noise estimator; it has one whenever its C/N₀ estimator
 reads a density (see [`requires_noise_density`](@ref)), or whenever you declared
@@ -1080,9 +947,7 @@ function append_noise_observation!(track_state::TrackState, observation::NoiseOb
     track_state
 end
 
-# Look up a signal's noise estimator, with an error that names what is configured
-# rather than a bare NamedTuple `KeyError` — the likeliest cause is a signal
-# whose C/N₀ estimator reads no density, so nothing provisioned one.
+# Look up a signal's noise estimator, with an error naming what is configured.
 @inline function _noise_estimator_for_signal(track_state::TrackState, signal_id::Symbol)
     noise_estimators = track_state.noise_estimators
     haskey(noise_estimators, signal_id) ||
@@ -1113,9 +978,7 @@ _signal_index(::Tuple, i::Integer) = Int(i)
 function _signal_index(signals::Tuple, ::Type{T}) where {T<:AbstractGNSSSignal}
     idx = findfirst(s -> s.signal isa T, signals)
     isnothing(idx) && throw(ArgumentError("no signal of type $T on this satellite"))
-    # Match the read-accessor contract (`_find_signal_by_type`): a type
-    # selector must be unambiguous. If the sat tracks the same signal type
-    # twice, require the caller to address it by integer index instead.
+    # Like `_find_signal_by_type`, a type selector must be unambiguous.
     isnothing(findnext(s -> s.signal isa T, signals, idx + 1)) || throw(
         ArgumentError(
             "more than one signal of type $T on this satellite — " *
@@ -1125,9 +988,8 @@ function _signal_index(signals::Tuple, ::Type{T}) where {T<:AbstractGNSSSignal}
     idx
 end
 
-# Rebuild `sat` with the addressed signal's coherent-integration length set
-# to `N`; the other signals are left untouched (types unchanged, so the
-# satellite's concrete type is preserved).
+# Rebuild `sat` with the addressed signal's coherent-integration length set to
+# `N`, preserving the satellite's concrete type.
 function _set_sat_signal_preferred_blocks(sat::TrackedSat, N::Int, sel...)
     idx = _signal_index(sat.signals, sel...)
     idx_tuple = ntuple(identity, length(sat.signals))
@@ -1233,15 +1095,8 @@ function set_preferred_num_code_blocks_to_integrate!(
     track_state
 end
 
-# Re-seed one satellite's Doppler-estimator state from its current Doppler via
-# the estimator's `_reset_estimator_state` hook (a fresh, zeroed loop filter
-# for the conventional estimator, keeping any per-sat bandwidth override),
-# preserving `carrier_doppler` / `code_doppler`. Each signal's
-# `last_fully_integrated_filtered_prompt` is cleared too: the FLL
-# discriminator measures the prompt rotation since the previous integration,
-# and after a cadence change that previous prompt belongs to the old
-# integration interval — `fll_disc` returns 0 for a zeroed previous prompt,
-# so the first post-reset update skips the stale measurement.
+# Per-satellite body of `reset_loop_filters!`. A zeroed previous prompt makes
+# `fll_disc` return 0, so the first post-reset FLL update is skipped.
 @inline function _reset_sat_loop_filters(track_state::TrackState, sat::TrackedSat)
     new_signals = map(
         s ->
@@ -1263,22 +1118,16 @@ $(SIGNATURES)
 
 Re-seed the Doppler-estimator state of every satellite (or one addressed
 satellite) from its current Doppler, giving each a freshly initialized loop
-filter. For the conventional PLL/DLL estimator this zeroes the carrier and code
-loop-filter integrators while preserving the converged `carrier_doppler` /
-`code_doppler` — and any per-satellite loop-bandwidth override carried on the
-`SatConventionalPLLAndDLL` state — so the loop continues from the
-converged frequency with a clean filter. Each signal's
-`last_fully_integrated_filtered_prompt` is cleared as well, so the first
-FLL update after the reset doesn't measure a prompt rotation that spans the
-old integration interval.
+filter. For the conventional PLL/DLL estimator this zeroes the loop-filter
+integrators while keeping `carrier_doppler` / `code_doppler` and any
+per-satellite bandwidth override. Each signal's
+`last_fully_integrated_filtered_prompt` is cleared too, so the first FLL update
+doesn't span the old integration interval.
 
-This is the recommended handoff when a signal's coherent-integration length
-changes mid-track — e.g. promoting GPS L5I from 1 ms to 10 ms via
-[`set_preferred_num_code_blocks_to_integrate!`](@ref). The bilinear loop
-filter's integrator state is not portable across the change in update interval
-(`Δt` grows by the integration factor), so resetting it avoids a transient that
-can drag the loop out of lock; the converged Doppler is the right seed for the
-new, longer integration.
+Use it after changing a signal's coherent-integration length mid-track (e.g.
+via [`set_preferred_num_code_blocks_to_integrate!`](@ref)): the loop filter's
+integrator state is not portable across a change in update interval and would
+cause a transient that can break lock.
 
 For [`VectorPLLAndDLL`](@ref) the re-seed additionally zeroes the
 externally-supplied NCO corrections (`code_freq_update` / `carrier_freq_update`)
@@ -1322,10 +1171,8 @@ end
 reset_loop_filters!(track_state::TrackState{<:SignalGroups{1}}, sat_id) =
     reset_loop_filters!(track_state, 1, sat_id)
 
-# Recursive tuple walk that folds the set of distinct band ids
-# (`GNSSSignals.get_band_id`) across a `groups` tuple. Returns an
-# `NTuple{N,Symbol}` of unique ids, in first-encounter order.
-# Concrete-typed input → fully unrolled at compile time, no allocation.
+# Tuple walk collecting distinct band ids in first-encounter order; unrolled at
+# compile time, allocation-free.
 @inline _band_keys_in_groups(::Tuple{}, acc::Tuple{Vararg{Symbol}}) = acc
 @inline function _band_keys_in_groups(t::Tuple, acc::Tuple{Vararg{Symbol}})
     k = get_band_id(first(t).band)
@@ -1349,11 +1196,8 @@ band_keys(ts) == (:L1, :L5)
 @inline band_keys(track_state::TrackState) =
     _band_keys_in_groups(Tuple(track_state.groups), ())
 
-# Single-band shortcut helper: returns the unique band instance shared by
-# all groups when there is exactly one distinct band. Errors otherwise —
-# this is what gates whether the bare-buffer `track(buf, state, fs)`
-# entry point can route the measurement to a single auto-keyed
-# `BandMeasurements` NamedTuple.
+# The single band shared by all groups, or an error — gates the bare-buffer
+# `track(buf, state, fs)` entry point.
 @inline function _single_band(track_state::TrackState)
     keys_tuple = band_keys(track_state)
     if length(keys_tuple) != 1
@@ -1369,24 +1213,17 @@ band_keys(ts) == (:L1, :L5)
             ),
         )
     end
-    # All groups share one band — pull it off the first group.
     first(track_state.groups).band
 end
 
-# Two-way membership check on two short symbol tuples. Equivalent to
-# `Set(a) == Set(b)` but allocation-free: tuple `in` is unrolled and
-# the comparison runs in O(length(a)·length(b)) — fine for band tuples
-# which are 1..a few entries.
+# Allocation-free `Set(a) == Set(b)` for short tuples.
 @inline function _tuple_sets_equal(a::Tuple, b::Tuple)
     length(a) == length(b) || return false
     all(x -> x in b, a) && all(y -> y in a, b)
 end
 
-# Validate a multi-band measurements NamedTuple against the TrackState's
-# groups: keys must match exactly, antenna shape per band must match,
-# and all observation durations must be identical (no tolerance). Called
-# once at the top of `track` / `track!` — O(num_bands), irrelevant next
-# to the inner loop.
+# Validate a multi-band measurements NamedTuple against the groups: matching keys,
+# per-band antenna shapes, and identical durations. Called once per `track`.
 @inline function _validate_measurements(
     track_state::TrackState,
     measurements::BandMeasurements,
@@ -1412,12 +1249,9 @@ end
     return nothing
 end
 
-# For each group, check the measurement at its band has the antenna
-# shape the group declares. Vector → 1 antenna; Matrix → cols = num_ants.
-# A `for g in track_state.groups` loop boxes when `groups` is a
-# heterogeneous tuple (multi-band TrackStates), allocating 2 entries per
-# call. Walk via tuple recursion so each step has concrete types and
-# inlines cleanly.
+# Check each group's band measurement has the declared antenna count (Vector → 1,
+# Matrix → columns). Tuple recursion, since a `for` loop over heterogeneous
+# groups boxes and allocates.
 @inline function _validate_antenna_shapes(
     track_state::TrackState,
     measurements::BandMeasurements,
@@ -1458,11 +1292,9 @@ end
     )
 end
 
-# Exact-equality duration check across all measurements — no tolerance.
-# Cross-multiply instead of dividing so that mixed-precision sampling
-# rates (e.g. Float32 vs Float64) with identical real durations compare
-# equal; the rates are promoted first so neither product rounds in a
-# narrower type than the comparison.
+# Exact-equality duration check across all measurements. Cross-multiplies
+# promoted rates instead of dividing, so mixed-precision rates with identical
+# durations compare equal.
 @inline function _validate_equal_durations(measurements::BandMeasurements)
     ms = Tuple(measurements)
     isempty(ms) && return nothing

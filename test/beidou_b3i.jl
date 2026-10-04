@@ -44,14 +44,13 @@ const GEO_PRN = 1   # GEO (D2) — carries no overlay
         @test res.polarity == -1
     end
 
-    # As on B1I, the GEO satellites carry no overlay — modelled as an all-ones
-    # column, which the soft detector handles as a data-bit-edge search.
+    # GEO PRNs get an all-ones column, as on B1I (see docs/src/bit_sync.md).
     @test Tracking._packed_secondary_code(UInt32, b3i, GEO_PRN) ==
           (one(UInt32) << N) - one(UInt32)
     @test Tracking.uses_soft_secondary_code_detection(b3i) == true
     @test Tracking.uses_soft_bit_edge_detection(b3i) == false
 
-    # Plain BPSK (`LOC`) → EarlyPromptLate default.
+    # BPSK → EarlyPromptLate.
     @test @inferred(get_default_correlator(b3i, NumAnts(1))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
     @test @inferred(get_default_correlator(b3i, NumAnts(3))) ==

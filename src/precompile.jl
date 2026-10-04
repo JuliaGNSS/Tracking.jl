@@ -1,13 +1,8 @@
 # Precompile workload (PrecompileTools). The first `track!` of a session costs
-# 2.6 s of compilation for the float backend and another 1.7 s for the Int16
-# backend on a workstation, three to four times that on an embedded ARM host,
-# and a live receiver pays it on its first tracked satellite, i.e. after the
-# stream has started (GNSSReceiver.jl#107). The tracking kernels are
-# specialised on the signal type, so every signal this package can track is
-# tracked here — one satellite through a few code periods, with both sample
-# element types and the threaded backends a receiver uses — so the loop
-# filters, prompt filter, C/N₀ estimator and bit buffer of each compile at
-# precompile time instead of on the first satellite of a run.
+# seconds of compilation per backend (several times that on embedded ARM), and a
+# live receiver pays it after the stream has started (GNSSReceiver.jl#107). The
+# kernels are specialised on the signal type, so every trackable signal is
+# tracked here for a few code periods with both sample element types.
 using PrecompileTools: @setup_workload, @compile_workload
 
 # Every signal Tracking has a default correlator for. (The Galileo E5/E6 and
@@ -32,21 +27,17 @@ const _PRECOMPILE_SIGNALS = (
     BeiDouB3I(),
 )
 
-# Sampling frequency for one signal's workload. The BOC-modulated signals (GPS
-# L1C, Galileo E1, BeiDou B1C) need at least their sub-chip rate — twelve times
-# the chip rate for TMBOC/CBOC/QMBOC — so every signal at the 1.023 MHz chip
-# rate is sampled at 24 chips per sample period; the 5.115 and 10.23 MHz BPSK
-# codes get four samples per chip.
-# Float64-valued, like the `5e6Hz` a receiver passes: the kernels specialise on
-# the frequency's element type, and an `Int`-valued rate would compile a
-# specialisation nobody calls.
+# Sampling frequency for one signal's workload: 24 samples per chip at the
+# 1.023 MHz chip rate (BOC signals need their sub-chip rate, 12× for
+# TMBOC/CBOC/QMBOC), four for the 5.115 and 10.23 MHz BPSK codes. Float64-valued
+# like a receiver's `5e6Hz`, since the kernels specialise on the element type.
 function _precompile_sampling_frequency(system)
     code_frequency = get_code_frequency(system)
     code_frequency <= 1.1e6Hz ? 24.0 * code_frequency : 4.0 * code_frequency
 end
 
-# One code period of a clean replica at four samples per chip, with a small
-# carrier Doppler, so the loops have something to pull on.
+# One code period of a clean replica with a small carrier Doppler, so the loops
+# have something to pull on.
 function _precompile_signal(system)
     sampling_frequency = _precompile_sampling_frequency(system)
     num_samples = round(
@@ -66,10 +57,8 @@ function _precompile_signal(system)
 end
 
 # One signal's workload, as a function so every call inside it is statically
-# dispatched on the concrete signal type — the specialisations then land in
-# the package image. Iterating the signal tuple in a loop instead dispatches
-# dynamically, and the methods compiled that way were not all cached (the
-# first `track!` of a session still cost ~1 s).
+# dispatched and lands in the package image; a dynamically dispatched loop over
+# the signals left methods uncached.
 function _precompile_track(system, signal_f32, signal_i16, sampling_frequency, backend16)
     state = TrackState(system, [TrackedSat(system, 1, 0.0, 180.0Hz)])
     for _ = 1:3

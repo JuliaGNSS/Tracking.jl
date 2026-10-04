@@ -13,20 +13,15 @@ using Tracking:
     VeryEarlyPromptLateCorrelator,
     NumAnts
 
-# Both `GalileoE1B` (full CBOC) and `GalileoE1B_BOC11` (BOC(1,1)
-# approximation) share primary code, code length, code rate, data rate,
-# and band — only the modulation differs. All tracking-side traits should
-# therefore behave identically; the testset is parameterised over both.
+# CBOC and its BOC(1,1) approximation differ only in modulation, so all
+# tracking-side traits must match.
 @testset "Galileo E1B ($(nameof(typeof(galileo_e1b))))" for galileo_e1b in (
     GalileoE1B(),
     GalileoE1B_BOC11(),
 )
 
-    # E1B broadcasts one I/NAV channel symbol per primary code period
-    # (250 sym/s, 4 ms primary period; Galileo OS SIS ICD Tables 11 & 15)
-    # — no sub-symbol boundary to find, so the detector reports
-    # `found = true` from the start. Polarity ambiguity is resolved
-    # downstream by GNSSDecoder.jl via the I/NAV preamble.
+    # One symbol per 4 ms primary period: `found = true` from the start (see
+    # src/galileo/e1b.jl).
     prn = 1
     for (bits, n) in ((UInt8(0x0), 0), (UInt8(0x1), 1), (UInt8(0xff), 32))
         res = @inferred detect_bit_or_secondary_code_sync(galileo_e1b, prn, bits, n)
@@ -45,8 +40,7 @@ using Tracking:
     @test effective_carrier_loop_filter_bandwidth(18.0Hz, 4ms) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(galileo_e1b)) ≈ 1.0Hz
 
-    # 1 symbol = 1 primary period; sync buffer is dead state, but a
-    # concrete type is still required.
+    # Sync buffer is dead state but needs a concrete type.
     @test @inferred(get_code_block_buffer_type(galileo_e1b)) === UInt8
 end
 

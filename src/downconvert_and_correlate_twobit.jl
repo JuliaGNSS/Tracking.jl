@@ -10,13 +10,10 @@
 #   measurement:  b ⇔ |component| ≥ `threshold` (ADC counts; ≈1σ → the classic
 #                 near-optimal 4-level quantiser, ≈0.55 dB loss vs float against
 #                 ≈1.96 dB for 1-bit)
-#   carrier:      SinCosLUT v3.3's `generate_carrier_signs_mags!` — sign + magnitude
-#                 bit planes straight off the UInt32 NCO, magnitude threshold on the
-#                 45° octant boundary (|sin| ≥ √2/2). The weight pair is the consumer's
-#                 choice; at that threshold ±1/±3 and ±1/±2 have the SAME correlation
-#                 loss (≈0.25 dB vs a float carrier, against ≈0.91 dB for 1-bit), and
-#                 ±1/±3 makes the product weight below strictly cheaper. Both bits are
-#                 exact functions of the phase accumulator — no table, no rounding.
+#   carrier:      SinCosLUT's `generate_carrier_signs_mags!` — sign + magnitude
+#                 planes off the UInt32 NCO, magnitude bit ⇔ |sin| ≥ √2/2. At that
+#                 threshold ±1/±3 loses the same as ±1/±2 (≈0.25 dB vs float, against
+#                 ≈0.91 dB for 1-bit) and makes the product weight below cheaper.
 #
 # A product's SIGN is still an XOR of sign bits; only the WEIGHT changes. With both
 # factors `(1+2G)(1+2H)` ∈ {1, 3, 9} the weight has the two-plane expansion
@@ -45,17 +42,12 @@
 #   Iₓ = 2N − 2·IS + 2·(GXA_ac + GXA_bs) − 4·IF        GXA = Σ pc X + 4·pc A of the
 #   Qₓ =    − 2·QS + 2·(GXA_cc − GXA_es) − 4·QF        plane's (meas, carrier) combo
 #
-# With all magnitude bits zero this degenerates exactly to the one-bit backend's result.
-# Everything else — strip-mined `blk`-sample blocks, pack-once + funnel-shifted code
-# planes, band-shared measurement packing (>1 sat), the multi-signal-per-sat
-# carrier+measurement tile-share, the dynamic (runtime tap-count) fallback — mirrors the
-# one-bit backend (see downconvert_and_correlate_onebit.jl for the machinery rationale).
+# With all magnitude bits zero this degenerates exactly to the one-bit result. All other
+# machinery (blocks, funnel-shifted code planes, band-shared measurement planes,
+# tile-share, dynamic fallback) mirrors downconvert_and_correlate_onebit.jl.
 #
-# The 2-bit measurement + 2-bit carrier recover ≈2 dB of correlation SNR over the one-bit
-# backend (≈0.8 dB total quantisation loss vs Float32, against ≈2.9 dB), for ≈3 popcounts
-# per plane instead of 1. Accumulators finalize to `ComplexF64` (M=1) /
-# `SVector{M,ComplexF64}` (M>1); downstream consumers are ratio/normalised, so the coarse
-# amplitude scale is immaterial.
+# Recovers ≈2 dB over one-bit (≈0.8 dB total loss vs Float32, against ≈2.9 dB) for ≈3
+# popcounts per plane instead of 1.
 
 import SinCosLUT
 import VectorizationBase
@@ -69,15 +61,8 @@ const _TWOBIT_BLK = 8192
 const _TB_VW = 8
 
 # ── sign / magnitude mask helpers ─────────────────────────────────────────────
-# Pack the sign bit of 64 lanes into a UInt64 (bit j ⇔ lane j < 0). Same as the one-bit
-# `_ob_mm`; duplicated so the two backends stay independent files.
-# Two lowerings per mask, chosen by arch (see the one-bit `_ob_mm`): the portable
-# `icmp` + `bitcast <64 x i1> to i64` is optimal on x86 (→ `vpmovmskb` / `vpmov{b,w}2m`),
-# but on aarch64 LLVM emits per-16-lane `cmlt` + `and` + `addv` + GPR-move sequences whose
-# serial `addv`→GPR moves dominate; there the predicate bytes are isolated with the
-# `{1,2,…,128}` bitmask and reduced with a 4-deep `addp` tree — one GPR move total. The
-# magnitude mask gets the same treatment: its unsigned-range compare feeds the identical
-# sext + addp tree. Both lowerings are bit-identical.
+# Pack the sign bit of 64 lanes into a UInt64 (bit j ⇔ lane j < 0). A copy of the one-bit
+# `_ob_mm` (see there for the two per-arch lowerings), kept so the files stay independent.
 @static if Sys.ARCH === :aarch64
     @inline _tb_mm(v::SIMD.Vec{64,Int8}) = Base.llvmcall(
         (
@@ -162,10 +147,9 @@ define i64 @entry(<64 x i16> %v) #0 { %c = icmp slt <64 x i16> %v, zeroinitializ
     )
 end
 # Magnitude mask: bit j ⇔ |lane j| ≥ thr, via one unsigned-range compare: with
-# `off = thr − 1` and `lim = 2·thr − 1` (as bit patterns), `|v| ≤ thr−1 ⇔
-# wrap(v + off) ≤ 2·thr−2` unsigned, so the large plane is `wrap(v + off) ≥ᵤ lim`.
-# Exact for EVERY Int16 lane (including −32768, where an `abs`-based test wraps)
-# and every `thr ∈ [1, 32767]`.
+# `off = thr − 1` and `lim = 2·thr − 1`, `|v| ≥ thr ⇔ wrap(v + off) ≥ᵤ lim`. Exact for
+# every Int16 lane (including −32768, where `abs` wraps) and `thr ∈ [1, 32767]`. Same
+# per-arch lowering as `_tb_mm`.
 @static if Sys.ARCH === :aarch64
     @inline _tb_mag_mm(v::SIMD.Vec{64,Int16}, off::Int16, lim::Int16) = Base.llvmcall(
         (
@@ -229,11 +213,9 @@ end
 @inline _tb_masklast(w::UInt64, r::Int) = r == 0 ? w : w & ((UInt64(1) << r) - UInt64(1))
 
 # ── x86 fast measurement pack (BMI2) ──────────────────────────────────────────
-# The generic pack deinterleaves 64 complex lanes with shufflevector (a pile of
-# port-limited permutes once legalised). On x86 with BMI2 it is cheaper to keep the data
-# INTERLEAVED — extract each 32-lane register's sign / magnitude masks directly (the
-# bits come out re/im-interleaved) — and deinterleave the BITS with scalar `pext`
-# (1/cycle, off the vector ports): two pexts per plane word.
+# The generic pack deinterleaves with shufflevector (port-limited permutes). With BMI2 it
+# is cheaper to take the masks of the interleaved data and deinterleave the bits with
+# scalar `pext` (off the vector ports): two pexts per plane word.
 @inline _tb_mm32(v::SIMD.Vec{32,Int16}) = Base.llvmcall(
     (
         """
@@ -308,9 +290,8 @@ const _TB_FAST_PACK = Bool(VectorizationBase.has_feature(Val(:x86_64_bmi2)))
     )
 end
 
-# ── code plane helpers (code is 1-bit; identical to the one-bit backend) ──────
-# Pack tap code sign plane: bit for output sample n = sign(extb[byteoff+n]). `extb` is
-# padded ≥ byteoff+nwb·64 so the last (masked) word can be read whole.
+# ── code plane helpers (code is 1-bit; copies of the one-bit `_ob_*` helpers) ──
+# Pack tap code sign plane: bit for output sample n = sign(extb[byteoff+n]).
 @inline function _tb_pack_code!(
     codeb::Vector{UInt64},
     koff::Int,
@@ -326,9 +307,7 @@ end
     nothing
 end
 
-# Derive each tap plane from the prompt-extended plane by a funnel bit-shift, for ANY
-# `off ≥ 0` (whole-word shift `wsh = off ÷ 64` + sub-word shift). The caller must size /
-# zero `pe` so `pe[nwb+wsh+1]` is a valid (zero) pad word (see the per-kernel `pepad`).
+# Funnel-shift a tap plane out of the prompt-extended plane (see `_ob_shift_plane!`).
 @inline function _tb_shift_plane!(
     dst::Vector{UInt64},
     doff::Int,
@@ -352,8 +331,7 @@ end
     nothing
 end
 
-# Mask the last valid word to `r` bits (if partial) and zero the VW-pad words [nwb+1, nwv],
-# so a whole-VW-chunk correlate sees zeros (which contribute nothing) past the real samples.
+# Mask the last word to `r` bits (if partial) and zero the VW-pad words [nwb+1, nwv].
 @inline function _tb_finish!(buf::Vector{UInt64}, off::Int, nwb::Int, nwv::Int, r::Int)
     @inbounds (r != 0) && (buf[off+nwb] &= (UInt64(1) << r) - UInt64(1))
     @inbounds for w = (nwb+1):nwv
@@ -371,7 +349,7 @@ end
 
 # ── measurement packing (sign + magnitude planes) ─────────────────────────────
 # Per-sat direct pack (single-sat group): sign(real)→mrb, |real| ≥ thr→gmrb, likewise
-# imag → mib/gmib; full 64-sample words via a deinterleaving vector load, scalar tail.
+# imag → mib/gmib.
 @inline function _tb_pack_meas!(
     mrb::Vector{UInt64},
     mib::Vector{UInt64},
@@ -429,9 +407,7 @@ end
     nothing
 end
 
-# Band-shared measurement planes (see the one-bit `OneBitBandBuffers`): the sign AND
-# magnitude planes are identical for every satellite on a band, so pack them once per
-# group and funnel-realign per sat.
+# Band-shared sign and magnitude planes (see the one-bit `OneBitBandBuffers`).
 struct TwoBitBandBuffers
     mrband::Vector{UInt64}
     miband::Vector{UInt64}
@@ -474,12 +450,10 @@ end
 # than it saves on a small capture.
 const _TB_BAND_PAR_MIN = 512
 
-# Pack the band's `M` measurement sign + magnitude planes over all `num_samples` samples.
-# Plane `j` occupies `stride` words at offset `(j-1)*stride`; the last two words of each
-# plane are the zero funnel pad. This pack runs ONCE per group on the critical path
-# before the per-sat `@batch`, so for the threaded backend (`threaded = true`) and a
-# large enough capture the full-word body is itself split across threads (each word is
-# independent: it reads its own 64 samples and writes its own plane words).
+# Pack the band's `M` sign + magnitude planes over all samples. Plane `j` occupies `stride`
+# words at `(j-1)*stride`, ending in two zero funnel-pad words. It runs on the critical
+# path before the per-sat `@batch`, so with `threaded` and a large capture the
+# (word-independent) full-word body is split across threads.
 function _tb_pack_band!(
     band::TwoBitBandBuffers,
     signal,
@@ -502,9 +476,8 @@ function _tb_pack_band!(
     full = fld(num_samples, 64)
     if threaded && M * full >= _TB_BAND_PAR_MIN
         nch = min(Threads.nthreads(), cld(M * full, _TB_BAND_PAR_MIN))
-        # Bundle the loop parameters into ONE isbits capture: Polyester passes captured
-        # variables through a fixed-size task buffer, and past a handful of captures it
-        # falls back to a true-closure `@cfunction` — unsupported on aarch64 (NEON).
+        # One isbits capture: past a few captures Polyester falls back to a closure
+        # `@cfunction`, unsupported on aarch64.
         prm = (; per = cld(full, nch), full, M, stride, num_rows, moff, mlim)
         @batch for c = 1:nch
             wlo = (c - 1) * prm.per
@@ -569,9 +542,7 @@ function _tb_pack_band!(
     nothing
 end
 
-# Funnel-realign antenna `j`'s block (`len` samples starting at 1-based absolute sample
-# `base`) from the shared band planes into the thread-local block planes at word-offset
-# `moff`.
+# Funnel-realign antenna `j`'s block from the band planes (see `_ob_realign_meas!`).
 @inline function _tb_realign_meas!(
     mrb::Vector{UInt64},
     mib::Vector{UInt64},
@@ -609,10 +580,8 @@ end
     nothing
 end
 
-# Scratch: the one-bit planes plus the measurement magnitude planes (`gmrb`/`gmib`) and
-# the carrier magnitude planes (`hsinw`/`hcosw`). Grown lazily and reused, so a hoisted
-# backend is allocation-free in steady state. Plane word-strides are padded to a multiple
-# of `_TB_VW` (`wpbv`).
+# Scratch: the one-bit planes plus measurement (`gmrb`/`gmib`) and carrier
+# (`hsinw`/`hcosw`) magnitude planes; grown lazily and reused.
 struct TwoBitScratchBuffers
     extb::Vector{Int8}
     peb::Vector{UInt64}
@@ -718,8 +687,7 @@ const _TwoBitDC =
 
 @inline _tb_num_ants_val(::AbstractCorrelator{M}) where {M} = NumAnts{M}()
 
-# The bit-wise CBOC gate (see the one-bit backend for the rationale: the code plane keeps
-# only the sign, so a multi-level amplitude-carrying code cannot be represented).
+# The bit-wise CBOC gate (see the one-bit kernel).
 @inline function _tb_check_modulation(signal_type)
     get_modulation(signal_type) isa GNSSSignals.CBOC && throw(
         ArgumentError(
@@ -738,17 +706,9 @@ const _TwoBitDC =
 end
 
 # ── The two-bit hybrid-blocked kernel ─────────────────────────────────────────
-# Returns this integration's correlation contribution: `SVector{NC}` of complex sums (one
-# per tap) — `ComplexF64` (M=1) or `SVector{M,ComplexF64}` (M>1) — to be added to the
-# correlator's running accumulators. `@generated` over (NC, M): the per-(antenna, tap)
-# IS/IF/QS/QF and per-antenna GXA accumulators live in named locals and unroll.
-#
-# `SVector` and not `Vector` because `NC` is a parameter here, so the result needs no heap
-# cell at all — matching `_int16_hybrid_blocked!`. It used to be a `Vector`, which the
-# compiler elided at the per-satellite call site but *not* at the noise reference's,
-# leaving that one call 112 B per despread (and so ~1 kB per chunk at ten
-# sub-integrations) on this backend and the one-bit one alone. This kernel's dynamic
-# fallback below, where `NC` is a runtime value, still returns a `Vector`.
+# Returns this integration's contribution as an `SVector{NC}` (see
+# `_onebit_hybrid_blocked!`); the per-(antenna, tap) IS/IF/QS/QF and per-antenna GXA
+# accumulators are named locals.
 @generated function _twobit_hybrid_blocked!(
     dc::_TwoBitDC,
     signal::AbstractVecOrMat{Complex{Int16}},
@@ -782,9 +742,8 @@ end
         end
     end
 
-    # Per-VW-chunk unrolled accumulate: per antenna the shared sample⊻carrier sign
-    # products and the four (measurement mag, carrier mag) mask combos, then per tap the
-    # three popcounts per plane merged into the four I/Q accumulators.
+    # Per antenna: sample⊻carrier sign products and the four mask combos; per tap: three
+    # popcounts per plane merged into the four I/Q accumulators.
     body = Expr(:block)
     for j = 1:M
         push!(body.args, :(MR = vload(SIMD.Vec{_TB_VW,UInt64}, mrb, $(j - 1) * wpbv + i)))
@@ -922,8 +881,7 @@ end
             nwb = cld(len, 64)
             nwv = cld(nwb, _TB_VW) * _TB_VW
             r = len & 63
-            # code (Int8 ±1) for samples [min_shift, len+span); pack the extended plane
-            # ONCE, then derive each tap by a funnel bit-shift.
+            # code for samples [min_shift, len+span); pack once, funnel-shift per tap.
             gen_code!(
                 view(extb, 1:(len+span)),
                 signal_type,
@@ -953,8 +911,7 @@ end
                     end for k = 1:NC
                 )...,
             ))
-            # carrier sign + magnitude planes (shared across antennas & taps) — the four
-            # bit planes straight off SinCosLUT's 2-bit NCO.
+            # carrier sign + magnitude planes (shared across antennas & taps)
             generate_carrier_signs_mags!(
                 sinw,
                 cosw,
@@ -968,8 +925,7 @@ end
             _tb_zeropad!(cosw, 0, nwb, nwv)
             _tb_zeropad!(hsinw, 0, nwb, nwv)
             _tb_zeropad!(hcosw, 0, nwb, nwv)
-            # measurement sign + magnitude planes, per antenna. >1 sat: funnel-realign
-            # from the band-shared planes. 1 sat: pack directly (no realign copy).
+            # measurement planes: realign from the band planes (>1 sat) or pack directly.
             base = signal_start_sample + blk_off
             if band_shared
                 $(Expr(
@@ -1039,14 +995,7 @@ end
     end
 end
 
-# Dynamic (runtime tap count) fallback: correlators whose sample shifts are a
-# runtime-sized `AbstractVector`. Mirrors the one-bit dynamic method: same block
-# pipeline, but loops taps/antennas at runtime and horizontally sums each popcount chunk
-# into per-(antenna, tap) Int64 totals. Not the hot path, but bit-identical to the
-# `@generated` kernel. Returns a `Vector` rather than that kernel's `SVector{NC}`,
-# because here the tap count is only known at runtime; the caller broadcasts either
-# shape onto the correlator's accumulators. `SVector` shifts dispatch to the
-# `@generated` method above, so EPL/VEPL keep the fast unrolled path.
+# Dynamic (runtime tap count) fallback, as the one-bit `AbstractVector` method.
 function _twobit_hybrid_blocked!(
     dc::_TwoBitDC,
     signal::AbstractVecOrMat{Complex{Int16}},
@@ -1260,15 +1209,8 @@ function _twobit_hybrid_blocked!(
 end
 
 # ── Multi-signal-per-sat tile-share ───────────────────────────────────────────
-# A satellite carrying several signals on one carrier shares the carrier and the
-# measurement — and therefore the whole carrier wipe-off AND the magnitude mask totals
-# (they involve only measurement and carrier planes, never the code). So per strip-mine
-# block the carrier planes are generated ONCE, the measurement planes packed/realigned
-# ONCE (per antenna), and the per-antenna GXA mask totals accumulated ONCE (during the
-# first signal's pass); each signal then correlates its own code planes against them.
-# Bit-identical to correlating each signal alone. Mirrors the one-bit
-# `_onebit_hybrid_blocked_multi!`; static tap counts (SVector shifts) only, like the
-# other tile-shares.
+# As `_onebit_hybrid_blocked_multi!`. The GXA mask totals involve no code, so they are
+# also sat-shared and accumulated once per block (during the first signal's pass).
 @generated function _twobit_hybrid_blocked_multi!(
     dc::_TwoBitDC,
     signal::AbstractVecOrMat{Complex{Int16}},
@@ -1289,8 +1231,8 @@ end
     maxNC = maximum(NCs)
     zc = :(zero(SIMD.Vec{_TB_VW,UInt64}))
 
-    # Per-signal shift/span/offset locals + per-(signal, antenna, tap) IS/IF/QS/QF and
-    # per-antenna GXA accumulators (measurement/carrier only — sat-shared, NOT per signal).
+    # Per-signal shift/offset locals, per-(signal, antenna, tap) IS/IF/QS/QF and
+    # per-antenna (sat-shared) GXA accumulators.
     setup = Expr(:block)
     maxspan = Expr(:call, :max)
     for i = 1:N
@@ -1334,8 +1276,7 @@ end
         push!(gates.args, :(_tb_check_modulation(signal_types[$i])))
     end
 
-    # Per antenna, measurement packing: band-shared funnel-realign (>1 sat) vs direct
-    # pack (1 sat). Filled ONCE per block, shared across the sat's signals.
+    # Measurement planes per antenna (realign vs direct pack), shared across signals.
     realign = Expr(:block)
     directpack = Expr(:block)
     for j = 1:M
@@ -1386,9 +1327,8 @@ end
         )
     end
 
-    # Per-signal, within a block: one-shot code fill + pack into `codeb`, then the masked
-    # popcount correlate reading the shared carrier/measurement planes. The sat-shared
-    # GXA totals accumulate during signal 1's pass only.
+    # Per signal: code fill + pack, then the masked popcount correlate against the shared
+    # planes. GXA accumulates during signal 1's pass only.
     function signal_block(i)
         b = Expr(:block)
         push!(b.args, :(nwe = cld(len + $(Symbol("span_$i")), 64)))
@@ -1525,8 +1465,7 @@ end
         push!(sigs.args, signal_block(i))
     end
 
-    # Finalize: per signal, a Vector of NCᵢ tap sums (matching the single-signal kernel's
-    # return so `_correlate_signals` is shared).
+    # Finalize: per signal, a `Vector` of NCᵢ tap sums (see the one-bit multi kernel).
     s(sym) = :(sum($sym) % Int64)
     function tapval(i, k)
         function cplx(j)
@@ -1634,20 +1573,9 @@ end
 end
 
 # ── Correlate / plumbing (mirrors the one-bit backend) ────────────────────────
-# The despread primitive on this backend's kernel — see `_despread_one_signal!`
-# in downconvert_and_correlate_cpu.jl for the contract and for why the noise
-# reference must go through the same kernel as the prompt (here it is not merely
-# desirable: the two-bit accumulators are popcount counts rather than sample sums,
-# so a float-kernel reference would put `|P|²` and `N̂₀` on incompatible scales).
-# Serves the per-satellite single-signal path and the open-loop noise reference
-# alike, so the shared `_correlate_signals` needs no `_TwoBitDC` method.
-#
-# `code_replica_size` is ignored: this backend packs the code sign plane inside
-# the kernel, so there is no replica buffer to size. `use_band_cache` is the one
-# it does read — `_dc_one_group!` packs the band's measurement sign planes once
-# per group and the per-satellite path reads them, while the noise reference,
-# running before any group packs, must pass `false` (the planes would be whichever
-# group ran last).
+# The despread primitive on this backend's kernel; see `_despread_one_signal!` in
+# downconvert_and_correlate_cpu.jl. Honours `use_band_cache`, ignores
+# `code_replica_size`.
 @inline _despread_one_signal!(
     dc::_TwoBitDC,
     correlator,
@@ -1684,9 +1612,7 @@ end
     ),
 )
 
-# Multiple signals per sat: share one carrier + measurement downconvert across the
-# sat's signals via the tile-share kernel. Returns the per-signal
-# `(new_correlator, is_integration_completed)` tuples.
+# Multi-signal-per-sat correlate via the tile-share kernel (as the Int16 method).
 @inline function _correlate_signals(
     signals::Tuple{TrackedSignal,TrackedSignal,Vararg{TrackedSignal}},
     per_signal_completed::Tuple,
@@ -1737,11 +1663,7 @@ end
     map(tuple, new_corrs, per_signal_completed)
 end
 
-# The per-sat chunk loop is the generic
-# `_update_tracked_sat_correlator(sat, dc::AbstractDownconvertAndCorrelator, …)`
-# in downconvert_and_correlate_cpu.jl — the backend boundary is
-# `_correlate_signals`, which dispatches on `dc::_TwoBitDC` above.
-
+# `_dc_one_group!` with the band plane pack; see the one-bit method.
 @inline function _dc_one_group!(
     g::SignalGroup,
     dc::_TwoBitDC,
@@ -1757,17 +1679,10 @@ end
     isempty(vals) && n_noise == 0 && return nothing
     m = measurements[get_band_id(g.band)]
     _check_sample_type(dc, m)
-    # The pack below is sized by the *satellite* count alone: a noise item riding
-    # this loop passes `use_band_cache = false` (its band may not even be this one),
-    # so it neither reads the planes nor should influence whether they are built.
-    # Pack the band's measurement planes ONCE, shared across sats — but only for >1 sat:
-    # for a single sat the shared pack + per-sat realign copy is slower than packing that
-    # one sat directly, so empty the band buffer to select the kernel's per-sat path.
+    # Band pack only for >1 sat (noise items don't count); see the one-bit method.
     samples = m.samples
     if samples_unchanged
-        # Same buffer content as the previous call with this dc (track! passes
-        # this on every chunk/pass after the first): the shared band pack — or
-        # the emptied single-sat state — is still valid, keep it.
+        # Same buffer as the previous call with this dc: the band state is still valid.
     elseif length(vals) > 1
         nsamp = get_num_samples(m)
         M = samples isa AbstractMatrix ? size(samples, 2) : 1
@@ -1807,18 +1722,7 @@ end
 
 @inline _threading(::TwoBitThreadedDownconvertAndCorrelator) = _BatchLoop()
 
-# The public `downconvert_and_correlate(!)` entry points are the backend-agnostic
-# ones in downconvert_and_correlate_cpu.jl, inherited via
-# `AbstractDownconvertAndCorrelator`: this backend's methods were byte-identical to
-# them, so the only thing they added was a third copy of the noise pass's call
-# site. Everything two-bit-specific is reached through `_despread_one_signal!`,
-# `_dc_one_group!`, `_check_sample_type` and `_dc_group_loop!`.
-
-# Reject non-`Complex{Int16}` sample buffers up front (12-bit ADC contract).
-# Defined as the shared `_check_sample_type` hook rather than inline in
-# `_dc_one_group!` so the per-band noise measurement — which runs before the
-# group loop — rejects them with the same message instead of a `MethodError`
-# from deep inside the kernel.
+# Reject non-`Complex{Int16}` sample buffers (see the Int16 `_check_sample_type`).
 @inline _check_sample_type(::_TwoBitDC, m) =
     eltype(m.samples) === Complex{Int16} || throw(
         ArgumentError(

@@ -21,7 +21,7 @@ using Tracking:
     @test w1 === 1.0 + 0.0im
     @test @inferred(_combine_antennas(w1, complex(1.2, 1.3))) === complex(1.2, 1.3)
 
-    # Multi antenna: the last element is selected, exactly as before.
+    # Multi antenna: the last element is selected.
     w2 = @inferred get_weights(default_post_corr_filter, NumAnts(2))
     @test w2 === SVector{2,ComplexF64}(0.0 + 0.0im, 1.0 + 0.0im)
     tap = SVector(complex(1.2, 1.3), complex(2.2, 4.3))

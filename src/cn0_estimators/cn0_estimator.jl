@@ -16,11 +16,10 @@ abstract type AbstractCN0Estimator end
 $(SIGNATURES)
 
 Per-record side information handed to `Tracking.update` alongside the prompt:
-everything the tracking loop knows about the record that an estimator cannot
-recover from the prompt stream alone. Its reason for existing is the
-**navigation-bit grid** — where the data-bit boundaries sit and whether they are
-known yet — which is what lets an estimator sum prompts coherently over exactly
-one symbol ([`NWPRCN0Estimator`](@ref) does) instead of straddling a bit flip.
+what the tracking loop knows about the record that an estimator cannot recover
+from the prompt stream alone — chiefly the **navigation-bit grid**, which lets an
+estimator sum prompts coherently without straddling a bit flip
+([`NWPRCN0Estimator`](@ref) does).
 
 Fields:
 
@@ -33,35 +32,24 @@ Fields:
     `signal`; `20` for GPS L1 C/A, `1` for GPS L1C-D / Galileo E1B, and `0` for a
     pilot, which carries no data and therefore has **no** bit grid — post-sync
     its prompts stay coherent for as long as the loops hold them.
-  - `bit_code_block_index` — blocks already accumulated into the currently open
-    navigation bit *before* this record, i.e. this record's own offset inside
-    the bit; `0` means the record starts a fresh bit. It is `-1` whenever this
-    record's prompt cannot be summed coherently against the grid: before the
-    signal's bit / secondary-code sync has been found, and — for a
-    secondary-coded signal only — for a record of the fold that follows a sync
-    detected in that same fold, which was correlated without the overlay
-    wipe-off the sync just established (see `_apply_correlator_output`). Such a
-    record's *blocks* still count towards the grid, so the offset stays right for
-    the records after it.
+  - `bit_code_block_index` — this record's offset inside the open navigation
+    bit (`0` = starts a fresh bit). `-1` when the prompt cannot be summed
+    coherently against the grid: before bit / secondary-code sync, and, for a
+    secondary-coded signal, for a record correlated without the overlay wipe-off
+    a sync in the same fold just established (see `_apply_correlator_output`).
+    Such a record's blocks still count towards the grid.
   - `bit_buffer` — the signal's `BitBuffer` as of *before* this record:
     the soft bits decoded so far, the open coherent bit accumulator, the lock
     polarity and the secondary-code phase.
   - `noise_density` — **this signal's** measured noise density `N₀` (dimension
-    `1/Hz`), for an estimator that divides the prompt's power by a *measured*
-    floor instead of inferring one from the prompt stream
-    ([`NoiseRefCN0Estimator`](@ref) does). Per signal and not per band because
-    the floor is the post-correlation one — see [`AbstractNoiseEstimator`](@ref).
-    It is a **type parameter, not a sentinel**: `Nothing` says no
-    [`AbstractNoiseEstimator`](@ref) is configured for this signal at all, which
-    is a static property of the setup, so every call site monomorphises and the
-    estimators stay allocation-free. A configured
-    source whose window is merely still empty never reaches here — the fold
-    skips the update instead, so this field is unconditionally a plain scalar
-    whenever it is not `Nothing`.
-  - `integration_time` — this record's own `T`, so an estimator that works per
-    record does not have to be told one `T` for a whole ring of records
-    integrated at different lengths. `nothing` when the caller did not supply
-    one (the bare-prompt-stream path).
+    `1/Hz`), read by [`NoiseRefCN0Estimator`](@ref). `Nothing` (in the type, not
+    as a sentinel) means no [`AbstractNoiseEstimator`](@ref) is configured for
+    the signal, so call sites monomorphise. A configured source whose window is
+    still empty never reaches here — the fold skips the update — so otherwise
+    this is always a plain scalar.
+  - `integration_time` — this record's own `T`, so records of different lengths
+    in one ring are each handled correctly. `nothing` on the bare-prompt-stream
+    path.
 """
 struct CN0UpdateContext{S<:AbstractGNSSSignal,B<:Unsigned,N,T}
     signal::S
@@ -73,9 +61,8 @@ struct CN0UpdateContext{S<:AbstractGNSSSignal,B<:Unsigned,N,T}
     integration_time::T
 end
 
-# Positional convenience for the five load-bearing fields, defaulting the two
-# that only a noise-referenced estimator reads. Keeps the pre-6.1 call shape
-# working: an estimator that ignores them is unaffected by their arrival.
+# Positional convenience for the first five fields, defaulting the two only a
+# noise-referenced estimator reads.
 @inline CN0UpdateContext(
     signal::AbstractGNSSSignal,
     num_code_blocks::Integer,
@@ -92,21 +79,14 @@ end
     nothing,
 )
 
-# Build the context from the state the correlate/fold step has at hand. The
-# bit buffer must be the one from *before* this record was folded in, so
-# `bit_code_block_index` is the record's own offset inside the open bit rather
-# than the next record's. `bit_sync_usable = false` forces the "no bit grid"
-# marker for a record whose prompt cannot be summed coherently against the grid
-# — a record correlated with a pre-sync replica whose secondary-code wipe-off the
-# sync changed under it (see `drop_prompt` in `_apply_correlator_output`).
+# Build the context from the correlate/fold step's state. `bit_buffer` must be the
+# one from *before* this record was folded in, so `bit_code_block_index` is this
+# record's offset. `bit_sync_usable = false` forces the "no bit grid" marker (see
+# `drop_prompt` in `_apply_correlator_output`).
 #
-# The keyword form is the readable one for a caller building a context by hand; it
-# forwards to the positional core below, which is what the per-record fold calls.
-# The split is not cosmetic: a keyword call costs a per-call allocation on Julia
-# 1.10 that 1.11+ elides, `Project.toml` still supports 1.10, and this runs once
-# per completed record per signal per satellite — the hottest of the three sites
-# that build one. `_noise_observation` is routed around its builder's keywords for
-# the same reason.
+# The keyword form is for callers building a context by hand; the per-record fold
+# calls the positional core below, because a keyword call allocates per call on
+# Julia 1.10 (still supported) and this is the hottest construction site.
 @inline CN0UpdateContext(
     signal::AbstractGNSSSignal,
     bit_buffer::BitBuffer,
@@ -152,32 +132,19 @@ floor from the prompt stream ([`MomentsCN0Estimator`](@ref),
 [`NWPRCN0Estimator`](@ref), [`NoCN0Estimator`](@ref)); `true` only for
 [`NoiseRefCN0Estimator`](@ref).
 
-It is a trait rather than a hard-coded type check because
-[`update(::AbstractCN0Estimator, ::Any, ::CN0UpdateContext)`](@ref) is a
-documented extension point: a third-party estimator that wants a density must be
-able to say so, and one that does not must not pay for it.
-
-Two things key off it, and both are compile-time constants on the estimator's
-type:
+A trait, so a custom estimator can opt in. Two things key off it:
 
   - **Provisioning.** [`TrackState`](@ref) gives a signal a
-    [`CorrelatorNoiseEstimator`](@ref) only where that signal's estimator returns
-    `true`. A signal that does not ask gets no entry at all, so its despread
-    never runs and costs exactly zero — which is the answer for anyone who
-    deliberately stays on NWPR.
+    [`CorrelatorNoiseEstimator`](@ref) only where its estimator returns `true`;
+    any other signal runs no despread at all.
   - **The warm-up skip.** While a configured source's window is still empty, the
-    fold skips the C/N₀ update for the requiring signal *only* — its co-residents
-    on the same band and the same satellite are untouched, because each has its
-    own source. An `NWPRCN0Estimator` beside it would otherwise be corrupted: a
-    record missing from the bit grid makes `_update_nwpr` drop its open
-    narrowband window, so NWPR would silently degrade to its fallback.
+    fold skips the C/N₀ update for the requiring signal *only*. Skipping its
+    neighbours too would make an `NWPRCN0Estimator` beside it drop its open
+    window on every skipped record (see `_update_nwpr`).
 
-The trait's real home is the **type**, and the instance method forwards to it.
-That is what lets provisioning be decided from a group's already-fixed slot type
-rather than from a satellite value: the whole `noise_estimators` NamedTuple —
-its keys included — then folds out of `TrackState`'s type parameters instead of
-inferring as a union of "provisioned" and "not". A custom estimator may define
-either form; defining the type form is the one that keeps that folding.
+The trait's home is the **type** and the instance method forwards to it, so
+provisioning folds out of `TrackState`'s type parameters. A custom estimator
+should define the type form to keep that.
 """
 requires_noise_density(::Type{<:AbstractCN0Estimator}) = false
 requires_noise_density(estimator::AbstractCN0Estimator) =
@@ -213,10 +180,10 @@ sample-driven path needs no configuration at all.
 
 # Why this and not NWPR
 
-[`NWPRCN0Estimator`](@ref) is accurate where it applies, but it needs a coherent
-narrowband window and so does not apply uniformly. Measured through `track!` on
-a data-modulated GPS L1 C/A signal, 1200 code blocks, median over 9 seeds, with
-the fraction of runs reporting `-Inf dB-Hz` in brackets:
+[`NWPRCN0Estimator`](@ref) needs a coherent narrowband window, so it does not
+apply uniformly. Measured through `track!` on a data-modulated GPS L1 C/A signal,
+1200 code blocks, median over 9 seeds, fraction of runs reporting `-Inf dB-Hz`
+in brackets:
 
 | true | NWPR, 1-block records | NoiseRef    | NWPR, 20-block records | NoiseRef    |
 |:---- | ---------------------:| -----------:| ----------------------:| -----------:|
@@ -225,26 +192,18 @@ the fraction of runs reporting `-Inf dB-Hz` in brackets:
 | 40   | 39.7 ± 0.35           | 39.9 ± 0.19 | 27.1 ± 5.79            | 39.8 ± 0.37 |
 | 45   | 44.7 ± 0.30           | 44.9 ± 0.13 | 32.9 ± 2.00            | 44.7 ± 0.30 |
 
-Three things in that table decided the default. At **25 dB-Hz** NWPR's window
-lands outside `1 < μ̂ < M` in over half the runs and the surviving estimates read
-14 dB low, which is exactly the regime a lock detector has to work in. At **long
-coherent records** NWPR collapses — a record as long as its own window has
-`NBP ≡ WBP` and no window exists at all, so it falls back — while the
-non-coherent reference is **immune to the phase-noise wash** and barely moves
-between 1- and 20-block records. And on GPS L1C-D, Galileo E1B and any
-secondary-coded signal before sync, NWPR admits no window ever and defers
-permanently to a fallback with a different bias (issue #217).
-
-What NWPR is still better at is the top of the range, where the reference
-carries a self-leakage bias it does not: ≈0.13 dB at 45 dB-Hz and ≈0.40 at 50 on
-L1 C/A. See [`NoiseRefCN0Estimator`](@ref).
+At **25 dB-Hz**, where lock decisions are made, NWPR's ratio leaves
+`1 < μ̂ < M` in over half the runs. At **long coherent records** a record as long
+as its window has `NBP ≡ WBP` and NWPR falls back, while the non-coherent
+reference is immune to phase noise. On GPS L1C-D, Galileo E1B and secondary-coded
+signals before sync NWPR never gets a window at all (issue #217). NWPR is better
+only at the top of the range, where the reference carries a self-leakage bias
+(see [`NoiseRefCN0Estimator`](@ref)).
 
 # When to pass something else
 
-`NWPRCN0Estimator` remains exported and is the estimator to configure explicitly
-for **externally supplied correlator outputs without a noise observation** — a
-correlator-ingest path that cannot also report `Σ|B|²` for an untracked PRN. It
-is the one place it is still necessary; everywhere else, prefer appending a
+Configure `NWPRCN0Estimator` explicitly for **externally supplied correlator
+outputs without a noise observation**. Everywhere else, prefer appending a
 [`NoiseObservation`](@ref) per signal with [`append_noise_observation!`](@ref).
 """
 function default_cn0_estimator(

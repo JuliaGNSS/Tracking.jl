@@ -195,11 +195,10 @@ end
 Tracking.default_carrier_loop_filter_bandwidth(::GalileoE1B{Matrix{Int32}}) = 7.0Hz
 
 @testset "Positional TrackState(satellites::SatelliteDicts) infers default estimator" begin
-    # With no estimator kwarg, the default is the auto-bandwidth
-    # `ConventionalAssistedPLLAndDLL`, which seeds each group's sats from that
-    # group's own driver signal. Every signal's default is the flat 18 Hz, so
-    # give the Galileo driver its own through the documented extension point,
-    # on a code-storage parameterization no other test uses.
+    # The default auto-bandwidth estimator seeds each group's sats from that
+    # group's own driver signal. All defaults are a flat 18 Hz, so the Galileo
+    # driver gets its own via the documented extension point, on a code-storage
+    # type no other test uses.
     gpsl1 = GPSL1CA()
     galileo = GalileoE1B(Int32.(GalileoE1B().codes), GalileoE1B().lut)
     estimator = ConventionalAssistedPLLAndDLL()
@@ -231,8 +230,7 @@ end
 end
 
 @testset "Positional TrackState constructor rejects sats with a different estimator" begin
-    # `_assert_doppler_estimator_types_match` errors when sat-state and
-    # the configured estimator would produce different concrete types.
+    # See `_assert_doppler_estimator_types_match`.
     gpsl1 = GPSL1CA()
     sat_default = TrackedSat(gpsl1, 1, 10.5, 10.0Hz)  # default estimator
     different = ConventionalPLLAndDLL(;
@@ -252,27 +250,20 @@ end
     a = TrackedSat(gpsl1, 1, 10.5, 10.0Hz; doppler_estimator = estimator)
     sats = dictionary([1 => a])
 
-    # `_copy_slot_vector` is the cheap per-iteration copy used inside
-    # `track`'s loop (`downconvert_and_correlate` / `estimate`): it detaches
-    # the slot *values* but deliberately *shares* the key set (`Indices`), so
-    # the hash table is not copied on every loop iteration. The key set is
-    # detached once at the `track` boundary instead (see below, #123).
+    # `_copy_slot_vector` (per-iteration) shares the key set; see sat_state.jl.
     shared = Tracking._copy_slot_vector(sats)
     @test shared.values !== sats.values
     @test keys(shared) === keys(sats)
 
-    # `_detach_slot_vector` is the boundary copy: keys *and* values detached.
+    # `_detach_slot_vector` (track boundary) detaches keys and values.
     detached = Tracking._detach_slot_vector(sats)
     @test detached.values !== sats.values
     @test keys(detached) !== keys(sats)
 end
 
 @testset "Immutable boundary copies do not share Dictionary Indices (#123)" begin
-    # `reset_start_sample_and_bit_buffer` is the boundary copy `track` makes
-    # of the caller's live state. With a shared `Indices`, `add_satellite!`
-    # on the copy would grow the original's key set without resizing its
-    # values vector — leaving the original claiming keys it has no values for
-    # (UndefRefError or silent garbage on access).
+    # With a shared `Indices`, `add_satellite!` on the copy would grow the
+    # original's key set but not its values (UndefRefError on access).
     ts = TrackState(; signal = GPSL1CA())
     ts = add_satellite!(ts; prn = 1, carrier_doppler = 100.0Hz)
 
@@ -293,11 +284,8 @@ end
 end
 
 @testset "track output is structurally detached from input (#123)" begin
-    # The public contract: `add_satellite!` on `track`'s output must not
-    # corrupt the input state, even though the hot loop shares key sets among
-    # its throwaway intermediates. The detach at the `track` boundary
-    # (`reset_start_sample_and_bit_buffer`) makes the output's key set
-    # independent of the input's.
+    # Public contract: `add_satellite!` on `track`'s output must not corrupt
+    # the input state.
     sampling_frequency = 5e6Hz
     gpsl1 = GPSL1CA()
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 10.5, 10.0Hz)])
@@ -326,12 +314,8 @@ end
 end
 
 @testset "remove_satellite(!) leaves no #undef hole → track! is safe (issue #182)" begin
-    # `Dictionaries.delete!` only rehashes/compacts once deletions cross ~1/3
-    # of the entries; a single removal from a larger group otherwise leaves a
-    # `#undef` slot in the backing `values` vector, which the tracking hot
-    # paths iterate directly (`_reset_one_group!` et al.) and dereference into
-    # an `UndefRefError`. Ten satellites keep the deletion below the rehash
-    # threshold, so the removed slot survives as a hole unless we compact.
+    # Ten satellites keep one deletion below `delete!`'s rehash threshold, so
+    # it would leave a `#undef` hole; see `_satellites_without`.
     signal = rand(ComplexF32, 20000)
     build() = foldl(
         (ts, prn) -> add_satellite!(ts; prn = prn, carrier_doppler = (100.0 * prn)Hz),
@@ -347,8 +331,7 @@ end
         sats = get_sat_states(ts, :default)
         @test length(sats) == 9
         @test !haskey(sats, 3)
-        # No hole: the backing vector holds exactly the live entries, all
-        # assigned — the precondition the hot loops rely on.
+        # No hole: the backing vector holds exactly the live entries.
         vals = sats.values
         @test length(vals) == 9
         @test all(i -> isassigned(vals, i), eachindex(vals))
@@ -541,10 +524,8 @@ end
     import Tracking
     using Tracking: AbstractDopplerEstimator
 
-    # Immutable estimator with growing shared state held in a resizable
-    # Vector. update_estimator_on_handoff mutates the vectors in place
-    # and returns the same `est` object — concrete type is preserved, no
-    # new heap-allocated wrapper per call.
+    # Immutable estimator whose hook mutates its vectors in place and
+    # returns the same object.
     struct CountingEstimator <: AbstractDopplerEstimator
         sats_added::Vector{Int}
         last_batch_prns::Vector{Int}
@@ -613,9 +594,8 @@ end
     import Tracking
     using Tracking: AbstractDopplerEstimator
 
-    # Spec-conforming estimator that *rebuilds itself* on handoff — same
-    # concrete type, replaced field — the style the
-    # `update_estimator_on_handoff` docstring explicitly sanctions.
+    # Estimator that rebuilds itself on handoff (same concrete type), as
+    # `update_estimator_on_handoff` allows.
     struct RebuildingEstimator <: AbstractDopplerEstimator
         num_registered::Int
     end
@@ -659,11 +639,8 @@ end
     @test ret === conventional_ts
 end
 
-# Type stability matters because every accessor is on the path between
-# user code and the hot tracking loop. A widened return type here can
-# silently propagate into a dynamic dispatch in the caller; `@inferred`
-# trips the moment the compiler's narrowest prediction stops matching
-# the actual return.
+# Accessors sit between user code and the hot loop; a widened return type would
+# propagate into dynamic dispatch in the caller.
 @testset "Accessor type stability — single-group, single-signal" begin
     track_state = TrackState(; signal = GPSL1CA())
     track_state =
@@ -728,10 +705,8 @@ end
     set_preferred_num_code_blocks_to_integrate!(l5_state, 1, 10)
     @test get_preferred_num_code_blocks_to_integrate(l5_state, 1) == 10
 
-    # Pilot signals carry no data bits, so the setter accepts any length of
-    # at least one block. Post-sync the integration is bounded by the
-    # secondary-code period (and divisor-clamped to it at runtime, issue
-    # #134), see `calc_num_code_blocks_to_integrate`.
+    # Pilots have no data bits: any length ≥ 1 is accepted; the runtime clamp
+    # is in `calc_num_code_blocks_to_integrate` (issue #134).
     gpsl1c_p = GPSL1C_P()
     p_state = TrackState(gpsl1c_p, [TrackedSat(gpsl1c_p, 1, 0.0, 0.0Hz)])
     set_preferred_num_code_blocks_to_integrate!(p_state, 1, 7)

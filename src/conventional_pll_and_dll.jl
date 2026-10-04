@@ -119,16 +119,13 @@ Conventional Phase-Locked Loop (PLL) and Delay-Locked Loop (DLL) Doppler
 estimator. Configuration-only — per-satellite state lives in each
 [`TrackedSat`](@ref) wrapper, produced via [`init_estimator_state`](@ref).
 
-Type parameters `CA` and `CO` select the carrier and code loop filter types;
-the bandwidth fields configure the loop bandwidths used when seeding new
-satellites. Each bandwidth field is `Maybe{typeof(1.0Hz)}`: a `nothing`
-field (the default) means **auto** — [`init_estimator_state`](@ref) sizes the
-bandwidth per satellite from that sat's estimator-driver signal (`signals[1]`)
-via [`default_carrier_loop_filter_bandwidth`](@ref) /
-[`default_code_loop_filter_bandwidth`](@ref). Pass an explicit bandwidth to
-override them for every satellite this estimator seeds. At filter time both are
-capped against the record's integration time
-([`effective_carrier_loop_filter_bandwidth`](@ref),
+Type parameters `CA` and `CO` select the carrier and code loop filter types.
+A `nothing` bandwidth (the default) means **auto**: [`init_estimator_state`](@ref)
+sizes it per satellite from the sat's estimator-driver signal (`signals[1]`) via
+[`default_carrier_loop_filter_bandwidth`](@ref) /
+[`default_code_loop_filter_bandwidth`](@ref); an explicit bandwidth applies to
+every satellite. At filter time both are capped against the record's integration
+time ([`effective_carrier_loop_filter_bandwidth`](@ref),
 [`effective_code_loop_filter_bandwidth`](@ref)), so lengthening the coherent
 integration with [`set_preferred_num_code_blocks_to_integrate!`](@ref) needs no
 re-tuning.
@@ -152,13 +149,9 @@ end
 $(SIGNATURES)
 
 Create a ConventionalPLLAndDLL with FLL-assisted carrier tracking. This is the
-default Doppler estimator used by TrackState. Uses a ThirdOrderAssistedBilinearLF
-for the carrier loop filter which combines PLL and FLL discriminators for
-improved tracking under high dynamics.
-
-Bandwidths default to `nothing` (auto): each satellite is seeded with the
-loop bandwidth recommended for its own estimator-driver signal — see
-[`ConventionalPLLAndDLL`](@ref). Pass explicit bandwidths to override.
+default Doppler estimator used by TrackState. Its `ThirdOrderAssistedBilinearLF`
+carrier filter combines PLL and FLL discriminators for high dynamics. Bandwidths
+default to auto, see [`ConventionalPLLAndDLL`](@ref).
 """
 function ConventionalAssistedPLLAndDLL(
     ::Type{CO} = SecondOrderBilinearLF;
@@ -193,12 +186,9 @@ $(SIGNATURES)
 Build the per-satellite estimator state stored in a [`TrackedSat`](@ref) for a
 satellite tracked under [`ConventionalPLLAndDLL`](@ref).
 
-Auto bandwidths (`nothing` on the estimator) are resolved here, per satellite,
-from the sat's estimator-driver signal (`signals[1]`): each sat gets the loop
-bandwidth recommended for the signal that actually drives its loop, so a
-multi-group / multi-constellation [`TrackState`](@ref) ends up with the right
-bandwidth per group even though it carries one shared estimator. An explicit
-bandwidth on the estimator is used verbatim for every satellite.
+Auto bandwidths (`nothing` on the estimator) are resolved here from the sat's
+estimator-driver signal (`signals[1]`), so a multi-group [`TrackState`](@ref)
+gets the right bandwidth per group from one shared estimator.
 """
 function init_estimator_state(
     estimator::ConventionalPLLAndDLL{CA,CO},
@@ -225,19 +215,15 @@ function init_estimator_state(
     )
 end
 
-# Re-seed hook used by `reset_loop_filters!`. The generic fallback simply
-# rebuilds the per-sat state from scratch via `init_estimator_state`; custom
-# estimators may specialize to preserve per-sat configuration across the
-# reset.
+# Re-seed hook used by `reset_loop_filters!`. The fallback rebuilds the per-sat
+# state via `init_estimator_state`; estimators may specialize to preserve
+# per-sat configuration.
 _reset_estimator_state(estimator::AbstractDopplerEstimator, sat::TrackedSat) =
     init_estimator_state(estimator, sat)
 
-# Conventional PLL/DLL: zero the loop-filter integrators and re-seed the
-# init Dopplers from the sat's current (converged) Dopplers, but keep the
-# bandwidths from the EXISTING per-sat state — a per-sat
-# `SatConventionalPLLAndDLL` bandwidth override must survive the reset
-# (going through `init_estimator_state` would silently revert it to the
-# estimator-level defaults).
+# Zero the loop-filter integrators and re-seed the init Dopplers from the sat's
+# current Dopplers, but keep the existing per-sat bandwidths so a per-sat
+# override survives the reset.
 function _reset_estimator_state(
     ::ConventionalPLLAndDLL,
     sat::TrackedSat{<:Tuple{Vararg{TrackedSignal}},<:SatConventionalPLLAndDLL},
@@ -272,30 +258,20 @@ function aid_dopplers(
     init_carrier_doppler + carrier_doppler, init_code_doppler + code_doppler
 end
 
-# Per-sat update for the conventional PLL/DLL estimator. Pure: takes a
-# TrackedSat and returns the updated TrackedSat. Shared by the immutable
-# `estimate_dopplers_and_filter_prompt` and the in-place
-# `estimate_dopplers_and_filter_prompt!` so the two cannot drift.
+# Pure per-sat update, shared by the conventional and vector estimators (which
+# dispatch on the per-sat state in `_process_estimator_driver_signal`). Every
+# signal's completed records are folded into its prompt filter, CN0 estimator
+# and bit buffer; `signals[1]` (the estimator driver) additionally runs the
+# loops and sets the sat-shared Dopplers.
 #
 # `noise` is one `(density, ready)` pair per signal, in `sat.signals` order (see
-# `_signal_noise_densities`) — so the driver takes `first(noise)` and the
-# passengers `Base.tail(noise)`, and no signal is ever handed another's floor.
+# `_signal_noise_densities`).
 function _update_tracked_sat_doppler(sat::TrackedSat, sampling_frequency, noise::Tuple)
-    # Walk all signals. For each one whose integration completed this
-    # iteration, normalize/filter its prompt, advance CN0 and bit buffer,
-    # and move its correlator to `last_fully_integrated_*`. Additionally,
-    # for `signals[1]` (the estimator-driver signal), run PLL/DLL and
-    # update the sat-shared carrier/code Doppler. Each signal's coherent-
-    # integration length comes from its own `preferred_num_code_blocks_to_integrate`.
     pll_and_dll_state = sat.doppler_estimator_state
     head = first(sat.signals)
     tail_signals = Base.tail(sat.signals)
 
-    # The loops lock the driver (`signals[1]`) onto the real axis; every signal's
-    # bit-buffer prompt is de-rotated by its carrier-phase offset from the driver
-    # so a quadrature component (QPSK data/pilot, e.g. GPS L5 / Galileo E5a) does
-    # not decode off the collapsed real part. The per-signal carrier phase comes
-    # from `get_carrier_phase_offset`.
+    # See `_carrier_phase_derotation`.
     driver_carrier_phase = get_carrier_phase_offset(head.signal)
 
     driver_noise_density, driver_noise_density_ready = first(noise)
@@ -318,28 +294,17 @@ function _update_tracked_sat_doppler(sat::TrackedSat, sampling_frequency, noise:
         driver_carrier_phase,
     )
 
-    # Phase-snap fallback chain. Picks the synced signal with the
-    # longest `(primary × secondary)` code length, and uses its
-    # secondary-code phase to anchor `sat.code_phase` to the right
-    # secondary-chip window.
+    # One-time phase snap on the iteration a signal first syncs: anchor
+    # `sat.code_phase` to the secondary-chip window of the synced signal with the
+    # longest `(primary × secondary)` code, keeping the within-primary-block
+    # phase. Re-running it later would wedge the satellite (issue #117); after
+    # sync, `update`'s `mod(…, current_code_wrap)` keeps the alignment.
     #
-    # This is a *one-time* anchoring applied only on the iteration a
-    # signal transitions `found == false → true`. It preserves the
-    # within-primary-block phase (`mod(code_phase, primary)`) so the loop
-    # keeps the current chunk-bounded position; re-running it on later
-    # iterations would wedge the satellite (see issue #117). After sync,
-    # `update`'s `mod(…, current_code_wrap)` maintains the alignment.
-    #
-    # Because sync is detected in this estimate pass — *after* the whole
-    # chunk was correlated — any in-flight partial integration for this
-    # chunk was accumulated at the pre-snap code phase (and, pre-sync, with
-    # no secondary-code overlay). Once the snap jumps `code_phase` into the
-    # secondary window that partial's data is phase-inconsistent with the
-    # new alignment (for a flipped NH chip it can even cancel to zero and
-    # feed a 0/0 into the discriminators). So on the snap we also reset every
-    # signal's in-flight accumulator: the phase bookkeeping is kept, but the
-    # next chunk re-integrates cleanly from the snapped phase to the next
-    # boundary. Block-aligned starts have no residue, so this is a no-op there.
+    # Sync is detected after the chunk was correlated, so every signal's
+    # in-flight partial was accumulated at the pre-snap phase and would be
+    # inconsistent with the new alignment (a flipped NH chip can even cancel it
+    # to zero, a 0/0 in the discriminators). It is therefore dropped and
+    # re-integrated from the snapped phase.
     new_signals = (new_head, new_tail...)
     just_synced = _any_signal_just_synced(sat.signals, new_signals)
     snapped_code_phase =
@@ -358,56 +323,37 @@ function _update_tracked_sat_doppler(sat::TrackedSat, sampling_frequency, noise:
     )
 end
 
-# Drop an in-flight (partial) integration: zero the accumulator and its sample
-# counter, leaving all other per-signal state intact. Used at the sync-transition
-# phase snap, where the shared `code_phase` moves and any partial accumulated at
-# the old phase must not be carried into the re-anchored window.
+# Drop an in-flight (partial) integration at the sync phase snap (see
+# `_update_tracked_sat_doppler`), leaving all other per-signal state intact.
 @inline _reset_inflight_integration(s::TrackedSignal) =
     TrackedSignal(s; correlator = zero(s.correlator), integrated_samples = 0)
 
-# De-rotation applied to a component's bit-buffer prompt so its own energy is
-# real again, given the loops lock the driver onto the real axis. The rotation
-# is `cis(driver_carrier_phase − get_carrier_phase(signal))`, where the
-# per-signal carrier phase (radians, relative to the band's in-phase reference)
-# comes from `get_carrier_phase_offset`.
-# For an in-phase component (co-phased with the driver, or the driver itself)
-# the difference is 0 and `cis(0) === 1 + 0im`, a bit-identical no-op; a
-# quadrature component (GPS L5 / Galileo E5a I-vs-Q) rotates by `±90°` onto the
-# real axis, where the navigation decoder resolves the residual sign via its
+# The loops lock the driver onto the real axis; this rotation brings a
+# component's bit-buffer prompt back onto it, so a quadrature component (GPS L5 /
+# Galileo E5a I vs Q) does not decode off the collapsed real part. It is
+# `cis(0) === 1 + 0im`, a bit-identical no-op, for the driver and co-phased
+# components; the residual ±90° sign is resolved by the navigation decoder's
 # preamble.
 @inline _carrier_phase_derotation(driver_carrier_phase::Real, signal) =
     cis(driver_carrier_phase - get_carrier_phase_offset(signal))
 
-# Apply one completed `CorrelatorOutput` record to a signal — shared by the
-# estimator-driver and passenger folds so they cannot drift (issue #133):
-# normalize the record's (raw) correlator by its sample count, update/apply the
-# post-corr filter, record the filtered prompt, advance the CN0 estimator and
-# bit buffer, and rebuild the `TrackedSignal` with the record moved to
-# `last_fully_integrated_*`. Returns the rebuilt signal plus the filtered
-# correlator the driver's loop-filter section needs.
+# Apply one completed `CorrelatorOutput` record to a signal, shared by the
+# driver and passenger folds (issue #133): normalize the record's correlator,
+# update/apply the post-corr filter, advance the CN0 estimator and bit buffer,
+# and move the record to `last_fully_integrated_*`. Returns the rebuilt signal
+# and the filtered correlator for the driver's loops. The live accumulator is
+# not touched; the correlate phase already reset it.
 #
-# Unlike the old per-integration advance, this does NOT reset the live
-# accumulator or `integrated_samples`: the correlate phase already reset them
-# when it snapshotted this record and began (or is carrying) the next
-# integration. It consumes only the record's stored correlator.
+# The bit accumulator is credited with the blocks *actually* integrated,
+# recovered from the record's sample count: the first post-sync integration is
+# truncated to the data-bit boundary (issue #125).
 #
-# The bit accumulator is credited with the blocks *actually* integrated
-# (`calc_num_code_blocks_for_bit_buffer`), recovered from the record's sample
-# count: post-sync the first integration is truncated to land on the data-bit
-# boundary, so crediting the intended length would misalign the decoded bits
-# (issue #125).
-# `correlated_pre_sync = true` marks a record that follows a bit/secondary sync
-# detected earlier in the same fold, i.e. one that was correlated with a
-# pre-sync replica. Its *prompt* is only unusable where sync changed the replica
-# — the secondary-code wipe-off, whose absence would feed sign-corrupted prompts
-# into the first post-sync bits — so it is dropped from the coherent bit
-# accumulation for secondary-coded signals only; a signal without a secondary
-# code (GPS L1 C/A) correlates identically either side of the sync instant and
-# keeps its prompt. The code blocks such a record covers are real either way and
-# are always credited to the accumulator's block count: dropping the count
-# slides the bit window one block off the navigation-bit grid for the rest of
-# the run, which costs ~0.9 dB of bit-decision SNR and makes every coherent
-# window that follows the grid straddle a bit flip (issue #219).
+# `correlated_pre_sync = true` marks a record correlated with a pre-sync replica
+# (sync was detected earlier in the same fold). Its prompt lacks the
+# secondary-code wipe-off, so it is dropped from the coherent bit sum for
+# secondary-coded signals only. Its blocks are always credited: dropping them
+# slides the bit window off the navigation-bit grid for the rest of the run
+# (issue #219).
 @inline function _apply_correlator_output(
     tracked_signal::TrackedSignal,
     output::CorrelatorOutput,
@@ -423,11 +369,8 @@ end
         normalize(output.correlator, output.integrated_samples, get_code_amplitude(signal))
     post_corr_filter =
         update(tracked_signal.post_corr_filter, get_prompt(normalized_correlator))
-    # The filter's weights, read once and used twice: to combine the antennas
-    # here, and to reduce the shared noise covariance to *this* satellite's floor
-    # below. Both sides of the C/N₀ ratio must go through the same `w` or they
-    # describe different channels — which is precisely what went wrong when the
-    # floor was measured on one fixed antenna and the prompt was beamformed.
+    # Used both to combine the antennas and to reduce the noise covariance to this
+    # satellite's floor below: both sides of the C/N₀ ratio must share one `w`.
     weights = get_weights(post_corr_filter, _num_ants_val(normalized_correlator))
     filtered_correlator = _combine_correlator(normalized_correlator, weights)
     prompt = get_prompt(filtered_correlator)
@@ -440,44 +383,22 @@ end
     )
     # Floored at 1 for the fractional-block record after a sync phase-snap reset.
     integrated_code_blocks = max(1, bit_block_count)
-    # De-rotate the prompt onto the driver's (real) phase frame before both the
-    # secondary/bit sync search and the coherent bit accumulation inside
-    # `buffer`, so a quadrature component's data lands on the real axis it is
-    # decided on. No-op for the driver and for co-phased pairs.
+    # De-rotated before both the sync search and the coherent bit sum in `buffer`
+    # (see `_carrier_phase_derotation`).
     bit_prompt = prompt * _carrier_phase_derotation(driver_carrier_phase, signal)
-    # Keep a pre-sync-correlated record's prompt out of the coherent sum where
-    # the sync changed the replica under it (secondary-code wipe-off), but
-    # always let it advance the accumulator's block count — see above.
     drop_prompt = correlated_pre_sync && get_secondary_code_length(signal) > 1
-    # The CN0 estimator is handed the navigation-bit state along with the prompt
-    # (`CN0UpdateContext`, built from the bit buffer as it stands *before* this
-    # record): `NWPRCN0Estimator` needs to know where the data-bit
-    # boundaries are to sum prompts coherently over exactly one bit — nothing a
-    # downstream consumer of `get_filtered_prompts` could reconstruct. The bit
-    # grid is trustworthy for exactly the records whose prompt is: this record's
-    # blocks are always credited to the accumulator, so a pre-sync-correlated
-    # record is only unusable where the sync changed the replica under it, and
-    # `drop_prompt` is that condition. Where it holds the context reports "no bit
-    # grid", which keeps the sign-corrupted prompt out of any coherent window and
-    # drops the window that was open — exactly what happens before sync.
+    # The CN0 context carries the bit state from *before* this record, because
+    # `NWPRCN0Estimator` sums prompts coherently over exactly one data bit. Where
+    # `drop_prompt` holds, the context reports "no bit grid", which keeps the
+    # sign-corrupted prompt out of any coherent window, as before sync.
     #
-    # It also carries this signal's own noise density and this record's own
-    # integration time, for an estimator that divides by a *measured* floor
-    # (`NoiseRefCN0Estimator`). `noise_density_ready == false` means a source is
-    # configured but its window is still empty, and then the update is skipped —
-    # but only for the estimators that would actually read the density. Skipping
-    # the whole record would corrupt a co-resident `NWPRCN0Estimator`: a record
-    # missing from the bit grid makes `_update_nwpr` drop its open narrowband
-    # window, silently demoting NWPR to its fallback for a whole `num_records`.
-    # `requires_noise_density` is a compile-time constant on the estimator's
-    # type, so the gate costs nothing at run time.
-    #
-    # The density arrives as whatever the signal's window measures — a scalar for
-    # a single antenna, a spatial covariance for an array — and is reduced here,
-    # through the same weights that produced `prompt`, to the one scalar floor
-    # this satellite's combiner actually sees. `nothing` (no estimator configured)
-    # passes straight through, so the context's type parameter stays `Nothing` and
-    # the wiring mistake still surfaces at the first record.
+    # It also carries this signal's noise density and this record's integration
+    # time for `NoiseRefCN0Estimator`. A not-ready density skips the update only
+    # for estimators that read it (`requires_noise_density`, compile-time):
+    # skipping the whole record would make a co-resident NWPR drop its open window.
+    # The density (scalar, or covariance for an array) is reduced through the
+    # prompt's weights to this combiner's scalar floor; `nothing` passes through
+    # (see `_reduce_noise_density`).
     scalar_noise_density = _reduce_noise_density(noise_density, weights)
     cn0_estimator = _update_cn0_estimator(
         get_cn0_estimator(tracked_signal),
@@ -497,10 +418,9 @@ end
         bit_block_count,
         drop_prompt ? zero(bit_prompt) : bit_prompt,
     )
-    # Such a record also moves the secondary-code anchor: the code-phase snap
-    # runs after this fold and aligns the *upcoming* integration to
-    # `bit_buffer.secondary_phase`, which the detector reported for the block
-    # right after the syncing record.
+    # A pre-sync-correlated record also moves the secondary-code anchor: the
+    # phase snap after this fold aligns the upcoming integration to
+    # `bit_buffer.secondary_phase`, reported for the block after the syncing one.
     if correlated_pre_sync
         bit_buffer = _advance_secondary_phase(signal, bit_buffer, bit_block_count)
     end
@@ -552,14 +472,11 @@ end
     )
 end
 
-# Process the estimator-driver signal (signals[1]): fold over every
-# `CorrelatorOutput` collected during this chunk, in order — running the PLL/DLL
-# plus prompt filter / CN0 / bit-buffer update per record and threading the loop
-# filters and FLL `previous_prompt` across them — then return the new
-# doppler_estimator_state and the *last* record's carrier/code Doppler (the NCO
-# is written once per chunk). With no outputs the Doppler holds. This is where
-# ConventionalPLLAndDLL hard-codes the "signals[1] drives the loop filter" rule —
-# a custom AbstractDopplerEstimator may use any/all signals' state.
+# Fold the estimator-driver signal's (signals[1]) chunk of `CorrelatorOutput`s
+# in order, running the PLL/DLL per record and threading the loop filters and the
+# FLL `previous_prompt` across records. Returns the new estimator state and the
+# *last* record's Dopplers (the NCO is written once per chunk); with no outputs
+# the Doppler holds. A custom AbstractDopplerEstimator may use any signal.
 @inline function _process_estimator_driver_signal(
     tracked_signal::TrackedSignal,
     sat::TrackedSat,
@@ -582,21 +499,14 @@ end
     found_before_fold = has_bit_or_secondary_code_been_found(ts.bit_buffer)
     @inbounds for k in eachindex(outputs)
         output = outputs[k]
-        # FLL needs the previous record's filtered prompt; the first record of
-        # the chunk chains from the sat's carried-over
-        # `last_fully_integrated_filtered_prompt` (the previous chunk's last).
-        # Read it off `ts` BEFORE the advance overwrites it.
+        # The FLL's previous prompt (the previous chunk's last for the first
+        # record); read it BEFORE the advance overwrites it.
         previous_prompt = get_last_fully_integrated_filtered_prompt(ts)
         # Per-record integration time — the block time, NOT the chunk time.
         integration_time = output.integrated_samples / sampling_frequency
-        # A record that follows a sync detected earlier in THIS fold was
-        # correlated with pre-sync replicas — its blocks still count towards the
-        # bit, only its prompt may have to be dropped (see
-        # `_apply_correlator_output`).
+        # See `correlated_pre_sync` in `_apply_correlator_output`.
         synced_earlier_in_fold =
             !found_before_fold && has_bit_or_secondary_code_been_found(ts.bit_buffer)
-        # The driver de-rotates against itself (offset 0), so the derotation is a
-        # no-op for it; passed for symmetry with the passenger path.
         ts, filtered_correlator = _apply_correlator_output(
             ts,
             output,
@@ -628,9 +538,8 @@ end
             integration_time,
             carrier_bandwidth,
         )
-        # `dll_disc` is fed the chunk-fixed `sat.code_doppler` — the code Doppler
-        # that actually generated this chunk's replicas — for every record;
-        # only the loop-filter *state* threads across records.
+        # `dll_disc` gets the chunk-fixed `sat.code_doppler` that generated this
+        # chunk's replicas; only the loop-filter state threads across records.
         code_freq_update, code_loop_filter = calculate_code_frequency_update(
             signal,
             code_loop_filter,
@@ -654,10 +563,9 @@ end
     return ts, new_doppler_estimator_state, carrier_doppler, code_doppler
 end
 
-# Process the non-driver signals (signals[2:end]): the shared per-signal
-# advance only — no loop-filter work. Walks the tuple recursively to keep
-# type-stability and avoid boxing, stepping the per-signal `(density, ready)`
-# tuple in lockstep so each passenger divides by its own noise floor.
+# Process the non-driver signals (signals[2:end]): the per-signal advance only,
+# no loop filtering. Recursive over the tuple for type stability, stepping the
+# `(density, ready)` tuple in lockstep.
 @inline _process_passenger_signals(::Tuple{}, ::Integer, _, ::Tuple{}, ::Real) = ()
 @inline function _process_passenger_signals(
     signals::Tuple,
@@ -700,8 +608,7 @@ end
     ts = tracked_signal
     found_before_fold = has_bit_or_secondary_code_been_found(ts.bit_buffer)
     @inbounds for k in eachindex(outputs)
-        # Same rule as the driver fold: records after a sync detected earlier
-        # in this fold stay out of the bit buffer.
+        # See `correlated_pre_sync` in `_apply_correlator_output`.
         synced_earlier_in_fold =
             !found_before_fold && has_bit_or_secondary_code_been_found(ts.bit_buffer)
         ts = first(
@@ -725,78 +632,52 @@ end
 $(SIGNATURES)
 
 Estimate Dopplers and filter prompts for all satellites where the correlation has reached
-the end of the code or multiples of that. This function uses the
-conventional PLL and DLL implementation to estimate Dopplers for
-carrier and code. Those Doppler estimations will be used to create the next
-replicas to downconvert and decode the incoming signal. In addition to the
-Doppler estimation it will also filter the prompt with the configured
-post correlation filter.
-In the case that the that the correlation hasn't reached the end, e.g. in the case
-the incoming signal did not provide enough samples, it will return struct with
-zeroed values.
+the end of the code or multiples of that, using the conventional PLL and DLL. The
+Dopplers drive the next replicas; the prompts go through the configured post
+correlation filter. Satellites without a completed integration are passed through
+unchanged.
 
-The sampling-frequency argument may be either a [`BandMeasurements`](@ref)
-NamedTuple (the `track` path, from which the per-band rate is read) or a bare
-per-band sampling-frequency source — a `NamedTuple`/`Dict` keyed by
-`get_band_id` mapping each band to its sampling frequency. The latter is
-the entry point for an **external correlator producer** (e.g. an FPGA): it needs
-no sample buffer, only the per-signal `correlator_outputs` and the rate that
-maps `integrated_samples` to an integration time. See
+The second argument is either a [`BandMeasurements`](@ref) NamedTuple (the `track`
+path) or a bare per-band sampling-frequency source, a `NamedTuple`/`Dict` keyed by
+`get_band_id`. The latter is the entry point for an **external correlator
+producer** (e.g. an FPGA), which needs no sample buffer. See
 [External correlator producers](@ref).
 """
 function estimate_dopplers_and_filter_prompt(
     track_state::TrackState{<:SignalGroups,<:ConventionalPLLAndDLL},
     sampling_frequencies::Union{BandMeasurements,NamedTuple,AbstractDict},
 )
-    # Detach the slot *values* from the input (sharing the key set), then
-    # delegate to the in-place form. This step never changes the key set, so
-    # sharing the `Indices` is safe and avoids copying the hash table every
-    # `track` loop iteration; the key set is detached once at the `track`
-    # boundary (`reset_start_sample_and_bit_buffer`, #123). The per-sat
-    # doppler update is identical between the two forms — only the storage
-    # ownership differs.
+    # Copy the slot *values* but share the key set, which this step never
+    # changes (it is detached once at the `track` boundary, #123), then delegate
+    # to the in-place form.
     new_track_state =
         TrackState(track_state; groups = _copy_groups_slot_vectors(track_state.groups))
     estimate_dopplers_and_filter_prompt!(new_track_state, sampling_frequencies)
 end
 
-# Per-band sampling frequency for a group, from either a `BandMeasurements`
-# NamedTuple (read the rate off the band's `BandMeasurement`) or a bare
-# per-band rate source keyed by `get_band_id` (a `NamedTuple`/`Dict`). Both are
-# looked up by the group's band id, so the estimator stays per-band and is
-# never handed a scalar (groups may sit on different bands).
+# Per-band sampling frequency for a group, looked up by its band id in either
+# a `BandMeasurements` NamedTuple or a bare per-band rate source.
 @inline _band_sampling_frequency(m::BandMeasurements, key) = m[key].sampling_frequency
 @inline _band_sampling_frequency(fs::NamedTuple, key) = fs[key]
 @inline _band_sampling_frequency(fs::AbstractDict, key) = fs[key]
 
-# Per-signal noise density, as `(density, ready)` — the union-free pair the fold
-# threads down to `_apply_correlator_output`. Looked up by signal id, because the
-# floor a record divides by is the *post-correlation* one and that is a property
-# of the despreading modulation, not of the RF band (see
-# [`AbstractNoiseEstimator`](@ref)).
+# Per-signal noise density as a union-free `(density, ready)` pair. Keyed by
+# signal id: the post-correlation floor depends on the despreading modulation,
+# not the RF band (see `AbstractNoiseEstimator`).
 #
-# Three cases, and only the first two are ever seen by a shipped estimator:
-#
-#   * no entry for the signal — no `AbstractNoiseEstimator` is configured, a
-#     *static* property of the setup. The density is `nothing`, which makes the
-#     context's `N` type parameter `Nothing` and `NoiseRefCN0Estimator.update`
-#     throw. `ready` is `true`, because there is nothing to wait for: the wiring
-#     mistake must surface at the first record, not be silently skipped forever.
-#   * an entry whose window is still empty — a *runtime* condition. The density
-#     is a dummy scalar of the right type and `ready` is `false`, so the fold
-#     skips the update for the estimators that would read it, without ever
-#     letting a `Union{Nothing,D}` into the context.
-#   * an entry with a density — the normal case.
+#   * no entry (no noise estimator configured, a static wiring mistake):
+#     `(nothing, true)`, so `NoiseRefCN0Estimator` throws at the first record
+#     instead of being skipped forever.
+#   * an empty window (a runtime condition): a dummy density of the right type
+#     with `ready = false`, so the fold skips the estimators that read it.
+#   * otherwise the measured density.
 @inline _signal_noise_density(noise_estimators::NamedTuple, ::Val{K}) where {K} =
     haskey(noise_estimators, K) ? _noise_density_and_ready(noise_estimators[K]) :
     (nothing, true)
 
-# One `(density, ready)` pair per signal of a group's slot type, in the slot
-# type's own order — which is the order of every satellite's `signals` tuple, so
-# the fold can pair them off positionally with `first`/`Base.tail` and never
-# needs a lookup per satellite. The whole tuple folds to a constant shape: the
-# signal ids come out of `TrackedSignal`'s type parameters and `haskey` on a
-# NamedTuple is compile-time.
+# One `(density, ready)` pair per signal, in the order of every satellite's
+# `signals` tuple, so the fold pairs them positionally without a per-sat lookup.
+# The shape is compile-time (signal ids come from the type parameters).
 @inline _signal_noise_densities(
     noise_estimators::NamedTuple,
     ::Type{<:TrackedSat{Signals}},
@@ -811,14 +692,9 @@ end
         _signal_noise_densities(noise_estimators, Base.tuple_type_tail(T))...,
     )
 
-# Per-group body for the doppler estimator. Pulled out so
-# `_foreach_group!` can call it without boxing when the groups tuple
-# is heterogeneous (e.g. GPS L1 + Galileo E1B). The per-signal type
-# is recovered from each signal inside `_update_tracked_sat_doppler`.
-# Routes to this group's band's sampling frequency (see
-# `_band_sampling_frequency`), and to each signal's own noise density (see
-# `_signal_noise_densities`) — the sampling rate is a band property, the noise
-# floor is not.
+# Per-group body for the doppler estimator, a named function so `_foreach_group!`
+# can call it without boxing over heterogeneous groups (e.g. GPS L1 + Galileo
+# E1B). The sampling rate is per band, the noise density per signal.
 @inline function _est_one_group!(
     g::SignalGroup,
     sampling_frequencies::Union{BandMeasurements,NamedTuple,AbstractDict},
@@ -835,45 +711,19 @@ end
     return nothing
 end
 
-# A signal with a configured noise estimator that has no *usable* density is a
-# loud *symptom* — every satellite reports `-Inf dB-Hz` on it — but not a loud
-# diagnosis. There are two causes, and the message names both because the fold
-# cannot tell them apart from here:
+# Warn when a signal whose CN0 estimator needs a noise density has none usable
+# (it would report `-Inf dB-Hz`). The fold cannot tell the two causes apart, so
+# the message names both: an empty window (e.g. `append_noise_observation!`
+# never called) or a zero floor (a dead input or underrun, see
+# `_noise_density_and_ready`). This is the only point that knows a fold ran
+# with an unusable density.
 #
-#   - The window is still empty. The likeliest hardware-integration mistake: a
-#     `CorrelatorNoiseEstimator` configured per the docs whose
-#     `append_noise_observation!` is never called, so the static "no source
-#     configured" check does not fire and the runtime skip repeats forever.
-#   - The window holds a floor of zero, i.e. the input carries no power at all —
-#     a front-end dropout or a buffer underrun. `_noise_density_and_ready`
-#     reports that as not-ready rather than dividing by it (see there), so it
-#     arrives here as the same flag. This is the one cause that *can* reach a
-#     software-path caller, and the one that can appear after a signal has been
-#     reporting a real C/N₀ for a while.
-#
-# This is the only point that knows a fold actually ran *and* the density was
-# unusable, so the warning belongs here. `maxlog` is
-# keyed per callsite rather than per signal, so the `_id` is made
-# signal-specific — otherwise a second misconfigured signal would be silenced by
-# the first, and the message names the signal precisely because a multi-signal
-# setup is where the mistake is most likely.
-#
-# Walks the slot type and the density tuple in lockstep: `requires_noise_density`
-# is a compile-time constant per signal, so all that survives is one branch on
-# each signal's runtime `ready` flag.
-#
-# Warn rather than throw, and the asymmetry with the static case is the point:
-# "no source configured" is unambiguously a mistake, whereas "no usable density at
-# this instant" has legitimate transient readings (a producer that folds before it
-# appends, a buffer shorter than one sub-integration, or a momentary dead input),
-# so making it fatal would break a caller streaming short buffers.
-#
-# Takes the estimators as well as the `(density, ready)` pairs, for one reason: a
-# multi-antenna window that is merely *filling* to its own dimension count is
-# not-ready too, and that is a normal startup transient rather than a
-# misconfiguration. Reading `_noise_window_filling` off the estimator keeps the
-# fold's pair two-state — nothing downstream has to learn a third case — while
-# still telling the two apart here, which is the only place that cares.
+# Warn rather than throw: unlike the static no-estimator case, this has
+# legitimate transient causes (a producer that folds before it appends, a short
+# buffer). A multi-antenna window still filling to its dimension count is a
+# normal startup transient and is not warned about (`_noise_window_filling`).
+# `maxlog` is per callsite, so `_id` is made signal-specific to keep one
+# signal's warning from silencing another's.
 @inline _warn_noise_density_missing(
     ::Type{<:TrackedSat{Signals}},
     noise::Tuple,
@@ -894,8 +744,8 @@ end
     _warn_noise_density_missing(Base.tuple_type_tail(T), Base.tail(noise), noise_estimators)
 end
 
-# `haskey` on a NamedTuple is compile-time, so the no-estimator case (a static
-# wiring mistake, which must warn) folds away rather than being tested per fold.
+# `haskey` on a NamedTuple is compile-time, so the no-estimator case (which must
+# warn) folds away.
 @inline _noise_window_still_filling(noise_estimators::NamedTuple, ::Val{K}) where {K} =
     haskey(noise_estimators, K) ? _noise_window_filling(noise_estimators[K]) : false
 
@@ -919,13 +769,9 @@ group's `Vector{TrackedSat}` backing storage and overwrites slots with the
 new immutable `TrackedSat` value. Returns the same `track_state` object —
 allocation-free in steady state when [`track!`](@ref)'s preconditions are met.
 
-As with the immutable form, the second argument is either a
-[`BandMeasurements`](@ref) NamedTuple or a bare per-band sampling-frequency
-source keyed by `get_band_id`. The estimator only reads the per-band
-sampling frequency (to turn each output's `integrated_samples` into an
-integration time and to normalize the DLL discriminator); it consumes each
-signal's `correlator_outputs` and **clears** them, whether they were produced
-by the software correlate phase or appended by an external producer via
+The second argument is as for the immutable form; only the per-band sampling
+frequency is read from it. Each signal's `correlator_outputs` are consumed and
+**cleared**, whether produced by the software correlate phase or appended via
 [`append_correlator_output!`](@ref).
 """
 function estimate_dopplers_and_filter_prompt!(

@@ -68,10 +68,9 @@ Tracking.get_weights(::MyBeamformer, ::NumAnts{M}) where {M} =
 """
 function get_weights end
 
-# The scalar case is a plain `ComplexF64` rather than an `SVector{1}`, because a
-# single-antenna correlator's accumulators are plain `ComplexF64` too (see
-# `type_for_num_ants`). `one(ComplexF64)` is exact, so `_combine_antennas` and
-# `_reduce_noise_density` are both bit-identical no-ops at `M == 1`.
+# A plain `ComplexF64` at `M == 1`, matching single-antenna accumulators (see
+# `type_for_num_ants`); `one(ComplexF64)` makes combining and noise reduction
+# bit-identical no-ops there.
 get_weights(::DefaultPostCorrFilter, ::NumAnts{1}) = one(ComplexF64)
 get_weights(::DefaultPostCorrFilter, ::NumAnts{M}) where {M} =
     SVector{M,ComplexF64}(ntuple(i -> i == M ? one(ComplexF64) : zero(ComplexF64), M))
@@ -82,31 +81,20 @@ get_weights(::DefaultPostCorrFilter, ::NumAnts{M}) where {M} =
 @inline _combine_antennas(w::Number, tap::Number) = conj(w) * tap
 @inline _combine_antennas(w::StaticVector, tap::StaticVector) = w'tap
 
-# The same, for every tap of a correlator at once: an `M`-antenna correlator
-# reduced to the single-channel one the discriminators read.
-#
-# Its own function, rather than the closure written inline at the call site, and
-# that is load-bearing rather than tidy: `_apply_correlator_output` is large
-# enough that a closure *capturing* the weights is built on the heap there, which
-# costs an allocation per record on the one path that must have none (see the
-# `track!` allocation guards in `test/track_in_place.jl`). Built here, in a
-# function small enough to inline, the capture stays in registers.
+# The same, for every tap of a correlator at once. A separate small function on
+# purpose: inline in the large `_apply_correlator_output`, the weight-capturing
+# closure is heap-allocated per record, breaking the `track!` allocation guards
+# (`test/track_in_place.jl`).
 @inline _combine_correlator(correlator, weights) = update_accumulator(
     correlator,
     map(tap -> _combine_antennas(weights, tap), get_accumulators(correlator)),
 )
 
 # Reduce a measured noise floor to the scalar one that *this* combiner sees.
-#
-# `nothing` means no noise estimator is configured for the signal at all, a
-# static property of the setup: it must pass straight through so the C/N₀
-# context's type parameter stays `Nothing` and `NoiseRefCN0Estimator` throws the
-# wiring-mistake error at the first record (see `_signal_noise_density`).
-#
-# The scalar case is `|w|²·N₀`, which for `DefaultPostCorrFilter`'s exact
-# `1.0+0.0im` is bit-identical to the unreduced density. The matrix case is
-# `wᴴRw`, the exact post-combination floor for any fixed `w` — no `‖w‖²` factor
-# on top, because the covariance already carries the antennas' relative scale.
+# `nothing` (no noise estimator configured) passes through so the wiring mistake
+# surfaces at the first record (see `_signal_noise_density`). The scalar case is
+# `|w|²·N₀`; the matrix case `wᴴRw` needs no extra `‖w‖²` factor, because the
+# covariance already carries the antennas' relative scale.
 @inline _reduce_noise_density(::Nothing, w) = nothing
 @inline _reduce_noise_density(density::Number, w::Number) = abs2(w) * density
 @inline _reduce_noise_density(R::StaticMatrix, w::StaticVector) = real(w' * R * w)

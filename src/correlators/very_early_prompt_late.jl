@@ -2,10 +2,8 @@
 $(SIGNATURES)
 
 VeryEarlyPromptLateCorrelator holding a user defined number of correlation values.
-The code is shifted in samples. Hence, the specified code shift is actually a
-preferred code shift, because depending on sampling frequency and
-code frequency the specified code shift might not be the actual code shift. It is as
-close as possible, though. The algorithm makes sure that at least one sample is shifted.
+Code shifts are preferred shifts, rounded to whole samples as for
+[`EarlyPromptLateCorrelator`](@ref).
 """
 struct VeryEarlyPromptLateCorrelator{M,T} <: AbstractEarlyPromptLateCorrelator{M}
     accumulators::SVector{5,T}

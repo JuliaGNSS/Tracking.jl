@@ -11,57 +11,39 @@ with `N̂₀` the signal's noise density from its [`AbstractNoiseEstimator`](@re
 `T` that record's own integration time. The ring averages the per-record terms
 and [`estimate_cn0`](@ref) converts the mean once.
 
-Unlike [`NWPRCN0Estimator`](@ref) this is **non-coherent**: it needs no bit sync,
-no window length `M`, no coherent window and no fallback, it is immune to
-residual carrier-phase error, and it has no saturation ceiling. It is therefore
-the one estimator that works uniformly on **every** signal — including GPS
-L1C-D and Galileo E1B (`blocks_per_bit == 1`) and any secondary-coded signal
-before sync, where NWPR admits no coherent window at all and defers permanently
-to a fallback with a different bias (issue #217).
+Unlike [`NWPRCN0Estimator`](@ref) this is **non-coherent**: no bit sync, no
+window, no `M`, no fallback, no saturation ceiling, and immune to residual
+carrier-phase error. It therefore works uniformly on **every** signal, including
+GPS L1C-D, Galileo E1B and secondary-coded signals before sync (issue #217).
 
 # What it needs
 
-A noise density for its **own signal** — not for its RF band, because what this
-divides by is the post-correlation floor and that depends on the despreading
-modulation (see [`AbstractNoiseEstimator`](@ref)). On the sample-driven path it
-is automatic: [`TrackState`](@ref) provisions a
-[`CorrelatorNoiseEstimator`](@ref) for every signal whose estimator asks for one
-(see [`requires_noise_density`](@ref)), and `track!` measures before the fold
-reads. On a correlator-ingest path you configure the same type and fill it with
-[`append_noise_observation!`](@ref) per signal instead. With **no** source
-configured for the signal, `update` throws — a wiring mistake, and a silent
-substitution would hide a backend that fails to populate the reference. While a
-configured source's window is merely still **empty**, the update is skipped
-(the fold warns once per signal) and [`estimate_cn0`](@ref) reports `-Inf dB-Hz`
-until it fills.
+A noise density for its **own signal** (see [`AbstractNoiseEstimator`](@ref) for
+why per signal). On the sample-driven path [`TrackState`](@ref) provisions a
+[`CorrelatorNoiseEstimator`](@ref) automatically (see
+[`requires_noise_density`](@ref)); on a correlator-ingest path fill the same type
+with [`append_noise_observation!`](@ref). With **no** source configured, `update`
+throws: a silent substitution would hide a backend that never populates the
+reference. While a configured window is still **empty**, the fold skips the
+update (warning once per signal) and [`estimate_cn0`](@ref) reports `-Inf dB-Hz`.
 
-# Three deliberate properties
+# Deliberate properties
 
-  - **No `fallback` field.** The three reasons NWPR needs one — warm-up, no
-    admissible window pre-sync, and no window ever at one symbol per code block
-    — all vanish. One record plus a density is a valid, if noisy, estimate on
-    every signal.
-  - **`estimate_cn0`'s `integration_time` argument is ignored**, because `T` is
-    applied per record at update time, where it is actually known. The signature
-    stays for interface uniformity; this is not an oversight.
-  - **Only the average is floored, never the per-record term.** Individual terms
-    go negative at low C/N₀ and that is exactly what makes the mean unbiased;
-    clamping per record would reintroduce a noise floor of the kind
-    [`MomentsCN0Estimator`](@ref) has.
+  - **No `fallback`.** One record plus a density is a valid, if noisy, estimate
+    on every signal.
+  - **`estimate_cn0`'s `integration_time` is ignored**; `T` is applied per record
+    in `update`.
+  - **Only the average is floored, never the per-record term.** Negative terms
+    at low C/N₀ keep the mean unbiased; clamping them would reintroduce a floor
+    like [`MomentsCN0Estimator`](@ref)'s.
 
 # The one bias it carries
 
-The reference despreads with a *wrong* PRN, so besides the thermal floor and the
-other satellites' interference — both of which NWPR sees identically — it also
-collects **the tracked satellite's own power**, `ε_self/N₀ = C/f_chip`. NWPR does
-not: it despreads with the correct code, where the satellite's power appears in
-both `NBP` and `WBP` and cancels in the ratio. On GPS L1 C/A that is 0.013 dB at
-35 dB-Hz, 0.042 at 40, 0.13 at 45 and 0.40 at 50 (≈10× smaller on the 10.23 Mcps
-signals), always reading **low**. It is carried rather than corrected, because
-the correction `N̂₀ ← N̂₀ − Σᵢ Ĉᵢ/f_chip` would make every satellite's C/N₀ a
-function of every other satellite's estimate — the cross-satellite feedback loop
-this design exists without. Below 40 dB-Hz it sits under NWPR's own +0.05 dB
-bias, and that is the range where lock and loss decisions are made.
+The reference despreads with a *wrong* PRN, so it also collects the tracked
+satellite's own power, `ε_self/N₀ = C/f_chip`, which NWPR cancels in its ratio:
+C/N₀ reads low by ≈0.13 dB at 45 dB-Hz and ≈0.40 at 50 on GPS L1 C/A. It is not
+corrected, since that would couple every satellite's C/N₀ to every other's. See
+"The one bias it carries" in docs/src/cn0_estimator.md.
 
 # Fields / configuration
 
@@ -95,10 +77,8 @@ get_current_index(estimator::NoiseRefCN0Estimator) = estimator.current_index
 """
 $(SIGNATURES)
 
-This estimator reads its signal's noise density, so a signal carrying it is
-provisioned with a [`CorrelatorNoiseEstimator`](@ref). Declared on the type, so
-the provisioning decision folds out of a group's slot type — see
-[`requires_noise_density`](@ref).
+`true`: a signal carrying this estimator is provisioned a
+[`CorrelatorNoiseEstimator`](@ref); see [`requires_noise_density`](@ref).
 """
 requires_noise_density(::Type{NoiseRefCN0Estimator}) = true
 
@@ -106,10 +86,8 @@ requires_noise_density(::Type{NoiseRefCN0Estimator}) = true
 $(SIGNATURES)
 
 Fold one record's `prompt` into the ring: `|P|²/N̂₀ − 1/T` in linear Hz, with the
-density and the record's own integration time taken from `context`.
-
-The term is **not** clamped — at low C/N₀ individual terms are negative, and
-that is what keeps the mean unbiased.
+density and the record's own integration time taken from `context`. The term is
+**not** clamped (see [`NoiseRefCN0Estimator`](@ref)).
 """
 function update(estimator::NoiseRefCN0Estimator, prompt, context::CN0UpdateContext)
     cn0 = ustrip(
@@ -127,16 +105,10 @@ function update(estimator::NoiseRefCN0Estimator, prompt, context::CN0UpdateConte
     )
 end
 
-# Neither of the two things this estimator reads is optional, and both absences are
-# a static property of the setup — `CN0UpdateContext` carries each as `Nothing`
-# rather than as a sentinel — so both are caught in the type domain, at the first
-# record and loudly. A silent substitution would hide a backend that never
-# populates the reference, which is the whole point of the estimator.
-#
-# Three methods rather than two: `{…,Nothing,Nothing}` is ambiguous between the
-# other two, and a context missing both is reported as the missing *source*,
-# because that is the root cause — an integration time would not help a signal
-# with nothing to divide by.
+# A missing density or integration time is `Nothing` in the context's type, so
+# both are caught by dispatch on the first record. The third method resolves the
+# ambiguity of `{…,Nothing,Nothing}` and reports the missing source, the root
+# cause.
 @noinline update(
     ::NoiseRefCN0Estimator,
     prompt,
@@ -198,21 +170,16 @@ $(SIGNATURES)
 
 Mean of the buffered per-record terms, converted once with `dBHz`.
 
-`integration_time` is **ignored**: `T` was applied per record in `update`, where
-each record's own value was known — a record lengthened by
-[`set_preferred_num_code_blocks_to_integrate!`](@ref) is therefore handled
-correctly even when it sits in the ring beside shorter ones. The argument stays
-for interface uniformity with the other estimators.
+`integration_time` is **ignored**: `T` was applied per record in `update`, so a
+record lengthened by [`set_preferred_num_code_blocks_to_integrate!`](@ref) is
+handled correctly beside shorter ones. The argument stays for interface
+uniformity.
 
 An empty ring, a mean that has not cleared zero, and a **non-finite** mean all
-report `-Inf dB-Hz` — the house convention that a missing estimate is `-Inf` and
-never `NaN` (see [`NoCN0Estimator`](@ref) for why). The last case is what makes
-the convention hold rather than merely be intended: `NaN dB-Hz` compares `>=`
-**true** against every lock threshold, so letting one out would turn a dead
-signal into a locked one, and `mean_cn0 <= 0` is exactly the test a `NaN` passes
-through. `_noise_density_and_ready` keeps the reachable source of one — a zero
-measured floor — out of the ring in the first place; this covers what a `NaN`
-prompt would still put there.
+report `-Inf dB-Hz`, never `NaN` (see [`NoCN0Estimator`](@ref) for why). The
+explicit `isfinite` matters because a `NaN` passes `mean_cn0 <= 0`;
+`_noise_density_and_ready` keeps a zero floor out of the ring, this catches a
+`NaN` prompt.
 """
 function estimate_cn0(estimator::NoiseRefCN0Estimator, integration_time)
     filled = length(estimator)

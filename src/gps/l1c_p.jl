@@ -1,21 +1,10 @@
 """
 $(SIGNATURES)
 
-Secondary-code sync detector for GPS L1C-P.
-
-L1C-P broadcasts a per-PRN 1800-chip overlay code (IS-GPS-800G §3.2.2.1.2)
-on top of the 10-ms primary code, giving an 18-second cycle. To lock the
-overlay we wait for the sliding `code_block_bits` window to fill to 1800
-primary periods, then run a single 1800-phase shifted Hamming-distance
-sweep against the PRN's known overlay pattern.
-
-Returns `SyncResult(false, 0, 0)` until 1800 blocks have been buffered.
-Once that horizon is reached the generic [`_secondary_code_search`](@ref)
-rotation sweep picks the alignment whose Hamming distance to the overlay
-(or its negation) is minimal; if that distance is within the 2.5 %
-tolerance (≤ 45 errors) it reports `SyncResult(true, phase, ±1)` where
-`phase` is the secondary-chip offset of the *upcoming* integration, which
-downstream code uses to anchor the shared `sat.code_phase`.
+Secondary-code sync detector for GPS L1C-P: the hard
+[`_detect_secondary_code_sync`](@ref) over the per-PRN 1800-chip overlay
+(IS-GPS-800G §3.2.2.1.2) on the 10 ms primary code, an 18 s cycle. Needs 1800
+buffered blocks; accepts up to 45 errors (2.5 %).
 """
 function detect_bit_or_secondary_code_sync(
     signal::GPSL1C_P,
@@ -26,28 +15,15 @@ function detect_bit_or_secondary_code_sync(
     _detect_secondary_code_sync(signal, prn, code_block_bits, num_code_blocks)
 end
 
-# No bespoke `_packed_secondary_code` method: GNSSSignals exposes the overlay as
-# a `PerPRNSecondaryCode`, which the generic packer already reads into the
-# newest-first UInt1800 the rotation sweep wants. The reference is rebuilt on
-# every detector call once the 1800-block window has filled, until lock; each
-# rebuild walks 1800 chips, which is small next to the 1800-phase Hamming sweep
-# that follows it. Under weak-signal conditions (many detector calls before
-# lock) a per-PRN cache would shave that rebuild, but the sweep still
-# dominates, so it's not worth the state.
+# The generic `_packed_secondary_code` rebuilds the reference on every call
+# until lock; not cached, since the 1800-phase sweep dominates its cost.
 
-# `get_default_correlator(::GPSL1C_P)` — the VeryEarlyPromptLate BOC default —
-# is defined jointly with GPS L1C-D in `l1c_d.jl` (one `Union` method).
+# `get_default_correlator(::GPSL1C_P)` is defined with GPS L1C-D in `l1c_d.jl`.
 
-# 1800-chip overlay search needs an exact-width 1800-bit container. The
-# `UInt1800` alias is defined in the top-level Tracking module via
-# `BitIntegers.@define_integers 1800` and is what `BitBuffer{B}` carries
-# for L1C-P throughout the tracker.
+# Exact-width container for the 1800-chip overlay search
+# (`BitIntegers.@define_integers 1800` in Tracking.jl).
 @inline get_code_block_buffer_type(::GPSL1C_P) = UInt1800
 
-# L1C-P keeps the hard-decision rotation sweep: its 1800-chip / 18 s overlay is
-# far too long to integrate coherently per bin (the soft CFAR detector's model),
-# and a 1800-chip code at the 45-error budget is not false-lock-prone anyway.
-# The `uses_soft_secondary_code_detection` default already excludes it (N = 1800
-# exceeds the 100-chip cap); this makes the intent explicit and keeps L1C-P on
-# the hard path even if that default cap were ever widened.
+# Already the default (see `uses_soft_secondary_code_detection`); explicit so
+# L1C-P stays on the hard sweep even if that default's 100-chip cap is widened.
 @inline uses_soft_secondary_code_detection(::GPSL1C_P) = false

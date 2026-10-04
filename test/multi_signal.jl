@@ -1,19 +1,8 @@
 module MultiSignalTest
 
-# Smoke test for the multi-signal code path. Builds a TrackedSat with a
-# 2-tuple of TrackedSignals (both GPSL1CA, identical config) and runs one
-# track() call on a synthetic L1 C/A signal. Verifies:
-#
-#  1. The tuple-walking code path in `_update_tracked_sat_correlator` and
-#     `_update_tracked_sat_doppler` handles N>1 signals without error.
-#  2. Both signals' correlators accumulate.
-#  3. The PLL/DLL only fires for `signals[1]` (the estimator-driver signal) —
-#     `signals[2]`'s `last_fully_integrated_correlator` updates but the
-#     sat-level Doppler reflects only `signals[1]`'s discriminator.
-#
-# This exercises the mechanics. Real multi-signal scenarios (one sat
-# carrying L1 C/A + L1C-D + L1C-P with different primary periods) come
-# online with the full user-facing capabilities API in a later step.
+# Multi-signal code path: a TrackedSat with two identical GPSL1CA signals. Checks that
+# the tuple walks handle N>1 signals, both correlators accumulate, and only
+# `signals[1]` (the estimator driver) feeds the PLL/DLL.
 
 using Test: @test, @testset, @test_throws
 using Unitful: Hz, dBHz
@@ -60,8 +49,7 @@ using GNSSSignals: GPSL1C_P, GPSL1C_D, GalileoE1B
     prn = 1
     num_samples = 5000  # 1 ms at 5 MHz
 
-    # Build a 2-signal sat via the public TrackedSignal-tuple constructor:
-    # both signals are GPSL1CA with explicit (default-equal) correlators.
+    # 2-signal sat via the public TrackedSignal-tuple constructor.
     estimator = ConventionalAssistedPLLAndDLL()
     signal_a = TrackedSignal(
         gpsl1;
@@ -99,14 +87,12 @@ using GNSSSignals: GPSL1C_P, GPSL1C_D, GalileoE1B
 
     new_track_state = track(signal_buf, track_state, sampling_frequency)
 
-    # Both signals saw a completed integration this call (1 ms = 1 code
-    # period of L1 C/A).
+    # 1 ms = one L1 C/A code period: both signals completed an integration.
     new_sat = get_sat_state(new_track_state, prn)
     @test length(get_filtered_prompts(new_sat.signals[1])) == 1
     @test length(get_filtered_prompts(new_sat.signals[2])) == 1
 
-    # Both signals' last_fully_integrated_correlator received non-zero
-    # values (they actually correlated against the input).
+    # Both actually correlated against the input.
     corr_1 = get_last_fully_integrated_correlator(new_sat.signals[1])
     corr_2 = get_last_fully_integrated_correlator(new_sat.signals[2])
     @test corr_1.accumulators != zero(corr_1.accumulators)
@@ -126,21 +112,10 @@ using GNSSSignals: GPSL1C_P, GPSL1C_D, GalileoE1B
 end
 
 @testset "Multi-signal track over a multi-code-period chunk" begin
-    # Regression test for the tile-share tuple kernel's code-replica
-    # indexing. `gen_code_replica!` writes its first sample at the
-    # absolute buffer index `start_sample`; the in-register single-signal
-    # kernel reads the replica at that same absolute offset, but the
-    # multi-signal `downconvert_and_correlate_fused_tuple!` kernel used to
-    # read it from index 1. The two agree only for the *first* integration
-    # of a chunk (`start_sample == 1`) — every later integration within
-    # the same chunk correlated against the wrong code, decorrelating the
-    # loop. The single-code-period chunk used by the smoke test above
-    # never exercises `start_sample > 1`, so it missed this entirely.
-    #
-    # Here we feed a chunk spanning ten L1 C/A code periods (so nine
-    # integrations run at `start_sample > 1`) and require the multi-signal
-    # estimator-driver signal to match a single-signal reference bit for
-    # bit.
+    # Regression: `downconvert_and_correlate_fused_tuple!` must read the code
+    # replica at absolute offset `start_sample`, not 1. Ten code periods give
+    # nine integrations at `start_sample > 1`; the driver signal must match a
+    # single-signal reference bit for bit.
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     carrier_doppler = 1000.0Hz
@@ -194,9 +169,7 @@ end
 end
 
 @testset "Per-signal accessors on multi-signal TrackedSat / TrackState" begin
-    # Build a TrackState with one 3-signal sat (GPSL1C_P, GPSL1C_D, GPSL1CA).
-    # The signal types are distinct, so the type-based selector form has no
-    # collisions.
+    # One 3-signal sat with distinct signal types, so type selectors are unique.
     track_state =
         TrackState(; signals = (modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),))
     track_state = add_satellite!(
@@ -212,10 +185,7 @@ end
         @test get_signal(sat, 1) isa GPSL1C_P
         @test get_signal(sat, 2) isa GPSL1C_D
         @test get_signal(sat, 3) isa GPSL1CA
-        # Per-signal getters: the value happens to match the no-selector
-        # form for signal[1] (the `only`-equivalent slot when there's one
-        # signal), but here we exercise all three indices to prove the
-        # dispatch works on multi-signal sats.
+        # Per-signal getters on all three indices.
         @test get_num_bits(sat, 1) == 0
         @test get_num_bits(sat, 2) == 0
         @test get_num_bits(sat, 3) == 0
@@ -283,7 +253,7 @@ end
     end
 
     @testset "estimate_cn0(::TrackedSignal) direct dispatch" begin
-        # The per-signal entry point that didn't exist before.
+        # The per-signal entry point.
         sig = sat.signals[1]
         @test estimate_cn0(sig) == -Inf * dBHz
     end

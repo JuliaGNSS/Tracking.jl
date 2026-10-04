@@ -9,20 +9,11 @@
 """
 $(SIGNATURES)
 
-Secondary-code sync detector for the BeiDou B2a data component — the
-generic [`_detect_secondary_code_sync`](@ref) rotation search over the
-5-chip secondary code (`00010`, shared across all PRNs;
-BDS-SIS-ICD-B2a-1.0 §5.2.1) overlaid on the 1 ms primary code period. B2a
-carries B-CNAV2 at 200 sym/s, so one secondary period (5 primary blocks)
-is exactly one channel symbol: the detector locks the secondary phase, and
-data-bit decoding then integrates one secondary period per symbol — the
-same "overlay period = one symbol" shape as Galileo E5a-I's CS20 and
-E5b-I's CS4.
-
-With `N = 5` the trait default routes B2a data to the soft, CFAR detector
-([`uses_soft_secondary_code_detection`](@ref)); a 5-chip hard template
-match would be badly false-lock-prone. The packed reference comes from the
-generic [`_packed_secondary_code`](@ref). Returns [`SyncResult`](@ref).
+Hard-path secondary-code sync detector for the BeiDou B2a data component over
+the shared 5-chip code (`00010`; BDS-SIS-ICD-B2a-1.0 §5.2.1) — see
+[`_detect_secondary_code_sync`](@ref). One period is exactly one 200 sym/s
+B-CNAV2 symbol. The default detector is the soft one
+([`uses_soft_secondary_code_detection`](@ref)).
 """
 @inline function detect_bit_or_secondary_code_sync(
     signal::BeiDouB2aI,
@@ -36,20 +27,10 @@ end
 """
 $(SIGNATURES)
 
-Secondary-code sync detector for the BeiDou B2a pilot component — the
-generic [`_detect_secondary_code_sync`](@ref) rotation search over the
-per-PRN 100-chip secondary code (truncated length-1021 Weil codes,
-BDS-SIS-ICD-B2a-1.0 §5.2.1 Table 5-4) overlaid on the 1 ms primary code
-period, giving a 100 ms cycle. The B2a pilot is dataless; the overlay is
-its only sync feature, so the detector locks after a single overlay period
-in the worst case and reports the upcoming integration's secondary chip in
-`SyncResult.phase`. The per-PRN packed reference comes from the generic
-[`_packed_secondary_code`](@ref), which reads the signal's
-[`PerPRNSecondaryCode`](@ref) — the same shape as Galileo E5a-Q / E5b-Q /
-E6-C. With `N = 100` the trait default routes the pilot to the soft
-[`_detect_secondary_code_cfar`](@ref)
-([`uses_soft_secondary_code_detection`](@ref)), so this method is reached
-only if a caller forces the hard path. Returns [`SyncResult`](@ref).
+Hard-path secondary-code sync detector for the BeiDou B2a pilot over the
+per-PRN 100-chip code (BDS-SIS-ICD-B2a-1.0 §5.2.1 Table 5-4; 100 ms cycle) —
+see [`_detect_secondary_code_sync`](@ref). The default detector is the soft one
+([`uses_soft_secondary_code_detection`](@ref)).
 """
 @inline function detect_bit_or_secondary_code_sync(
     signal::BeiDouB2aQ,
@@ -69,12 +50,6 @@ function get_default_correlator(
     EarlyPromptLateCorrelator(; num_ants)
 end
 
-# B2a data: the 5-chip secondary search window is 5 blocks. UInt32 matches the
-# other short-secondary-code signals (GPS L5I/L5Q, Galileo E1C/E5a-I/E5b-I) —
-# wider than the horizon needs, but it keeps the hard rotation sweep available
-# and the widths uniform across that family.
+# Hold one 5-chip / 100-chip period (see `get_code_block_buffer_type`).
 @inline get_code_block_buffer_type(::BeiDouB2aI) = UInt32
-# B2a pilot: the 100-chip overlay search needs a 100-block window; UInt128 is
-# the smallest built-in unsigned that holds it (the rotation search masks down
-# to the low 100 bits).
 @inline get_code_block_buffer_type(::BeiDouB2aQ) = UInt128

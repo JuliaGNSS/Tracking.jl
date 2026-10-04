@@ -191,7 +191,6 @@ end
         sampling_frequency,
     )
 
-    # Bare-buffer shortcut survives the multi-band refactor.
     track!(signal, track_state, sampling_frequency)
     # Doppler converged toward the injected value.
     @test abs(get_carrier_doppler(track_state, :default, prn) - carrier_doppler) < 50Hz

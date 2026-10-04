@@ -18,10 +18,8 @@ using Tracking:
     gpsl2cm = GPSL2CM()
     prn = 1
 
-    # L2CM broadcasts one CNAV symbol per 20 ms L2CM code period (50 sps) —
-    # one block per symbol, no sub-symbol boundary to find, so the detector
-    # reports `found = true` from the start. Polarity ambiguity is resolved
-    # downstream by GNSSDecoder.jl.
+    # One symbol per 20 ms primary period: `found = true` from the start (see
+    # src/gps/l2c.jl).
     for (bits, n) in ((UInt8(0x0), 0), (UInt8(0x1), 1), (UInt8(0xff), 32))
         res = @inferred detect_bit_or_secondary_code_sync(gpsl2cm, prn, bits, n)
         @test res.found == true
@@ -49,12 +47,10 @@ using Tracking:
         )
     ) ≈ 0.9Hz
 
-    # 1 symbol = 1 primary period; sync buffer is dead state, but a concrete
-    # type is still required.
+    # Sync buffer is dead state but needs a concrete type.
     @test @inferred(get_code_block_buffer_type(gpsl2cm)) === UInt8
 
-    # L2C introduces the L2 band; get_band_id maps it into the multi-band
-    # `track` measurement keys.
+    # `get_band_id` keys the multi-band `track` measurements.
     @test get_band_id(get_band(gpsl2cm)) == :L2
     @test get_band_id(get_band(GPSL2CL())) == :L2
 end
@@ -63,10 +59,7 @@ end
     gpsl2cl = GPSL2CL()
     prn = 1
 
-    # L2CL is a dataless pilot with no secondary/overlay code and a single
-    # 767250-chip code (1.5 s period). There is no bit and no secondary code
-    # to lock, so the detector never reports `found` — the tracker keeps one
-    # code block per integration and simply tracks.
+    # Dataless pilot without a secondary code: nothing to sync, never `found`.
     for (bits, n) in ((UInt8(0x0), 0), (UInt8(0x1), 10), (UInt8(0xff), 1000))
         res = @inferred detect_bit_or_secondary_code_sync(gpsl2cl, prn, bits, n)
         @test res.found == false
@@ -91,8 +84,7 @@ end
         )
     ) ≈ 0.012Hz
 
-    # No sync feature; the search buffer is dead state but a concrete type is
-    # still required.
+    # Sync buffer is dead state but needs a concrete type.
     @test @inferred(get_code_block_buffer_type(gpsl2cl)) === UInt8
 end
 

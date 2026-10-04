@@ -7,9 +7,8 @@ satellite's preferred integration length against.
 
 One full symbol: the data-bit period for data-bearing signals, or the
 secondary-code period for pilots (`data_frequency == 0`, e.g. GPS L1C-P;
-`set_preferred_num_code_blocks_to_integrate!` used to be a silent no-op for
-these, issue #134). Integrating past it would straddle a symbol boundary and
-average two opposite signs away.
+issue #134). Integrating past it would straddle a symbol boundary and average
+two opposite signs away.
 
 # Overriding
 
@@ -31,8 +30,6 @@ actually starts at.
 """
 @inline function max_num_code_blocks_to_integrate(signal::AbstractGNSSSignal)
     data_freq = get_data_frequency(signal)
-    # One full symbol = one data bit for data-bearing signals, or one
-    # secondary-code period for pilots (`data_frequency == 0`).
     iszero(data_freq) ? get_secondary_code_length(signal) :
     Int(get_code_frequency(signal) / (get_code_length(signal) * data_freq))
 end

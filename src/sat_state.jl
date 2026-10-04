@@ -1,14 +1,9 @@
 """
 $(SIGNATURES)
 
-Per-signal tracking state. One `TrackedSignal` exists for each signal being
-tracked on a satellite — for a satellite tracked on GPS L1 C/A only there is
-one; for a satellite tracked on GPS L1 C/A + L1C-D + L1C-P there are three.
-
-Holds the signal-specific state: the correlator, post-correlation filter,
-CN0 estimator, bit buffer, and the integration-progress flags. The
-per-satellite carrier/code Doppler and phase are shared across signals and
-live on the enclosing [`TrackedSat`](@ref).
+Per-signal tracking state, one per signal tracked on a satellite: correlator,
+post-correlation filter, CN0 estimator, bit buffer and integration progress. The
+shared carrier/code Doppler and phase live on the enclosing [`TrackedSat`](@ref).
 """
 struct TrackedSignal{
     Sig<:AbstractGNSSSignal,
@@ -26,37 +21,23 @@ struct TrackedSignal{
     bit_buffer::BitBuffer{B}
     post_corr_filter::PCF
     filtered_prompts::Vector{ComplexF64}
-    # Correlator outputs completed within the current processing chunk, each
-    # tagged with its end sample index. Preallocated and reused (like
-    # `filtered_prompts`): the correlate phase `push!`es a record per completed
-    # integration, the Doppler estimator folds over them and `empty!`s the
-    # array. Empty at chunk boundaries; see [`CorrelatorOutput`].
+    # Records completed within the current chunk; preallocated, filled by the
+    # correlate phase and emptied by the Doppler estimator (see
+    # `get_correlator_outputs`).
     correlator_outputs::Vector{CorrelatorOutput{C}}
-    # Preferred coherent-integration length for THIS signal, in primary code
-    # blocks. The actual length is capped per integration by the signal's
-    # bit/secondary-code period and held at 1 until bit/secondary sync (see
-    # `calc_num_code_blocks_to_integrate`). Defaults to 1; change it with
-    # [`set_preferred_num_code_blocks_to_integrate!`](@ref).
+    # Preferred coherent-integration length in primary code blocks; see
+    # `set_preferred_num_code_blocks_to_integrate!`.
     preferred_num_code_blocks_to_integrate::Int
-    # Primary-code blocks the most recently folded record actually spanned. The
-    # CN0 estimator buffers *sample-normalized* prompts, so a record covering N
-    # blocks arrives with N times the SNR of a one-block record; without knowing
-    # N, `estimate_cn0` would divide that SNR by one code period and over-report
-    # C/N₀ by 10·log₁₀(N) — 13 dB at a full GPS L1 C/A bit. Set by
-    # `_apply_correlator_output` from the record's own sample count, so it is
-    # right whether the records were lengthened by the correlate step
-    # (`preferred_num_code_blocks_to_integrate`) or by an external producer
-    # summing dumps. Starts at 1, the pre-sync length.
+    # Primary-code blocks the most recently folded record actually spanned, set
+    # by `_apply_correlator_output` from the record's sample count (so it also
+    # holds for external producers). `estimate_cn0` needs it: the buffered prompts
+    # are sample-normalized, so ignoring N over-reports C/N₀ by 10·log₁₀(N).
     last_fully_integrated_num_code_blocks::Int
 end
 
 # Reject a preferred coherent-integration length that cannot work for this
-# signal. For data-bearing signals the length must evenly divide the number
-# of code blocks that form one bit: a non-divisor length would make the
-# post-sync integrations straddle bit boundaries, so the bit buffer's
-# blocks-per-bit boundary check would never fire and no bit would ever be
-# emitted again (issue #128). Pilot signals (`data_frequency == 0`) have no
-# bit boundary to straddle, so any length of at least one block is accepted.
+# signal. For data-bearing signals it must evenly divide the blocks per bit, or
+# integrations straddle bit boundaries and no bit is ever emitted (issue #128).
 function validate_preferred_num_code_blocks_to_integrate(
     signal::AbstractGNSSSignal,
     preferred_num_code_blocks::Integer,
@@ -95,27 +76,16 @@ post-corr filter and CN0 estimator default to the signal's recommended values;
 pass `correlator`, `post_corr_filter` and `cn0_estimator` explicitly to
 override.
 
-`cn0_estimator` accepts any [`AbstractCN0Estimator`](@ref) — it is a type
-parameter of the returned `TrackedSignal`, so a custom estimator is stored as
-is. The default is [`default_cn0_estimator`](@ref), a
-[`NoiseRefCN0Estimator`](@ref) averaging `num_prompts_for_cn0_estimation` records
-against the signal's own **measured** noise density. On the sample-driven path
-that needs no configuration — `TrackState` provisions the noise source and
-`track!` fills it — but a **correlator-ingest** path must feed it too, with
-[`append_noise_observation!`](@ref) per signal, or C/N₀ stays at `-Inf dB-Hz`.
-Pass `cn0_estimator = NWPRCN0Estimator()` for the estimator that infers its floor
-from the prompt stream and needs no noise observation, or
-`cn0_estimator = MomentsCN0Estimator(num_prompts_for_cn0_estimation)` for the
-plain moment-ratio estimator. See [`default_cn0_estimator`](@ref) for which to
-pick when. Each signal needs its **own** estimator instance: they buffer into a
-shared vector, so handing one instance to two signals corrupts both.
+`cn0_estimator` accepts any [`AbstractCN0Estimator`](@ref) (it is a type
+parameter of `TrackedSignal`). The default is [`default_cn0_estimator`](@ref);
+the alternatives are on the [CN0 Estimator](@ref) page. On a correlator-ingest path feed it with
+[`append_noise_observation!`](@ref), or C/N₀ stays at `-Inf dB-Hz`. Each signal
+needs its **own** estimator instance: estimators buffer into a vector, so sharing
+one corrupts both.
 
-`preferred_num_code_blocks_to_integrate` defaults to the signal's recommended
-starting integration length, [`default_num_code_blocks_to_integrate`](@ref) —
-one primary code block for every signal but Galileo E5a-QP, whose 64.5 µs block
-is too short to run a loop on. Throws an `ArgumentError` if the value passed is
-invalid for `signal` (see
-[`set_preferred_num_code_blocks_to_integrate!`](@ref)).
+`preferred_num_code_blocks_to_integrate` defaults to
+[`default_num_code_blocks_to_integrate`](@ref); an invalid value throws an
+`ArgumentError` (see [`set_preferred_num_code_blocks_to_integrate!`](@ref)).
 """
 function TrackedSignal(
     signal::AbstractGNSSSignal;
@@ -135,14 +105,10 @@ function TrackedSignal(
         signal,
         preferred_num_code_blocks_to_integrate,
     )
-    # Per-signal sync-search buffer width — see `get_code_block_buffer_type`.
-    # Picking the type here makes `B` concrete in the resulting
-    # `TrackedSignal{Sig, B, C, PCF, CN0}`.
+    # Per-signal sync-search buffer width (see `get_code_block_buffer_type`).
     B = get_code_block_buffer_type(signal)
-    # Preallocate the per-chunk correlator-output buffer. A default-length
-    # chunk (= smallest code period) yields at most one record per chunk for
-    # the driver; size to a small constant so `push!` never grows it after
-    # warmup even for a moderately enlarged `doppler_update_interval`.
+    # A default chunk yields at most one record; a small sizehint keeps `push!`
+    # from growing it even for a moderately enlarged `doppler_update_interval`.
     correlator_outputs = CorrelatorOutput{typeof(correlator)}[]
     sizehint!(correlator_outputs, 4)
     TrackedSignal(
@@ -161,18 +127,10 @@ function TrackedSignal(
     )
 end
 
-# Kwarg-update constructor — produces a new TrackedSignal sharing concrete
-# correlator and PCF types with `t`. The two constrained fields use
-# `Maybe{C}` / `Maybe{PCF}` to keep `nothing` distinguishable from a real
-# value, since the user might legitimately want to set them to anything of
-# the same type.
-#
-# `cn0_estimator` is deliberately NOT pinned to `t`'s estimator type: swapping
-# the estimator on an existing signal is one of the documented ways to plug a
-# custom one in, so the result's `CN0` parameter follows the passed value. Every
-# call site passes either the literal default `nothing` or a concretely typed
-# estimator, so the resulting type is inferred and the per-record rebuild in
-# `_apply_correlator_output` stays allocation-free.
+# Kwarg-update constructor; keeps `t`'s concrete correlator and PCF types.
+# `cn0_estimator` is deliberately not pinned, so a custom estimator can be swapped
+# in; call sites pass `nothing` or a concrete estimator, so the type still infers
+# and `_apply_correlator_output` stays allocation-free.
 function TrackedSignal(
     t::TrackedSignal{Sig,B,C,PCF};
     signal = nothing,
@@ -233,15 +191,9 @@ $(SIGNATURES)
 The integration time of the most recently completed record: its primary-code
 block count times one code period.
 
-This is the `T` the last correlator output was accumulated over, and the
-quantity [`estimate_cn0`](@ref) divides its sample-normalized prompts by. C/N₀
-itself is processing-independent, so anything asking a *detectability* question
-of that record — is the peak still above the noise, is the bit decision
-trustworthy — needs this `T` too: the post-integration SNR is `C/N₀ · T`, not
-C/N₀ alone.
-
-Do not confuse it with `get_integrated_samples`, which counts the record
-currently being accumulated and resets to zero each time one completes.
+This is the `T` [`estimate_cn0`](@ref) divides by, and what turns C/N₀ into the
+record's post-integration SNR (`C/N₀ · T`). Unlike `get_integrated_samples`, it
+describes the last *completed* record, not the one being accumulated.
 """
 get_last_fully_integrated_integration_time(t::TrackedSignal) =
     get_last_fully_integrated_num_code_blocks(t) * get_code_length(get_signal(t)) /
@@ -266,19 +218,11 @@ $(SIGNATURES)
 Append an externally built [`CorrelatorOutput`](@ref) to `signal`'s
 per-chunk `correlator_outputs` buffer and return `signal`.
 
-This is the blessed ingest path for an **external correlator producer** (e.g.
-an FPGA streaming correlator dumps): build a [`CorrelatorOutput`](@ref) from the
-producer's raw accumulator, sample count and chunk-relative end index, append it
-here per signal in `sample_index` order, then run
-[`estimate_dopplers_and_filter_prompt!`](@ref) with a per-band sampling-frequency
-source to fold the batch and update the NCOs — no sample buffer or
-`downconvert_and_correlate!` needed. The estimator consumes and **clears** the
-buffer as part of that call, so between chunks it is empty again (same contract
-as the software correlate phase). Prefer this over mutating the vector returned
-by [`get_correlator_outputs`](@ref) directly — it documents intent and is
-type-checked (the output's correlator type must match the signal's).
-
-See [External correlator producers](@ref) for the full offload contract.
+This is the ingest path for an **external correlator producer** (e.g. an FPGA):
+append records per signal in `sample_index` order, then run
+[`estimate_dopplers_and_filter_prompt!`](@ref), which folds and clears them.
+Prefer it over mutating [`get_correlator_outputs`](@ref) directly; it is
+type-checked. See [External correlator producers](@ref) for the full contract.
 """
 append_correlator_output!(t::TrackedSignal, output::CorrelatorOutput) =
     (push!(t.correlator_outputs, output); t)
@@ -301,18 +245,8 @@ Holds the state of a single satellite being tracked. Carries the satellite-
 level carrier/code Doppler and phase (shared across all signals on this
 satellite), the per-signal correlator state in `signals::Tuple{Vararg{TrackedSignal}}`,
 and the per-satellite Doppler-estimator state in `doppler_estimator_state`.
-
-The first signal in `signals` is the **estimator-driver signal** — the one
-the Doppler estimator uses to update the satellite-shared carrier and code
-Doppler. With the default [`ConventionalPLLAndDLL`](@ref) /
-[`ConventionalAssistedPLLAndDLL`](@ref), that means `signals[1]`'s
-correlator is what the PLL/DLL discriminator runs on, and per-satellite
-Doppler updates happen at the rate of the first signal's integration
-boundary; other signals filter their own prompts and update their own CN0
-estimates and bit buffers on their own boundaries. A user-supplied
-[`AbstractDopplerEstimator`](@ref) is free to use the other signals' state
-too — `signals[1]`'s privileged role is a convention of the conventional
-estimators, not a structural constraint of the type.
+The first signal in `signals` is the **estimator-driver signal**, whose
+correlator feeds the Doppler estimator (see [Estimator-driver signal](@ref)).
 
 The shared `code_phase` wraps at the least common multiple of the signals'
 code periods including secondary code (see [`max_code_length`](@ref)).
@@ -328,20 +262,9 @@ struct TrackedSat{Signals<:Tuple{Vararg{TrackedSignal}},D}
     doppler_estimator_state::D
 end
 
-# Worst-case wrap *length* contributed by a single signal — used both by
-# the compile-time `max_code_length` upper bound and by the runtime
-# `current_code_wrap` (which falls back to the primary-only length when
-# the signal hasn't synced yet).
-#
-# For a pilot (`data_frequency == 0`) the long wrap is one full secondary
-# code period. For a data-bearing signal it is one full data-bit period,
-# which may or may not coincide with the secondary code length:
-#   - GPS L5I: 10230 × 10 = 102300 chips (NH10 spans exactly one data
-#     bit, so the two notions agree).
-#   - GPS L1 C/A: 1023 × 20 = 20460 chips (no secondary code; the long
-#     wrap is purely the 20-block bit period).
-# We take the `max` of the two so multi-signal callers stay
-# upper-bounded by whichever is larger.
+# Post-sync wrap length of one signal: a full secondary-code period for a pilot;
+# for a data signal the larger of the secondary-code and data-bit periods (e.g.
+# GPS L1 C/A: 1023 × 20 chips, no secondary code).
 @inline function _post_sync_code_length(tsig::TrackedSignal)
     sig = tsig.signal
     primary = get_code_length(sig)
@@ -355,13 +278,7 @@ end
     end
 end
 
-# Folded with `lcm` (identity 1 on the empty tuple), not `max`: per-signal
-# phases are re-derived as `mod(code_phase, _replica_code_wrap(...))`,
-# which is only correct when the shared wrap is an integer multiple of
-# *every* signal's replica wrap (issue #129). For all shipped signal
-# pairings the shorter wraps divide the longer ones, so the lcm equals
-# the max — but `max` would silently corrupt non-driver code phases for
-# a future pairing where it isn't a common multiple.
+# Folded with `lcm`, not `max` — see `current_code_wrap` (issue #129).
 @inline _max_code_length(::Tuple{}) = 1
 @inline _max_code_length(t::Tuple) =
     lcm(_post_sync_code_length(first(t)), _max_code_length(Base.tail(t)))
@@ -371,28 +288,15 @@ $(SIGNATURES)
 
 Upper bound on the shared `sat.code_phase` wrap period, in chips —
 the least common multiple of the per-signal wrap periods once *every*
-signal on the sat has synced. For a sat tracking only GPS L1 C/A this is
-1023 × 20 = 20460 (one full data bit); for one tracking L1C-P this is
-10230 × 1800 ≈ 18.4 M (one full secondary-code cycle). For every shipped
-multi-signal pairing the shorter wraps divide the longer ones, so the
-lcm coincides with the longest signal's wrap.
+signal on the sat has synced (e.g. 1023 × 20 = 20460 for GPS L1 C/A alone).
 
-This is the *compile-time* bound. The actual runtime wrap shrinks to
-`get_code_length(signal) × 1` for any signal whose bit/secondary-code
-sync hasn't been found yet — see [`current_code_wrap`](@ref) for the
-runtime value used by the inner loop.
-
-Implemented via tuple recursion (not `@generated`) so the heterogeneous
-walk unrolls at type-inference time; the result folds to a literal in
-the calling site for any concrete `signals` tuple type.
+This is the compile-time bound (it folds to a literal for a concrete `signals`
+type); see [`current_code_wrap`](@ref) for the runtime value, which honors sync
+state.
 """
 @inline max_code_length(signals::Tuple{Vararg{TrackedSignal}}) = _max_code_length(signals)
 
-# Runtime per-signal wrap contribution, honoring the current sync state:
-# a signal that hasn't synced yet wraps at just its primary code length
-# (we don't yet know which bit / secondary-chip we're in), so its
-# contribution to the shared wrap is `primary × 1`. Once synced its
-# contribution widens to `_post_sync_code_length(tsig)`.
+# Runtime per-signal wrap contribution; see `current_code_wrap`.
 @inline function _current_code_length(tsig::TrackedSignal)
     if tsig.bit_buffer.found
         _post_sync_code_length(tsig)
@@ -401,9 +305,6 @@ the calling site for any concrete `signals` tuple type.
     end
 end
 
-# `lcm`-folded for the same reason as `_max_code_length` above: the wrap
-# must be a common multiple of every signal's current wrap, not merely
-# the largest of them.
 @inline _current_code_wrap(::Tuple{}) = 1
 @inline _current_code_wrap(t::Tuple) =
     lcm(_current_code_length(first(t)), _current_code_wrap(Base.tail(t)))
@@ -423,44 +324,27 @@ honors the current per-signal sync state. For each signal:
     the full secondary-code period for pilots, or the full data-bit
     period for data-bearing signals.
   - If `bit_buffer.found = false`, the signal contributes just its
-    primary code length — we don't yet know which bit / secondary chip
-    we're in, so wrapping at the primary length is the most we can
-    legitimately do.
+    primary code length, since the bit / secondary chip is still unknown.
 
 The shared wrap is the least common multiple of the per-signal
-contributions, so it stays an integer multiple of every signal's own
-replica wrap — per-signal phases are re-derived as
+contributions, not their maximum: per-signal phases are re-derived as
 `mod(code_phase, replica_wrap)`, which a non-common-multiple wrap would
-silently corrupt (issue #129). For all shipped signal pairings the
-shorter wraps divide the longer ones, so the lcm coincides with the
-longest synced signal's wrap and shorter signals just ride along.
+silently corrupt (issue #129). For shipped pairings the two coincide.
 """
 @inline current_code_wrap(signals::Tuple{Vararg{TrackedSignal}}) =
     _current_code_wrap(signals)
 
-# Detect whether any signal on the sat transitioned `bit_buffer.found`
-# from `false` (in `old_signals`) to `true` (in `new_signals`) during
-# this estimator iteration. Used to gate the one-time code-phase snap:
-# the snap is only valid at the sync transition (when `code_phase` sits
-# on a primary-code boundary) and must not run on subsequent iterations
-# (see `_update_tracked_sat_doppler` and issue #117). Walks the two
-# tuples in lockstep; folds to a compile-time-decided chain of `||`s.
+# Whether any signal's `bit_buffer.found` went `false` → `true` this iteration.
+# Gates the one-time code-phase snap, valid only at the sync transition (see
+# `_update_tracked_sat_doppler` and issue #117).
 @inline _any_signal_just_synced(::Tuple{}, ::Tuple{}) = false
 @inline _any_signal_just_synced(old::Tuple, new::Tuple) =
     (!first(old).bit_buffer.found && first(new).bit_buffer.found) ||
     _any_signal_just_synced(Base.tail(old), Base.tail(new))
 
-# Phase-snap fallback chain: walk `signals` and pick the synced signal
-# whose `(primary × secondary)` code length is the largest. That signal's
-# `bit_buffer.secondary_phase` carries the secondary-chip offset for the
-# next primary-code period, which determines the absolute position in
-# `sat.code_phase`'s wrap window. If no signal is synced (or the synced
-# ones all have secondary code length 1 and so don't constrain the
-# wrap), return the input `code_phase` unchanged.
-#
-# Walks the tuple recursively; the heterogeneous signal types fold to a
-# compile-time-decided sequence of comparisons, so this is type-stable
-# and allocation-free.
+# Snap `code_phase` into the secondary-code window given by the synced signal
+# with the longest `primary × secondary` length (its `secondary_phase` fixes the
+# absolute position). Unchanged if no synced signal has a secondary code.
 @inline function _snap_code_phase_from_synced_signal(
     signals::Tuple{Vararg{TrackedSignal}},
     code_phase::Float64,
@@ -469,25 +353,16 @@ longest synced signal's wrap and shorter signals just ride along.
     if best_len == 0
         return code_phase
     end
-    # `code_phase` already wraps mod `max_code_length(signals)`. The
-    # best-anchored signal has wrap = best_len; align the low
-    # `best_len` chips of `code_phase` to the synced secondary-chip
-    # window (`best_phase_chips`, a multiple of the primary length),
-    # leaving the higher-order wrap untouched. Crucially we *preserve*
-    # the within-primary-block phase `mod(code_phase, best_prim)`: the
-    # snap places `code_phase` into the right secondary window without
-    # discarding any partial (chunk-bounded) integration progress within
-    # the current primary block — dropping it would inject a one-block
-    # phase error at sync and force the loops to re-converge (issue #117).
+    # Align the low `best_len` chips to the synced secondary window, keeping the
+    # higher-order wrap and the within-primary-block phase — dropping the latter
+    # would inject a phase error at sync (issue #117).
     base = floor(Int, code_phase / best_len) * best_len
     within_primary = code_phase - floor(code_phase / best_prim) * best_prim
     Float64(base + best_phase_chips) + within_primary
 end
 
-# Tuple walker — finds the synced signal with the largest
-# `(primary × secondary)` length and returns
-# `(length, secondary_phase_in_chips, primary_length)` for it.
-# `(0, 0, 1)` if no signal is synced.
+# Returns `(length, secondary_phase_in_chips, primary_length)` of the best anchor,
+# or `(0, 0, 1)` if none.
 @inline _find_best_secondary_anchor(
     ::Tuple{},
     best_len::Int,
@@ -507,11 +382,7 @@ end
         prim = get_code_length(sig)
         sec = get_secondary_code_length(sig)
         total = prim * sec
-        # Only signals with a non-trivial secondary code contribute
-        # information about the wrap-window offset. Signals with
-        # secondary_code_length == 1 (e.g. GPS L1 C/A) lock only the
-        # bit-edge inside the primary period and don't pin the secondary
-        # phase; skip them.
+        # Signals without a secondary code (e.g. GPS L1 C/A) don't pin the window.
         if sec > 1 && total > best_len
             best_len = total
             best_chips = bb.secondary_phase * prim
@@ -548,18 +419,13 @@ function TrackedSat(
     carrier_phase = 0.0,
     code_doppler = nothing,
 )
-    # Float-ize the carrier first so its product with the code/center ratio
-    # is float-typed too; that way users may pass `200Hz` (Int) without
-    # the struct constructor's `typeof(1.0Hz)` field type rejecting it.
+    # Float-ize so an integer `200Hz` fits the `typeof(1.0Hz)` fields.
     cdop = float(carrier_doppler)
     cd =
         isnothing(code_doppler) ?
         cdop * get_code_center_frequency_ratio(first(tracked_signals).signal) :
         float(code_doppler)
-    # Two-stage build so the estimator's `init_estimator_state` sees a real
-    # `TrackedSat` (handy for estimators that need carrier/code Doppler at
-    # init time). The first stage builds a sat with `D = Nothing`; the
-    # second stage rebuilds it with the actual `doppler_estimator_state`.
+    # Two-stage build so `init_estimator_state` sees a real `TrackedSat`.
     bare = TrackedSat(
         prn,
         float(code_phase),
@@ -594,10 +460,9 @@ default correlator. The first signal is the estimator-driver signal. Further
 kwargs (`doppler_estimator`, `carrier_phase`, `code_doppler`) forward to the
 `TrackedSignal`-tuple core constructor above.
 
-`cn0_estimator` takes a **tuple** of estimators here — one per signal, in the
-same order — since each signal needs its own instance (see
-[`TrackedSignal`](@ref)). A single estimator is accepted only for a
-single-signal tuple.
+`cn0_estimator` takes a **tuple** of estimators, one per signal in the same
+order (each signal needs its own instance); a single estimator is accepted only
+for a single-signal tuple.
 """
 function TrackedSat(
     signals::Tuple{AbstractGNSSSignal,Vararg{AbstractGNSSSignal}},
@@ -624,11 +489,7 @@ function TrackedSat(
     TrackedSat(tracked_signals, prn, code_phase, carrier_doppler; kwargs...)
 end
 
-# Resolve the `cn0_estimator` kwarg of the multi-signal constructors into one
-# estimator per signal. `nothing` builds the per-signal default; a tuple is
-# taken as is (length-checked); a single estimator is only allowed for a
-# single-signal sat, because the estimators buffer into a shared vector and two
-# signals folding their prompts into the same buffer would corrupt both.
+# Resolve the multi-signal `cn0_estimator` kwarg into one estimator per signal.
 @inline _per_signal_cn0_estimators(
     signals::Tuple{Vararg{AbstractGNSSSignal}},
     ::Nothing,
@@ -695,10 +556,8 @@ function TrackedSat(
     TrackedSat((tracked_signal,), prn, code_phase, carrier_doppler; kwargs...)
 end
 
-# Kwarg-update constructor. `signals` and `doppler_estimator_state` carry
-# `Maybe{...}` constraints so that the new value retains the same concrete
-# type as the original (preventing accidental type changes that would break
-# inference on the enclosing TrackState).
+# Kwarg-update constructor; `signals` and `doppler_estimator_state` keep their
+# concrete types so the enclosing TrackState stays inferable.
 function TrackedSat(
     sat::TrackedSat{Signals,D};
     prn = nothing,
@@ -786,19 +645,11 @@ for the conventional PLL/DLL).
 """
 get_doppler_estimator_state(s::TrackedSat) = s.doppler_estimator_state
 
-# Per-signal accessors on a TrackedSat.
-#
-# Three selector forms (in increasing specificity), all routed through
-# `_find_signal` so every per-signal accessor is one line:
-#   * no selector — only valid for single-signal sats; falls back to
-#     `only(s.signals)`. Errors on multi-signal sats.
-#   * `Integer` index — canonical: picks `s.signals[i]`. Unambiguous even
-#     when the same signal type appears twice in the tuple.
-#   * `Type{<:AbstractGNSSSignal}` — sugar: picks the unique signal of
-#     that type. Errors if zero or >1 matches.
-#
-# Type-based selection walks the signals tuple recursively and folds at
-# compile time when the sat's `Signals` type is concrete.
+# Per-signal accessors on a TrackedSat, routed through `_find_signal`:
+#   * no selector — single-signal sats only.
+#   * `Integer` index — always unambiguous.
+#   * signal type — the unique signal of that type; errors on zero or >1
+#     matches. Folds at compile time for a concrete `Signals` type.
 @noinline _throw_needs_signal_selector() = throw(
     ArgumentError(
         "satellite tracks multiple signals — pass a signal selector " *
@@ -862,16 +713,12 @@ get_correlator_outputs(s::TrackedSat, sel...) =
 get_preferred_num_code_blocks_to_integrate(s::TrackedSat, sel...) =
     get_preferred_num_code_blocks_to_integrate(_find_signal(s.signals, sel...))
 
-# Append an external `CorrelatorOutput` to one signal of a sat. `output` comes
-# first so an optional trailing signal selector (integer index / signal type)
-# disambiguates a multi-signal sat, matching the per-signal accessor ladder.
+# `output` comes first so a trailing signal selector works as for the accessors.
 append_correlator_output!(s::TrackedSat, output::CorrelatorOutput, sel...) =
     (append_correlator_output!(_find_signal(s.signals, sel...), output); s)
 
-# Reset the satellite's signal-start sample and per-signal bit buffer between
-# `track` calls. Per-signal `filtered_prompts` vectors are emptied in place;
-# the per-signal `bit_buffer` is reset to its no-sync state; the
-# `signal_start_sample` returns to 1 (the first sample of the next buffer).
+# Reset between `track` calls: `signal_start_sample` back to 1, per-signal
+# buffers emptied in place and bit buffers reset.
 function reset_start_sample_and_bit_buffer(sat::TrackedSat)
     new_signals = map(s -> _reset_signal(s), sat.signals)
     TrackedSat(sat; signal_start_sample = 1, signals = new_signals)
@@ -890,15 +737,11 @@ Build the per-satellite Doppler-estimator state used by `estimator` for the
 given satellite. A custom doppler estimator must define this method for its
 [`AbstractDopplerEstimator`](@ref) subtype.
 
-This function must be **pure** (free of observable side effects): besides
-seeding each real satellite on entry, it is also called to build the
-throwaway PRN-0 template sat that fixes a group's dictionary slot type at
-[`TrackState`](@ref) construction, as a type probe when validating
-pre-built sats, and by [`reset_loop_filters!`](@ref) to re-seed existing
-satellites. Estimators with cross-satellite shared state must therefore
-not register satellites here — perform shared-state registration in
-[`update_estimator_on_handoff`](@ref), which is called exactly once per
-handoff with the real incoming satellites.
+This function must be **pure**: it is also called on throwaway template sats
+(to fix slot types at [`TrackState`](@ref) construction), as a type probe, and
+by [`reset_loop_filters!`](@ref). Register satellites in cross-satellite shared
+state in [`update_estimator_on_handoff`](@ref) instead, which runs exactly once
+per handoff with the real incoming satellites.
 """
 function init_estimator_state end
 
@@ -914,29 +757,21 @@ with the dictionary of incoming satellites, *after* per-sat seeding via
 The default returns `estimator` unchanged, so estimators with no shared state
 need not implement it.
 
-The returned estimator must have the same concrete type as the input —
-[`TrackState`](@ref) is parameterized on the estimator type, and changing it
-would break inference. For growing shared state, hold the storage in a
-resizable container (e.g. `Vector`, `Matrix`) on an otherwise immutable
-estimator and `push!`/`resize!` it in place; rebuild the estimator with
+The returned estimator must have the same concrete type as the input
+([`TrackState`](@ref) is parameterized on it). For growing shared state, hold
+resizable storage (e.g. `Vector`) on the estimator and `push!`/`resize!` it in
+place, or rebuild it with
 [`Setfield.@set`](https://jw3126.github.io/Setfield.jl/stable/) or a copying
-constructor when fields need replacing.
+constructor.
 
-Every entry point honors the return value: the `TrackState` it returns
-carries the returned estimator. `TrackState` is immutable, so even the
-in-place [`add_satellite!`](@ref) can only honor a *rebuilt* estimator
-through its return value — callers must keep using the returned
-`TrackState` rather than the one they passed in (for in-place estimators
-the two are identical).
+Every entry point's returned `TrackState` carries the returned estimator, so
+callers of the in-place [`add_satellite!`](@ref) must keep using its return value.
 """
 update_estimator_on_handoff(estimator::AbstractDopplerEstimator, _new_sats) = estimator
 
 """
-Type alias for a tuple or named tuple of per-group satellite dictionaries.
-Each entry is `Dictionary{I, <:TrackedSat}` — the keys are satellite
-identifiers (PRNs) and the values are the per-sat tracking state. The signal
-type for each group lives in the dictionary value type, accessed via
-`only(sat.signals).signal` at use sites.
+Type alias for a tuple or named tuple of per-group satellite dictionaries,
+each a `Dictionary{I, <:TrackedSat}` keyed by satellite identifier (PRN).
 """
 const SatelliteDicts{N} = TupleLike{<:NTuple{N,Dictionary{<:Any,<:TrackedSat}}}
 
@@ -946,15 +781,9 @@ $(SIGNATURES)
 A group of satellites that all track the same tuple of GNSS signal types,
 on the same RF band, observed by the same antenna array.
 
-Groups are the unit of type stability: every `TrackedSat` inside a
-`SignalGroup` shares the same concrete `Tuple{Vararg{TrackedSignal}}`
-shape, so the dictionary's value type is concrete and the hot loop sees
-no dynamic dispatch.
-
-Two groups may share a band (e.g. `:legacy_gps` tracking `(GPSL1CA(),)` and
-`:galileo` tracking `(GalileoE1B(),)` both on `L1()`). The grouping is by
-signal-tuple shape, not by band — band is metadata each group carries so
-the right measurement is routed to it during `track`.
+Groups are the unit of type stability (one concrete `TrackedSat` type per
+group). Several groups may share a band; the band only routes the right
+measurement to the group during `track`.
 
 Fields:
 
@@ -997,9 +826,7 @@ function SignalGroup(
     SignalGroup{B,S,Sigs,NA}(band, satellites, signals, num_ants)
 end
 
-# Kwarg-update constructor — produces a new SignalGroup sharing concrete types
-# with `g`. The `satellites` field uses `Maybe{S}` so `nothing` stays
-# distinguishable from a real dict.
+# Kwarg-update constructor; keeps `g`'s concrete types.
 function SignalGroup(
     g::SignalGroup{B,S,Sigs,NA};
     band::Maybe{B} = nothing,
@@ -1020,26 +847,11 @@ function SignalGroup(
     )
 end
 
-# Constructor invariants for a group's signal tuple (issue #129):
-# (a) every signal lives on the group's RF band — the whole group is
-#     downconverted against the single measurement that `band` routes to,
-#     so a signal on another band would silently correlate against the
-#     wrong samples (and `_validate_measurements` would never ask for its
-#     band's buffer); and
-# (b) every signal shares one chip rate — the shared `code_phase` advances
-#     at `signals[1]`'s code frequency (see `update` in
-#     downconvert_and_correlate.jl), so a signal with a different chip
-#     rate would silently mistrack; and
-# (c) every signal comes from one constellation (issue #224) — a group's
-#     satellites carry one PRN and one Doppler, so e.g. GPS L1 C/A and
-#     Galileo E1B (same band and chip rate) would track two different
-#     satellites. The constellation stands in for the PRN namespace; should a
-#     constellation sharing GPS's code space with disjoint PRNs (QZSS, SBAS)
-#     be tracked, swap it for a PRN-namespace trait. A one-signal group needs
-#     no constellation; in a larger one a user-defined signal without
-#     `get_constellation_id` is rejected rather than left unchecked.
-# Bands compare by id (`GNSSSignals.get_band_id`, not instance) so a
-# user-defined band that aliases an existing measurement key still validates.
+# A group's signals share one band (#129), one chip rate (#129) and one
+# constellation (#224); the error messages say why. The constellation stands in
+# for the PRN namespace: move to a PRN-namespace trait once QZSS/SBAS share GPS's
+# code space. Bands compare by id, so a user-defined band aliasing an existing
+# measurement key still validates.
 # The instance method is generic and forwards to the type, so look for the latter.
 _has_constellation_id(s::AbstractGNSSSignal) =
     hasmethod(get_constellation_id, Tuple{Type{typeof(s)}})
@@ -1172,10 +984,7 @@ function SignalGroup(
     # Before the template satellite, which an invalid signal would fail with a
     # less telling error; the positional constructor checks again.
     _validate_signal_group(signals, band)
-    # Build a template TrackedSat so the dict's value type is concrete.
-    # Reuses the existing helper from tracking_state.jl, which is fine
-    # because doppler_estimator only affects per-sat state type, not the
-    # storage's outer shape.
+    # Template TrackedSat fixes the dict's concrete value type.
     template = _make_template_tracked_sat(signals, doppler_estimator, num_ants)
     sats = Dictionary{Int,typeof(template)}(Int[], typeof(template)[])
     SignalGroup(band, sats, signals, num_ants)
@@ -1187,56 +996,39 @@ Type alias: NamedTuple of `SignalGroup`s — the storage shape inside
 """
 const SignalGroups{N} = NamedTuple{<:Any,<:NTuple{N,SignalGroup}}
 
-# Build a `Dictionary` that shares its keys (`Indices`) with the original but
-# holds a freshly-copied `values::Vector{TrackedSat}`. Used by the immutable
-# per-iteration steps `downconvert_and_correlate` /
-# `estimate_dopplers_and_filter_prompt` to detach the slot *values* before
-# delegating to the in-place form. These steps never change the key set —
-# they only overwrite per-sat values — so sharing the `Indices` is safe and
-# avoids copying the hash table on every loop iteration of `track`.
-#
-# The key set is detached separately, once, at the `track` boundary via
-# `_detach_slot_vector` (see below and #123). A caller that invokes these
-# per-iteration steps directly (outside `track`) and then mutates the key set
-# of the result with `add_satellite!`/`remove_satellite!` would corrupt the
-# input's keys — use `track`'s output, or the immutable `add_satellite` /
-# `remove_satellite`, for structural changes.
+# Copy that shares the keys (`Indices`) but copies `values`. Used by the
+# immutable per-iteration steps (`downconvert_and_correlate`,
+# `estimate_dopplers_and_filter_prompt`), which never change the key set, to
+# avoid copying the hash table every iteration. Keys are detached once, at the
+# `track` boundary (`_detach_slot_vector`, #123); calling these steps directly
+# and then `add_satellite!`/`remove_satellite!` on the result would corrupt the
+# input's keys.
 @inline function _copy_slot_vector(sats::Dictionary{<:Any,<:TrackedSat})
     Dictionary(keys(sats), copy(sats.values))
 end
 
-# Fully-detached copy: freshly-copied `Indices` *and* `values`. `copy(sats)`
-# detaches both (#123). Used at the `track` boundary
-# (`reset_start_sample_and_bit_buffer`, the first copy of the caller's live
-# state) so that a later `add_satellite!`/`remove_satellite!` on the returned
-# state cannot mutate the input's key set. Costs one hash-table copy per group
-# per `track` call — the irreducible price of an independently-mutable result.
+# Fully-detached copy (keys and values, #123), used once per `track` call by
+# `reset_start_sample_and_bit_buffer`.
 @inline function _detach_slot_vector(sats::Dictionary{<:Any,<:TrackedSat})
     copy(sats)
 end
 
-# Groups-shape variant: produce a fresh `SignalGroups` where each `SignalGroup`
-# reuses the original's band / signals / num_ants but holds a Dictionary whose
-# `values` vector is freshly copied (keys shared — per-iteration loop steps).
+# Groups-shape variant of `_copy_slot_vector`.
 @inline _copy_group_slot_vectors(g::SignalGroup) =
     SignalGroup(g; satellites = _copy_slot_vector(g.satellites))
 
 @inline _copy_groups_slot_vectors(groups::SignalGroups) =
     map(_copy_group_slot_vectors, groups)
 
-# Groups-shape variant of `_detach_slot_vector`: keys *and* values detached.
-# Used by the immutable `reset_start_sample_and_bit_buffer` boundary copy.
+# Groups-shape variant of `_detach_slot_vector`.
 @inline _detach_group_slot_vectors(g::SignalGroup) =
     SignalGroup(g; satellites = _detach_slot_vector(g.satellites))
 
 @inline _detach_groups_slot_vectors(groups::SignalGroups) =
     map(_detach_group_slot_vectors, groups)
 
-# Recursive tuple walker: applies `f(sats_dict, args...)` to each per-group
-# satellite dictionary in the (named-)tuple. Each step has fully concrete
-# types, so no runtime dispatch even when groups differ (heterogeneous
-# `Tuple{Dictionary{Int, TrackedSat{Tuple{TrackedSignal{GPSL1CA,...}},...}}, Dictionary{Int, TrackedSat{Tuple{TrackedSignal{GalileoE1B,...}},...}}}`
-# would otherwise box each element when iterated with `for s in tuple`).
+# Apply `f(group, args...)` to each element of a (named) tuple via recursion, so
+# heterogeneous groups get concrete types instead of being boxed by a `for` loop.
 @inline _foreach_group!(f::F, ::Tuple{}, args::Vararg{Any,N}) where {F,N} = nothing
 @inline function _foreach_group!(f::F, t::Tuple, args::Vararg{Any,N}) where {F,N}
     f(first(t), args...)
@@ -1246,12 +1038,8 @@ end
 @inline _foreach_group!(f::F, nt::NamedTuple, args::Vararg{Any,N}) where {F,N} =
     _foreach_group!(f, Tuple(nt), args...)
 
-# In-place variant: walks each group's `Vector{TrackedSat}` slot storage
-# and overwrites each entry with a freshly reset value. The vector
-# itself, the Dictionary, the SignalGroup, and the enclosing NamedTuple
-# are all reused. `TrackedSat` itself is immutable, so the slot is
-# reassigned rather than mutated; we still call the non-`!` per-
-# `TrackedSat` form.
+# In-place reset: overwrites each (immutable) `TrackedSat` slot in the group's
+# values vector, reusing all containers.
 @inline function _reset_one_group!(g::SignalGroup)
     vals = g.satellites.values
     @inbounds for i in eachindex(vals)
@@ -1286,13 +1074,10 @@ get_sat_state(sats::Dictionary{<:Any,<:TrackedSat}, identifier) = sats[identifie
 get_sat_state(sats::Dictionary{<:Any,<:TrackedSat}) = only(sats)
 
 function estimate_cn0(tsig::TrackedSignal)
-    # The estimator's buffered prompts are sample-normalized, so their SNR is
-    # that of a whole record — the integration time it must be divided by is the
-    # record's, not one code period. See
-    # [`get_last_fully_integrated_integration_time`](@ref).
+    # Divide by the record's integration time, not one code period (see the
+    # `last_fully_integrated_num_code_blocks` field).
     estimate_cn0(get_cn0_estimator(tsig), get_last_fully_integrated_integration_time(tsig))
 end
 
-# Per-signal selectors handled by `_find_signal` (no selector → only-fold;
-# Integer → indexed; Type{T} → unique-type match).
+# Per-signal selectors handled by `_find_signal`.
 estimate_cn0(sat::TrackedSat, sel...) = estimate_cn0(_find_signal(sat.signals, sel...))

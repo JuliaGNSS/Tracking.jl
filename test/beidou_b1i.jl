@@ -22,16 +22,14 @@ rotl(x::T, r, N) where {T} =
 const MEO_PRN = 6
 const GEO_PRN = 1
 
-# The block index at which the synthetic streams below put their first symbol
-# boundary — so the rotation the detector should recover is `SYMBOL_OFFSET`.
+# Block index of the first symbol boundary in the synthetic streams, i.e. the
+# rotation the detector should recover.
 const SYMBOL_OFFSET = 7
 
-# Drive the *live* soft path — `_update_secondary_accumulators!` followed by
-# `_detect_secondary_code_cfar`, exactly the pair `_buffer_find_bit` calls for a
-# signal with `uses_soft_secondary_code_detection` — with a synthetic prompt
-# stream: one navigation symbol every `blocks_per_symbol` blocks, the PRN's
-# overlay chip on top, plus unit-variance complex noise. Returns the 1-based
-# block index of the lock and the rotation it fired at, or `nothing`.
+# Drive the live soft path (the pair `_buffer_find_bit` calls) with a synthetic
+# prompt stream: one symbol every `blocks_per_symbol` blocks times the overlay
+# chip, plus unit-variance complex noise. Returns the 1-based lock block and
+# rotation, or `nothing`.
 function soft_sync(prn, blocks_per_symbol; nblocks, amplitude = 3.0, seed = 1)
     signal = BeiDouB1I()
     N = get_secondary_code_length(signal)
@@ -63,8 +61,7 @@ end
     N = get_secondary_code_length(b1i)  # 20 (NH20)
     @test N == 20
 
-    # One NH20 period is exactly one D1 data symbol at 50 sym/s. Below one
-    # full period the detector returns `found = false`.
+    # One NH20 period is one D1 symbol. No lock below one full period.
     @test @inferred(detect_bit_or_secondary_code_sync(b1i, MEO_PRN, UInt32(0x0), N - 1)).found ==
           false
 
@@ -87,59 +84,41 @@ end
     end
 
     @testset "GEO satellites carry no NH20 overlay" begin
-        # BDS-SIS-ICD-B1I-3.0 §5.2.1: the overlay is applied on the MEO/IGSO
-        # satellites only. GNSSSignals models the GEO ones (PRN 1-5, 59-63)
-        # with an all-ones column, so the tiered code equals the primary code.
+        # GEO PRNs get an all-ones column (see docs/src/bit_sync.md).
         mask = (one(UInt32) << N) - one(UInt32)
         for prn in (1, 5, 59, 63)
             @test Tracking._packed_secondary_code(UInt32, b1i, prn) == mask
         end
-        # An all-ones reference is rotation-invariant, so the *hard* sweep has
-        # nothing to lock — it would match at every phase and report the first
-        # one it tried. Pin the degeneracy so a future move to the hard path
-        # cannot pass silently; what the soft path (the live one) does with the
-        # same column is pinned in the next testset.
+        # Rotation-invariant, so the hard sweep would lock at an arbitrary
+        # phase. Pinned so a move to the hard path cannot pass silently.
         reference = Tracking._packed_secondary_code(UInt32, b1i, GEO_PRN)
         @test all(rotl(reference, r, N) == reference for r = 0:(N-1))
     end
 
     @testset "Soft sync — the live path, and what a GEO satellite does to it" begin
-        # MEO/IGSO: the real NH20 at the D1 rate (20 blocks/symbol). The overlay
-        # is what the bins lock onto, and the detector fires at the true period
-        # boundary.
+        # MEO/IGSO: NH20 at the D1 rate locks at the true period boundary.
         meo = soft_sync(MEO_PRN, 20; nblocks = 2000)
         @test meo !== nothing
         @test meo.rotation == SYMBOL_OFFSET
 
-        # GEO's all-ones column at the *D1* rate: an all-ones reference is
-        # rotation-invariant, so the bins are separated only by the data
-        # transitions they straddle and the detector reduces to exactly the
-        # bit-edge search GPS L1 C/A uses — it still finds the symbol boundary.
-        # This case is hypothetical: no satellite broadcasts it.
+        # Hypothetical all-ones column at the D1 rate: reduces to a bit-edge
+        # search and still finds the symbol boundary.
         geo_at_d1_rate = soft_sync(GEO_PRN, 20; nblocks = 4000)
         @test geo_at_d1_rate !== nothing
         @test geo_at_d1_rate.rotation == SYMBOL_OFFSET
 
-        # What a GEO satellite actually broadcasts: no overlay *and* D2 at
-        # 500 sym/s, i.e. 2 blocks per symbol. Every 20-block bin then averages
-        # ~10 random symbols, no rotation stands out, and the CFAR test never
-        # accepts — the satellite tracks and ranges but stays pre-sync. Pin
-        # that, so the docs' claim cannot drift back to "locks the bit edge".
+        # Real GEO: no overlay and D2 at 2 blocks/symbol never syncs. Pins the
+        # claim in docs/src/bit_sync.md.
         for seed = 1:3
             @test soft_sync(GEO_PRN, 2; nblocks = 20000, seed) === nothing
         end
     end
 
-    # The soft CFAR secondary-code detector is the active path (NH20 is 20
-    # chips, inside the 100-chip cap) — on the GEO PRNs too, where it declines
-    # to lock rather than falling back to anything else.
+    # Soft secondary-code detection for every PRN; never the bit-edge detector.
     @test Tracking.uses_soft_secondary_code_detection(b1i) == true
-    # `uses_soft_bit_edge_detection` requires *no* secondary code, and the
-    # signal type reports 20 — so B1I never routes to the bit-edge detector,
-    # not even for a GEO PRN.
     @test Tracking.uses_soft_bit_edge_detection(b1i) == false
 
-    # Plain BPSK (`LOC`) → EarlyPromptLate default.
+    # BPSK → EarlyPromptLate.
     @test @inferred(get_default_correlator(b1i, NumAnts(1))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
     @test @inferred(get_default_correlator(b1i, NumAnts(3))) ==

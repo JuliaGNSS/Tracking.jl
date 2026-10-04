@@ -31,11 +31,8 @@ using Tracking:
     update,
     update_accumulator
 
-# Float64 throughout, deliberately: that is what the tracking loop produces
-# (`integrated_samples / sampling_frequency`, and a density built by the
-# `noise_observation` builders), and `1ms` would instead make the density a
-# `Rational{Int64}` — a type combination the loop never creates, whose arithmetic
-# an older compiler does not fully elide.
+# Float64, as the tracking loop produces; `1ms` would make the density a
+# `Rational{Int64}`, which the loop never creates.
 const T = 1.0ms
 # `E|P|² = N₀/T`, so a unit-noise-power prompt stream is measured against
 # `N₀ = T` — 1e-3 Hz⁻¹ at a 1 ms record.
@@ -83,12 +80,9 @@ _fold(estimator, prompts) =
 end
 
 @testset "records of different length are each divided by their own T" begin
-    # `T` enters per record rather than once at `estimate_cn0`, which is what
-    # lets one per-signal density serve records of any length — and retires the
-    # heterogeneous-`T` bug class structurally instead of guarding it. Against a
-    # fixed `N₀` the sample-normalised prompt power of a record at C/N₀ = γ is
-    # `N₀·(γ + 1/T)`, so a 20 ms record carrying the *same* γ has a visibly
-    # different power: its share of the noise floor has shrunk twentyfold.
+    # `T` enters per record (see `NoiseRefCN0Estimator`). Against a fixed `N₀` a
+    # record at C/N₀ = γ has prompt power `N₀·(γ + 1/T)`, so 1 ms and 20 ms
+    # records of the same γ differ in power.
     γ = 3000.0                                   # ≈34.8 dB-Hz
     power(t_ms) = 1e-3 * (γ + 1 / (t_ms * 1e-3))
     short = update(NoiseRefCN0Estimator(), complex(sqrt(power(1)), 0.0), _context())
@@ -100,17 +94,14 @@ end
     @test _db(estimate_cn0(short, T)) ≈ 10log10(γ) atol = 1e-9
     @test _db(estimate_cn0(long, 20ms)) ≈ 10log10(γ) atol = 1e-9
 
-    # ... and a ring holding both together still averages to the same γ, which is
-    # the case `estimate_cn0(estimator, integration_time)` cannot express at all.
+    # ... and a ring holding both still averages to γ.
     both =
         update(short, complex(sqrt(power(20)), 0.0), _context(; integration_time = 20.0ms))
     @test _db(estimate_cn0(both, T)) ≈ 10log10(γ) atol = 1e-9
 end
 
 @testset "per-record terms are not clamped, so the mean is unbiased" begin
-    # Individual terms go negative on noise, and that is exactly what keeps the
-    # mean honest. Clamping per record would reintroduce a floor of the kind the
-    # moment ratio has.
+    # See "Deliberate properties" in `NoiseRefCN0Estimator`'s docstring.
     rng = Xoshiro(20260806)
     noise_only = _fold(NoiseRefCN0Estimator(; num_records = 2000), _prompts(0.0, 2000, rng))
     terms = noise_only.buffered_cn0
@@ -123,10 +114,8 @@ end
 end
 
 @testset "bias and σ match the pinned noise-reference columns" begin
-    # `test/cn0_estimator_comparison.jl` pins what a noise-reference estimator
-    # must reproduce; this is the shipped estimator measured the same way. Those
-    # reference columns are the variance-free-reference limit, which is what an
-    # exactly known `N₀` gives here.
+    # The shipped estimator against the variance-free-reference columns pinned
+    # in `test/cn0_estimator_comparison.jl` (an exactly known `N₀`).
     num_records = 100
     trials = 1500
     for (cn0_dbhz, σ_bound) in ((30.0, 0.9), (40.0, 0.30), (50.0, 0.10))
@@ -149,25 +138,20 @@ end
 end
 
 @testset "no source configured is a loud, static error" begin
-    # `Nothing` in the context's type parameter, so this is decided at compile
-    # time and fires on the very first record. A silent substitution would hide a
-    # backend that never populates the reference.
+    # Dispatched on `Nothing` in the context's type; see `NoiseRefCN0Estimator`.
     estimator = NoiseRefCN0Estimator()
     @test_throws ArgumentError update(
         estimator,
         complex(1.0, 0.0),
         CN0UpdateContext(GPSL1CA(), BitBuffer{UInt64}(), 1),
     )
-    # And there is no bare-prompt form at all: the density and `T` are exactly
-    # what a prompt stream cannot carry.
+    # No bare-prompt form: a prompt stream carries no density and no `T`.
     @test_throws ArgumentError update(estimator, complex(1.0, 0.0))
 end
 
 @testset "a density without a T is the same kind of error, not a MethodError" begin
-    # `integration_time` defaults to `nothing` on the public `CN0UpdateContext`,
-    # and the bare-prompt error tells the caller to "call the three-argument
-    # update" — so supplying the density and forgetting `T` is an easy mistake.
-    # `1/nothing` used to surface it as a `MethodError` from inside Unitful.
+    # `integration_time` defaults to `nothing` on `CN0UpdateContext`, so
+    # forgetting it is an easy mistake and must give a clear error.
     estimator = NoiseRefCN0Estimator()
     err = try
         update(estimator, complex(1.0, 0.0), _context(; integration_time = nothing))
@@ -178,8 +162,7 @@ end
     @test err isa ArgumentError
     @test occursin("integration time", err.msg)
 
-    # Missing both is ambiguous between the two guards unless it is dispatched
-    # explicitly; it is, and it names the missing *source* — the root cause.
+    # Missing both names the missing *source*, the root cause.
     err_both = try
         update(
             estimator,
@@ -195,15 +178,8 @@ end
 end
 
 @testset "a NaN never leaves estimate_cn0" begin
-    # The house convention is that a missing estimate is `-Inf dB-Hz` and never
-    # `NaN`, and here it is load-bearing rather than tidy: `NaN dB-Hz` compares
-    # `>=` TRUE against every threshold, so one escaping would report a dead
-    # signal as passing every lock detector. `mean_cn0 <= 0` is exactly the test a
-    # `NaN` slips through.
-    #
-    # A zero measured floor with a zero prompt is the reachable source — a
-    # front-end dropout or buffer underrun delivers all-zero samples — so it is
-    # the case built here.
+    # See `estimate_cn0(::NoiseRefCN0Estimator, …)`. A zero floor with a zero
+    # prompt (a front-end dropout) is the reachable source of a `NaN` term.
     poisoned = update(
         NoiseRefCN0Estimator(; num_records = 4),
         complex(0.0, 0.0),
@@ -238,20 +214,14 @@ end
     prompt = complex(2.0, 0.0)
     fold_many(estimator, prompt, context, 200)          # warm up
 
-    # The contract is "allocation-free in **steady state**": nothing that scales
-    # with the number of folds. A bare `== 0` would assert something about the
-    # compiler instead — on Julia 1.10 this measurement carries a fixed ~48 B per
-    # *call* to the harness, and the long-shipped `MomentsCN0Estimator` carries
-    # ~32 B through the identical harness on that version, so it is a property of
-    # the measurement rather than of either estimator. Two very different fold
-    # counts separate the two cleanly: a genuine per-fold allocation would grow a
-    # hundredfold between them, a per-call one does not move at all.
+    # Allocation-free in **steady state**: nothing that scales with the number of
+    # folds. Not `== 0`, because Julia 1.10 charges a fixed per-call amount to
+    # this harness; two very different fold counts separate the two.
     few = @allocated fold_many(estimator, prompt, context, 10_000)
     many = @allocated fold_many(estimator, prompt, context, 1_000_000)
     @test many == few
     @test few <= 128
-    # Same measurement on the estimator that predates this work, so a regression
-    # here can always be told apart from the compiler's own floor.
+    # The same harness on `MomentsCN0Estimator`, as the compiler's baseline.
     moments = MomentsCN0Estimator(100)
     fold_many(moments, prompt, context, 200)
     @test @allocated(fold_many(moments, prompt, context, 1_000_000)) <= few
@@ -340,17 +310,10 @@ end
 end
 
 @testset "the warm-up skip is per estimator, not per satellite" begin
-    # One satellite carrying a `NoiseRefCN0Estimator` signal and an
-    # `NWPRCN0Estimator` signal, driven through a warm-up where the density is
-    # unavailable. Skipping the whole satellite's C/N₀ fold would drop NWPR's open
-    # narrowband window on every skipped record — `_update_nwpr` drops it whenever
-    # the record is missing from the bit grid — and silently demote NWPR to its
-    # fallback.
-    # Two L1 C/A signals on one satellite — synthetic, but it is the shortest
-    # configuration that puts two *different* C/N₀ estimators side by side, and it
-    # covers both folds: the noise-referenced one drives the loop, the NWPR one
-    # rides along as a passenger. Records are ingested rather than correlated, so
-    # the density really is unavailable for the whole run.
+    # See "the warm-up skip" in `requires_noise_density`. Two L1 C/A signals on
+    # one satellite (synthetic, but the shortest setup with two different
+    # estimators side by side); records are ingested, so the density stays
+    # unavailable for the whole run.
     gpsl1 = GPSL1CA()
     signals = (gpsl1, gpsl1)
 

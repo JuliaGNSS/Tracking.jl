@@ -23,14 +23,10 @@ const L1C_P_MAX_ERRORS =
 @testset "GPS L1C-P" begin
     gpsl1c_p = GPSL1C_P()
 
-    # L1C-P's 1800-chip / 18 s overlay is far too long to integrate coherently
-    # per bin, so it stays on the hard-decision rotation sweep, not the soft
-    # CFAR secondary-code detector.
+    # The 1800-chip overlay stays on the hard-decision rotation sweep.
     @test Tracking.uses_soft_secondary_code_detection(gpsl1c_p) == false
 
-    # Below the 1800-block horizon, the L1C-P detector returns `found =
-    # false` without running the sweep. Above it, the sweep runs against
-    # the per-PRN overlay.
+    # Below the 1800-block horizon the sweep does not run.
     prn = 1
     @test @inferred(
         detect_bit_or_secondary_code_sync(gpsl1c_p, prn, Tracking.UInt1800(0x0), 0)
@@ -47,9 +43,7 @@ const L1C_P_MAX_ERRORS =
         )
     ).found == false
 
-    # TMBOC(6,1,4/33): the default is the VeryEarlyPromptLate correlator, whose
-    # very-early/very-late taps feed the VEML discriminator that mitigates the
-    # BOC side-peak false locks — same as the Galileo E1 signals.
+    # TMBOC(6,1,4/33) → VeryEarlyPromptLate (VEML; see src/gps/l1c_d.jl).
     @test @inferred(get_default_correlator(gpsl1c_p, NumAnts(1))) ==
           VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(1))
     @test @inferred(get_default_correlator(gpsl1c_p, NumAnts(3))) ==
@@ -64,10 +58,8 @@ const L1C_P_MAX_ERRORS =
     @test @inferred(get_code_block_buffer_type(gpsl1c_p)) === Tracking.UInt1800
 
     @testset "Overlay search — clean lock at known phase / polarity" begin
-        # Build PRN 1's newest-first overlay reference, then rotate it *left*
-        # by `r` to emulate a prompt buffer whose upcoming integration is
-        # overlay chip `r`. The rotation search recovers `phase == r` (the
-        # upcoming chip) at positive polarity (distance 0 ≤ max_errors).
+        # Rotating the reference left by `r` emulates a buffer whose upcoming
+        # integration is overlay chip `r` (see `_secondary_code_search`).
         reference = Tracking._packed_secondary_code(Tracking.UInt1800, gpsl1c_p, prn)
         rotl(x, r) = r == 0 ? x : ((x << r) | (x >> (1800 - r)))
         for r in (0, 137, 1799)
@@ -78,10 +70,7 @@ const L1C_P_MAX_ERRORS =
             @test res.polarity == +1
         end
 
-        # Negative polarity = bitwise NOT of the reference within the
-        # 1800-bit window. The exact-width UInt1800 makes `~` equivalent
-        # to XOR with all-ones; build that explicitly. No rotation, so the
-        # recovered upcoming chip is 0.
+        # Negative polarity = complement within the 1800-bit window.
         all_ones =
             (Tracking.UInt1800(1) << 1799) |
             ((Tracking.UInt1800(1) << 1799) - one(Tracking.UInt1800))
@@ -115,10 +104,8 @@ const L1C_P_MAX_ERRORS =
         for idx in indices
             corrupted ⊻= Tracking.UInt1800(1) << (idx - 1)
         end
-        # Note: with random flips it's *possible* (very small probability)
-        # for the corrupted buffer to coincide with the overlay rotated
-        # by some other phase within tolerance. With this fixed seed we
-        # verified that doesn't happen for PRN 1.
+        # Random flips could in principle match another rotation within
+        # tolerance; verified not to happen for this seed and PRN 1.
         res = detect_bit_or_secondary_code_sync(
             gpsl1c_p,
             prn,

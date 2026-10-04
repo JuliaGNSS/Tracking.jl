@@ -95,25 +95,17 @@ function correlate_once(
     _completed_or_partial_correlator(first(get_sat_state(ts2, 1).signals))
 end
 
-# A bare `downconvert_and_correlate` treats the whole buffer as one chunk. If a
-# code period completed, its (raw) correlator was snapshotted into
-# `correlator_outputs` and the live correlator holds only the residue — return
-# the first completed integration. If the buffer was shorter than one code
-# period (e.g. Galileo E1B's 4 ms period in a 1 ms buffer) nothing completed, so
-# the live correlator holds the whole partial integration — return that. Either
-# way this matches the value the old single-step call left in the live correlator.
+# First completed integration, or the live partial correlator if none completed
+# (see the same helper in downconvert_and_correlate_int16.jl).
 function _completed_or_partial_correlator(sig)
     outs = sig.correlator_outputs
     isempty(outs) ? sig.correlator : first(outs).correlator
 end
 
-# Direct (per-sample) reference of the two-bit quantised correlation: quantise the
-# measurement to `{±1,±3}` at `thr`, reconstruct the `{±1,±3}` carrier from the SAME
-# SinCosLUT bit planes the backend reads, take the sign of the same code replica, and sum
-# the products sample by sample — following the kernel's `blk`-sample blocking so the
-# per-block carrier-NCO restarts and code re-fills see identical inputs. The kernel's
-# masked-popcount expansion must reproduce this exactly (all values are small integers,
-# exact in Float64).
+# Per-sample reference of the two-bit correlation: `{±1,±3}` measurement and carrier
+# (from the same SinCosLUT bit planes) times the code sign, summed with the kernel's
+# `blk` blocking so inputs are identical. The popcount expansion (see the header of
+# src/downconvert_and_correlate_twobit.jl) must match exactly (small integers).
 function ref_twobit(
     cap,
     sig,
@@ -203,11 +195,7 @@ function _track_noisy(
     amp = 10^(cn0_dbhz / 20)
     noise_std = sqrt(fs / 1Hz)
     rng = MersenneTwister(seed)
-    # The C/N0 margins recorded below measure the *backend's* quantisation loss,
-    # so the estimator is pinned to the moment estimator instead of following
-    # the default: NWPR's coherent narrowband sum reacts to the residual phase
-    # noise the quantisation also causes, which would fold a second effect into
-    # the same number.
+    # Moment estimator pinned, as in the one-bit test file.
     ts = TrackState(
         gpsl1,
         [
@@ -300,8 +288,8 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
     end
 
     @testset "bit-exact on full-range Int16 noise (incl. ±32767 / −32768)" begin
-        # The magnitude plane uses a wrap-exact unsigned-range compare, so even the
-        # Int16 extremes quantise correctly (an |v|-based test wraps at −32768).
+        # Int16 extremes must quantise correctly (see the magnitude-mask comment in
+        # src/downconvert_and_correlate_twobit.jl).
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = 5000
         rng = MersenneTwister(42)
@@ -356,8 +344,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         @test_throws ArgumentError TwoBitThreadedDownconvertAndCorrelator(; threshold = -5)
     end
 
-    # The two-bit correlation preserves the correlation-triangle shape and its ratios
-    # (E/P, L/P) at high SNR; a small tolerance absorbs the quantisation coarseness.
+    # E/P and L/P ratios survive two-bit quantisation at high SNR.
     @testset "ratios match Float32: $(nameof(typeof(sig))) @ $(fs/1e6Hz) MHz" for (
         sig,
         fs,
@@ -396,9 +383,8 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
     end
 
     @testset "high sampling rate: tap span ≥ 64 words uncorrupted" begin
-        # Tap sample-shift offsets > 64 need the whole-word + sub-word funnel shift (the
-        # one-bit regression); the bit-exact reference above covers correctness, this
-        # pins the correlation shape at 100 MHz through the full plumbing.
+        # Tap offsets > 64 bits (see the one-bit test); pins the correlation shape at
+        # 100 MHz through the full plumbing.
         sig, fs = GPSL1CA(), 100e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         fc = 200Hz * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
@@ -493,9 +479,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
     end
 
     @testset "multi-signal-per-sat (N=$N) matches single signal" for N in (2, 3)
-        # A sat carrying N GPS L1 signals shares one carrier + measurement downconvert
-        # (and the mask totals) via the tile-share kernel; each signal's correlator must
-        # be identical to correlating it alone.
+        # Tile-share kernel: each signal's correlator must equal correlating it alone.
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
@@ -670,11 +654,9 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         5e6Hz,      # small capture → serial band pack
         40e6Hz,     # ≥ _TB_BAND_PAR_MIN full words → the band pack itself runs threaded
     )
-        # ≥2 sats on one band trip the pack-measurement-once-per-band path
-        # (`_tb_pack_band!` + per-sat `_tb_realign_meas!`, sign AND magnitude planes);
-        # each sat's correlator must exactly equal correlating that PRN alone (which
-        # packs directly, always serially) — for the threaded backend this also pins
-        # the chunked threaded band pack against the serial one.
+        # ≥2 sats trip the pack-once-per-band path (`_tb_pack_band!` +
+        # `_tb_realign_meas!`); each sat must equal correlating that PRN alone, which
+        # also pins the threaded band pack against the serial per-sat pack.
         sig = GPSL1CA()
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
@@ -718,8 +700,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
     end
 
     @testset "errors on CBOC (non-binary) code" begin
-        # CBOC (Galileo E1B) carries an amplitude, so keeping only the code sign loses
-        # information; the modulation gate rejects it. E1B's BOC(6,1) needs fs ≥ 12.276 MHz.
+        # CBOC modulation gate, as in the one-bit test.
         sig, fs = GalileoE1B(), 15e6Hz
         cap = make_capture(sig, 1, fs, 5000, 200Hz, 100.0)
         meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
@@ -732,9 +713,8 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
     end
 
     @testset "two-bit tracks Float32 better than one-bit in noise" begin
-        # Weak BPSK signal in Gaussian noise: the two-bit measurement + carrier recover
-        # quantisation information the one-bit backend discards, so the recovered prompt
-        # phase has lower variance about the noiseless-reference angle.
+        # Weak signal in noise: two-bit's prompt phase must scatter less than one-bit's
+        # about the noiseless reference.
         Random.seed!(3)
         sig, fs = GPSL1CA(), 5e6Hz
         cdopp, cphase, prn = 1000.0Hz, 0.0, 1
@@ -766,10 +746,8 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
                 round.(Int16, A .* imag.(s) .+ σ .* randn(N)),
             )
             meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
-            # Separate track states per backend: `downconvert_and_correlate`
-            # shares each signal's (reused) `correlator_outputs` buffer with its
-            # input, so running both backends on one `ts` would append d2's
-            # records after d1's and make `first(...)` return d1's for both.
+            # Separate states: the output shares the input's `correlator_outputs`
+            # buffer, so one shared `ts` would make `first(...)` return d1's for both.
             ts1 = TrackState(sig, [TrackedSat(sig, prn, cphase, cdopp)])
             ts2 = TrackState(sig, [TrackedSat(sig, prn, cphase, cdopp)])
             c1 = _completed_or_partial_correlator(
@@ -785,14 +763,9 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
     end
 
     @testset "2-bit SNR vs Float32 and one-bit: tracking jitter and C/N0" begin
-        # At a fixed 45 dB-Hz C/N0, all backends lock the same true Doppler; the losses
-        # show up as C/N0-estimate bias and Doppler jitter. Measured over 8 seeds (at 45
-        # and 40 dB-Hz alike): one-bit loses ≈2.8–2.9 dB of C/N0, two-bit only ≈0.85 dB
-        # (theory: 0.55 dB from the 2-bit measurement + 0.25 dB from the 2-bit carrier)
-        # — a ≈2 dB recovery; Doppler jitter ≈1.55× Float32 for one-bit vs ≈1.16× for
-        # two-bit. Pin the *bounded* degradation and the ≥1 dB recovery over one-bit
-        # with a fixed seed (this seed measures: two-bit loss 0.74 dB, one-bit loss
-        # 2.76 dB, recovery 2.02 dB, jitter ratio 1.15×), not exact numbers.
+        # Pin the bounded two-bit loss and the ≥1 dB recovery over one-bit (see the
+        # header of src/downconvert_and_correlate_twobit.jl), not exact numbers. This
+        # seed measures: two-bit loss 0.74 dB, one-bit 2.76 dB, jitter ratio 1.15×.
         cn0_in = 45.0
         f = _track_noisy(CPUThreadedDownconvertAndCorrelator(), cn0_in, 1234)
         b1 = _track_noisy(OneBitThreadedDownconvertAndCorrelator(), cn0_in, 1234)
@@ -810,8 +783,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         @test 1.0 < jitter_ratio < 2.0
         @test _std(b2.dopplers) <= _std(b1.dopplers) * 1.1
 
-        # C/N0 estimate: biased low by ≲1.5 dB (vs ≈2.5–3 dB for one-bit), recovering
-        # at least 1 dB of the one-bit backend's quantisation loss
+        # C/N0 biased low by ≲1.5 dB, recovering ≥1 dB over one-bit
         @test b2.cn0 < f.cn0
         @test (f.cn0 - b2.cn0) < 1.5
         @test (b2.cn0 - b1.cn0) > 1.0

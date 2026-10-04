@@ -1,15 +1,10 @@
 """
 $(SIGNATURES)
 
-Secondary-code sync detector for Galileo E5a-I — the generic
-[`_detect_secondary_code_sync`](@ref) rotation search over the 20-chip
-CS20 secondary code (Galileo OS SIS ICD Table 19) overlaid on the 1 ms
-primary code period. E5a-I carries the F/NAV data stream at 50 sps, so one
-CS20 period (20 primary blocks) is exactly one channel symbol: the
-detector locks the secondary phase, and data-bit decoding then integrates
-one CS20 period per symbol. Default 2.5 % tolerance discretizes to 0
-(exact match over the 20-chip window). The packed reference comes from the
-generic [`_packed_secondary_code`](@ref). Returns [`SyncResult`](@ref).
+Hard-path secondary-code sync detector for Galileo E5a-I over the shared CS20
+code (Galileo OS SIS ICD Table 19) — see [`_detect_secondary_code_sync`](@ref).
+One CS20 period is exactly one 50 sps F/NAV symbol. The default detector is the soft one
+([`uses_soft_secondary_code_detection`](@ref)).
 """
 @inline function detect_bit_or_secondary_code_sync(
     signal::GalileoE5aI,
@@ -23,16 +18,10 @@ end
 """
 $(SIGNATURES)
 
-Secondary-code sync detector for Galileo E5a-Q — the generic
-[`_detect_secondary_code_sync`](@ref) rotation search over the per-PRN
-100-chip CS100 secondary code (Galileo OS SIS ICD Table 20) overlaid on
-the 1 ms primary code period, giving a 100 ms cycle. E5a-Q is a dataless
-pilot; the CS100 overlay is its only sync feature, so the detector locks
-after a single CS100 period in the worst case and reports the upcoming
-integration's CS100 chip in `SyncResult.phase`. The per-PRN packed
-reference comes from the generic [`_packed_secondary_code`](@ref), which
-reads the signal's [`PerPRNSecondaryCode`](@ref). Returns
-[`SyncResult`](@ref).
+Hard-path secondary-code sync detector for the Galileo E5a-Q pilot over the
+per-PRN CS100 code (Galileo OS SIS ICD Table 20; 100 ms cycle) — see
+[`_detect_secondary_code_sync`](@ref). The default detector is the soft one
+([`uses_soft_secondary_code_detection`](@ref)).
 """
 @inline function detect_bit_or_secondary_code_sync(
     signal::GalileoE5aQ,
@@ -52,9 +41,6 @@ function get_default_correlator(
     EarlyPromptLateCorrelator(; num_ants)
 end
 
-# E5a-I: sync-search window is one CS20 period (20 blocks); UInt32 holds it.
+# Hold one CS20 / CS100 period (see `get_code_block_buffer_type`).
 @inline get_code_block_buffer_type(::GalileoE5aI) = UInt32
-# E5a-Q: the CS100 overlay search needs a 100-block window; UInt128 is the
-# smallest built-in unsigned that holds it (the rotation search masks down
-# to the low 100 bits).
 @inline get_code_block_buffer_type(::GalileoE5aQ) = UInt128
