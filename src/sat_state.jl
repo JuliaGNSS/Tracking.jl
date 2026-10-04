@@ -48,6 +48,8 @@ struct TrackedSignal{
     # (`preferred_num_code_blocks_to_integrate`) or by an external producer
     # summing dumps. Starts at 1, the pre-sync length.
     last_fully_integrated_num_code_blocks::Int
+    # Group delay of this signal, `nothing` while unknown; see `set_group_delay!`.
+    group_delay::Union{Nothing,typeof(1.0s)}
 end
 
 # Reject a preferred coherent-integration length that cannot work for this
@@ -116,6 +118,9 @@ one primary code block for every signal but Galileo E5a-QP, whose 64.5 µs block
 is too short to run a loop on. Throws an `ArgumentError` if the value passed is
 invalid for `signal` (see
 [`set_preferred_num_code_blocks_to_integrate!`](@ref)).
+
+`group_delay` is the signal's group delay in units of time, `nothing` (the
+default) while unknown; see [`set_group_delay!`](@ref).
 """
 function TrackedSignal(
     signal::AbstractGNSSSignal;
@@ -130,6 +135,7 @@ function TrackedSignal(
     preferred_num_code_blocks_to_integrate::Int = default_num_code_blocks_to_integrate(
         signal,
     ),
+    group_delay = nothing,
 )
     validate_preferred_num_code_blocks_to_integrate(
         signal,
@@ -158,6 +164,7 @@ function TrackedSignal(
         correlator_outputs,
         preferred_num_code_blocks_to_integrate,
         1,
+        convert(Union{Nothing,typeof(1.0s)}, group_delay),
     )
 end
 
@@ -173,6 +180,9 @@ end
 # call site passes either the literal default `nothing` or a concretely typed
 # estimator, so the resulting type is inferred and the per-record rebuild in
 # `_apply_correlator_output` stays allocation-free.
+#
+# `nothing` keeps a field; `group_delay`, for which `nothing` is a value, is set
+# by passing `Some(delay)`.
 function TrackedSignal(
     t::TrackedSignal{Sig,B,C,PCF};
     signal = nothing,
@@ -187,6 +197,7 @@ function TrackedSignal(
     correlator_outputs::Maybe{Vector{CorrelatorOutput{C}}} = nothing,
     preferred_num_code_blocks_to_integrate = nothing,
     last_fully_integrated_num_code_blocks = nothing,
+    group_delay::Maybe{Some} = nothing,
 ) where {
     Sig<:AbstractGNSSSignal,
     B<:Unsigned,
@@ -216,6 +227,8 @@ function TrackedSignal(
         t.preferred_num_code_blocks_to_integrate : preferred_num_code_blocks_to_integrate,
         isnothing(last_fully_integrated_num_code_blocks) ?
         t.last_fully_integrated_num_code_blocks : last_fully_integrated_num_code_blocks,
+        isnothing(group_delay) ? t.group_delay :
+        convert(Union{Nothing,typeof(1.0s)}, something(group_delay)),
     )
 end
 
@@ -226,6 +239,7 @@ get_last_fully_integrated_filtered_prompt(t::TrackedSignal) =
     t.last_fully_integrated_filtered_prompt
 get_last_fully_integrated_num_code_blocks(t::TrackedSignal) =
     t.last_fully_integrated_num_code_blocks
+get_group_delay(t::TrackedSignal) = t.group_delay
 
 """
 $(SIGNATURES)
@@ -873,6 +887,7 @@ get_last_fully_integrated_correlator(s::TrackedSat, sel...) =
     get_last_fully_integrated_correlator(_find_signal(s.signals, sel...))
 get_last_fully_integrated_filtered_prompt(s::TrackedSat, sel...) =
     get_last_fully_integrated_filtered_prompt(_find_signal(s.signals, sel...))
+get_group_delay(s::TrackedSat, sel...) = get_group_delay(_find_signal(s.signals, sel...))
 get_last_fully_integrated_num_code_blocks(s::TrackedSat, sel...) =
     get_last_fully_integrated_num_code_blocks(_find_signal(s.signals, sel...))
 get_last_fully_integrated_integration_time(s::TrackedSat, sel...) =

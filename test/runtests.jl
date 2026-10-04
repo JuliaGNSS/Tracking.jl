@@ -1,6 +1,7 @@
 include("aqua.jl")
 include("conventional_pll_and_dll.jl")
 include("carrier_loop_staging.jl")
+include("group_delay.jl")
 include("sat_state.jl")
 include("sample_parameters.jl")
 include("downconvert_and_correlate.jl")
