@@ -155,7 +155,7 @@ $(SIGNATURES)
 
 Filter the correlator by the function `post_corr_filter`
 """
-function apply(post_corr_filter, correlator::AbstractCorrelator)
+function apply(post_corr_filter::F, correlator::AbstractCorrelator) where {F}
     update_accumulator(correlator, map(post_corr_filter, get_accumulators(correlator)))
 end
 

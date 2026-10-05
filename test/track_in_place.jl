@@ -4,7 +4,12 @@ using Test: @test, @testset
 using Random: MersenneTwister
 using Unitful: Hz
 using GNSSSignals:
-    GPSL1CA, GPSL5I, gen_code, get_code_center_frequency_ratio, get_code_frequency
+    GPSL1CA,
+    GPSL5I,
+    GalileoE1B,
+    gen_code,
+    get_code_center_frequency_ratio,
+    get_code_frequency
 
 using Tracking:
     TrackedSat,
@@ -30,7 +35,11 @@ using Tracking:
     NoiseRefCN0Estimator,
     NWPRCN0Estimator,
     append_noise_observation!,
-    noise_observation_from_samples
+    noise_observation_from_samples,
+    CorrelatorOutput,
+    append_correlator_output!,
+    get_default_correlator,
+    update_accumulator
 
 # Build a simple 4 ms GPS-L1 PRN-1 signal with known carrier doppler & code phase.
 function make_signal(sampling_frequency)
@@ -322,6 +331,40 @@ if VERSION >= v"1.11"
         @test measure_track_alloc_l5i(200) == 0
         @test measure_track_alloc_l5i(900) == 0
     end
+end
+
+# Folding a record normalizes its correlator through a closure. Not specialized on
+# it, `apply` dispatched dynamically and allocated per record for a
+# five-tap (VEML) correlator, as Galileo E1's default is.
+@testset "folding a record allocates nothing, whatever the correlator ($name)" for (
+    name,
+    signal,
+) in (
+    ("EarlyPromptLate", GPSL1CA()),
+    ("VeryEarlyPromptLate", GalileoE1B()),
+)
+    sampling_frequency = 16.368e6Hz
+    n = 65472
+    track_state = TrackState(
+        signal,
+        [TrackedSat(signal, 11, 0.0, 0.0Hz; cn0_estimator = NWPRCN0Estimator(signal))],
+    )
+    correlator = get_default_correlator(signal)
+    record = CorrelatorOutput(
+        update_accumulator(
+            correlator,
+            map(_ -> (1.0 + 0.1im) * n, correlator.accumulators),
+        ),
+        n,
+        n,
+    )
+    measurements = (L1 = BandMeasurement(ComplexF64[], sampling_frequency),)
+    allocated = map(1:10) do _
+        reset_start_sample_and_bit_buffer!(track_state)
+        append_correlator_output!(track_state, record, 11)
+        @allocated estimate_dopplers_and_filter_prompt!(track_state, measurements)
+    end
+    @test last(allocated) == 0
 end
 
 end
