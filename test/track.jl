@@ -281,6 +281,18 @@ end
     @test get_doppler_estimator_state(counted).num_records == 0
 end
 
+@testset "A scalar loop has no navigation solution to report" begin
+    track_state = TrackState(; signal = GPSL1CA())
+    @test TrackingLoops.navigation_solution(track_state) === nothing
+    @test TrackingLoops.navigation_status(track_state) === nothing
+    @test TrackingLoops.navigation_cycle(track_state) === nothing
+    @test TrackingLoops.navigation_epoch(track_state) === nothing
+    @test TrackingLoops.satellite_report(track_state, GPSL1CA(), 1) === nothing
+    vector =
+        TrackState(; signal = GPSL1CA(), doppler_estimator = VectorPLLAndDLL(GPSL1CA()))
+    @test TrackingLoops.navigation_cycle(vector) == 0
+end
+
 # An estimator that keeps every record it is handed, around the loop it wraps.
 struct RecordingEstimator{E<:TrackingLoops.AbstractDopplerEstimator} <:
        TrackingLoops.AbstractDopplerEstimator

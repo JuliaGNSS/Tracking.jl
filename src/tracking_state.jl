@@ -1486,3 +1486,21 @@ end
     end
     return nothing
 end
+
+# What the Doppler estimator knows of the navigation solution, asked of the
+# `TrackState` that holds it: TrackingLoops' interface, forwarded so a receiver
+# need not reach for the estimator. Every estimator answers it, the scalar loops
+# with `nothing`; see TrackingLoops' `navigation_solution`.
+TrackingLoops.navigation_solution(track_state::TrackState) =
+    TrackingLoops.navigation_solution(track_state.doppler_estimator)
+TrackingLoops.navigation_status(track_state::TrackState) =
+    TrackingLoops.navigation_status(track_state.doppler_estimator)
+TrackingLoops.navigation_cycle(track_state::TrackState) =
+    TrackingLoops.navigation_cycle(track_state.doppler_estimator)
+TrackingLoops.navigation_epoch(track_state::TrackState) =
+    TrackingLoops.navigation_epoch(track_state.doppler_estimator)
+TrackingLoops.satellite_report(
+    track_state::TrackState,
+    signal::AbstractGNSSSignal,
+    prn::Integer,
+) = TrackingLoops.satellite_report(track_state.doppler_estimator, signal, prn)
