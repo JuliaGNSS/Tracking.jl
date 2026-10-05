@@ -223,16 +223,24 @@ end
           nav_code_freq_update +
           expected_carrier_freq_update * get_code_center_frequency_ratio(gpsl1)
 
-    # Discriminator outputs are accumulated for the navigation filter; the
-    # FLL discriminator is zero here since there is no previous prompt.
+    # Discriminator outputs are accumulated for the navigation filter; without
+    # a previous prompt there is no FLL reading, and the record is not counted.
     @test state.code_discr_acc == (1, dll_discriminator)
-    @test state.carrier_discr_acc == (1, 0.0Hz)
+    @test state.carrier_discr_acc == (0, 0.0Hz)
     # The mean accessors divide sum by count (one sample here).
     @test mean_code_discr(state) == dll_discriminator
-    @test mean_carrier_discr(state) == 0.0Hz
+    @test mean_carrier_discr(state) === nothing
     # The navigation filter's corrections survive the update untouched.
     @test state.code_freq_update == nav_code_freq_update
     @test state.carrier_freq_update == nav_carrier_freq_update
+
+    # The next record has a previous prompt, so its FLL reading is counted.
+    sats = get_sat_states(new_track_state)
+    sats[prn] = _with_full_integration(sats[prn], cis(0.1) .* accumulators, num_samples)
+    estimate_dopplers_and_filter_prompt!(new_track_state, _meas_l1(sampling_frequency))
+    state = get_doppler_estimator_state(get_sat_state(new_track_state, prn))
+    @test first(state.carrier_discr_acc) == 1
+    @test mean_carrier_discr(state) > 0.0Hz
 
     # The accumulator-reset functions bring the accumulators back to zero.
     reset_code_discr_acc!(new_track_state)

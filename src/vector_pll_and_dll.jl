@@ -270,9 +270,18 @@ end
         state;
         carrier_loop_filter,
         code_discr_acc = state.code_discr_acc .+ (1, dll_discriminator),
-        carrier_discr_acc = state.carrier_discr_acc .+ (1, fll_discriminator),
+        carrier_discr_acc = _accumulated_fll(
+            state.carrier_discr_acc,
+            fll_discriminator,
+            previous_prompt,
+        ),
     )
 end
+
+# A record without a previous prompt has no FLL reading (`fll_disc` reads 0 Hz)
+# and is left out of the accumulator, as the scalar loop leaves it out.
+@inline _accumulated_fll(acc::Tuple, fll_discriminator, previous_prompt::Complex) =
+    iszero(previous_prompt) ? acc : acc .+ (1, fll_discriminator)
 
 @inline _with_loop_state(state::SatVectorPLLAndDLL; kwargs...) =
     SatVectorPLLAndDLL(state; kwargs...)
@@ -495,7 +504,9 @@ $(SIGNATURES)
 Mean FLL (carrier) discriminator accumulated on `state` since the last
 [`reset_carrier_discr_acc!`](@ref), in Hz, or `nothing` if nothing has been
 accumulated yet (`count == 0`). The carrier counterpart to
-[`mean_code_discr`](@ref).
+[`mean_code_discr`](@ref). A record without a previous prompt (the first after
+[`add_satellite!`](@ref), [`reset_loop_filters!`](@ref) or a pilot's
+secondary-code sync) has no FLL reading and is not counted.
 """
 function mean_carrier_discr(state::SatVectorPLLAndDLL)
     count, discr_sum = state.carrier_discr_acc
