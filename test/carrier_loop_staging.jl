@@ -31,6 +31,7 @@ using Tracking:
     frequency_lock_window,
     get_carrier_doppler,
     get_carrier_phase,
+    get_carrier_phase_polarity,
     get_doppler_estimator_state,
     get_sat_state,
     has_bit_or_secondary_code_been_found,
@@ -350,6 +351,29 @@ end
         @test abs(get_carrier_doppler(track_state) - 200Hz) < 0.1Hz
         settled = max(switched_at, round(Int, 300 / chunk_ms)) + round(Int, 200 / chunk_ms)
         @test half_cycle_slips(phase_offsets, settled) == 0
+    end
+end
+
+@testset "Carrier phase polarity" begin
+    # Unresolved until the driver pilot syncs.
+    track_state = TrackState(; signal = GalileoE1C())
+    add_satellite!(track_state; prn = 11, code_phase = 0.0, carrier_doppler = 0.0Hz)
+    @test @inferred(get_carrier_phase_polarity(track_state)) === 0
+    @test get_carrier_phase_polarity(get_sat_state(track_state, 11)) === 0
+    @test Tracking._carrier_phase_polarity(nothing, nothing) === Int8(0)
+
+    # Resolved after: corrected, the carrier phase is the signal's, whichever
+    # sign Costas pulled in on.
+    for (signal, chunk_ms, duration_chunks) in
+        ((GPSL5Q(), 1, 2000), (GalileoE1C(), 4, 500)),
+        start_phase in (0.0, π)
+
+        phase_offsets, _, track_state =
+            track_pilot(signal, start_phase; duration_chunks, chunk_ms)
+        polarity = get_carrier_phase_polarity(track_state)
+        @test polarity != 0
+        corrected = phase_offsets[end] + (polarity < 0 ? π : 0.0)
+        @test abs(rem2pi(corrected, RoundNearest)) < 0.2
     end
 end
 

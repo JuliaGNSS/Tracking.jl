@@ -477,6 +477,7 @@ The trailing `sig` selector is either:
 | `get_code_phase` | Shared code phase (wraps at [`max_code_length`](@ref)). |
 | `get_code_doppler` | Shared code Doppler. |
 | `get_carrier_phase` | Shared carrier phase in radians. |
+| `get_carrier_phase_polarity` | Whether that phase is half a cycle off (`-1`), not (`+1`), or unresolved (`0`). |
 | `get_carrier_doppler` | Shared carrier Doppler. |
 | `get_signal_start_sample` | Index of the next sample to integrate. |
 
@@ -542,6 +543,7 @@ get_prn(::TrackedSat)
 get_code_phase(::TrackedSat)
 get_code_doppler(::TrackedSat)
 get_carrier_phase(::TrackedSat)
+get_carrier_phase_polarity(::TrackedSat)
 get_carrier_doppler(::TrackedSat)
 get_signal_start_sample(::TrackedSat)
 get_signals(::TrackedSat)

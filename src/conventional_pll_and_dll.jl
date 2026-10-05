@@ -724,6 +724,9 @@ end
     _with_loop_state(state; carrier_loop_filter, code_loop_filter, frequency_lock)
 end
 
+_carrier_phase_polarity(::SatConventionalPLLAndDLL, sat::TrackedSat) =
+    _sync_polarity(first(sat.signals).signal, first(sat.signals).bit_buffer, sat.prn)
+
 # A per-sat state with some of its fields replaced, through the state type's
 # keyword-update constructor.
 @inline _with_loop_state(state::SatConventionalPLLAndDLL; kwargs...) =

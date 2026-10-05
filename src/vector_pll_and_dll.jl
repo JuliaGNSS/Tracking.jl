@@ -277,6 +277,9 @@ end
 @inline _with_loop_state(state::SatVectorPLLAndDLL; kwargs...) =
     SatVectorPLLAndDLL(state; kwargs...)
 
+_carrier_phase_polarity(::SatVectorPLLAndDLL, sat::TrackedSat) =
+    _sync_polarity(first(sat.signals).signal, first(sat.signals).bit_buffer, sat.prn)
+
 """
 $(SIGNATURES)
 
