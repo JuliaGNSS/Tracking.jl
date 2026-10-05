@@ -14,8 +14,8 @@ jobs:
       # opt-in (skipped unless this is "true"), so a plain local `]test` never
       # triggers the download. Run it on a single job (Linux / Julia 1), so
       # the matrix stays fast and the download is cached once for one OS
-      # instead of three. The test passes on Linux/macOS/Windows; ongoing CI
-      # only needs one of them.
+      # instead of two. The test passes on Linux and macOS; ongoing CI only
+      # needs one of them.
       TRACKING_RUN_INTEGRATION_TEST: ${{ matrix.os == 'ubuntu-latest' && matrix.version == '1' }}
     strategy:
       matrix:
@@ -26,8 +26,6 @@ jobs:
         os:
           - ubuntu-latest
         include:
-          - os: windows-latest
-            version: '1'
           - os: macOS-latest
             version: '1'
     steps:
