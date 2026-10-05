@@ -34,7 +34,8 @@ using Tracking:
     get_integrated_samples,
     get_sat_state,
     get_doppler_estimator_state,
-    reset_loop_filters!
+    reset_loop_filters!,
+    get_sat_states
 import TrackingLoops
 using TrackingLoops:
     get_prompt,
@@ -49,7 +50,13 @@ using TrackingLoops:
     ConventionalPLLAndDLL,
     ConventionalAssistedPLLAndDLL,
     NCOReferencedPLLAndDLL,
-    SatNCOReferencedPLLAndDLL
+    SatNCOReferencedPLLAndDLL,
+    VectorPLLAndDLL,
+    SatVectorPLLAndDLL,
+    enable_vector_tracking,
+    set_vector_corrections,
+    mean_code_discriminator,
+    reset_discriminator_accumulators
 import Tracking
 using StaticArrays: SVector
 using Unitful: ustrip, uconvert
@@ -157,13 +164,11 @@ _unit_code(c) = (m = maximum(abs, c); m == 0 ? float(c) : c ./ m)
     #    plot(imag.(tracked_prompts))
 end
 
-@testset "Through track, the NCO-referenced loop is the conventional assisted loop" begin
-    # `track` hands the estimator the chunk's own replica word and no landing
-    # sample, so the delay-aware estimator must reproduce the conventional one
-    # exactly — including after its loop filters are reset.
+# GPS L1 C/A PRN 1 at a 1 kHz Doppler in noise, cut into 1 ms chunks at 4 MHz.
+function _noisy_gpsl1_chunks(num_chunks)
     gpsl1 = GPSL1CA()
     fs = 4e6Hz
-    num_samples = 4000 * 200
+    num_samples = 4000 * num_chunks
     carrier_doppler = 1000.0Hz
     code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
     t = (0:(num_samples-1)) ./ ustrip(Hz, fs)
@@ -173,6 +178,15 @@ end
     signal =
         ComplexF32.(code .* cis.(2π .* ustrip(Hz, carrier_doppler) .* t .+ 0.3)) .+
         0.5f0 .* randn(rng, ComplexF32, num_samples)
+    gpsl1, fs, carrier_doppler, [signal[((k-1)*4000+1):(k*4000)] for k = 1:num_chunks]
+end
+
+@testset "Through track, the NCO-referenced and the vector loops are the conventional assisted loop" begin
+    # `track` hands the estimator the chunk's own replica word and no landing
+    # sample, so the delay-aware estimator must reproduce the conventional one
+    # exactly — including after its loop filters are reset. Out of the vector
+    # loop, the vector estimator is the scalar loop it wraps, bit for bit.
+    gpsl1, fs, carrier_doppler, chunks = _noisy_gpsl1_chunks(200)
     function run(estimator)
         track_state = TrackState(; signal = gpsl1, doppler_estimator = estimator)
         track_state = add_satellite!(
@@ -182,12 +196,12 @@ end
             carrier_doppler = 1005.0Hz,
         )
         history = Tuple{typeof(1.0Hz),Float64}[]
-        for k = 1:200
-            track_state = track(signal[((k-1)*4000+1):(k*4000)], track_state, fs)
+        for chunk in chunks
+            track_state = track(chunk, track_state, fs)
             sat_state = get_sat_state(track_state, 1)
             push!(history, (get_carrier_doppler(sat_state), get_code_phase(sat_state)))
         end
-        track_state = track(signal[1:4000], reset_loop_filters!(track_state), fs)
+        track_state = track(first(chunks), reset_loop_filters!(track_state), fs)
         sat_state = get_sat_state(track_state, 1)
         push!(history, (get_carrier_doppler(sat_state), get_code_phase(sat_state)))
         history, track_state
@@ -198,6 +212,150 @@ end
     @test get_doppler_estimator_state(get_sat_state(track_state, 1)) isa
           SatNCOReferencedPLLAndDLL
     @test abs(conventional[200][1] - carrier_doppler) < 5Hz
+    for estimator in (VectorPLLAndDLL(), VectorPLLAndDLL(NCOReferencedPLLAndDLL()))
+        vector, track_state = run(estimator)
+        @test vector == conventional
+        @test get_doppler_estimator_state(get_sat_state(track_state, 1)) isa
+              SatVectorPLLAndDLL
+    end
+end
+
+# An estimator Tracking has never heard of, implementing only TrackingLoops'
+# estimator interface: it hands every record to the loop it wraps and counts
+# the records it saw.
+struct CountingEstimator{E<:TrackingLoops.AbstractDopplerEstimator} <:
+       TrackingLoops.AbstractDopplerEstimator
+    inner::E
+end
+struct SatCountingEstimator{S}
+    inner::S
+    num_records::Int
+end
+TrackingLoops.init_estimator_state(
+    estimator::CountingEstimator,
+    driver_signal,
+    carrier_doppler,
+    code_doppler,
+) = SatCountingEstimator(
+    TrackingLoops.init_estimator_state(
+        estimator.inner,
+        driver_signal,
+        carrier_doppler,
+        code_doppler,
+    ),
+    0,
+)
+function TrackingLoops.step_loop(
+    estimator::CountingEstimator,
+    state::SatCountingEstimator,
+    record,
+    words,
+    landing_sample::Int64,
+)
+    inner, carrier_doppler, code_doppler =
+        TrackingLoops.step_loop(estimator.inner, state.inner, record, words, landing_sample)
+    SatCountingEstimator(inner, state.num_records + 1), carrier_doppler, code_doppler
+end
+
+@testset "Through track, an estimator implementing step_loop runs without adaptation" begin
+    gpsl1, fs, carrier_doppler, chunks = _noisy_gpsl1_chunks(100)
+    function run(estimator)
+        track_state = TrackState(; signal = gpsl1, doppler_estimator = estimator)
+        track_state = add_satellite!(
+            track_state;
+            prn = 1,
+            code_phase = 100.2,
+            carrier_doppler = 1005.0Hz,
+        )
+        for chunk in chunks
+            track!(chunk, track_state, fs)
+        end
+        # No `reset_estimator_state` method: the reset re-initializes.
+        reset_loop_filters!(track_state)
+        get_sat_state(track_state, 1)
+    end
+    reference = run(ConventionalAssistedPLLAndDLL())
+    counted = run(CountingEstimator(ConventionalAssistedPLLAndDLL()))
+    @test get_carrier_doppler(counted) == get_carrier_doppler(reference)
+    @test get_code_phase(counted) == get_code_phase(reference)
+    @test get_doppler_estimator_state(counted).num_records == 0
+end
+
+@testset "Through track, a member of the vector loop is steered by its corrections" begin
+    # The navigation filter writes each member's corrections into its estimator
+    # state between two `track` calls; `track` applies them per record and
+    # accumulates the discriminators the filter reads next. A proportional code
+    # loop stands in for the filter here: every 10 ms it reads the mean DLL
+    # discriminator and sets the code correction from it.
+    gpsl1, fs, carrier_doppler, chunks = _noisy_gpsl1_chunks(400)
+    code_frequency =
+        get_code_frequency(gpsl1) + carrier_doppler * get_code_center_frequency_ratio(gpsl1)
+    code_phase_error(track_state, num_chunks) = rem(
+        get_code_phase(get_sat_state(track_state, 1)) -
+        (100.0 + ustrip(Hz, code_frequency) * 4000 * num_chunks / ustrip(Hz, fs)),
+        1023,
+        RoundNearest,
+    )
+    function update_estimator_state(f, track_state)
+        sats = get_sat_states(track_state)
+        sat = sats[1]
+        sats[1] =
+            TrackedSat(sat; doppler_estimator_state = f(get_doppler_estimator_state(sat)))
+        track_state
+    end
+    function run(gain)
+        track_state = TrackState(; signal = gpsl1, doppler_estimator = VectorPLLAndDLL())
+        track_state = add_satellite!(
+            track_state;
+            prn = 1,
+            code_phase = 100.3,
+            carrier_doppler = 1005.0Hz,
+        )
+        # Pull the carrier in on the scalar loop; the 1 Hz DLL is still far
+        # from the code phase after 50 ms.
+        for chunk in chunks[1:50]
+            track_state = track(chunk, track_state, fs)
+        end
+        track_state = update_estimator_state(enable_vector_tracking, track_state)
+        for (k, chunk) in enumerate(chunks[51:400])
+            track_state = track(chunk, track_state, fs)
+            k % 10 == 0 || continue
+            track_state = update_estimator_state(track_state) do state
+                # One record per 1 ms chunk.
+                @test first(state.code_discr_acc) == 10
+                @test first(state.carrier_discr_acc) == 10
+                correction = gain * mean_code_discriminator(state)
+                reset_discriminator_accumulators(
+                    set_vector_corrections(state, correction, 0.0Hz),
+                )
+            end
+        end
+        track_state
+    end
+
+    unsteered = run(0.0Hz)
+    @test abs(code_phase_error(unsteered, 400)) > 0.05
+    steered = run(10.0Hz)
+    @test abs(code_phase_error(steered, 400)) < 0.01
+    sat_state = get_sat_state(steered, 1)
+    state = get_doppler_estimator_state(sat_state)
+    @test state.vt_on
+    @test abs(get_carrier_doppler(sat_state) - carrier_doppler) < 5Hz
+    # The code filter is frozen: the code Doppler is the carrier-aided handover
+    # Doppler plus the correction the last chunk ran under (the newest one was
+    # set after it).
+    inner = state.inner
+    ratio = get_code_center_frequency_ratio(gpsl1)
+    @test get_code_doppler(sat_state) ≈
+          inner.init_code_doppler +
+          state.code_freq_update_history[2] +
+          (get_carrier_doppler(sat_state) - inner.init_carrier_doppler) * ratio
+    # A reset keeps the satellite in the vector loop and stops applying the
+    # corrections, which the converged Dopplers already contain.
+    reset_loop_filters!(steered)
+    state = get_doppler_estimator_state(get_sat_state(steered, 1))
+    @test state.vt_on
+    @test state.code_freq_update == 0.0Hz
 end
 
 @testset "Tracking with large initial Doppler offset" begin
