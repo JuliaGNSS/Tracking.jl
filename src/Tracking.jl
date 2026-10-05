@@ -237,9 +237,18 @@ measurement on a sample grid that runs on across calls. The correlate phase
 indexes its records from the current measurement's start, and the estimate phase
 adds the band's offset when it hands a record to the Doppler estimator, so an
 estimator that keeps per-satellite state of its own (TrackingLoops'
-`VectorPLLAndDLL`) sees every satellite of the band on one time grid. It is
-shared by the states derived from this one; [`track`](@ref) gives its result a
-copy.
+`VectorPLLAndDLL`) sees every satellite of the band on one time grid. The
+in-place mutators share it with the state they return; [`track`](@ref) and the
+non-mutating constructors ([`merge_sats`](@ref), [`add_satellite`](@ref),
+[`remove_satellite`](@ref)) give their result a copy, so tracking the result
+leaves the input's grid where it was.
+
+A fresh `TrackState` starts every band at `0`. To carry an estimator that keeps
+state of its own over into a rebuilt `TrackState` (to track another band with
+the same `VectorPLLAndDLL`, say), pass the old state's offsets as the
+constructor's `sample_offsets` keyword. Otherwise the estimator receives records
+that lie in its past. A band the old state did not track starts on the same
+time grid at `elapsed_time * sampling_frequency` (in samples of the new band).
 """
 struct TrackState{G<:SignalGroups,DE<:AbstractDopplerEstimator,NE<:NoiseEstimators}
     groups::G
@@ -257,14 +266,41 @@ end
 TrackState(
     groups::SignalGroups,
     doppler_estimator::AbstractDopplerEstimator,
-    noise_estimators::NoiseEstimators,
+    noise_estimators::NoiseEstimators;
+    sample_offsets = nothing,
 ) = TrackState(
     groups,
     doppler_estimator,
     noise_estimators,
     Base.RefValue{Any}(nothing),
-    Dict{Symbol,Int}(get_band_id(group.band) => 0 for group in groups),
+    _initial_sample_offsets(groups, sample_offsets),
 )
+
+# Every band of `groups` at `0`, overridden by the `sample_offsets` the caller
+# carries over (a `NamedTuple` or `AbstractDict` keyed by `get_band_id`). The
+# result is always a fresh `Dict`, so it never aliases the caller's.
+function _initial_sample_offsets(groups::SignalGroups, sample_offsets)
+    offsets = Dict{Symbol,Int}(get_band_id(group.band) => 0 for group in groups)
+    isnothing(sample_offsets) && return offsets
+    for (band, offset) in pairs(sample_offsets)
+        haskey(offsets, band) || throw(
+            ArgumentError(
+                string(
+                    "`sample_offsets` names band `",
+                    band,
+                    "`, which no group of this TrackState tracks (bands: ",
+                    join(keys(offsets), ", "),
+                    ").",
+                ),
+            ),
+        )
+        offset >= 0 || throw(
+            ArgumentError("`sample_offsets` must be non-negative, got $band => $offset."),
+        )
+        offsets[band] = offset
+    end
+    offsets
+end
 
 include("sample_parameters.jl")
 include("downconvert_and_correlate.jl")

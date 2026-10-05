@@ -42,6 +42,18 @@ shared noise reference, and advancing two of them concurrently races on it. Buil
 a separate `TrackState` per thread rather than branching one — see
 `downconvert_and_correlate` for why the window is not copied.
 
+The Doppler estimator is shared too: the returned state holds the input's
+`doppler_estimator` itself, not a copy. You can therefore keep reading results
+off the instance you passed in. An estimator with state of its own
+(TrackingLoops' `VectorPLLAndDLL`, whose navigation engine keeps every
+satellite's slot and the filter's cycle) is advanced by `track` as it is by
+[`track!`](@ref). Each result gets its own copy of the band's sample offsets,
+but branching two states from one input still steps one engine with both
+branches' records: the second branch hands it records from its past, and the
+two branches' measurements mix in one navigation filter. To branch such a
+state, `deepcopy` the input first, which copies the estimator together with
+the satellites that point into it.
+
 For real-time loops processing many chunks of signal in sequence, **construct
 the correlator once outside the loop** and pass it via the
 `downconvert_and_correlator` keyword argument:
