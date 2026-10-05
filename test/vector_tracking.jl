@@ -37,7 +37,14 @@ using PositionVelocityTime:
     BiasColumns
 using Tracking: TrackState, track!, add_satellite!
 using TrackingLoops:
-    VectorPLLAndDLL, navigation_solution, navigation_status, VTStatus, SPEED_OF_LIGHT
+    VectorPLLAndDLL,
+    navigation_solution,
+    navigation_status,
+    navigation_cycle,
+    navigation_epoch,
+    satellite_report,
+    VTStatus,
+    SPEED_OF_LIGHT
 
 include("lnav_encoder.jl")
 
@@ -196,6 +203,15 @@ end
     @test status.running
     @test status.num_members == length(sats)
     @test length(navigation_solution(estimator).sats) == length(sats)
+    # The same, asked of the track state, as a receiver does.
+    @test navigation_solution(track_state) === navigation_solution(estimator)
+    @test navigation_cycle(track_state) == navigation_cycle(estimator) > 250
+    @test navigation_epoch(track_state) !== nothing
+    for decoder in decoders
+        report = satellite_report(track_state, SIGNAL, decoder.prn)
+        @test report.pvt_ready && report.in_vector_loop
+        @test report.decoder.data.sqrt_A == decoder.data.sqrt_A
+    end
     @test maximum(errors[(end-250):end]) < 10.0
 end
 
