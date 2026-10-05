@@ -1,6 +1,6 @@
 # Noise Estimator
 
-[`NoiseRefCN0Estimator`](@ref) — the default C/N₀ estimator — divides each
+[`NoiseRefCN0Estimator`](@extref TrackingLoops.NoiseRefCN0Estimator) — the default C/N₀ estimator — divides each
 record's prompt power by a **measured noise floor** instead of inferring one from
 the prompt's own statistics. This page is about where that floor comes from.
 
@@ -12,13 +12,13 @@ NamedTuple keyed by signal id (`GNSSSignals.get_signal_id` — `:GPSL1CA`,
 `:GalileoE1B`, …).
 
 On the sample-driven path none of this needs configuring — `TrackState`
-provisions a [`CorrelatorNoiseEstimator`](@ref) for every signal asking for a
+provisions a [`CorrelatorNoiseEstimator`](@extref TrackingLoops.CorrelatorNoiseEstimator) for every signal asking for a
 density, and `track!` fills it. Read on if you feed correlator outputs from
 hardware, or if you want to know what the measurement actually does.
 
-```@docs
-AbstractNoiseEstimator
-```
+In the TrackingLoops manual:
+
+- [`AbstractNoiseEstimator`](@extref TrackingLoops.AbstractNoiseEstimator)
 
 ## Why per signal and not per RF band
 
@@ -92,29 +92,35 @@ reason a density is stored rather than a power, and it buys two things:
 
 |                                 | software                                            | hardware                              |
 |:------------------------------- |:--------------------------------------------------- |:------------------------------------- |
-| fills the window via            | `track!` → `downconvert_and_correlate!` → [`update_noise!`](@ref) | [`append_noise_observation!`](@ref)   |
+| fills the window via            | `track!` → `downconvert_and_correlate!` → [`update_noise!`](@extref TrackingLoops.update_noise!-Tuple{AbstractNoiseEstimator, Vararg{Any, 4}}) | [`append_noise_observation!`](@ref)   |
 | enters `downconvert_and_correlate!`? | yes                                            | **no**                                |
 | needs sample buffers?           | yes                                                  | no                                    |
 
 They live on **disjoint call graphs** — a hardware producer never calls
 `downconvert_and_correlate!`, it injects correlator outputs and folds — so one
 concrete type serves both and nothing needs to distinguish them. You configure
-[`CorrelatorNoiseEstimator`](@ref) either way; you simply fill it differently.
+[`CorrelatorNoiseEstimator`](@extref TrackingLoops.CorrelatorNoiseEstimator) either way; you simply fill it differently.
 
 ```@docs
-update_noise!
 append_noise_observation!
-get_noise_density
 ```
+
+In the TrackingLoops manual:
+
+- [`update_noise!`](@extref TrackingLoops.update_noise!-Tuple{AbstractNoiseEstimator, Vararg{Any, 4}})
+- [`get_noise_density`](@extref TrackingLoops.get_noise_density-Tuple{AbstractNoiseEstimator})
 
 ## The software source
 
 ```@docs
-CorrelatorNoiseEstimator
-CorrelatorNoiseEstimator()
-TrackingLoops.update_noise!(::CorrelatorNoiseEstimator, ::Tracking.BandMeasurement, ::Integer, ::Integer, ::TrackingLoops.NoiseUpdateContext)
 TrackingLoops.despread_noise!
 ```
+
+In the TrackingLoops manual:
+
+- [`CorrelatorNoiseEstimator`](@extref TrackingLoops.CorrelatorNoiseEstimator)
+- [`CorrelatorNoiseEstimator()`](@extref TrackingLoops.CorrelatorNoiseEstimator-Tuple{})
+- [`update_noise!(::CorrelatorNoiseEstimator, …)`](@extref TrackingLoops.update_noise!-Tuple{CorrelatorNoiseEstimator, Any, Integer, Integer, TrackingLoops.NoiseUpdateContext})
 
 Four properties are worth knowing about it.
 
@@ -225,12 +231,12 @@ tap, which is indistinguishable from anything finer below 40 dB-Hz.
 
 ### The observation and its builders
 
-```@docs
-NoiseObservation
-noise_observation
-noise_observation_from_correlator
-noise_observation_from_samples
-```
+In the TrackingLoops manual:
+
+- [`NoiseObservation`](@extref TrackingLoops.NoiseObservation)
+- [`noise_observation`](@extref TrackingLoops.noise_observation)
+- [`noise_observation_from_correlator`](@extref TrackingLoops.noise_observation_from_correlator)
+- [`noise_observation_from_samples`](@extref TrackingLoops.noise_observation_from_samples)
 
 All three reduce to the same `N₀` on the same white input, which is what makes
 the paths interchangeable.
@@ -306,7 +312,7 @@ rather than collapsing them.
 
 ## Writing your own source
 
-[`AbstractNoiseEstimator`](@ref) and its three methods are public, so a source
+[`AbstractNoiseEstimator`](@extref TrackingLoops.AbstractNoiseEstimator) and its three methods are public, so a source
 that is neither of the shipped paths — a front-end power monitor read over a
 sideband, say — is a subtype away:
 
@@ -331,13 +337,13 @@ TrackState(; signal = GPSL1CA(), noise_estimators = (GPSL1CA = MyPowerMonitor(..
 
 Two contracts to keep. The window must be mutated **in place** and the struct
 returned unchanged — `TrackState` is immutable and never rebuilt for a noise
-update. And [`TrackingLoops.noise_density_type`](@ref) must name the concrete type
+update. And [`TrackingLoops.noise_density_type`](@extref TrackingLoops.noise_density_type) must name the concrete type
 `get_noise_density` returns, so the fold can split off the `nothing` once per
 signal per chunk and keep everything below it monomorphic; it defaults to
 `typeof(1.0/1.0Hz)`, which every shipped builder produces.
 
-```@docs
-TrackingLoops.noise_density_type
-TrackingLoops.NoiseUpdateContext
-requires_noise_density
-```
+In the TrackingLoops manual:
+
+- [`noise_density_type`](@extref TrackingLoops.noise_density_type)
+- [`NoiseUpdateContext`](@extref TrackingLoops.NoiseUpdateContext)
+- [`requires_noise_density`](@extref TrackingLoops.requires_noise_density-Tuple{Type{<:AbstractCN0Estimator}})

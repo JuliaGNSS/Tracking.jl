@@ -871,7 +871,7 @@ code-replica scratch comes from the correlator's (per-thread)
 per-call allocation is the slot-value copy.
 
 The **noise estimators are shared too**, and this call advances them: a
-[`CorrelatorNoiseEstimator`](@ref)'s sliding window and its RNG stream are
+[`CorrelatorNoiseEstimator`](@extref TrackingLoops.CorrelatorNoiseEstimator)'s sliding window and its RNG stream are
 written in place through the immutable `TrackState` (that is what lets per-signal
 state live in one), so the input's window grows and its draws advance even though
 its per-sat values do not. They are deliberately not copied — a window holds
@@ -931,7 +931,7 @@ pack happens once per call; leave it `false` (the default) whenever the
 buffers may have been refilled.
 
 `measure_noise = false` skips the per-signal noise measurement for this call,
-leaving every configured [`CorrelatorNoiseEstimator`](@ref)'s window untouched.
+leaving every configured [`CorrelatorNoiseEstimator`](@extref TrackingLoops.CorrelatorNoiseEstimator)'s window untouched.
 Pass it on a call that re-covers samples an earlier call already measured —
 which is exactly what `track!` does on its final drain pass, where the whole
 buffer arrives as one unchunked chunk. Measuring there would enter every sample

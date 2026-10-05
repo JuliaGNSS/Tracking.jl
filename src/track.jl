@@ -36,7 +36,7 @@ snapshot those buffers. The same applies to a bare
 across several calls appends to the same buffers.
 
 Each signal's noise estimator is shared the same way, and `track` advances it:
-a [`CorrelatorNoiseEstimator`](@ref)'s sliding window and RNG stream are written
+a [`CorrelatorNoiseEstimator`](@extref TrackingLoops.CorrelatorNoiseEstimator)'s sliding window and RNG stream are written
 in place, so branching two states from one input leaves them dividing by one
 shared noise reference, and advancing two of them concurrently races on it. Build
 a separate `TrackState` per thread rather than branching one — see
@@ -76,7 +76,7 @@ set_preferred_num_code_blocks_to_integrate!(track_state, :gps_l5, 1, GPSL5I, 10)
 The conventional estimator auto-scales each signal's carrier loop bandwidth by
 `1/N` for its integration length `N`, so longer integration stays stable without
 re-tuning; the code loop keeps its absolute bandwidth, capped only where
-stability requires (see [`ConventionalPLLAndDLL`](@ref)).
+stability requires (see [`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL)).
 """
 function track(
     measurements::BandMeasurements,

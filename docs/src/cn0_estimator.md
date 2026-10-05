@@ -13,7 +13,7 @@ satellite produces one CN0 value per signal.
     interchangeable: on GPS L1C the pilot carries ~75 % of the power against the
     data component's ~25 %, a 4.8 dB difference.
 
-    Nothing inside Tracking reads [`estimate_cn0`](@ref) — it is a reporting API,
+    Nothing inside Tracking reads [`estimate_cn0`](@extref TrackingLoops.estimate_cn0-Tuple{NoiseRefCN0Estimator, Any}) — it is a reporting API,
     so this costs only the per-record estimator update, which is well under a per
     cent of the correlation work for that record (~40 ns against ~9 µs for a
     two-signal satellite over 4000 samples). `estimate_cn0` itself is of the same
@@ -21,14 +21,14 @@ satellite produces one CN0 value per signal.
     costs almost nothing either way.
 
     The reason to switch a signal off is therefore not speed but honesty.
-    [`NoCN0Estimator`](@ref) is the per-signal opt-out.
+    [`NoCN0Estimator`](@extref TrackingLoops.NoCN0Estimator) is the per-signal opt-out.
 
 ## Choosing an estimator
 
 Four estimators ship, and each column below is a reason somebody picks a
 different one.
 
-|                                                            | [`NoiseRefCN0Estimator`](@ref) (default)                | [`NWPRCN0Estimator`](@ref)                                                                                                                                                 | [`MomentsCN0Estimator`](@ref) | [`NoCN0Estimator`](@ref) |
+|                                                            | [`NoiseRefCN0Estimator`](@extref TrackingLoops.NoiseRefCN0Estimator) (default)                | [`NWPRCN0Estimator`](@extref TrackingLoops.NWPRCN0Estimator)                                                                                                                                                 | [`MomentsCN0Estimator`](@extref TrackingLoops.MomentsCN0Estimator) | [`NoCN0Estimator`](@extref TrackingLoops.NoCN0Estimator) |
 |:---------------------------------------------------------- |:------------------------------------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |:----------------------------- |:------------------------ |
 | Needs the band's samples (or a noise observation)?         | **yes**                                                 | no                                                                                                                                                                         | no                            | no                       |
 | Needs bit sync / a coherent window?                        | no                                                      | **yes**                                                                                                                                                                    | no                            | no                       |
@@ -42,14 +42,14 @@ different one.
 | Cost                                                       | per-record arithmetic + one despread per signal per chunk | per-record arithmetic                                                                                                                                                      | per-record arithmetic         | none                     |
 
 The "degenerate" row is a rate of unusable *outputs*, not a per-window discard
-rate: [`estimate_cn0`](@ref) pools every buffered window and range-checks the
+rate: [`estimate_cn0`](@extref TrackingLoops.estimate_cn0-Tuple{NoiseRefCN0Estimator, Any}) pools every buffered window and range-checks the
 pooled ratio once.
 
 ### Which one do I use?
 
- 1. **Sample-driven [`track!`](@ref)** → [`NoiseRefCN0Estimator`](@ref). This is
+ 1. **Sample-driven [`track!`](@ref)** → [`NoiseRefCN0Estimator`](@extref TrackingLoops.NoiseRefCN0Estimator). This is
     the default and needs no configuration: the signal is provisioned a
-    [`CorrelatorNoiseEstimator`](@ref) automatically and `track!` fills it.
+    [`CorrelatorNoiseEstimator`](@extref TrackingLoops.CorrelatorNoiseEstimator) automatically and `track!` fills it.
  2. **Correlator outputs from hardware, *with* a noise observation** → the same,
     plus one [`append_noise_observation!`](@ref) per signal per fold. See
     [Noise Estimator](noise_estimator.md) for what a producer has to report; the
@@ -59,15 +59,15 @@ pooled ratio once.
     `NWPRCN0Estimator(signal)`, accepting its fallback on the signals it cannot
     serve. This is the one place NWPR is still the right choice.
  4. **A signal whose C/N₀ nobody reads** (the passenger of a co-tracked pair) →
-    [`NoCN0Estimator`](@ref); see [Not measuring a signal at all](#Not-measuring-a-signal-at-all).
- 5. [`MomentsCN0Estimator`](@ref) is a fallback component and a prompt-stream
+    [`NoCN0Estimator`](@extref TrackingLoops.NoCN0Estimator); see [Not measuring a signal at all](#Not-measuring-a-signal-at-all).
+ 5. [`MomentsCN0Estimator`](@extref TrackingLoops.MomentsCN0Estimator) is a fallback component and a prompt-stream
     tool, not a recommended standalone default — see
     [Why not the moment method](#Why-not-the-moment-method) for the ≈27.6 dB-Hz
     floor that rules it out.
 
 ## The default: C/N₀ against a measured noise floor
 
-[`NoiseRefCN0Estimator`](@ref) computes, per record,
+[`NoiseRefCN0Estimator`](@extref TrackingLoops.NoiseRefCN0Estimator) computes, per record,
 
 ```
 Ĉ/N₀ = ⟨|P|²⟩ / N̂₀ − 1/T
@@ -81,10 +81,10 @@ characteristics on every signal.
 Where the density comes from is a separate, pluggable thing: see
 [Noise Estimator](noise_estimator.md). On the sample-driven path it is automatic.
 
-```@docs
-NoiseRefCN0Estimator
-TrackingLoops.default_cn0_estimator
-```
+In the TrackingLoops manual:
+
+- [`NoiseRefCN0Estimator`](@extref TrackingLoops.NoiseRefCN0Estimator)
+- [`default_cn0_estimator`](@extref TrackingLoops.default_cn0_estimator)
 
 ### Getting the low-C/N₀ variance
 
@@ -148,15 +148,15 @@ a C/N₀. It was the default until the measured noise reference landed, and it i
 what to configure on a correlator-ingest path that cannot report a noise
 observation.
 
-```@docs
-NWPRCN0Estimator
-NWPRCN0Estimator(::GNSSSignals.AbstractGNSSSignal)
-```
+In the TrackingLoops manual:
+
+- [`NWPRCN0Estimator`](@extref TrackingLoops.NWPRCN0Estimator)
+- [`NWPRCN0Estimator(::AbstractGNSSSignal)`](@extref TrackingLoops.NWPRCN0Estimator-Tuple{AbstractGNSSSignal})
 
 ### Why not the moment method
 
 The [Moments Method](https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=4621371&tag=1)
-(M2M4, [`MomentsCN0Estimator`](@ref)) was the default up to and including
+(M2M4, [`MomentsCN0Estimator`](@extref TrackingLoops.MomentsCN0Estimator)) was the default up to and including
 Tracking 5.1. It is a *moment ratio*, and at a finite window the sample moments
 fluctuate enough to manufacture signal power out of noise. Measured on
 synthetic prompts (amplitude `√(C/N₀·T)` in unit-variance complex noise), 100
@@ -211,7 +211,7 @@ A narrowband window must not straddle a navigation-bit flip (a mid-window flip
 costs ~7 dB). Where the bit boundaries are is something the tracking loop knows
 and a downstream consumer of `get_filtered_prompts` does not, so each
 record's prompt is handed to the estimator together with the navigation-bit
-state in a [`CN0UpdateContext`](@ref), and the window is derived from it:
+state in a [`CN0UpdateContext`](@extref TrackingLoops.CN0UpdateContext), and the window is derived from it:
 
 | signal state                                         | narrowband window                                                          |
 |:---------------------------------------------------- |:-------------------------------------------------------------------------- |
@@ -223,7 +223,7 @@ state in a [`CN0UpdateContext`](@ref), and the window is derived from it:
 | record at least as long as its own window            | none — a one-record window has `NBP == WBP`                                |
 
 Where no window is admissible the estimator falls back to a
-[`MomentsCN0Estimator`](@ref), which needs no coherence at all — and with it to
+[`MomentsCN0Estimator`](@extref TrackingLoops.MomentsCN0Estimator), which needs no coherence at all — and with it to
 that estimator's floor. Note the last row: with
 [`set_preferred_num_code_blocks_to_integrate!`](@ref) at a whole navigation bit,
 a window closes on a single record and NWPR reports its fallback for good.
@@ -251,14 +251,14 @@ a window closes on a single record and NWPR reports its fallback for good.
     not tens of seconds.)
 
     **This is what the default estimator exists to retire.**
-    [`NoiseRefCN0Estimator`](@ref) has no window at all, so those signals and
+    [`NoiseRefCN0Estimator`](@extref TrackingLoops.NoiseRefCN0Estimator) has no window at all, so those signals and
     phases are ordinary records to it — that is
     [issue #217](https://github.com/JuliaGNSS/Tracking.jl/issues/217), and the
     reason the default moved. If you are on NWPR anyway (a correlator-ingest path
     with no noise observation), the mitigations are: take the lock decision from
     the **pilot** of the pair, which is the component the loops track anyway
     (L1C-D with L1C-P, E1B with E1C, both on one [`TrackedSat`](@ref)); give the
-    data component a [`NoCN0Estimator`](@ref); or give it an
+    data component a [`NoCN0Estimator`](@extref TrackingLoops.NoCN0Estimator); or give it an
     `NWPRCN0Estimator(signal; fallback = NoCN0Estimator())`, which reports
     `-Inf dB-Hz` exactly when no coherent window is available.
 
@@ -318,7 +318,7 @@ julia> get_prn(track_state, 1)
 
 To choose a different estimator — or to configure NWPR's windows explicitly —
 pass a `cn0_estimator` instance. It is a type parameter of
-[`TrackedSignal`](@ref), so any [`AbstractCN0Estimator`](@ref) is stored as is:
+[`TrackedSignal`](@ref), so any [`AbstractCN0Estimator`](@extref TrackingLoops.AbstractCN0Estimator) is stored as is:
 
 ```jldoctest cn0_estimator_kwarg
 julia> using Tracking, TrackingLoops, GNSSSignals
@@ -379,7 +379,7 @@ despread each per chunk, against `n_sats` tracking correlations apiece.
 
 ### Not measuring a signal at all
 
-[`NoCN0Estimator`](@ref) keeps no state, does no per-record work and reports
+[`NoCN0Estimator`](@extref TrackingLoops.NoCN0Estimator) keeps no state, does no per-record work and reports
 `-Inf dB-Hz`. It is the way to say *"this signal's C/N₀ is not measured"* — which
 is worth saying in two situations:
 
@@ -410,10 +410,10 @@ It reports `-Inf dB-Hz` rather than `NaN dB-Hz` deliberately: with Unitful's
 `NaN` would clear every lock detector it met. `-Inf` compares `false` against any
 finite threshold, which is the safe answer to "is this signal locked?".
 
-```@docs
-MomentsCN0Estimator
-NoCN0Estimator
-```
+In the TrackingLoops manual:
+
+- [`MomentsCN0Estimator`](@extref TrackingLoops.MomentsCN0Estimator)
+- [`NoCN0Estimator`](@extref TrackingLoops.NoCN0Estimator)
 
 ## What the estimator returns
 
@@ -453,7 +453,7 @@ see [The one bias it carries](#The-one-bias-it-carries).
 !!! note "An antenna array's floor follows each satellite's own beamformer"
 
     `N̂₀` is measured before the prompt is combined, but the prompt the estimator
-    sees is post-[`AbstractPostCorrFilter`](@ref) — so on an antenna array the two
+    sees is post-[`AbstractPostCorrFilter`](@extref TrackingLoops.AbstractPostCorrFilter) — so on an antenna array the two
     sides of the ratio would describe different channels unless the floor is
     reduced through the very weights that produced the prompt.
 
@@ -471,10 +471,10 @@ see [The one bias it carries](#The-one-bias-it-carries).
     which is exact rather than approximate for any fixed `w`, because
     `E[|wᴴn|²] = wᴴRw`. Nothing is stored per satellite: only the final read is.
 
-    This is why [`get_weights`](@ref) is a required part of the
-    [`AbstractPostCorrFilter`](@ref) contract, and why that contract is
+    This is why [`get_weights`](@extref TrackingLoops.get_weights) is a required part of the
+    [`AbstractPostCorrFilter`](@extref TrackingLoops.AbstractPostCorrFilter) contract, and why that contract is
     deliberately **linear in the antennas** — a non-linear combiner has no such
-    closed form. [`DefaultPostCorrFilter`](@ref) selects one antenna (`last`), for
+    closed form. [`DefaultPostCorrFilter`](@extref TrackingLoops.DefaultPostCorrFilter) selects one antenna (`last`), for
     which `wᴴR̂w` is that antenna's own diagonal entry, so it reports exactly what
     a single-antenna run on that column would.
 
@@ -507,7 +507,7 @@ of a cycle at 120 Hz over the default 5 ms window, which spreads the five phasor
 over 216° and costs `NBP` ~5.9 dB. `μ̂` collapses toward 1 and the inversion
 `(μ̂−1)/(M−μ̂)` falls off a cliff; past 1.25 cycles `μ̂ ≤ 1` and the estimate is
 `-Inf`. This is the constraint `M·T ≪ 1/(2·Δf)` stated under
-[`NWPRCN0Estimator`](@ref), which at the default window means `Δf ≪ 100 Hz`.
+[`NWPRCN0Estimator`](@extref TrackingLoops.NWPRCN0Estimator), which at the default window means `Δf ≪ 100 Hz`.
 
 The non-coherent estimators see only the **within-record** loss, `sinc²(Δf·T)` —
 0.21 dB at 120 Hz, 0.91 dB at 250 Hz. That is real signal loss the correlator
@@ -582,19 +582,19 @@ the doctest deterministic; 25 records only fill a quarter of the default
 pre-sync one: five of those records land in a window that straddles a data-bit
 flip once the signal carries data, which this noise-free-code demo does not.
 
-```@docs
-estimate_cn0
-```
+In the TrackingLoops manual:
+
+- [`estimate_cn0`](@extref TrackingLoops.estimate_cn0-Tuple{NoiseRefCN0Estimator, Any})
 
 ## Custom CN0 Estimators
 
-```@docs
-AbstractCN0Estimator
-CN0UpdateContext
-```
+In the TrackingLoops manual:
+
+- [`AbstractCN0Estimator`](@extref TrackingLoops.AbstractCN0Estimator)
+- [`CN0UpdateContext`](@extref TrackingLoops.CN0UpdateContext)
 
 You can implement your own estimator by creating a subtype of
-[`AbstractCN0Estimator`](@ref) and implementing:
+[`AbstractCN0Estimator`](@extref TrackingLoops.AbstractCN0Estimator) and implementing:
 
   - `TrackingLoops.update(cn0_estimator::MyCN0Estimator, prompt)` — return a new
     estimator with the latest prompt added (immutable update).
@@ -612,15 +612,15 @@ three-argument form instead, which is what the tracking loop calls:
 The default three-argument method drops the context and calls the two-argument
 one, so implementing only the latter is fine.
 
-```@docs
-TrackingLoops.update(::MomentsCN0Estimator, ::Any)
-TrackingLoops.update(::TrackingLoops.AbstractCN0Estimator, ::Any, ::CN0UpdateContext)
-TrackingLoops.update(::NWPRCN0Estimator, ::Any, ::CN0UpdateContext)
-TrackingLoops.update(::NWPRCN0Estimator, ::Any)
-TrackingLoops.update(::NoiseRefCN0Estimator, ::Any, ::CN0UpdateContext)
-TrackingLoops.update(::NoiseRefCN0Estimator, ::Any)
-TrackingLoops.update(::NoCN0Estimator, ::Any)
-```
+In the TrackingLoops manual:
+
+- [`update(::MomentsCN0Estimator, ::Any)`](@extref TrackingLoops.update-Tuple{MomentsCN0Estimator, Any})
+- [`update(::AbstractCN0Estimator, ::Any, ::CN0UpdateContext)`](@extref TrackingLoops.update-Tuple{AbstractCN0Estimator, Any, CN0UpdateContext})
+- [`update(::NWPRCN0Estimator, ::Any, ::CN0UpdateContext)`](@extref TrackingLoops.update-Tuple{NWPRCN0Estimator, Any, CN0UpdateContext})
+- [`update(::NWPRCN0Estimator, ::Any)`](@extref TrackingLoops.update-Tuple{NWPRCN0Estimator, Any})
+- [`update(::NoiseRefCN0Estimator, ::Any, ::CN0UpdateContext)`](@extref TrackingLoops.update-Tuple{NoiseRefCN0Estimator, Any, CN0UpdateContext})
+- [`update(::NoiseRefCN0Estimator, ::Any)`](@extref TrackingLoops.update-Tuple{NoiseRefCN0Estimator, Any})
+- [`update(::NoCN0Estimator, ::Any)`](@extref TrackingLoops.update-Tuple{NoCN0Estimator, Any})
 
 Plug it in with the `cn0_estimator` keyword of [`TrackedSignal`](@ref) or
 [`TrackedSat`](@ref) — the estimator is a type parameter of `TrackedSignal`, so

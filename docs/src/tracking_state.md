@@ -11,9 +11,9 @@ The tracking state nests as **TrackState → SignalGroup → TrackedSat → Trac
 
 ### Estimator-driver signal
 
-The first signal in each group's tuple is the **estimator-driver signal** — the one the Doppler estimator uses to update the satellite-shared carrier and code Doppler. With the default [`ConventionalPLLAndDLL`](@ref) / [`ConventionalAssistedPLLAndDLL`](@ref), `signals[1]`'s correlator is the input to the PLL/DLL discriminator, and the per-signal default loop bandwidths are sized off this signal's primary-code period. A user-supplied [`AbstractDopplerEstimator`](@ref) is free to use the other signals' state too — `signals[1]`'s privileged role is a convention of the conventional estimators, not a structural constraint of `TrackedSat`.
+The first signal in each group's tuple is the **estimator-driver signal** — the one the Doppler estimator uses to update the satellite-shared carrier and code Doppler. With the default [`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL) / [`ConventionalAssistedPLLAndDLL`](@extref TrackingLoops.ConventionalAssistedPLLAndDLL), `signals[1]`'s correlator is the input to the PLL/DLL discriminator, and the per-signal default loop bandwidths are sized off this signal's primary-code period. A user-supplied [`AbstractDopplerEstimator`](@extref TrackingLoops.AbstractDopplerEstimator) is free to use the other signals' state too — `signals[1]`'s privileged role is a convention of the conventional estimators, not a structural constraint of `TrackedSat`.
 
-The driver signal is privileged for the Doppler estimator only. Bit synchronisation, the post-correlation filter and the **CN0 estimator** all run per signal, so a multi-signal satellite produces one C/N₀ per signal rather than one for the driver — see [CN0 Estimator](cn0_estimator.md) for what that costs and for [`NoCN0Estimator`](@ref), the per-signal opt-out.
+The driver signal is privileged for the Doppler estimator only. Bit synchronisation, the post-correlation filter and the **CN0 estimator** all run per signal, so a multi-signal satellite produces one C/N₀ per signal rather than one for the driver — see [CN0 Estimator](cn0_estimator.md) for what that costs and for [`NoCN0Estimator`](@extref TrackingLoops.NoCN0Estimator), the per-signal opt-out.
 
 ## Choosing a `TrackState` constructor
 
@@ -92,7 +92,7 @@ TrackedSat(
 )
 ```
 
-`cn0_estimator` takes any [`AbstractCN0Estimator`](@ref) — unlike the correlator
+`cn0_estimator` takes any [`AbstractCN0Estimator`](@extref TrackingLoops.AbstractCN0Estimator) — unlike the correlator
 and the post-corr filter it *is* free to change the sat's concrete type, since it
 is a type parameter of [`TrackedSignal`](@ref). See
 [CN0 Estimator](cn0_estimator.md) for the estimators that ship with Tracking and
@@ -255,7 +255,7 @@ julia> get_num_ants(track_state, 1)
 4
 ```
 
-By default the track function uses the last antenna channel as the reference signal to drive the discriminators. An appropriate beamforming algorithm will probably suit better — construct a [`TrackedSat`](@ref) with a custom `post_corr_filter` and build the `TrackState` from it (so the slot type takes the custom filter type rather than the default). A filter supplies its combining weights through [`get_weights`](@ref); Tracking applies them to the correlator and reduces the measured noise covariance through the same weights, so the C/N₀ stays correct for whatever the beamformer does:
+By default the track function uses the last antenna channel as the reference signal to drive the discriminators. An appropriate beamforming algorithm will probably suit better — construct a [`TrackedSat`](@ref) with a custom `post_corr_filter` and build the `TrackState` from it (so the slot type takes the custom filter type rather than the default). A filter supplies its combining weights through [`get_weights`](@extref TrackingLoops.get_weights); Tracking applies them to the correlator and reduces the measured noise covariance through the same weights, so the C/N₀ stays correct for whatever the beamformer does:
 
 ```jldoctest beamformer_array
 julia> using Tracking, TrackingLoops, GNSSSignals, StaticArrays

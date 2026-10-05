@@ -216,14 +216,14 @@ struct used for tracking operations.
 per-group `satellites` dictionary, signal-instance tuple, band, and
 antenna count.
 
-`noise_estimators` is a NamedTuple of [`AbstractNoiseEstimator`](@ref)s keyed by
+`noise_estimators` is a NamedTuple of [`AbstractNoiseEstimator`](@extref TrackingLoops.AbstractNoiseEstimator)s keyed by
 **signal** id (`GNSSSignals.get_signal_id` — `:GPSL1CA`, `:GalileoE1B`, …), the
 same NamedTuple idiom [`BandMeasurements`](@ref) uses for bands, so a lookup
 folds to a compile-time constant. Keyed by signal and not by band because the
 floor a record divides by is the *post-correlation* one, which depends on the
-despreading modulation (see [`AbstractNoiseEstimator`](@ref)). A signal gets an
+despreading modulation (see [`AbstractNoiseEstimator`](@extref TrackingLoops.AbstractNoiseEstimator)). A signal gets an
 entry only where its C/N₀ estimator reads a noise density (see
-[`requires_noise_density`](@ref)); signals with no such estimator get none, and
+[`requires_noise_density`](@extref TrackingLoops.requires_noise_density-Tuple{Type{<:AbstractCN0Estimator}})); signals with no such estimator get none, and
 then the noise measurement costs exactly nothing. Each estimator averages **in
 place**, so `TrackState` itself is never rebuilt for a noise update.
 
