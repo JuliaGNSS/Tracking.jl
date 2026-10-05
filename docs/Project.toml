@@ -10,7 +10,6 @@ TrackingLoops = "89eadfff-3a96-4166-8be0-4e8bed6efc30"
 
 [sources]
 Tracking = {path = ".."}
-TrackingLoops = {url = "https://github.com/JuliaGNSS/TrackingLoops.jl"}
 
 [compat]
 Documenter = "1"

@@ -23,9 +23,6 @@ VectorizationBase = "3d5dd08c-fd9d-11e8-17fa-ed2836048c2f"
 [weakdeps]
 Acquisition = "d4bbf60b-102b-5ffb-8f97-a7ea5817e69f"
 
-[sources]
-TrackingLoops = {rev = "main", url = "https://github.com/JuliaGNSS/TrackingLoops.jl"}
-
 [extensions]
 TrackingAcquisitionExt = ["Acquisition"]
 
