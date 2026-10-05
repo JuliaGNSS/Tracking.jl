@@ -51,6 +51,7 @@ function update(
         new_signals_data,
         integrated_samples,
         new_signal_start_sample,
+        Float64(code_phase),
     )
 
     TrackedSat(
@@ -68,16 +69,18 @@ end
 #
 # On completion, snapshot the (raw) accumulator into the shared
 # `correlator_outputs` vector — tagged with `sample_index` (the end sample of
-# this integration) — and reset the accumulator.
+# this integration) and the replica's `code_phase` there — and reset the
+# accumulator.
 # The `push!` mutates the same vector the copy-update constructor threads
 # through unchanged, so it stays allocation-free after the buffer's capacity is
 # seated. On a partial (chunk/buffer-bounded) sub-step, carry the accumulator.
-@inline _build_new_signals(::Tuple{}, ::Tuple{}, ::Int, ::Int) = ()
+@inline _build_new_signals(::Tuple{}, ::Tuple{}, ::Int, ::Int, ::Float64) = ()
 @inline function _build_new_signals(
     signals::Tuple,
     new_data::Tuple,
     integrated_samples::Int,
     signal_start_sample::Int,
+    code_phase::Float64,
 )
     s = first(signals)
     (corr, completed) = first(new_data)
@@ -85,7 +88,7 @@ end
     if completed
         push!(
             s.correlator_outputs,
-            CorrelatorOutput(corr, total_integrated, signal_start_sample - 1),
+            CorrelatorOutput(corr, total_integrated, signal_start_sample - 1, code_phase),
         )
         new_s = TrackedSignal(s; integrated_samples = 0, correlator = zero(corr))
     else
@@ -98,6 +101,7 @@ end
             Base.tail(new_data),
             integrated_samples,
             signal_start_sample,
+            code_phase,
         )...,
     )
 end
