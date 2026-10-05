@@ -49,6 +49,13 @@ other signal, so a state that stays on [`NWPRCN0Estimator`](@extref TrackingLoop
 despread at all. Pass an explicit NamedTuple to configure the window, or to
 declare a signal's source on a correlator-ingest path where you fill it with
 [`append_noise_observation!`](@ref) rather than from samples.
+
+`sample_offsets` sets where each band's sample grid starts, as a `NamedTuple`
+or `AbstractDict` keyed by `get_band_id`. Bands it leaves out start at `0`.
+Pass the old state's `sample_offsets` when you rebuild a `TrackState` around a
+Doppler estimator that has already run and keeps state of its own; see the
+`sample_offsets` field of the struct [`TrackState`](@ref). The other
+constructors take the same keyword.
 """
 function TrackState(;
     signal::Maybe{AbstractGNSSSignal} = nothing,
@@ -56,6 +63,7 @@ function TrackState(;
     doppler_estimator::Maybe{AbstractDopplerEstimator} = nothing,
     num_ants::NumAnts = NumAnts(1),
     noise_estimators::Maybe{NamedTuple} = nothing,
+    sample_offsets = nothing,
 )
     if isnothing(signal) && isnothing(signals)
         throw(
@@ -90,7 +98,12 @@ function TrackState(;
         _normalize_group_entry(entry, estimator, num_ants)
     end
     _validate_same_band_num_ants(groups)
-    TrackState(groups, estimator, _resolve_noise_estimators(noise_estimators, groups))
+    TrackState(
+        groups,
+        estimator,
+        _resolve_noise_estimators(noise_estimators, groups);
+        sample_offsets,
+    )
 end
 
 # Resolve the `noise_estimators` kwarg. `nothing` provisions one
@@ -324,6 +337,7 @@ function TrackState(
     tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}};
     doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
     noise_estimators::Maybe{NamedTuple} = nothing,
+    sample_offsets = nothing,
 )
     # `signal` is implied by each sat's `signals[1].signal` in the new design;
     # the positional argument is kept for backward-compatible construction but
@@ -335,7 +349,8 @@ function TrackState(
     TrackState(
         groups,
         doppler_estimator,
-        _resolve_noise_estimators(noise_estimators, groups),
+        _resolve_noise_estimators(noise_estimators, groups);
+        sample_offsets,
     )
 end
 
@@ -343,13 +358,15 @@ function TrackState(
     tracked_sats::Dictionary{<:Any,<:TrackedSat};
     doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
     noise_estimators::Maybe{NamedTuple} = nothing,
+    sample_offsets = nothing,
 )
     _assert_doppler_estimator_types_match(tracked_sats, doppler_estimator)
     groups = (default = _signal_group_from_dict(tracked_sats),)
     TrackState(
         groups,
         doppler_estimator,
-        _resolve_noise_estimators(noise_estimators, groups),
+        _resolve_noise_estimators(noise_estimators, groups);
+        sample_offsets,
     )
 end
 
@@ -387,6 +404,7 @@ function TrackState(
     satellites::SatelliteDicts;
     doppler_estimator::AbstractDopplerEstimator = ConventionalAssistedPLLAndDLL(),
     noise_estimators::Maybe{NamedTuple} = nothing,
+    sample_offsets = nothing,
 )
     foreach(
         d -> _assert_doppler_estimator_types_match(d, doppler_estimator),
@@ -396,7 +414,8 @@ function TrackState(
     TrackState(
         groups,
         doppler_estimator,
-        _resolve_noise_estimators(noise_estimators, groups),
+        _resolve_noise_estimators(noise_estimators, groups);
+        sample_offsets,
     )
 end
 
@@ -450,7 +469,11 @@ end
 function reset_start_sample_and_bit_buffer(track_state::TrackState)
     new_groups = _detach_groups_slot_vectors(track_state.groups)
     reset_start_sample_and_bit_buffer!(new_groups)
-    TrackState(track_state; groups = new_groups)
+    TrackState(
+        track_state;
+        groups = new_groups,
+        sample_offsets = copy(track_state.sample_offsets),
+    )
 end
 
 function reset_start_sample_and_bit_buffer!(track_state::TrackState)
@@ -573,7 +596,7 @@ function merge_sats(
         new_estimator,
         track_state.noise_estimators,
         track_state.noise_descriptor,
-        track_state.sample_offsets,
+        copy(track_state.sample_offsets),
     )
 end
 
@@ -777,7 +800,7 @@ function add_satellite(
         new_estimator,
         track_state.noise_estimators,
         track_state.noise_descriptor,
-        track_state.sample_offsets,
+        copy(track_state.sample_offsets),
     )
 end
 
@@ -845,7 +868,7 @@ function remove_satellite(
         track_state.doppler_estimator,
         track_state.noise_estimators,
         track_state.noise_descriptor,
-        track_state.sample_offsets,
+        copy(track_state.sample_offsets),
     )
 end
 

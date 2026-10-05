@@ -354,6 +354,13 @@ end
     @test track_state.sample_offsets == before
     track!(first(chunks), track_state, fs)
     @test track_state.sample_offsets[get_band_id(get_band(gpsl1))] == 4000 * 21
+    # `track` shares the estimator with its input; a `deepcopy` branches it.
+    num_records = length(estimator.records)
+    branch = track(first(chunks), deepcopy(track_state), fs)
+    @test length(estimator.records) == num_records
+    @test length(branch.doppler_estimator.records) > num_records
+    track(first(chunks), track_state, fs)
+    @test length(estimator.records) > num_records
 end
 
 @testset "Tracking with large initial Doppler offset" begin

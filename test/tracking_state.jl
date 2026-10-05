@@ -831,4 +831,58 @@ end
           201.0Hz
 end
 
+@testset "non-mutating constructors give their result its own sample offsets" begin
+    gpsl1 = GPSL1CA()
+    band = GNSSSignals.get_band_id(GNSSSignals.get_band(gpsl1))
+    ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 10.5, 10.0Hz)])
+    ts.sample_offsets[band] = 4000
+    derived_states = (
+        merge_sats(ts, TrackedSat(gpsl1, 2, 11.5, 20.0Hz)),
+        Tracking.add_satellite(ts, :default, TrackedSat(gpsl1, 3, 12.5, 30.0Hz)),
+        remove_satellite(ts; prn = 1),
+        Tracking.reset_start_sample_and_bit_buffer(ts),
+    )
+    for derived in derived_states
+        @test derived.sample_offsets == ts.sample_offsets
+        derived.sample_offsets[band] += 4000
+        @test ts.sample_offsets[band] == 4000
+    end
+    # The in-place mutators keep sharing them with the state they return.
+    @test add_satellite!(ts; prn = 4).sample_offsets === ts.sample_offsets
+end
+
+@testset "constructors carry sample offsets over" begin
+    gpsl1 = GPSL1CA()
+    l1 = GNSSSignals.get_band_id(GNSSSignals.get_band(gpsl1))
+    l5 = GNSSSignals.get_band_id(GNSSSignals.get_band(GPSL5I()))
+    @test TrackState(; signal = gpsl1).sample_offsets == Dict(l1 => 0)
+    @test TrackState(; signal = gpsl1, sample_offsets = Dict(l1 => 8000)).sample_offsets ==
+          Dict(l1 => 8000)
+    # A rebuilt state that adds a band carries the old band's offset and
+    # starts the new one at 0 unless told otherwise; it never aliases the input.
+    old = TrackState(; signal = gpsl1, sample_offsets = (; l1 => 8000))
+    rebuilt = TrackState(;
+        signals = (l1 = (gpsl1,), l5 = (GPSL5I(),)),
+        doppler_estimator = old.doppler_estimator,
+        sample_offsets = old.sample_offsets,
+    )
+    @test rebuilt.sample_offsets == Dict(l1 => 8000, l5 => 0)
+    @test rebuilt.sample_offsets !== old.sample_offsets
+    @test TrackState(
+        gpsl1,
+        [TrackedSat(gpsl1, 1, 10.5, 10.0Hz)];
+        sample_offsets = (; l1 => 4000),
+    ).sample_offsets == Dict(l1 => 4000)
+    @test TrackState(
+        dictionary((1 => TrackedSat(gpsl1, 1, 10.5, 10.0Hz),));
+        sample_offsets = (; l1 => 4000),
+    ).sample_offsets == Dict(l1 => 4000)
+    @test TrackState(
+        (default = dictionary((1 => TrackedSat(gpsl1, 1, 10.5, 10.0Hz),)),);
+        sample_offsets = (; l1 => 4000),
+    ).sample_offsets == Dict(l1 => 4000)
+    @test_throws ArgumentError TrackState(; signal = gpsl1, sample_offsets = (; l5 => 0))
+    @test_throws ArgumentError TrackState(; signal = gpsl1, sample_offsets = (; l1 => -1))
+end
+
 end
