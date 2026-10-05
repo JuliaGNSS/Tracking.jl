@@ -18,7 +18,3 @@ TrackingLoopFilters = "0814aff9-93cb-554c-9fff-9bf1cfdb5efa"
 TrackingLoops = "89eadfff-3a96-4166-8be0-4e8bed6efc30"
 Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 ZipFile = "a5390f91-8eb1-5f08-bee0-b1d1ffed6cea"
-
-[sources]
-Tracking = {path = ".."}
-TrackingLoops = {url = "https://github.com/JuliaGNSS/TrackingLoops.jl"}
