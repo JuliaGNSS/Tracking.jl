@@ -295,6 +295,13 @@ measurement; the estimate phase adds the band's running offset (the
 builds the record. Step every satellite at least every half navigation cycle
 (50 ms by default), which any `track!` call on a shorter chunk does.
 
+The estimator's engine and the state's offsets belong together. A
+`TrackState` built afresh around an estimator that has already run starts
+every band at `0`, so pass the old state's `sample_offsets` to the
+constructor (see [`TrackState`](@ref)). To branch a state, `deepcopy` it
+rather than calling [`track`](@ref) twice on it, since `track` shares the
+estimator with its input.
+
 [`reset_loop_filters!`](@ref) re-seeds the inner loop and keeps the satellite
 in the vector loop. It drops the corrections, which the converged Dopplers
 already contain, until the filter's next cycle sets new ones.
