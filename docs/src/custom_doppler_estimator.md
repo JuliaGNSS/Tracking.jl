@@ -1,9 +1,14 @@
 # Custom Doppler Estimator
 
-Tracking.jl ships [`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL) (and the FLL-assisted
-variant [`ConventionalAssistedPLLAndDLL`](@extref TrackingLoops.ConventionalAssistedPLLAndDLL)), but you can plug in a
-different Doppler-estimation algorithm — e.g. a Kalman filter or a
-joint-channel estimator — by implementing a small set of methods.
+The Doppler estimators are TrackingLoops'. [`track!`](@ref) knows none of them
+in particular: it drives any estimator through TrackingLoops' estimator
+interface, so [`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL) (and the FLL-assisted variant
+[`ConventionalAssistedPLLAndDLL`](@extref TrackingLoops.ConventionalAssistedPLLAndDLL)), [`NCOReferencedPLLAndDLL`](@extref TrackingLoops.NCOReferencedPLLAndDLL), the vector
+loop [`VectorPLLAndDLL`](@extref TrackingLoops.VectorPLLAndDLL) and an estimator of your own are interchangeable:
+pass one as `doppler_estimator` and `track!` runs it.
+
+You can plug in a different Doppler-estimation algorithm, e.g. a Kalman
+filter or a joint-channel estimator, by implementing a small set of methods.
 
 ## Where state lives
 
@@ -76,8 +81,24 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
    itself on handoff. (For in-place estimators, including the
    conventional ones, the returned `TrackState` is the input itself.)
 
-5. **An `estimate_dopplers_and_filter_prompt` method** dispatched on
-   `TrackState{<:Any, <:MyEstimator}`. This is where the actual update
+5. **The per-record step**, in one of two ways.
+
+   **A `step_loop` method** (TrackingLoops' per-record interface) is all
+   `track!` needs. It folds every completed record of the estimator-driver
+   signal (`signals[1]`) through
+   `TrackingLoops.step_loop(estimator, state, record, words, landing_sample)`,
+   which returns the new per-satellite state and the new carrier and code
+   Dopplers. Tracking does the rest: the bit buffer, the C/N₀ estimators,
+   the other signals, the phase snap at sync. Add a
+   `TrackingLoops.reset_estimator_state(estimator, state, carrier_doppler,
+   code_doppler)` method to choose what [`reset_loop_filters!`](@ref) keeps;
+   without one, the reset re-initializes the state. An estimator written this
+   way also runs in a hardware correlator's loop process unchanged.
+
+   **An `estimate_dopplers_and_filter_prompt` method** dispatched on
+   `TrackState{<:Any, <:MyEstimator}` replaces the whole estimate phase
+   instead, for an estimator that does not fit a per-record step, e.g. one
+   that steps every satellite jointly. This is where the actual update
    logic runs, once per **chunk** (see [Chunked Doppler updates](track.md#Chunked-Doppler-updates)).
    It walks each group in `track_state.groups`, reads the band's
    `BandMeasurement` from the `measurements::BandMeasurements` NamedTuple via
@@ -114,10 +135,10 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
 
 ## Skeleton
 
-The skeleton below is the smallest possible working estimator: every
-method returns a constant. Real estimators replace these bodies with
-the actual algorithm, but the *structure* — five methods, two structs
-— is what the rest of `Tracking.jl` dispatches on.
+The skeleton below is the smallest possible working estimator that replaces
+the estimate phase: every method returns a constant. Real estimators replace
+these bodies with the actual algorithm, but the *structure* — five methods,
+two structs — is what the rest of `Tracking.jl` dispatches on.
 
 ```jldoctest myestimator
 julia> using Tracking, TrackingLoops, GNSSSignals
@@ -180,15 +201,15 @@ julia> get_doppler_estimator_state(get_sat_state(track_state, 1))
 SatMyEstimator()
 ```
 
-The existing [`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL) implementation in
-`src/conventional_pll_and_dll.jl` shows the full pattern, including how
-the immutable and in-place forms share a `_update_tracked_sat_doppler`
-helper so they cannot drift, and how the per-signal walk distinguishes
-the [estimator-driver signal](tracking_state.md#Estimator-driver-signal)
-(`signals[1]`, which drives the conventional PLL/DLL) from the other
-signals (which only have their prompts filtered).
-That split is a convention `ConventionalPLLAndDLL` chooses — your own
-estimator can use every signal's state any way you like.
+The generic estimate phase in `src/conventional_pll_and_dll.jl` shows the
+full pattern, including how the immutable and in-place forms share a
+`_update_tracked_sat_doppler` helper so they cannot drift, and how the
+per-signal walk distinguishes the
+[estimator-driver signal](tracking_state.md#Estimator-driver-signal)
+(`signals[1]`, whose records are folded through `step_loop`) from the other
+signals (which only have their prompts filtered). That split is a convention
+of the per-record path — an estimator that replaces the estimate phase can
+use every signal's state any way you like.
 
 ## What stays generic
 
@@ -244,3 +265,32 @@ In the TrackingLoops manual:
 - [`scheduled_words`](@extref TrackingLoops.scheduled_words)
 - [`mean_nco_word`](@extref TrackingLoops.mean_nco_word)
 - [`FixedNCOWord`](@extref TrackingLoops.FixedNCOWord)
+
+### The vector loop
+
+`VectorPLLAndDLL(inner)` wraps either loop above, and `track!` drives it like
+any other estimator: through `step_loop`. Out of the vector loop it is `inner`, bit for bit. A
+navigation filter takes a satellite over by writing into its per-satellite
+state between two `track!` calls: it enables the vector loop and sets the code
+and carrier corrections. From then on `track!` steers the replica with those
+corrections and accumulates the DLL and FLL discriminators the filter reads at
+its next cycle. TrackingLoops' `update_navigation!` is that filter. It reads and
+writes the states through its `VTSat` slots, so a receiver copies each
+satellite's `get_doppler_estimator_state` into its slot before the cycle and
+writes the slot's state back after it:
+
+```julia
+sats = get_sat_states(track_state)
+sats[prn] = TrackedSat(sats[prn]; doppler_estimator_state = slot.estimator_state)
+```
+
+[`reset_loop_filters!`](@ref) re-seeds the inner loop and keeps the satellite
+in the vector loop. It drops the corrections, which the converged Dopplers
+already contain, until the filter's next cycle sets new ones.
+
+In the TrackingLoops manual:
+
+- [`VectorPLLAndDLL`](@extref TrackingLoops.VectorPLLAndDLL)
+- [`SatVectorPLLAndDLL`](@extref TrackingLoops.SatVectorPLLAndDLL)
+- [`update_navigation!`](@extref TrackingLoops.update_navigation!)
+- [`VTSat`](@extref TrackingLoops.VTSat)
