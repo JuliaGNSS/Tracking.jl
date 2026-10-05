@@ -63,7 +63,9 @@ end
 # `words` and `landing_sample` are what a hardware correlator's link adds: the
 # NCO words each record really ran on and the device sample the command
 # computed from this fold lands at. Through the software receiver they are the
-# satellite's own Doppler and `NO_LANDING_SAMPLE`.
+# satellite's own Doppler and `NO_LANDING_SAMPLE`. `sample_offset` moves the
+# records from the current measurement's sample origin onto the band's running
+# one (`TrackState`'s `sample_offsets`).
 function _update_tracked_sat_doppler(
     sat::TrackedSat,
     estimator::AbstractDopplerEstimator,
@@ -71,6 +73,7 @@ function _update_tracked_sat_doppler(
     noise::Tuple,
     words = _software_words(sat),
     landing_sample::Int64 = NO_LANDING_SAMPLE,
+    sample_offset::Int = 0,
 )
     # Walk all signals. For each one whose integration completed this
     # iteration, normalize/filter its prompt, advance CN0 and bit buffer, and
@@ -100,6 +103,7 @@ function _update_tracked_sat_doppler(
             driver_carrier_phase,
             words,
             landing_sample,
+            sample_offset,
         )
 
     new_tail = _process_passenger_signals(
@@ -232,6 +236,7 @@ end
     driver_carrier_phase::Real,
     words,
     landing_sample::Int64,
+    sample_offset::Int = 0,
 )
     outputs = tracked_signal.correlator_outputs
     if isempty(outputs)
@@ -269,6 +274,8 @@ end
             driver_carrier_phase;
             correlated_pre_sync = synced_earlier_in_fold,
         )
+        # The record names its satellite, and sits on the band's running sample
+        # grid, for an estimator that keeps per-satellite state of its own.
         record = LoopRecord(
             signal,
             filtered_correlator,
@@ -277,6 +284,8 @@ end
             integrated_code_blocks,
             sampling_frequency;
             fold_end,
+            prn = sat.prn,
+            sample_offset,
         )
         state, carrier_doppler, code_doppler =
             step_loop(estimator, state, record, words, landing_sample)
@@ -428,14 +437,26 @@ end
     estimator::AbstractDopplerEstimator,
     sampling_frequencies::Union{BandMeasurements,NamedTuple,AbstractDict},
     noise_estimators::NamedTuple,
+    sample_offsets::Dict{Symbol,Int},
 )
     vals = g.satellites.values
     isempty(vals) && return nothing
-    sampling_frequency = _band_sampling_frequency(sampling_frequencies, get_band_id(g.band))
+    band_id = get_band_id(g.band)
+    sampling_frequency = _band_sampling_frequency(sampling_frequencies, band_id)
+    sample_offset = get(sample_offsets, band_id, 0)
     noise = _signal_noise_densities(noise_estimators, eltype(g.satellites))
     _warn_noise_density_missing(eltype(g.satellites), noise, noise_estimators)
     @inbounds for i in eachindex(vals)
-        vals[i] = _update_tracked_sat_doppler(vals[i], estimator, sampling_frequency, noise)
+        sat = vals[i]
+        vals[i] = _update_tracked_sat_doppler(
+            sat,
+            estimator,
+            sampling_frequency,
+            noise,
+            _software_words(sat),
+            NO_LANDING_SAMPLE,
+            sample_offset,
+        )
     end
     return nothing
 end
@@ -510,6 +531,7 @@ function estimate_dopplers_and_filter_prompt!(
         track_state.doppler_estimator,
         sampling_frequencies,
         track_state.noise_estimators,
+        track_state.sample_offsets,
     )
     return track_state
 end

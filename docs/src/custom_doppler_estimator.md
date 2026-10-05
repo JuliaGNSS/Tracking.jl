@@ -108,7 +108,8 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
    Each signal's correlator outputs completed during the chunk are in its
    `correlator_outputs::Vector{`[`CorrelatorOutput`](@extref TrackingLoops.CorrelatorOutput)`}` (a chunk may hold
    zero, one, or several per signal), each carrying the raw correlator, its
-   integrated-sample count, and the end sample index.
+   integrated-sample count, the end sample index (counted from the current
+   measurement's first sample) and the replica's code phase there.
    Fold over them in order — threading whatever filter state you carry — and
    write the NCO Doppler once (typically from the last output). Empty each
    signal's `correlator_outputs` when done, and remember the NCO Doppler is held
@@ -268,21 +269,31 @@ In the TrackingLoops manual:
 
 ### The vector loop
 
-`VectorPLLAndDLL(inner)` wraps either loop above, and `track!` drives it like
-any other estimator: through `step_loop`. Out of the vector loop it is `inner`, bit for bit. A
-navigation filter takes a satellite over by writing into its per-satellite
-state between two `track!` calls: it enables the vector loop and sets the code
-and carrier corrections. From then on `track!` steers the replica with those
-corrections and accumulates the DLL and FLL discriminators the filter reads at
-its next cycle. TrackingLoops' `update_navigation!` is that filter. It reads and
-writes the states through its `VTSat` slots, so a receiver copies each
-satellite's `get_doppler_estimator_state` into its slot before the cycle and
-writes the slot's state back after it:
+`VectorPLLAndDLL(signals...)` is a Doppler estimator like the loops above, and
+`track!` drives it like any other: through `step_loop`, with nothing
+vector-specific in between. Inside that step its navigation engine decodes
+every satellite's navigation bits, solves the PVT, and from its first fix on
+closes all the satellites' loops at once with a navigation filter. Read its
+results off the estimator: `navigation_solution(estimator)` and
+`navigation_status(estimator)`.
 
 ```julia
-sats = get_sat_states(track_state)
-sats[prn] = TrackedSat(sats[prn]; doppler_estimator_state = slot.estimator_state)
+estimator = VectorPLLAndDLL(GPSL1CA())
+track_state = TrackState(; signal = GPSL1CA(), doppler_estimator = estimator)
+for chunk in chunks
+    track!(chunk, track_state, sampling_frequency)
+end
+navigation_solution(estimator)
 ```
+
+It needs three things of each record, which `track!` provides for every
+estimator: the satellite (the `LoopRecord`'s `prn`), the replica's code phase
+at the record's end (`code_phase`), and one time grid for all satellites of a
+band. The correlate phase counts samples from the start of the current
+measurement; the estimate phase adds the band's running offset (the
+`TrackState`'s `sample_offsets`, advanced by every `track!` call) when it
+builds the record. Step every satellite at least every half navigation cycle
+(50 ms by default), which any `track!` call on a shorter chunk does.
 
 [`reset_loop_filters!`](@ref) re-seeds the inner loop and keeps the satellite
 in the vector loop. It drops the corrections, which the converged Dopplers
@@ -292,5 +303,4 @@ In the TrackingLoops manual:
 
 - [`VectorPLLAndDLL`](@extref TrackingLoops.VectorPLLAndDLL)
 - [`SatVectorPLLAndDLL`](@extref TrackingLoops.SatVectorPLLAndDLL)
-- [`update_navigation!`](@extref TrackingLoops.update_navigation!)
-- [`VTSat`](@extref TrackingLoops.VTSat)
+- [`LoopRecord`](@extref TrackingLoops.LoopRecord)
