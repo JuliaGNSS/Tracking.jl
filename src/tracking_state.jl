@@ -1120,7 +1120,8 @@ Re-seed the Doppler-estimator state of every satellite (or one addressed
 satellite) from its current Doppler, giving each a freshly initialized loop
 filter. For the conventional PLL/DLL estimator this zeroes the loop-filter
 integrators while keeping `carrier_doppler` / `code_doppler` and any
-per-satellite bandwidth override. Each signal's
+per-satellite bandwidth override, and restarts the carrier loop's staging on
+the FLL-assisted PLL (see [`Tracking.FrequencyLockIndicator`](@ref)). Each signal's
 `last_fully_integrated_filtered_prompt` is cleared too, so the first FLL update
 doesn't span the old integration interval.
 

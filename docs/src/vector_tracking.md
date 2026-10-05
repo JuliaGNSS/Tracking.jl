@@ -27,10 +27,11 @@ satellite's estimator-driver signal (`signals[1]`) completes an integration,
 
   - **`vt_on = false` — scalar fallback.** The satellite runs an ordinary
     FLL-assisted PLL and DLL, identical to
-    [`ConventionalAssistedPLLAndDLL`](@ref) (same default loop-filter types
-    and the same auto-sized loop bandwidths). This is the pull-in mode a
-    freshly acquired satellite tracks in until [`enable_vt!`](@ref) puts it
-    into the vector loop.
+    [`ConventionalAssistedPLLAndDLL`](@ref) (same default loop-filter types,
+    the same auto-sized loop bandwidths and the same
+    [carrier loop staging](@ref "Carrier loop staging")). This is the
+    pull-in mode a freshly acquired satellite tracks in until
+    [`enable_vt!`](@ref) puts it into the vector loop.
 
   - **`vt_on = true` — vector closure.** The navigation filter drives the
     NCOs instead of the local loop filters:
@@ -47,7 +48,15 @@ satellite's estimator-driver signal (`signals[1]`) completes an integration,
 
     In this mode the DLL and FLL discriminator outputs and the prompt
     magnitude are **accumulated** on the per-sat state for the navigation
-    filter to read and reset.
+    filter to read and reset. The carrier loop is not staged: it stays
+    FLL-assisted and runs no frequency lock indicator. Its discriminators turn
+    four-quadrant as in the scalar loop
+    ([carrier loop staging](@ref "Carrier loop staging")), so on a wiped-off
+    prompt the FLL readings the navigation filter gets range over ±1/(2T)
+    instead of ±1/(4T); a receiver can tell from `get_data_frequency`,
+    `get_secondary_code_length` and `has_bit_or_secondary_code_been_found`.
+    Vector tracking is enabled long after the sync, so the PLL's switch is
+    behind it.
 
 The satellite-shared carrier/code Doppler is always updated through the same
 carrier-aiding (`aid_dopplers`) used by the conventional estimator, and the

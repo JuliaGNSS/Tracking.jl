@@ -1163,3 +1163,30 @@ function reset(bit_buffer::BitBuffer{B}) where {B<:Unsigned}
         bit_buffer.phase_acc,
     )
 end
+
+# Whether the replica wipes every sign modulation off the signal's prompt, so
+# that consecutive prompts share their sign: a dataless signal, synced to its
+# secondary code where it has one. `synced` must hold for the record's
+# correlation, i.e. before the fold.
+@inline _is_wiped_off(signal::AbstractGNSSSignal, synced::Bool) =
+    iszero(get_data_frequency(signal)) && (get_secondary_code_length(signal) == 1 || synced)
+
+# The polarity of a pilot's prompt according to its secondary-code sync, which
+# the four-quadrant PLL reads the prompt with, or 0 for the Costas one:
+# a data signal, a pilot before its sync, and a pilot without a secondary code
+# (GPS L2 CL, Galileo E5a-QP), whose sync reads no sign. The sync reads it off
+# one whole secondary period of the prompt summed with the code wiped off. That
+# sum was correlated with a pre-sync replica, which carries secondary chip 0 on
+# every block, so the post-sync prompt has the sync polarity times chip 0. The
+# switch may be a half-cycle jump; for both this and the pilots without a
+# secondary code, see "Carrier loop staging" in docs/src/loop_filter.md.
+@inline function _sync_polarity(
+    signal::AbstractGNSSSignal,
+    bit_buffer::BitBuffer,
+    prn::Integer,
+)
+    _is_wiped_off(signal, bit_buffer.found) && get_secondary_code_length(signal) > 1 ||
+        return Int8(0)
+    chip0 = GNSSSignals.secondary_value(get_secondary_code(signal), prn, 0)
+    Int8(bit_buffer.polarity * sign(chip0))
+end

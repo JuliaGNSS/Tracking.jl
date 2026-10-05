@@ -448,11 +448,13 @@ end
     @test get_cn0_estimator(full_bit[1], 1).num_records_per_ratio == 20
     capped_cn0 = [ustrip(uconvert(dBHz, estimate_cn0(state, 1))) for state in faded]
     full_bit_cn0 = [ustrip(uconvert(dBHz, estimate_cn0(state, 1))) for state in full_bit]
-    # Over 96 seeds in groups of 16: the capped median stayed in 23.4–24.8 and
-    # beat the whole-bit window by 1.1–6.1 dB (4.5 dB for these seeds). Eight
-    # seeds are not enough.
-    @test median_of(capped_cn0) ≈ 25 atol = 3.5
-    @test median_of(capped_cn0) - median_of(full_bit_cn0) > 1
+    # The cap pays off where the carrier phase wanders within a bit. With the
+    # FLL-assisted loop it did (the whole-bit window read 19.6 dB-Hz for these
+    # seeds, 4.5 dB under the capped one); the staged loop has dropped the FLL
+    # by the fade, and the whole-bit window reads 24.7 dB-Hz, the capped one
+    # 25.1. Eight seeds are not enough.
+    @test median_of(capped_cn0) ≈ 25 atol = 1.5
+    @test median_of(capped_cn0) >= median_of(full_bit_cn0)
 end
 
 end

@@ -80,6 +80,65 @@ Override per signal by defining methods of
 [`default_code_loop_filter_bandwidth`](@ref), or override at construction
 time by passing your own `doppler_estimator =` to `TrackState`.
 
+## Carrier loop staging
+
+Every satellite's carrier loop starts as an FLL-assisted PLL and drops the FLL
+once its frequency has converged, along Kaplan & Hegarty's closure sequence
+(§5.3, §5.5): "apply the error inputs from both discriminators as an
+FLL-assisted PLL until phase lock is achieved, then convert to pure PLL". There
+is no down-staging: the pure PLL stays until [`reset_loop_filters!`](@ref)
+restarts the staging.
+
+  - **Frequency lock** is declared once the mean FLL discriminator, the
+    residual frequency error, stays below [`frequency_lock_threshold`](@ref)
+    (3 Hz, at most 1/(16T) on long records, a quarter of the two-quadrant FLL's
+    range) over a
+    [`frequency_lock_window`](@ref) (0.5 s, at least four records). The window
+    mean is the phase advance across the window over its length, so its noise
+    falls with the window length rather than with each record's SNR. Both are
+    overridable per signal type. Kaplan & Hegarty's phase lock indicator
+    (§5.11.2), specified unnormalised for 20 ms updates, never declares lock at
+    1 ms and 30 dB-Hz, which would leave the noisy FLL branch in.
+  - **The pure PLL** is the FLL-assisted filter with a zero FLL input, which is
+    exactly the third-order PLL `ThirdOrderBilinearLF` (same state, same
+    coefficients), so the switch costs nothing and leaves no transient. The FLL
+    discriminator is no longer formed.
+  - **Four-quadrant discriminators** apply where the replica wipes every sign
+    modulation off the prompt: a dataless signal
+    (`get_data_frequency(signal) == 0`), synced to its secondary code where it
+    has one.
+      * The FLL is four-quadrant (twice the pull-in range) from the first
+        record correlated after that sync, and from the start for the pilots
+        without a secondary code (GPS L2 CL, Galileo E5a-QP). It needs no sign,
+        only that consecutive prompts share it.
+      * The PLL is four-quadrant (linear over ±180°, worth up to 6 dB of
+        threshold) from the same record on, reading the prompt with the sign
+        the secondary-code sync found. A short overlay (GPS L5Q's 20 ms) can
+        sync while the loop is still pulling in, and a Costas slip after it
+        makes the switch a half-cycle jump of the carrier phase: the start of
+        the resolved phase, not part of a continuous one.
+      * The pilots without a secondary code (GPS L2 CL, Galileo E5a-QP) keep
+        the Costas PLL. That is a choice, not a necessity: their prompt keeps
+        its sign too, so the PLL could turn four-quadrant with the sign the
+        Costas loop holds. But without a sync that sign is arbitrary, so the
+        switch would leave the carrier phase unresolved, and it would have to
+        be taken off a single noisy prompt; the wider range alone was not
+        considered worth that.
+
+    Data signals stay on the two-quadrant (Costas) discriminators. At the sync
+    a pilot drops its previous prompt, which lacked the wipe-off, so the
+    four-quadrant FLL never compares across it.
+
+With a carrier filter other than the FLL-assisted one the loop is a PLL from the
+start and runs no frequency lock indicator. The indicator is held per
+satellite:
+
+```@docs
+Tracking.FrequencyLockIndicator
+frequency_lock_window
+frequency_lock_threshold
+```
+
 ## Doppler Estimators
 
 ```@docs

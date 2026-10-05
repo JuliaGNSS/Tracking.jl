@@ -20,6 +20,8 @@ vector-tracking (VT) interface to an external navigation filter
     While `false` the satellite runs a conventional (scalar) PLL/DLL as a
     fallback and nothing is accumulated. Set by [`enable_vt!`](@ref) /
     [`disable_vt!`](@ref).
+  - `frequency_lock`: the carrier loop's [`FrequencyLockIndicator`](@ref), run
+    as in the conventional estimator while `vt_on` is unset.
 """
 @kwdef struct SatVectorPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     init_carrier_doppler::typeof(1.0Hz)
@@ -33,6 +35,7 @@ vector-tracking (VT) interface to an external navigation filter
     carrier_discr_acc::Tuple{Int,typeof(0.0Hz)} = (0, 0.0Hz)
     carrier_freq_update::typeof(0.0Hz) = 0.0Hz
     vt_on::Bool = false
+    frequency_lock::FrequencyLockIndicator = FrequencyLockIndicator()
 end
 
 function SatVectorPLLAndDLL(
@@ -63,6 +66,7 @@ function SatVectorPLLAndDLL(
     carrier_discr_acc::Maybe{Tuple{Int,typeof(0.0Hz)}} = nothing,
     carrier_freq_update::Maybe{typeof(0.0Hz)} = nothing,
     vt_on::Maybe{Bool} = nothing,
+    frequency_lock::Maybe{FrequencyLockIndicator} = nothing,
 ) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     SatVectorPLLAndDLL{CA,CO}(
         sat_vector_pll_and_dll.init_carrier_doppler,
@@ -84,6 +88,7 @@ function SatVectorPLLAndDLL(
         isnothing(carrier_freq_update) ? sat_vector_pll_and_dll.carrier_freq_update :
         carrier_freq_update,
         isnothing(vt_on) ? sat_vector_pll_and_dll.vt_on : vt_on,
+        isnothing(frequency_lock) ? sat_vector_pll_and_dll.frequency_lock : frequency_lock,
     )
 end
 
@@ -103,6 +108,8 @@ integration:
   - This estimator accumulates each satellite's DLL / FLL discriminator
     outputs for the navigation filter to consume (and reset via
     [`reset_code_discr_acc!`](@ref) / [`reset_carrier_discr_acc!`](@ref)).
+    The FLL readings are four-quadrant on a wiped-off prompt, see
+    [The per-integration contract](@ref).
   - The navigation filter feeds NCO corrections back via
     [`set_code_freq_updates!`](@ref) / [`set_carrier_freq_updates!`](@ref).
     While a satellite's `vt_on` flag is set, its code Doppler follows the
@@ -185,10 +192,11 @@ function init_estimator_state(
     )
 end
 
-# Re-seed hook used by `reset_loop_filters!`, as for the conventional estimator,
-# plus zeroing the discriminator accumulators and the NCO corrections: the
-# current Dopplers already contain the last correction, so keeping it would
-# apply it twice. Bandwidths and `vt_on` survive the reset.
+# Re-seed hook used by `reset_loop_filters!`, as for the conventional estimator
+# (the carrier loop's staging restarts too), plus zeroing the discriminator
+# accumulators and the NCO corrections: the current Dopplers already contain the
+# last correction, so keeping it would apply it twice. Bandwidths and `vt_on`
+# survive the reset.
 function _reset_estimator_state(
     ::VectorPLLAndDLL,
     sat::TrackedSat{<:Tuple{Vararg{TrackedSignal}},<:SatVectorPLLAndDLL},
@@ -208,6 +216,10 @@ end
 # The vector closure of one record, plugged into the shared driver fold by
 # dispatch on the per-sat state; with `vt_on` unset it is the scalar closure. See
 # "The per-integration contract" in docs/src/vector_tracking.md.
+#
+# The vector closure is not staged: it stays FLL-assisted and does not run the
+# frequency lock indicator. Its carrier discriminators are picked as in the scalar
+# closure.
 @inline function _close_loops(
     state::SatVectorPLLAndDLL,
     signal::AbstractGNSSSignal,
@@ -218,6 +230,8 @@ end
     integration_time,
     carrier_bandwidth,
     code_bandwidth,
+    wiped_off::Bool,
+    polarity::Int8,
 )
     state.vt_on || return _close_scalar_loops(
         state,
@@ -229,9 +243,17 @@ end
         integration_time,
         carrier_bandwidth,
         code_bandwidth,
+        wiped_off,
+        polarity,
     )
-    pll_discriminator = pll_disc(signal, correlator)
-    fll_discriminator = fll_disc(signal, correlator, previous_prompt, integration_time)
+    pll_discriminator = pll_disc(signal, correlator; polarity)
+    fll_discriminator = fll_disc(
+        signal,
+        correlator,
+        previous_prompt,
+        integration_time;
+        four_quadrant = wiped_off,
+    )
     dll_discriminator = dll_disc(signal, correlator, code_doppler, sampling_frequency)
     carrier_freq_update, carrier_loop_filter = calculate_carrier_frequency_update(
         state.carrier_loop_filter,

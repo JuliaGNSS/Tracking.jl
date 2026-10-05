@@ -60,8 +60,80 @@ default 1 Hz.
 end
 
 """
+$(SIGNATURES)
+
+Window of the frequency lock indicator for `signal` at the record length
+`integration_time`: the FLL is dropped once its mean reading over this window
+stays below [`frequency_lock_threshold`](@ref). By default 0.5 s, and at least
+four records. Override by defining a method for your signal type.
+"""
+frequency_lock_window(signal::AbstractGNSSSignal, integration_time) =
+    max(0.5s, uconvert(s, 4 * integration_time))
+
+"""
+$(SIGNATURES)
+
+Threshold of the frequency lock indicator for `signal` at the record length
+`integration_time`, see [`frequency_lock_window`](@ref). By default 3 Hz, and at
+most 1/(16T), a quarter of the two-quadrant FLL's range and an eighth of the
+four-quadrant one's (0.04 Hz at GPS L2 CL's 1.5 s). Override by defining a method
+for your signal type.
+"""
+frequency_lock_threshold(signal::AbstractGNSSSignal, integration_time) =
+    min(3.0Hz, uconvert(Hz, 1 / (16 * integration_time)))
+
+"""
+$(TYPEDEF)
+
+The frequency lock indicator of a satellite's carrier loop: FLL-assisted until
+`locked` latches, a pure PLL after, until [`reset_loop_filters!`](@ref).
+See [Carrier loop staging](@ref).
+
+$(TYPEDFIELDS)
+"""
+struct FrequencyLockIndicator
+    """
+    FLL readings integrated over the current window
+    """
+    integrated_frequency_error::typeof(1.0Hz * 1.0s)
+    """
+    Length of the current window
+    """
+    window_time::typeof(1.0s)
+    """
+    Whether frequency lock has been declared (latched)
+    """
+    locked::Bool
+end
+
+FrequencyLockIndicator() = FrequencyLockIndicator(0.0Hz * 0.0s, 0.0s, false)
+
+# Advance the frequency lock indicator by one record's FLL reading, in windows
+# of `frequency_lock_window`. A record without a previous prompt has no FLL
+# reading and is left out; a latched lock is kept as is.
+@inline function _update_frequency_lock(
+    indicator::FrequencyLockIndicator,
+    signal::AbstractGNSSSignal,
+    fll_discriminator,
+    previous_prompt::Complex,
+    integration_time,
+)
+    (indicator.locked || iszero(previous_prompt)) && return indicator
+    dt = uconvert(s, integration_time)
+    integrated_error = indicator.integrated_frequency_error + fll_discriminator * dt
+    window_time = indicator.window_time + dt
+    window_time < frequency_lock_window(signal, integration_time) &&
+        return FrequencyLockIndicator(integrated_error, window_time, false)
+    locked =
+        abs(integrated_error / window_time) <
+        frequency_lock_threshold(signal, integration_time)
+    FrequencyLockIndicator(0.0Hz * 0.0s, 0.0s, locked)
+end
+
+"""
 Per-satellite state for the conventional PLL and DLL Doppler estimator.
-Holds initial Doppler values and loop filter states.
+Holds initial Doppler values, loop filter states and the carrier loop's
+[`FrequencyLockIndicator`](@ref).
 """
 @kwdef struct SatConventionalPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     init_carrier_doppler::typeof(1.0Hz)
@@ -70,6 +142,7 @@ Holds initial Doppler values and loop filter states.
     code_loop_filter::CO = SecondOrderBilinearLF()
     carrier_loop_filter_bandwidth::typeof(1.0Hz) = 18.0Hz
     code_loop_filter_bandwidth::typeof(1.0Hz) = 1.0Hz
+    frequency_lock::FrequencyLockIndicator = FrequencyLockIndicator()
 end
 
 function SatConventionalPLLAndDLL(
@@ -86,6 +159,7 @@ function SatConventionalPLLAndDLL(
         code_loop_filter,
         carrier_loop_filter_bandwidth,
         code_loop_filter_bandwidth,
+        FrequencyLockIndicator(),
     )
 end
 
@@ -95,6 +169,7 @@ function SatConventionalPLLAndDLL(
     code_loop_filter::Maybe{CO} = nothing,
     carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
     code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
+    frequency_lock::Maybe{FrequencyLockIndicator} = nothing,
 ) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     SatConventionalPLLAndDLL{CA,CO}(
         sat_conventional_pll_and_dll.init_carrier_doppler,
@@ -109,6 +184,8 @@ function SatConventionalPLLAndDLL(
         isnothing(code_loop_filter_bandwidth) ?
         sat_conventional_pll_and_dll.code_loop_filter_bandwidth :
         code_loop_filter_bandwidth,
+        isnothing(frequency_lock) ? sat_conventional_pll_and_dll.frequency_lock :
+        frequency_lock,
     )
 end
 
@@ -212,6 +289,7 @@ function init_estimator_state(
         code_loop_filter,
         carrier_loop_filter_bandwidth,
         code_loop_filter_bandwidth,
+        FrequencyLockIndicator(),
     )
 end
 
@@ -221,9 +299,9 @@ end
 _reset_estimator_state(estimator::AbstractDopplerEstimator, sat::TrackedSat) =
     init_estimator_state(estimator, sat)
 
-# Zero the loop-filter integrators and re-seed the init Dopplers from the sat's
-# current Dopplers, but keep the existing per-sat bandwidths so a per-sat
-# override survives the reset.
+# Zero the loop-filter integrators, restart the carrier loop's staging, and
+# re-seed the init Dopplers from the sat's current Dopplers, but keep the
+# existing per-sat bandwidths so a per-sat override survives the reset.
 function _reset_estimator_state(
     ::ConventionalPLLAndDLL,
     sat::TrackedSat{<:Tuple{Vararg{TrackedSignal}},<:SatConventionalPLLAndDLL},
@@ -236,6 +314,7 @@ function _reset_estimator_state(
         constructorof(typeof(state.code_loop_filter))(),
         state.carrier_loop_filter_bandwidth,
         state.code_loop_filter_bandwidth,
+        FrequencyLockIndicator(),
     )
 end
 
@@ -310,7 +389,7 @@ function _update_tracked_sat_doppler(sat::TrackedSat, sampling_frequency, noise:
         just_synced ? _snap_code_phase_from_synced_signal(new_signals, sat.code_phase) :
         sat.code_phase
     final_signals =
-        just_synced ? map(_reset_inflight_integration, new_signals) : new_signals
+        just_synced ? map(_reset_on_snap, sat.signals, new_signals) : new_signals
 
     TrackedSat(
         sat;
@@ -326,6 +405,26 @@ end
 # `_update_tracked_sat_doppler`), leaving all other per-signal state intact.
 @inline _reset_inflight_integration(s::TrackedSignal) =
     TrackedSignal(s; correlator = zero(s.correlator), integrated_samples = 0)
+
+# The reset at the sync phase snap, given a signal before and after the fold. A
+# signal whose prompt this sync wipes off (a pilot synced to its secondary code)
+# also drops its previous prompt: it was correlated without the wipe-off and
+# may differ in sign from the next record, which the four-quadrant FLL would
+# read as half a cycle of rotation. A zero prompt makes the FLL skip that
+# record, as after `reset_loop_filters!`.
+@inline function _reset_on_snap(old::TrackedSignal, new::TrackedSignal)
+    s = _reset_inflight_integration(new)
+    newly_wiped_off =
+        _is_wiped_off(new.signal, new.bit_buffer.found) &&
+        !_is_wiped_off(old.signal, old.bit_buffer.found)
+    newly_wiped_off ?
+    TrackedSignal(
+        s;
+        last_fully_integrated_filtered_prompt = zero(
+            s.last_fully_integrated_filtered_prompt,
+        ),
+    ) : s
+end
 
 # The loops lock the driver onto the real axis; this rotation brings a
 # component's bit-buffer prompt back onto it, so a quadrature component (GPS L5 /
@@ -495,6 +594,10 @@ end
     carrier_doppler = sat.carrier_doppler
     code_doppler = sat.code_doppler
     found_before_fold = has_bit_or_secondary_code_been_found(ts.bit_buffer)
+    # Every record of the chunk was correlated before this fold, so the sync
+    # state from before the fold decides which carrier discriminators apply.
+    wiped_off = _is_wiped_off(signal, found_before_fold)
+    polarity = _sync_polarity(signal, ts.bit_buffer, sat.prn)
     @inbounds for k in eachindex(outputs)
         output = outputs[k]
         # The FLL's previous prompt (the previous chunk's last for the first
@@ -540,6 +643,8 @@ end
             integration_time,
             carrier_bandwidth,
             code_bandwidth,
+            wiped_off,
+            polarity,
         )
         carrier_doppler, code_doppler = aid_dopplers(
             signal,
@@ -560,9 +665,13 @@ end
 
 # Close the scalar loops for one record: form the discriminators the filters
 # read, run them through the loop filters held in the per-sat state, and return
-# the two NCO updates and the state carrying the advanced filters. Any per-sat
-# state with the `carrier_loop_filter` / `code_loop_filter` fields and a
-# `_with_loop_state` method will do.
+# the two NCO updates and the state carrying the advanced filters and frequency
+# lock indicator. Any per-sat state with the `carrier_loop_filter`,
+# `code_loop_filter` and `frequency_lock` fields and a `_with_loop_state` method
+# will do.
+#
+# The carrier loop is staged (see `FrequencyLockIndicator`); `wiped_off` and
+# `polarity` pick its discriminators (see `pll_disc`, `fll_disc`).
 @inline function _close_scalar_loops(
     state,
     signal::AbstractGNSSSignal,
@@ -573,12 +682,29 @@ end
     integration_time,
     carrier_bandwidth,
     code_bandwidth,
+    wiped_off::Bool,
+    polarity::Int8,
 )
-    pll_discriminator = pll_disc(signal, correlator)
-    # Only formed for a carrier filter that reads it.
-    fll_discriminator =
-        _uses_fll(state.carrier_loop_filter) ?
-        fll_disc(signal, correlator, previous_prompt, integration_time) : 0.0Hz
+    pll_discriminator = pll_disc(signal, correlator; polarity)
+    # Only formed for a carrier filter that reads it, until frequency lock.
+    frequency_lock = state.frequency_lock
+    fll_discriminator = 0.0Hz
+    if _uses_fll(state.carrier_loop_filter) && !frequency_lock.locked
+        fll_discriminator = fll_disc(
+            signal,
+            correlator,
+            previous_prompt,
+            integration_time;
+            four_quadrant = wiped_off,
+        )
+        frequency_lock = _update_frequency_lock(
+            frequency_lock,
+            signal,
+            fll_discriminator,
+            previous_prompt,
+            integration_time,
+        )
+    end
     dll_discriminator = dll_disc(signal, correlator, code_doppler, sampling_frequency)
     carrier_freq_update, carrier_loop_filter = calculate_carrier_frequency_update(
         state.carrier_loop_filter,
@@ -595,7 +721,7 @@ end
     )
     carrier_freq_update,
     code_freq_update,
-    _with_loop_state(state; carrier_loop_filter, code_loop_filter)
+    _with_loop_state(state; carrier_loop_filter, code_loop_filter, frequency_lock)
 end
 
 # A per-sat state with some of its fields replaced, through the state type's
