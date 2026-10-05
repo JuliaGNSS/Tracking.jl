@@ -409,12 +409,14 @@ function TrackState(
     groups::Maybe{G} = nothing,
     doppler_estimator::Maybe{DE} = nothing,
     noise_estimators::Maybe{NE} = nothing,
+    sample_offsets::Maybe{Dict{Symbol,Int}} = nothing,
 ) where {G<:SignalGroups,DE<:AbstractDopplerEstimator,NE<:NoiseEstimators}
     TrackState{G,DE,NE}(
         isnothing(groups) ? track_state.groups : groups,
         isnothing(doppler_estimator) ? track_state.doppler_estimator : doppler_estimator,
         isnothing(noise_estimators) ? track_state.noise_estimators : noise_estimators,
         track_state.noise_descriptor,
+        isnothing(sample_offsets) ? track_state.sample_offsets : sample_offsets,
     )
 end
 
@@ -571,6 +573,7 @@ function merge_sats(
         new_estimator,
         track_state.noise_estimators,
         track_state.noise_descriptor,
+        track_state.sample_offsets,
     )
 end
 
@@ -668,6 +671,7 @@ function add_satellite!(
         new_estimator,
         track_state.noise_estimators,
         track_state.noise_descriptor,
+        track_state.sample_offsets,
     )
 end
 
@@ -773,6 +777,7 @@ function add_satellite(
         new_estimator,
         track_state.noise_estimators,
         track_state.noise_descriptor,
+        track_state.sample_offsets,
     )
 end
 
@@ -840,6 +845,7 @@ function remove_satellite(
         track_state.doppler_estimator,
         track_state.noise_estimators,
         track_state.noise_descriptor,
+        track_state.sample_offsets,
     )
 end
 

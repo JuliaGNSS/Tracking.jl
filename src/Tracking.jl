@@ -230,12 +230,23 @@ backend's parallel loop can reach them through a single pointer instead of a
 by-value copy (see `_park_noise_items!`). It is shared — not copied — by every
 `TrackState` derived from this one, exactly as the per-satellite scratch vectors
 are, and nothing outside one `downconvert_and_correlate!` call reads it.
+
+`sample_offsets` counts, per band (keyed by `get_band_id`), the samples every
+[`track!`](@ref) call before this one consumed: the origin of the current
+measurement on a sample grid that runs on across calls. The correlate phase
+indexes its records from the current measurement's start, and the estimate phase
+adds the band's offset when it hands a record to the Doppler estimator, so an
+estimator that keeps per-satellite state of its own (TrackingLoops'
+`VectorPLLAndDLL`) sees every satellite of the band on one time grid. It is
+shared by the states derived from this one; [`track`](@ref) gives its result a
+copy.
 """
 struct TrackState{G<:SignalGroups,DE<:AbstractDopplerEstimator,NE<:NoiseEstimators}
     groups::G
     doppler_estimator::DE
     noise_estimators::NE
     noise_descriptor::Base.RefValue{Any}
+    sample_offsets::Dict{Symbol,Int}
 end
 
 # Three-argument construction: the descriptor cell is scratch, so a freshly built
@@ -247,7 +258,13 @@ TrackState(
     groups::SignalGroups,
     doppler_estimator::AbstractDopplerEstimator,
     noise_estimators::NoiseEstimators,
-) = TrackState(groups, doppler_estimator, noise_estimators, Base.RefValue{Any}(nothing))
+) = TrackState(
+    groups,
+    doppler_estimator,
+    noise_estimators,
+    Base.RefValue{Any}(nothing),
+    Dict{Symbol,Int}(get_band_id(group.band) => 0 for group in groups),
+)
 
 include("sample_parameters.jl")
 include("downconvert_and_correlate.jl")

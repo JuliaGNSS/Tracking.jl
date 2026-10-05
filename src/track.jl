@@ -91,8 +91,11 @@ function track(
     # chunk iteration (issue #133). The copy is otherwise shallow:
     # per-satellite scratch vectors are shared with the input — see the
     # docstring above.
-    detached =
-        TrackState(track_state; groups = _detach_groups_slot_vectors(track_state.groups))
+    detached = TrackState(
+        track_state;
+        groups = _detach_groups_slot_vectors(track_state.groups),
+        sample_offsets = copy(track_state.sample_offsets),
+    )
     track!(measurements, detached; kwargs...)::TS
 end
 
@@ -249,7 +252,27 @@ function track!(
         measure_noise = chunk_index == 0,
     )
     estimate_dopplers_and_filter_prompt!(track_state, measurements)
+    _advance_sample_offsets!(track_state.sample_offsets, measurements)
     return track_state
+end
+
+# The next measurement of every band starts where this one ended. A tuple walk,
+# so the bands' differently typed measurements stay statically dispatched.
+@inline _advance_sample_offsets!(
+    sample_offsets::Dict{Symbol,Int},
+    measurements::BandMeasurements,
+) = _advance_sample_offsets!(sample_offsets, keys(measurements), values(measurements))
+@inline _advance_sample_offsets!(sample_offsets::Dict{Symbol,Int}, ::Tuple{}, ::Tuple{}) =
+    sample_offsets
+@inline function _advance_sample_offsets!(
+    sample_offsets::Dict{Symbol,Int},
+    bands::Tuple,
+    measurements::Tuple,
+)
+    band = first(bands)
+    sample_offsets[band] =
+        get(sample_offsets, band, 0) + get_num_samples(first(measurements))
+    _advance_sample_offsets!(sample_offsets, Base.tail(bands), Base.tail(measurements))
 end
 
 # Bare-buffer convenience wrapper. Single-band TrackStates only.
