@@ -1,28 +1,29 @@
 # The TrackState-level plumbing of the per-record Doppler estimators. The
 # estimators themselves — configuration, per-satellite state and the per-record
-# `step` — are TrackingLoops'; what this file adds is the walk over a
+# `step_loop` — are TrackingLoops'; what this file adds is the walk over a
 # `TrackedSat`'s signals and over a `TrackState`'s groups, and the mapping of a
 # `TrackedSignal` onto the bare per-record state the shared fold operates on.
+#
+# Nothing here knows a particular loop. Any `AbstractDopplerEstimator` that
+# implements TrackingLoops' estimator interface — `init_estimator_state`,
+# `reset_estimator_state` and `step_loop` — is driven by `track!` as it is.
 
-# Re-seed hook used by `reset_loop_filters!`. The generic fallback simply
-# rebuilds the per-sat state from scratch via `init_estimator_state`; custom
-# estimators may specialize to preserve per-sat configuration across the reset.
-_reset_estimator_state(estimator::AbstractDopplerEstimator, sat::TrackedSat) =
-    init_estimator_state(estimator, sat)
-
-# The conventional and the NCO-referenced loops: zero the integrators and
-# re-seed the init Dopplers from the sat's current (converged) Dopplers, but
-# keep the bandwidths from the EXISTING per-sat state — a per-sat bandwidth
-# override must survive the reset.
-_reset_estimator_state(
-    estimator::Union{ConventionalPLLAndDLL,NCOReferencedPLLAndDLL},
-    sat::TrackedSat,
-) = reset_estimator_state(
-    estimator,
-    sat.doppler_estimator_state,
-    sat.carrier_doppler,
-    sat.code_doppler,
-)
+# Re-seed hook used by `reset_loop_filters!`: the estimator's own
+# `reset_estimator_state`, which keeps whatever per-satellite configuration it
+# chooses to keep across the reset (the shipped loops keep their bandwidths,
+# the vector loop also its membership). An estimator without one is rebuilt
+# from scratch via `init_estimator_state`.
+function _reset_estimator_state(estimator::AbstractDopplerEstimator, sat::TrackedSat)
+    state = sat.doppler_estimator_state
+    applicable(
+        reset_estimator_state,
+        estimator,
+        state,
+        sat.carrier_doppler,
+        sat.code_doppler,
+    ) || return init_estimator_state(estimator, sat)
+    reset_estimator_state(estimator, state, sat.carrier_doppler, sat.code_doppler)
+end
 
 # The per-satellite state built from a live `TrackedSat` and explicit filters —
 # the form Tracking's own tests and a hand-built satellite use.
@@ -144,28 +145,6 @@ function _update_tracked_sat_doppler(
     )
 end
 
-# The estimator is implied by the state for the shipped estimators — the step
-# reads only the state's filters and bandwidths — so a caller holding a bare
-# satellite (a test, an external producer) may omit it. The default-constructed
-# estimator stands in for whichever one built the state: its filter types and
-# bandwidths are not read, and `predict_landing` only matters with a landing
-# sample, which this path never has.
-_update_tracked_sat_doppler(
-    sat::TrackedSat{<:Tuple{Vararg{TrackedSignal}},<:SatConventionalPLLAndDLL},
-    sampling_frequency,
-    noise::Tuple,
-) = _update_tracked_sat_doppler(
-    sat,
-    ConventionalAssistedPLLAndDLL(),
-    sampling_frequency,
-    noise,
-)
-_update_tracked_sat_doppler(
-    sat::TrackedSat{<:Tuple{Vararg{TrackedSignal}},<:SatNCOReferencedPLLAndDLL},
-    sampling_frequency,
-    noise::Tuple,
-) = _update_tracked_sat_doppler(sat, NCOReferencedPLLAndDLL(), sampling_frequency, noise)
-
 # Drop an in-flight (partial) integration: zero the accumulator and its sample
 # counter, leaving all other per-signal state intact. Used at the sync-transition
 # phase snap, where the shared `code_phase` moves and any partial accumulated at
@@ -245,8 +224,8 @@ end
 @inline function _process_estimator_driver_signal(
     tracked_signal::TrackedSignal,
     sat::TrackedSat,
-    estimator::Union{ConventionalPLLAndDLL,NCOReferencedPLLAndDLL},
-    pll_and_dll_state::Union{SatConventionalPLLAndDLL,SatNCOReferencedPLLAndDLL},
+    estimator::AbstractDopplerEstimator,
+    pll_and_dll_state,
     sampling_frequency,
     noise_density,
     noise_density_ready::Bool,
@@ -377,9 +356,11 @@ end
 $(SIGNATURES)
 
 Estimate Dopplers and filter prompts for all satellites where the correlation has reached
-the end of the code or multiples of that, with the conventional PLL and DLL or the
-delay-aware NCO-referenced loop (through the software receiver the latter runs as the
-conventional loop). Those Doppler estimations will be used to create the next
+the end of the code or multiples of that, by folding every completed record through the
+estimator's TrackingLoops `step_loop`. Any estimator that implements it works here
+unchanged: the conventional PLL and DLL, the delay-aware NCO-referenced loop (through the
+software receiver it runs as the conventional loop), the vector loop around either, or
+your own. Those Doppler estimations will be used to create the next
 replicas to downconvert and decode the incoming signal. In addition to the
 Doppler estimation it will also filter the prompt with the configured
 post correlation filter.
@@ -394,10 +375,7 @@ maps `integrated_samples` to an integration time. See
 [External correlator producers](@ref).
 """
 function estimate_dopplers_and_filter_prompt(
-    track_state::TrackState{
-        <:SignalGroups,
-        <:Union{ConventionalPLLAndDLL,NCOReferencedPLLAndDLL},
-    },
+    track_state::TrackState{<:Any,<:AbstractDopplerEstimator},
     sampling_frequencies::Union{BandMeasurements,NamedTuple,AbstractDict},
 )
     # Detach the slot *values* from the input (sharing the key set), then
@@ -523,10 +501,7 @@ by the software correlate phase or appended by an external producer via
 [`append_correlator_output!`](@ref).
 """
 function estimate_dopplers_and_filter_prompt!(
-    track_state::TrackState{
-        <:SignalGroups,
-        <:Union{ConventionalPLLAndDLL,NCOReferencedPLLAndDLL},
-    },
+    track_state::TrackState{<:Any,<:AbstractDopplerEstimator},
     sampling_frequencies::Union{BandMeasurements,NamedTuple,AbstractDict},
 )
     _foreach_group!(
