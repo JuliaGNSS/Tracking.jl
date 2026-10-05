@@ -38,9 +38,9 @@ validation live with the receiver and are tracked in
 
 *Blocks per integration* is the coherent integration length in whole primary
 code blocks: the value a fresh [`TrackedSignal`](@ref) starts at
-([`default_num_code_blocks_to_integrate`](@ref)), and in brackets the structural
+([`default_num_code_blocks_to_integrate`](@extref TrackingLoops.default_num_code_blocks_to_integrate)), and in brackets the structural
 ceiling [`set_preferred_num_code_blocks_to_integrate!`](@ref) may raise it to
-([`max_num_code_blocks_to_integrate`](@ref)) — one data bit, one overlay period,
+([`max_num_code_blocks_to_integrate`](@extref TrackingLoops.max_num_code_blocks_to_integrate)) — one data bit, one overlay period,
 or one code cycle. The tracker always integrates a single block until the sync
 feature is found, whatever this says.
 

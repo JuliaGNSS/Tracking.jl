@@ -21,12 +21,13 @@ the C/N₀ estimators and the Doppler estimators — lives in
 [TrackingLoops.jl](https://github.com/JuliaGNSS/TrackingLoops.jl), so that a
 hardware correlator's loop process can run the same code without this
 package's sample-domain half. Reading results needs only Tracking.jl: it
-re-exports the TrackingLoops functions that read them — [`estimate_cn0`](@ref),
-[`get_prompt`](@ref), `get_soft_bits`, `has_bit_or_secondary_code_been_found`
+re-exports the TrackingLoops functions that read them — [`estimate_cn0`](@extref TrackingLoops.estimate_cn0-Tuple{MomentsCN0Estimator, Any}),
+[`get_prompt`](@extref TrackingLoops.get_prompt), `get_soft_bits`, `has_bit_or_secondary_code_been_found`
 and a few more. Load
 TrackingLoops next to it to configure a correlator, a C/N₀ or noise estimator,
-a Doppler estimator or a post-correlation filter. Its API is listed in the
-[Loop core reference](trackingloops.md).
+a Doppler estimator or a post-correlation filter, or for vector tracking. Its
+API is documented in the
+[TrackingLoops.jl manual](https://juliagnss.github.io/TrackingLoops.jl/stable/).
 
 ```julia
 using Tracking, TrackingLoops, GNSSSignals

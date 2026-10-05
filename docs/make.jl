@@ -1,30 +1,22 @@
-using Documenter, Tracking, GNSSSignals, TrackingLoopFilters, TrackingLoops
-using Documenter: Remotes
+using Documenter, DocumenterInterLinks, Tracking, GNSSSignals, TrackingLoopFilters, TrackingLoops
 
 const DOCTEST_SETUP = :(using Tracking, TrackingLoops, GNSSSignals, TrackingLoopFilters; using Tracking: Hz; using Unitful: u_str)
 DocMeta.setdocmeta!(Tracking, :DocTestSetup, DOCTEST_SETUP; recursive=true)
-DocMeta.setdocmeta!(TrackingLoops, :DocTestSetup, DOCTEST_SETUP; recursive=true)
 
-# TrackingLoops is resolved from its repository rather than developed, so its
-# checkout carries no `.git` and Documenter cannot work out where to point the
-# "source" link of a docstring that lives there. Name the remote explicitly.
-const TRACKINGLOOPS_ROOT = dirname(dirname(pathof(TrackingLoops)))
+# The per-record loop arithmetic — correlators, discriminators, the bit buffer,
+# the C/N0 estimators, the Doppler estimators — is TrackingLoops' API, which
+# users load next to Tracking and which Tracking does not re-export. Its own
+# manual documents it; these pages link there with `@extref` rather than
+# repeating its docstrings.
+const LINKS = InterLinks(
+    "TrackingLoops" => "https://juliagnss.github.io/TrackingLoops.jl/stable/",
+)
 
 makedocs(
     sitename="Tracking.jl",
-    remotes = Dict(
-        TRACKINGLOOPS_ROOT =>
-            (Remotes.GitHub("JuliaGNSS", "TrackingLoops.jl"), "main"),
-    ),
     format = Documenter.HTML(prettyurls = false),
-    # The per-record loop arithmetic — correlators, discriminators, the bit
-    # buffer, the C/N0 estimators, the Doppler estimators — is TrackingLoops'
-    # API, which users load next to Tracking and which Tracking does not
-    # re-export. Its docstrings are still what these pages explain, and
-    # Documenter only splices in docstrings from the listed modules, so both
-    # are listed. That puts TrackingLoops' exports under `checkdocs` too; the
-    # ones no topic page covers are collected in `trackingloops.md`.
-    modules = [Tracking, TrackingLoops],
+    modules = [Tracking],
+    plugins = [LINKS],
     doctest = true,
     checkdocs = :exports,  # only complain about undocumented *exported* symbols
     pages = [
@@ -38,7 +30,6 @@ makedocs(
         "correlator.md",
         "cn0_estimator.md",
         "noise_estimator.md",
-        "trackingloops.md",
     ]
 )
 

@@ -57,19 +57,19 @@ treatment of digital-loop stability at large `BL · Δt`), so the code loop's
 cap carries even more stability margin than the carrier loop's.
 
 Override per signal by defining methods of
-[`default_carrier_loop_filter_bandwidth`](@ref) /
-[`default_code_loop_filter_bandwidth`](@ref), or override at construction
+[`default_carrier_loop_filter_bandwidth`](@extref TrackingLoops.default_carrier_loop_filter_bandwidth) /
+[`default_code_loop_filter_bandwidth`](@extref TrackingLoops.default_code_loop_filter_bandwidth), or override at construction
 time by passing your own `doppler_estimator =` to `TrackState`.
 
 ## Doppler Estimators
 
-```@docs
-ConventionalPLLAndDLL
-ConventionalAssistedPLLAndDLL
-default_carrier_loop_filter_bandwidth
-default_code_loop_filter_bandwidth
-TrackingLoops.effective_code_loop_filter_bandwidth
-```
+In the TrackingLoops manual:
+
+- [`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL)
+- [`ConventionalAssistedPLLAndDLL`](@extref TrackingLoops.ConventionalAssistedPLLAndDLL)
+- [`default_carrier_loop_filter_bandwidth`](@extref TrackingLoops.default_carrier_loop_filter_bandwidth)
+- [`default_code_loop_filter_bandwidth`](@extref TrackingLoops.default_code_loop_filter_bandwidth)
+- [`effective_code_loop_filter_bandwidth`](@extref TrackingLoops.effective_code_loop_filter_bandwidth)
 
 ## Resetting loop filters
 

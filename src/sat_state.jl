@@ -95,10 +95,10 @@ post-corr filter and CN0 estimator default to the signal's recommended values;
 pass `correlator`, `post_corr_filter` and `cn0_estimator` explicitly to
 override.
 
-`cn0_estimator` accepts any [`AbstractCN0Estimator`](@ref) — it is a type
+`cn0_estimator` accepts any [`AbstractCN0Estimator`](@extref TrackingLoops.AbstractCN0Estimator) — it is a type
 parameter of the returned `TrackedSignal`, so a custom estimator is stored as
-is. The default is [`default_cn0_estimator`](@ref), a
-[`NoiseRefCN0Estimator`](@ref) averaging `num_prompts_for_cn0_estimation` records
+is. The default is [`default_cn0_estimator`](@extref TrackingLoops.default_cn0_estimator), a
+[`NoiseRefCN0Estimator`](@extref TrackingLoops.NoiseRefCN0Estimator) averaging `num_prompts_for_cn0_estimation` records
 against the signal's own **measured** noise density. On the sample-driven path
 that needs no configuration — `TrackState` provisions the noise source and
 `track!` fills it — but a **correlator-ingest** path must feed it too, with
@@ -106,12 +106,12 @@ that needs no configuration — `TrackState` provisions the noise source and
 Pass `cn0_estimator = NWPRCN0Estimator()` for the estimator that infers its floor
 from the prompt stream and needs no noise observation, or
 `cn0_estimator = MomentsCN0Estimator(num_prompts_for_cn0_estimation)` for the
-plain moment-ratio estimator. See [`default_cn0_estimator`](@ref) for which to
+plain moment-ratio estimator. See [`default_cn0_estimator`](@extref TrackingLoops.default_cn0_estimator) for which to
 pick when. Each signal needs its **own** estimator instance: they buffer into a
 shared vector, so handing one instance to two signals corrupts both.
 
 `preferred_num_code_blocks_to_integrate` defaults to the signal's recommended
-starting integration length, [`default_num_code_blocks_to_integrate`](@ref) —
+starting integration length, [`default_num_code_blocks_to_integrate`](@extref TrackingLoops.default_num_code_blocks_to_integrate) —
 one primary code block for every signal but Galileo E5a-QP, whose 64.5 µs block
 is too short to run a loop on. Throws an `ArgumentError` if the value passed is
 invalid for `signal` (see
@@ -234,7 +234,7 @@ The integration time of the most recently completed record: its primary-code
 block count times one code period.
 
 This is the `T` the last correlator output was accumulated over, and the
-quantity [`estimate_cn0`](@ref) divides its sample-normalized prompts by. C/N₀
+quantity [`estimate_cn0`](@extref TrackingLoops.estimate_cn0-Tuple{NoiseRefCN0Estimator, Any}) divides its sample-normalized prompts by. C/N₀
 itself is processing-independent, so anything asking a *detectability* question
 of that record — is the peak still above the noise, is the bit decision
 trustworthy — needs this `T` too: the post-integration SNR is `C/N₀ · T`, not
@@ -252,7 +252,7 @@ get_filtered_prompts(t::TrackedSignal) = t.filtered_prompts
 """
 $(SIGNATURES)
 
-The [`CorrelatorOutput`](@ref)s this signal completed during the most recent
+The [`CorrelatorOutput`](@extref TrackingLoops.CorrelatorOutput)s this signal completed during the most recent
 processing chunk, in order. Populated by the correlate phase and consumed +
 cleared by the Doppler estimator after each chunk, so it is empty between
 `track!` calls; read it inside a custom estimator, or right after a bare
@@ -263,11 +263,11 @@ get_correlator_outputs(t::TrackedSignal) = t.correlator_outputs
 """
 $(SIGNATURES)
 
-Append an externally built [`CorrelatorOutput`](@ref) to `signal`'s
+Append an externally built [`CorrelatorOutput`](@extref TrackingLoops.CorrelatorOutput) to `signal`'s
 per-chunk `correlator_outputs` buffer and return `signal`.
 
 This is the blessed ingest path for an **external correlator producer** (e.g.
-an FPGA streaming correlator dumps): build a [`CorrelatorOutput`](@ref) from the
+an FPGA streaming correlator dumps): build a [`CorrelatorOutput`](@extref TrackingLoops.CorrelatorOutput) from the
 producer's raw accumulator, sample count and chunk-relative end index, append it
 here per signal in `sample_index` order, then run
 [`estimate_dopplers_and_filter_prompt!`](@ref) with a per-band sampling-frequency
@@ -304,13 +304,13 @@ and the per-satellite Doppler-estimator state in `doppler_estimator_state`.
 
 The first signal in `signals` is the **estimator-driver signal** — the one
 the Doppler estimator uses to update the satellite-shared carrier and code
-Doppler. With the default [`ConventionalPLLAndDLL`](@ref) /
-[`ConventionalAssistedPLLAndDLL`](@ref), that means `signals[1]`'s
+Doppler. With the default [`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL) /
+[`ConventionalAssistedPLLAndDLL`](@extref TrackingLoops.ConventionalAssistedPLLAndDLL), that means `signals[1]`'s
 correlator is what the PLL/DLL discriminator runs on, and per-satellite
 Doppler updates happen at the rate of the first signal's integration
 boundary; other signals filter their own prompts and update their own CN0
 estimates and bit buffers on their own boundaries. A user-supplied
-[`AbstractDopplerEstimator`](@ref) is free to use the other signals' state
+[`AbstractDopplerEstimator`](@extref TrackingLoops.AbstractDopplerEstimator) is free to use the other signals' state
 too — `signals[1]`'s privileged role is a convention of the conventional
 estimators, not a structural constraint of the type.
 

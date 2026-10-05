@@ -90,34 +90,30 @@ peak and the outer pair disambiguates from the side-peaks.
 ## Default Correlators
 
 The default correlator depends on the GNSS signal type and is returned by
-[`get_default_correlator`](@ref):
+[`get_default_correlator`](@extref TrackingLoops.get_default_correlator):
 
-- [`EarlyPromptLateCorrelator`](@ref) for GPS L1 C/A, GPS L2CM, GPS L2CL,
+- [`EarlyPromptLateCorrelator`](@extref TrackingLoops.EarlyPromptLateCorrelator) for GPS L1 C/A, GPS L2CM, GPS L2CL,
   GPS L5I, GPS L5Q, Galileo E5a-I, Galileo E5a-Q (BPSK modulation)
-- [`VeryEarlyPromptLateCorrelator`](@ref) for GPS L1C-D, GPS L1C-P, Galileo E1B
+- [`VeryEarlyPromptLateCorrelator`](@extref TrackingLoops.VeryEarlyPromptLateCorrelator) for GPS L1C-D, GPS L1C-P, Galileo E1B
   and Galileo E1C (BOC / CBOC / TMBOC modulation)
-
-```@docs
-get_default_correlator
-```
 
 ## Correlator Types
 
-```@docs
-EarlyPromptLateCorrelator
-VeryEarlyPromptLateCorrelator
-```
+In the TrackingLoops manual:
+
+- [`EarlyPromptLateCorrelator`](@extref TrackingLoops.EarlyPromptLateCorrelator)
+- [`VeryEarlyPromptLateCorrelator`](@extref TrackingLoops.VeryEarlyPromptLateCorrelator)
 
 ## Accessing Correlator Values
 
-```@docs
-get_early
-get_prompt
-get_late
-get_accumulators
-get_num_accumulators
-get_num_ants(::AbstractCorrelator)
-```
+In the TrackingLoops manual:
+
+- [`get_early`](@extref TrackingLoops.get_early)
+- [`get_prompt`](@extref TrackingLoops.get_prompt)
+- [`get_late`](@extref TrackingLoops.get_late)
+- [`get_accumulators`](@extref TrackingLoops.get_accumulators)
+- [`get_num_accumulators`](@extref TrackingLoops.get_num_accumulators)
+- [`get_num_ants(::AbstractCorrelator)`](@extref TrackingLoops.get_num_ants)
 
 ## Correlator outputs
 
@@ -129,10 +125,13 @@ them straight to the estimator — see
 [External correlator producers](track.md#External-correlator-producers).
 
 ```@docs
-CorrelatorOutput
 get_correlator_outputs
 append_correlator_output!
 ```
+
+In the TrackingLoops manual:
+
+- [`CorrelatorOutput`](@extref TrackingLoops.CorrelatorOutput)
 
 ## Sample shifts
 
@@ -142,41 +141,41 @@ prompt — that mapping is `get_correlator_sample_shifts`. The spacing in
 *samples* between the outermost shifts is `get_early_late_sample_spacing`,
 which is what the DLL uses to scale its discriminator output back to chips.
 
-```@docs
-get_correlator_sample_shifts
-get_early_late_sample_spacing
-update_accumulator(::EarlyPromptLateCorrelator, ::Any)
-update_accumulator(::VeryEarlyPromptLateCorrelator, ::Any)
-```
+In the TrackingLoops manual:
+
+- [`get_correlator_sample_shifts`](@extref TrackingLoops.get_correlator_sample_shifts-Tuple{EarlyPromptLateCorrelator, Any, Any})
+- [`get_early_late_sample_spacing`](@extref TrackingLoops.get_early_late_sample_spacing)
+- [`update_accumulator(::EarlyPromptLateCorrelator, ::Any)`](@extref TrackingLoops.update_accumulator-Tuple{EarlyPromptLateCorrelator, Any})
+- [`update_accumulator(::VeryEarlyPromptLateCorrelator, ::Any)`](@extref TrackingLoops.update_accumulator-Tuple{VeryEarlyPromptLateCorrelator, Any})
 
 ## Antenna and accumulator counts
 
-```@docs
-NumAnts
-NumAccumulators
-```
+In the TrackingLoops manual:
+
+- [`NumAnts`](@extref TrackingLoops.NumAnts)
+- [`NumAccumulators`](@extref TrackingLoops.NumAccumulators)
 
 ## Post-correlation filter
 
 A post-correlation filter reduces the correlator's per-antenna taps to the single
 channel the Doppler estimator and the C/N₀ estimator see. It does not combine the
-taps itself: it declares its combining weights through [`get_weights`](@ref), and
+taps itself: it declares its combining weights through [`get_weights`](@extref TrackingLoops.get_weights), and
 Tracking applies them. That indirection is what keeps the C/N₀ honest on an
 antenna array — the measured noise covariance is reduced through the *same*
 weights, so numerator and denominator describe the same channel (see
 [CN0 Estimator](cn0_estimator.md)).
 
-[`DefaultPostCorrFilter`](@ref) is the identity for a single antenna and selects
+[`DefaultPostCorrFilter`](@extref TrackingLoops.DefaultPostCorrFilter) is the identity for a single antenna and selects
 the last element for an array. For multi-antenna tracking a beamformer is the
 natural override; see the worked example in
 [Tracking State](tracking_state.md).
 
-```@docs
-AbstractPostCorrFilter
-DefaultPostCorrFilter
-TrackingLoops.update(::DefaultPostCorrFilter, ::Any)
-get_weights
-```
+In the TrackingLoops manual:
+
+- [`AbstractPostCorrFilter`](@extref TrackingLoops.AbstractPostCorrFilter)
+- [`DefaultPostCorrFilter`](@extref TrackingLoops.DefaultPostCorrFilter)
+- [`update(::DefaultPostCorrFilter, ::Any)`](@extref TrackingLoops.update-Tuple{DefaultPostCorrFilter, Any})
+- [`get_weights`](@extref TrackingLoops.get_weights)
 
 ## Integration sizing
 

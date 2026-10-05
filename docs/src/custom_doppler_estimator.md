@@ -1,7 +1,7 @@
 # Custom Doppler Estimator
 
-Tracking.jl ships [`ConventionalPLLAndDLL`](@ref) (and the FLL-assisted
-variant [`ConventionalAssistedPLLAndDLL`](@ref)), but you can plug in a
+Tracking.jl ships [`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL) (and the FLL-assisted
+variant [`ConventionalAssistedPLLAndDLL`](@extref TrackingLoops.ConventionalAssistedPLLAndDLL)), but you can plug in a
 different Doppler-estimation algorithm — e.g. a Kalman filter or a
 joint-channel estimator — by implementing a small set of methods.
 
@@ -19,7 +19,7 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
 
 ## What you implement
 
-1. **An estimator type** subtyping [`AbstractDopplerEstimator`](@ref). It
+1. **An estimator type** subtyping [`AbstractDopplerEstimator`](@extref TrackingLoops.AbstractDopplerEstimator). It
    carries configuration and any cross-satellite or cross-system shared
    state (filter parameters, joint-state vectors, …). Per-satellite state
    does *not* live here.
@@ -85,7 +85,7 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
    `carrier_doppler`/`code_doppler` and updated per-sat estimator state.
 
    Each signal's correlator outputs completed during the chunk are in its
-   `correlator_outputs::Vector{`[`CorrelatorOutput`](@ref)`}` (a chunk may hold
+   `correlator_outputs::Vector{`[`CorrelatorOutput`](@extref TrackingLoops.CorrelatorOutput)`}` (a chunk may hold
    zero, one, or several per signal), each carrying the raw correlator, its
    integrated-sample count, and the end sample index.
    Fold over them in order — threading whatever filter state you carry — and
@@ -180,7 +180,7 @@ julia> get_doppler_estimator_state(get_sat_state(track_state, 1))
 SatMyEstimator()
 ```
 
-The existing [`ConventionalPLLAndDLL`](@ref) implementation in
+The existing [`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL) implementation in
 `src/conventional_pll_and_dll.jl` shows the full pattern, including how
 the immutable and in-place forms share a `_update_tracked_sat_doppler`
 helper so they cannot drift, and how the per-signal walk distinguishes
@@ -202,13 +202,16 @@ estimator the `TrackState` was built with.
 ## API reference
 
 ```@docs
-AbstractDopplerEstimator
 init_estimator_state
-reset_estimator_state
 update_estimator_on_handoff
 Tracking.estimate_dopplers_and_filter_prompt
 Tracking.estimate_dopplers_and_filter_prompt!
 ```
+
+In the TrackingLoops manual:
+
+- [`AbstractDopplerEstimator`](@extref TrackingLoops.AbstractDopplerEstimator)
+- [`reset_estimator_state`](@extref TrackingLoops.reset_estimator_state-Tuple{ConventionalPLLAndDLL, SatConventionalPLLAndDLL, Any, Any})
 
 ### One record through a loop
 
@@ -218,11 +221,11 @@ software receiver here and the loop process of a hardware correlator run the
 same arithmetic. `track!` calls it with the chunk's own replica word and no
 landing sample.
 
-```@docs
-step_loop
-LoopRecord
-SatConventionalPLLAndDLL
-```
+In the TrackingLoops manual:
+
+- [`step_loop`](@extref TrackingLoops.step_loop-Tuple{ConventionalPLLAndDLL, SatConventionalPLLAndDLL, LoopRecord, Any, Int64})
+- [`LoopRecord`](@extref TrackingLoops.LoopRecord)
+- [`SatConventionalPLLAndDLL`](@extref TrackingLoops.SatConventionalPLLAndDLL)
 
 ### The delay-aware loop
 
@@ -233,11 +236,11 @@ correction for the sample the new word will land at. Given a fixed word and no
 landing sample — which is what `track!` supplies — it is the conventional loop
 to the bit.
 
-```@docs
-NCOReferencedPLLAndDLL
-SatNCOReferencedPLLAndDLL
-NCOTimeline
-scheduled_words
-mean_nco_word
-FixedNCOWord
-```
+In the TrackingLoops manual:
+
+- [`NCOReferencedPLLAndDLL`](@extref TrackingLoops.NCOReferencedPLLAndDLL)
+- [`SatNCOReferencedPLLAndDLL`](@extref TrackingLoops.SatNCOReferencedPLLAndDLL)
+- [`NCOTimeline`](@extref TrackingLoops.NCOTimeline)
+- [`scheduled_words`](@extref TrackingLoops.scheduled_words)
+- [`mean_nco_word`](@extref TrackingLoops.mean_nco_word)
+- [`FixedNCOWord`](@extref TrackingLoops.FixedNCOWord)

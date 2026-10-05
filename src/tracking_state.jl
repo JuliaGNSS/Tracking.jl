@@ -41,11 +41,11 @@ correlator or PCF *types* should construct `TrackedSat`s themselves and
 hand them to the `add_satellite!(track_state, group, sat)` overload.
 
 `noise_estimators` declares the per-signal noise sources
-([`AbstractNoiseEstimator`](@ref)s keyed by signal id, `GNSSSignals.get_signal_id`
+([`AbstractNoiseEstimator`](@extref TrackingLoops.AbstractNoiseEstimator)s keyed by signal id, `GNSSSignals.get_signal_id`
 — `:GPSL1CA`, `:GalileoE1B`, …). Left at `nothing` it is derived: a
-[`CorrelatorNoiseEstimator`](@ref) for every signal whose C/N₀ estimator reads a
-noise density (see [`requires_noise_density`](@ref)), and **no entry** for any
-other signal, so a state that stays on [`NWPRCN0Estimator`](@ref) runs no
+[`CorrelatorNoiseEstimator`](@extref TrackingLoops.CorrelatorNoiseEstimator) for every signal whose C/N₀ estimator reads a
+noise density (see [`requires_noise_density`](@extref TrackingLoops.requires_noise_density-Tuple{Type{<:AbstractCN0Estimator}})), and **no entry** for any
+other signal, so a state that stays on [`NWPRCN0Estimator`](@extref TrackingLoops.NWPRCN0Estimator) runs no
 despread at all. Pass an explicit NamedTuple to configure the window, or to
 declare a signal's source on a correlator-ingest path where you fill it with
 [`append_noise_observation!`](@ref) rather than from samples.
@@ -994,7 +994,7 @@ end
 """
 $(SIGNATURES)
 
-Append an externally built [`CorrelatorOutput`](@ref) to the buffer of the
+Append an externally built [`CorrelatorOutput`](@extref TrackingLoops.CorrelatorOutput) to the buffer of the
 addressed signal and return `track_state`. The `output` is followed by the same
 satellite/signal addressing forms as the per-signal accessors (e.g.
 [`get_correlator_outputs`](@ref)):
@@ -1020,7 +1020,7 @@ append_correlator_output!(
 """
 $(SIGNATURES)
 
-Append an externally built [`NoiseObservation`](@ref) to the addressed
+Append an externally built [`NoiseObservation`](@extref TrackingLoops.NoiseObservation) to the addressed
 **signal**'s noise estimator and return `track_state`:
 
   - `append_noise_observation!(track_state, obs)` — single-signal `TrackState`.
@@ -1038,10 +1038,10 @@ estimator-level method for the table of differences.
 Per signal and not per band because the floor a record divides by is the
 *post-correlation* one, and that depends on the despreading modulation: a noise
 channel is a tracking channel with a wrong PRN, so it is configured with a code
-exactly like the ones it serves. See [`AbstractNoiseEstimator`](@ref).
+exactly like the ones it serves. See [`AbstractNoiseEstimator`](@extref TrackingLoops.AbstractNoiseEstimator).
 
 The signal must have a noise estimator; it has one whenever its C/N₀ estimator
-reads a density (see [`requires_noise_density`](@ref)), or whenever you declared
+reads a density (see [`requires_noise_density`](@extref TrackingLoops.requires_noise_density-Tuple{Type{<:AbstractCN0Estimator}})), or whenever you declared
 one through `TrackState`'s `noise_estimators` keyword.
 """
 append_noise_observation!(
@@ -1156,7 +1156,7 @@ thrown otherwise (issue #128). Pilot signals accept any length of at least
 one block.
 
 The satellite is addressed exactly like the per-signal accessors
-(e.g. [`estimate_cn0`](@ref)) — in particular, the per-signal form always
+(e.g. [`estimate_cn0`](@extref TrackingLoops.estimate_cn0-Tuple{NoiseRefCN0Estimator, Any})) — in particular, the per-signal form always
 names the group explicitly, even on a single-group `TrackState`:
 
 ```julia
@@ -1284,7 +1284,7 @@ new, longer integration.
 Addressed like the per-signal accessors — no satellite id resets every
 satellite in `track_state`; `(group, prn)` or (single-group) `prn` resets one.
 Mutates `track_state` in place and returns it. Works for any
-[`AbstractDopplerEstimator`](@ref) through its [`init_estimator_state`](@ref) hook.
+[`AbstractDopplerEstimator`](@extref TrackingLoops.AbstractDopplerEstimator) through its [`init_estimator_state`](@ref) hook.
 
 ```julia
 set_preferred_num_code_blocks_to_integrate!(track_state, 1, GPSL5I, 10)

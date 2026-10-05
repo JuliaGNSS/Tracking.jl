@@ -17,7 +17,7 @@ num_sub = max(1, round(Int, slice_duration / code_period))
 ```
 
 with `code_period` the primary code period of the signal being measured — see
-[`CorrelatorNoiseEstimator`](@ref) for why the sub-integration length is derived
+[`CorrelatorNoiseEstimator`](@extref TrackingLoops.CorrelatorNoiseEstimator) for why the sub-integration length is derived
 rather than configured. Equal slices rather than fixed-length ones so no
 remainder is wasted and every window entry is statistically identical; the
 `max(1, …)` matters, because a signal whose code period exceeds the
@@ -39,7 +39,7 @@ Successive observations are independent because their *sample* ranges are
 disjoint; the replica repeating is irrelevant.
 
 The draws are per sub-integration rather than per chunk so that every window
-entry is an independent trial — see [`CorrelatorNoiseEstimator`](@ref) for why a
+entry is an independent trial — see [`CorrelatorNoiseEstimator`](@extref TrackingLoops.CorrelatorNoiseEstimator) for why a
 *stationary* phase and Doppler turn a chance alignment with a present-but-
 untracked signal into a permanent bias, and the randomisation turns it back into
 an occasional single-observation outlier.
