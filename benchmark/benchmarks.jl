@@ -942,6 +942,34 @@ end
 # Stacking N copies of GPSL1CA on one sat is not a real-world scenario
 # (a real sat carries one signal of each kind), but it isolates the
 # tuple-walk cost on identical N for a clean per-signal-cost comparison.
+# A track state around one satellite whose signals repeat. A signal group rejects
+# a repeated signal on revisions that check for it, and there the group is built
+# through its unchecked constructor, as the tile-share kernel tests do.
+function _repeated_signal_track_state(signal, sat, doppler_estimator)
+    try
+        TrackState(signal, sat; doppler_estimator)
+    catch e
+        e isa ArgumentError || rethrow()
+        sats = Tracking.to_dictionary(sat)
+        signals = map(s -> s.signal, sat.signals)
+        band = Tracking.get_band(signal)
+        num_ants = NumAnts(Tracking.get_num_ants(sat))
+        group =
+            Tracking.SignalGroup{typeof(band),typeof(sats),typeof(signals),typeof(num_ants)}(
+                band,
+                sats,
+                signals,
+                num_ants,
+            )
+        groups = (default = group,)
+        TrackState(
+            groups,
+            doppler_estimator,
+            Tracking._resolve_noise_estimators(nothing, groups),
+        )
+    end
+end
+
 if _HAS_TRACKED_SIGNAL
     function _make_multi_signal_track_state(; n_signals, nsamp, sfreq)
         gpsl1 = GPSL1CA()
@@ -997,7 +1025,7 @@ if _HAS_TRACKED_SIGNAL
                     de_state,
                 )
             end
-        ts = TrackState(gpsl1, sat; doppler_estimator = estimator)
+        ts = _repeated_signal_track_state(gpsl1, sat, estimator)
         signal = rand(Complex{Float32}, nsamp)
         ts, signal
     end
@@ -1318,7 +1346,7 @@ if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
             n_signals,
         )
         sat = Tracking.TrackedSat(signals, 1, 10.5, 1000.0Hz; doppler_estimator = est)
-        TrackState(_AXES_SIG, sat; doppler_estimator = est)
+        _repeated_signal_track_state(_AXES_SIG, sat, est)
     end
 
     # A single-signal sat with M antenna channels.
