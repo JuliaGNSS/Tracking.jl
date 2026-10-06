@@ -6,9 +6,8 @@ module GalileoE5aQPTest
 # chips, repeated 31 times within 2 ms with no overlay. Tracking it is a
 # *policy* decision, not just a dispatch method: one primary code block is
 # 64.5 µs, so the tracker must group whole 31-block (2 ms) code cycles into one
-# coherent integration, or the loop would run at 15.5 kHz off a 279 Hz
-# reference bandwidth. These tests pin that policy, its arithmetic and the
-# resulting end-to-end pass (issue #236).
+# coherent integration, or the loop would run at 15.5 kHz. These tests pin that
+# policy, its arithmetic and the resulting end-to-end pass (issue #236).
 
 using Test: @test, @testset, @inferred, @test_throws
 using Unitful: Hz, dBHz, ms, upreferred, ustrip
@@ -33,6 +32,7 @@ using Tracking:
     TrackedSat,
     TrackedSignal,
     default_carrier_loop_filter_bandwidth,
+    effective_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     detect_bit_or_secondary_code_sync,
     estimate_cn0,
@@ -120,12 +120,13 @@ const BLOCKS_PER_CYCLE = 31
         @test max_num_code_blocks_to_integrate(GalileoE5aI()) == 20
         @test max_num_code_blocks_to_integrate(GalileoE5aQ()) == 100
 
-        # The carrier default is a per-primary-block *reference* bandwidth, so
-        # for a 64.5 µs block it is a large 279 Hz — and the loop's automatic
-        # 1/N scaling at the 31-block integration brings it to a sane 9 Hz.
+        # The flat 18 Hz carrier default, uncapped at the 2 ms cycle.
         BL = @inferred default_carrier_loop_filter_bandwidth(e5a_qp)
-        @test BL ≈ 0.018 / upreferred(get_code_length(e5a_qp) / get_code_frequency(e5a_qp))
-        @test BL / BLOCKS_PER_CYCLE ≈ 9.0Hz rtol = 1e-3
+        @test BL ≈ 18.0Hz
+        cycle_time = upreferred(
+            BLOCKS_PER_CYCLE * get_code_length(e5a_qp) / get_code_frequency(e5a_qp),
+        )
+        @test effective_carrier_loop_filter_bandwidth(BL, cycle_time) ≈ 18.0Hz
         @test @inferred(default_code_loop_filter_bandwidth(e5a_qp)) ≈ 1.0Hz
     end
 
@@ -175,17 +176,15 @@ const BLOCKS_PER_CYCLE = 31
     end
 
     @testset "Pulls a Doppler offset in over 2 ms integrations" begin
-        # The software reference check the policy is really about: a 20 Hz
+        # The software reference check the policy is really about: a 5 Hz
         # carrier-Doppler error on a clean replica, closed by the loop over
-        # 120 ms of 2 ms integrations. At the 279 Hz per-block reference
-        # bandwidth the estimator's automatic 1/N scaling turns into a 9 Hz
-        # effective one, which is a bandwidth a PLL can actually hold.
+        # 240 ms of 2 ms integrations at the default 18 Hz carrier bandwidth.
         doppler = 200.0Hz
         samples_per_chip = 4
         sampling_frequency = samples_per_chip * get_code_frequency(e5a_qp)
         code_frequency =
             get_code_frequency(e5a_qp) + doppler * get_code_center_frequency_ratio(e5a_qp)
-        num_cycles = 60
+        num_cycles = 120
         samples_per_cycle = BLOCKS_PER_CYCLE * samples_per_chip * get_code_length(e5a_qp)
         num_samples = num_cycles * samples_per_cycle
 
@@ -197,8 +196,8 @@ const BLOCKS_PER_CYCLE = 31
             ) .* code,
         )
 
-        # Start 20 Hz off and feed one 2 ms cycle per `track` call.
-        track_state = TrackState(e5a_qp, [TrackedSat(e5a_qp, prn, 0.0, 180.0Hz)])
+        # Start 5 Hz off and feed one 2 ms cycle per `track` call.
+        track_state = TrackState(e5a_qp, [TrackedSat(e5a_qp, prn, 0.0, 195.0Hz)])
         for cycle = 1:num_cycles
             track_state = track(
                 view(samples, ((cycle-1)*samples_per_cycle+1):(cycle*samples_per_cycle)),

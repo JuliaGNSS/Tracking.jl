@@ -39,7 +39,7 @@ rotl(x::T, r, N) where {T} =
     @test @inferred(get_default_correlator(e6b, NumAnts(3))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
-    # 1 ms primary period (5115 chips at 5.115 Mcps) → 18 Hz / 1 Hz.
+    # Flat defaults, uncapped at 1 ms.
     @test @inferred(default_carrier_loop_filter_bandwidth(e6b)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(e6b)) ≈ 1.0Hz
 
@@ -86,7 +86,7 @@ end
     @test @inferred(get_default_correlator(e6c, NumAnts(1))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
 
-    # 1 ms primary period, same as E6-B → 18 Hz / 1 Hz.
+    # Flat defaults, uncapped at 1 ms.
     @test @inferred(default_carrier_loop_filter_bandwidth(e6c)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(e6c)) ≈ 1.0Hz
 

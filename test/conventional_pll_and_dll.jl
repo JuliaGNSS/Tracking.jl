@@ -4,11 +4,16 @@ using Test: @test, @testset, @inferred, @test_throws
 using Unitful: Hz, ms
 import Tracking
 using GNSSSignals: GPSL1CA, get_code_center_frequency_ratio
-using TrackingLoopFilters: ThirdOrderBilinearLF, SecondOrderBilinearLF
+using TrackingLoopFilters:
+    ThirdOrderBilinearLF, ThirdOrderAssistedBilinearLF, SecondOrderBilinearLF, filter_loop
+using Random: MersenneTwister
 using StaticArrays: SVector
 using Dictionaries: Dictionary
 using Tracking:
     aid_dopplers,
+    calculate_carrier_frequency_update,
+    pll_disc,
+    fll_disc,
     SatConventionalPLLAndDLL,
     EarlyPromptLateCorrelator,
     TrackedSignal,
@@ -159,9 +164,9 @@ end
         _meas_l1(sampling_frequency),
     )
 
-    @test get_carrier_doppler(new_track_state_after_full_integration) ==
-          100.52615628464486Hz
-    @test get_code_doppler(new_track_state_after_full_integration) == -0.16073504885813858Hz
+    # The carrier update is the radian-fed one of before #244 divided by 2π.
+    @test get_carrier_doppler(new_track_state_after_full_integration) == 100.0837403735401Hz
+    @test get_code_doppler(new_track_state_after_full_integration) == -0.1610223319172975Hz
     @test get_last_fully_integrated_filtered_prompt(
         new_track_state_after_full_integration,
     ) == 0.4 + 0.004im
@@ -175,8 +180,8 @@ end
 end
 
 @testset "loop bandwidth follows the record's actual integration length" begin
-    # The `1/N` bandwidth scaling must pair with the blocks a record ACTUALLY
-    # covered (recovered from its sample count), not the intended integration
+    # The stability caps must pair with the time a record ACTUALLY
+    # integrated (recovered from its sample count), not the intended integration
     # length: a single-block record folded when the bit buffer already reports
     # sync — a mid-fold sync detection with an enlarged
     # `doppler_update_interval`, or the truncated first post-sync integration —
@@ -226,24 +231,17 @@ end
 
     one_block = 5000                      # one 1 ms L1 C/A code period at 5 MHz
     # Synced with a 20-block preferred length, but the record covered a single
-    # block: full bandwidth — exactly the plain single-block baseline. (Scaling
-    # by the intended length would divide the bandwidth by 20 here.)
+    # block: full bandwidth — exactly the plain single-block baseline. (Capping
+    # against the intended length would cut the bandwidth to 4.5 Hz here.)
     @test doppler_after(20, true, one_block) == doppler_after(1, false, one_block)
 
-    # A record that actually covered 20 blocks is scaled by 1/20 regardless of
-    # the preferred integration length.
+    # A record that actually covered 20 blocks is capped regardless of the
+    # preferred integration length.
     @test doppler_after(20, true, 20 * one_block) == doppler_after(1, true, 20 * one_block)
 end
 
-# The DLL bandwidth is an absolute value, not a per-primary-period reference: a
-# longer coherent integration must not narrow it, because nothing that sets it —
-# thermal noise, pull-in time, the absence of dynamic stress on a carrier-aided
-# loop — scales with the integration length. Only its own `BL·Δt` stability
-# product may cap it, and only once the update interval is long enough to
-# threaten stability. A `1/N` scaling here (which the carrier loop does want)
-# would take a 20 ms L1 C/A integration to 0.05 Hz, where stability allows
-# 0.9 Hz — the same pull-in sag that sizing the DLL off the carrier default used
-# to cause per signal, re-introduced through the integration length.
+# The DLL bandwidth is capped by its stability product, not scaled by the block
+# count (see `effective_code_loop_filter_bandwidth`).
 @testset "code loop bandwidth is not narrowed by the integration length" begin
     bw = 1.0Hz
     l1ca_period = 1ms  # 1023 chips at 1.023 Mcps
@@ -258,7 +256,7 @@ end
     for num_blocks in (20, 100, 1500)
         integration_time = num_blocks * l1ca_period
         @test Tracking.effective_code_loop_filter_bandwidth(bw, integration_time) *
-              integration_time ≈ Tracking.MAX_LOOP_BANDWIDTH_TIME_PRODUCT
+              integration_time ≈ Tracking.MAX_CODE_LOOP_BANDWIDTH_TIME_PRODUCT
     end
 
     # An explicit bandwidth below the cap is used verbatim, at any length.
@@ -354,8 +352,8 @@ end
     )
 
     # Sat 1 matches the baseline result from the previous testset.
-    @test get_carrier_doppler(new_track_state, 1) == 100.52615628464486Hz
-    @test get_code_doppler(new_track_state, 1) == -0.16073504885813858Hz
+    @test get_carrier_doppler(new_track_state, 1) == 100.0837403735401Hz
+    @test get_code_doppler(new_track_state, 1) == -0.1610223319172975Hz
 
     # Sat 2 has different bandwidths so must produce a different update.
     @test get_carrier_doppler(new_track_state, 2) != get_carrier_doppler(new_track_state, 1)
@@ -418,6 +416,95 @@ end
     # different concrete state type than the TrackState's estimator.
     bad_sat = TrackedSat(gpsl1, 2, 0.25, 200.0Hz)
     @test_throws ArgumentError merge_sats(track_state, bad_sat)
+end
+
+# Likewise the carrier bandwidth, at 0.09 (issue #245).
+@testset "carrier loop bandwidth is capped, not scaled, by the integration length" begin
+    bw = 18.0Hz
+    @test Tracking.effective_carrier_loop_filter_bandwidth(bw, 1ms) == bw
+    @test Tracking.effective_carrier_loop_filter_bandwidth(bw, 4ms) == bw
+    @test Tracking.effective_carrier_loop_filter_bandwidth(bw, 5ms) ≈ bw
+    @test Tracking.effective_carrier_loop_filter_bandwidth(bw, 10ms) ≈ 9.0Hz
+    @test Tracking.effective_carrier_loop_filter_bandwidth(bw, 20ms) ≈ 4.5Hz
+    for integration_time in (10ms, 20ms, 100ms, 1500ms)
+        @test Tracking.effective_carrier_loop_filter_bandwidth(bw, integration_time) *
+              integration_time ≈ Tracking.MAX_CARRIER_LOOP_BANDWIDTH_TIME_PRODUCT
+    end
+    @test Tracking.effective_carrier_loop_filter_bandwidth(2.0Hz, 20ms) == 2.0Hz
+
+    # Through the estimator: a 4 ms integration runs at the full bandwidth (a
+    # `1/N` scaling would give 4.5 Hz); at 20 ms bandwidths above the cap saturate.
+    sampling_frequency = 5e6Hz
+    gpsl1 = GPSL1CA()
+    correlator = update_accumulator(
+        get_default_correlator(gpsl1),
+        SVector(1000.0 + 10im, 2000.0 + 20im, 750.0 + 10im),
+    )
+    carrier_doppler_after(integrated_samples, carrier_bandwidth) = begin
+        doppler_estimator =
+            ConventionalPLLAndDLL(; carrier_loop_filter_bandwidth = carrier_bandwidth)
+        sat = TrackedSat(gpsl1, 1, 0.5, 100.0Hz; doppler_estimator)
+        sig = TrackedSignal(
+            only(sat.signals);
+            correlator_outputs = [
+                CorrelatorOutput(correlator, integrated_samples, integrated_samples),
+            ],
+        )
+        ts = TrackState(gpsl1, TrackedSat(sat; signals = (sig,)); doppler_estimator)
+        get_carrier_doppler(
+            estimate_dopplers_and_filter_prompt(ts, _meas_l1(sampling_frequency)),
+        )
+    end
+    one_block = 5000
+    # `pll_disc` is scale invariant, so the raw correlator will do.
+    freq_update, _ =
+        filter_loop(ThirdOrderBilinearLF(), pll_disc(gpsl1, correlator), 4ms, 18.0Hz)
+    @test carrier_doppler_after(4 * one_block, 18.0Hz) ≈ 100.0Hz + freq_update
+    @test carrier_doppler_after(20 * one_block, 10.0Hz) ==
+          carrier_doppler_after(20 * one_block, 20.0Hz)
+end
+
+@testset "Carrier loop has the configured noise bandwidth (issue #244)" begin
+    # Closed loop with white phase noise σ_n: the NCO jitter must be
+    # σ² = σ_n² · 2 · BL · T. Fed radians, it was ≈5.6× wider.
+    gpsl1 = GPSL1CA()
+    T = 1ms
+    bandwidth = 18.0Hz
+    σ_n = 0.05
+    rng = MersenneTwister(1)
+    lf = ThirdOrderBilinearLF()
+    φ = 0.0          # signal phase minus NCO phase, rad
+    acc = 0.0
+    n = 200_000
+    settle = 1_000
+    for i = 1:n
+        prompt = cis(φ + σ_n * randn(rng))
+        correlator = EarlyPromptLateCorrelator(SVector(prompt, prompt, prompt), 0.5)
+        freq_update, lf =
+            calculate_carrier_frequency_update(gpsl1, lf, correlator, prompt, T, bandwidth)
+        φ -= 2π * Float64(freq_update * T)
+        i > settle && (acc += φ^2)
+    end
+    effective_bandwidth = acc / (n - settle) / σ_n^2 / (2 * Float64(T * Hz))
+    @test 0.85 < effective_bandwidth / Float64(bandwidth / Hz) < 1.15
+
+    # The FLL-assisted filter gets the phase error in cycles too.
+    prompt = cis(0.3)
+    previous_prompt = cis(0.1)
+    correlator = EarlyPromptLateCorrelator(SVector(prompt, prompt, prompt), 0.5)
+    @test calculate_carrier_frequency_update(
+        gpsl1,
+        ThirdOrderAssistedBilinearLF(),
+        correlator,
+        previous_prompt,
+        T,
+        bandwidth,
+    ) == filter_loop(
+        ThirdOrderAssistedBilinearLF(),
+        (pll_disc(gpsl1, correlator), fll_disc(gpsl1, correlator, previous_prompt, T)),
+        T,
+        bandwidth,
+    )
 end
 
 end

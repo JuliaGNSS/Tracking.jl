@@ -106,11 +106,11 @@ end
 """
 $(SIGNATURES)
 
-Calculates the carrier phase error in radians.
+Calculates the carrier phase error in cycles.
 """
 function pll_disc(signal::AbstractGNSSSignal, correlator)
     p = get_prompt(correlator)
-    atan(imag(p) / real(p))
+    atan(imag(p) / real(p)) / 2π
 end
 
 """

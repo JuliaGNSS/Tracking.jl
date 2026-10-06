@@ -57,7 +57,7 @@ const GEO_PRN = 1   # GEO (D2) — carries no overlay
     @test @inferred(get_default_correlator(b3i, NumAnts(3))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
-    # 1 ms primary period (10230 chips at 10.23 Mcps) → 18 Hz / 1 Hz.
+    # Flat defaults, uncapped at 1 ms.
     @test @inferred(default_carrier_loop_filter_bandwidth(b3i)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(b3i)) ≈ 1.0Hz
 

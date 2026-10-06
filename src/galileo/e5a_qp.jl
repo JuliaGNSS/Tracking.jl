@@ -15,12 +15,10 @@
 #      rather than a symbol grid.
 #
 #   2. One primary code block is far too short to run a loop on. This package
-#      integrates in whole primary code blocks and sizes the carrier loop off
-#      the primary period, so a 64.5 µs block would mean a 15.5 kHz loop update
-#      rate against a 279 Hz reference bandwidth. E5a-QP therefore integrates a
-#      whole 31-block code cycle — 10230 chips, exactly 2 ms — by default, which
-#      puts the loop at 500 Hz and, through the estimator's automatic 1/N
-#      bandwidth scaling, at a 9 Hz effective carrier bandwidth. That is the
+#      integrates in whole primary code blocks, so a 64.5 µs block would mean a
+#      15.5 kHz loop update rate. E5a-QP therefore integrates a whole 31-block
+#      code cycle — 10230 chips, exactly 2 ms — by default, which puts the loop
+#      at 500 Hz with the default 18 Hz carrier bandwidth. That is the
 #      "short-period integration policy" of issue #236, expressed as the two
 #      integration-length traits rather than as a special case in `track`.
 #

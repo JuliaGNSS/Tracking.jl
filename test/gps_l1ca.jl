@@ -25,9 +25,6 @@ using Tracking:
     @test @inferred(get_default_correlator(gpsl1, NumAnts(3))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
-    # Per-signal default loop bandwidths: sized for the 1 ms primary code
-    # period at BL·T ≈ 0.018. Historically the package shipped 18 Hz / 1 Hz
-    # as the universal default — that value falls out of the formula here.
     @test @inferred(default_carrier_loop_filter_bandwidth(gpsl1)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(gpsl1)) ≈ 1.0Hz
 

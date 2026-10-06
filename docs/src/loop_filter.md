@@ -16,45 +16,64 @@ The default Doppler estimator is `ConventionalAssistedPLLAndDLL` which uses:
 - `SecondOrderBilinearLF` for the code loop
 
 When [`TrackState`](@ref) builds the default estimator implicitly from a
-signal-tuple declaration, the **carrier** bandwidth is sized **per signal**
-from the signal's primary code period `T`, at `BL · T ≈ 0.018` — ~10× margin
-from the `BL · T < 0.18` stability edge of the bilinear third-order filter.
-The **code** bandwidth is a flat 1 Hz for every signal. The values fall out to:
+signal-tuple declaration, the **carrier** bandwidth is a flat 18 Hz and the
+**code** bandwidth a flat 1 Hz for every signal.
 
-| Signal      | Primary period | Carrier BL | Code BL |
-|-------------|----------------|-----------:|--------:|
-| GPS L1 C/A  | 1 ms           |    18 Hz   |    1 Hz |
-| GPS L5I     | 1 ms           |    18 Hz   |    1 Hz |
-| Galileo E1B | 4 ms           |   4.5 Hz   |    1 Hz |
-| GPS L1C-D   | 10 ms          |   1.8 Hz   |    1 Hz |
-| GPS L1C-P   | 10 ms          |   1.8 Hz   |    1 Hz |
-| GPS L2 CM   | 20 ms          |   0.9 Hz   |    1 Hz |
-| GPS L2 CL   | 1.5 s          | 0.012 Hz   |    1 Hz |
+Both are one-sided noise bandwidths `BL` in the sense of Kaplan & Hegarty, so
+they plug into the usual PLL jitter and dynamic-stress formulas. (Before
+[#244](https://github.com/JuliaGNSS/Tracking.jl/issues/244) the carrier filter
+was fed radians, so a configured 18 Hz loop behaved like one of ~100 Hz.)
 
-The 1-ms-primary-period signals (L1 C/A, L5I) keep the historical 18 Hz /
-1 Hz default; longer-period signals get appropriately tighter carrier loops
-so the PLL stays stable. The DLL does **not** follow the carrier loop down:
-being carrier-aided it has almost no dynamic stress to track, so its
-bandwidth is a thermal-noise-versus-pull-in choice that does not scale with
-the symbol rate.
+18 Hz is the third-order PLL bandwidth of the literature (Kaplan & Hegarty
+Table 5.6, Pany Table 3.3; Borre et al. quote about 20 Hz). None of them scales
+it with the primary code period: thermal jitter and dynamic stress, which set
+the bandwidth, do not depend on it.
 
-The two are also treated differently at filter time, since only the carrier
-bandwidth is a per-code-period reference. Integrating `N` primary blocks
-coherently scales the carrier bandwidth to `BL/N`, holding its `BL · Δt`
-product at the single-period value, while the code bandwidth is left alone and
-merely capped by the same product against the record's actual integration time
-(`Tracking.effective_code_loop_filter_bandwidth`). That cap is what pulls the
-L2 C primaries down in practice — 0.9 Hz for a 20 ms L2 CM integration,
-0.012 Hz for a 1.5 s L2 CL one — while every integration shorter than 18 ms,
-whatever its signal or block count, runs the DLL at the full 1 Hz.
+### Stability cap
 
-Reusing the third-order carrier filter's `0.018` product to cap the
-*second*-order code filter is conservative: transform-designed digital loops
-of this kind only destabilize around `BL · Δt ≈ 0.4` (S. A. Stephens and
-J. B. Thomas, "Controlled-Root Formulation for Digital Phase-Locked Loops",
-IEEE Trans. Aerospace and Electronic Systems 31(1), 1995 — the standard
-treatment of digital-loop stability at large `BL · Δt`), so the code loop's
-cap carries even more stability margin than the carrier loop's.
+Stability does depend on the loop update interval `Δt`, so at filter time each
+bandwidth is capped against the record's actual integration time
+(`Tracking.effective_carrier_loop_filter_bandwidth`,
+`Tracking.effective_code_loop_filter_bandwidth`). An explicit bandwidth is
+capped the same way; the cap only ever narrows a loop.
+
+```julia
+BL_carrier = min(BL_carrier_configured, 0.09  / Δt)
+BL_code    = min(BL_code_configured,    0.018 / Δt)
+```
+
+The default FLL-assisted third-order carrier filter diverges at `BL · Δt ≈ 0.4`
+(the plain third-order one at ≈ 0.43). Below that, the loop's actual noise
+bandwidth runs wider than configured:
+
+| `BL · Δt`                    | 0.018 | 0.036 | 0.072 | 0.09  | 0.18  | 0.36 |
+|------------------------------|------:|------:|------:|------:|------:|-----:|
+| `ThirdOrderAssistedBilinearLF` | 1.05× | 1.09× | 1.19× | 1.25× | 1.65× | 5.2× |
+| `ThirdOrderBilinearLF`         | 0.97× | 1.00× | 1.07× | 1.12× | 1.38× | 2.8× |
+
+The carrier cap at 0.09 keeps the loop within 25 % of its configured bandwidth
+with about 4× stability margin. It is the product of Kaplan & Hegarty's
+third-order design example (18 Hz at 5 ms) and matches GNSS-SDR's narrow
+post-sync bandwidths (5 Hz at 20 ms). Kaplan & Hegarty (Fig. 5.24) and Pany
+also run 18 Hz at 20 ms, but warn that analog-derived loops reach their design
+bandwidth only for `BL · Δt` well below unity — this filter is 5× wider there.
+The resulting defaults:
+
+| Integration | Signals                                                   | Carrier BL |  Code BL |
+|-------------|-----------------------------------------------------------|-----------:|---------:|
+| 1 ms        | GPS L1 C/A, GPS L5, Galileo E5a, …                        |      18 Hz |     1 Hz |
+| 2 ms        | Galileo E5a-QP                                            |      18 Hz |     1 Hz |
+| 4 ms        | Galileo E1B / E1C                                         |      18 Hz |     1 Hz |
+| 10 ms       | GPS L1C-D / L1C-P, BeiDou B1C; GPS L5I synced at 10 ms    |       9 Hz |     1 Hz |
+| 20 ms       | GPS L2 CM; GPS L1 C/A, L5Q, Galileo E5a-I synced at 20 ms |     4.5 Hz |   0.9 Hz |
+| 1.5 s       | GPS L2 CL                                                 |    0.06 Hz | 0.012 Hz |
+
+The code cap of 0.018 is conservative for the second-order code filter, which
+destabilizes only around `BL · Δt ≈ 0.4` (S. A. Stephens and J. B. Thomas,
+"Controlled-Root Formulation for Digital Phase-Locked Loops", IEEE Trans.
+Aerospace and Electronic Systems 31(1), 1995). Carrier-aided, the DLL has
+almost no dynamics to track, so its 1 Hz is a thermal-noise-versus-pull-in
+choice, applied in full up to 18 ms.
 
 Override per signal by defining methods of
 [`default_carrier_loop_filter_bandwidth`](@ref) /
@@ -68,6 +87,7 @@ ConventionalPLLAndDLL
 ConventionalAssistedPLLAndDLL
 default_carrier_loop_filter_bandwidth
 default_code_loop_filter_bandwidth
+Tracking.effective_carrier_loop_filter_bandwidth
 Tracking.effective_code_loop_filter_bandwidth
 ```
 

@@ -110,8 +110,8 @@ over 100 ms of observation, 4000 trials × 9 seeds, relative σ in dB:
 
 Two honest caveats. The record length also sets the discriminator behaviour and
 the loop's update interval, so this is a **trade, not a free win** — the
-conventional estimator rescales the carrier bandwidth by `1/N` to keep the loop
-stable, but a longer record still means a slower loop. And the length is capped
+conventional estimator caps the carrier bandwidth at `0.09 / T` to keep the loop
+stable, so a long enough record also means a narrower loop. And the length is capped
 at one block until bit/secondary sync is found, so pre-sync you are on the 1 ms
 column whatever you configure.
 

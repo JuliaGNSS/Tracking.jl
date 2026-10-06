@@ -1,78 +1,34 @@
-# Target `BL · Δt` for a loop update interval of `Δt` — ~10× margin from the
-# `BL · Δt < 0.18` practical stability edge of the bilinear third-order carrier
-# filter. Sizes the carrier default against the primary code period, and caps
-# the code loop against each record's actual integration time (see
-# `effective_code_loop_filter_bandwidth`). For the code loop the shared product
-# is a conservative reuse: its filter is the *second*-order bilinear one, which
-# destabilizes only around the classic `BL · Δt ≈ 0.4` of transform-designed
-# digital loops (Stephens & Thomas 1995, "Controlled-Root Formulation for
-# Digital Phase-Locked Loops", IEEE Trans. AES 31(1) — this implementation's
-# linearized edge lands there numerically too), so the cap only adds margin.
-const MAX_LOOP_BANDWIDTH_TIME_PRODUCT = 0.018
+# Largest `BL · Δt` per loop. The default FLL-assisted carrier filter diverges
+# at ≈ 0.4 and runs 25 % wider than configured at 0.09; the 0.018 code cap is
+# conservative for the second-order filter (stable to ≈ 0.4, Stephens & Thomas
+# 1995). See the "Stability cap" section of docs/src/loop_filter.md.
+const MAX_CARRIER_LOOP_BANDWIDTH_TIME_PRODUCT = 0.09
+const MAX_CODE_LOOP_BANDWIDTH_TIME_PRODUCT = 0.018
 
 """
 $(SIGNATURES)
 
-Recommended carrier-loop-filter bandwidth for `signal`'s primary integration
-period. Sized so that the PLL time-bandwidth product `BL * T` lands at
-about 0.018 (≈10× margin from the 0.18 stability edge of the bilinear
-third-order filter). Used by [`TrackState(; signal=…)`](@ref) when the
-user doesn't pass an explicit `doppler_estimator`.
+Recommended carrier-loop-filter bandwidth for `signal`: a flat 18 Hz, the
+third-order PLL bandwidth of the literature. It is the loop's one-sided noise
+bandwidth `BL`, seeded for every satellite whose estimator leaves
+`carrier_loop_filter_bandwidth` as `nothing`, and capped at filter time by
+[`effective_carrier_loop_filter_bandwidth`](@ref).
 
-Override by defining a method for your signal type, or by constructing
-[`ConventionalAssistedPLLAndDLL`](@ref) yourself with explicit
-`carrier_loop_filter_bandwidth =` / `code_loop_filter_bandwidth =` kwargs.
-
-```julia
-T = get_code_length(signal) / get_code_frequency(signal)   # primary period
-BL = 0.018 / T                                              # this default
-```
-
-`T` here is the **primary**-code period, not the chosen coherent
-integration length. For GPS L1 C/A (T = 1 ms) and GPS L5I (T = 1 ms, a
-10230-chip code at 10.23 MHz) this returns 18 Hz — matching the historical
-hand-picked default. For L1C-D / L1C-P (T = 10 ms) it returns 1.8 Hz, and
-for Galileo E1B (T = 4 ms) 4.5 Hz — the well-inside-stability values the
-multi-signal flagship use case needs.
-
-This value is the **reference** bandwidth for a one-primary-code-period
-integration; it is not the bandwidth that ends up in the loop when you
-integrate longer. Coherently integrating `N` primary blocks grows the loop
-update interval to `N·T`, which would push `BL·N·T` toward the ~0.18
-stability edge of the bilinear filter. To avoid that, the conventional
-estimator **automatically scales the effective loop bandwidth by
-`1/N`** at filter time (see [`ConventionalPLLAndDLL`](@ref)), holding the
-`BL·Δt` stability product fixed at its single-period value. So you set this
-reference bandwidth once and the loop stays stable at any integration length
-— no manual `1/N` adjustment is needed.
+Override by defining a method for your signal type, or pass
+`carrier_loop_filter_bandwidth =` to the estimator.
 """
 function default_carrier_loop_filter_bandwidth(signal::AbstractGNSSSignal)
-    # T = the primary code period — one code block, not the chosen coherent
-    # integration length. The estimator's bandwidth fields are typed
-    # `typeof(1.0Hz)`, so explicitly land on Hz (otherwise `1/s` propagates and
-    # trips the typed field assignment).
-    primary_period = get_code_length(signal) / get_code_frequency(signal)
-    uconvert(Hz, MAX_LOOP_BANDWIDTH_TIME_PRODUCT / primary_period)
+    18.0Hz
 end
 
 """
 $(SIGNATURES)
 
-Recommended code-loop-filter (DLL) bandwidth for `signal`: a flat 1 Hz for every
-signal.
-
-A *carrier-aided* DLL has almost no dynamic stress to track — the code Doppler
-is handed to it by the PLL (see `aid_dopplers`) — so its bandwidth is a
-thermal-noise-versus-pull-in trade that scales with neither the symbol rate
-(the old 18:1 carrier:code ratio starved the long-primary signals' pull-in) nor
-the coherent integration length. 1 Hz sits inside the 0.25–2 Hz the reference
-software receivers (GNSS-SDR, SoftGNSS, PocketSDR) use across signals.
-
-Unlike the carrier bandwidth this is an **absolute** value, not a
-per-primary-code-period reference. Only the loop's own `BL · Δt` stability
-product caps it, at filter time, against each record's actual integration time
-— see [`effective_code_loop_filter_bandwidth`](@ref); the cap binds only past
-18 ms (0.9 Hz for a 20 ms L2 CM integration, 0.012 Hz for a 1.5 s L2 CL one).
+Recommended code-loop-filter (DLL) bandwidth for `signal`: a flat 1 Hz, inside
+the 0.25–2 Hz of the reference software receivers. Carrier-aided (see
+`aid_dopplers`), the DLL has almost no dynamics to track, so the bandwidth is a
+thermal-noise-versus-pull-in trade independent of the signal. Capped at filter
+time by [`effective_code_loop_filter_bandwidth`](@ref).
 
 Override by defining a method for your signal type.
 """
@@ -83,27 +39,24 @@ end
 """
 $(SIGNATURES)
 
-Effective code-loop bandwidth for a record that integrated for
-`integration_time`: the configured bandwidth, capped so the code loop's
-`BL · Δt` product stays inside `MAX_LOOP_BANDWIDTH_TIME_PRODUCT`.
+The configured carrier bandwidth, capped at `0.09 / integration_time` to keep
+the loop stable on long integrations (see the loop-filter docs). The default
+18 Hz runs unchanged up to 5 ms of integration, 9 Hz at 10 ms, 4.5 Hz at 20 ms.
+"""
+@inline function effective_carrier_loop_filter_bandwidth(bandwidth, integration_time)
+    min(bandwidth, uconvert(Hz, MAX_CARRIER_LOOP_BANDWIDTH_TIME_PRODUCT / integration_time))
+end
 
-The carrier loop takes a `1/N` scaling instead, because its configured
-bandwidth is a per-primary-code-period *reference* — see
-[`ConventionalPLLAndDLL`](@ref). The DLL's is an absolute value: carrier-aided,
-it has no dynamic stress that grows with the integration length, and neither its
-pull-in time nor its thermal-noise floor does either, so integrating longer must
-not narrow it. Only stability may, and stability depends on the update interval
-the record actually had — hence the cap against `integration_time` rather than a
-scaling by the block count. A `1/N` here would take a 20 ms L1 C/A integration
-down to 0.05 Hz where stability allows 0.9 Hz, re-introducing through the
-integration length exactly the pull-in sag that sizing the DLL off the carrier
-default used to cause by signal.
+"""
+$(SIGNATURES)
 
-For a single-block integration of any signal at or below the 18 ms period where
-the cap starts to bind, this returns the configured bandwidth unchanged.
+The configured code bandwidth, capped at `0.018 / integration_time` for
+stability. Longer integration must not otherwise narrow the DLL: neither its
+dynamics nor its noise floor depend on it. The cap binds only past 18 ms at the
+default 1 Hz.
 """
 @inline function effective_code_loop_filter_bandwidth(bandwidth, integration_time)
-    min(bandwidth, uconvert(Hz, MAX_LOOP_BANDWIDTH_TIME_PRODUCT / integration_time))
+    min(bandwidth, uconvert(Hz, MAX_CODE_LOOP_BANDWIDTH_TIME_PRODUCT / integration_time))
 end
 
 """
@@ -172,24 +125,13 @@ satellites. Each bandwidth field is `Maybe{typeof(1.0Hz)}`: a `nothing`
 field (the default) means **auto** — [`init_estimator_state`](@ref) sizes the
 bandwidth per satellite from that sat's estimator-driver signal (`signals[1]`)
 via [`default_carrier_loop_filter_bandwidth`](@ref) /
-[`default_code_loop_filter_bandwidth`](@ref): the carrier loop is sized for the
-signal's own integration period (18 Hz for GPS L1 C/A, 4.5 Hz for Galileo E1B,
-1.8 Hz for L1C-D / L1C-P, …), the code loop takes a flat 1 Hz. Pass an explicit
-bandwidth to override the auto-sizing for every satellite this estimator seeds.
-
-The two bandwidths are referenced differently, because only the carrier loop's
-tuning tracks the update rate. The **carrier** bandwidth is referenced to a
-one-primary-code-period integration: when a signal coherently integrates `N`
-primary blocks (its per-[`TrackedSignal`](@ref)
-`preferred_num_code_blocks_to_integrate`, set via
-[`set_preferred_num_code_blocks_to_integrate!`](@ref)), it is automatically
-scaled to `BL/N` at filter time so the loop's `BL·Δt` stability product stays at
-its single-period value. This keeps the loop stable across integration lengths
-without the caller re-tuning the bandwidth — e.g. a 1 ms→10 ms switch needs no
-bandwidth change. The **code** bandwidth is an absolute value that longer
-integration does not narrow; it is only capped by the same stability product
-against the record's actual integration time — see
-[`effective_code_loop_filter_bandwidth`](@ref).
+[`default_code_loop_filter_bandwidth`](@ref). Pass an explicit bandwidth to
+override them for every satellite this estimator seeds. At filter time both are
+capped against the record's integration time
+([`effective_carrier_loop_filter_bandwidth`](@ref),
+[`effective_code_loop_filter_bandwidth`](@ref)), so lengthening the coherent
+integration with [`set_preferred_num_code_blocks_to_integrate!`](@ref) needs no
+re-tuning.
 """
 struct ConventionalPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter} <:
        AbstractDopplerEstimator
@@ -441,9 +383,8 @@ end
 # normalize the record's (raw) correlator by its sample count, update/apply the
 # post-corr filter, record the filtered prompt, advance the CN0 estimator and
 # bit buffer, and rebuild the `TrackedSignal` with the record moved to
-# `last_fully_integrated_*`. Returns the rebuilt signal plus the intermediate
-# values the driver's loop-filter section needs (`filtered_correlator`,
-# `integrated_code_blocks`).
+# `last_fully_integrated_*`. Returns the rebuilt signal plus the filtered
+# correlator the driver's loop-filter section needs.
 #
 # Unlike the old per-integration advance, this does NOT reset the live
 # accumulator or `integrated_samples`: the correlate phase already reset them
@@ -454,11 +395,7 @@ end
 # (`calc_num_code_blocks_for_bit_buffer`), recovered from the record's sample
 # count: post-sync the first integration is truncated to land on the data-bit
 # boundary, so crediting the intended length would misalign the decoded bits
-# (issue #125). The block count returned for the driver's `1/N` carrier-bandwidth
-# scaling is the same actual count (floored at 1): the bandwidth must pair with
-# the record's true integration time, so it only switches when the integration
-# actually lengthened — not already on the fold where sync was detected but the
-# records were still single-block (see `_process_estimator_driver_signal`).
+# (issue #125).
 # `correlated_pre_sync = true` marks a record that follows a bit/secondary sync
 # detected earlier in the same fold, i.e. one that was correlated with a
 # pre-sync replica. Its *prompt* is only unusable where sync changed the replica
@@ -501,9 +438,7 @@ end
         sampling_frequency,
         has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
     )
-    # Blocks this record actually covered, for the driver's `1/N` carrier-bandwidth
-    # scaling. The floor at 1 covers the fractional-block record right after a
-    # sync phase-snap accumulator reset, whose rounded block count can be 0.
+    # Floored at 1 for the fractional-block record after a sync phase-snap reset.
     integrated_code_blocks = max(1, bit_block_count)
     # De-rotate the prompt onto the driver's (real) phase frame before both the
     # secondary/bit sync search and the coherent bit accumulation inside
@@ -579,7 +514,7 @@ end
         # What the CN0 estimator's newest prompt was integrated over.
         last_fully_integrated_num_code_blocks = integrated_code_blocks,
     )
-    return new_signal, filtered_correlator, integrated_code_blocks
+    return new_signal, filtered_correlator
 end
 
 # Build the context and fold the record into one signal's CN0 estimator, or skip
@@ -662,7 +597,7 @@ end
             !found_before_fold && has_bit_or_secondary_code_been_found(ts.bit_buffer)
         # The driver de-rotates against itself (offset 0), so the derotation is a
         # no-op for it; passed for symmetry with the passenger path.
-        ts, filtered_correlator, integrated_code_blocks = _apply_correlator_output(
+        ts, filtered_correlator = _apply_correlator_output(
             ts,
             output,
             sat.prn,
@@ -673,25 +608,13 @@ end
             correlated_pre_sync = synced_earlier_in_fold,
         )
 
-        # The configured CARRIER bandwidth is referenced to a
-        # one-primary-code-period integration. Coherently integrating N periods
-        # grows the loop update interval by that factor, so scale the effective
-        # bandwidth by 1/N to hold the loop's BL·Δt stability product at its
-        # single-period value. N (`integrated_code_blocks`) is the number of
-        # blocks this record ACTUALLY covered — recovered from its sample count —
-        # not the intended integration length: the bandwidth pairs with the
-        # record's true `integration_time`, so it only switches once the
-        # integrations really lengthen. Scaling by the intended length instead
-        # would under-gain the loop for single-block records folded after a
-        # mid-fold sync detection (correlated pre-sync, but the live bit buffer
-        # already reports the post-sync length) and for the first post-sync
-        # integration, which is truncated to land on the data-bit boundary. For
-        # the N=1 path this divides by 1 and is bit-identical to before.
-        carrier_bandwidth =
-            pll_and_dll_state.carrier_loop_filter_bandwidth / integrated_code_blocks
-        # The DLL's is an absolute bandwidth, so it is capped by its own
-        # stability product against this record's integration time instead of
-        # scaled by N — see `effective_code_loop_filter_bandwidth`.
+        # Capped against the record's actual integration time, not the intended
+        # one: records folded after a mid-fold sync, or the truncated first
+        # post-sync integration, are still short.
+        carrier_bandwidth = effective_carrier_loop_filter_bandwidth(
+            pll_and_dll_state.carrier_loop_filter_bandwidth,
+            integration_time,
+        )
         code_bandwidth = effective_code_loop_filter_bandwidth(
             pll_and_dll_state.code_loop_filter_bandwidth,
             integration_time,
@@ -1018,6 +941,9 @@ function estimate_dopplers_and_filter_prompt!(
     return track_state
 end
 
+# The filter's coefficients assume consistent units, so it is fed the phase
+# error in cycles (`pll_disc`) and the FLL error in Hz to output a Doppler in Hz.
+# Fed radians, the loop gain was 2π too high (#244).
 function calculate_carrier_frequency_update(
     signal::AbstractGNSSSignal,
     carrier_loop_filter::ThirdOrderAssistedBilinearLF,

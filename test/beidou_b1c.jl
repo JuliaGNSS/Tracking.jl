@@ -43,9 +43,8 @@ const B1C_P_MAX_ERRORS =
     @test @inferred(get_default_correlator(b1c_d, NumAnts(3))) ==
           VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
-    # 10 ms primary period (10230 chips at 1.023 Mcps) → 1.8 Hz carrier, and
-    # short enough to leave the DLL at its unclamped 1 Hz reference.
-    @test @inferred(default_carrier_loop_filter_bandwidth(b1c_d)) ≈ 1.8Hz
+    # Flat defaults; the carrier is capped to 9 Hz at 10 ms.
+    @test @inferred(default_carrier_loop_filter_bandwidth(b1c_d)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(b1c_d)) ≈ 1.0Hz
 
     @test @inferred(get_code_block_buffer_type(b1c_d)) === UInt8
@@ -87,8 +86,8 @@ end
     @test @inferred(get_default_correlator(b1c_p, NumAnts(3))) ==
           VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
-    # 10 ms primary period → 1.8 Hz / 1 Hz, same as the data component.
-    @test @inferred(default_carrier_loop_filter_bandwidth(b1c_p)) ≈ 1.8Hz
+    # Same as the data component.
+    @test @inferred(default_carrier_loop_filter_bandwidth(b1c_p)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(b1c_p)) ≈ 1.0Hz
 
     # 1800-chip per-PRN overlay → the exact-width UInt1800 that GPS L1C-P's

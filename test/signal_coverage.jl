@@ -35,6 +35,7 @@ using Tracking:
     TrackedSat,
     TrackedSignal,
     default_carrier_loop_filter_bandwidth,
+    effective_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     default_num_code_blocks_to_integrate,
     detect_bit_or_secondary_code_sync,
@@ -149,20 +150,18 @@ end
     @test get_preferred_num_code_blocks_to_integrate(TrackedSignal(signal)) ==
           default_blocks
 
-    # Loop-bandwidth defaults are derived from the primary code period, so the
-    # question is not whether they are positive — `BL = 0.018 / T` always is —
-    # but whether the loop that results is a sane one to run. That is a question
-    # about the integration the signal actually *starts* at, not about one
-    # primary block: the estimator scales the carrier bandwidth by `1/N` for an
-    # N-block integration, so both bounds below are taken across `N`. The bounds
-    # are absolute: 100 Hz is already a very wide carrier loop (reference
-    # receivers sit at 5-25 Hz), and an update rate above 2 kHz means the
-    # tracker would be filtering faster than any real loop needs to. Galileo
-    # E5a-QP is what makes the distinction load-bearing — 279 Hz per 64.5 µs
-    # block, but 9 Hz across the 31-block (2 ms) cycle it integrates.
-    carrier_bandwidth = @inferred default_carrier_loop_filter_bandwidth(signal)
+    # The loop must be sane at the integration the signal starts at (E5a-QP: a
+    # 31-block cycle, not one 64.5 µs block): carrier below 100 Hz, update rate
+    # below 2 kHz.
+    integration_time =
+        upreferred(get_code_length(signal) * default_blocks / get_code_frequency(signal))
+    carrier_bandwidth = @inferred effective_carrier_loop_filter_bandwidth(
+        default_carrier_loop_filter_bandwidth(signal),
+        integration_time,
+    )
     code_bandwidth = @inferred default_code_loop_filter_bandwidth(signal)
-    @test 0.0Hz < carrier_bandwidth / default_blocks < 100.0Hz
+    @test 0.0Hz < carrier_bandwidth < 100.0Hz
+    @test carrier_bandwidth * integration_time <= 0.09 + 1e-12
     @test 0.0Hz < code_bandwidth < 100.0Hz
     @test get_code_frequency(signal) / (get_code_length(signal) * default_blocks) < 2000.0Hz
 

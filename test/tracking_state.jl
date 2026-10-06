@@ -192,15 +192,16 @@ end
     ]
 end
 
+Tracking.default_carrier_loop_filter_bandwidth(::GalileoE1B{Matrix{Int32}}) = 7.0Hz
+
 @testset "Positional TrackState(satellites::SatelliteDicts) infers default estimator" begin
     # With no estimator kwarg, the default is the auto-bandwidth
-    # `ConventionalAssistedPLLAndDLL`; each group's sats are then seeded with
-    # the bandwidth recommended for that group's own driver signal — the loop
-    # runs on each group's driver, so there is no cross-group compromise. The
-    # GPS L1 C/A sat gets 18 Hz while the Galileo E1B sat gets 4.5 Hz, from
-    # the one shared (auto) estimator.
+    # `ConventionalAssistedPLLAndDLL`, which seeds each group's sats from that
+    # group's own driver signal. Every signal's default is the flat 18 Hz, so
+    # give the Galileo driver its own through the documented extension point,
+    # on a code-storage parameterization no other test uses.
     gpsl1 = GPSL1CA()
-    galileo = GalileoE1B()
+    galileo = GalileoE1B(Int32.(GalileoE1B().codes), GalileoE1B().lut)
     estimator = ConventionalAssistedPLLAndDLL()
     sats = (
         gps = dictionary([
@@ -216,7 +217,7 @@ end
     @test get_sat_states(ts, :gps)[1].doppler_estimator_state.carrier_loop_filter_bandwidth ==
           default_carrier_loop_filter_bandwidth(gpsl1)
     @test get_sat_states(ts, :gal)[2].doppler_estimator_state.carrier_loop_filter_bandwidth ==
-          default_carrier_loop_filter_bandwidth(galileo)
+          7.0Hz
 end
 
 @testset "Positional TrackState(dict) default estimator inference" begin

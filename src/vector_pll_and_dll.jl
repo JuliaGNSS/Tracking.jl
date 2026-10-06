@@ -125,8 +125,9 @@ per satellite from that sat's estimator-driver signal (`signals[1]`) via
 [`default_carrier_loop_filter_bandwidth`](@ref) /
 [`default_code_loop_filter_bandwidth`](@ref) — the same sizing as the
 conventional estimator, which the scalar fallback loop is. Like the
-conventional estimator, the effective bandwidth is scaled by `1/N` at filter
-time when a signal coherently integrates `N` primary code blocks.
+conventional estimator, both bandwidths are capped at filter time against the
+record's actual integration time (see
+[`effective_carrier_loop_filter_bandwidth`](@ref)).
 """
 struct VectorPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter} <:
        AbstractDopplerEstimator
@@ -294,7 +295,7 @@ end
         integration_time = output.integrated_samples / sampling_frequency
         synced_earlier_in_fold =
             !found_before_fold && has_bit_or_secondary_code_been_found(ts.bit_buffer)
-        ts, filtered_correlator, integrated_code_blocks = _apply_correlator_output(
+        ts, filtered_correlator = _apply_correlator_output(
             ts,
             output,
             sat.prn,
@@ -305,14 +306,11 @@ end
             correlated_pre_sync = synced_earlier_in_fold,
         )
 
-        # Same effective-bandwidth handling as the conventional estimator: the
-        # carrier's per-primary-period reference is scaled by 1/N when a record
-        # coherently integrates N primary code blocks, holding its BL·Δt
-        # stability product at the single-period value, while the DLL's absolute
-        # bandwidth is only capped by that same product against the record's
-        # actual integration time.
-        carrier_bandwidth =
-            pll_and_dll_state.carrier_loop_filter_bandwidth / integrated_code_blocks
+        # Capped as in the conventional estimator.
+        carrier_bandwidth = effective_carrier_loop_filter_bandwidth(
+            pll_and_dll_state.carrier_loop_filter_bandwidth,
+            integration_time,
+        )
         code_bandwidth = effective_code_loop_filter_bandwidth(
             pll_and_dll_state.code_loop_filter_bandwidth,
             integration_time,

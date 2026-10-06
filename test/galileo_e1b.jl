@@ -1,13 +1,14 @@
 module GalileoE1BTest
 
 using Test: @test, @testset, @inferred
-using Unitful: Hz
+using Unitful: Hz, ms
 using GNSSSignals: GalileoE1B, GalileoE1B_BOC11
 using Tracking:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
     default_carrier_loop_filter_bandwidth,
+    effective_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     VeryEarlyPromptLateCorrelator,
     NumAnts
@@ -39,9 +40,9 @@ using Tracking:
     @test @inferred(get_default_correlator(galileo_e1b, NumAnts(3))) ==
           VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
-    # 4 ms primary period (4092 chips at 1.023 Mcps) → BL·T ≈ 0.018 gives
-    # 4.5 Hz carrier, and leaves the DLL at its unclamped 1 Hz reference.
-    @test @inferred(default_carrier_loop_filter_bandwidth(galileo_e1b)) ≈ 4.5Hz
+    # Flat defaults; a 4 ms integration is below the carrier cap.
+    @test @inferred(default_carrier_loop_filter_bandwidth(galileo_e1b)) ≈ 18.0Hz
+    @test effective_carrier_loop_filter_bandwidth(18.0Hz, 4ms) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(galileo_e1b)) ≈ 1.0Hz
 
     # 1 symbol = 1 primary period; sync buffer is dead state, but a

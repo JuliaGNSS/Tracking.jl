@@ -47,7 +47,7 @@ rotl(x::T, r, N) where {T} =
     @test @inferred(get_default_correlator(e5a_i, NumAnts(1))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
 
-    # 1 ms primary period (10230 chips at 10.23 Mcps) → 18 Hz / 1 Hz.
+    # Flat defaults, uncapped at 1 ms.
     @test @inferred(default_carrier_loop_filter_bandwidth(e5a_i)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(e5a_i)) ≈ 1.0Hz
 

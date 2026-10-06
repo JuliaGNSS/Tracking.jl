@@ -1,13 +1,14 @@
 module GPSL1CDTest
 
 using Test: @test, @testset, @inferred
-using Unitful: Hz
+using Unitful: Hz, ms
 using GNSSSignals: GPSL1C_D
 using Tracking:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
     default_carrier_loop_filter_bandwidth,
+    effective_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     VeryEarlyPromptLateCorrelator,
     NumAnts
@@ -36,10 +37,9 @@ using Tracking:
     @test @inferred(get_default_correlator(gpsl1c_d, NumAnts(3))) ==
           VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
-    # 10 ms primary period at BL·T ≈ 0.018 → 1.8 Hz carrier, 10× tighter than the
-    # L1 C/A default and required for stable 10 ms tracking. 10 ms is still short
-    # enough to leave the DLL at its unclamped 1 Hz reference.
-    @test @inferred(default_carrier_loop_filter_bandwidth(gpsl1c_d)) ≈ 1.8Hz
+    # Flat defaults; at 10 ms the carrier is capped to 9 Hz, the DLL not yet.
+    @test @inferred(default_carrier_loop_filter_bandwidth(gpsl1c_d)) ≈ 18.0Hz
+    @test effective_carrier_loop_filter_bandwidth(18.0Hz, 10ms) ≈ 9.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(gpsl1c_d)) ≈ 1.0Hz
 
     # 1 symbol = 1 primary period; sync buffer is dead state, but a
