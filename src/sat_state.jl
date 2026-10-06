@@ -848,10 +848,10 @@ function SignalGroup(
 end
 
 # A group's signals share one band (#129), one chip rate (#129) and one
-# constellation (#224); the error messages say why. The constellation stands in
-# for the PRN namespace: move to a PRN-namespace trait once QZSS/SBAS share GPS's
-# code space. Bands compare by id, so a user-defined band aliasing an existing
-# measurement key still validates.
+# constellation (#224), and are all different; the error messages say why. The
+# constellation stands in for the PRN namespace: move to a PRN-namespace trait
+# once QZSS/SBAS share GPS's code space. Bands compare by id, so a user-defined
+# band aliasing an existing measurement key still validates.
 # The instance method is generic and forwards to the type, so look for the latter.
 _has_constellation_id(s::AbstractGNSSSignal) =
     hasmethod(get_constellation_id, Tuple{Type{typeof(s)}})
@@ -877,6 +877,18 @@ end
 
 function _validate_signal_group(signals::Tuple{Vararg{AbstractGNSSSignal}}, band)
     driver = first(signals)
+    for (i, s) in enumerate(signals)
+        any(t -> typeof(t) === typeof(s), signals[1:(i-1)]) && throw(
+            ArgumentError(
+                string(
+                    "A SignalGroup lists `",
+                    get_signal_id(s),
+                    "` twice. Each signal is tracked once per satellite, and a ",
+                    "signal-type selector must name exactly one of them: list it once.",
+                ),
+            ),
+        )
+    end
     foreach(signals) do s
         if get_band_id(get_band(s)) !== get_band_id(band)
             throw(

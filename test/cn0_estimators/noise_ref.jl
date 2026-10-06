@@ -9,6 +9,7 @@ using StaticArrays: SVector
 using Unitful: Hz, s, ms, dBHz, ustrip, uconvert
 using GNSSSignals: GPSL1CA, GPSL5I
 import Tracking
+include("../repeated_signal_test_helpers.jl")  # `_repeated_signal_track_state`
 using Tracking:
     BitBuffer,
     CN0UpdateContext,
@@ -252,7 +253,10 @@ function _ingested_state(
     sat =
         isnothing(signals) ? TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator) :
         TrackedSat(signals, 1, 0.0, 0.0Hz; cn0_estimator)
-    ts = TrackState(gpsl1, [sat])
+    # Explicit `signals` may repeat one, which only the unchecked group allows.
+    ts =
+        isnothing(signals) ? TrackState(gpsl1, [sat]) :
+        _repeated_signal_track_state(sat, Tracking.ConventionalAssistedPLLAndDLL())
     a = sqrt(prompt_power) * num_samples
     correlator = update_accumulator(
         EarlyPromptLateCorrelator(),

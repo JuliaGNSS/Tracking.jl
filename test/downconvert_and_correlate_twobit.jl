@@ -42,6 +42,7 @@ using Tracking:
     TwoBitDownconvertAndCorrelator,
     TwoBitThreadedDownconvertAndCorrelator
 import Tracking
+include("repeated_signal_test_helpers.jl")  # `_repeated_signal_track_state`
 using StaticArrays: SVector
 
 # Dynamic-tap-count correlator (see the one-bit test file): runtime Vector shifts and
@@ -507,11 +508,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             ).signals,
         ).correlator
         satN = TrackedSat(ntuple(_ -> mksig(), N), 1, 100.0, 200Hz; doppler_estimator = est)
-        tsN = downconvert_and_correlate(
-            dc,
-            meas,
-            TrackState(sig, satN; doppler_estimator = est),
-        )
+        tsN = downconvert_and_correlate(dc, meas, _repeated_signal_track_state(satN, est))
         for s in get_sat_state(tsN, 1).signals
             @test get_prompt(s.correlator) == get_prompt(cs)
             @test get_early(s.correlator) == get_early(cs)
@@ -547,11 +544,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             post_corr_filter = DefaultPostCorrFilter(),
         )
         satN = TrackedSat(ntuple(_ -> mksig(), N), 1, 100.0, 200Hz; doppler_estimator = est)
-        tsN = downconvert_and_correlate(
-            dc,
-            meas,
-            TrackState(sig, satN; doppler_estimator = est),
-        )
+        tsN = downconvert_and_correlate(dc, meas, _repeated_signal_track_state(satN, est))
         for s in get_sat_state(tsN, 1).signals
             c = _completed_or_partial_correlator(s)
             @test length(get_prompt(c)) == M
