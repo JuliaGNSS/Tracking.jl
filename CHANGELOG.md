@@ -13,6 +13,7 @@
 
 * ask the track state for the estimator's navigation solution ([f8c68d3](https://github.com/JuliaGNSS/Tracking.jl/commit/f8c68d36618b91927dc9448b1a02a51df7c97168))
 * hand the estimator records that name their satellite on one sample grid ([54b2e7e](https://github.com/JuliaGNSS/Tracking.jl/commit/54b2e7ebeccd5b77ec1847c1df687400942a95b5))
+* **pvt:** hand tracked satellites to PositionVelocityTime from here ([b4d6790](https://github.com/JuliaGNSS/Tracking.jl/commit/b4d679029c1393baa2ae587db2964af2163081d9))
 * **track:** keep each state's sample grid its own, and carry it into rebuilt ones ([dd9baac](https://github.com/JuliaGNSS/Tracking.jl/commit/dd9baac5acb72a4e499cdadb78348aa8637b9043))
 
 
