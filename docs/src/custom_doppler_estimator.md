@@ -175,14 +175,15 @@ SatMyEstimator()
 ```
 
 The existing [`ConventionalPLLAndDLL`](@ref) implementation in
-`src/conventional_pll_and_dll.jl` shows the full pattern, including how
-the immutable and in-place forms share a `_update_tracked_sat_doppler`
-helper so they cannot drift, and how the per-signal walk distinguishes
-the [estimator-driver signal](tracking_state.md#Estimator-driver-signal)
-(`signals[1]`, which drives the conventional PLL/DLL) from the other
-signals (whose prompts are filtered and, with [Signal combining](@ref),
-whose discriminators join the driver's loops; [`VectorPLLAndDLL`](@ref)
-also hands their raw readings to the navigation filter).
+`src/doppler_estimators/conventional_pll_and_dll.jl` shows the full
+pattern, including how the immutable and in-place forms share a
+`_update_tracked_sat_doppler` helper so they cannot drift, and how the
+per-signal walk distinguishes the [estimator-driver
+signal](tracking_state.md#Estimator-driver-signal) (`signals[1]`, which
+drives the conventional PLL/DLL) from the other signals (whose prompts
+are filtered and, with [Signal combining](@ref), whose discriminators
+join the driver's loops; [`VectorPLLAndDLL`](@ref) also hands their raw
+readings to the navigation filter).
 That split is a convention `ConventionalPLLAndDLL` chooses — your own
 estimator can use every signal's state any way you like.
 
