@@ -108,6 +108,19 @@ GNSSSignals.get_constellation_id(::Type{FakeGPSConstellationL1Signal}) =
     @test ts isa TrackState
 end
 
+@testset "SignalGroup rejects a signal listed twice" begin
+    @test_throws "twice" SignalGroup((GPSL1CA(), GPSL1CA()))
+    @test_throws "twice" SignalGroup((GPSL1C_P(), GPSL1CA(), GPSL1C_P()))
+    @test_throws ArgumentError TrackState(; signals = (l1 = (GPSL1CA(), GPSL1CA()),))
+    @test_throws "twice" SignalGroup(
+        GNSSSignals.L1(),
+        Dictionary{Int,Tracking.TrackedSat}(),
+        (GPSL1CA(), GPSL1CA()),
+        NumAnts(1),
+    )
+    @test SignalGroup((GPSL1C_P(), GPSL1C_D(), GPSL1CA())) isa SignalGroup
+end
+
 @testset "SignalGroup rejects mixed constellations (issue #224)" begin
     # Same band and chip rate, but two different satellites per PRN.
     for signals in (

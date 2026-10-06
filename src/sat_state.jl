@@ -1042,7 +1042,9 @@ end
 #     constellation sharing GPS's code space with disjoint PRNs (QZSS, SBAS)
 #     be tracked, swap it for a PRN-namespace trait. A one-signal group needs
 #     no constellation; in a larger one a user-defined signal without
-#     `get_constellation_id` is rejected rather than left unchecked.
+#     `get_constellation_id` is rejected rather than left unchecked; and
+# (d) every signal is different — a signal listed twice would be tracked
+#     twice to no purpose, and a signal-type selector must name exactly one.
 # Bands compare by id (`GNSSSignals.get_band_id`, not instance) so a
 # user-defined band that aliases an existing measurement key still validates.
 # The instance method is generic and forwards to the type, so look for the latter.
@@ -1070,6 +1072,18 @@ end
 
 function _validate_signal_group(signals::Tuple{Vararg{AbstractGNSSSignal}}, band)
     driver = first(signals)
+    for (i, s) in enumerate(signals)
+        any(t -> typeof(t) === typeof(s), signals[1:(i-1)]) && throw(
+            ArgumentError(
+                string(
+                    "A SignalGroup lists `",
+                    get_signal_id(s),
+                    "` twice. Each signal is tracked once per satellite, and a ",
+                    "signal-type selector must name exactly one of them: list it once.",
+                ),
+            ),
+        )
+    end
     foreach(signals) do s
         if get_band_id(get_band(s)) !== get_band_id(band)
             throw(

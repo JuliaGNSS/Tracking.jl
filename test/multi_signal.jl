@@ -19,6 +19,8 @@ using Test: @test, @testset, @test_throws
 using Unitful: Hz, dBHz
 using Dictionaries: dictionary
 using GNSSSignals: GPSL1CA, gen_code, get_code_frequency, get_code_center_frequency_ratio
+import Tracking
+include("repeated_signal_test_helpers.jl")  # `_repeated_signal_track_state`
 using Tracking:
     TrackedSat,
     TrackedSignal,
@@ -84,7 +86,7 @@ using GNSSSignals: GPSL1C_P, GPSL1C_D, GalileoE1B
         doppler_estimator = estimator,
     )
 
-    track_state = TrackState(gpsl1, sat; doppler_estimator = estimator)
+    track_state = _repeated_signal_track_state(sat, estimator)
 
     # Synthetic L1 C/A signal — same as track tests use.
     range_ = 0:(num_samples-1)
@@ -170,9 +172,10 @@ end
     ref_sat = get_sat_state(ref_state, prn)
 
     # Two-signal sat, both GPSL1CA with identical config.
-    multi_state = TrackState(; signals = (default = (gpsl1, gpsl1),))
-    multi_state =
-        add_satellite!(multi_state; prn, code_phase = start_code_phase, carrier_doppler)
+    multi_state = _repeated_signal_track_state(
+        TrackedSat((gpsl1, gpsl1), prn, start_code_phase, carrier_doppler),
+        Tracking.ConventionalAssistedPLLAndDLL(),
+    )
     multi_state = track(signal_buf, multi_state, sampling_frequency)
     multi_sat = get_sat_state(multi_state, prn)
 

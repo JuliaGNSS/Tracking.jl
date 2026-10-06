@@ -38,6 +38,7 @@ using TrackingLoops:
     DefaultPostCorrFilter,
     ConventionalAssistedPLLAndDLL
 import Tracking
+include("repeated_signal_test_helpers.jl")  # `_repeated_signal_track_state`
 
 # Dynamic-tap-count correlator: sample shifts are a runtime Vector and the
 # accumulators are a Vector (issue #126 (b) extension point), to exercise the
@@ -425,11 +426,7 @@ end
         ).correlator
         # N-signal sat
         satN = TrackedSat(ntuple(_ -> mksig(), N), 1, 100.0, 200Hz; doppler_estimator = est)
-        tsN = downconvert_and_correlate(
-            dc,
-            meas,
-            TrackState(sig, satN; doppler_estimator = est),
-        )
+        tsN = downconvert_and_correlate(dc, meas, _repeated_signal_track_state(satN, est))
         for s in get_sat_state(tsN, 1).signals
             @test get_prompt(s.correlator) ≈ get_prompt(cs)
             @test get_early(s.correlator) ≈ get_early(cs)
