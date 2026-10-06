@@ -11,7 +11,7 @@ The tracking state nests as **TrackState → SignalGroup → TrackedSat → Trac
 
 ### Estimator-driver signal
 
-The first signal in each group's tuple is the **estimator-driver signal** — the one the Doppler estimator uses to update the satellite-shared carrier and code Doppler. With the default [`ConventionalPLLAndDLL`](@ref) / [`ConventionalAssistedPLLAndDLL`](@ref), `signals[1]`'s correlator is the input to the PLL/DLL discriminator, and an auto-bandwidth estimator seeds the loop bandwidths from this signal's [`default_carrier_loop_filter_bandwidth`](@ref) / [`default_code_loop_filter_bandwidth`](@ref). A user-supplied [`AbstractDopplerEstimator`](@ref) is free to use the other signals' state too — `signals[1]`'s privileged role is a convention of the conventional estimators, not a structural constraint of `TrackedSat`.
+The first signal in each group's tuple is the **estimator-driver signal** — the one the Doppler estimator uses to update the satellite-shared carrier and code Doppler. With the default [`ConventionalPLLAndDLL`](@ref) / [`ConventionalAssistedPLLAndDLL`](@ref), `signals[1]`'s correlator is the input to the PLL/DLL discriminator (joined by the other signals' with [Signal combining](@ref)), and an auto-bandwidth estimator seeds the loop bandwidths from this signal's [`default_carrier_loop_filter_bandwidth`](@ref) / [`default_code_loop_filter_bandwidth`](@ref). A user-supplied [`AbstractDopplerEstimator`](@ref) is free to use the other signals' state too — `signals[1]`'s privileged role is a convention of the conventional estimators, not a structural constraint of `TrackedSat`.
 
 The driver signal is privileged for the Doppler estimator only. Bit synchronisation, the post-correlation filter and the **CN0 estimator** all run per signal, so a multi-signal satellite produces one C/N₀ per signal rather than one for the driver — see [CN0 Estimator](cn0_estimator.md) for what that costs and for [`NoCN0Estimator`](@ref), the per-signal opt-out.
 
@@ -230,6 +230,8 @@ julia> get_carrier_doppler(track_state, :modern_gps, 11)
 ```
 
 Putting a pilot signal first (e.g. `GPSL1C_P()`) is encouraged with the conventional estimators when one is available: pilot signals carry no data-bit modulation, which lets the PLL run longer coherent integrations and reach lower phase-noise floors. The data-bearing signals (L1C-D, L1 C/A) still recover their navigation bits independently — each [`TrackedSignal`](@ref) carries its own `bit_buffer` regardless of which signal drives the estimator.
+
+With `combine_signals = true` on the Doppler estimator, e.g. `ConventionalAssistedPLLAndDLL(; combine_signals = true)`, the other signals' discriminators are also combined into the driver's loops; see [Signal combining](@ref).
 
 When a satellite tracks signals with different primary-code lengths (e.g. L1 C/A at 1 ms vs L1C-P at 10 ms), each outer iteration integrates to the **shortest** signal's next primary-code boundary. The shorter signal's correlator completes every iteration; the longer signal's correlator accumulates across multiple iterations and only marks `is_integration_completed = true` on its own boundary. Doppler updates therefore happen at the shortest signal's cadence (1 ms in this example), and longer signals see their integration windows spanned by piecewise Doppler updates — the natural per-iteration-Doppler-correction behaviour of a real receiver.
 

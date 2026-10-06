@@ -132,8 +132,9 @@ end
 
 """
 Per-satellite state for the conventional PLL and DLL Doppler estimator.
-Holds initial Doppler values, loop filter states and the carrier loop's
-[`FrequencyLockIndicator`](@ref).
+Holds initial Doppler values, loop filter states, the carrier loop's
+[`FrequencyLockIndicator`](@ref) and the passengers' pending
+[`SignalCombiningSums`](@ref).
 """
 @kwdef struct SatConventionalPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     init_carrier_doppler::typeof(1.0Hz)
@@ -143,6 +144,7 @@ Holds initial Doppler values, loop filter states and the carrier loop's
     carrier_loop_filter_bandwidth::typeof(1.0Hz) = 18.0Hz
     code_loop_filter_bandwidth::typeof(1.0Hz) = 1.0Hz
     frequency_lock::FrequencyLockIndicator = FrequencyLockIndicator()
+    signal_combining_sums::SignalCombiningSums = SignalCombiningSums()
 end
 
 function SatConventionalPLLAndDLL(
@@ -160,6 +162,7 @@ function SatConventionalPLLAndDLL(
         carrier_loop_filter_bandwidth,
         code_loop_filter_bandwidth,
         FrequencyLockIndicator(),
+        SignalCombiningSums(),
     )
 end
 
@@ -170,6 +173,7 @@ function SatConventionalPLLAndDLL(
     carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
     code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
     frequency_lock::Maybe{FrequencyLockIndicator} = nothing,
+    signal_combining_sums::Maybe{SignalCombiningSums} = nothing,
 ) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     SatConventionalPLLAndDLL{CA,CO}(
         sat_conventional_pll_and_dll.init_carrier_doppler,
@@ -186,6 +190,8 @@ function SatConventionalPLLAndDLL(
         code_loop_filter_bandwidth,
         isnothing(frequency_lock) ? sat_conventional_pll_and_dll.frequency_lock :
         frequency_lock,
+        isnothing(signal_combining_sums) ?
+        sat_conventional_pll_and_dll.signal_combining_sums : signal_combining_sums,
     )
 end
 
@@ -206,11 +212,21 @@ time ([`effective_carrier_loop_filter_bandwidth`](@ref),
 [`effective_code_loop_filter_bandwidth`](@ref)), so lengthening the coherent
 integration with [`set_preferred_num_code_blocks_to_integrate!`](@ref) needs no
 re-tuning.
+
+`combine_signals = true` combines the passengers' (`signals[2:end]`)
+discriminators into the loops of the driver (`signals[1]`); see
+[Signal combining](@ref). Each passenger is assumed to integrate no longer than
+the driver. A longer passenger record is combined only into the driver record it
+ends in, with a weight proportional to its integration time (its cube for the
+FLL), so it dominates that one loop update with a reading averaged over its own,
+longer record; its FLL reading also has the narrower range ±1/(4·T_passenger).
+Make the longest-integrating signal (typically the pilot) the driver.
 """
 struct ConventionalPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter} <:
        AbstractDopplerEstimator
     carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)}
     code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)}
+    combine_signals::Bool
 end
 
 function ConventionalPLLAndDLL(
@@ -218,8 +234,13 @@ function ConventionalPLLAndDLL(
     ::Type{CO} = SecondOrderBilinearLF;
     carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
     code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
+    combine_signals::Bool = false,
 ) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
-    ConventionalPLLAndDLL{CA,CO}(carrier_loop_filter_bandwidth, code_loop_filter_bandwidth)
+    ConventionalPLLAndDLL{CA,CO}(
+        carrier_loop_filter_bandwidth,
+        code_loop_filter_bandwidth,
+        combine_signals,
+    )
 end
 
 """
@@ -228,18 +249,20 @@ $(SIGNATURES)
 Create a ConventionalPLLAndDLL with FLL-assisted carrier tracking. This is the
 default Doppler estimator used by TrackState. Its `ThirdOrderAssistedBilinearLF`
 carrier filter combines PLL and FLL discriminators for high dynamics. Bandwidths
-default to auto, see [`ConventionalPLLAndDLL`](@ref).
+default to auto and signal combining to off, see [`ConventionalPLLAndDLL`](@ref).
 """
 function ConventionalAssistedPLLAndDLL(
     ::Type{CO} = SecondOrderBilinearLF;
     carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
     code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
+    combine_signals::Bool = false,
 ) where {CO<:AbstractLoopFilter}
     ConventionalPLLAndDLL(
         ThirdOrderAssistedBilinearLF,
         CO;
         carrier_loop_filter_bandwidth,
         code_loop_filter_bandwidth,
+        combine_signals,
     )
 end
 
@@ -248,12 +271,14 @@ function ConventionalPLLAndDLL(
     pll_and_dll::ConventionalPLLAndDLL{CA,CO};
     carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
     code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
+    combine_signals::Maybe{Bool} = nothing,
 ) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     ConventionalPLLAndDLL{CA,CO}(
         isnothing(carrier_loop_filter_bandwidth) ?
         pll_and_dll.carrier_loop_filter_bandwidth : carrier_loop_filter_bandwidth,
         isnothing(code_loop_filter_bandwidth) ? pll_and_dll.code_loop_filter_bandwidth :
         code_loop_filter_bandwidth,
+        isnothing(combine_signals) ? pll_and_dll.combine_signals : combine_signals,
     )
 end
 
@@ -290,6 +315,7 @@ function init_estimator_state(
         carrier_loop_filter_bandwidth,
         code_loop_filter_bandwidth,
         FrequencyLockIndicator(),
+        SignalCombiningSums(),
     )
 end
 
@@ -315,6 +341,7 @@ function _reset_estimator_state(
         state.carrier_loop_filter_bandwidth,
         state.code_loop_filter_bandwidth,
         FrequencyLockIndicator(),
+        SignalCombiningSums(),
     )
 end
 
@@ -343,8 +370,14 @@ end
 # driver) additionally runs the loops and sets the sat-shared Dopplers.
 #
 # `noise` is one `(density, ready)` pair per signal, in `sat.signals` order (see
-# `_signal_noise_densities`).
-function _update_tracked_sat_doppler(sat::TrackedSat, sampling_frequency, noise::Tuple)
+# `_signal_noise_densities`). With `combine_signals`, the passengers' records are
+# folded within the driver's, see `_process_estimator_driver_signal`.
+function _update_tracked_sat_doppler(
+    sat::TrackedSat,
+    sampling_frequency,
+    noise::Tuple,
+    combine_signals::Bool = false,
+)
     estimator_state = sat.doppler_estimator_state
     head = first(sat.signals)
     tail_signals = Base.tail(sat.signals)
@@ -353,8 +386,13 @@ function _update_tracked_sat_doppler(sat::TrackedSat, sampling_frequency, noise:
     driver_carrier_phase_offset = get_carrier_phase_offset(head.signal)
 
     driver_noise_density, driver_noise_density_ready = first(noise)
-    new_head, new_doppler_estimator_state, new_carrier_doppler, new_code_doppler =
-        _process_estimator_driver_signal(
+    if combine_signals && !isempty(tail_signals)
+        # The passengers come back with their records consumed.
+        new_head,
+        new_doppler_estimator_state,
+        new_carrier_doppler,
+        new_code_doppler,
+        tail_signals = _process_estimator_driver_signal(
             head,
             sat,
             estimator_state,
@@ -362,7 +400,21 @@ function _update_tracked_sat_doppler(sat::TrackedSat, sampling_frequency, noise:
             driver_noise_density,
             driver_noise_density_ready,
             driver_carrier_phase_offset,
+            tail_signals,
+            Base.tail(noise),
         )
+    else
+        new_head, new_doppler_estimator_state, new_carrier_doppler, new_code_doppler, _ =
+            _process_estimator_driver_signal(
+                head,
+                sat,
+                estimator_state,
+                sampling_frequency,
+                driver_noise_density,
+                driver_noise_density_ready,
+                driver_carrier_phase_offset,
+            )
+    end
 
     new_tail = _process_passenger_signals(
         tail_signals,
@@ -390,6 +442,10 @@ function _update_tracked_sat_doppler(sat::TrackedSat, sampling_frequency, noise:
         sat.code_phase
     final_signals =
         just_synced ? map(_reset_on_snap, sat.signals, new_signals) : new_signals
+    final_state =
+        just_synced ?
+        _drop_pending_combining(new_doppler_estimator_state, combine_signals) :
+        new_doppler_estimator_state
 
     TrackedSat(
         sat;
@@ -397,7 +453,7 @@ function _update_tracked_sat_doppler(sat::TrackedSat, sampling_frequency, noise:
         carrier_doppler = new_carrier_doppler,
         code_doppler = new_code_doppler,
         signals = final_signals,
-        doppler_estimator_state = new_doppler_estimator_state,
+        doppler_estimator_state = final_state,
     )
 end
 
@@ -604,6 +660,12 @@ end
 # *last* record's Dopplers (the NCO is written once per chunk); with no outputs
 # the Doppler holds. How a record closes the loops is `_close_loops`, dispatched
 # on the per-sat state. A custom AbstractDopplerEstimator may use any signal.
+#
+# `passengers` (with their `(density, ready)` pairs) are the passengers to
+# combine, empty without signal combining. Before each driver record the
+# passenger records ending by then are applied (`_advance_passengers`), the rest
+# after the last one, their sums left pending. They are returned with their
+# records consumed.
 @inline function _process_estimator_driver_signal(
     tracked_signal::TrackedSignal,
     sat::TrackedSat,
@@ -612,10 +674,18 @@ end
     noise_density,
     noise_density_ready::Bool,
     driver_carrier_phase_offset::Real = 0.0,
+    passengers::Tuple = (),
+    passenger_noise::Tuple = (),
 )
     outputs = tracked_signal.correlator_outputs
-    if isempty(outputs)
-        return tracked_signal, estimator_state, sat.carrier_doppler, sat.code_doppler
+    if isempty(outputs) && isempty(passengers)
+        return (
+            tracked_signal,
+            estimator_state,
+            sat.carrier_doppler,
+            sat.code_doppler,
+            passengers,
+        )
     end
     signal = tracked_signal.signal
     ts = tracked_signal
@@ -626,8 +696,36 @@ end
     # state from before the fold decides which carrier discriminators apply.
     wiped_off = _is_wiped_off(signal, found_before_fold)
     polarity = _sync_polarity(signal, ts.bit_buffer, sat.prn)
+    loops_to_combine = _loops_to_combine(estimator_state)
+    code_frequency = get_code_frequency(signal) + sat.code_doppler
+    contexts = map(passengers, passenger_noise) do passenger, noise
+        _passenger_context(
+            passenger,
+            noise,
+            tracked_signal,
+            driver_carrier_phase_offset,
+            code_frequency,
+        )
+    end
+    cursors = map(_ -> 1, passengers)
+    combining_sums = estimator_state.signal_combining_sums
+    passenger_args = (
+        loops_to_combine,
+        sat.prn,
+        sampling_frequency,
+        driver_carrier_phase_offset,
+        sat.code_doppler,
+    )
     @inbounds for k in eachindex(outputs)
         output = outputs[k]
+        passengers, cursors, combining_sums = _advance_passengers(
+            passengers,
+            cursors,
+            contexts,
+            output.sample_index,
+            combining_sums,
+            passenger_args...,
+        )
         # The FLL's previous prompt (the previous chunk's last for the first
         # record); read it BEFORE the advance overwrites it.
         previous_prompt = _fll_previous_prompt(ts, output, sampling_frequency)
@@ -673,7 +771,9 @@ end
             code_bandwidth,
             wiped_off,
             polarity,
+            combining_sums,
         )
+        combining_sums = SignalCombiningSums()
         carrier_doppler, code_doppler = aid_dopplers(
             signal,
             estimator_state.init_carrier_doppler,
@@ -683,7 +783,20 @@ end
         )
     end
     empty!(outputs)
-    return ts, estimator_state, carrier_doppler, code_doppler
+    if !isempty(passengers)
+        passengers, _, combining_sums = _advance_passengers(
+            passengers,
+            cursors,
+            contexts,
+            typemax(Int),
+            combining_sums,
+            passenger_args...,
+        )
+        foreach(passenger -> empty!(passenger.correlator_outputs), passengers)
+        estimator_state =
+            _with_loop_state(estimator_state; signal_combining_sums = combining_sums)
+    end
+    return ts, estimator_state, carrier_doppler, code_doppler, passengers
 end
 
 # How one record closes the loops, dispatched on the per-sat state: the scalar
@@ -697,6 +810,8 @@ end
 # lock indicator. Any per-sat state with the `carrier_loop_filter`,
 # `code_loop_filter` and `frequency_lock` fields and a `_with_loop_state` method
 # will do.
+#
+# `pending`: the passengers' `SignalCombiningSums` (see `_loops_to_combine`).
 #
 # The carrier loop is staged (see `FrequencyLockIndicator`); `wiped_off` and
 # `polarity` pick its discriminators (see `pll_disc`, `fll_disc`).
@@ -712,18 +827,33 @@ end
     code_bandwidth,
     wiped_off::Bool,
     polarity::Int8,
+    pending::SignalCombiningSums = SignalCombiningSums(),
 )
-    pll_discriminator = pll_disc(signal, correlator; polarity)
+    weight = _discriminator_weight(signal, integration_time)
+    pll_discriminator = _gated_mean(
+        pll_disc(signal, correlator; polarity),
+        weight,
+        pending.pll,
+        _TWO_QUADRANT_PLL_RANGE,
+    )
     # Only formed for a carrier filter that reads it, until frequency lock.
     frequency_lock = state.frequency_lock
     fll_discriminator = 0.0Hz
     if _uses_fll(state.carrier_loop_filter) && !frequency_lock.locked
-        fll_discriminator = fll_disc(
-            signal,
-            correlator,
-            previous_prompt,
-            integration_time;
-            four_quadrant = wiped_off,
+        fll_weight =
+            iszero(previous_prompt) ? 0.0s^3 :
+            _fll_discriminator_weight(signal, integration_time)
+        fll_discriminator = _gated_mean(
+            fll_disc(
+                signal,
+                correlator,
+                previous_prompt,
+                integration_time;
+                four_quadrant = wiped_off,
+            ),
+            fll_weight,
+            pending.fll,
+            _two_quadrant_fll_range(integration_time),
         )
         frequency_lock = _update_frequency_lock(
             frequency_lock,
@@ -733,7 +863,11 @@ end
             integration_time,
         )
     end
-    dll_discriminator = dll_disc(signal, correlator, code_doppler, sampling_frequency)
+    dll_discriminator = _weighted_mean(
+        dll_disc(signal, correlator, code_doppler, sampling_frequency),
+        weight,
+        pending.dll,
+    )
     carrier_freq_update, carrier_loop_filter = calculate_carrier_frequency_update(
         state.carrier_loop_filter,
         pll_discriminator,
@@ -760,8 +894,9 @@ _carrier_phase_polarity(::SatConventionalPLLAndDLL, sat::TrackedSat) =
 @inline _with_loop_state(state::SatConventionalPLLAndDLL; kwargs...) =
     SatConventionalPLLAndDLL(state; kwargs...)
 
-# Process the non-driver signals (signals[2:end]): the per-signal advance only,
-# no loop filtering. Recursive over the tuple for type stability, stepping the
+# Process the non-driver signals (signals[2:end]) that are not folded with the
+# driver's records (see `_advance_passengers`): the per-signal advance only, no
+# loop filtering. Recursive over the tuple for type stability, stepping the
 # `(density, ready)` tuple in lockstep.
 @inline _process_passenger_signals(::Tuple{}, ::Integer, _, ::Tuple{}, ::Real) = ()
 @inline function _process_passenger_signals(
@@ -805,24 +940,48 @@ end
     ts = tracked_signal
     found_before_fold = has_bit_or_secondary_code_been_found(ts.bit_buffer)
     @inbounds for k in eachindex(outputs)
-        # See `correlated_pre_sync` in `_apply_correlator_output`.
-        synced_earlier_in_fold =
-            !found_before_fold && has_bit_or_secondary_code_been_found(ts.bit_buffer)
         ts = first(
-            _apply_correlator_output(
+            _apply_passenger_record(
                 ts,
                 outputs[k],
+                found_before_fold,
                 prn,
                 sampling_frequency,
                 noise_density,
                 noise_density_ready,
-                driver_carrier_phase_offset;
-                correlated_pre_sync = synced_earlier_in_fold,
+                driver_carrier_phase_offset,
             ),
         )
     end
     empty!(outputs)
     ts
+end
+
+# Apply one passenger record; returns the signal and the filtered correlator.
+@inline function _apply_passenger_record(
+    tracked_signal::TrackedSignal,
+    output::CorrelatorOutput,
+    found_before_fold::Bool,
+    prn::Integer,
+    sampling_frequency,
+    noise_density,
+    noise_density_ready::Bool,
+    driver_carrier_phase_offset::Real,
+)
+    # See `correlated_pre_sync` in `_apply_correlator_output`.
+    correlated_pre_sync =
+        !found_before_fold &&
+        has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer)
+    _apply_correlator_output(
+        tracked_signal,
+        output,
+        prn,
+        sampling_frequency,
+        noise_density,
+        noise_density_ready,
+        driver_carrier_phase_offset;
+        correlated_pre_sync,
+    )
 end
 
 """
@@ -896,6 +1055,7 @@ end
     g::SignalGroup,
     sampling_frequencies::Union{BandMeasurements,NamedTuple,AbstractDict},
     noise_estimators::NamedTuple,
+    combine_signals::Bool,
 )
     vals = g.satellites.values
     isempty(vals) && return nothing
@@ -903,7 +1063,8 @@ end
     noise = _signal_noise_densities(noise_estimators, eltype(g.satellites))
     _warn_noise_density_missing(eltype(g.satellites), noise, noise_estimators)
     @inbounds for i in eachindex(vals)
-        vals[i] = _update_tracked_sat_doppler(vals[i], sampling_frequency, noise)
+        vals[i] =
+            _update_tracked_sat_doppler(vals[i], sampling_frequency, noise, combine_signals)
     end
     return nothing
 end
@@ -980,6 +1141,7 @@ function estimate_dopplers_and_filter_prompt!(
         track_state.groups,
         sampling_frequencies,
         track_state.noise_estimators,
+        track_state.doppler_estimator.combine_signals,
     )
     return track_state
 end

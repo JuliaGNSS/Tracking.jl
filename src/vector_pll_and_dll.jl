@@ -22,6 +22,8 @@ vector-tracking (VT) interface to an external navigation filter
     [`disable_vt!`](@ref).
   - `frequency_lock`: the carrier loop's [`FrequencyLockIndicator`](@ref), run
     as in the conventional estimator while `vt_on` is unset.
+  - `signal_combining_sums`: the passengers' pending
+    [`SignalCombiningSums`](@ref).
 """
 @kwdef struct SatVectorPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     init_carrier_doppler::typeof(1.0Hz)
@@ -36,6 +38,7 @@ vector-tracking (VT) interface to an external navigation filter
     carrier_freq_update::typeof(0.0Hz) = 0.0Hz
     vt_on::Bool = false
     frequency_lock::FrequencyLockIndicator = FrequencyLockIndicator()
+    signal_combining_sums::SignalCombiningSums = SignalCombiningSums()
 end
 
 function SatVectorPLLAndDLL(
@@ -67,6 +70,7 @@ function SatVectorPLLAndDLL(
     carrier_freq_update::Maybe{typeof(0.0Hz)} = nothing,
     vt_on::Maybe{Bool} = nothing,
     frequency_lock::Maybe{FrequencyLockIndicator} = nothing,
+    signal_combining_sums::Maybe{SignalCombiningSums} = nothing,
 ) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     SatVectorPLLAndDLL{CA,CO}(
         sat_vector_pll_and_dll.init_carrier_doppler,
@@ -89,6 +93,8 @@ function SatVectorPLLAndDLL(
         carrier_freq_update,
         isnothing(vt_on) ? sat_vector_pll_and_dll.vt_on : vt_on,
         isnothing(frequency_lock) ? sat_vector_pll_and_dll.frequency_lock : frequency_lock,
+        isnothing(signal_combining_sums) ? sat_vector_pll_and_dll.signal_combining_sums :
+        signal_combining_sums,
     )
 end
 
@@ -128,11 +134,16 @@ default — with any non-assisted filter the navigation filter's
 
 Bandwidths (auto by default) are sized and capped exactly as for
 [`ConventionalPLLAndDLL`](@ref).
+
+`combine_signals = true` combines the passengers' discriminators into the
+driver's loops as for [`ConventionalPLLAndDLL`](@ref); under vector closure
+into the PLL only.
 """
 struct VectorPLLAndDLL{CA<:AbstractLoopFilter,CO<:AbstractLoopFilter} <:
        AbstractDopplerEstimator
     carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)}
     code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)}
+    combine_signals::Bool
 end
 
 function VectorPLLAndDLL(
@@ -140,8 +151,13 @@ function VectorPLLAndDLL(
     ::Type{CO} = SecondOrderBilinearLF;
     carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
     code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
+    combine_signals::Bool = false,
 ) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
-    VectorPLLAndDLL{CA,CO}(carrier_loop_filter_bandwidth, code_loop_filter_bandwidth)
+    VectorPLLAndDLL{CA,CO}(
+        carrier_loop_filter_bandwidth,
+        code_loop_filter_bandwidth,
+        combine_signals,
+    )
 end
 
 # Kwarg-update constructor for tweaking bandwidths in place.
@@ -149,12 +165,14 @@ function VectorPLLAndDLL(
     pll_and_dll::VectorPLLAndDLL{CA,CO};
     carrier_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
     code_loop_filter_bandwidth::Maybe{typeof(1.0Hz)} = nothing,
+    combine_signals::Maybe{Bool} = nothing,
 ) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
     VectorPLLAndDLL{CA,CO}(
         isnothing(carrier_loop_filter_bandwidth) ?
         pll_and_dll.carrier_loop_filter_bandwidth : carrier_loop_filter_bandwidth,
         isnothing(code_loop_filter_bandwidth) ? pll_and_dll.code_loop_filter_bandwidth :
         code_loop_filter_bandwidth,
+        isnothing(combine_signals) ? pll_and_dll.combine_signals : combine_signals,
     )
 end
 
@@ -192,6 +210,12 @@ function init_estimator_state(
     )
 end
 
+# Under vector closure the navigation filter owns the code loop and the FLL
+# branch, so passengers are combined into the PLL only.
+@inline _locally_closed_loops(state::SatVectorPLLAndDLL) =
+    state.vt_on ? (pll = true, fll = false, dll = false) :
+    (pll = true, fll = true, dll = true)
+
 # Re-seed hook used by `reset_loop_filters!`, as for the conventional estimator
 # (the carrier loop's staging restarts too), plus zeroing the discriminator
 # accumulators and the NCO corrections: the current Dopplers already contain the
@@ -218,8 +242,8 @@ end
 # "The per-integration contract" in docs/src/vector_tracking.md.
 #
 # The vector closure is not staged: it stays FLL-assisted and does not run the
-# frequency lock indicator. Its carrier discriminators are picked as in the scalar
-# closure.
+# frequency lock indicator. Its carrier discriminators are picked, and `pending`
+# combined, as in the scalar closure.
 @inline function _close_loops(
     state::SatVectorPLLAndDLL,
     signal::AbstractGNSSSignal,
@@ -232,6 +256,7 @@ end
     code_bandwidth,
     wiped_off::Bool,
     polarity::Int8,
+    pending::SignalCombiningSums = SignalCombiningSums(),
 )
     state.vt_on || return _close_scalar_loops(
         state,
@@ -245,8 +270,14 @@ end
         code_bandwidth,
         wiped_off,
         polarity,
+        pending,
     )
-    pll_discriminator = pll_disc(signal, correlator; polarity)
+    pll_discriminator = _gated_mean(
+        pll_disc(signal, correlator; polarity),
+        _discriminator_weight(signal, integration_time),
+        pending.pll,
+        _TWO_QUADRANT_PLL_RANGE,
+    )
     fll_discriminator = fll_disc(
         signal,
         correlator,
@@ -327,6 +358,7 @@ function estimate_dopplers_and_filter_prompt!(
         track_state.groups,
         sampling_frequencies,
         track_state.noise_estimators,
+        track_state.doppler_estimator.combine_signals,
     )
     return track_state
 end

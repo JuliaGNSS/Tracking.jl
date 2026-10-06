@@ -180,7 +180,8 @@ the immutable and in-place forms share a `_update_tracked_sat_doppler`
 helper so they cannot drift, and how the per-signal walk distinguishes
 the [estimator-driver signal](tracking_state.md#Estimator-driver-signal)
 (`signals[1]`, which drives the conventional PLL/DLL) from the other
-signals (which only have their prompts filtered).
+signals (whose prompts are filtered and, with [Signal combining](@ref),
+whose discriminators join the driver's loops).
 That split is a convention `ConventionalPLLAndDLL` chooses — your own
 estimator can use every signal's state any way you like.
 

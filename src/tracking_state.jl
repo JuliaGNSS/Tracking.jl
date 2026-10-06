@@ -1118,9 +1118,13 @@ Set the group delay of one signal on one satellite, in units of time, or
 `nothing` to mark it unknown again (the default). Read it back with
 `get_group_delay`.
 
-A signal with the larger group delay arrives later. Unknown is not zero: a
-consumer must use only the delays that are set. Setting the delay a signal has
-already leaves its satellite as it is.
+A group delay is what [signal combining](@ref "Signal combining") needs to refer
+a passenger's code discriminator to the driver's code phase: a signal with the
+larger group delay arrives later. Only the difference between a passenger's and
+the driver's (`signals[1]`) group delay is used, so any common datum cancels.
+Zero is not assumed for an unknown delay: a passenger is combined into the code
+loop only where both its own and the driver's group delay are set. Setting the
+delay a signal has already leaves its satellite as it is.
 
 Addressed like [`set_preferred_num_code_blocks_to_integrate!`](@ref):
 
