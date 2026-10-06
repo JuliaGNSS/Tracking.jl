@@ -13,5 +13,10 @@ TrackingLoops = "89eadfff-3a96-4166-8be0-4e8bed6efc30"
 Tracking = {path = ".."}
 
 [compat]
+Accessors = "0.1.45"
+Dictionaries = "0.4.6"
 Documenter = "1"
 DocumenterInterLinks = "1"
+GNSSSignals = "4.1.2"
+StaticArrays = "1.9.22"
+TrackingLoopFilters = "1.0.1"
