@@ -483,15 +483,14 @@ end
     @test get_cn0_estimator(full_bit[1], 1).num_records_per_ratio == 20
     capped_cn0 = [ustrip(uconvert(dBHz, estimate_cn0(state, 1))) for state in faded]
     full_bit_cn0 = [ustrip(uconvert(dBHz, estimate_cn0(state, 1))) for state in full_bit]
-    # Margins from 96 seeds split into disjoint groups of 16: the capped median
-    # never left 22.4–24.8 and the gap to the whole-bit window never fell below
-    # 1.5 dB. Over all 96, capped reads a median 23.6 dB-Hz (p10 19.5) against the
-    # whole-bit window's 21.0 (p10 12.0), and the whole-bit window reports `-Inf` —
-    # "no signal" on a satellite that is being tracked — in 17 of 96 runs against
-    # 1. Eight seeds are not enough for either bound: on some groups of eight the
-    # whole-bit window happens to win.
-    @test median_of(capped_cn0) ≈ 25 atol = 3.5
-    @test median_of(capped_cn0) - median_of(full_bit_cn0) > 1
+    # The cap pays off where the carrier phase wanders within a bit. Under a
+    # loop that kept the FLL branch it did: the whole-bit window read more than
+    # 1 dB under the capped one, often `-Inf`. The staged loop has dropped the
+    # FLL by the fade and holds the phase over the bit, so the two now agree. Margins from 96 seeds split into disjoint groups of 16: the
+    # capped median stayed in 24.0–25.1 and its gap to the whole-bit window in
+    # −0.37 to +0.42 dB; neither window read `-Inf`.
+    @test median_of(capped_cn0) ≈ 25 atol = 1.5
+    @test median_of(capped_cn0) - median_of(full_bit_cn0) > -0.5
 end
 
 end

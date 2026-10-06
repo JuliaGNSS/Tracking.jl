@@ -32,14 +32,18 @@ import TrackingLoops:
     AbstractPostCorrFilter,
     append_noise_observation!,
     BitBuffer,
+    combine_passenger_record,
+    combines_signals,
     buffer,
     _calc_num_code_blocks_that_form_a_bit,
+    calc_num_code_blocks_for_bit_buffer,
     calc_num_code_blocks_to_integrate,
     ConventionalAssistedPLLAndDLL,
     CorrelatorNoiseEstimator,
     CorrelatorOutput,
     default_cn0_estimator,
     default_num_code_blocks_to_integrate,
+    drop_pending_passengers,
     DefaultPostCorrFilter,
     EarlyPromptLateCorrelator,
     estimate_cn0,
@@ -75,9 +79,13 @@ import TrackingLoops:
     _pool_taps,
     requires_noise_density,
     reset,
+    is_wiped_off,
     reset_estimator_state,
     SatConventionalPLLAndDLL,
+    SatNCOReferencedPLLAndDLL,
+    SatVectorPLLAndDLL,
     step_loop,
+    sync_polarity,
     update,
     update_accumulator,
     update_noise!
@@ -93,10 +101,13 @@ export get_prn,
     get_code_phase,
     get_code_doppler,
     get_carrier_phase,
+    get_carrier_phase_polarity,
     get_carrier_doppler,
     get_integrated_samples,
     get_preferred_num_code_blocks_to_integrate,
     set_preferred_num_code_blocks_to_integrate!,
+    get_group_delay,
+    set_group_delay!,
     reset_loop_filters!,
     get_signal_start_sample,
     get_correlator,
@@ -313,6 +324,7 @@ include("downconvert_and_correlate_cpu.jl")
 include("downconvert_and_correlate_int16.jl")
 include("downconvert_and_correlate_onebit.jl")
 include("downconvert_and_correlate_twobit.jl")
+include("signal_combining.jl")
 include("conventional_pll_and_dll.jl")
 include("tracking_state.jl")
 include("track.jl")

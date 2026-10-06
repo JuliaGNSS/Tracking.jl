@@ -185,6 +185,7 @@ GNSSSignals.get_data_frequency(::FakeWrapSignal) = 0Hz
         base.correlator_outputs,
         base.preferred_num_code_blocks_to_integrate,
         base.last_fully_integrated_num_code_blocks,
+        base.group_delay,
     )
 
     # Pre-sync wraps 4 and 6: the shared wrap must be 12 (max would give 6,
@@ -229,8 +230,8 @@ end
 
     # Kwargs flow through: explicit carrier phase, code doppler, estimator.
     # The default (auto-bandwidth) estimator sizes the sat's loop from its
-    # own driver signal (signals[1] = GPS L1C-P → 1.8 Hz), not from a fixed
-    # value on the estimator (which is `nothing` = auto).
+    # own driver signal (signals[1] = GPS L1C-P), not from a fixed value on
+    # the estimator (which is `nothing` = auto).
     estimator = TrackingLoops.ConventionalAssistedPLLAndDLL()
     @test estimator.carrier_loop_filter_bandwidth === nothing
     sat_kw = TrackedSat(

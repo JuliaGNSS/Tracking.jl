@@ -11,7 +11,7 @@ The tracking state nests as **TrackState → SignalGroup → TrackedSat → Trac
 
 ### Estimator-driver signal
 
-The first signal in each group's tuple is the **estimator-driver signal** — the one the Doppler estimator uses to update the satellite-shared carrier and code Doppler. With the default [`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL) / [`ConventionalAssistedPLLAndDLL`](@extref TrackingLoops.ConventionalAssistedPLLAndDLL), `signals[1]`'s correlator is the input to the PLL/DLL discriminator, and the per-signal default loop bandwidths are sized off this signal's primary-code period. A user-supplied [`AbstractDopplerEstimator`](@extref TrackingLoops.AbstractDopplerEstimator) is free to use the other signals' state too — `signals[1]`'s privileged role is a convention of the conventional estimators, not a structural constraint of `TrackedSat`.
+The first signal in each group's tuple is the **estimator-driver signal** — the one the Doppler estimator uses to update the satellite-shared carrier and code Doppler. With the default [`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL) / [`ConventionalAssistedPLLAndDLL`](@extref TrackingLoops.ConventionalAssistedPLLAndDLL), `signals[1]`'s correlator is the input to the PLL/DLL discriminator (joined by the other signals' with [Signal combining](@ref)), and an auto-bandwidth estimator seeds the loop bandwidths from this signal's [`default_carrier_loop_filter_bandwidth`](@extref TrackingLoops.default_carrier_loop_filter_bandwidth) / [`default_code_loop_filter_bandwidth`](@extref TrackingLoops.default_code_loop_filter_bandwidth). A user-supplied [`AbstractDopplerEstimator`](@extref TrackingLoops.AbstractDopplerEstimator) is free to use the other signals' state too — `signals[1]`'s privileged role is a convention of the conventional estimators, not a structural constraint of `TrackedSat`.
 
 The driver signal is privileged for the Doppler estimator only. Bit synchronisation, the post-correlation filter and the **CN0 estimator** all run per signal, so a multi-signal satellite produces one C/N₀ per signal rather than one for the driver — see [CN0 Estimator](cn0_estimator.md) for what that costs and for [`NoCN0Estimator`](@extref TrackingLoops.NoCN0Estimator), the per-signal opt-out.
 
@@ -232,6 +232,8 @@ julia> get_carrier_doppler(track_state, :modern_gps, 11)
 ```
 
 Putting a pilot signal first (e.g. `GPSL1C_P()`) is encouraged with the conventional estimators when one is available: pilot signals carry no data-bit modulation, which lets the PLL run longer coherent integrations and reach lower phase-noise floors. The data-bearing signals (L1C-D, L1 C/A) still recover their navigation bits independently — each [`TrackedSignal`](@ref) carries its own `bit_buffer` regardless of which signal drives the estimator.
+
+With `combine_signals = true` on the Doppler estimator, e.g. `ConventionalAssistedPLLAndDLL(; combine_signals = true)`, the other signals' discriminators are also combined into the driver's loops; see [Signal combining](@ref).
 
 When a satellite tracks signals with different primary-code lengths (e.g. L1 C/A at 1 ms vs L1C-P at 10 ms), each outer iteration integrates to the **shortest** signal's next primary-code boundary. The shorter signal's correlator completes every iteration; the longer signal's correlator accumulates across multiple iterations and only marks `is_integration_completed = true` on its own boundary. Doppler updates therefore happen at the shortest signal's cadence (1 ms in this example), and longer signals see their integration windows spanned by piecewise Doppler updates — the natural per-iteration-Doppler-correction behaviour of a real receiver.
 
@@ -481,6 +483,7 @@ The trailing `sig` selector is either:
 | `get_code_phase` | Shared code phase (wraps at [`max_code_length`](@ref)). |
 | `get_code_doppler` | Shared code Doppler. |
 | `get_carrier_phase` | Shared carrier phase in radians. |
+| `get_carrier_phase_polarity` | Whether that phase is half a cycle off (`-1`), not (`+1`), or unresolved (`0`). |
 | `get_carrier_doppler` | Shared carrier Doppler. |
 | `get_signal_start_sample` | Index of the next sample to integrate. |
 
@@ -499,6 +502,7 @@ The trailing `sig` selector is either:
 | `get_bit_buffer` / `get_soft_bits` / `get_num_bits` | Bit buffer, decoded soft bits (sign = the hard bit), bit count. |
 | `get_integrated_samples` | Number of samples accumulated into the current integration so far. |
 | `has_bit_or_secondary_code_been_found` | `true` once bit/secondary-code synchronization has been achieved. |
+| `get_group_delay` | The signal's group delay, `nothing` while unknown; set with [`set_group_delay!`](@ref). |
 
 The per-signal form always names the group explicitly, even on a single-group `TrackState`. Use `:default` as the group key in that case — `estimate_cn0(track_state, :default, 11, GPSL1C_P)`.
 
@@ -546,6 +550,7 @@ get_prn(::TrackedSat)
 get_code_phase(::TrackedSat)
 get_code_doppler(::TrackedSat)
 get_carrier_phase(::TrackedSat)
+get_carrier_phase_polarity(::TrackedSat)
 get_carrier_doppler(::TrackedSat)
 get_signal_start_sample(::TrackedSat)
 get_signals(::TrackedSat)
@@ -557,6 +562,7 @@ get_doppler_estimator_state(::TrackedSat)
 ```@docs
 TrackedSignal
 get_last_fully_integrated_integration_time(::TrackedSignal)
+set_group_delay!
 ```
 
 The per-signal accessors in the table under [Addressing satellites and signals](#Addressing-satellites-and-signals) all dispatch directly on a `TrackedSignal` too. Additionally:

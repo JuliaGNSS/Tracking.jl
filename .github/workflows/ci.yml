@@ -52,6 +52,12 @@ jobs:
         with:
           path: ~/.julia/scratchspaces/10b2438b-ffd4-5096-aa58-44041d5c8f3b/flexiband_iii_7a
           key: flexiband-iii-7a-short-v1
+      # TEMPORARY: until TrackingLoops 4.0.0 is registered, test against its
+      # integration branch. Never on master, which must resolve from General.
+      # The commit that bumps the TrackingLoops compat to 4 removes this step.
+      - name: Use TrackingLoops' unreleased sc/v4
+        if: github.base_ref != 'master' && github.ref != 'refs/heads/master' && !startsWith(github.ref, 'refs/tags/')
+        run: julia --color=yes --project=. -e 'using Pkg; Pkg.add(url = "https://github.com/JuliaGNSS/TrackingLoops.jl", rev = "sc/v4")'
       - uses: julia-actions/julia-runtest@v1
       - uses: julia-actions/julia-processcoverage@v1
       - uses: codecov/codecov-action@v7

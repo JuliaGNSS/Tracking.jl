@@ -605,7 +605,8 @@ end
     @testset "full track converges (GPS L1 C/A)" begin
         sig, fs = GPSL1CA(), 5e6Hz
         cdopp, cphase = 300Hz, 230.0
-        nsamp = round(Int, (fs / 1Hz) * 1e-3) * 5
+        # 100 ms: long enough for the 18 Hz carrier loop to settle a 20 Hz step.
+        nsamp = round(Int, (fs / 1Hz) * 1e-3) * 100
         cap = make_capture(sig, 1, fs, nsamp, cdopp, cphase)
         ts = TrackState(sig, [TrackedSat(sig, 1, cphase, cdopp - 20Hz)])
         ts = track(

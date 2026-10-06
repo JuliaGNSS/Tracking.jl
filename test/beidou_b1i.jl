@@ -146,7 +146,7 @@ end
     @test @inferred(get_default_correlator(b1i, NumAnts(3))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
-    # 1 ms primary period (2046 chips at 2.046 Mcps) → 18 Hz / 1 Hz.
+    # Flat defaults, uncapped at 1 ms.
     @test @inferred(default_carrier_loop_filter_bandwidth(b1i)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(b1i)) ≈ 1.0Hz
 

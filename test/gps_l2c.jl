@@ -8,6 +8,7 @@ using TrackingLoops:
     get_default_correlator,
     get_code_block_buffer_type,
     default_carrier_loop_filter_bandwidth,
+    effective_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     effective_code_loop_filter_bandwidth,
     EarlyPromptLateCorrelator,
@@ -32,11 +33,14 @@ using TrackingLoops:
     @test @inferred(get_default_correlator(gpsl2cm, NumAnts(1))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
 
-    # 20 ms primary period (10230 chips at 511.5 kcps) → BL·T ≈ 0.018 gives
-    # 0.9 Hz carrier. The DLL default is the flat 1 Hz; the same product caps it
-    # to 0.9 Hz at filter time, against the actual integration time rather than
-    # the code period (see `effective_code_loop_filter_bandwidth`).
-    @test @inferred(default_carrier_loop_filter_bandwidth(gpsl2cm)) ≈ 0.9Hz
+    # Flat defaults, capped at the 20 ms primary period.
+    @test @inferred(default_carrier_loop_filter_bandwidth(gpsl2cm)) ≈ 18.0Hz
+    @test @inferred(
+        effective_carrier_loop_filter_bandwidth(
+            default_carrier_loop_filter_bandwidth(gpsl2cm),
+            20ms,
+        )
+    ) ≈ 4.5Hz
     @test @inferred(default_code_loop_filter_bandwidth(gpsl2cm)) ≈ 1.0Hz
     @test @inferred(
         effective_code_loop_filter_bandwidth(
@@ -71,10 +75,14 @@ end
     @test @inferred(get_default_correlator(gpsl2cl, NumAnts(1))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
 
-    # 1.5 s primary period → BL·T ≈ 0.018 gives 0.012 Hz carrier. The DLL default
-    # stays the flat 1 Hz; its stability cap is what pulls it onto the carrier
-    # value at filter time, where the update interval is actually known.
-    @test @inferred(default_carrier_loop_filter_bandwidth(gpsl2cl)) ≈ 0.012Hz
+    # Flat defaults, capped at the 1.5 s primary period.
+    @test @inferred(default_carrier_loop_filter_bandwidth(gpsl2cl)) ≈ 18.0Hz
+    @test @inferred(
+        effective_carrier_loop_filter_bandwidth(
+            default_carrier_loop_filter_bandwidth(gpsl2cl),
+            1.5s,
+        )
+    ) ≈ 0.06Hz
     @test @inferred(default_code_loop_filter_bandwidth(gpsl2cl)) ≈ 1.0Hz
     @test @inferred(
         effective_code_loop_filter_bandwidth(
