@@ -83,6 +83,10 @@ import TrackingLoops:
     update_noise!
 
 using Unitful: upreferred, uconvert, ustrip, dimension, NoUnits, Hz, dBHz, ms, s
+# Extended with the methods that hand tracked satellites over for a PVT solve; see
+# `position_velocity_time.jl`.
+import PositionVelocityTime
+using GNSSDecoder: GNSSDecoderState
 import Base.zero, Base.length, Base.resize!
 
 export get_prn,
@@ -312,6 +316,7 @@ include("downconvert_and_correlate_twobit.jl")
 include("conventional_pll_and_dll.jl")
 include("tracking_state.jl")
 include("track.jl")
+include("position_velocity_time.jl")
 include("precompile.jl")
 
 end
