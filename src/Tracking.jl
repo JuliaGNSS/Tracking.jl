@@ -34,6 +34,7 @@ import TrackingLoops:
     BitBuffer,
     buffer,
     _calc_num_code_blocks_that_form_a_bit,
+    calc_num_code_blocks_for_bit_buffer,
     calc_num_code_blocks_to_integrate,
     ConventionalAssistedPLLAndDLL,
     CorrelatorNoiseEstimator,

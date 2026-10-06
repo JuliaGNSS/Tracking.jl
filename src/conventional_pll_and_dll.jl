@@ -249,6 +249,31 @@ end
     return new_signal, filtered_correlator, integrated_code_blocks
 end
 
+# The previous prompt an FLL reading compares a record with, or zero where there
+# is none to compare with. The reading divides the rotation between the two
+# prompts by this record's integration time, which holds only for records of one
+# length, so a record whose length differs from the previous one's (at a sync, or
+# after `set_preferred_num_code_blocks_to_integrate!`) has no reading either. The
+# length is counted as `last_fully_integrated_num_code_blocks` keeps it.
+@inline function _fll_previous_prompt(
+    tracked_signal::TrackedSignal,
+    output::CorrelatorOutput,
+    sampling_frequency,
+)
+    num_code_blocks = max(
+        1,
+        calc_num_code_blocks_for_bit_buffer(
+            tracked_signal.signal,
+            output.integrated_samples,
+            sampling_frequency,
+            has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
+        ),
+    )
+    previous_prompt = get_last_fully_integrated_filtered_prompt(tracked_signal)
+    num_code_blocks == tracked_signal.last_fully_integrated_num_code_blocks ?
+    previous_prompt : zero(previous_prompt)
+end
+
 # Process the estimator-driver signal (signals[1]): fold over every
 # `CorrelatorOutput` collected during this chunk, in order — running the
 # per-record advance and the estimator's `step` per record, threading the
@@ -294,7 +319,7 @@ end
         # the chunk chains from the sat's carried-over
         # `last_fully_integrated_filtered_prompt` (the previous chunk's last).
         # Read it off `ts` BEFORE the advance overwrites it.
-        previous_prompt = get_last_fully_integrated_filtered_prompt(ts)
+        previous_prompt = _fll_previous_prompt(ts, output, sampling_frequency)
         # A record that follows a sync detected earlier in THIS fold was
         # correlated with pre-sync replicas — its blocks still count towards the
         # bit, only its prompt may have to be dropped (see `fold_record`).

@@ -176,6 +176,23 @@ function _synced(b::BitBuffer)
     )
 end
 
+@testset "No FLL reading across a change of record length" begin
+    fs = 5e6Hz
+    signal = GPSL1CA()
+    unsynced = TrackedSignal(signal)
+    ts = TrackedSignal(
+        unsynced;
+        bit_buffer = _synced(unsynced.bit_buffer),
+        last_fully_integrated_filtered_prompt = cis(0.1),
+        last_fully_integrated_num_code_blocks = 1,
+    )
+    record(n) = CorrelatorOutput(get_default_correlator(signal), n, n)
+    # One block after one block: the previous prompt holds.
+    @test Tracking._fll_previous_prompt(ts, record(5000), fs) == cis(0.1)
+    # Twenty after one, as for a data signal at its bit sync: none.
+    @test iszero(Tracking._fll_previous_prompt(ts, record(100000), fs))
+end
+
 @testset "A pilot drops its previous prompt at the sync that wipes it off" begin
     # The four-quadrant FLL must not compare the first wiped-off prompt with one
     # correlated before the sync.

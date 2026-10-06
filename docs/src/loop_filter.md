@@ -132,9 +132,12 @@ Tracking adds is the per-record information it needs.
 
 The FLL compares a record's prompt with the previous record's, so Tracking
 leaves a record out of it where that comparison does not hold: the first record
-after [`add_satellite!`](@ref) or [`reset_loop_filters!`](@ref), and a pilot's
-first record after the sync that wipes its prompt off, which may differ in sign
-from the one before.
+after [`add_satellite!`](@ref) or [`reset_loop_filters!`](@ref); a record whose
+length differs from the previous one's, as at a data signal's bit sync or after
+[`set_preferred_num_code_blocks_to_integrate!`](@ref), since the reading divides
+the rotation by the record's own integration time; and a pilot's first record
+after the sync that wipes its prompt off, which may differ in sign from the one
+before.
 
 With a carrier filter other than the FLL-assisted one the loop is a PLL from the
 start and runs no frequency lock indicator.
