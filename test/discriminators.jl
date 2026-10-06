@@ -23,6 +23,9 @@ using Tracking:
     get_prompt,
     update_accumulator
 
+# A correlator whose taps all sit at the prompt `p`.
+_prompt_correlator(p) = EarlyPromptLateCorrelator(SVector(p / 2, p, p / 2), 0.5)
+
 @testset "PLL discriminator" begin
     correlator_minus60off = EarlyPromptLateCorrelator(
         SVector(-0.5 + sqrt(3) / 2im, -1 + sqrt(3) * 1im, -0.5 + sqrt(3) / 2im),
@@ -38,6 +41,27 @@ using Tracking:
     @test @inferred(pll_disc(gpsl1, correlator_minus60off)) ≈ -1 / 6  #-60°
     @test @inferred(pll_disc(gpsl1, correlator_0off)) == 0
     @test @inferred(pll_disc(gpsl1, correlator_plus60off)) ≈ 1 / 6  #+60°
+
+    # With the prompt's sign given, the four-quadrant discriminator agrees with
+    # the Costas one within ±1/4 cycle; beyond, the Costas one folds the error by
+    # half a cycle while it does not.
+    for correlator in (correlator_0off, correlator_plus60off)
+        @test @inferred(pll_disc(gpsl1, correlator; polarity = 1)) ≈
+              pll_disc(gpsl1, correlator)
+    end
+    # An unknown sign (0) reads with the Costas discriminator.
+    @test @inferred(pll_disc(gpsl1, correlator_minus60off; polarity = 0)) ==
+          pll_disc(gpsl1, correlator_minus60off)
+    # `correlator_minus60off`'s prompt sits at +120°, which Costas reads as -60°.
+    @test @inferred(pll_disc(gpsl1, correlator_minus60off; polarity = 1)) ≈ 1 / 3
+    @test pll_disc(gpsl1, _prompt_correlator(cis(-2π / 3)); polarity = 1) ≈ -1 / 3
+    @test pll_disc(gpsl1, _prompt_correlator(-1.0 + 0.0im)) == 0
+    @test pll_disc(gpsl1, _prompt_correlator(-1.0 + 0.0im); polarity = 1) ≈ 1 / 2
+    # A negative polarity reads the error around the inverted prompt.
+    @test @inferred(pll_disc(gpsl1, _prompt_correlator(-cis(0.2)); polarity = -1)) ≈
+          0.2 / 2π
+    @test pll_disc(gpsl1, _prompt_correlator(-cis(2.5)); polarity = -1) ≈ 2.5 / 2π
+    @test pll_disc(gpsl1, _prompt_correlator(-cis(0.2)); polarity = 1.0) ≈ (0.2 - π) / 2π
 end
 
 @testset "FLL discriminator" begin
@@ -79,6 +103,45 @@ end
     @test in_mhz ≈ (166 + 2 / 3) * 1Hz
     @test fll_disc(gpsl1, correlator_0off, get_prompt(correlator_empty), 5000 / 5.0MHz) isa
           typeof(1.0Hz)
+
+    # The four-quadrant discriminator pulls in over ±1 / (2T) = ±500 Hz instead
+    # of ±250 Hz; within ±250 Hz the two agree. `correlator_minus60off`'s prompt
+    # sits at +120°, an advance of -120° to `correlator_0off`'s.
+    @test @inferred(
+        fll_disc(
+            gpsl1,
+            correlator_0off,
+            get_prompt(correlator_minus60off),
+            1ms;
+            four_quadrant = true,
+        )
+    ) ≈ -(333 + 1 / 3) * 1Hz
+    @test fll_disc(gpsl1, correlator_0off, cis(-2π / 3), 1ms) ≈ -(166 + 2 / 3) * 1Hz
+    @test fll_disc(gpsl1, correlator_0off, cis(-2π / 3), 1ms; four_quadrant = true) ≈
+          (333 + 1 / 3) * 1Hz
+    @test fll_disc(gpsl1, correlator_0off, cis(2π / 3), 1ms; four_quadrant = true) ≈
+          -(333 + 1 / 3) * 1Hz
+    @test abs(fll_disc(gpsl1, correlator_0off, -1.0 + 0.0im, 1ms; four_quadrant = true)) ≈
+          500Hz
+    # Which sign the two prompts share cancels.
+    @test fll_disc(
+        gpsl1,
+        _prompt_correlator(-1.0 + 0.0im),
+        -cis(-2π / 3),
+        1ms;
+        four_quadrant = true,
+    ) ≈ (333 + 1 / 3) * 1Hz
+    @test fll_disc(
+        gpsl1,
+        correlator_0off,
+        get_prompt(correlator_empty),
+        1ms;
+        four_quadrant = true,
+    ) == 0Hz
+    # In Hz whatever the unit of the integration time, like `fll_disc`.
+    @test @inferred(
+        fll_disc(gpsl1, correlator_0off, cis(-2π / 3), 1e-3 / Hz; four_quadrant = true)
+    ) isa typeof(1.0Hz)
 end
 
 @testset "DLL discriminator" begin
