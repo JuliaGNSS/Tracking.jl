@@ -575,3 +575,21 @@ dedicated page: [Bit and Secondary-Code Sync](bit_sync.md).
 For day-to-day use, the only thing most users need is
 `has_bit_or_secondary_code_been_found` (per signal) to gate calls to
 `get_soft_bits` — both are listed in the [per-signal accessor table](#What-you-can-read).
+
+## Handing over to PositionVelocityTime
+
+Paired with the navigation data GNSSDecoder.jl decodes from their soft bits, tracked
+satellites become the measurements `PositionVelocityTime.calc_pvt` solves. A whole
+`TrackState` and a `NamedTuple` of per-group PRN → `GNSSDecoderState` mappings (with
+the same group names) convert in one call:
+
+```julia
+using PositionVelocityTime: PositionVelocityTime, calc_pvt
+pvt = calc_pvt(PositionVelocityTime.signal_groups(track_state, decoders))
+```
+
+```@docs
+Tracking.PositionVelocityTime.signal_groups(::TrackState, ::NamedTuple)
+Tracking.PositionVelocityTime.SignalGroup(::Tracking.SignalGroup, ::Any)
+Tracking.PositionVelocityTime.SatelliteState(::Tracking.GNSSDecoderState, ::Tracking.AbstractGNSSSignal, ::TrackedSat)
+```
