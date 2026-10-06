@@ -515,4 +515,21 @@ end
     )
 end
 
+@testset "No FLL reading across a change of record length" begin
+    fs = 5e6Hz
+    signal = GPSL1CA()
+    synced = Tracking.BitBuffer(UInt64(0), 0, true, 0.0im, 0)
+    ts = TrackedSignal(
+        TrackedSignal(signal);
+        bit_buffer = synced,
+        last_fully_integrated_filtered_prompt = cis(0.1),
+        last_fully_integrated_num_code_blocks = 1,
+    )
+    record(n) = CorrelatorOutput(get_default_correlator(signal), n, n)
+    # One block after one block: the previous prompt holds.
+    @test Tracking._fll_previous_prompt(ts, record(5000), fs) == cis(0.1)
+    # Twenty after one, as for a data signal at its bit sync: none.
+    @test iszero(Tracking._fll_previous_prompt(ts, record(100000), fs))
+end
+
 end

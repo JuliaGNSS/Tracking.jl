@@ -506,7 +506,8 @@ Mean FLL (carrier) discriminator accumulated on `state` since the last
 accumulated yet (`count == 0`). The carrier counterpart to
 [`mean_code_discr`](@ref). A record without a previous prompt (the first after
 [`add_satellite!`](@ref), [`reset_loop_filters!`](@ref) or a pilot's
-secondary-code sync) has no FLL reading and is not counted.
+secondary-code sync, or one whose length differs from the previous record's) has
+no FLL reading and is not counted.
 """
 function mean_carrier_discr(state::SatVectorPLLAndDLL)
     count, discr_sum = state.carrier_discr_acc

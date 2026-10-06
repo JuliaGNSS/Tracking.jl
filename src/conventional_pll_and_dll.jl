@@ -473,14 +473,8 @@ end
     filtered_correlator = _combine_correlator(normalized_correlator, weights)
     prompt = get_prompt(filtered_correlator)
     push!(tracked_signal.filtered_prompts, prompt)
-    bit_block_count = calc_num_code_blocks_for_bit_buffer(
-        signal,
-        output.integrated_samples,
-        sampling_frequency,
-        has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
-    )
-    # Floored at 1 for the fractional-block record after a sync phase-snap reset.
-    integrated_code_blocks = max(1, bit_block_count)
+    bit_block_count = _bit_block_count(tracked_signal, output, sampling_frequency)
+    integrated_code_blocks = _record_num_code_blocks(bit_block_count)
     # De-rotated before both the sync search and the coherent bit sum in `buffer`
     # (see `_carrier_phase_derotation`).
     bit_prompt = prompt * _carrier_phase_derotation(driver_carrier_phase_offset, signal)
@@ -533,6 +527,40 @@ end
         last_fully_integrated_num_code_blocks = integrated_code_blocks,
     )
     return new_signal, filtered_correlator
+end
+
+# The primary-code blocks a record spans, counted as for the bit buffer: 0 for the
+# fractional-block record after a sync phase-snap reset.
+@inline _bit_block_count(
+    tracked_signal::TrackedSignal,
+    output::CorrelatorOutput,
+    sampling_frequency,
+) = calc_num_code_blocks_for_bit_buffer(
+    tracked_signal.signal,
+    output.integrated_samples,
+    sampling_frequency,
+    has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
+)
+
+# The blocks as `last_fully_integrated_num_code_blocks` keeps them: floored at 1.
+@inline _record_num_code_blocks(bit_block_count::Integer) = max(1, bit_block_count)
+
+# The previous prompt an FLL reading compares a record with, or zero where there
+# is none to compare with. The reading divides the rotation between the two
+# prompts by this record's integration time, which holds only for records of one
+# length, so a record whose length differs from the previous one's (at a sync, or
+# after `set_preferred_num_code_blocks_to_integrate!`) has no reading either.
+@inline function _fll_previous_prompt(
+    tracked_signal::TrackedSignal,
+    output::CorrelatorOutput,
+    sampling_frequency,
+)
+    num_code_blocks = _record_num_code_blocks(
+        _bit_block_count(tracked_signal, output, sampling_frequency),
+    )
+    previous_prompt = get_last_fully_integrated_filtered_prompt(tracked_signal)
+    num_code_blocks == tracked_signal.last_fully_integrated_num_code_blocks ?
+    previous_prompt : zero(previous_prompt)
 end
 
 # Build the context and fold the record into one signal's CN0 estimator, or skip
@@ -602,7 +630,7 @@ end
         output = outputs[k]
         # The FLL's previous prompt (the previous chunk's last for the first
         # record); read it BEFORE the advance overwrites it.
-        previous_prompt = get_last_fully_integrated_filtered_prompt(ts)
+        previous_prompt = _fll_previous_prompt(ts, output, sampling_frequency)
         # Per-record integration time — the block time, NOT the chunk time.
         integration_time = output.integrated_samples / sampling_frequency
         # See `correlated_pre_sync` in `_apply_correlator_output`.
