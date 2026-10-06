@@ -75,9 +75,11 @@ import TrackingLoops:
     _pool_taps,
     requires_noise_density,
     reset,
+    is_wiped_off,
     reset_estimator_state,
     SatConventionalPLLAndDLL,
     step_loop,
+    sync_polarity,
     update,
     update_accumulator,
     update_noise!
