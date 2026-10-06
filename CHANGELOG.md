@@ -1,5 +1,84 @@
 # Changelog
 
+# [9.0.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v8.3.2...v9.0.0) (2026-10-06)
+
+
+* build!: require TrackingLoops 2 and drop Windows ([0d71e11](https://github.com/JuliaGNSS/Tracking.jl/commit/0d71e11fd07583ea1d0769bf9fd8903bbc5b77f8))
+* feat!: export only this package's API and the functions that read it ([b1f34c0](https://github.com/JuliaGNSS/Tracking.jl/commit/b1f34c0f4cb0365b0069e044fd6c1cceb295c469))
+* feat(track)!: drive any estimator that implements step_loop ([9801822](https://github.com/JuliaGNSS/Tracking.jl/commit/98018220439150727c8bd52a9b424aca702fefbf))
+* feat(track)!: remove the vector PLL and DLL, which moved to TrackingLoops ([f84794c](https://github.com/JuliaGNSS/Tracking.jl/commit/f84794cb5216932f064839c8230907e8a783f2ec)), closes [JuliaGNSS/TrackingLoops.jl#3](https://github.com/JuliaGNSS/TrackingLoops.jl/issues/3)
+
+
+### Features
+
+* ask the track state for the estimator's navigation solution ([f8c68d3](https://github.com/JuliaGNSS/Tracking.jl/commit/f8c68d36618b91927dc9448b1a02a51df7c97168))
+* hand the estimator records that name their satellite on one sample grid ([54b2e7e](https://github.com/JuliaGNSS/Tracking.jl/commit/54b2e7ebeccd5b77ec1847c1df687400942a95b5))
+* **track:** keep each state's sample grid its own, and carry it into rebuilt ones ([dd9baac](https://github.com/JuliaGNSS/Tracking.jl/commit/dd9baac5acb72a4e499cdadb78348aa8637b9043))
+
+
+### BREAKING CHANGES
+
+* `estimate_dopplers_and_filter_prompt` and
+`estimate_dopplers_and_filter_prompt!` now have a method for every
+`TrackState{<:Any,<:AbstractDopplerEstimator}`. A custom estimator that
+overrides them with an untyped second argument is now ambiguous with it.
+Type the second argument as documented (`measurements::BandMeasurements`),
+or drop the override and implement `TrackingLoops.step_loop` instead.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+* Tracking no longer installs on Windows, because
+TrackingLoops 2 depends on GNSSDecoder, whose Aff3ct dependency has no
+Windows build. Linux and macOS are unaffected. Stay on Tracking 8 on
+Windows.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+* `VectorPLLAndDLL`, `SatVectorPLLAndDLL`, `enable_vt!`,
+`disable_vt!`, `reset_code_discr_acc!`, `reset_carrier_discr_acc!`,
+`mean_code_discr`, `mean_carrier_discr`, `set_code_freq_updates!` and
+`set_carrier_freq_updates!` are removed, and `track!` no longer runs a
+vector loop. TrackingLoops 2 provides vector tracking instead: its
+`VectorPLLAndDLL(inner)` wraps a satellite's scalar loop, its
+`enable_vector_tracking`, `disable_vector_tracking`, `set_vector_corrections`,
+`reset_discriminator_accumulators`, `mean_code_discriminator` and
+`mean_carrier_discriminator` act on one satellite's state, and its
+`VectorTrackingState` / `update_navigation!` close the loops.
+`reset_loop_filters!` no longer has a vector-loop case.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+* Tracking no longer exports the TrackingLoops
+configuration API or GNSSSignals' accessors. Add `using TrackingLoops`
+(and `using GNSSSignals` where not already loaded) next to
+`using Tracking`, or qualify the names. No longer exported from
+Tracking:
+
+- from TrackingLoops: `AbstractCN0Estimator`, `AbstractCorrelator`,
+  `AbstractDopplerEstimator`, `AbstractNoiseEstimator`,
+  `AbstractPostCorrFilter`, `CN0UpdateContext`,
+  `ConventionalAssistedPLLAndDLL`, `ConventionalPLLAndDLL`,
+  `CorrelatorNoiseEstimator`, `CorrelatorOutput`,
+  `default_carrier_loop_filter_bandwidth`,
+  `default_code_loop_filter_bandwidth`,
+  `default_num_code_blocks_to_integrate`, `DefaultPostCorrFilter`,
+  `EarlyPromptLateCorrelator`, `get_correlator_sample_shifts`,
+  `get_default_correlator`, `get_early_late_sample_spacing`,
+  `get_noise_density`, `get_num_accumulators`, `get_weights`,
+  `init_estimator_state`, `max_num_code_blocks_to_integrate`,
+  `MomentsCN0Estimator`, `NoCN0Estimator`, `noise_observation`,
+  `noise_observation_from_correlator`, `noise_observation_from_samples`,
+  `NoiseObservation`, `NoiseRefCN0Estimator`, `NumAccumulators`,
+  `NumAnts`, `NWPRCN0Estimator`, `requires_noise_density`,
+  `update_accumulator`, `update_noise!`,
+  `VeryEarlyPromptLateCorrelator`;
+- from GNSSSignals: `get_band_id`, `get_code_frequency`,
+  `get_code_length`, `get_codes`, `get_modulation`,
+  `get_secondary_code`.
+
+Internals that moved to TrackingLoops are no longer reachable as
+`Tracking.X`; use `TrackingLoops.X`, including for method overrides such
+as `TrackingLoops.get_bit_edge_detection_confidence`.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
 ## [8.3.2](https://github.com/JuliaGNSS/Tracking.jl/compare/v8.3.1...v8.3.2) (2026-09-30)
 
 No changes to the package. Replaces the accidental 9.0.0 release.
