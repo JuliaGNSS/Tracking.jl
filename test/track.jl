@@ -421,17 +421,19 @@ end
         return error <= tolerance
     end
 
-    # ConventionalPLLAndDLL: converges at 90Hz offset, fails at 100Hz
-    @test test_convergence(90Hz, false) == true
-    @test test_convergence(100Hz, false) == false
+    # Pull-in ranges of the default 18 Hz loop (90 / 240 Hz before #244).
+    # ConventionalPLLAndDLL: converges at 40Hz offset, fails at 60Hz. In between
+    # the outcome depends on where cycle slips leave the loop.
+    @test test_convergence(40Hz, false) == true
+    @test test_convergence(60Hz, false) == false
 
-    # ConventionalAssistedPLLAndDLL: converges at 240Hz offset, fails at 250Hz.
+    # ConventionalAssistedPLLAndDLL: converges at 170Hz offset, fails at 180Hz.
     # The two-pass chunk (completions → NCO update → residue at the updated
     # Doppler) keeps every integration on a single Doppler and applies each
     # correction at its completing boundary, so the FLL pull-in edge matches
     # the classic per-code-period update.
-    @test test_convergence(240Hz, true) == true
-    @test test_convergence(250Hz, true) == false
+    @test test_convergence(170Hz, true) == true
+    @test test_convergence(180Hz, true) == false
 end
 
 @testset "Track multiple systems of type $type" for type in
@@ -516,7 +518,8 @@ end
 
     track_state = @inferred track(signal, track_state, sampling_frequency)
 
-    iterations = 2000
+    # 1.33 s: the 18 Hz carrier loop settles the 90° start phase in about 1.2 s.
+    iterations = 5000
     for i = 1:iterations
         carrier_phase_gps =
             mod2pi(
@@ -646,7 +649,8 @@ end
     track_state =
         @inferred track(signal, track_state, sampling_frequency; intermediate_frequency)
 
-    iterations = 2000
+    # 3.5 s: the 18 Hz carrier loop settles the 20 Hz start offset in about 3.2 s.
+    iterations = 3500
     code_phases = zeros(iterations)
     carrier_phases = zeros(iterations)
     tracked_code_phases = zeros(iterations)
@@ -763,7 +767,8 @@ end
 
     track_state = @inferred track(signal_mat, track_state, sampling_frequency)
 
-    iterations = 2000
+    # 3.5 s: the 18 Hz carrier loop settles the 20 Hz start offset in about 3.2 s.
+    iterations = 3500
     code_phases = zeros(iterations)
     carrier_phases = zeros(iterations)
     tracked_code_phases = zeros(iterations)
@@ -1034,10 +1039,8 @@ end
 # integration. L1C-D has data bits (50 Hz), L1C-P is the pilot — both still
 # need a working signal-path with a closed PLL/DLL.
 #
-# These tests rely on the per-signal default loop bandwidths, which size the
-# carrier BL at ~0.018/T (Hz) and take a flat 1 Hz for the code loop. For
-# L1C-D / L1C-P that gives ~1.8 Hz carrier / 1 Hz code — both well inside the
-# `BL * T < 0.4` stability bound for 10 ms integration.
+# These tests rely on the default loop bandwidths (carrier capped to 9 Hz at
+# 10 ms, code 1 Hz).
 @testset "Tracking single signal $name with $type samples" for (name, sig_type) in (
         ("GPSL1C_D", GPSL1C_D),
         ("GPSL1C_P", GPSL1C_P),
@@ -1088,7 +1091,7 @@ end
         sampling_frequency,
     )
 
-    iterations = 100
+    iterations = 200
     primary_code_len = get_code_length(signal)
     for i = 1:iterations
         carrier_phase =
@@ -1104,8 +1107,7 @@ end
         )
         track!(build_signal(carrier_phase, code_phase), track_state, sampling_frequency)
     end
-    # By now the PLL/DLL has had 100 × 10 ms = 1 s to converge on a clean
-    # signal seeded 5 Hz off — should be well inside 1 Hz.
+    # 2 s to converge from 5 Hz off to within 1 Hz.
     final_doppler = get_carrier_doppler(track_state, :default, prn)
     @test abs(final_doppler - carrier_doppler) < 1.0Hz
 end
@@ -1177,8 +1179,7 @@ end
     carrier_doppler = 1234.0Hz
     init_offset = 5.0Hz
 
-    # Driver is signals[1] = L1C_P at 10 ms; the per-signal default loop
-    # bandwidth picks the right (~1.8 Hz) value automatically.
+    # Driver is signals[1] = L1C_P at 10 ms, with the default loop bandwidths.
     track_state =
         TrackState(; signals = (modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),))
     track_state = add_satellite!(

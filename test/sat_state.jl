@@ -229,8 +229,8 @@ end
 
     # Kwargs flow through: explicit carrier phase, code doppler, estimator.
     # The default (auto-bandwidth) estimator sizes the sat's loop from its
-    # own driver signal (signals[1] = GPS L1C-P → 1.8 Hz), not from a fixed
-    # value on the estimator (which is `nothing` = auto).
+    # own driver signal (signals[1] = GPS L1C-P), not from a fixed value on
+    # the estimator (which is `nothing` = auto).
     estimator = TrackingLoops.ConventionalAssistedPLLAndDLL()
     @test estimator.carrier_loop_filter_bandwidth === nothing
     sat_kw = TrackedSat(
