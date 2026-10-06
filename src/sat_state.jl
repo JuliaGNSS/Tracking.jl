@@ -760,6 +760,39 @@ get_carrier_phase(s::TrackedSat) = s.carrier_phase * 2π
 """
 $(SIGNATURES)
 
+Half-cycle state of the satellite's carrier phase ([`get_carrier_phase`](@ref)),
+for a carrier-phase user that needs it resolved, such as RTK ambiguity fixing.
+
+The loops hold the prompt of the estimator-driver signal (`signals[1]`) on the
+real axis, so the carrier phase is that signal's, with its component phase: the
+phase on the band's in-phase reference is the carrier phase minus
+`get_carrier_phase_offset(signals[1])`. The Costas loop may hold it half a cycle
+off, which this reports:
+
+  - `+1`: resolved, the carrier phase is the driver signal's;
+  - `-1`: resolved, the carrier phase is half a cycle off it: add π;
+  - `0`: unresolved, the half-cycle ambiguity remains for a downstream user to
+    resolve, e.g. from the navigation message preamble.
+
+It is resolved once a dataless driver has synced to its secondary code, with
+the sign its four-quadrant PLL then holds. The switch may pull the carrier phase
+over by half a cycle: treat it as the start of the resolved carrier phase, not as
+part of a continuous one (see [Carrier loop staging](@ref)). A pilot without a
+secondary code (GPS L2 CL, Galileo E5a-QP), a data signal and any satellite of a
+custom estimator report `0`.
+"""
+get_carrier_phase_polarity(s::TrackedSat) =
+    Int(_carrier_phase_polarity(s.doppler_estimator_state, s))
+
+# The half-cycle state by the per-sat estimator state: TrackingLoops' shipped
+# estimators turn their PLL four-quadrant at the sync and report the sync's sign
+# (see `_carrier_phase_polarity` in conventional_pll_and_dll.jl); any other
+# estimator's is unresolved.
+_carrier_phase_polarity(_, _) = Int8(0)
+
+"""
+$(SIGNATURES)
+
 Get the current carrier Doppler frequency.
 """
 get_carrier_doppler(s::TrackedSat) = s.carrier_doppler

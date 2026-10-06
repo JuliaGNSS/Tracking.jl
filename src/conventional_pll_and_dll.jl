@@ -46,6 +46,14 @@ function TrackingLoops.SatConventionalPLLAndDLL(
     )
 end
 
+# The shipped estimators read the driver's prompt with the polarity of its
+# secondary-code sync (see the fold below), so that is the carrier phase's
+# half-cycle state.
+_carrier_phase_polarity(
+    ::Union{SatConventionalPLLAndDLL,SatNCOReferencedPLLAndDLL,SatVectorPLLAndDLL},
+    sat::TrackedSat,
+) = sync_polarity(first(sat.signals).signal, first(sat.signals).bit_buffer, sat.prn)
+
 # The words a software correlator's replicas ran on within a chunk: the
 # satellite's own Dopplers, regenerated every chunk.
 @inline _software_words(sat::TrackedSat) = FixedNCOWord(

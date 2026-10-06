@@ -118,7 +118,8 @@ Tracking adds is the per-record information it needs.
         the secondary-code sync found. A short overlay (GPS L5Q's 20 ms) can
         sync while the loop is still pulling in, and a Costas slip after it
         makes the switch a half-cycle jump of the carrier phase: the start of
-        the resolved phase, not part of a continuous one.
+        the resolved phase ([`get_carrier_phase_polarity`](@ref)), not part of
+        a continuous one.
       * The pilots without a secondary code (GPS L2 CL, Galileo E5a-QP) keep
         the Costas PLL. That is a choice, not a necessity: their prompt keeps
         its sign too, so the PLL could turn four-quadrant with the sign the
