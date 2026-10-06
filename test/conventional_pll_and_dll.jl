@@ -11,7 +11,7 @@ using StaticArrays: SVector
 using Dictionaries: Dictionary
 using Tracking:
     aid_dopplers,
-    calculate_carrier_frequency_update,
+    _close_loops,
     pll_disc,
     fll_disc,
     SatConventionalPLLAndDLL,
@@ -464,6 +464,23 @@ end
     bandwidth = 18.0Hz
     σ_n = 0.05
     rng = MersenneTwister(1)
+    # The carrier loop closes on the phase error in cycles: the closure's
+    # carrier update, which the code loop does not touch.
+    close_carrier_loop(carrier_loop_filter, correlator, previous_prompt) = _close_loops(
+        SatConventionalPLLAndDLL(;
+            init_carrier_doppler = 0.0Hz,
+            init_code_doppler = 0.0Hz,
+            carrier_loop_filter,
+        ),
+        gpsl1,
+        correlator,
+        previous_prompt,
+        0.0Hz,
+        5e6Hz,
+        T,
+        bandwidth,
+        1.0Hz,
+    )
     lf = ThirdOrderBilinearLF()
     φ = 0.0          # signal phase minus NCO phase, rad
     acc = 0.0
@@ -472,8 +489,8 @@ end
     for i = 1:n
         prompt = cis(φ + σ_n * randn(rng))
         correlator = EarlyPromptLateCorrelator(SVector(prompt, prompt, prompt), 0.5)
-        freq_update, lf =
-            calculate_carrier_frequency_update(gpsl1, lf, correlator, prompt, T, bandwidth)
+        freq_update, _, state = close_carrier_loop(lf, correlator, prompt)
+        lf = state.carrier_loop_filter
         φ -= 2π * Float64(freq_update * T)
         i > settle && (acc += φ^2)
     end
@@ -484,18 +501,15 @@ end
     prompt = cis(0.3)
     previous_prompt = cis(0.1)
     correlator = EarlyPromptLateCorrelator(SVector(prompt, prompt, prompt), 0.5)
-    @test calculate_carrier_frequency_update(
-        gpsl1,
-        ThirdOrderAssistedBilinearLF(),
-        correlator,
-        previous_prompt,
-        T,
-        bandwidth,
-    ) == filter_loop(
-        ThirdOrderAssistedBilinearLF(),
-        (pll_disc(gpsl1, correlator), fll_disc(gpsl1, correlator, previous_prompt, T)),
-        T,
-        bandwidth,
+    @test first(
+        close_carrier_loop(ThirdOrderAssistedBilinearLF(), correlator, previous_prompt),
+    ) == first(
+        filter_loop(
+            ThirdOrderAssistedBilinearLF(),
+            (pll_disc(gpsl1, correlator), fll_disc(gpsl1, correlator, previous_prompt, T)),
+            T,
+            bandwidth,
+        ),
     )
 end
 

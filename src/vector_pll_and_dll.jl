@@ -205,138 +205,55 @@ function _reset_estimator_state(
     )
 end
 
-# Carrier loop filtering with an explicit FLL-branch input (the raw FLL
-# discriminator, or the navigation filter's `carrier_freq_update` under vector
-# closure). Non-assisted filters ignore it and run PLL-only.
-function _filter_vector_carrier_loop(
-    carrier_loop_filter::ThirdOrderAssistedBilinearLF,
-    pll_discriminator,
-    fll_input,
-    integration_time,
-    loop_bandwidth,
-)
-    filter_loop(
-        carrier_loop_filter,
-        (pll_discriminator, fll_input),
-        integration_time,
-        loop_bandwidth,
-    )
-end
-
-function _filter_vector_carrier_loop(
-    carrier_loop_filter::AbstractLoopFilter,
-    pll_discriminator,
-    fll_input,
-    integration_time,
-    loop_bandwidth,
-)
-    filter_loop(carrier_loop_filter, pll_discriminator, integration_time, loop_bandwidth)
-end
-
-# The vector counterpart of the conventional driver fold (see that method in
-# conventional_pll_and_dll.jl), additionally threading the discriminator
-# accumulators. While `vt_on`, the navigation filter's corrections replace the
-# code loop filter output and the FLL branch input (see `VectorPLLAndDLL`) and
-# the raw DLL/FLL discriminators are accumulated; otherwise it is the scalar
-# fallback.
-@inline function _process_estimator_driver_signal(
-    tracked_signal::TrackedSignal,
-    sat::TrackedSat,
-    pll_and_dll_state::SatVectorPLLAndDLL,
+# The vector closure of one record, plugged into the shared driver fold by
+# dispatch on the per-sat state; with `vt_on` unset it is the scalar closure. See
+# "The per-integration contract" in docs/src/vector_tracking.md.
+@inline function _close_loops(
+    state::SatVectorPLLAndDLL,
+    signal::AbstractGNSSSignal,
+    correlator::AbstractCorrelator,
+    previous_prompt::Complex,
+    code_doppler,
     sampling_frequency,
-    noise_density,
-    noise_density_ready::Bool,
-    driver_carrier_phase::Real = 0.0,
+    integration_time,
+    carrier_bandwidth,
+    code_bandwidth,
 )
-    outputs = tracked_signal.correlator_outputs
-    if isempty(outputs)
-        return tracked_signal, pll_and_dll_state, sat.carrier_doppler, sat.code_doppler
-    end
-    signal = tracked_signal.signal
-    ts = tracked_signal
-    carrier_loop_filter = pll_and_dll_state.carrier_loop_filter
-    code_loop_filter = pll_and_dll_state.code_loop_filter
-    code_discr_acc = pll_and_dll_state.code_discr_acc
-    carrier_discr_acc = pll_and_dll_state.carrier_discr_acc
-    carrier_doppler = sat.carrier_doppler
-    code_doppler = sat.code_doppler
-    found_before_fold = has_bit_or_secondary_code_been_found(ts.bit_buffer)
-    @inbounds for k in eachindex(outputs)
-        output = outputs[k]
-        # Read BEFORE the advance overwrites it (as in the conventional fold).
-        previous_prompt = get_last_fully_integrated_filtered_prompt(ts)
-        integration_time = output.integrated_samples / sampling_frequency
-        synced_earlier_in_fold =
-            !found_before_fold && has_bit_or_secondary_code_been_found(ts.bit_buffer)
-        ts, filtered_correlator = _apply_correlator_output(
-            ts,
-            output,
-            sat.prn,
-            sampling_frequency,
-            noise_density,
-            noise_density_ready,
-            driver_carrier_phase;
-            correlated_pre_sync = synced_earlier_in_fold,
-        )
-
-        # Capped as in the conventional estimator.
-        carrier_bandwidth = effective_carrier_loop_filter_bandwidth(
-            pll_and_dll_state.carrier_loop_filter_bandwidth,
-            integration_time,
-        )
-        code_bandwidth = effective_code_loop_filter_bandwidth(
-            pll_and_dll_state.code_loop_filter_bandwidth,
-            integration_time,
-        )
-
-        pll_discriminator = pll_disc(signal, filtered_correlator)
-        fll_discriminator =
-            fll_disc(signal, filtered_correlator, previous_prompt, integration_time)
-        # The chunk-fixed code Doppler, as in the conventional fold.
-        dll_discriminator =
-            dll_disc(signal, filtered_correlator, sat.code_doppler, sampling_frequency)
-
-        if pll_and_dll_state.vt_on
-            code_discr_acc = code_discr_acc .+ (1, dll_discriminator)
-            carrier_discr_acc = carrier_discr_acc .+ (1, fll_discriminator)
-            code_freq_update = pll_and_dll_state.code_freq_update
-            fll_input = pll_and_dll_state.carrier_freq_update
-        else
-            code_freq_update, code_loop_filter = filter_loop(
-                code_loop_filter,
-                dll_discriminator,
-                integration_time,
-                code_bandwidth,
-            )
-            fll_input = fll_discriminator
-        end
-        carrier_freq_update, carrier_loop_filter = _filter_vector_carrier_loop(
-            carrier_loop_filter,
-            pll_discriminator,
-            fll_input,
-            integration_time,
-            carrier_bandwidth,
-        )
-        carrier_doppler, code_doppler = aid_dopplers(
-            signal,
-            pll_and_dll_state.init_carrier_doppler,
-            pll_and_dll_state.init_code_doppler,
-            carrier_freq_update,
-            code_freq_update,
-        )
-    end
-    empty!(outputs)
+    state.vt_on || return _close_scalar_loops(
+        state,
+        signal,
+        correlator,
+        previous_prompt,
+        code_doppler,
+        sampling_frequency,
+        integration_time,
+        carrier_bandwidth,
+        code_bandwidth,
+    )
+    pll_discriminator = pll_disc(signal, correlator)
+    fll_discriminator = fll_disc(signal, correlator, previous_prompt, integration_time)
+    dll_discriminator = dll_disc(signal, correlator, code_doppler, sampling_frequency)
+    carrier_freq_update, carrier_loop_filter = calculate_carrier_frequency_update(
+        state.carrier_loop_filter,
+        pll_discriminator,
+        state.carrier_freq_update,
+        integration_time,
+        carrier_bandwidth,
+    )
     # The NCO-correction fields are not written back: they are owned by the
     # navigation filter, and overwriting them would clobber its value.
-    new_doppler_estimator_state = SatVectorPLLAndDLL(
-        pll_and_dll_state;
+    carrier_freq_update,
+    state.code_freq_update,
+    SatVectorPLLAndDLL(
+        state;
         carrier_loop_filter,
-        code_loop_filter,
-        code_discr_acc,
-        carrier_discr_acc,
+        code_discr_acc = state.code_discr_acc .+ (1, dll_discriminator),
+        carrier_discr_acc = state.carrier_discr_acc .+ (1, fll_discriminator),
     )
-    return ts, new_doppler_estimator_state, carrier_doppler, code_doppler
 end
+
+@inline _with_loop_state(state::SatVectorPLLAndDLL; kwargs...) =
+    SatVectorPLLAndDLL(state; kwargs...)
 
 """
 $(SIGNATURES)
