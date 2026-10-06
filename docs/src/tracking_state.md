@@ -11,7 +11,7 @@ The tracking state nests as **TrackState → SignalGroup → TrackedSat → Trac
 
 ### Estimator-driver signal
 
-The first signal in each group's tuple is the **estimator-driver signal** — the one the Doppler estimator uses to update the satellite-shared carrier and code Doppler. With the default [`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL) / [`ConventionalAssistedPLLAndDLL`](@extref TrackingLoops.ConventionalAssistedPLLAndDLL), `signals[1]`'s correlator is the input to the PLL/DLL discriminator, and the per-signal default loop bandwidths are sized off this signal's primary-code period. A user-supplied [`AbstractDopplerEstimator`](@extref TrackingLoops.AbstractDopplerEstimator) is free to use the other signals' state too — `signals[1]`'s privileged role is a convention of the conventional estimators, not a structural constraint of `TrackedSat`.
+The first signal in each group's tuple is the **estimator-driver signal** — the one the Doppler estimator uses to update the satellite-shared carrier and code Doppler. With the default [`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL) / [`ConventionalAssistedPLLAndDLL`](@extref TrackingLoops.ConventionalAssistedPLLAndDLL), `signals[1]`'s correlator is the input to the PLL/DLL discriminator, and an auto-bandwidth estimator seeds the loop bandwidths from this signal's [`default_carrier_loop_filter_bandwidth`](@extref TrackingLoops.default_carrier_loop_filter_bandwidth) / [`default_code_loop_filter_bandwidth`](@extref TrackingLoops.default_code_loop_filter_bandwidth). A user-supplied [`AbstractDopplerEstimator`](@extref TrackingLoops.AbstractDopplerEstimator) is free to use the other signals' state too — `signals[1]`'s privileged role is a convention of the conventional estimators, not a structural constraint of `TrackedSat`.
 
 The driver signal is privileged for the Doppler estimator only. Bit synchronisation, the post-correlation filter and the **CN0 estimator** all run per signal, so a multi-signal satellite produces one C/N₀ per signal rather than one for the driver — see [CN0 Estimator](cn0_estimator.md) for what that costs and for [`NoCN0Estimator`](@extref TrackingLoops.NoCN0Estimator), the per-signal opt-out.
 
@@ -481,6 +481,7 @@ The trailing `sig` selector is either:
 | `get_code_phase` | Shared code phase (wraps at [`max_code_length`](@ref)). |
 | `get_code_doppler` | Shared code Doppler. |
 | `get_carrier_phase` | Shared carrier phase in radians. |
+| `get_carrier_phase_polarity` | Whether that phase is half a cycle off (`-1`), not (`+1`), or unresolved (`0`). |
 | `get_carrier_doppler` | Shared carrier Doppler. |
 | `get_signal_start_sample` | Index of the next sample to integrate. |
 
@@ -546,6 +547,7 @@ get_prn(::TrackedSat)
 get_code_phase(::TrackedSat)
 get_code_doppler(::TrackedSat)
 get_carrier_phase(::TrackedSat)
+get_carrier_phase_polarity(::TrackedSat)
 get_carrier_doppler(::TrackedSat)
 get_signal_start_sample(::TrackedSat)
 get_signals(::TrackedSat)

@@ -21,6 +21,14 @@ jobs:
         with:
           version: '1'
       - uses: julia-actions/cache@v3
+      # TEMPORARY: until TrackingLoops 4.0.0 is registered, build against its
+      # integration branch. Never on master, which must resolve from General.
+      # Before installing, which precompiles Tracking against the TrackingLoops
+      # it resolves.
+      # The commit that bumps the TrackingLoops compat to 4 removes this step.
+      - name: Use TrackingLoops' unreleased sc/v4
+        if: github.base_ref != 'master' && github.ref != 'refs/heads/master' && !startsWith(github.ref, 'refs/tags/')
+        run: julia --color=yes --project=docs -e 'using Pkg; Pkg.add(url = "https://github.com/JuliaGNSS/TrackingLoops.jl", rev = "sc/v4")'
       - name: Install dependencies
         run: |
           julia --project=docs -e '

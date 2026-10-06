@@ -34,15 +34,25 @@ function TrackingLoops.SatConventionalPLLAndDLL(
     carrier_loop_filter_bandwidth::typeof(1.0Hz) = 18.0Hz,
     code_loop_filter_bandwidth::typeof(1.0Hz) = 1.0Hz,
 ) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
-    SatConventionalPLLAndDLL(
-        sat.carrier_doppler,
-        sat.code_doppler,
+    # By keyword, so the fields TrackingLoops' state adds start at their
+    # defaults (a fresh carrier-loop staging).
+    SatConventionalPLLAndDLL(;
+        init_carrier_doppler = sat.carrier_doppler,
+        init_code_doppler = sat.code_doppler,
         carrier_loop_filter,
         code_loop_filter,
         carrier_loop_filter_bandwidth,
         code_loop_filter_bandwidth,
     )
 end
+
+# The shipped estimators read the driver's prompt with the polarity of its
+# secondary-code sync (see the fold below), so that is the carrier phase's
+# half-cycle state.
+_carrier_phase_polarity(
+    ::Union{SatConventionalPLLAndDLL,SatNCOReferencedPLLAndDLL,SatVectorPLLAndDLL},
+    sat::TrackedSat,
+) = sync_polarity(first(sat.signals).signal, first(sat.signals).bit_buffer, sat.prn)
 
 # The words a software correlator's replicas ran on within a chunk: the
 # satellite's own Dopplers, regenerated every chunk.
@@ -137,7 +147,7 @@ function _update_tracked_sat_doppler(
         just_synced ? _snap_code_phase_from_synced_signal(new_signals, sat.code_phase) :
         sat.code_phase
     final_signals =
-        just_synced ? map(_reset_inflight_integration, new_signals) : new_signals
+        just_synced ? map(_reset_on_snap, sat.signals, new_signals) : new_signals
 
     TrackedSat(
         sat;
@@ -155,6 +165,26 @@ end
 # the old phase must not be carried into the re-anchored window.
 @inline _reset_inflight_integration(s::TrackedSignal) =
     TrackedSignal(s; correlator = zero(s.correlator), integrated_samples = 0)
+
+# The reset at the sync phase snap, given a signal before and after the fold. A
+# signal whose prompt this sync wipes off (a pilot synced to its secondary code)
+# also drops its previous prompt: it was correlated without the wipe-off and may
+# differ in sign from the next record, which the four-quadrant FLL would read as
+# half a cycle of rotation (see `LoopRecord`'s previous-prompt contract). A zero
+# prompt makes the FLL skip that record, as after `reset_loop_filters!`.
+@inline function _reset_on_snap(old::TrackedSignal, new::TrackedSignal)
+    s = _reset_inflight_integration(new)
+    newly_wiped_off =
+        is_wiped_off(new.signal, new.bit_buffer.found) &&
+        !is_wiped_off(old.signal, old.bit_buffer.found)
+    newly_wiped_off ?
+    TrackedSignal(
+        s;
+        last_fully_integrated_filtered_prompt = zero(
+            s.last_fully_integrated_filtered_prompt,
+        ),
+    ) : s
+end
 
 # Apply one completed `CorrelatorOutput` record to a signal — shared by the
 # estimator-driver and passenger folds so they cannot drift (issue #133). The
@@ -219,6 +249,31 @@ end
     return new_signal, filtered_correlator, integrated_code_blocks
 end
 
+# The previous prompt an FLL reading compares a record with, or zero where there
+# is none to compare with. The reading divides the rotation between the two
+# prompts by this record's integration time, which holds only for records of one
+# length, so a record whose length differs from the previous one's (at a sync, or
+# after `set_preferred_num_code_blocks_to_integrate!`) has no reading either. The
+# length is counted as `last_fully_integrated_num_code_blocks` keeps it.
+@inline function _fll_previous_prompt(
+    tracked_signal::TrackedSignal,
+    output::CorrelatorOutput,
+    sampling_frequency,
+)
+    num_code_blocks = max(
+        1,
+        calc_num_code_blocks_for_bit_buffer(
+            tracked_signal.signal,
+            output.integrated_samples,
+            sampling_frequency,
+            has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer),
+        ),
+    )
+    previous_prompt = get_last_fully_integrated_filtered_prompt(tracked_signal)
+    num_code_blocks == tracked_signal.last_fully_integrated_num_code_blocks ?
+    previous_prompt : zero(previous_prompt)
+end
+
 # Process the estimator-driver signal (signals[1]): fold over every
 # `CorrelatorOutput` collected during this chunk, in order — running the
 # per-record advance and the estimator's `step` per record, threading the
@@ -252,13 +307,19 @@ end
     # delay-aware estimator maps every record of the fold onto the delay-free
     # loop's record the same distance ahead.
     fold_end = last(outputs).sample_index
+    # Every record of the chunk was correlated before this fold, so the sync
+    # state from before the fold decides which carrier discriminators apply: a
+    # four-quadrant FLL on a wiped-off prompt, a four-quadrant PLL with the
+    # secondary-code sync's sign.
+    wiped_off = is_wiped_off(signal, found_before_fold)
+    polarity = sync_polarity(signal, ts.bit_buffer, sat.prn)
     @inbounds for k in eachindex(outputs)
         output = outputs[k]
         # FLL needs the previous record's filtered prompt; the first record of
         # the chunk chains from the sat's carried-over
         # `last_fully_integrated_filtered_prompt` (the previous chunk's last).
         # Read it off `ts` BEFORE the advance overwrites it.
-        previous_prompt = get_last_fully_integrated_filtered_prompt(ts)
+        previous_prompt = _fll_previous_prompt(ts, output, sampling_frequency)
         # A record that follows a sync detected earlier in THIS fold was
         # correlated with pre-sync replicas — its blocks still count towards the
         # bit, only its prompt may have to be dropped (see `fold_record`).
@@ -286,6 +347,8 @@ end
             fold_end,
             prn = sat.prn,
             sample_offset,
+            wiped_off,
+            polarity,
         )
         state, carrier_doppler, code_doppler =
             step_loop(estimator, state, record, words, landing_sample)

@@ -959,6 +959,8 @@ get_num_ants(s::TrackState, id...) = get_num_ants(get_sat_state(s, id...))
 get_code_phase(s::TrackState, id...) = get_code_phase(get_sat_state(s, id...))
 get_code_doppler(s::TrackState, id...) = get_code_doppler(get_sat_state(s, id...))
 get_carrier_phase(s::TrackState, id...) = get_carrier_phase(get_sat_state(s, id...))
+get_carrier_phase_polarity(s::TrackState, id...) =
+    get_carrier_phase_polarity(get_sat_state(s, id...))
 get_carrier_doppler(s::TrackState, id...) = get_carrier_doppler(get_sat_state(s, id...))
 get_signal_start_sample(s::TrackState, id...) =
     get_signal_start_sample(get_sat_state(s, id...))
@@ -1174,9 +1176,8 @@ signal on one satellite — the `preferred_num_code_blocks_to_integrate` field o
 the addressed [`TrackedSignal`](@ref). The actual length is still capped per
 integration by the signal's bit/secondary-code period and held at 1 until
 bit/secondary sync (see `calc_num_code_blocks_to_integrate`); with the
-conventional estimator the carrier loop bandwidth auto-scales by `1/N` so the
-loop stays stable at any length, and the code loop bandwidth is left as
-configured unless stability caps it.
+conventional estimator the loop bandwidths are capped for stability, so no
+re-tuning is needed (see [`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL)).
 
 For data-bearing signals the length must evenly divide the number of code
 blocks that form one bit (e.g. a divisor of 20 for GPS L1 C/A, of 10 for GPS
@@ -1297,7 +1298,8 @@ filter. For the conventional PLL/DLL estimator this zeroes the carrier and code
 loop-filter integrators while preserving the converged `carrier_doppler` /
 `code_doppler` — and any per-satellite loop-bandwidth override carried on the
 `SatConventionalPLLAndDLL` state — so the loop continues from the
-converged frequency with a clean filter. Each signal's
+converged frequency with a clean filter, and restarts the carrier loop's
+staging on the FLL-assisted PLL (see [Carrier loop staging](@ref)). Each signal's
 `last_fully_integrated_filtered_prompt` is cleared as well, so the first
 FLL update after the reset doesn't measure a prompt rotation that spans the
 old integration interval.
