@@ -1,0 +1,128 @@
+# Signal combining, the host side: with an estimator that combines signals
+# (TrackingLoops' `combines_signals`), the driver fold walks the passengers'
+# (`signals[2:end]`) records alongside its own and hands each to the estimator's
+# `combine_passenger_record` before the driver record it ends within. The
+# combining itself — weights, gating, which loops — is TrackingLoops'. See the
+# "Signal combining" section of docs/src/loop_filter.md.
+
+# Per-passenger constants of one fold. `differential_group_delay_chips`, the
+# passenger's group delay minus the driver's in chips at the driver's code
+# frequency, refers the passenger's DLL discriminator to the driver's code phase;
+# `NaN` where either group delay is unknown, which leaves the passenger out of
+# the code loop: unknown is not zero.
+@inline function _passenger_context(
+    passenger::TrackedSignal,
+    (noise_density, noise_density_ready),
+    driver::TrackedSignal,
+    code_frequency,
+)
+    known = !isnothing(passenger.group_delay) && !isnothing(driver.group_delay)
+    differential_group_delay_chips =
+        known ?
+        Float64(
+            ustrip(NoUnits, (passenger.group_delay - driver.group_delay) * code_frequency),
+        ) : NaN
+    (;
+        found_before_fold = has_bit_or_secondary_code_been_found(passenger.bit_buffer),
+        noise_density,
+        noise_density_ready,
+        differential_group_delay_chips,
+    )
+end
+
+# Apply each passenger's records that end by sample `until`, from its cursor on,
+# and combine them into the estimator state. Recursive over the tuple for type
+# stability.
+@inline _advance_passengers(
+    ::Tuple{},
+    ::Tuple{},
+    ::Tuple{},
+    ::Integer,
+    state,
+    ::Vararg{Any,N},
+) where {N} = ((), (), state)
+@inline function _advance_passengers(
+    passengers::Tuple,
+    cursors::Tuple,
+    contexts::Tuple,
+    until::Integer,
+    state,
+    args::Vararg{Any,N},
+) where {N}
+    passenger, cursor, state = _advance_passenger(
+        first(passengers),
+        first(cursors),
+        first(contexts),
+        until,
+        state,
+        args...,
+    )
+    rest, rest_cursors, state = _advance_passengers(
+        Base.tail(passengers),
+        Base.tail(cursors),
+        Base.tail(contexts),
+        until,
+        state,
+        args...,
+    )
+    (passenger, rest...), (cursor, rest_cursors...), state
+end
+
+# One passenger's records up to `until`: the shared per-record advance, then the
+# record — with the passenger's own previous prompt, on its own record sequence —
+# into the estimator's sums.
+@inline function _advance_passenger(
+    tracked_signal::TrackedSignal,
+    cursor::Int,
+    context,
+    until::Integer,
+    state,
+    estimator::AbstractDopplerEstimator,
+    driver_signal::AbstractGNSSSignal,
+    prn::Integer,
+    sampling_frequency,
+    driver_carrier_phase::Real,
+    words,
+    sample_offset::Int,
+)
+    ts = tracked_signal
+    outputs = ts.correlator_outputs
+    @inbounds while cursor <= length(outputs) && outputs[cursor].sample_index <= until
+        output = outputs[cursor]
+        previous_prompt = _fll_previous_prompt(ts, output, sampling_frequency)
+        # See `correlated_pre_sync` in `_apply_correlator_output`.
+        correlated_pre_sync =
+            !context.found_before_fold &&
+            has_bit_or_secondary_code_been_found(ts.bit_buffer)
+        ts, filtered_correlator, integrated_code_blocks = _apply_correlator_output(
+            ts,
+            output,
+            prn,
+            sampling_frequency,
+            context.noise_density,
+            context.noise_density_ready,
+            driver_carrier_phase;
+            correlated_pre_sync,
+        )
+        record = LoopRecord(
+            ts.signal,
+            filtered_correlator,
+            previous_prompt,
+            output,
+            integrated_code_blocks,
+            sampling_frequency;
+            prn,
+            sample_offset,
+        )
+        state = combine_passenger_record(
+            estimator,
+            state,
+            record,
+            words;
+            driver_signal,
+            context.differential_group_delay_chips,
+        )
+        cursor += 1
+    end
+    ts, cursor, state
+end

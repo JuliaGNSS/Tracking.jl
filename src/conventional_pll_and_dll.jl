@@ -101,20 +101,30 @@ function _update_tracked_sat_doppler(
     driver_carrier_phase = get_carrier_phase_offset(head.signal)
 
     driver_noise_density, driver_noise_density_ready = first(noise)
-    new_head, new_doppler_estimator_state, new_carrier_doppler, new_code_doppler =
-        _process_estimator_driver_signal(
-            head,
-            sat,
-            estimator,
-            pll_and_dll_state,
-            sampling_frequency,
-            driver_noise_density,
-            driver_noise_density_ready,
-            driver_carrier_phase,
-            words,
-            landing_sample,
-            sample_offset,
-        )
+    # An estimator that combines signals gets the passengers' records within the
+    # driver fold (see signal_combining.jl); they come back with their records
+    # consumed, so the passenger walk below leaves them as they are.
+    combine = combines_signals(estimator) && !isempty(tail_signals)
+    new_head,
+    new_doppler_estimator_state,
+    new_carrier_doppler,
+    new_code_doppler,
+    tail_signals = _process_estimator_driver_signal(
+        head,
+        sat,
+        estimator,
+        pll_and_dll_state,
+        sampling_frequency,
+        driver_noise_density,
+        driver_noise_density_ready,
+        driver_carrier_phase,
+        words,
+        landing_sample,
+        sample_offset,
+        tail_signals,
+        Base.tail(noise),
+        combine,
+    )
 
     new_tail = _process_passenger_signals(
         tail_signals,
@@ -148,6 +158,11 @@ function _update_tracked_sat_doppler(
         sat.code_phase
     final_signals =
         just_synced ? map(_reset_on_snap, sat.signals, new_signals) : new_signals
+    # The passenger records still pending ended before the driver's
+    # re-integration from the snapped phase starts.
+    final_state =
+        just_synced ? drop_pending_passengers(estimator, new_doppler_estimator_state) :
+        new_doppler_estimator_state
 
     TrackedSat(
         sat;
@@ -155,7 +170,7 @@ function _update_tracked_sat_doppler(
         carrier_doppler = new_carrier_doppler,
         code_doppler = new_code_doppler,
         signals = final_signals,
-        doppler_estimator_state = new_doppler_estimator_state,
+        doppler_estimator_state = final_state,
     )
 end
 
@@ -274,6 +289,13 @@ end
     previous_prompt : zero(previous_prompt)
 end
 
+# With `combine`, the `passengers` (with their `(density, ready)` pairs) are
+# folded in too: before each driver record, every passenger record ending by
+# then is applied and combined into the estimator state
+# (`combine_passenger_record`), and after the driver's last record the rest,
+# their sums left pending in the state. They are returned with their records
+# consumed; without `combine` they are returned as they are.
+#
 # Process the estimator-driver signal (signals[1]): fold over every
 # `CorrelatorOutput` collected during this chunk, in order — running the
 # per-record advance and the estimator's `step` per record, threading the
@@ -292,10 +314,18 @@ end
     words,
     landing_sample::Int64,
     sample_offset::Int = 0,
+    passengers::Tuple = (),
+    passenger_noise::Tuple = (),
+    combine::Bool = false,
 )
     outputs = tracked_signal.correlator_outputs
-    if isempty(outputs)
-        return tracked_signal, pll_and_dll_state, sat.carrier_doppler, sat.code_doppler
+    if isempty(outputs) &&
+       !(combine && any(p -> !isempty(p.correlator_outputs), passengers))
+        return tracked_signal,
+        pll_and_dll_state,
+        sat.carrier_doppler,
+        sat.code_doppler,
+        passengers
     end
     signal = tracked_signal.signal
     ts = tracked_signal
@@ -306,7 +336,26 @@ end
     # The command this fold produces is computed after its last record; a
     # delay-aware estimator maps every record of the fold onto the delay-free
     # loop's record the same distance ahead.
-    fold_end = last(outputs).sample_index
+    fold_end = isempty(outputs) ? 0 : last(outputs).sample_index
+    # The passengers' records, when combined, are walked by cursor alongside.
+    contexts = map(passengers, passenger_noise) do passenger, noise
+        _passenger_context(
+            passenger,
+            noise,
+            tracked_signal,
+            get_code_frequency(signal) + sat.code_doppler,
+        )
+    end
+    cursors = map(_ -> 1, passengers)
+    passenger_args = (
+        estimator,
+        signal,
+        sat.prn,
+        sampling_frequency,
+        driver_carrier_phase,
+        words,
+        sample_offset,
+    )
     # Every record of the chunk was correlated before this fold, so the sync
     # state from before the fold decides which carrier discriminators apply: a
     # four-quadrant FLL on a wiped-off prompt, a four-quadrant PLL with the
@@ -315,6 +364,16 @@ end
     polarity = sync_polarity(signal, ts.bit_buffer, sat.prn)
     @inbounds for k in eachindex(outputs)
         output = outputs[k]
+        if combine
+            passengers, cursors, state = _advance_passengers(
+                passengers,
+                cursors,
+                contexts,
+                output.sample_index,
+                state,
+                passenger_args...,
+            )
+        end
         # FLL needs the previous record's filtered prompt; the first record of
         # the chunk chains from the sat's carried-over
         # `last_fully_integrated_filtered_prompt` (the previous chunk's last).
@@ -354,7 +413,19 @@ end
             step_loop(estimator, state, record, words, landing_sample)
     end
     empty!(outputs)
-    return ts, state, carrier_doppler, code_doppler
+    if combine
+        # The rest, after the driver's last record, stay pending in the state.
+        passengers, _, state = _advance_passengers(
+            passengers,
+            cursors,
+            contexts,
+            typemax(Int),
+            state,
+            passenger_args...,
+        )
+        foreach(passenger -> empty!(passenger.correlator_outputs), passengers)
+    end
+    return ts, state, carrier_doppler, code_doppler, passengers
 end
 
 # Process the non-driver signals (signals[2:end]): the shared per-signal

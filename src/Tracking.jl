@@ -32,6 +32,8 @@ import TrackingLoops:
     AbstractPostCorrFilter,
     append_noise_observation!,
     BitBuffer,
+    combine_passenger_record,
+    combines_signals,
     buffer,
     _calc_num_code_blocks_that_form_a_bit,
     calc_num_code_blocks_for_bit_buffer,
@@ -41,6 +43,7 @@ import TrackingLoops:
     CorrelatorOutput,
     default_cn0_estimator,
     default_num_code_blocks_to_integrate,
+    drop_pending_passengers,
     DefaultPostCorrFilter,
     EarlyPromptLateCorrelator,
     estimate_cn0,
@@ -321,6 +324,7 @@ include("downconvert_and_correlate_cpu.jl")
 include("downconvert_and_correlate_int16.jl")
 include("downconvert_and_correlate_onebit.jl")
 include("downconvert_and_correlate_twobit.jl")
+include("signal_combining.jl")
 include("conventional_pll_and_dll.jl")
 include("tracking_state.jl")
 include("track.jl")

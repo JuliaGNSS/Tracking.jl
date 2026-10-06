@@ -208,7 +208,8 @@ full pattern, including how the immutable and in-place forms share a
 per-signal walk distinguishes the
 [estimator-driver signal](tracking_state.md#Estimator-driver-signal)
 (`signals[1]`, whose records are folded through `step_loop`) from the other
-signals (which only have their prompts filtered). That split is a convention
+signals (whose prompts are filtered and, with [Signal combining](@ref),
+whose discriminators join the driver's loops). That split is a convention
 of the per-record path — an estimator that replaces the estimate phase can
 use every signal's state any way you like.
 
