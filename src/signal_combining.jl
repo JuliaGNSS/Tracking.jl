@@ -1,8 +1,9 @@
-# Signal combining, the host side: with an estimator that combines signals
-# (TrackingLoops' `combines_signals`), the driver fold walks the passengers'
+# The passengers, the host side: the driver fold walks the passengers'
 # (`signals[2:end]`) records alongside its own and hands each to the estimator's
-# `combine_passenger_record` before the driver record it ends within. The
-# combining itself — weights, gating, which loops — is TrackingLoops'. See the
+# `step_loop` before the driver record it ends within, so an estimator that
+# combines signals combines each into the driver step it belongs to, and the
+# vector loop decodes its decoding signal's. Nothing here asks which estimator it
+# is. The combining itself — weights, gating, which loops — is TrackingLoops'. See the
 # "Signal combining" section of docs/src/loop_filter.md.
 
 # Per-passenger constants of one fold. `differential_group_delay_chips`, the
@@ -27,6 +28,9 @@
         noise_density,
         noise_density_ready,
         differential_group_delay_chips,
+        # The fold the records belong to ends at the last of them.
+        fold_end = isempty(passenger.correlator_outputs) ? 0 :
+                   last(passenger.correlator_outputs).sample_index,
     )
 end
 
@@ -70,7 +74,8 @@ end
 
 # One passenger's records up to `until`: the shared per-record advance, then the
 # record — with the passenger's own previous prompt, on its own record sequence —
-# into the estimator's sums.
+# through the estimator's `step_loop`. Its Dopplers are the command in force and
+# are not taken: the chunk's command is the driver's.
 @inline function _advance_passenger(
     tracked_signal::TrackedSignal,
     cursor::Int,
@@ -83,6 +88,7 @@ end
     sampling_frequency,
     driver_carrier_phase::Real,
     words,
+    landing_sample::Int64,
     sample_offset::Int,
 )
     ts = tracked_signal
@@ -94,7 +100,7 @@ end
         correlated_pre_sync =
             !context.found_before_fold &&
             has_bit_or_secondary_code_been_found(ts.bit_buffer)
-        ts, filtered_correlator, integrated_code_blocks = _apply_correlator_output(
+        ts, filtered_correlator, integrated_code_blocks, signal_state = _apply_correlator_output(
             ts,
             output,
             prn,
@@ -111,17 +117,13 @@ end
             output,
             integrated_code_blocks,
             sampling_frequency;
+            context.fold_end,
             prn,
             sample_offset,
-        )
-        state = combine_passenger_record(
-            estimator,
-            state,
-            record,
-            words;
-            driver_signal,
+            signal_state,
             context.differential_group_delay_chips,
         )
+        state, _, _ = step_loop(estimator, state, record, words, landing_sample)
         cursor += 1
     end
     ts, cursor, state

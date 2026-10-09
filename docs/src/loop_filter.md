@@ -150,8 +150,9 @@ the estimator, e.g. `ConventionalAssistedPLLAndDLL(; combine_signals = true)`,
 the discriminators of the other signals, the passengers, are combined with the
 driver's into a weighted mean before the loop filters read it. A mean rather
 than a sum, so the loop gain does not change with the number of signals. The
-combining is TrackingLoops' (its `combine_passenger_record`); Tracking walks
-the passengers' records alongside the driver's.
+combining is TrackingLoops'. Tracking steps every passenger record with the
+estimator's `step_loop`, in sample order alongside the driver's, as it does for
+every estimator; an estimator that does not combine leaves the state as it is.
 
   - **Weights** are each signal's ICD power share
     (`GNSSSignals.get_relative_power`) times the record's integration time, and
