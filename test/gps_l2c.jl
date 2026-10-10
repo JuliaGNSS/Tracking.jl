@@ -32,11 +32,11 @@ using TrackingLoops:
     @test @inferred(get_default_correlator(gpsl2cm, NumAnts(1))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
 
-    # 20 ms primary period (10230 chips at 511.5 kcps) → BL·T ≈ 0.018 gives
-    # 0.9 Hz carrier. The DLL default is the flat 1 Hz; the same product caps it
-    # to 0.9 Hz at filter time, against the actual integration time rather than
-    # the code period (see `effective_code_loop_filter_bandwidth`).
-    @test @inferred(default_carrier_loop_filter_bandwidth(gpsl2cm)) ≈ 0.9Hz
+    # Both defaults are flat (18 Hz carrier, 1 Hz code) and are capped at filter
+    # time against the actual integration time rather than the code period: the
+    # carrier to 4.5 Hz (`effective_carrier_loop_filter_bandwidth`) and the code
+    # to 0.9 Hz (`effective_code_loop_filter_bandwidth`) for a 20 ms integration.
+    @test @inferred(default_carrier_loop_filter_bandwidth(gpsl2cm)) == 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(gpsl2cm)) ≈ 1.0Hz
     @test @inferred(
         effective_code_loop_filter_bandwidth(
@@ -71,10 +71,10 @@ end
     @test @inferred(get_default_correlator(gpsl2cl, NumAnts(1))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
 
-    # 1.5 s primary period → BL·T ≈ 0.018 gives 0.012 Hz carrier. The DLL default
-    # stays the flat 1 Hz; its stability cap is what pulls it onto the carrier
-    # value at filter time, where the update interval is actually known.
-    @test @inferred(default_carrier_loop_filter_bandwidth(gpsl2cl)) ≈ 0.012Hz
+    # Both defaults stay flat (18 Hz carrier, 1 Hz code); their stability caps
+    # pull them down at filter time, where the update interval is actually known
+    # (0.06 Hz carrier and 0.012 Hz code for a 1.5 s integration).
+    @test @inferred(default_carrier_loop_filter_bandwidth(gpsl2cl)) == 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(gpsl2cl)) ≈ 1.0Hz
     @test @inferred(
         effective_code_loop_filter_bandwidth(
