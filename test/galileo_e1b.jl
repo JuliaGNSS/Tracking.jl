@@ -39,9 +39,9 @@ using TrackingLoops:
     @test @inferred(get_default_correlator(galileo_e1b, NumAnts(3))) ==
           VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
-    # 4 ms primary period (4092 chips at 1.023 Mcps) → BL·T ≈ 0.018 gives
-    # 4.5 Hz carrier, and leaves the DLL at its unclamped 1 Hz reference.
-    @test @inferred(default_carrier_loop_filter_bandwidth(galileo_e1b)) ≈ 4.5Hz
+    # The flat 18 Hz carrier default (inside the 0.09 / T_int cap for a 4 ms
+    # integration), and the unclamped 1 Hz DLL reference.
+    @test @inferred(default_carrier_loop_filter_bandwidth(galileo_e1b)) == 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(galileo_e1b)) ≈ 1.0Hz
 
     # 1 symbol = 1 primary period; sync buffer is dead state, but a

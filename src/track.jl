@@ -85,10 +85,9 @@ for different lengths:
 set_preferred_num_code_blocks_to_integrate!(track_state, :gps_l5, 1, GPSL5I, 10)  # PRN 1 L5I: 10 ms
 ```
 
-The conventional estimator auto-scales each signal's carrier loop bandwidth by
-`1/N` for its integration length `N`, so longer integration stays stable without
-re-tuning; the code loop keeps its absolute bandwidth, capped only where
-stability requires (see [`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL)).
+The conventional estimator caps each loop bandwidth by its stability product
+against the actual integration time (the carrier at `0.09 / T_int`, the code at
+`0.018 / T_int`), so longer integration stays stable without re-tuning (see [`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL)).
 """
 function track(
     measurements::BandMeasurements,

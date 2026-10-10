@@ -103,11 +103,10 @@ smaller than E5a-I's 10230-chip one.
   own group and hand over.
 - **As a tracked signal.** It is tracked like any other pilot and yields the same
   code-phase, carrier-phase, Doppler and C/N₀ observables. What it needs is an
-  integration policy: one 64.5 µs primary block would run the loop at 15.5 kHz
-  off a 279 Hz per-block reference bandwidth, so E5a-QP integrates a whole
-  31-block code cycle — 10230 chips, exactly 2 ms — by default. That puts the
-  loop at 500 Hz and, through the estimator's automatic `1/N` bandwidth scaling,
-  at a 9 Hz effective carrier bandwidth.
+  integration policy: one 64.5 µs primary block would run the loop at 15.5 kHz,
+  so E5a-QP integrates a whole 31-block code cycle — 10230 chips, exactly
+  2 ms — by default. That puts the loop at 500 Hz with the default 18 Hz
+  carrier bandwidth.
 - **What it never provides** is navigation data, on its own or for E5a: it is
   dataless, and the F/NAV message stays E5a-I's to carry.
 
