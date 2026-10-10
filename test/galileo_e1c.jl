@@ -57,9 +57,9 @@ rotl(x::T, r, N) where {T} =
     @test @inferred(get_default_correlator(galileo_e1c, NumAnts(3))) ==
           VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
-    # 4 ms primary period (4092 chips at 1.023 Mcps), same as E1B → 4.5 Hz carrier
-    # and the unclamped 1 Hz DLL reference.
-    @test @inferred(default_carrier_loop_filter_bandwidth(galileo_e1c)) ≈ 4.5Hz
+    # Same as E1B: the flat 18 Hz carrier default and the unclamped 1 Hz DLL
+    # reference.
+    @test @inferred(default_carrier_loop_filter_bandwidth(galileo_e1c)) == 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(galileo_e1c)) ≈ 1.0Hz
 
     # 25-block CS25 window fits in a UInt32.
