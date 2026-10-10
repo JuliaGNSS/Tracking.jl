@@ -84,12 +84,17 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
 5. **The per-record step**, in one of two ways.
 
    **A `step_loop` method** (TrackingLoops' per-record interface) is all
-   `track!` needs. It folds every completed record of the estimator-driver
-   signal (`signals[1]`) through
-   `TrackingLoops.step_loop(estimator, state, record, words, landing_sample)`,
-   which returns the new per-satellite state and the new carrier and code
-   Dopplers. Tracking does the rest: the bit buffer, the C/N₀ estimators,
-   the other signals, the phase snap at sync. Add a
+   `track!` needs. It folds every completed record of every signal of the
+   satellite through
+   `TrackingLoops.step_loop(estimator, state, record, words, landing_sample)`
+   with the satellite's one state: the estimator-driver signal's
+   (`signals[1]`) first, then the other signals'. It returns the new
+   per-satellite state and the new carrier and code Dopplers; the satellite
+   takes the driver's, since the state records its driver
+   (`init_estimator_state`) and a record of any other signal returns the
+   command in force. Each record carries its signal's bit sync, the soft bits
+   it added and its C/N₀ estimator. Tracking does the rest: the bit buffer,
+   the C/N₀ estimators, the phase snap at sync. Add a
    `TrackingLoops.reset_estimator_state(estimator, state, carrier_doppler,
    code_doppler)` method to choose what [`reset_loop_filters!`](@ref) keeps;
    without one, the reset re-initializes the state. An estimator written this
@@ -207,8 +212,8 @@ full pattern, including how the immutable and in-place forms share a
 `_update_tracked_sat_doppler` helper so they cannot drift, and how the
 per-signal walk distinguishes the
 [estimator-driver signal](tracking_state.md#Estimator-driver-signal)
-(`signals[1]`, whose records are folded through `step_loop`) from the other
-signals (which only have their prompts filtered). That split is a convention
+(`signals[1]`, whose records close the loops) from the other signals, whose
+records go through `step_loop` as passengers. That split is a convention
 of the per-record path — an estimator that replaces the estimate phase can
 use every signal's state any way you like.
 
@@ -272,7 +277,10 @@ In the TrackingLoops manual:
 `VectorPLLAndDLL(signals...)` is a Doppler estimator like the loops above, and
 `track!` drives it like any other: through `step_loop`, with nothing
 vector-specific in between. Inside that step its navigation engine decodes
-every satellite's navigation bits, solves the PVT, and from its first fix on
+every satellite's navigation bits — of a plain signal, or of the data
+component of a pilot + data pair it ranges on the pilot of, e.g.
+`VectorPLLAndDLL(GalileoE1C() => GalileoE1B())` for a satellite tracked with
+`signals = (GalileoE1C(), GalileoE1B())` — solves the PVT, and from its first fix on
 closes all the satellites' loops at once with a navigation filter. Read its
 results off the estimator: `navigation_solution(estimator)` and
 `navigation_status(estimator)`.

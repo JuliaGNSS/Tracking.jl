@@ -41,6 +41,7 @@ function TrackingLoops.SatConventionalPLLAndDLL(
         code_loop_filter,
         carrier_loop_filter_bandwidth,
         code_loop_filter_bandwidth,
+        TrackingLoops._signal_key(first(sat.signals).signal),
     )
 end
 
@@ -77,9 +78,11 @@ function _update_tracked_sat_doppler(
 )
     # Walk all signals. For each one whose integration completed this
     # iteration, normalize/filter its prompt, advance CN0 and bit buffer, and
-    # move its correlator to `last_fully_integrated_*`. Additionally, for
-    # `signals[1]` (the estimator-driver signal), run PLL/DLL and update the
-    # sat-shared carrier/code Doppler.
+    # move its correlator to `last_fully_integrated_*`, and step every record
+    # through the estimator with the satellite's one state: the driver's
+    # (`signals[1]`) first, then the passengers'. The estimator tells them apart
+    # itself; the sat-shared carrier/code Doppler is the driver's command, since
+    # a passenger's record only returns the command already in force.
     pll_and_dll_state = sat.doppler_estimator_state
     head = first(sat.signals)
     tail_signals = Base.tail(sat.signals)
@@ -106,12 +109,17 @@ function _update_tracked_sat_doppler(
             sample_offset,
         )
 
-    new_tail = _process_passenger_signals(
+    new_tail, new_doppler_estimator_state = _process_passenger_signals(
         tail_signals,
         sat.prn,
         sampling_frequency,
         Base.tail(noise),
         driver_carrier_phase,
+        estimator,
+        new_doppler_estimator_state,
+        words,
+        landing_sample,
+        sample_offset,
     )
 
     # Phase-snap fallback chain. Picks the synced signal with the longest
@@ -162,7 +170,10 @@ end
 # per-record state; this wraps it: records the filtered prompt in the signal's
 # per-chunk `filtered_prompts`, and rebuilds the `TrackedSignal` with the record
 # moved to `last_fully_integrated_*`. Returns the rebuilt signal plus the
-# intermediate values the driver's loop-filter section needs.
+# intermediate values the driver's loop-filter section needs, and the record's
+# view of the signal as a TrackingLoops `SignalLoopState`, which the
+# `LoopRecord` handed to `step_loop` is built from: what the record did to the
+# bit clock and the soft bits it appended, for an estimator that decodes them.
 #
 # Unlike the old per-integration advance, this does NOT reset the live
 # accumulator or `integrated_samples`: the correlate phase already reset them
@@ -178,6 +189,8 @@ end
     driver_carrier_phase::Real = 0.0;
     correlated_pre_sync::Bool = false,
 )
+    found_before = has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer)
+    num_soft_bits = length(get_soft_bits(tracked_signal.bit_buffer))
     bit_buffer,
     cn0_estimator,
     post_corr_filter,
@@ -216,7 +229,18 @@ end
         # What the CN0 estimator's newest prompt was integrated over.
         last_fully_integrated_num_code_blocks = integrated_code_blocks,
     )
-    return new_signal, filtered_correlator, integrated_code_blocks
+    found_after = has_bit_or_secondary_code_been_found(bit_buffer)
+    signal_state = SignalLoopState(
+        bit_buffer,
+        cn0_estimator,
+        post_corr_filter,
+        prompt,
+        integrated_code_blocks,
+        !found_before && found_after ? SYNC_FOUND :
+        found_before && !found_after ? SYNC_LOST : SYNC_UNCHANGED,
+        length(get_soft_bits(bit_buffer)) - num_soft_bits,
+    )
+    return new_signal, filtered_correlator, integrated_code_blocks, signal_state
 end
 
 # Process the estimator-driver signal (signals[1]): fold over every
@@ -264,7 +288,7 @@ end
         # bit, only its prompt may have to be dropped (see `fold_record`).
         synced_earlier_in_fold =
             !found_before_fold && has_bit_or_secondary_code_been_found(ts.bit_buffer)
-        ts, filtered_correlator, integrated_code_blocks = _apply_correlator_output(
+        ts, filtered_correlator, _, signal_state = _apply_correlator_output(
             ts,
             output,
             sat.prn,
@@ -281,7 +305,7 @@ end
             filtered_correlator,
             previous_prompt,
             output,
-            integrated_code_blocks,
+            signal_state,
             sampling_frequency;
             fold_end,
             prn = sat.prn,
@@ -294,37 +318,64 @@ end
     return ts, state, carrier_doppler, code_doppler
 end
 
-# Process the non-driver signals (signals[2:end]): the shared per-signal
-# advance only — no loop-filter work. Walks the tuple recursively to keep
-# type-stability and avoid boxing, stepping the per-signal `(density, ready)`
+# Process the non-driver signals (signals[2:end]): the shared per-signal advance,
+# and every record stepped through the estimator with the satellite's state, which
+# is threaded through and returned. A passenger's record closes no loop — the
+# estimator returns the command in force, which is dropped here — but the vector
+# loop decodes its data component's bits from it. Walks the tuple recursively to
+# keep type-stability and avoid boxing, stepping the per-signal `(density, ready)`
 # tuple in lockstep so each passenger divides by its own noise floor.
-@inline _process_passenger_signals(::Tuple{}, ::Integer, _, ::Tuple{}, ::Real) = ()
+@inline _process_passenger_signals(
+    ::Tuple{},
+    ::Integer,
+    _,
+    ::Tuple{},
+    ::Real,
+    ::AbstractDopplerEstimator,
+    state,
+    words,
+    ::Int64,
+    ::Int,
+) = (), state
 @inline function _process_passenger_signals(
     signals::Tuple,
     prn::Integer,
     sampling_frequency,
     noise::Tuple,
     driver_carrier_phase::Real,
+    estimator::AbstractDopplerEstimator,
+    state,
+    words,
+    landing_sample::Int64,
+    sample_offset::Int,
 )
     noise_density, noise_density_ready = first(noise)
-    new_head = _process_one_passenger_signal(
+    new_head, state = _process_one_passenger_signal(
         first(signals),
         prn,
         sampling_frequency,
         noise_density,
         noise_density_ready,
         driver_carrier_phase,
+        estimator,
+        state,
+        words,
+        landing_sample,
+        sample_offset,
     )
-    (
-        new_head,
-        _process_passenger_signals(
-            Base.tail(signals),
-            prn,
-            sampling_frequency,
-            Base.tail(noise),
-            driver_carrier_phase,
-        )...,
+    new_tail, state = _process_passenger_signals(
+        Base.tail(signals),
+        prn,
+        sampling_frequency,
+        Base.tail(noise),
+        driver_carrier_phase,
+        estimator,
+        state,
+        words,
+        landing_sample,
+        sample_offset,
     )
+    (new_head, new_tail...), state
 end
 
 @inline function _process_one_passenger_signal(
@@ -333,32 +384,50 @@ end
     sampling_frequency,
     noise_density,
     noise_density_ready::Bool,
-    driver_carrier_phase::Real = 0.0,
+    driver_carrier_phase::Real,
+    estimator::AbstractDopplerEstimator,
+    state,
+    words,
+    landing_sample::Int64,
+    sample_offset::Int,
 )
     outputs = tracked_signal.correlator_outputs
-    isempty(outputs) && return tracked_signal
+    isempty(outputs) && return tracked_signal, state
     ts = tracked_signal
     found_before_fold = has_bit_or_secondary_code_been_found(ts.bit_buffer)
+    fold_end = last(outputs).sample_index
     @inbounds for k in eachindex(outputs)
+        output = outputs[k]
+        previous_prompt = get_last_fully_integrated_filtered_prompt(ts)
         # Same rule as the driver fold: records after a sync detected earlier
         # in this fold stay out of the bit buffer.
         synced_earlier_in_fold =
             !found_before_fold && has_bit_or_secondary_code_been_found(ts.bit_buffer)
-        ts = first(
-            _apply_correlator_output(
-                ts,
-                outputs[k],
-                prn,
-                sampling_frequency,
-                noise_density,
-                noise_density_ready,
-                driver_carrier_phase;
-                correlated_pre_sync = synced_earlier_in_fold,
-            ),
+        ts, filtered_correlator, _, signal_state = _apply_correlator_output(
+            ts,
+            output,
+            prn,
+            sampling_frequency,
+            noise_density,
+            noise_density_ready,
+            driver_carrier_phase;
+            correlated_pre_sync = synced_earlier_in_fold,
         )
+        record = LoopRecord(
+            ts.signal,
+            filtered_correlator,
+            previous_prompt,
+            output,
+            signal_state,
+            sampling_frequency;
+            fold_end,
+            prn,
+            sample_offset,
+        )
+        state, _, _ = step_loop(estimator, state, record, words, landing_sample)
     end
     empty!(outputs)
-    ts
+    ts, state
 end
 
 """
