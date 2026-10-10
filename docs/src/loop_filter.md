@@ -16,45 +16,45 @@ The default Doppler estimator is `ConventionalAssistedPLLAndDLL` which uses:
 - `SecondOrderBilinearLF` for the code loop
 
 When [`TrackState`](@ref) builds the default estimator implicitly from a
-signal-tuple declaration, the **carrier** bandwidth is sized **per signal**
-from the signal's primary code period `T`, at `BL · T ≈ 0.018` — ~10× margin
-from the `BL · T < 0.18` stability edge of the bilinear third-order filter.
-The **code** bandwidth is a flat 1 Hz for every signal. The values fall out to:
+signal-tuple declaration, the **carrier** bandwidth is a flat 18 Hz and the
+**code** bandwidth a flat 1 Hz for every signal. Both are one-sided noise
+bandwidths `BL` in the sense of Kaplan & Hegarty, so they plug into the usual
+PLL jitter and dynamic-stress formulas: the carrier filter is fed the phase
+error in cycles and the FLL error in Hz. 18 Hz is the third-order PLL bandwidth
+of the literature (Kaplan & Hegarty, *Understanding GPS*, Table 5.6).
 
-| Signal      | Primary period | Carrier BL | Code BL |
-|-------------|----------------|-----------:|--------:|
-| GPS L1 C/A  | 1 ms           |    18 Hz   |    1 Hz |
-| GPS L5I     | 1 ms           |    18 Hz   |    1 Hz |
-| Galileo E1B | 4 ms           |   4.5 Hz   |    1 Hz |
-| GPS L1C-D   | 10 ms          |   1.8 Hz   |    1 Hz |
-| GPS L1C-P   | 10 ms          |   1.8 Hz   |    1 Hz |
-| GPS L2 CM   | 20 ms          |   0.9 Hz   |    1 Hz |
-| GPS L2 CL   | 1.5 s          | 0.012 Hz   |    1 Hz |
+Neither default is scaled with the signal's code period or the number of
+integrated blocks. Each is instead capped at filter time by its stability
+product `BL · T_int` against the record's actual integration time: the carrier
+by `0.09` (`TrackingLoops.MAX_CARRIER_LOOP_BANDWIDTH_TIME_PRODUCT`, Kaplan's
+18 Hz at a 5 ms update), the code by `0.018`
+(`TrackingLoops.MAX_CODE_LOOP_BANDWIDTH_TIME_PRODUCT`). The bandwidths that end
+up in the loop are:
 
-The 1-ms-primary-period signals (L1 C/A, L5I) keep the historical 18 Hz /
-1 Hz default; longer-period signals get appropriately tighter carrier loops
-so the PLL stays stable. The DLL does **not** follow the carrier loop down:
-being carrier-aided it has almost no dynamic stress to track, so its
-bandwidth is a thermal-noise-versus-pull-in choice that does not scale with
-the symbol rate.
+| Integration time            | Carrier BL | Code BL  |
+|-----------------------------|-----------:|---------:|
+| ≤ 5 ms (L1 C/A, L5I, E1B)   |    18 Hz   |    1 Hz  |
+| 10 ms (L1C-D/P, B1C)        |     9 Hz   |    1 Hz  |
+| 20 ms (L1 C/A or L2 CM after sync) | 4.5 Hz |  0.9 Hz |
+| 1.5 s (L2 CL)               |   0.06 Hz  | 0.012 Hz |
 
-The two are also treated differently at filter time, since only the carrier
-bandwidth is a per-code-period reference. Integrating `N` primary blocks
-coherently scales the carrier bandwidth to `BL/N`, holding its `BL · Δt`
-product at the single-period value, while the code bandwidth is left alone and
-merely capped by the same product against the record's actual integration time
-(`TrackingLoops.effective_code_loop_filter_bandwidth`). That cap is what pulls the
-L2 C primaries down in practice — 0.9 Hz for a 20 ms L2 CM integration,
-0.012 Hz for a 1.5 s L2 CL one — while every integration shorter than 18 ms,
-whatever its signal or block count, runs the DLL at the full 1 Hz.
+The two caps differ because the loops do. The carrier loop carries the
+dynamic stress, so it should stay as wide as stability allows. The DLL is
+carrier-aided and has almost no dynamic stress to track, so its bandwidth is a
+thermal-noise-versus-pull-in choice, and its tighter cap only binds past 18 ms.
 
-Reusing the third-order carrier filter's `0.018` product to cap the
-*second*-order code filter is conservative: transform-designed digital loops
-of this kind only destabilize around `BL · Δt ≈ 0.4` (S. A. Stephens and
+Both caps keep well clear of instability: transform-designed digital loops of
+this kind only destabilize around `BL · Δt ≈ 0.4` (S. A. Stephens and
 J. B. Thomas, "Controlled-Root Formulation for Digital Phase-Locked Loops",
-IEEE Trans. Aerospace and Electronic Systems 31(1), 1995 — the standard
-treatment of digital-loop stability at large `BL · Δt`), so the code loop's
-cap carries even more stability margin than the carrier loop's.
+IEEE Trans. Aerospace and Electronic Systems 31(1), 1995). As `BL · Δt` grows,
+the true noise bandwidth runs wider than configured: about 5 % at `0.018` and
+25 % at `0.09` for the FLL-assisted carrier filter.
+
+Before TrackingLoops 4, the carrier filter was fed the phase error in radians
+while its output was read as Hz. The loop gain was 2π too high and the loop
+about 5.6× wider than configured (≈ 100 Hz for the 18 Hz L1 C/A default). To
+get approximately that loop back, configure
+`carrier_loop_filter_bandwidth = 85.0Hz`.
 
 Override per signal by defining methods of
 [`default_carrier_loop_filter_bandwidth`](@extref TrackingLoops.default_carrier_loop_filter_bandwidth) /
@@ -69,6 +69,7 @@ In the TrackingLoops manual:
 - [`ConventionalAssistedPLLAndDLL`](@extref TrackingLoops.ConventionalAssistedPLLAndDLL)
 - [`default_carrier_loop_filter_bandwidth`](@extref TrackingLoops.default_carrier_loop_filter_bandwidth)
 - [`default_code_loop_filter_bandwidth`](@extref TrackingLoops.default_code_loop_filter_bandwidth)
+- [`effective_carrier_loop_filter_bandwidth`](@extref TrackingLoops.effective_carrier_loop_filter_bandwidth)
 - [`effective_code_loop_filter_bandwidth`](@extref TrackingLoops.effective_code_loop_filter_bandwidth)
 
 ## Resetting loop filters

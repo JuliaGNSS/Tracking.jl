@@ -161,9 +161,8 @@ end
         _meas_l1(sampling_frequency),
     )
 
-    @test get_carrier_doppler(new_track_state_after_full_integration) ==
-          100.52615628464486Hz
-    @test get_code_doppler(new_track_state_after_full_integration) == -0.16073504885813858Hz
+    @test get_carrier_doppler(new_track_state_after_full_integration) == 100.0837403735401Hz
+    @test get_code_doppler(new_track_state_after_full_integration) == -0.1610223319172975Hz
     @test get_last_fully_integrated_filtered_prompt(
         new_track_state_after_full_integration,
     ) == 0.4 + 0.004im
@@ -177,10 +176,10 @@ end
 end
 
 @testset "loop bandwidth follows the record's actual integration length" begin
-    # The `1/N` bandwidth scaling must pair with the blocks a record ACTUALLY
-    # covered (recovered from its sample count), not the intended integration
-    # length: a single-block record folded when the bit buffer already reports
-    # sync — a mid-fold sync detection with an enlarged
+    # The carrier bandwidth's stability cap must pair with the time a record
+    # ACTUALLY covered (recovered from its sample count), not the intended
+    # integration length: a single-block record folded when the bit buffer
+    # already reports sync — a mid-fold sync detection with an enlarged
     # `doppler_update_interval`, or the truncated first post-sync integration —
     # must be filtered at the full single-period bandwidth. The Doppler update
     # therefore depends only on the record itself, not on the preferred
@@ -228,12 +227,12 @@ end
 
     one_block = 5000                      # one 1 ms L1 C/A code period at 5 MHz
     # Synced with a 20-block preferred length, but the record covered a single
-    # block: full bandwidth — exactly the plain single-block baseline. (Scaling
-    # by the intended length would divide the bandwidth by 20 here.)
+    # block: full bandwidth — exactly the plain single-block baseline. (Capping
+    # against the intended length would narrow the bandwidth to 4.5 Hz here.)
     @test doppler_after(20, true, one_block) == doppler_after(1, false, one_block)
 
-    # A record that actually covered 20 blocks is scaled by 1/20 regardless of
-    # the preferred integration length.
+    # A record that actually covered 20 blocks is capped at 0.09 / 20 ms
+    # regardless of the preferred integration length.
     @test doppler_after(20, true, 20 * one_block) == doppler_after(1, true, 20 * one_block)
 end
 
@@ -242,10 +241,10 @@ end
 # thermal noise, pull-in time, the absence of dynamic stress on a carrier-aided
 # loop — scales with the integration length. Only its own `BL·Δt` stability
 # product may cap it, and only once the update interval is long enough to
-# threaten stability. A `1/N` scaling here (which the carrier loop does want)
-# would take a 20 ms L1 C/A integration to 0.05 Hz, where stability allows
-# 0.9 Hz — the same pull-in sag that sizing the DLL off the carrier default used
-# to cause per signal, re-introduced through the integration length.
+# threaten stability. A `1/N` scaling here would take a 20 ms L1 C/A
+# integration to 0.05 Hz, where stability allows 0.9 Hz — the same pull-in sag
+# that sizing the DLL off the carrier default used to cause per signal,
+# re-introduced through the integration length.
 @testset "code loop bandwidth is not narrowed by the integration length" begin
     bw = 1.0Hz
     l1ca_period = 1ms  # 1023 chips at 1.023 Mcps
@@ -260,7 +259,7 @@ end
     for num_blocks in (20, 100, 1500)
         integration_time = num_blocks * l1ca_period
         @test TrackingLoops.effective_code_loop_filter_bandwidth(bw, integration_time) *
-              integration_time ≈ TrackingLoops.MAX_LOOP_BANDWIDTH_TIME_PRODUCT
+              integration_time ≈ TrackingLoops.MAX_CODE_LOOP_BANDWIDTH_TIME_PRODUCT
     end
 
     # An explicit bandwidth below the cap is used verbatim, at any length.
@@ -357,8 +356,8 @@ end
     )
 
     # Sat 1 matches the baseline result from the previous testset.
-    @test get_carrier_doppler(new_track_state, 1) == 100.52615628464486Hz
-    @test get_code_doppler(new_track_state, 1) == -0.16073504885813858Hz
+    @test get_carrier_doppler(new_track_state, 1) == 100.0837403735401Hz
+    @test get_code_doppler(new_track_state, 1) == -0.1610223319172975Hz
 
     # Sat 2 has different bandwidths so must produce a different update.
     @test get_carrier_doppler(new_track_state, 2) != get_carrier_doppler(new_track_state, 1)
