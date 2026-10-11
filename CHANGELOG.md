@@ -1,5 +1,45 @@
 # Changelog
 
+# [10.0.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v9.0.0...v10.0.0) (2026-10-11)
+
+
+* feat(track)!: step every record of a satellite through the estimator ([50347b5](https://github.com/JuliaGNSS/Tracking.jl/commit/50347b5fc56bae4489b23760617bf675c201416d)), closes [JuliaGNSS/TrackingLoops.jl#36](https://github.com/JuliaGNSS/TrackingLoops.jl/issues/36)
+* fix(track)!: track with the carrier loop's configured bandwidth from TrackingLoops 4 ([0f36e21](https://github.com/JuliaGNSS/Tracking.jl/commit/0f36e216627e5d7d8dbeb54446ef5c85ddf3600c)), closes [JuliaGNSS/TrackingLoops.jl#38](https://github.com/JuliaGNSS/TrackingLoops.jl/issues/38)
+
+
+### BREAKING CHANGES
+
+* requires TrackingLoops 4. A custom estimator's `step_loop`
+now also receives the passengers' records; one that steps its loop on every
+record must tell the driver's apart (the shipped loops do, by the driver
+`init_estimator_state` records). `SatConventionalPLLAndDLL(sat, ...)` records
+the satellite's driver signal.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+* tracking uses TrackingLoops 4, whose carrier loops have
+the bandwidth they are configured with and default to a flat 18 Hz capped
+at `0.09 / T_int`. Before, a loop's actual noise bandwidth was about
+5–6× the configured one (about 100 Hz for the default 1 ms GPS L1 C/A
+loop), and the default was `0.018 / T` divided by the number of
+coherently integrated code blocks. The 1 ms loops are therefore about
+5–6× narrower, with less thermal jitter but less dynamic tolerance and
+slower settling: on a clean GPS L1 C/A signal the default
+`ConventionalAssistedPLLAndDLL` still pulls in offsets up to the FLL's
+±250 Hz, but takes about 1.1 s instead of 0.4 s, and
+`ConventionalPLLAndDLL` without the FLL assist pulls in about 65 Hz
+instead of 90 Hz. `default_carrier_loop_filter_bandwidth` returns
+18 Hz for every signal, and an explicit carrier bandwidth is no longer
+divided by the number of integrated blocks but capped. Code that set
+`carrier_loop_filter_bandwidth`, or relied on the defaults, for a given
+dynamic behaviour must re-tune it; to get approximately the previous loop
+back, configure 85 Hz, e.g.
+`ConventionalAssistedPLLAndDLL(; carrier_loop_filter_bandwidth = 85.0Hz)`.
+`TrackingLoops.MAX_LOOP_BANDWIDTH_TIME_PRODUCT` is now
+`MAX_CODE_LOOP_BANDWIDTH_TIME_PRODUCT`. See the TrackingLoops 4.0.0
+release notes for the full migration.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
 # [9.0.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v8.3.2...v9.0.0) (2026-10-06)
 
 
