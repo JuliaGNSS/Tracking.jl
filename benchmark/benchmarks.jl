@@ -713,7 +713,7 @@ end
 if _HAS_TRACKED_SIGNAL
     function _with_found_bit_buffer(t, _bb_template)
         sig = only(t.signals)
-        new_bb = _make_found_bit_buffer(sig.bit_buffer)
+        new_bb = _make_found_bit_buffer(Tracking.get_bit_buffer(sig))
         new_sig = Tracking.TrackedSignal(sig; bit_buffer = new_bb)
         Tracking.TrackedSat(
             t.prn,

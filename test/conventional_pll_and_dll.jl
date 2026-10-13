@@ -8,6 +8,7 @@ using TrackingLoopFilters: ThirdOrderBilinearLF, SecondOrderBilinearLF
 using StaticArrays: SVector
 using Dictionaries: Dictionary
 using Tracking:
+    get_bit_buffer,
     TrackedSignal,
     TrackedSat,
     TrackState,
@@ -213,7 +214,7 @@ end
         base = only(sat.signals)
         sig = TrackedSignal(
             base;
-            bit_buffer = found ? synced(base.bit_buffer) : base.bit_buffer,
+            bit_buffer = found ? synced(get_bit_buffer(base)) : get_bit_buffer(base),
             preferred_num_code_blocks_to_integrate = preferred,
             correlator_outputs = [
                 CorrelatorOutput(correlator, integrated_samples, integrated_samples),
