@@ -183,8 +183,10 @@ end
 @testset "Through track, the NCO-referenced and the vector loops are the conventional assisted loop" begin
     # `track` hands the estimator the chunk's own replica word and no landing
     # sample, so the delay-aware estimator must reproduce the conventional one
-    # exactly — including after its loop filters are reset. Out of the vector
-    # loop, the vector estimator is the scalar loop it wraps, bit for bit.
+    # exactly — including after its loop filters are reset — given the same
+    # bandwidths: it pulls in at the narrow 18 Hz by default, as a wider loop
+    # tolerates less command delay. Out of the vector loop, the vector estimator
+    # is the scalar loop it wraps, bit for bit.
     gpsl1, fs, carrier_doppler, chunks = _noisy_gpsl1_chunks(200)
     function run(estimator)
         track_state = TrackState(; signal = gpsl1, doppler_estimator = estimator)
@@ -206,15 +208,19 @@ end
         history, track_state
     end
     conventional, _ = run(ConventionalAssistedPLLAndDLL())
+    narrow_conventional, _ =
+        run(ConventionalAssistedPLLAndDLL(; wide_carrier_loop_filter_bandwidth = 18.0Hz))
     referenced, track_state = run(NCOReferencedPLLAndDLL())
-    @test referenced == conventional
+    @test referenced == narrow_conventional
     @test get_doppler_estimator_state(get_sat_state(track_state, 1)) isa
           SatNCOReferencedPLLAndDLL
     @test abs(conventional[200][1] - carrier_doppler) < 5Hz
-    for estimator in
-        (VectorPLLAndDLL(gpsl1), VectorPLLAndDLL(gpsl1; inner = NCOReferencedPLLAndDLL()))
+    for (estimator, scalar) in (
+        (VectorPLLAndDLL(gpsl1), conventional),
+        (VectorPLLAndDLL(gpsl1; inner = NCOReferencedPLLAndDLL()), narrow_conventional),
+    )
         vector, track_state = run(estimator)
-        @test vector == conventional
+        @test vector == scalar
         @test get_doppler_estimator_state(get_sat_state(track_state, 1)) isa
               SatVectorPLLAndDLL
     end
@@ -255,6 +261,28 @@ function TrackingLoops.step_loop(
     inner, carrier_doppler, code_doppler =
         TrackingLoops.step_loop(estimator.inner, state.inner, record, words, landing_sample)
     SatCountingEstimator(inner, state.num_records + 1), carrier_doppler, code_doppler
+end
+
+@testset "reset_loop_filters! keeps the stage the carrier loop has reached" begin
+    # A reset is a handoff, to a new integration length say, not a
+    # re-acquisition: the loop keeps its stage. A satellite added anew pulls in
+    # from the start, FLL-assisted.
+    gpsl1, fs, carrier_doppler, chunks = _noisy_gpsl1_chunks(800)
+    track_state = TrackState(; signal = gpsl1)
+    track_state =
+        add_satellite!(track_state; prn = 1, code_phase = 100.2, carrier_doppler = 1005.0Hz)
+    stage(prn) = TrackingLoops.carrier_loop_stage(
+        get_doppler_estimator_state(get_sat_state(track_state, prn)),
+    )
+    @test stage(1) == TrackingLoops.FLL_ASSISTED_PLL
+    for chunk in chunks
+        track!(chunk, track_state, fs)
+    end
+    @test stage(1) == TrackingLoops.NARROW_PLL
+    reset_loop_filters!(track_state)
+    @test stage(1) == TrackingLoops.NARROW_PLL
+    track_state = add_satellite!(track_state; prn = 2, carrier_doppler = 0.0Hz)
+    @test stage(2) == TrackingLoops.FLL_ASSISTED_PLL
 end
 
 @testset "Through track, an estimator implementing step_loop runs without adaptation" begin
@@ -423,12 +451,15 @@ end
         return error <= tolerance
     end
 
-    # ConventionalPLLAndDLL: converges at 65Hz offset, never at 75Hz. Without
+    # ConventionalPLLAndDLL: converges at 65Hz offset, never at 100Hz. Without
     # an FLL the loop pulls in by cycle slipping, so its range follows the loop
-    # bandwidth: it was 90 Hz while the loop ran about 5.6× wider than
-    # configured (#244).
+    # bandwidth it pulls in at, the wide 50 Hz: it converged up to 68 Hz and from
+    # 94 Hz on (up to 240 Hz) it did not, and in between it depends on where the
+    # slips leave it. At the 18 Hz it pulled in at before the carrier loop was
+    # staged the edge was between 65 and 75 Hz; it was 90 Hz while the loop ran
+    # about 5.6× wider than configured (#244).
     @test test_convergence(65Hz, false) == true
-    @test test_convergence(75Hz, false) == false
+    @test test_convergence(100Hz, false) == false
 
     # ConventionalAssistedPLLAndDLL: converges at 245Hz offset, fails at 255Hz.
     # That edge is the FLL discriminator's unambiguous range of ±1/(4T) = 250 Hz
@@ -466,7 +497,8 @@ end
     # per-signal auto defaults (which would give Galileo E1B a tighter 4.5 Hz
     # loop that converges more slowly over this chunk schedule).
     estimator = ConventionalAssistedPLLAndDLL(;
-        carrier_loop_filter_bandwidth = 18.0Hz,
+        wide_carrier_loop_filter_bandwidth = 18.0Hz,
+        narrow_carrier_loop_filter_bandwidth = 18.0Hz,
         code_loop_filter_bandwidth = 1.0Hz,
     )
     gps_sat = TrackedSat(
@@ -1153,7 +1185,8 @@ end
     range = 0:(period-1)
 
     estimator = ConventionalAssistedPLLAndDLL(;
-        carrier_loop_filter_bandwidth = 1.8Hz,
+        wide_carrier_loop_filter_bandwidth = 1.8Hz,
+        narrow_carrier_loop_filter_bandwidth = 1.8Hz,
         code_loop_filter_bandwidth = 4.0Hz,
     )
     track_state = TrackState(; signal, doppler_estimator = estimator)

@@ -7,7 +7,7 @@ using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
-    default_carrier_loop_filter_bandwidth,
+    default_narrow_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     VeryEarlyPromptLateCorrelator,
     NumAnts
@@ -39,7 +39,7 @@ using TrackingLoops:
     # The flat 18 Hz carrier default; a 10 ms integration caps it to 9 Hz at
     # filter time (`effective_carrier_loop_filter_bandwidth`). 10 ms is still
     # short enough to leave the DLL at its unclamped 1 Hz reference.
-    @test @inferred(default_carrier_loop_filter_bandwidth(gpsl1c_d)) == 18.0Hz
+    @test @inferred(default_narrow_carrier_loop_filter_bandwidth(gpsl1c_d)) == 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(gpsl1c_d)) ≈ 1.0Hz
 
     # 1 symbol = 1 primary period; sync buffer is dead state, but a

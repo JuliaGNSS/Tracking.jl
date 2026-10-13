@@ -27,8 +27,9 @@ struct TrackedSignal{
     # buffer, C/N₀ estimator and post-correlation filter, the last record's
     # filtered prompt and the primary-code blocks it actually spanned (which the
     # C/N₀ estimate divides by, so a record lengthened by the correlate step or
-    # by an external producer summing dumps is credited right) and what it did
-    # to the bit clock.
+    # by an external producer summing dumps is credited right), what it did to
+    # the bit clock, the prompt its FLL compared with and its carrier phase
+    # polarity.
     loop_state::SignalLoopState{B,PCF,CN0}
     filtered_prompts::Vector{ComplexF64}
     # Correlator outputs completed within the current processing chunk, each
@@ -190,13 +191,13 @@ function TrackedSignal(
             isnothing(signal) ? t.signal : signal,
             preferred_num_code_blocks_to_integrate,
         )
-    new_loop_state = _update_loop_state(
-        isnothing(loop_state) ? t.loop_state : loop_state,
+    new_loop_state = SignalLoopState(
+        isnothing(loop_state) ? t.loop_state : loop_state;
         bit_buffer,
         cn0_estimator,
         post_corr_filter,
-        last_fully_integrated_filtered_prompt,
-        last_fully_integrated_num_code_blocks,
+        last_filtered_prompt = last_fully_integrated_filtered_prompt,
+        last_num_code_blocks = last_fully_integrated_num_code_blocks,
     )
     TrackedSignal{Sig,B,C,PCF,typeof(new_loop_state.cn0_estimator)}(
         isnothing(signal) ? t.signal : signal,
@@ -211,26 +212,6 @@ function TrackedSignal(
         t.preferred_num_code_blocks_to_integrate : preferred_num_code_blocks_to_integrate,
     )
 end
-
-# The loop state with the parts that are not `nothing` replaced.
-@inline _update_loop_state(
-    state::SignalLoopState,
-    bit_buffer,
-    cn0_estimator,
-    post_corr_filter,
-    last_filtered_prompt,
-    last_num_code_blocks,
-) = SignalLoopState(
-    isnothing(bit_buffer) ? state.bit_buffer : bit_buffer,
-    isnothing(cn0_estimator) ? state.cn0_estimator : cn0_estimator,
-    isnothing(post_corr_filter) ? state.post_corr_filter : post_corr_filter,
-    isnothing(last_filtered_prompt) ? state.last_filtered_prompt :
-    ComplexF64(last_filtered_prompt),
-    isnothing(last_num_code_blocks) ? state.last_num_code_blocks :
-    Int(last_num_code_blocks),
-    state.last_sync_change,
-    state.last_num_new_soft_bits,
-)
 
 get_signal(t::TrackedSignal) = t.signal
 get_correlator(t::TrackedSignal) = t.correlator

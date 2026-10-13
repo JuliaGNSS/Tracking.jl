@@ -9,7 +9,7 @@ using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
-    default_carrier_loop_filter_bandwidth,
+    default_narrow_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     EarlyPromptLateCorrelator,
     NumAnts
@@ -54,7 +54,7 @@ rotl(x::T, r, N) where {T} =
     # as L1 C/A — so the per-signal default BL falls out the same: 18 Hz /
     # 1 Hz. Longer coherent integration is unlocked by secondary-code sync
     # at runtime, not changed by this default.
-    @test @inferred(default_carrier_loop_filter_bandwidth(gpsl5)) ≈ 18.0Hz
+    @test @inferred(default_narrow_carrier_loop_filter_bandwidth(gpsl5)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(gpsl5)) ≈ 1.0Hz
 
     # 20-block sync window (2 × NH10) fits in a UInt32.
@@ -117,7 +117,7 @@ end
           EarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
     # 1 ms primary period (10230 chips at 10.23 Mcps), same as L5I → 18 Hz / 1 Hz.
-    @test @inferred(default_carrier_loop_filter_bandwidth(gpsl5q)) ≈ 18.0Hz
+    @test @inferred(default_narrow_carrier_loop_filter_bandwidth(gpsl5q)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(gpsl5q)) ≈ 1.0Hz
 
     # 20-block NH20 window fits in a UInt32.

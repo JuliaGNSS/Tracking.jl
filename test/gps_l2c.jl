@@ -7,7 +7,7 @@ using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
-    default_carrier_loop_filter_bandwidth,
+    default_narrow_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     effective_code_loop_filter_bandwidth,
     EarlyPromptLateCorrelator,
@@ -36,7 +36,7 @@ using TrackingLoops:
     # time against the actual integration time rather than the code period: the
     # carrier to 4.5 Hz (`effective_carrier_loop_filter_bandwidth`) and the code
     # to 0.9 Hz (`effective_code_loop_filter_bandwidth`) for a 20 ms integration.
-    @test @inferred(default_carrier_loop_filter_bandwidth(gpsl2cm)) == 18.0Hz
+    @test @inferred(default_narrow_carrier_loop_filter_bandwidth(gpsl2cm)) == 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(gpsl2cm)) ≈ 1.0Hz
     @test @inferred(
         effective_code_loop_filter_bandwidth(
@@ -74,7 +74,7 @@ end
     # Both defaults stay flat (18 Hz carrier, 1 Hz code); their stability caps
     # pull them down at filter time, where the update interval is actually known
     # (0.06 Hz carrier and 0.012 Hz code for a 1.5 s integration).
-    @test @inferred(default_carrier_loop_filter_bandwidth(gpsl2cl)) == 18.0Hz
+    @test @inferred(default_narrow_carrier_loop_filter_bandwidth(gpsl2cl)) == 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(gpsl2cl)) ≈ 1.0Hz
     @test @inferred(
         effective_code_loop_filter_bandwidth(

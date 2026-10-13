@@ -10,7 +10,7 @@ using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
-    default_carrier_loop_filter_bandwidth,
+    default_narrow_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     EarlyPromptLateCorrelator,
     NumAnts
@@ -147,7 +147,7 @@ end
           EarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
     # 1 ms primary period (2046 chips at 2.046 Mcps) → 18 Hz / 1 Hz.
-    @test @inferred(default_carrier_loop_filter_bandwidth(b1i)) ≈ 18.0Hz
+    @test @inferred(default_narrow_carrier_loop_filter_bandwidth(b1i)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(b1i)) ≈ 1.0Hz
 
     # 20-block NH20 window fits in a UInt32.

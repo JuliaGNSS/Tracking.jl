@@ -1,9 +1,18 @@
 module ConventionalPLLAndDLLTest
 
 using Test: @test, @testset, @inferred, @test_throws
+using Logging: NullLogger, with_logger
+import Random
 using Unitful: Hz, ms
 import Tracking
-using GNSSSignals: GPSL1CA, get_code_center_frequency_ratio
+import GNSSSignals
+using GNSSSignals:
+    GPSL1CA,
+    GalileoE1C,
+    get_code_center_frequency_ratio,
+    get_code_frequency,
+    get_code_length,
+    get_secondary_code
 using TrackingLoopFilters: ThirdOrderBilinearLF, SecondOrderBilinearLF
 using StaticArrays: SVector
 using Dictionaries: Dictionary
@@ -14,6 +23,10 @@ using Tracking:
     TrackState,
     BandMeasurement,
     estimate_dopplers_and_filter_prompt,
+    estimate_dopplers_and_filter_prompt!,
+    has_bit_or_secondary_code_been_found,
+    add_satellite!,
+    append_correlator_output!,
     get_carrier_doppler,
     get_code_doppler,
     get_last_fully_integrated_filtered_prompt,
@@ -28,6 +41,8 @@ using TrackingLoops:
     EarlyPromptLateCorrelator,
     init_estimator_state,
     ConventionalPLLAndDLL,
+    ConventionalAssistedPLLAndDLL,
+    LoopBandwidths,
     update_accumulator,
     get_default_correlator,
     CorrelatorOutput
@@ -75,33 +90,33 @@ end
     @test pll_and_dll.init_code_doppler == 100.0Hz
     @test pll_and_dll.carrier_loop_filter == ThirdOrderBilinearLF()
     @test pll_and_dll.code_loop_filter == SecondOrderBilinearLF()
-    @test pll_and_dll.carrier_loop_filter_bandwidth == 18.0Hz
-    @test pll_and_dll.code_loop_filter_bandwidth == 1.0Hz
+    @test pll_and_dll.bandwidths == LoopBandwidths()
 
     gpsl1 = GPSL1CA()
     sat_state = TrackedSat(gpsl1, 1, 0.5, 100.0Hz)
-    from_sat_state = @inferred SatConventionalPLLAndDLL(
+    from_sat_state = @inferred init_estimator_state(
+        ConventionalPLLAndDLL(
+            ThirdOrderBilinearLF,
+            SecondOrderBilinearLF;
+            wide_carrier_loop_filter_bandwidth = 25.0Hz,
+            code_loop_filter_bandwidth = 2.0Hz,
+        ),
         sat_state,
-        ThirdOrderBilinearLF(),
-        SecondOrderBilinearLF();
-        carrier_loop_filter_bandwidth = 25.0Hz,
-        code_loop_filter_bandwidth = 2.0Hz,
     )
-    @test from_sat_state.carrier_loop_filter_bandwidth == 25.0Hz
-    @test from_sat_state.code_loop_filter_bandwidth == 2.0Hz
+    @test from_sat_state.bandwidths.wide_carrier == 25.0Hz
+    @test from_sat_state.bandwidths.code == 2.0Hz
 
     # Update-from-existing constructor preserves bandwidth when not overridden,
     # and overrides when provided.
     preserved = @inferred SatConventionalPLLAndDLL(from_sat_state)
-    @test preserved.carrier_loop_filter_bandwidth == 25.0Hz
-    @test preserved.code_loop_filter_bandwidth == 2.0Hz
+    @test preserved.bandwidths == from_sat_state.bandwidths
 
     overridden = @inferred SatConventionalPLLAndDLL(
         from_sat_state;
-        carrier_loop_filter_bandwidth = 30.0Hz,
+        bandwidths = LoopBandwidths(; wide_carrier = 30.0Hz, code = 2.0Hz),
     )
-    @test overridden.carrier_loop_filter_bandwidth == 30.0Hz
-    @test overridden.code_loop_filter_bandwidth == 2.0Hz
+    @test overridden.bandwidths.wide_carrier == 30.0Hz
+    @test overridden.bandwidths.code == 2.0Hz
 end
 
 @testset "Conventional PLL and DLL" begin
@@ -162,8 +177,9 @@ end
         _meas_l1(sampling_frequency),
     )
 
-    @test get_carrier_doppler(new_track_state_after_full_integration) == 100.0837403735401Hz
-    @test get_code_doppler(new_track_state_after_full_integration) == -0.1610223319172975Hz
+    @test get_carrier_doppler(new_track_state_after_full_integration) ==
+          100.23888678999913Hz
+    @test get_code_doppler(new_track_state_after_full_integration) == -0.1609215874910254Hz
     @test get_last_fully_integrated_filtered_prompt(
         new_track_state_after_full_integration,
     ) == 0.4 + 0.004im
@@ -331,8 +347,7 @@ end
     sat1_de = sat1.doppler_estimator_state
     sat2_de = SatConventionalPLLAndDLL(
         sat2_pre.doppler_estimator_state;
-        carrier_loop_filter_bandwidth = 36.0Hz,
-        code_loop_filter_bandwidth = 2.0Hz,
+        bandwidths = LoopBandwidths(; wide_carrier = 36.0Hz, code = 2.0Hz),
     )
     sat2 = TrackedSat(
         sat2_pre.prn,
@@ -346,9 +361,9 @@ end
     )
     tracked = [sat1, sat2]
 
-    @test sat1_de.carrier_loop_filter_bandwidth == 18.0Hz
-    @test sat2_de.carrier_loop_filter_bandwidth == 36.0Hz
-    @test sat2_de.code_loop_filter_bandwidth == 2.0Hz
+    @test sat1_de.bandwidths.wide_carrier == 50.0Hz
+    @test sat2_de.bandwidths.wide_carrier == 36.0Hz
+    @test sat2_de.bandwidths.code == 2.0Hz
 
     track_state = TrackState(gpsl1, tracked; doppler_estimator)
     new_track_state = @inferred estimate_dopplers_and_filter_prompt(
@@ -357,8 +372,8 @@ end
     )
 
     # Sat 1 matches the baseline result from the previous testset.
-    @test get_carrier_doppler(new_track_state, 1) == 100.0837403735401Hz
-    @test get_code_doppler(new_track_state, 1) == -0.1610223319172975Hz
+    @test get_carrier_doppler(new_track_state, 1) == 100.23888678999913Hz
+    @test get_code_doppler(new_track_state, 1) == -0.1609215874910254Hz
 
     # Sat 2 has different bandwidths so must produce a different update.
     @test get_carrier_doppler(new_track_state, 2) != get_carrier_doppler(new_track_state, 1)
@@ -369,30 +384,30 @@ end
     gpsl1 = GPSL1CA()
     sat_state = TrackedSat(gpsl1, 1, 0.5, 100.0Hz)
     estimator = ConventionalPLLAndDLL(;
-        carrier_loop_filter_bandwidth = 22.0Hz,
+        wide_carrier_loop_filter_bandwidth = 22.0Hz,
         code_loop_filter_bandwidth = 1.5Hz,
     )
-    @test estimator.carrier_loop_filter_bandwidth == 22.0Hz
+    @test estimator.wide_carrier_loop_filter_bandwidth == 22.0Hz
     @test estimator.code_loop_filter_bandwidth == 1.5Hz
     # init_estimator_state seeds each sat with the configured bandwidths.
     de_state = init_estimator_state(estimator, sat_state)
-    @test de_state.carrier_loop_filter_bandwidth == 22.0Hz
-    @test de_state.code_loop_filter_bandwidth == 1.5Hz
+    @test de_state.bandwidths.wide_carrier == 22.0Hz
+    @test de_state.bandwidths.code == 1.5Hz
 
     # Kwarg-update constructor returns a new estimator with overridden
     # bandwidths and preserves the carrier/code filter type parameters.
-    bumped = ConventionalPLLAndDLL(estimator; carrier_loop_filter_bandwidth = 30.0Hz)
-    @test bumped.carrier_loop_filter_bandwidth == 30.0Hz
+    bumped = ConventionalPLLAndDLL(estimator; wide_carrier_loop_filter_bandwidth = 30.0Hz)
+    @test bumped.wide_carrier_loop_filter_bandwidth == 30.0Hz
     @test bumped.code_loop_filter_bandwidth == 1.5Hz  # unchanged
     preserved = ConventionalPLLAndDLL(estimator)
-    @test preserved.carrier_loop_filter_bandwidth == 22.0Hz
+    @test preserved.wide_carrier_loop_filter_bandwidth == 22.0Hz
     @test preserved.code_loop_filter_bandwidth == 1.5Hz
 end
 
 @testset "merge_sats with matching estimator carries through bandwidths" begin
     gpsl1 = GPSL1CA()
     estimator = ConventionalPLLAndDLL(;
-        carrier_loop_filter_bandwidth = 22.0Hz,
+        wide_carrier_loop_filter_bandwidth = 22.0Hz,
         code_loop_filter_bandwidth = 1.5Hz,
     )
     sat1 = TrackedSat(gpsl1, 1, 0.5, 100.0Hz; doppler_estimator = estimator)
@@ -404,14 +419,14 @@ end
     merged = merge_sats(track_state, sat2)
 
     de_state = get_sat_states(merged)[2].doppler_estimator_state
-    @test de_state.carrier_loop_filter_bandwidth == 22.0Hz
-    @test de_state.code_loop_filter_bandwidth == 1.5Hz
+    @test de_state.bandwidths.wide_carrier == 22.0Hz
+    @test de_state.bandwidths.code == 1.5Hz
 end
 
 @testset "merge_sats errors on mismatched doppler estimator type" begin
     gpsl1 = GPSL1CA()
     estimator = ConventionalPLLAndDLL(;
-        carrier_loop_filter_bandwidth = 22.0Hz,
+        wide_carrier_loop_filter_bandwidth = 22.0Hz,
         code_loop_filter_bandwidth = 1.5Hz,
     )
     sat1 = TrackedSat(gpsl1, 1, 0.5, 100.0Hz; doppler_estimator = estimator)
@@ -421,6 +436,198 @@ end
     # different concrete state type than the TrackState's estimator.
     bad_sat = TrackedSat(gpsl1, 2, 0.25, 200.0Hz)
     @test_throws ArgumentError merge_sats(track_state, bad_sat)
+end
+
+# An estimator that keeps what each record hands the carrier discriminators,
+# around the loop it wraps.
+struct PromptRecordingEstimator{E<:TrackingLoops.AbstractDopplerEstimator} <:
+       TrackingLoops.AbstractDopplerEstimator
+    inner::E
+    records::Vector{Tuple{ComplexF64,Int8}}
+end
+TrackingLoops.init_estimator_state(
+    e::PromptRecordingEstimator,
+    driver_signal,
+    carrier_doppler,
+    code_doppler,
+) = TrackingLoops.init_estimator_state(
+    e.inner,
+    driver_signal,
+    carrier_doppler,
+    code_doppler,
+)
+function TrackingLoops.step_loop(
+    e::PromptRecordingEstimator,
+    state,
+    record::TrackingLoops.LoopRecord,
+    words,
+    landing_sample::Int64,
+)
+    push!(e.records, (record.previous_prompt, record.carrier_phase_polarity))
+    TrackingLoops.step_loop(e.inner, state, record, words, landing_sample)
+end
+
+@testset "A record hands the FLL its previous prompt only at an unchanged polarity" begin
+    sampling_frequency = 5e6Hz
+    # Steps the satellite through one record per call, the bit buffer synced as
+    # `synced` makes it, and returns the record's (previous prompt, carrier phase
+    # polarity) and the prompt it left on the signal.
+    function step_records(signal, synced, num_blocks_per_record)
+        estimator = PromptRecordingEstimator(
+            ConventionalAssistedPLLAndDLL(),
+            Tuple{ComplexF64,Int8}[],
+        )
+        track_state = TrackState(; signal, doppler_estimator = estimator)
+        track_state = add_satellite!(track_state; prn = 1, carrier_doppler = 100.0Hz)
+        sats = get_sat_states(track_state)
+        sat = sats[1]
+        sats[1] = TrackedSat(
+            sat;
+            signals = map(
+                s -> TrackedSignal(s; bit_buffer = synced(get_bit_buffer(s))),
+                sat.signals,
+            ),
+        )
+        correlator = get_default_correlator(signal)
+        correlator = update_accumulator(
+            correlator,
+            map(_ -> 1000.0 + 10im, TrackingLoops.get_accumulators(correlator)),
+        )
+        one_block =
+            Int(sampling_frequency * get_code_length(signal) / get_code_frequency(signal))
+        prompts = ComplexF64[]
+        for num_blocks in num_blocks_per_record
+            sat = get_sat_states(track_state)[1]
+            samples = num_blocks * one_block
+            append_correlator_output!(
+                only(sat.signals),
+                CorrelatorOutput(correlator, samples, samples),
+            )
+            estimate_dopplers_and_filter_prompt!(track_state, _meas_l1(sampling_frequency))
+            push!(
+                prompts,
+                get_last_fully_integrated_filtered_prompt(get_sat_states(track_state)[1]),
+            )
+        end
+        estimator.records, prompts
+    end
+
+    # A bit buffer synced at polarity -1, on the first block of a bit.
+    synced(::TrackingLoops.BitBuffer{B}) where {B} = TrackingLoops.BitBuffer{B}(
+        zero(B),
+        0,
+        true,
+        0,
+        Int8(-1),
+        complex(0.0, 0.0),
+        0,
+        Float32[],
+        TrackingLoops.PhaseAccumulators(),
+    )
+
+    # A data signal's prompt sign stays unknown, so every record but the first
+    # chains from the one before, across a change of record length too.
+    records, prompts = step_records(GPSL1CA(), synced, (1, 1, 2, 2))
+    @test records[1][1] == 0
+    @test records[2][1] == prompts[1]
+    @test records[3][1] == prompts[2]
+    @test records[4][1] == prompts[3]
+    @test all(r -> r[2] == 0, records)
+
+    # A pilot synced to its secondary code knows its prompt's sign: the sync
+    # polarity, as the sync reads it off primary-only prompts. The FLL compares
+    # no prompts across the switch from the unknown sign.
+    records, prompts = step_records(GalileoE1C(), synced, (1, 1))
+    @test records[1] == (0, -1)
+    @test records[2] == (prompts[1], -1)
+end
+
+# An estimator that keeps each record's carrier phase polarity and prompt.
+struct PolarityRecordingEstimator{E<:TrackingLoops.AbstractDopplerEstimator} <:
+       TrackingLoops.AbstractDopplerEstimator
+    inner::E
+    records::Vector{Tuple{Int8,ComplexF64}}
+end
+TrackingLoops.init_estimator_state(
+    e::PolarityRecordingEstimator,
+    driver_signal,
+    carrier_doppler,
+    code_doppler,
+) = TrackingLoops.init_estimator_state(
+    e.inner,
+    driver_signal,
+    carrier_doppler,
+    code_doppler,
+)
+function TrackingLoops.step_loop(
+    e::PolarityRecordingEstimator,
+    state,
+    record::TrackingLoops.LoopRecord,
+    words,
+    landing_sample::Int64,
+)
+    push!(
+        e.records,
+        (
+            record.carrier_phase_polarity,
+            TrackingLoops.get_prompt(record.filtered_correlator),
+        ),
+    )
+    TrackingLoops.step_loop(e.inner, state, record, words, landing_sample)
+end
+
+@testset "A synced pilot's carrier phase polarity is its prompt's sign" begin
+    # Before the sync the replica wraps at one primary period, so it overlays
+    # every block with secondary chip 0, and block k of the received signal
+    # carries chip k: the prompt is sign · chip(k) · chip(0). Once synced the
+    # replica wipes the overlay and the prompt is the sign itself, which the
+    # four-quadrant discriminators must read it with. Galileo E1C's CS25 starts
+    # with a negative chip, so taking the pre-sync prompts as they come would
+    # read the opposite sign, a half-cycle PLL error.
+    e1c = GalileoE1C()
+    prn = 1
+    chip(k) = GNSSSignals.secondary_value(get_secondary_code(e1c), prn, k)
+    @test chip(0) == -1
+    sampling_frequency = 16.368e6Hz
+    num_samples = 65472 # 4 ms, one code period
+    record(prompt, sample_index) = CorrelatorOutput(
+        update_accumulator(
+            get_default_correlator(e1c),
+            ComplexF64(prompt * num_samples) .* SVector(0.2, 0.7, 1.0, 0.7, 0.2),
+        ),
+        num_samples,
+        sample_index,
+    )
+    rng = Random.Xoshiro(1)
+    for sign in (1, -1)
+        estimator = PolarityRecordingEstimator(
+            ConventionalAssistedPLLAndDLL(),
+            Tuple{Int8,ComplexF64}[],
+        )
+        track_state = TrackState(; signal = e1c, doppler_estimator = estimator)
+        track_state = add_satellite!(track_state; prn, carrier_doppler = 0.0Hz)
+        noisy(prompt) = prompt + 0.05 * randn(rng, ComplexF64)
+        step!(prompt, k) = begin
+            append_correlator_output!(get_sat_state(track_state, prn), record(prompt, k))
+            with_logger(NullLogger()) do
+                estimate_dopplers_and_filter_prompt!(track_state, _meas_l1(sampling_frequency))
+            end
+        end
+        k = 0
+        while !has_bit_or_secondary_code_been_found(get_sat_state(track_state, prn)) &&
+              k < 200
+            step!(noisy(sign * chip(k) * chip(0)), (k += 1) * num_samples)
+        end
+        @test has_bit_or_secondary_code_been_found(get_sat_state(track_state, prn))
+        num_pre_sync = length(estimator.records)
+        @test all(r -> r[1] == 0, estimator.records)
+        for _ = 1:10
+            step!(noisy(sign), (k += 1) * num_samples)
+        end
+        post_sync = estimator.records[(num_pre_sync+1):end]
+        @test all(r -> r[1] == sign, post_sync)
+        @test all(r -> Base.sign(real(r[2])) == sign, post_sync)
+    end
 end
 
 end

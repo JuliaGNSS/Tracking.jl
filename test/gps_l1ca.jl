@@ -8,7 +8,7 @@ import TrackingLoops
 using TrackingLoops:
     get_default_correlator,
     get_code_block_buffer_type,
-    default_carrier_loop_filter_bandwidth,
+    default_narrow_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     uses_soft_bit_edge_detection,
     get_bit_edge_detection_confidence,
@@ -29,7 +29,7 @@ using TrackingLoops:
     # Per-signal default loop bandwidths: sized for the 1 ms primary code
     # period at BL·T ≈ 0.018. Historically the package shipped 18 Hz / 1 Hz
     # as the universal default — that value falls out of the formula here.
-    @test @inferred(default_carrier_loop_filter_bandwidth(gpsl1)) ≈ 18.0Hz
+    @test @inferred(default_narrow_carrier_loop_filter_bandwidth(gpsl1)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(gpsl1)) ≈ 1.0Hz
 
     # 40-block sync window fits in a UInt64.

@@ -460,12 +460,12 @@ end
     @test ustrip(uconvert(dBHz, estimate_cn0(moments_noise_state, 1))) > 25
 
     # A signal that faded after bit sync was found is the case the coherence cap
-    # exists for: the loop stops holding phase over a whole navigation bit long
-    # before the signal becomes untrackable, so a bit-long coherent sum reads far
-    # too low — often `-Inf`, i.e. "no signal", on a satellite that is being
-    # tracked — while the capped window stays close to the truth. Locked in at
-    # 45 dB-Hz (so bit sync is found in every run) and faded to 25 dB-Hz; a
-    # median over seeds, since a single run of a low-C/N₀ estimate says little.
+    # exists for: a loop that stops holding phase over a whole navigation bit
+    # makes a bit-long coherent sum read too low — down to `-Inf`, i.e. "no
+    # signal", on a satellite that is being tracked — while the capped window
+    # stays close to the truth. Locked in at 45 dB-Hz (so bit sync is found in
+    # every run) and faded to 25 dB-Hz; a median over seeds, since a single run of
+    # a low-C/N₀ estimate says little.
     fade = (; fade_to = 25.0, fade_blocks = 400)
     seeds = 1:16
     faded = [track_noisy(45.0, 1500; seed, fade...) for seed in seeds]
@@ -483,15 +483,16 @@ end
     @test get_cn0_estimator(full_bit[1], 1).num_records_per_ratio == 20
     capped_cn0 = [ustrip(uconvert(dBHz, estimate_cn0(state, 1))) for state in faded]
     full_bit_cn0 = [ustrip(uconvert(dBHz, estimate_cn0(state, 1))) for state in full_bit]
-    # Margins from 96 seeds split into disjoint groups of 16: the capped median
-    # never left 22.4–24.8 and the gap to the whole-bit window never fell below
-    # 1.5 dB. Over all 96, capped reads a median 23.6 dB-Hz (p10 19.5) against the
-    # whole-bit window's 21.0 (p10 12.0), and the whole-bit window reports `-Inf` —
-    # "no signal" on a satellite that is being tracked — in 17 of 96 runs against
-    # 1. Eight seeds are not enough for either bound: on some groups of eight the
-    # whole-bit window happens to win.
-    @test median_of(capped_cn0) ≈ 25 atol = 3.5
-    @test median_of(capped_cn0) - median_of(full_bit_cn0) > 1
+    # Since the carrier loop narrows to a third-order PLL on phase lock, it holds
+    # phase over a whole bit at 25 dB-Hz, so the whole-bit window no longer reads
+    # low either (before, it read a median 21.0 dB-Hz and `-Inf` in 17 of 96 runs).
+    # From 48 seeds split into disjoint groups of 16: the capped median stayed
+    # within 24.1–25.0 dB-Hz and 0.1–0.33 dB above the whole-bit window's, and
+    # neither window reported `-Inf`. So the cap costs nothing where the loop
+    # holds phase.
+    @test median_of(capped_cn0) ≈ 25 atol = 1.5
+    @test median_of(capped_cn0) - median_of(full_bit_cn0) > -0.5
+    @test !any(isinf, capped_cn0)
 end
 
 end

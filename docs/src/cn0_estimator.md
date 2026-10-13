@@ -273,27 +273,31 @@ moment ratio's noise floor completely.
 
 ### The window is capped by the loop's coherence time
 
-A bit-aligned window does not have to span the whole bit, and it should not: the
+A bit-aligned window does not have to span the whole bit: the
 `num_narrowband_code_blocks` windows tile the bit from its start, so none
-straddles a flip *and* none runs past the coherence time of the loop that
-produced the prompts. The longest flip-free window is not the best one — a longer
-coherent window buys only a little (the same `num_records` records are combined
-either way, so only their partition changes: at a true 25 dB-Hz, going from a
-5-record to a 20-record window buys 0.8 dB of spread), while decoherence over a
-long window costs a *bias*, the one error more averaging cannot remove.
+straddles a flip, and the default stays short of a bit so that none runs past the
+coherence time of a loop that does not hold phase that long. A longer coherent
+window buys little (the same `num_records` records are combined either way, so
+only their partition changes), while decoherence over a long window costs a
+*bias*, the one error more averaging cannot remove.
 
 The case that shows it is a satellite that fades **after** bit sync was found,
-which is the normal way a receiver reaches low C/N₀. Locked in at 45 dB-Hz, then
-faded to a true 25 dB-Hz, medians over 96 runs:
+which is the normal way a receiver reaches low C/N₀. GPS L1 C/A at 1 ms records,
+locked in at 45 dB-Hz, then faded to a true 25 dB-Hz; median / 10th percentile
+of the reported C/N₀, and the runs that read `-Inf`:
 
-| coherent window       | reported C/N₀ | p10  | runs reading `-Inf` |
-|:--------------------- | -------------:| ----:| -------------------:|
-| 5 blocks (default)    | **23.6**      | 19.5 | 1 / 96              |
-| one full 20-block bit | 21.0          | 12.0 | 17 / 96             |
+| carrier loop                    | 5 blocks (default)       | one full 20-block bit    |
+|:------------------------------- | ------------------------:| ------------------------:|
+| before staging (96 runs)        | 23.6 / 19.5, 1 `-Inf`    | 21.0 / 12.0, 17 `-Inf`   |
+| staged, narrowed (48 runs)      | 24.6 / 22.0, none        | 24.7 / 22.5, none        |
 
-A whole-bit coherent sum reports "no signal" on a satellite that is being
-tracked. Raise `num_narrowband_code_blocks` for a pilot, a narrow carrier loop,
-or a signal that is never weak; lower it if the loop is noisier than the default.
+The staged carrier loop has dropped the FLL and narrowed to 18 Hz by the fade (see
+[Loop Filter](@ref)) and holds phase over a whole bit, so there the window length
+hardly matters. The loop before it did not, and a whole-bit coherent sum reported
+"no signal" on a satellite that was being tracked; nor does any loop that has
+not narrowed yet or runs wider. The short default is for those, at no
+measurable cost to the narrowed loop. Raise `num_narrowband_code_blocks` for a
+pilot, a narrow carrier loop, or a signal that is never weak.
 
 ## Configuring the estimator
 

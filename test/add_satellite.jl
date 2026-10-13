@@ -64,14 +64,14 @@ end
     # empty dict when the template's estimator-state type doesn't match
     # the TrackState's `doppler_estimator` kwarg.
     custom = ConventionalPLLAndDLL(;
-        carrier_loop_filter_bandwidth = 22.0Hz,
+        wide_carrier_loop_filter_bandwidth = 22.0Hz,
         code_loop_filter_bandwidth = 1.5Hz,
     )
     sg = SignalGroup((GPSL1CA(),); num_ants = NumAnts(1))  # default estimator
     ts = TrackState(; signals = (legacy = sg,), doppler_estimator = custom)
     ts = add_satellite!(ts; prn = 1, group = :legacy, carrier_doppler = 0.0Hz)
     de_state = get_sat_state(ts, :legacy, 1).doppler_estimator_state
-    @test de_state.carrier_loop_filter_bandwidth == 22.0Hz
+    @test de_state.bandwidths.wide_carrier == 22.0Hz
 end
 
 @testset "TrackState passes through pre-populated SignalGroup unchanged" begin
@@ -175,15 +175,15 @@ end
 
 @testset "Custom doppler estimator config seeds per-sat state correctly" begin
     custom = ConventionalPLLAndDLL(;
-        carrier_loop_filter_bandwidth = 22.0Hz,
+        wide_carrier_loop_filter_bandwidth = 22.0Hz,
         code_loop_filter_bandwidth = 1.5Hz,
     )
     track_state = TrackState(; signal = GPSL1CA(), doppler_estimator = custom)
     track_state = add_satellite!(track_state; prn = 4, carrier_doppler = 0.0Hz)
     de_state = get_sat_state(track_state, :default, 4).doppler_estimator_state
     @test de_state isa SatConventionalPLLAndDLL
-    @test de_state.carrier_loop_filter_bandwidth == 22.0Hz
-    @test de_state.code_loop_filter_bandwidth == 1.5Hz
+    @test de_state.bandwidths.wide_carrier == 22.0Hz
+    @test de_state.bandwidths.code == 1.5Hz
 end
 
 # `_make_acq`: shared Acquisition-version shim for building
@@ -397,14 +397,14 @@ end
 
 @testset "TrackState(acq; doppler_estimator) forwards kwargs" begin
     custom = ConventionalPLLAndDLL(;
-        carrier_loop_filter_bandwidth = 22.0Hz,
+        wide_carrier_loop_filter_bandwidth = 22.0Hz,
         code_loop_filter_bandwidth = 1.5Hz,
     )
     acq = _make_acq(GPSL1CA(), 9, 5.0, 80.0Hz)
     ts = TrackState(acq; doppler_estimator = custom)
     de_state = get_sat_state(ts, :default, 9).doppler_estimator_state
     @test de_state isa SatConventionalPLLAndDLL
-    @test de_state.carrier_loop_filter_bandwidth == 22.0Hz
+    @test de_state.bandwidths.wide_carrier == 22.0Hz
 end
 
 end

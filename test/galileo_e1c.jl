@@ -9,7 +9,7 @@ using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
-    default_carrier_loop_filter_bandwidth,
+    default_narrow_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     VeryEarlyPromptLateCorrelator,
     NumAnts
@@ -59,7 +59,7 @@ rotl(x::T, r, N) where {T} =
 
     # Same as E1B: the flat 18 Hz carrier default and the unclamped 1 Hz DLL
     # reference.
-    @test @inferred(default_carrier_loop_filter_bandwidth(galileo_e1c)) == 18.0Hz
+    @test @inferred(default_narrow_carrier_loop_filter_bandwidth(galileo_e1c)) == 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(galileo_e1c)) ≈ 1.0Hz
 
     # 25-block CS25 window fits in a UInt32.
