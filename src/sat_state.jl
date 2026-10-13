@@ -5,10 +5,12 @@ Per-signal tracking state. One `TrackedSignal` exists for each signal being
 tracked on a satellite — for a satellite tracked on GPS L1 C/A only there is
 one; for a satellite tracked on GPS L1 C/A + L1C-D + L1C-P there are three.
 
-Holds the signal-specific state: the correlator, post-correlation filter,
-CN0 estimator, bit buffer, and the integration-progress flags. The
-per-satellite carrier/code Doppler and phase are shared across signals and
-live on the enclosing [`TrackedSat`](@ref).
+Holds the signal-specific state: the correlator, the integration progress,
+and the signal's per-record loop state, a TrackingLoops
+[`SignalLoopState`](@extref TrackingLoops.SignalLoopState) holding its
+post-correlation filter, C/N₀ estimator, bit buffer and what the last record
+left for the next one. The per-satellite carrier/code Doppler and phase are
+shared across signals and live on the enclosing [`TrackedSat`](@ref).
 """
 struct TrackedSignal{
     Sig<:AbstractGNSSSignal,
@@ -21,10 +23,13 @@ struct TrackedSignal{
     integrated_samples::Int
     correlator::C
     last_fully_integrated_correlator::C
-    last_fully_integrated_filtered_prompt::ComplexF64
-    cn0_estimator::CN0
-    bit_buffer::BitBuffer{B}
-    post_corr_filter::PCF
+    # The state TrackingLoops' `apply_record` advances per record: the bit
+    # buffer, C/N₀ estimator and post-correlation filter, the last record's
+    # filtered prompt and the primary-code blocks it actually spanned (which the
+    # C/N₀ estimate divides by, so a record lengthened by the correlate step or
+    # by an external producer summing dumps is credited right) and what it did
+    # to the bit clock.
+    loop_state::SignalLoopState{B,PCF,CN0}
     filtered_prompts::Vector{ComplexF64}
     # Correlator outputs completed within the current processing chunk, each
     # tagged with its end sample index. Preallocated and reused (like
@@ -38,16 +43,6 @@ struct TrackedSignal{
     # `calc_num_code_blocks_to_integrate`). Defaults to 1; change it with
     # [`set_preferred_num_code_blocks_to_integrate!`](@ref).
     preferred_num_code_blocks_to_integrate::Int
-    # Primary-code blocks the most recently folded record actually spanned. The
-    # CN0 estimator buffers *sample-normalized* prompts, so a record covering N
-    # blocks arrives with N times the SNR of a one-block record; without knowing
-    # N, `estimate_cn0` would divide that SNR by one code period and over-report
-    # C/N₀ by 10·log₁₀(N) — 13 dB at a full GPS L1 C/A bit. Set by
-    # `_apply_correlator_output` from the record's own sample count, so it is
-    # right whether the records were lengthened by the correlate step
-    # (`preferred_num_code_blocks_to_integrate`) or by an external producer
-    # summing dumps. Starts at 1, the pre-sync length.
-    last_fully_integrated_num_code_blocks::Int
 end
 
 # Reject a preferred coherent-integration length that cannot work for this
@@ -135,10 +130,6 @@ function TrackedSignal(
         signal,
         preferred_num_code_blocks_to_integrate,
     )
-    # Per-signal sync-search buffer width — see `get_code_block_buffer_type`.
-    # Picking the type here makes `B` concrete in the resulting
-    # `TrackedSignal{Sig, B, C, PCF, CN0}`.
-    B = get_code_block_buffer_type(signal)
     # Preallocate the per-chunk correlator-output buffer. A default-length
     # chunk (= smallest code period) yields at most one record per chunk for
     # the driver; size to a small constant so `push!` never grows it after
@@ -150,14 +141,10 @@ function TrackedSignal(
         0,
         correlator,
         correlator,
-        complex(0.0, 0.0),
-        cn0_estimator,
-        BitBuffer{B}(),
-        post_corr_filter,
+        SignalLoopState(signal; cn0_estimator, post_corr_filter),
         ComplexF64[],
         correlator_outputs,
         preferred_num_code_blocks_to_integrate,
-        1,
     )
 end
 
@@ -165,7 +152,11 @@ end
 # correlator and PCF types with `t`. The two constrained fields use
 # `Maybe{C}` / `Maybe{PCF}` to keep `nothing` distinguishable from a real
 # value, since the user might legitimately want to set them to anything of
-# the same type.
+# the same type. Besides the whole `loop_state`, its parts can be replaced one
+# by one: `bit_buffer`, `cn0_estimator`, `post_corr_filter`,
+# `last_fully_integrated_filtered_prompt` (the loop state's
+# `last_filtered_prompt`) and `last_fully_integrated_num_code_blocks` (its
+# `last_num_code_blocks`).
 #
 # `cn0_estimator` is deliberately NOT pinned to `t`'s estimator type: swapping
 # the estimator on an existing signal is one of the documented ways to plug a
@@ -179,6 +170,7 @@ function TrackedSignal(
     integrated_samples = nothing,
     correlator::Maybe{C} = nothing,
     last_fully_integrated_correlator::Maybe{C} = nothing,
+    loop_state::Maybe{SignalLoopState{B,PCF}} = nothing,
     last_fully_integrated_filtered_prompt = nothing,
     cn0_estimator::Maybe{AbstractCN0Estimator} = nothing,
     bit_buffer::Maybe{BitBuffer{B}} = nothing,
@@ -198,34 +190,55 @@ function TrackedSignal(
             isnothing(signal) ? t.signal : signal,
             preferred_num_code_blocks_to_integrate,
         )
-    new_cn0_estimator = isnothing(cn0_estimator) ? t.cn0_estimator : cn0_estimator
-    TrackedSignal{Sig,B,C,PCF,typeof(new_cn0_estimator)}(
+    new_loop_state = _update_loop_state(
+        isnothing(loop_state) ? t.loop_state : loop_state,
+        bit_buffer,
+        cn0_estimator,
+        post_corr_filter,
+        last_fully_integrated_filtered_prompt,
+        last_fully_integrated_num_code_blocks,
+    )
+    TrackedSignal{Sig,B,C,PCF,typeof(new_loop_state.cn0_estimator)}(
         isnothing(signal) ? t.signal : signal,
         isnothing(integrated_samples) ? t.integrated_samples : integrated_samples,
         isnothing(correlator) ? t.correlator : correlator,
         isnothing(last_fully_integrated_correlator) ? t.last_fully_integrated_correlator :
         last_fully_integrated_correlator,
-        isnothing(last_fully_integrated_filtered_prompt) ?
-        t.last_fully_integrated_filtered_prompt : last_fully_integrated_filtered_prompt,
-        new_cn0_estimator,
-        isnothing(bit_buffer) ? t.bit_buffer : bit_buffer,
-        isnothing(post_corr_filter) ? t.post_corr_filter : post_corr_filter,
+        new_loop_state,
         isnothing(filtered_prompts) ? t.filtered_prompts : filtered_prompts,
         isnothing(correlator_outputs) ? t.correlator_outputs : correlator_outputs,
         isnothing(preferred_num_code_blocks_to_integrate) ?
         t.preferred_num_code_blocks_to_integrate : preferred_num_code_blocks_to_integrate,
-        isnothing(last_fully_integrated_num_code_blocks) ?
-        t.last_fully_integrated_num_code_blocks : last_fully_integrated_num_code_blocks,
     )
 end
+
+# The loop state with the parts that are not `nothing` replaced.
+@inline _update_loop_state(
+    state::SignalLoopState,
+    bit_buffer,
+    cn0_estimator,
+    post_corr_filter,
+    last_filtered_prompt,
+    last_num_code_blocks,
+) = SignalLoopState(
+    isnothing(bit_buffer) ? state.bit_buffer : bit_buffer,
+    isnothing(cn0_estimator) ? state.cn0_estimator : cn0_estimator,
+    isnothing(post_corr_filter) ? state.post_corr_filter : post_corr_filter,
+    isnothing(last_filtered_prompt) ? state.last_filtered_prompt :
+    ComplexF64(last_filtered_prompt),
+    isnothing(last_num_code_blocks) ? state.last_num_code_blocks :
+    Int(last_num_code_blocks),
+    state.last_sync_change,
+    state.last_num_new_soft_bits,
+)
 
 get_signal(t::TrackedSignal) = t.signal
 get_correlator(t::TrackedSignal) = t.correlator
 get_last_fully_integrated_correlator(t::TrackedSignal) = t.last_fully_integrated_correlator
 get_last_fully_integrated_filtered_prompt(t::TrackedSignal) =
-    t.last_fully_integrated_filtered_prompt
+    t.loop_state.last_filtered_prompt
 get_last_fully_integrated_num_code_blocks(t::TrackedSignal) =
-    t.last_fully_integrated_num_code_blocks
+    t.loop_state.last_num_code_blocks
 
 """
 $(SIGNATURES)
@@ -283,13 +296,13 @@ See [External correlator producers](@ref) for the full offload contract.
 append_correlator_output!(t::TrackedSignal, output::CorrelatorOutput) =
     (push!(t.correlator_outputs, output); t)
 
-get_post_corr_filter(t::TrackedSignal) = t.post_corr_filter
-get_cn0_estimator(t::TrackedSignal) = t.cn0_estimator
-get_bit_buffer(t::TrackedSignal) = t.bit_buffer
-get_soft_bits(t::TrackedSignal) = get_soft_bits(t.bit_buffer)
-get_num_bits(t::TrackedSignal) = length(t.bit_buffer)
+get_post_corr_filter(t::TrackedSignal) = t.loop_state.post_corr_filter
+get_cn0_estimator(t::TrackedSignal) = t.loop_state.cn0_estimator
+get_bit_buffer(t::TrackedSignal) = t.loop_state.bit_buffer
+get_soft_bits(t::TrackedSignal) = get_soft_bits(get_bit_buffer(t))
+get_num_bits(t::TrackedSignal) = length(get_bit_buffer(t))
 has_bit_or_secondary_code_been_found(t::TrackedSignal) =
-    has_bit_or_secondary_code_been_found(t.bit_buffer)
+    has_bit_or_secondary_code_been_found(get_bit_buffer(t))
 get_integrated_samples(t::TrackedSignal) = t.integrated_samples
 get_preferred_num_code_blocks_to_integrate(t::TrackedSignal) =
     t.preferred_num_code_blocks_to_integrate
@@ -394,7 +407,7 @@ the calling site for any concrete `signals` tuple type.
 # contribution to the shared wrap is `primary × 1`. Once synced its
 # contribution widens to `_post_sync_code_length(tsig)`.
 @inline function _current_code_length(tsig::TrackedSignal)
-    if tsig.bit_buffer.found
+    if get_bit_buffer(tsig).found
         _post_sync_code_length(tsig)
     else
         get_code_length(tsig.signal)
@@ -447,7 +460,7 @@ longest synced signal's wrap and shorter signals just ride along.
 # tuples in lockstep; folds to a compile-time-decided chain of `||`s.
 @inline _any_signal_just_synced(::Tuple{}, ::Tuple{}) = false
 @inline _any_signal_just_synced(old::Tuple, new::Tuple) =
-    (!first(old).bit_buffer.found && first(new).bit_buffer.found) ||
+    (!get_bit_buffer(first(old)).found && get_bit_buffer(first(new)).found) ||
     _any_signal_just_synced(Base.tail(old), Base.tail(new))
 
 # Phase-snap fallback chain: walk `signals` and pick the synced signal
@@ -502,7 +515,7 @@ end
 )
     head = first(t)
     sig = head.signal
-    bb = head.bit_buffer
+    bb = get_bit_buffer(head)
     if bb.found
         prim = get_code_length(sig)
         sec = get_secondary_code_length(sig)
@@ -880,7 +893,7 @@ end
 @inline function _reset_signal(t::TrackedSignal)
     empty!(t.filtered_prompts)
     empty!(t.correlator_outputs)
-    TrackedSignal(t; bit_buffer = reset(t.bit_buffer))
+    TrackedSignal(t; bit_buffer = reset(get_bit_buffer(t)))
 end
 
 """

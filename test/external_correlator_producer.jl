@@ -243,7 +243,7 @@ end
         (L1 = fs,),
     )
     signal = only(get_signals(first(ts.groups).satellites.values[1]))
-    @test !has_bit_or_secondary_code_been_found(signal.bit_buffer)
+    @test !has_bit_or_secondary_code_been_found(signal)
 end
 
 end

@@ -166,14 +166,13 @@ end
 
 # Apply one completed `CorrelatorOutput` record to a signal — shared by the
 # estimator-driver and passenger folds so they cannot drift (issue #133). The
-# arithmetic is TrackingLoops' `fold_record`, run on the `TrackedSignal`'s bare
-# per-record state; this wraps it: records the filtered prompt in the signal's
-# per-chunk `filtered_prompts`, and rebuilds the `TrackedSignal` with the record
-# moved to `last_fully_integrated_*`. Returns the rebuilt signal plus the
-# intermediate values the driver's loop-filter section needs, and the record's
-# view of the signal as a TrackingLoops `SignalLoopState`, which the
-# `LoopRecord` handed to `step_loop` is built from: what the record did to the
-# bit clock and the soft bits it appended, for an estimator that decodes them.
+# arithmetic is TrackingLoops' `apply_record` on the signal's `loop_state`; this
+# wraps it: records the filtered prompt in the signal's per-chunk
+# `filtered_prompts`, keeps the record as `last_fully_integrated_correlator`, and
+# returns the rebuilt signal, whose `loop_state` a `LoopRecord` is built from:
+# what the record did to the bit clock and the soft bits it appended, for an
+# estimator that decodes them. With it come the filtered correlator the
+# discriminators read and the blocks the record covered.
 #
 # Unlike the old per-integration advance, this does NOT reset the live
 # accumulator or `integrated_samples`: the correlate phase already reset them
@@ -186,61 +185,35 @@ end
     sampling_frequency,
     noise_density,
     noise_density_ready::Bool,
-    driver_carrier_phase::Real = 0.0;
-    correlated_pre_sync::Bool = false,
+    driver_carrier_phase::Real;
+    correlated_pre_sync::Bool,
 )
-    found_before = has_bit_or_secondary_code_been_found(tracked_signal.bit_buffer)
-    num_soft_bits = length(get_soft_bits(tracked_signal.bit_buffer))
-    bit_buffer,
-    cn0_estimator,
-    post_corr_filter,
-    prompt,
-    filtered_correlator,
-    bit_block_count,
-    integrated_code_blocks,
-    overshoot = fold_record(
-        tracked_signal.signal,
-        prn,
-        tracked_signal.bit_buffer,
-        get_cn0_estimator(tracked_signal),
-        tracked_signal.post_corr_filter,
-        output,
-        sampling_frequency,
-        noise_density,
-        noise_density_ready,
-        driver_carrier_phase,
-        correlated_pre_sync,
-    )
+    loop_state, prompt, filtered_correlator, integrated_code_blocks, overshoot =
+        apply_record(
+            tracked_signal.loop_state,
+            tracked_signal.signal,
+            prn,
+            output,
+            sampling_frequency,
+            noise_density,
+            noise_density_ready,
+            driver_carrier_phase;
+            correlated_pre_sync,
+        )
     overshoot && _warn_bit_boundary_overshoot(
         get_signal_id(tracked_signal.signal),
         prn,
-        tracked_signal.bit_buffer.prompt_accumulator_integrated_code_blocks +
-        bit_block_count,
+        get_bit_buffer(tracked_signal).prompt_accumulator_integrated_code_blocks +
+        integrated_code_blocks,
         _calc_num_code_blocks_that_form_a_bit(tracked_signal.signal),
     )
     push!(tracked_signal.filtered_prompts, prompt)
     new_signal = TrackedSignal(
         tracked_signal;
-        last_fully_integrated_filtered_prompt = prompt,
-        bit_buffer,
-        cn0_estimator,
-        post_corr_filter,
+        loop_state,
         last_fully_integrated_correlator = output.correlator,
-        # What the CN0 estimator's newest prompt was integrated over.
-        last_fully_integrated_num_code_blocks = integrated_code_blocks,
     )
-    found_after = has_bit_or_secondary_code_been_found(bit_buffer)
-    signal_state = SignalLoopState(
-        bit_buffer,
-        cn0_estimator,
-        post_corr_filter,
-        prompt,
-        integrated_code_blocks,
-        !found_before && found_after ? SYNC_FOUND :
-        found_before && !found_after ? SYNC_LOST : SYNC_UNCHANGED,
-        length(get_soft_bits(bit_buffer)) - num_soft_bits,
-    )
-    return new_signal, filtered_correlator, integrated_code_blocks, signal_state
+    return new_signal, filtered_correlator, integrated_code_blocks
 end
 
 # Process the estimator-driver signal (signals[1]): fold over every
@@ -271,7 +244,7 @@ end
     state = pll_and_dll_state
     carrier_doppler = sat.carrier_doppler
     code_doppler = sat.code_doppler
-    found_before_fold = has_bit_or_secondary_code_been_found(ts.bit_buffer)
+    found_before_fold = has_bit_or_secondary_code_been_found(ts)
     # The command this fold produces is computed after its last record; a
     # delay-aware estimator maps every record of the fold onto the delay-free
     # loop's record the same distance ahead.
@@ -285,10 +258,10 @@ end
         previous_prompt = get_last_fully_integrated_filtered_prompt(ts)
         # A record that follows a sync detected earlier in THIS fold was
         # correlated with pre-sync replicas — its blocks still count towards the
-        # bit, only its prompt may have to be dropped (see `fold_record`).
+        # bit, only its prompt may have to be dropped (see `apply_record`).
         synced_earlier_in_fold =
-            !found_before_fold && has_bit_or_secondary_code_been_found(ts.bit_buffer)
-        ts, filtered_correlator, _, signal_state = _apply_correlator_output(
+            !found_before_fold && has_bit_or_secondary_code_been_found(ts)
+        ts, filtered_correlator, _ = _apply_correlator_output(
             ts,
             output,
             sat.prn,
@@ -305,7 +278,7 @@ end
             filtered_correlator,
             previous_prompt,
             output,
-            signal_state,
+            ts.loop_state,
             sampling_frequency;
             fold_end,
             prn = sat.prn,
@@ -394,7 +367,7 @@ end
     outputs = tracked_signal.correlator_outputs
     isempty(outputs) && return tracked_signal, state
     ts = tracked_signal
-    found_before_fold = has_bit_or_secondary_code_been_found(ts.bit_buffer)
+    found_before_fold = has_bit_or_secondary_code_been_found(ts)
     fold_end = last(outputs).sample_index
     @inbounds for k in eachindex(outputs)
         output = outputs[k]
@@ -402,8 +375,8 @@ end
         # Same rule as the driver fold: records after a sync detected earlier
         # in this fold stay out of the bit buffer.
         synced_earlier_in_fold =
-            !found_before_fold && has_bit_or_secondary_code_been_found(ts.bit_buffer)
-        ts, filtered_correlator, _, signal_state = _apply_correlator_output(
+            !found_before_fold && has_bit_or_secondary_code_been_found(ts)
+        ts, filtered_correlator, _ = _apply_correlator_output(
             ts,
             output,
             prn,
@@ -418,7 +391,7 @@ end
             filtered_correlator,
             previous_prompt,
             output,
-            signal_state,
+            ts.loop_state,
             sampling_frequency;
             fold_end,
             prn,
@@ -610,7 +583,7 @@ end
 # silencing all but the first would hide how wide the problem is. Warn rather
 # than throw — one producer's off-by-one should cost a bit-sync, not the
 # receiver — but warn loudly, because the resync also discards the partial bit
-# and the straddling record. The detection itself is TrackingLoops' (`fold_record`
+# and the straddling record. The detection itself is TrackingLoops' (`apply_record`
 # reports the overshoot); the logging is this package's, so the loop process
 # stays free of it.
 @noinline function _warn_bit_boundary_overshoot(
