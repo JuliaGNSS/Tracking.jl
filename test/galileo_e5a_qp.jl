@@ -40,7 +40,7 @@ import TrackingLoops
 using TrackingLoops:
     EarlyPromptLateCorrelator,
     NumAnts,
-    default_carrier_loop_filter_bandwidth,
+    default_narrow_carrier_loop_filter_bandwidth,
     effective_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     detect_bit_or_secondary_code_sync,
@@ -123,7 +123,7 @@ const BLOCKS_PER_CYCLE = 31
         @test max_num_code_blocks_to_integrate(GalileoE5aQ()) == 100
 
         # The flat 18 Hz carrier default, uncapped at the 2 ms cycle.
-        BL = @inferred default_carrier_loop_filter_bandwidth(e5a_qp)
+        BL = @inferred default_narrow_carrier_loop_filter_bandwidth(e5a_qp)
         @test BL ≈ 18.0Hz
         cycle_time = upreferred(
             BLOCKS_PER_CYCLE * get_code_length(e5a_qp) / get_code_frequency(e5a_qp),

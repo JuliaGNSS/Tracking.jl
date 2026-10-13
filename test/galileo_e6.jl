@@ -10,7 +10,7 @@ using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
-    default_carrier_loop_filter_bandwidth,
+    default_narrow_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     EarlyPromptLateCorrelator,
     NumAnts
@@ -41,7 +41,7 @@ rotl(x::T, r, N) where {T} =
           EarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
     # 1 ms primary period (5115 chips at 5.115 Mcps) → 18 Hz / 1 Hz.
-    @test @inferred(default_carrier_loop_filter_bandwidth(e6b)) ≈ 18.0Hz
+    @test @inferred(default_narrow_carrier_loop_filter_bandwidth(e6b)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(e6b)) ≈ 1.0Hz
 
     # No sub-symbol boundary to search — the buffer is dead state, UInt8.
@@ -88,7 +88,7 @@ end
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
 
     # 1 ms primary period, same as E6-B → 18 Hz / 1 Hz.
-    @test @inferred(default_carrier_loop_filter_bandwidth(e6c)) ≈ 18.0Hz
+    @test @inferred(default_narrow_carrier_loop_filter_bandwidth(e6c)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(e6c)) ≈ 1.0Hz
 
     # 100-block CS100 window needs UInt128.

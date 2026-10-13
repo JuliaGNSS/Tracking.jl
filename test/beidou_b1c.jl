@@ -10,7 +10,7 @@ using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
-    default_carrier_loop_filter_bandwidth,
+    default_narrow_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     get_bit_edge_or_secondary_code_tolerance,
     VeryEarlyPromptLateCorrelator,
@@ -46,7 +46,7 @@ const B1C_P_MAX_ERRORS =
 
     # The flat 18 Hz carrier default (capped to 9 Hz only at filter time, against
     # a 10 ms integration), and the unclamped 1 Hz DLL reference.
-    @test @inferred(default_carrier_loop_filter_bandwidth(b1c_d)) == 18.0Hz
+    @test @inferred(default_narrow_carrier_loop_filter_bandwidth(b1c_d)) == 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(b1c_d)) ≈ 1.0Hz
 
     @test @inferred(get_code_block_buffer_type(b1c_d)) === UInt8
@@ -89,7 +89,7 @@ end
           VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
     # 18 Hz / 1 Hz, same as the data component.
-    @test @inferred(default_carrier_loop_filter_bandwidth(b1c_p)) == 18.0Hz
+    @test @inferred(default_narrow_carrier_loop_filter_bandwidth(b1c_p)) == 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(b1c_p)) ≈ 1.0Hz
 
     # 1800-chip per-PRN overlay → the exact-width UInt1800 that GPS L1C-P's

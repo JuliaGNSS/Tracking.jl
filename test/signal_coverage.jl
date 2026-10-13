@@ -41,7 +41,7 @@ import TrackingLoops
 using TrackingLoops:
     AbstractCorrelator,
     NumAnts,
-    default_carrier_loop_filter_bandwidth,
+    default_narrow_carrier_loop_filter_bandwidth,
     effective_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     default_num_code_blocks_to_integrate,
@@ -158,7 +158,7 @@ end
     integration_time =
         upreferred(get_code_length(signal) * default_blocks / get_code_frequency(signal))
     carrier_bandwidth = @inferred effective_carrier_loop_filter_bandwidth(
-        default_carrier_loop_filter_bandwidth(signal),
+        default_narrow_carrier_loop_filter_bandwidth(signal),
         integration_time,
     )
     code_bandwidth = @inferred default_code_loop_filter_bandwidth(signal)

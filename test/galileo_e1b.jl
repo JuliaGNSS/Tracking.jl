@@ -7,7 +7,7 @@ using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
-    default_carrier_loop_filter_bandwidth,
+    default_narrow_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     VeryEarlyPromptLateCorrelator,
     NumAnts
@@ -41,7 +41,7 @@ using TrackingLoops:
 
     # The flat 18 Hz carrier default (inside the 0.09 / T_int cap for a 4 ms
     # integration), and the unclamped 1 Hz DLL reference.
-    @test @inferred(default_carrier_loop_filter_bandwidth(galileo_e1b)) == 18.0Hz
+    @test @inferred(default_narrow_carrier_loop_filter_bandwidth(galileo_e1b)) == 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(galileo_e1b)) ≈ 1.0Hz
 
     # 1 symbol = 1 primary period; sync buffer is dead state, but a

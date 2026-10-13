@@ -10,8 +10,8 @@
 
 # Re-seed hook used by `reset_loop_filters!`: the estimator's own
 # `reset_estimator_state`, which keeps whatever per-satellite configuration it
-# chooses to keep across the reset (the shipped loops keep their bandwidths,
-# the vector loop also its membership). An estimator without one is rebuilt
+# chooses to keep across the reset (the shipped loops keep their bandwidths and
+# their carrier loop's stage, the vector loop also its membership). An estimator without one is rebuilt
 # from scratch via `init_estimator_state`.
 function _reset_estimator_state(estimator::AbstractDopplerEstimator, sat::TrackedSat)
     state = sat.doppler_estimator_state
@@ -23,26 +23,6 @@ function _reset_estimator_state(estimator::AbstractDopplerEstimator, sat::Tracke
         sat.code_doppler,
     ) || return init_estimator_state(estimator, sat)
     reset_estimator_state(estimator, state, sat.carrier_doppler, sat.code_doppler)
-end
-
-# The per-satellite state built from a live `TrackedSat` and explicit filters —
-# the form Tracking's own tests and a hand-built satellite use.
-function TrackingLoops.SatConventionalPLLAndDLL(
-    sat::TrackedSat,
-    carrier_loop_filter::CA,
-    code_loop_filter::CO;
-    carrier_loop_filter_bandwidth::typeof(1.0Hz) = 18.0Hz,
-    code_loop_filter_bandwidth::typeof(1.0Hz) = 1.0Hz,
-) where {CA<:AbstractLoopFilter,CO<:AbstractLoopFilter}
-    SatConventionalPLLAndDLL(
-        sat.carrier_doppler,
-        sat.code_doppler,
-        carrier_loop_filter,
-        code_loop_filter,
-        carrier_loop_filter_bandwidth,
-        code_loop_filter_bandwidth,
-        TrackingLoops._signal_key(first(sat.signals).signal),
-    )
 end
 
 # The words a software correlator's replicas ran on within a chunk: the
@@ -169,10 +149,21 @@ end
 # arithmetic is TrackingLoops' `apply_record` on the signal's `loop_state`; this
 # wraps it: records the filtered prompt in the signal's per-chunk
 # `filtered_prompts`, keeps the record as `last_fully_integrated_correlator`, and
-# returns the rebuilt signal, whose `loop_state` a `LoopRecord` is built from:
-# what the record did to the bit clock and the soft bits it appended, for an
-# estimator that decodes them. With it come the filtered correlator the
-# discriminators read and the blocks the record covered.
+# returns the rebuilt signal, whose `loop_state` a `LoopRecord` is built from,
+# with the filtered correlator the discriminators read and the blocks the record
+# covered.
+#
+# `overlay_wiped`, as for `apply_record`, says whether the replica under the
+# record wiped the secondary code at the synced phase. Where it did not, the
+# record was correlated with the pre-sync replica, which wraps at one primary
+# period, so GNSSSignals overlays every block with secondary chip 0, also after a
+# sync found in the record's own fold. TrackingLoops takes a dataless,
+# secondary-coded signal's pre-sync prompts as primary-only: the sync reads its
+# polarity off them, and that polarity is the prompt's sign once the overlay is
+# wiped, which the four-quadrant discriminators read a synced pilot with. So
+# such a record of such a signal is multiplied by chip 0 first; for a PRN whose
+# chip 0 is negative the four-quadrant PLL would read a half-cycle error
+# otherwise.
 #
 # Unlike the old per-integration advance, this does NOT reset the live
 # accumulator or `integrated_samples`: the correlate phase already reset them
@@ -186,8 +177,11 @@ end
     noise_density,
     noise_density_ready::Bool,
     driver_carrier_phase::Real;
-    correlated_pre_sync::Bool,
+    overlay_wiped::Bool,
 )
+    if !overlay_wiped && _pre_sync_replica_chip(tracked_signal.signal, prn) < 0
+        output = _negated(output)
+    end
     loop_state, prompt, filtered_correlator, integrated_code_blocks, overshoot =
         apply_record(
             tracked_signal.loop_state,
@@ -198,7 +192,7 @@ end
             noise_density,
             noise_density_ready,
             driver_carrier_phase;
-            correlated_pre_sync,
+            overlay_wiped,
         )
     overshoot && _warn_bit_boundary_overshoot(
         get_signal_id(tracked_signal.signal),
@@ -216,10 +210,26 @@ end
     return new_signal, filtered_correlator, integrated_code_blocks
 end
 
+# The secondary chip the pre-sync replica of a dataless, secondary-coded signal
+# carries on every block (see `_apply_correlator_output`), `1` for any other
+# signal, whose replica either carries no secondary code or whose prompts
+# carry data and are read two-quadrant. TrackingLoops' predicate picks the
+# signals, so that they are the ones whose carrier phase polarity it reads.
+@inline _pre_sync_replica_chip(signal::AbstractGNSSSignal, prn::Integer) =
+    is_dataless_with_secondary_code(signal) ?
+    Int(GNSSSignals.secondary_value(get_secondary_code(signal), prn, 0)) : 1
+
+@inline _negated(output::CorrelatorOutput) = CorrelatorOutput(
+    TrackingLoops.apply(-, output.correlator),
+    output.integrated_samples,
+    output.sample_index,
+    output.code_phase,
+)
+
 # Process the estimator-driver signal (signals[1]): fold over every
 # `CorrelatorOutput` collected during this chunk, in order — running the
 # per-record advance and the estimator's `step` per record, threading the
-# loop-filter state and the FLL `previous_prompt` across them — then return the
+# loop-filter state across them — then return the
 # new doppler_estimator_state and the *last* record's carrier/code Doppler (the
 # NCO is written once per chunk). With no outputs the Doppler holds.
 @inline function _process_estimator_driver_signal(
@@ -251,16 +261,10 @@ end
     fold_end = last(outputs).sample_index
     @inbounds for k in eachindex(outputs)
         output = outputs[k]
-        # FLL needs the previous record's filtered prompt; the first record of
-        # the chunk chains from the sat's carried-over
-        # `last_fully_integrated_filtered_prompt` (the previous chunk's last).
-        # Read it off `ts` BEFORE the advance overwrites it.
-        previous_prompt = get_last_fully_integrated_filtered_prompt(ts)
-        # A record that follows a sync detected earlier in THIS fold was
-        # correlated with pre-sync replicas — its blocks still count towards the
-        # bit, only its prompt may have to be dropped (see `apply_record`).
-        synced_earlier_in_fold =
-            !found_before_fold && has_bit_or_secondary_code_been_found(ts)
+        # Every record of a fold that started before the sync was correlated
+        # with the pre-sync replica, also one after a sync detected earlier in
+        # THIS fold: its blocks still count towards the bit, only its prompt may
+        # have to be dropped (see `apply_record`).
         ts, filtered_correlator, _ = _apply_correlator_output(
             ts,
             output,
@@ -269,14 +273,13 @@ end
             noise_density,
             noise_density_ready,
             driver_carrier_phase;
-            correlated_pre_sync = synced_earlier_in_fold,
+            overlay_wiped = found_before_fold,
         )
         # The record names its satellite, and sits on the band's running sample
         # grid, for an estimator that keeps per-satellite state of its own.
         record = LoopRecord(
             signal,
             filtered_correlator,
-            previous_prompt,
             output,
             ts.loop_state,
             sampling_frequency;
@@ -371,11 +374,7 @@ end
     fold_end = last(outputs).sample_index
     @inbounds for k in eachindex(outputs)
         output = outputs[k]
-        previous_prompt = get_last_fully_integrated_filtered_prompt(ts)
-        # Same rule as the driver fold: records after a sync detected earlier
-        # in this fold stay out of the bit buffer.
-        synced_earlier_in_fold =
-            !found_before_fold && has_bit_or_secondary_code_been_found(ts)
+        # Same rule as the driver fold.
         ts, filtered_correlator, _ = _apply_correlator_output(
             ts,
             output,
@@ -384,12 +383,11 @@ end
             noise_density,
             noise_density_ready,
             driver_carrier_phase;
-            correlated_pre_sync = synced_earlier_in_fold,
+            overlay_wiped = found_before_fold,
         )
         record = LoopRecord(
             ts.signal,
             filtered_correlator,
-            previous_prompt,
             output,
             ts.loop_state,
             sampling_frequency;

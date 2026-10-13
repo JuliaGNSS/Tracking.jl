@@ -48,7 +48,7 @@ using TrackingLoops:
     NoiseRefCN0Estimator,
     BitBuffer,
     NumAnts,
-    default_carrier_loop_filter_bandwidth,
+    default_wide_carrier_loop_filter_bandwidth,
     ConventionalAssistedPLLAndDLL,
     ConventionalPLLAndDLL
 
@@ -149,10 +149,10 @@ end
     ts = TrackState(sats)
     @test length(get_sat_states(ts, :gps)) == 1
     @test length(get_sat_states(ts, :gal)) == 1
-    @test get_sat_states(ts, :gps)[1].doppler_estimator_state.carrier_loop_filter_bandwidth ==
-          default_carrier_loop_filter_bandwidth(gpsl1)
-    @test get_sat_states(ts, :gal)[2].doppler_estimator_state.carrier_loop_filter_bandwidth ==
-          default_carrier_loop_filter_bandwidth(galileo)
+    @test get_sat_states(ts, :gps)[1].doppler_estimator_state.bandwidths.wide_carrier ==
+          default_wide_carrier_loop_filter_bandwidth(gpsl1)
+    @test get_sat_states(ts, :gal)[2].doppler_estimator_state.bandwidths.wide_carrier ==
+          default_wide_carrier_loop_filter_bandwidth(galileo)
 end
 
 @testset "Positional TrackState(dict) default estimator inference" begin
@@ -171,7 +171,7 @@ end
     gpsl1 = GPSL1CA()
     sat_default = TrackedSat(gpsl1, 1, 10.5, 10.0Hz)  # default estimator
     different = ConventionalPLLAndDLL(;
-        carrier_loop_filter_bandwidth = 22.0Hz,
+        wide_carrier_loop_filter_bandwidth = 22.0Hz,
         code_loop_filter_bandwidth = 1.5Hz,
     )
     @test_throws ArgumentError TrackState(
@@ -722,7 +722,7 @@ end
     gpsl1 = GPSL1CA()
     sat_default = TrackedSat(gpsl1, 1, 10.5, 10.0Hz)  # assisted default estimator
     different = ConventionalPLLAndDLL(;
-        carrier_loop_filter_bandwidth = 22.0Hz,
+        wide_carrier_loop_filter_bandwidth = 22.0Hz,
         code_loop_filter_bandwidth = 1.5Hz,
     )
     @test_throws ArgumentError TrackState(
@@ -736,7 +736,7 @@ end
     ts0 = add_satellite!(ts0; prn = 1)
     populated_group = ts0.groups.default
     different = ConventionalPLLAndDLL(;
-        carrier_loop_filter_bandwidth = 22.0Hz,
+        wide_carrier_loop_filter_bandwidth = 22.0Hz,
         code_loop_filter_bandwidth = 1.5Hz,
     )
     @test_throws ArgumentError TrackState(;
@@ -761,8 +761,11 @@ end
     old = sats[1]
     overridden_state = TrackingLoops.SatConventionalPLLAndDLL(
         get_doppler_estimator_state(old);
-        carrier_loop_filter_bandwidth = 5.0Hz,
-        code_loop_filter_bandwidth = 0.25Hz,
+        bandwidths = TrackingLoops.LoopBandwidths(;
+            wide_carrier = 5.0Hz,
+            narrow_carrier = 4.0Hz,
+            code = 0.25Hz,
+        ),
     )
     fake_prompt_signals = map(
         s -> Tracking.TrackedSignal(s; last_fully_integrated_filtered_prompt = 1.0 + 2.0im),
@@ -777,8 +780,9 @@ end
     reset_loop_filters!(ts, 1)
     state = get_doppler_estimator_state(get_sat_state(ts, 1))
     # The per-sat bandwidth override survives the reset…
-    @test state.carrier_loop_filter_bandwidth == 5.0Hz
-    @test state.code_loop_filter_bandwidth == 0.25Hz
+    @test state.bandwidths.wide_carrier == 5.0Hz
+    @test state.bandwidths.narrow_carrier == 4.0Hz
+    @test state.bandwidths.code == 0.25Hz
     # …and the FLL's previous-prompt memory is cleared, so the first
     # post-reset fll_disc doesn't span the old integration interval.
     @test get_last_fully_integrated_filtered_prompt(ts, 1) == 0.0 + 0.0im

@@ -4,7 +4,12 @@ using Test: @test, @testset
 using Random: MersenneTwister
 using Unitful: Hz
 using GNSSSignals:
-    GPSL1CA, GPSL5I, gen_code, get_code_center_frequency_ratio, get_code_frequency
+    GPSL1CA,
+    GPSL5I,
+    GalileoE1C,
+    gen_code,
+    get_code_center_frequency_ratio,
+    get_code_frequency
 
 using Tracking:
     TrackedSat,
@@ -402,6 +407,31 @@ if VERSION >= v"1.11"
         end
         @test measure_track_alloc_l5i(200) == 0
         @test measure_track_alloc_l5i(900) == 0
+    end
+
+    # And for a dataless pilot whose secondary code starts with a negative chip
+    # (Galileo E1C: CS25), whose pre-sync records are multiplied by that chip to
+    # make their prompts primary-only before they are folded. Both lengths are
+    # past `2 × 25` blocks.
+    @testset "track! is allocation-free during acquisition (pre-sync pilot)" begin
+        sampling_frequency = 16.368e6Hz
+        samples_per_block = 65472              # 4 ms Galileo E1C code period
+        function measure_track_alloc_e1c(nblocks)
+            e1c = GalileoE1C()
+            track_state = TrackState(e1c, [TrackedSat(e1c, 1, 10.5, 1000.0Hz)])
+            dc = CPUDownconvertAndCorrelator()
+            signal = rand(MersenneTwister(nblocks), ComplexF32, samples_per_block * nblocks)
+            call() = track!(
+                signal,
+                track_state,
+                sampling_frequency;
+                downconvert_and_correlator = dc,
+            )
+            call()                             # warmup: seat buffers, compile
+            @allocated call()
+        end
+        @test measure_track_alloc_e1c(60) == 0
+        @test measure_track_alloc_e1c(120) == 0
     end
 end
 

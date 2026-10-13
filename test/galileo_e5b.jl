@@ -9,7 +9,7 @@ using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
-    default_carrier_loop_filter_bandwidth,
+    default_narrow_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     EarlyPromptLateCorrelator,
     NumAnts
@@ -77,7 +77,7 @@ rotl(x::T, r, N) where {T} =
           EarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
     # 1 ms primary period (10230 chips at 10.23 Mcps) → 18 Hz / 1 Hz.
-    @test @inferred(default_carrier_loop_filter_bandwidth(e5b_i)) ≈ 18.0Hz
+    @test @inferred(default_narrow_carrier_loop_filter_bandwidth(e5b_i)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(e5b_i)) ≈ 1.0Hz
 
     # 4-block CS4 window; UInt32 matches the other short-secondary signals.
@@ -122,7 +122,7 @@ end
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
 
     # 1 ms primary period, same as E5b-I → 18 Hz / 1 Hz.
-    @test @inferred(default_carrier_loop_filter_bandwidth(e5b_q)) ≈ 18.0Hz
+    @test @inferred(default_narrow_carrier_loop_filter_bandwidth(e5b_q)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(e5b_q)) ≈ 1.0Hz
 
     # 100-block CS100 window needs UInt128.

@@ -105,8 +105,8 @@ smaller than E5a-I's 10230-chip one.
   code-phase, carrier-phase, Doppler and C/N₀ observables. What it needs is an
   integration policy: one 64.5 µs primary block would run the loop at 15.5 kHz,
   so E5a-QP integrates a whole 31-block code cycle — 10230 chips, exactly
-  2 ms — by default. That puts the loop at 500 Hz with the default 18 Hz
-  carrier bandwidth.
+  2 ms — by default. That puts the loop at 500 Hz, where the carrier loop
+  pulls in at 45 Hz and narrows to the default 18 Hz.
 - **What it never provides** is navigation data, on its own or for E5a: it is
   dataless, and the F/NAV message stays E5a-I's to carry.
 
@@ -142,6 +142,9 @@ method. Each is honest about what does and does not work today.
 - **One chip rate per [`SignalGroup`](@ref)**, which is what keeps E5a-QP out of
   an E5a group even though it shares the carrier
   ([#151](https://github.com/JuliaGNSS/Tracking.jl/issues/151)).
-- **Dataless pilots use the two-quadrant Costas carrier discriminators** they do
-  not need, halving each loop's pull-in range
+- **Pilots without a secondary code** (GPS L2 CL, Galileo E5a-QP) keep the
+  two-quadrant Costas carrier discriminators they do not need, at half the
+  range of the four-quadrant ones, as their sync reads no prompt sign. The
+  secondary-coded pilots switch to the four-quadrant discriminators once their
+  secondary code is synced
   ([#230](https://github.com/JuliaGNSS/Tracking.jl/issues/230)).

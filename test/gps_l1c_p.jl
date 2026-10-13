@@ -10,7 +10,7 @@ using TrackingLoops:
     detect_bit_or_secondary_code_sync,
     get_default_correlator,
     get_code_block_buffer_type,
-    default_carrier_loop_filter_bandwidth,
+    default_narrow_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     get_bit_edge_or_secondary_code_tolerance,
     VeryEarlyPromptLateCorrelator,
@@ -57,7 +57,7 @@ const L1C_P_MAX_ERRORS =
 
     # The flat 18 Hz carrier default, and a 10 ms period short enough to leave
     # the DLL at its unclamped 1 Hz reference.
-    @test @inferred(default_carrier_loop_filter_bandwidth(gpsl1c_p)) == 18.0Hz
+    @test @inferred(default_narrow_carrier_loop_filter_bandwidth(gpsl1c_p)) == 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(gpsl1c_p)) ≈ 1.0Hz
 
     # 1800-chip per-PRN overlay → exact-width UInt1800.

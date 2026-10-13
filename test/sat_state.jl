@@ -232,7 +232,7 @@ end
     # own driver signal (signals[1] = GPS L1C-P), not from a fixed value on the
     # estimator (which is `nothing` = auto).
     estimator = TrackingLoops.ConventionalAssistedPLLAndDLL()
-    @test estimator.carrier_loop_filter_bandwidth === nothing
+    @test estimator.wide_carrier_loop_filter_bandwidth === nothing
     sat_kw = TrackedSat(
         sigs,
         7,
@@ -244,8 +244,8 @@ end
     )
     @test get_carrier_phase(sat_kw) ≈ 0.5
     @test get_code_doppler(sat_kw) == -0.3Hz
-    @test sat_kw.doppler_estimator_state.carrier_loop_filter_bandwidth ==
-          TrackingLoops.default_carrier_loop_filter_bandwidth(GPSL1C_P())
+    @test sat_kw.doppler_estimator_state.bandwidths.wide_carrier ==
+          TrackingLoops.default_wide_carrier_loop_filter_bandwidth(GPSL1C_P())
 end
 
 @testset "Last fully integrated integration time" begin

@@ -1296,8 +1296,9 @@ satellite) from its current Doppler, giving each a freshly initialized loop
 filter. For the conventional PLL/DLL estimator this zeroes the carrier and code
 loop-filter integrators while preserving the converged `carrier_doppler` /
 `code_doppler` — and any per-satellite loop-bandwidth override carried on the
-`SatConventionalPLLAndDLL` state — so the loop continues from the
-converged frequency with a clean filter. Each signal's
+`SatConventionalPLLAndDLL` state and the stage its carrier loop has reached —
+so the loop continues from the converged frequency with a clean filter. Each
+signal's
 `last_fully_integrated_filtered_prompt` is cleared as well, so the first
 FLL update after the reset doesn't measure a prompt rotation that spans the
 old integration interval.

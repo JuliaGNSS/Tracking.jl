@@ -93,8 +93,11 @@ per-sat fields directly and rewraps `doppler_estimator_state` unchanged.
    takes the driver's, since the state records its driver
    (`init_estimator_state`) and a record of any other signal returns the
    command in force. Each record carries its signal's bit sync, the soft bits
-   it added and its C/N₀ estimator. Tracking does the rest: the bit buffer,
-   the C/N₀ estimators, the phase snap at sync. Add a
+   it added, its C/N₀ estimator, the prompt its FLL compares with
+   (`previous_prompt`: the previous record's, `0` across a change of
+   carrier phase polarity) and its carrier phase polarity, the prompt's sign
+   where it is known. Tracking does the rest: the bit buffer, the C/N₀
+   estimators, the phase snap at sync. Add a
    `TrackingLoops.reset_estimator_state(estimator, state, carrier_doppler,
    code_doppler)` method to choose what [`reset_loop_filters!`](@ref) keeps;
    without one, the reset re-initializes the state. An estimator written this
@@ -261,7 +264,8 @@ records after the record that motivated it, as a hardware replica's does. It
 attributes every record to the word that really ran over it and sizes the
 correction for the sample the new word will land at. Given a fixed word and no
 landing sample — which is what `track!` supplies — it is the conventional loop
-to the bit.
+to the bit, given the same bandwidths: by default it pulls in at the narrow
+18 Hz rather than the wide 50 Hz, as a wider loop tolerates less command delay.
 
 In the TrackingLoops manual:
 
