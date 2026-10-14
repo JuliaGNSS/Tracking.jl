@@ -1,5 +1,61 @@
 # Changelog
 
+# [11.0.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v10.0.0...v11.0.0) (2026-10-14)
+
+
+* feat(track)!: stage the carrier loop and read synced pilots four-quadrant, with TrackingLoops 5 ([b43e701](https://github.com/JuliaGNSS/Tracking.jl/commit/b43e70142fb011f488c3531dee3afb43227e1ef7))
+* refactor(track)!: hold a signal's per-record state as TrackingLoops' SignalLoopState ([d764dc3](https://github.com/JuliaGNSS/Tracking.jl/commit/d764dc3e4cd936e848b078012843298d8fc97a00))
+
+
+### BREAKING CHANGES
+
+* Tracking requires TrackingLoops 5, and track! runs its
+staged carrier loop. Instead of an FLL-assisted PLL at 18 Hz throughout,
+the default loop pulls in at 50 Hz FLL-assisted and narrows to 18 Hz on
+phase lock, and secondary-coded pilots (GPS L1C-P, L5Q, Galileo E1C,
+E5a-Q, E5b-Q, E6-C, BeiDou B1C-P, B2a-Q) switch to the four-quadrant
+discriminators once synced, so tracking results differ. For one PLL
+bandwidth throughout, pass the same wide_carrier_loop_filter_bandwidth and
+narrow_carrier_loop_filter_bandwidth to the estimator; the estimators'
+carrier_loop_filter_bandwidth keyword and field are now
+wide_carrier_loop_filter_bandwidth (see TrackingLoops' release notes).
+reset_loop_filters! keeps the stage a satellite's carrier loop has
+reached, as TrackingLoops' reset_estimator_state does; a satellite added
+anew starts over. The pre-sync records of a dataless, secondary-coded
+signal whose PRN's secondary chip 0 is negative are negated before they
+are folded, so their filtered prompts (get_filtered_prompts,
+get_last_fully_integrated_filtered_prompt) and
+get_last_fully_integrated_correlator have the opposite sign until the
+sync. Tracking's SatConventionalPLLAndDLL(sat::TrackedSat,
+carrier_loop_filter, code_loop_filter; carrier_loop_filter_bandwidth,
+code_loop_filter_bandwidth) is removed: build the state with
+init_estimator_state(ConventionalPLLAndDLL(typeof(carrier_loop_filter),
+typeof(code_loop_filter); wide_carrier_loop_filter_bandwidth,
+narrow_carrier_loop_filter_bandwidth, fll_assist_loop_filter_bandwidth,
+code_loop_filter_bandwidth), sat), whose bandwidths left out are the
+satellite's first signal's, or replace a state's filters and bandwidths
+with TrackingLoops' SatConventionalPLLAndDLL(state; carrier_loop_filter,
+code_loop_filter, bandwidths). A custom AbstractDopplerEstimator now
+receives records whose previous_prompt is zero across a change of carrier
+phase polarity, and whose carrier_phase_polarity is the prompt's sign
+where it is known.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+* TrackedSignal's fields bit_buffer, cn0_estimator,
+post_corr_filter, last_fully_integrated_filtered_prompt and
+last_fully_integrated_num_code_blocks are replaced by one field
+loop_state::TrackingLoops.SignalLoopState: read them with get_bit_buffer,
+get_cn0_estimator, get_post_corr_filter,
+get_last_fully_integrated_filtered_prompt and
+get_last_fully_integrated_num_code_blocks, or from loop_state (its
+last_filtered_prompt and last_num_code_blocks); the keyword constructor
+TrackedSignal(t; ...) still takes them. Code calling TrackedSignal's
+all-positional constructor passes (signal, integrated_samples, correlator,
+last_fully_integrated_correlator, loop_state, filtered_prompts,
+correlator_outputs, preferred_num_code_blocks_to_integrate).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
 # [10.0.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v9.0.0...v10.0.0) (2026-10-11)
 
 
