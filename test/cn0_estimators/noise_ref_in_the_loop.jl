@@ -1,20 +1,17 @@
 module NoiseRefInTheLoopTest
 
-# Why `NoiseRefCN0Estimator` is the default:
+# Why `NoiseRefCN0Estimator` is the default, in the loop (that it serves the
+# signals `NWPRCN0Estimator` cannot, #217, is tested in TrackingLoops):
 #
-#   1. It serves the signals `NWPRCN0Estimator` cannot — GPS L1C-D and Galileo
-#      E1B (one symbol per code block) and any secondary-coded signal before
-#      sync (#217).
-#   2. In a real loop it beats NWPR where lock decisions are made, and is immune
-#      to the phase-noise wash at long coherent records.
-#   3. Its one bias, the reference's self-leakage, is the size the design says.
+#   1. It beats NWPR where lock decisions are made, and is immune to the
+#      phase-noise wash at long coherent records.
+#   2. Its one bias, the reference's self-leakage, is the size the design says.
 
 using Test: @test, @testset
 using Random: Xoshiro, randn, rand
 using Statistics: std
 using Unitful: Hz, s, ms, dBHz, ustrip, uconvert
-using GNSSSignals:
-    GPSL1CA, GPSL1C_D, GPSL5I, GalileoE1B, gen_code, get_code_frequency, get_code_length
+using GNSSSignals: GPSL1CA, gen_code, get_code_frequency, get_code_length
 import Tracking
 using Tracking:
     BandMeasurement,
@@ -25,82 +22,17 @@ using Tracking:
     reset_loop_filters!,
     set_preferred_num_code_blocks_to_integrate!,
     track!
-import TrackingLoops
 using TrackingLoops:
-    BitBuffer,
-    CN0UpdateContext,
     CorrelatorNoiseEstimator,
     MomentsCN0Estimator,
     NWPRCN0Estimator,
     NoiseRefCN0Estimator,
     estimate_cn0,
     get_noise_density,
-    has_bit_or_secondary_code_been_found,
-    update
+    has_bit_or_secondary_code_been_found
 
 _db(x) = ustrip(uconvert(dBHz, x))
 _median(xs) = (v = sort(collect(xs)); v[div(length(v) + 1, 2)])
-
-# Float64, as in `cn0_estimators/noise_ref.jl`.
-const T = 1.0ms
-const N₀ = uconvert(Hz^-1, T)              # `E|P|² = N₀/T`, so a unit-noise prompt
-
-# `λ = (C/N₀)·T` per record, CN(0,1) noise, perfect phase — the same model
-# `test/cn0_estimator_comparison.jl` uses.
-_prompts(λ, n, rng) = sqrt(λ) .+ (randn(rng, n) .+ im .* randn(rng, n)) ./ sqrt(2)
-
-@testset "the signals NWPR cannot serve at all (issue #217)" begin
-    # Three configurations where NWPR never gets a window and reports its
-    # fallback (see the table in `NWPRCN0Estimator`); the noise reference has no
-    # window, so they are ordinary records to it.
-    bit_buffer = BitBuffer{UInt64}()
-    cases = (
-        # (signal, blocks per bit, this record's offset in the bit)
-        ("GPS L1C-D, synced", GPSL1C_D(), 1, 0),
-        ("Galileo E1B, synced", GalileoE1B(), 1, 0),
-        ("GPS L5I, pre-sync", GPSL5I(), 10, -1),
-    )
-    for (name, signal, blocks_per_bit, block_index) in cases
-        @testset "$name" begin
-            context =
-                CN0UpdateContext(signal, 1, blocks_per_bit, block_index, bit_buffer, N₀, T)
-            rng = Xoshiro(20260806)
-            λ = 10^3.0 * 1e-3                          # a true 30 dB-Hz
-            prompts = _prompts(λ, 400, rng)
-
-            nwpr =
-                foldl((e, p) -> update(e, p, context), prompts; init = NWPRCN0Estimator())
-            reference = foldl(
-                (e, p) -> update(e, p, context),
-                prompts;
-                init = NoiseRefCN0Estimator(; num_records = 400),
-            )
-
-            # NWPR buffered nothing at all and is reporting its fallback.
-            @test Base.length(nwpr) == 0
-            @test estimate_cn0(nwpr, T) ==
-                  estimate_cn0(TrackingLoops.get_fallback_cn0_estimator(nwpr), T)
-            # The noise reference: inside 1 dB of the truth.
-            @test _db(estimate_cn0(reference, T)) ≈ 30 atol = 1.0
-
-            # ... and on **pure noise**, the moment-ratio floor of #217.
-            noise = _prompts(0.0, 400, rng)
-            nwpr_noise =
-                foldl((e, p) -> update(e, p, context), noise; init = NWPRCN0Estimator())
-            reference_noise = foldl(
-                (e, p) -> update(e, p, context),
-                noise;
-                init = NoiseRefCN0Estimator(; num_records = 400),
-            )
-            # A single realisation, so the bound is loose — the documented
-            # ≈27.6 dB-Hz is a median over seeds. The gap is the claim.
-            @test _db(estimate_cn0(nwpr_noise, T)) > 18
-            @test _db(estimate_cn0(reference_noise, T)) < 15
-            @test _db(estimate_cn0(nwpr_noise, T)) - _db(estimate_cn0(reference_noise, T)) >
-                  5
-        end
-    end
-end
 
 # One satellite through `track!`, data-modulated like a real L1 C/A signal.
 # `blocks > 1` lengthens the coherent record once bit sync is in, which is the

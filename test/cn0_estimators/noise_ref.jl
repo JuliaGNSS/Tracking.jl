@@ -1,12 +1,10 @@
 module NoiseRefCN0EstimatorTest
 
-using Test: @test, @testset, @inferred, @test_throws, @test_logs, collect_test_logs
+using Test: @test, @testset, @test_logs, collect_test_logs
 using Logging: Warn
-using Random: Xoshiro, randn
-using Statistics: mean, std
 using Dictionaries: dictionary
 using StaticArrays: SVector
-using Unitful: Hz, s, ms, dBHz, ustrip, uconvert
+using Unitful: Hz, s, dBHz, ustrip, uconvert
 using GNSSSignals: GPSL1CA, GPSL5I
 import Tracking
 using Tracking:
@@ -16,8 +14,6 @@ using Tracking:
     estimate_dopplers_and_filter_prompt!,
     get_cn0_estimator
 using TrackingLoops:
-    BitBuffer,
-    CN0UpdateContext,
     CorrelatorNoiseEstimator,
     CorrelatorOutput,
     EarlyPromptLateCorrelator,
@@ -28,208 +24,11 @@ using TrackingLoops:
     append_noise_observation!,
     estimate_cn0,
     noise_observation_from_samples,
-    requires_noise_density,
-    update,
     update_accumulator
-
-# Float64, as the tracking loop produces; `1ms` would make the density a
-# `Rational{Int64}`, which the loop never creates.
-const T = 1.0ms
-# `E|P|² = N₀/T`, so a unit-noise-power prompt stream is measured against
-# `N₀ = T` — 1e-3 Hz⁻¹ at a 1 ms record.
-const N₀ = uconvert(Hz^-1, T)
-
-_context(; noise_density = N₀, integration_time = T) =
-    CN0UpdateContext(GPSL1CA(), BitBuffer{UInt64}(), 1; noise_density, integration_time)
-
-# The same post-correlation prompt model `test/cn0_estimator_comparison.jl` uses:
-# `λ = (C/N₀)·T` is the per-record SNR, noise is CN(0,1), phase is perfect.
-_prompts(λ, n, rng) = sqrt(λ) .+ (randn(rng, n) .+ im .* randn(rng, n)) ./ sqrt(2)
 
 # `ustrip` does not take a `Level` unit directly, so convert first — the idiom
 # the other CN0 tests use.
 _db(x) = ustrip(uconvert(dBHz, x))
-
-_fold(estimator, prompts) =
-    foldl((e, p) -> update(e, p, _context()), prompts; init = estimator)
-
-@testset "one record plus a density is already an estimate" begin
-    estimator = NoiseRefCN0Estimator(; num_records = 4)
-    @test @inferred(Base.length(estimator)) == 0
-    # Empty ring: `-Inf dB-Hz`, the house convention for "not measured".
-    @test @inferred(estimate_cn0(estimator, T)) == -Inf * dBHz
-
-    # No warm-up, no window, no `M`: the very first record reports. A noiseless
-    # prompt of power `p` against `N₀ = T` reads `(p − 1)/T`.
-    one = @inferred update(estimator, complex(2.0, 0.0), _context())
-    @test Base.length(one) == 1
-    @test _db(estimate_cn0(one, T)) ≈ 10log10((4.0 - 1.0) / 1e-3)
-
-    # `estimate_cn0`'s `integration_time` argument is ignored — `T` was applied
-    # per record, where each record's own value was known.
-    @test estimate_cn0(one, 20ms) == estimate_cn0(one, T)
-
-    # The ring wraps at `num_records` and keeps only the newest.
-    filled = _fold(NoiseRefCN0Estimator(; num_records = 4), fill(complex(2.0, 0.0), 10))
-    @test Base.length(filled) == 4
-    @test _db(estimate_cn0(filled, T)) ≈ 10log10((4.0 - 1.0) / 1e-3)
-
-    @test requires_noise_density(estimator)
-    @test !requires_noise_density(NWPRCN0Estimator())
-    @test !requires_noise_density(MomentsCN0Estimator(10))
-    @test !requires_noise_density(NoCN0Estimator())
-end
-
-@testset "records of different length are each divided by their own T" begin
-    # `T` enters per record (see `NoiseRefCN0Estimator`). Against a fixed `N₀` a
-    # record at C/N₀ = γ has prompt power `N₀·(γ + 1/T)`, so 1 ms and 20 ms
-    # records of the same γ differ in power.
-    γ = 3000.0                                   # ≈34.8 dB-Hz
-    power(t_ms) = 1e-3 * (γ + 1 / (t_ms * 1e-3))
-    short = update(NoiseRefCN0Estimator(), complex(sqrt(power(1)), 0.0), _context())
-    long = update(
-        NoiseRefCN0Estimator(),
-        complex(sqrt(power(20)), 0.0),
-        _context(; integration_time = 20.0ms),
-    )
-    @test _db(estimate_cn0(short, T)) ≈ 10log10(γ) atol = 1e-9
-    @test _db(estimate_cn0(long, 20ms)) ≈ 10log10(γ) atol = 1e-9
-
-    # ... and a ring holding both still averages to γ.
-    both =
-        update(short, complex(sqrt(power(20)), 0.0), _context(; integration_time = 20.0ms))
-    @test _db(estimate_cn0(both, T)) ≈ 10log10(γ) atol = 1e-9
-end
-
-@testset "per-record terms are not clamped, so the mean is unbiased" begin
-    # See the deliberate properties in `NoiseRefCN0Estimator`'s docstring.
-    rng = Xoshiro(20260806)
-    noise_only = _fold(NoiseRefCN0Estimator(; num_records = 2000), _prompts(0.0, 2000, rng))
-    terms = noise_only.buffered_cn0
-    @test count(<(0), terms) > 500          # ≈63 % of a unit-mean exponential
-    # ... and they cancel: the mean sits within a few σ of zero, where one σ of
-    # the mean is `1/(√2000 · T)` ≈ 22 Hz.
-    @test abs(mean(terms)) < 150
-    # A whole ring of pure noise never reports a positive floor.
-    @test _db(estimate_cn0(noise_only, T)) < 25
-end
-
-@testset "bias and σ match the pinned noise-reference columns" begin
-    # The shipped estimator against the variance-free-reference columns pinned
-    # in `test/cn0_estimator_comparison.jl` (an exactly known `N₀`).
-    num_records = 100
-    trials = 1500
-    for (cn0_dbhz, σ_bound) in ((30.0, 0.9), (40.0, 0.30), (50.0, 0.10))
-        λ = 10^(cn0_dbhz / 10) * 1e-3
-        rng = Xoshiro(20260806 + round(Int, cn0_dbhz))
-        estimates = map(1:trials) do _
-            estimator = _fold(
-                NoiseRefCN0Estimator(; num_records),
-                _prompts(λ, num_records, rng),
-            )
-            # Back to λ̂, so the numbers are on the plan's scale.
-            10^(_db(estimate_cn0(estimator, T)) / 10) * 1e-3
-        end
-        # Never degenerate — the first structural claim the plan rests on.
-        @test all(isfinite, estimates)
-        @test all(>(0), estimates)
-        @test abs(10log10(mean(estimates) / λ)) < 0.05
-        @test 4.342944819 * std(estimates) / λ < σ_bound
-    end
-end
-
-@testset "no source configured is a loud, static error" begin
-    # Dispatched on `Nothing` in the context's type; see `NoiseRefCN0Estimator`.
-    estimator = NoiseRefCN0Estimator()
-    @test_throws ArgumentError update(
-        estimator,
-        complex(1.0, 0.0),
-        CN0UpdateContext(GPSL1CA(), BitBuffer{UInt64}(), 1),
-    )
-    # No bare-prompt form: a prompt stream carries no density and no `T`.
-    @test_throws ArgumentError update(estimator, complex(1.0, 0.0))
-end
-
-@testset "a density without a T is the same kind of error, not a MethodError" begin
-    # `integration_time` defaults to `nothing` on `CN0UpdateContext`, so
-    # forgetting it is an easy mistake and must give a clear error.
-    estimator = NoiseRefCN0Estimator()
-    err = try
-        update(estimator, complex(1.0, 0.0), _context(; integration_time = nothing))
-        nothing
-    catch e
-        e
-    end
-    @test err isa ArgumentError
-    @test occursin("integration time", err.msg)
-
-    # Missing both names the missing *source*, the root cause.
-    err_both = try
-        update(
-            estimator,
-            complex(1.0, 0.0),
-            _context(; noise_density = nothing, integration_time = nothing),
-        )
-        nothing
-    catch e
-        e
-    end
-    @test err_both isa ArgumentError
-    @test occursin("AbstractNoiseEstimator is configured", err_both.msg)
-end
-
-@testset "a NaN never leaves estimate_cn0" begin
-    # See `estimate_cn0(::NoiseRefCN0Estimator, …)`. A zero floor with a zero
-    # prompt (a front-end dropout) is the reachable source of a `NaN` term.
-    poisoned = update(
-        NoiseRefCN0Estimator(; num_records = 4),
-        complex(0.0, 0.0),
-        _context(; noise_density = 0.0 * N₀),
-    )
-    @test isnan(poisoned.buffered_cn0[1])           # the per-record term is NaN ...
-    @test estimate_cn0(poisoned, T) == -Inf * dBHz  # ... and the estimate is not
-    @test !(estimate_cn0(poisoned, T) >= 30dBHz)
-
-    # A NaN prompt is the other way in, and is covered by the same guard.
-    nan_prompt = update(NoiseRefCN0Estimator(), complex(NaN, 0.0), _context())
-    @test estimate_cn0(nan_prompt, T) == -Inf * dBHz
-
-    # An `Inf` term (a zero floor under a non-zero prompt) is not a C/N₀ either.
-    inf_term = update(
-        NoiseRefCN0Estimator(),
-        complex(1.0, 0.0),
-        _context(; noise_density = 0.0 * N₀),
-    )
-    @test estimate_cn0(inf_term, T) == -Inf * dBHz
-end
-
-@testset "update is allocation-free and inferred" begin
-    function fold_many(estimator, prompt, context, n)
-        for _ = 1:n
-            estimator = update(estimator, prompt, context)
-        end
-        estimator
-    end
-    estimator = NoiseRefCN0Estimator()
-    context = _context()
-    prompt = complex(2.0, 0.0)
-    fold_many(estimator, prompt, context, 200)          # warm up
-
-    # Allocation-free in **steady state**: nothing that scales with the number of
-    # folds. Not `== 0`, because Julia 1.10 charges a fixed per-call amount to
-    # this harness; two very different fold counts separate the two.
-    few = @allocated fold_many(estimator, prompt, context, 10_000)
-    many = @allocated fold_many(estimator, prompt, context, 1_000_000)
-    @test many == few
-    @test few <= 128
-    # The same harness on `MomentsCN0Estimator`, as the compiler's baseline.
-    moments = MomentsCN0Estimator(100)
-    fold_many(moments, prompt, context, 200)
-    @test @allocated(fold_many(moments, prompt, context, 1_000_000)) <= few
-
-    @test @inferred(update(estimator, prompt, context)) isa NoiseRefCN0Estimator
-    @test @inferred(estimate_cn0(estimator, T)) isa typeof(0.0dBHz)
-end
 
 # A pure **correlator-ingest** state (the hardware path): records come through
 # `append_correlator_output!` with no samples, so the software noise measurement

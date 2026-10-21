@@ -19,10 +19,11 @@ a signal fails the test suite rather than user code.
   [GNSSDecoder.jl](https://github.com/JuliaGNSS/GNSSDecoder.jl)'s job, and a
   satellite can be ranged on without it.
 
-**Evidence level.** Every row is verified in this repository's test suite
-against clean synthetic GNSSSignals replicas: `test/<constellation>_<signal>.jl`
-pins defaults and sync behaviour, and `test/signal_coverage.jl` runs each signal
-through [`track`](@ref). Simulated-FPGA, hardware-replay and live-RF validation
+**Evidence level.** Every row is verified against clean synthetic GNSSSignals
+replicas: TrackingLoops'
+[`test/signals.jl`](https://github.com/JuliaGNSS/TrackingLoops.jl/blob/main/test/signals.jl)
+pins defaults and sync behaviour, and `test/signal_coverage.jl` here runs each
+signal through [`track`](@ref). Simulated-FPGA, hardware-replay and live-RF validation
 are tracked in
 [GNSSReceiver.jl#130](https://github.com/JuliaGNSS/GNSSReceiver.jl/issues/130).
 

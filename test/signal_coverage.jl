@@ -18,7 +18,6 @@ using GNSSSignals:
     get_code_length,
     get_data_frequency,
     get_modulation,
-    get_secondary_code_length,
     get_signal_name
 import Tracking
 using Tracking:
@@ -32,14 +31,11 @@ using Tracking:
     track
 import TrackingLoops
 using TrackingLoops:
-    AbstractCorrelator,
     NumAnts,
     default_narrow_carrier_loop_filter_bandwidth,
     effective_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
     default_num_code_blocks_to_integrate,
-    detect_bit_or_secondary_code_sync,
-    get_code_block_buffer_type,
     get_default_correlator,
     max_num_code_blocks_to_integrate
 
@@ -98,18 +94,9 @@ const END_TO_END = [
     end
 end
 
+# The correlator, the sync-search buffer and the detectors are checked per
+# signal in TrackingLoops (`test/signals.jl` there).
 @testset "Per-signal API — $(get_signal_name(signal))" for signal in SUPPORTED
-    for num_ants in (1, 3)
-        correlator = @inferred get_default_correlator(signal, NumAnts(num_ants))
-        @test correlator isa AbstractCorrelator
-        @test TrackingLoops.get_num_ants(correlator) == num_ants
-    end
-
-    # Wide enough for one secondary-code period, the hard sweep's horizon.
-    B = @inferred get_code_block_buffer_type(signal)
-    @test B <: Unsigned
-    @test sizeof(B) * 8 >= get_secondary_code_length(signal)
-
     # The default must divide the ceiling, or it is clamped to one (#128).
     default_blocks = @inferred default_num_code_blocks_to_integrate(signal)
     max_blocks = @inferred max_num_code_blocks_to_integrate(signal)
@@ -132,17 +119,11 @@ end
           TrackingLoops.MAX_CARRIER_LOOP_BANDWIDTH_TIME_PRODUCT + 1e-12
     @test 0.0Hz < code_bandwidth < 100.0Hz
     @test get_code_frequency(signal) / (get_code_length(signal) * default_blocks) < 2000.0Hz
-
-    # Signals without a method use the soft CFAR path, run end to end below.
-    if hasmethod(detect_bit_or_secondary_code_sync, Tuple{typeof(signal),Int,B,Int})
-        @test detect_bit_or_secondary_code_sync(signal, 6, zero(B), 0) isa
-              TrackingLoops.SyncResult
-    end
 end
 
 # A smoke test of the whole chain over four default integrations (so E5a-QP
 # completes a 31-block cycle), stopping before sync wherever there is something to
-# sync on; sync is tested per signal in `test/<constellation>_<signal>.jl`.
+# sync on; sync is tested per signal in TrackingLoops' `test/signals.jl`.
 @testset "Runs a clean signal through track — $(get_signal_name(signal))" for signal in
                                                                               END_TO_END
     # Defined everywhere, the first B2b-I PRN, and a BeiDou MEO/IGSO satellite

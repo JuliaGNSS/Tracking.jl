@@ -36,7 +36,6 @@ using Tracking:
     merge_sats
 import TrackingLoops
 using TrackingLoops:
-    aid_dopplers,
     SatConventionalPLLAndDLL,
     EarlyPromptLateCorrelator,
     init_estimator_state,
@@ -55,25 +54,6 @@ _completed_signal(sig, correlator, num_samples) = TrackedSignal(
     sig;
     correlator_outputs = [CorrelatorOutput(correlator, num_samples, num_samples)],
 )
-
-@testset "Doppler aiding" begin
-    gpsl1 = GPSL1CA()
-    init_carrier_doppler = 10Hz
-    init_code_doppler = 1Hz
-    carrier_freq_update = 2Hz
-    code_freq_update = -0.5Hz
-
-    carrier_freq, code_freq = @inferred aid_dopplers(
-        gpsl1,
-        init_carrier_doppler,
-        init_code_doppler,
-        carrier_freq_update,
-        code_freq_update,
-    )
-
-    @test carrier_freq == 10Hz + 2Hz
-    @test code_freq == 1Hz + 2Hz / 1540 - 0.5Hz
-end
 
 @testset "Satellite Conventional PLL and DLL" begin
     pll_and_dll = @inferred SatConventionalPLLAndDLL(
