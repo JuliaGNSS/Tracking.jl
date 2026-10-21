@@ -35,15 +35,10 @@ using Tracking:
     track
 import TrackingLoops
 using TrackingLoops:
-    EarlyPromptLateCorrelator,
-    NumAnts,
     default_narrow_carrier_loop_filter_bandwidth,
     effective_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
-    detect_bit_or_secondary_code_sync,
     estimate_cn0,
-    get_code_block_buffer_type,
-    get_default_correlator,
     default_num_code_blocks_to_integrate,
     max_num_code_blocks_to_integrate,
     has_bit_or_secondary_code_been_found
@@ -69,27 +64,6 @@ const BLOCKS_PER_CYCLE = 31
         ) ≈ upreferred(2ms)
         @test get_band_id(e5a_qp) === :L5
         @test get_band_id(GalileoE5aI()) === :L5
-    end
-
-    @testset "Correlator, sync and search-buffer defaults" begin
-        for n in (1, 3)
-            @test @inferred(get_default_correlator(e5a_qp, NumAnts(n))) ==
-                  EarlyPromptLateCorrelator(; num_ants = NumAnts(n))
-        end
-
-        # Nothing to find: sync is immediate, which unlocks the multi-block
-        # integration.
-        for (bits, n) in ((UInt8(0x0), 0), (UInt8(0x1), 1), (UInt8(0xff), 97))
-            res = @inferred detect_bit_or_secondary_code_sync(e5a_qp, prn, bits, n)
-            @test res.found == true
-            @test res.phase == 0
-            @test res.polarity == +1
-        end
-
-        @test TrackingLoops.uses_soft_bit_edge_detection(e5a_qp) == false
-        @test TrackingLoops.uses_soft_secondary_code_detection(e5a_qp) == false
-
-        @test @inferred(get_code_block_buffer_type(e5a_qp)) === UInt8
     end
 
     @testset "Short-period integration policy" begin

@@ -126,7 +126,7 @@ end
     # integration delivers, so both block counts must report the same C/N₀.
     # Pinned to `MomentsCN0Estimator`, which takes one `T` at `estimate_cn0`
     # time; `NoiseRefCN0Estimator` applies `T` per record (tested in
-    # `cn0_estimators/noise_ref.jl`).
+    # TrackingLoops).
     function cn0_at(num_blocks, prompts)
         tsig = Tracking.TrackedSignal(gpsl1; cn0_estimator = MomentsCN0Estimator(100))
         estimator = get_cn0_estimator(tsig)
