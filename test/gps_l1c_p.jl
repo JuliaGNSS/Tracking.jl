@@ -23,14 +23,9 @@ const L1C_P_MAX_ERRORS =
 @testset "GPS L1C-P" begin
     gpsl1c_p = GPSL1C_P()
 
-    # L1C-P's 1800-chip / 18 s overlay is far too long to integrate coherently
-    # per bin, so it stays on the hard-decision rotation sweep, not the soft
-    # CFAR secondary-code detector.
+    # An 18 s overlay is too long for coherent bins: the hard rotation sweep.
     @test TrackingLoops.uses_soft_secondary_code_detection(gpsl1c_p) == false
 
-    # Below the 1800-block horizon, the L1C-P detector returns `found =
-    # false` without running the sweep. Above it, the sweep runs against
-    # the per-PRN overlay.
     prn = 1
     @test @inferred(
         detect_bit_or_secondary_code_sync(gpsl1c_p, prn, TrackingLoops.UInt1800(0x0), 0)
@@ -47,27 +42,20 @@ const L1C_P_MAX_ERRORS =
         )
     ).found == false
 
-    # TMBOC(6,1,4/33): the default is the VeryEarlyPromptLate correlator, whose
-    # very-early/very-late taps feed the VEML discriminator that mitigates the
-    # BOC side-peak false locks — same as the Galileo E1 signals.
+    # TMBOC: VEML against BOC side-peak locks.
     @test @inferred(get_default_correlator(gpsl1c_p, NumAnts(1))) ==
           VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(1))
     @test @inferred(get_default_correlator(gpsl1c_p, NumAnts(3))) ==
           VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
-    # The flat 18 Hz carrier default, and a 10 ms period short enough to leave
-    # the DLL at its unclamped 1 Hz reference.
+    # 10 ms leaves the 1 Hz DLL unclamped.
     @test @inferred(default_narrow_carrier_loop_filter_bandwidth(gpsl1c_p)) == 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(gpsl1c_p)) ≈ 1.0Hz
 
-    # 1800-chip per-PRN overlay → exact-width UInt1800.
     @test @inferred(get_code_block_buffer_type(gpsl1c_p)) === TrackingLoops.UInt1800
 
     @testset "Overlay search — clean lock at known phase / polarity" begin
-        # Build PRN 1's newest-first overlay reference, then rotate it *left*
-        # by `r` to emulate a prompt buffer whose upcoming integration is
-        # overlay chip `r`. The rotation search recovers `phase == r` (the
-        # upcoming chip) at positive polarity (distance 0 ≤ max_errors).
+        # A buffer whose upcoming integration is overlay chip `r`.
         reference =
             TrackingLoops._packed_secondary_code(TrackingLoops.UInt1800, gpsl1c_p, prn)
         rotl(x, r) = r == 0 ? x : ((x << r) | (x >> (1800 - r)))
@@ -79,10 +67,7 @@ const L1C_P_MAX_ERRORS =
             @test res.polarity == +1
         end
 
-        # Negative polarity = bitwise NOT of the reference within the
-        # 1800-bit window. The exact-width UInt1800 makes `~` equivalent
-        # to XOR with all-ones; build that explicitly. No rotation, so the
-        # recovered upcoming chip is 0.
+        # Negative polarity: the complement within the 1800-bit window.
         all_ones =
             (TrackingLoops.UInt1800(1) << 1799) |
             ((TrackingLoops.UInt1800(1) << 1799) - one(TrackingLoops.UInt1800))
@@ -98,7 +83,6 @@ const L1C_P_MAX_ERRORS =
             TrackingLoops._packed_secondary_code(TrackingLoops.UInt1800, gpsl1c_p, prn)
         rng = MersenneTwister(42)
 
-        # Up to `L1C_P_MAX_ERRORS` bit-flips: still locks.
         for n_errors in (0, 1, 10, L1C_P_MAX_ERRORS)
             corrupted = overlay
             indices = randperm(rng, 1800)[1:n_errors]
@@ -110,17 +94,14 @@ const L1C_P_MAX_ERRORS =
             @test res.phase == 0
         end
 
-        # One extra error — must reject.
+        # One error more rejects.
         n_errors = L1C_P_MAX_ERRORS + 1
         corrupted = overlay
         indices = randperm(rng, 1800)[1:n_errors]
         for idx in indices
             corrupted ⊻= TrackingLoops.UInt1800(1) << (idx - 1)
         end
-        # Note: with random flips it's *possible* (very small probability)
-        # for the corrupted buffer to coincide with the overlay rotated
-        # by some other phase within tolerance. With this fixed seed we
-        # verified that doesn't happen for PRN 1.
+        # Random flips could match another rotation; this seed does not.
         res = detect_bit_or_secondary_code_sync(
             gpsl1c_p,
             prn,

@@ -1,29 +1,24 @@
-# Fused downconvert + correlate SIMD kernel.
-# Generates the carrier on-the-fly, downconverts, and accumulates against the
-# code replica in a single pass — keeping downconverted samples in registers
-# instead of writing them to an intermediate buffer.
+# Fused downconvert + correlate SIMD kernels.
 
 using Base.Cartesian: @nexprs
 
 # Horizontal sum: reduce SIMD vector lanes to a scalar.
 @inline _hsum(v::SIMD.Vec) = sum(Tuple(v))
 
-# Build SIMD offset vector for unroll index u (1-based).
-# Uses @generated to produce a literal tuple, avoiding ntuple heap allocation on AVX-512.
+# SIMD offset vector for unroll index u (1-based). @generated, as `ntuple`
+# heap-allocates on AVX-512.
 @inline @generated function _make_offset(::Type{T}, ::Val{W}, ::Val{U}) where {T,W,U}
     elems = [:(T($(k - 1 + (U - 1) * W))) for k = 1:W]
     :(SIMD.Vec{$W,T}(($(elems...),)))
 end
 
-# Stack-friendly mutable copy / immutable conversion for accumulators.
-# SVector → MVector (stack-allocated), Vector → copy (heap).
+# Mutable copy / immutable conversion for accumulators.
 @inline _mutable_copy(v::SVector) = MVector(v)
 @inline _mutable_copy(v::Vector) = copy(v)
 @inline _to_immutable(v::MVector) = SVector(v)
 @inline _to_immutable(v::Vector) = v
 
-# Add a single antenna's correlation result to accumulator element.
-# M==1: scalar complex; M>1: SVector with one antenna updated.
+# Add antenna `j`'s correlation result to an accumulator element.
 @inline _add_antenna(acc::Complex, prev::Complex, j::Int, val::ComplexF64) = prev + val
 @inline function _add_antenna(
     acc::SVector{M},
@@ -60,31 +55,16 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
     num_samples::Integer,
 ) where {M,ST,NC}
     W = _simd_width(Float32)  # Compute at generation time, embed as literal
-    # Block-accumulation period: flush the Float32 lane accumulators into the
-    # Float64 running totals every FLUSH_EVERY main-loop iterations. Each main
-    # iteration adds 4 terms per lane (the 4× unroll), so a lane accumulates
-    # 4·FLUSH_EVERY = 128 Float32 terms before being flushed — small enough that
-    # the Float32 partial sum stays accurate (width-difference stays ~1e-8,
-    # far below the ~1e-7 floor that matters for tracking), large enough that
-    # the Float64 flush (amortised over 4·FLUSH_EVERY·W samples) is negligible.
+    # Flush the Float32 lane accumulators into Float64 every FLUSH_EVERY main-loop
+    # iterations, i.e. every 4·FLUSH_EVERY = 128 terms per lane (see below).
     FLUSH_EVERY = 32
     # ── Accumulators ──
-    # The correlator sum is the sum of ~10^5-10^6 per-sample products. Summing
-    # those in Float32 loses precision that *scales with the SIMD width*: each
-    # of the W lanes accumulates a different strided subset of the terms, and
-    # the per-lane Float32 rounding grows with the partial-sum magnitude, so the
-    # final hsum — and the closed tracking loop downstream — depended on the
-    # host's vector width (AVX2 width-8 vs AVX-512 width-16, a >100 Hz Doppler
-    # swing; issue #152).
-    #
-    # Fix: two-level (blocked) accumulation. The hot loop keeps the fast
-    # full-width Float32 FMA into per-lane block accumulators `f_re/f_im`; every
-    # FLUSH_EVERY iterations those are widened and added into Float64 running
-    # totals `acc_re/acc_im` and reset to zero. Bounding the Float32 partial sum
-    # this way makes the result width-independent to ~1e-9 (vs ~4e-6 unblocked)
-    # while keeping Float32 throughput — the product is exact for the ±1 code
-    # replica, and only the cheap flush runs in Float64. `s_re/s_im` hold the
-    # scalar-remainder tail in Float64.
+    # A plain Float32 sum of ~10^5-10^6 products depends on the SIMD width (each
+    # lane sums a different strided subset), which swung the closed loop's Doppler
+    # by >100 Hz between AVX2 and AVX-512 (#152). So the hot loop FMAs in Float32
+    # into per-lane blocks `f_re/f_im`, flushed into Float64 totals `acc_re/acc_im`:
+    # width-independent to ~1e-9 (vs ~4e-6) at Float32 throughput. `s_re/s_im` hold
+    # the scalar-remainder tail in Float64.
     acc_init = Expr(:block)
     for j = 1:M, k = 1:NC
         push!(acc_init.args, :($(Symbol("acc_re_$(j)_$(k)")) = z64))
@@ -291,10 +271,8 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
         off_3 = _make_offset(T, Val{W}(), Val{3}())
         off_4 = _make_offset(T, Val{W}(), Val{4}())
 
-        # Phase via muladd: p_u = base_phase + init_u where
-        #   base_phase = 2π·freq_ratio·(i - start_sample)  (scalar, broadcast)
-        #   init_u     = 2π·(off_u·freq_ratio + phase0)    (precomputed per-vector)
-        # One muladd per vector, no drift, no per-iteration multiply chain.
+        # Phase p_u = 2π·freq_ratio·(i - start_sample) + init_u, with
+        # init_u = 2π·(off_u·freq_ratio + phase0): one muladd per vector, no drift.
         two_pi_fr = SIMD.Vec{W,T}(two_pi * freq_ratio)
         init_1 = two_pi * (off_1 * freq_ratio + phase0)
         init_2 = two_pi * (off_2 * freq_ratio + phase0)
@@ -348,12 +326,9 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
 end
 
 # ── Shared downconvert-into-tile phase ────────────────────────────────
-# Generates the carrier on-the-fly and downconverts `signal` into the SoA
-# tile (one `num_samples`-long slice per antenna):
-# `tile_re/tile_im[(j-1)*num_samples + idx]`. Shared by the dynamic-shifts
-# fused kernel and the tuple tile-share kernel below so the two phase-1
-# loops cannot drift (issue #133). `@generated` so the M antenna slices
-# unroll via `@nexprs`, exactly as both kernels did before.
+# Downconverts `signal` into the SoA tile, one `num_samples` slice per antenna
+# (`tile_re/tile_im[(j-1)*num_samples + idx]`). Shared by the dynamic-shifts and the
+# tuple tile-share kernels so they cannot drift (#133).
 @generated function _downconvert_into_tile!(
     tile_re,
     tile_im,
@@ -425,16 +400,9 @@ end
 end
 
 # ── Overload for dynamic-length sample_shifts (AbstractVector) ────────
-# Fired when the caller passes a runtime-sized `AbstractVector` of
-# shifts; the common EPL/VEPL correlators use `SVector{NC}` and
-# dispatch to the `@generated` overload above (which has no tile
-# buffers). This overload requires the caller to supply SoA tile
-# buffers (`tile_re`, `tile_im`) of length `num_samples * M` and
-# element type `Float32` — typically pulled from a long-lived per-
-# thread scratch pool so the kernel itself stays allocation-free. Any
-# `AbstractVector{Float32}` compatible with `pointer()` and `vstore`
-# works (`Vector{Float32}` for direct callers, `ScratchView{Float32}`
-# for the threaded `track!` hot path).
+# The EPL/VEPL correlators' `SVector` shifts use the overload above. This one takes
+# caller-supplied Float32 SoA tiles of length `num_samples * M` (any
+# `AbstractVector{Float32}` with `pointer`, e.g. a `ScratchView`).
 function downconvert_and_correlate_fused!(
     correlator::AbstractCorrelator{M},
     signal::AbstractArray{Complex{ST}},
@@ -453,7 +421,6 @@ function downconvert_and_correlate_fused!(
     min_shift = minimum(sample_shifts)
     CHUNK = 512  # block-accumulation length; see issue #152
 
-    # Downconvert each antenna into its tile slice
     _downconvert_into_tile!(
         tile_re,
         tile_im,
@@ -466,18 +433,14 @@ function downconvert_and_correlate_fused!(
         num_samples,
     )
 
-    # Correlate: tap-outer, antenna-inner with @simd. The code replica is
-    # written at absolute index `start_sample` by `gen_code_replica!`, so
-    # reads must be offset by `start_sample - 1` (like the in-register and
-    # tuple tile-share kernels).
+    # Correlate: tap-outer, antenna-inner. `gen_code_replica!` writes the replica
+    # at absolute index `start_sample`, hence the `start_sample - 1` offset.
     prev = get_accumulators(correlator)
     new_acc = _mutable_copy(prev)
     @inbounds for k = 1:num_taps
         shift_offset = start_sample - 1 + sample_shifts[k] - min_shift
         for j = 1:M
-            # Block accumulation: fast Float32 @simd inner sum over CHUNK-sample
-            # blocks, flushed into Float64 totals so the result is accurate and
-            # width-independent without paying full-Float64 throughput (#152).
+            # Float32 blocks of CHUNK samples flushed into Float64 (#152).
             acc_r = zero(Float64)
             acc_i = zero(Float64)
             ant_off = (j - 1) * num_samples
@@ -504,24 +467,10 @@ function downconvert_and_correlate_fused!(
 end
 
 # ── Tuple-of-correlators tile-share fused kernel ──────────────────────
-# For multi-signal-per-satellite tracking: one downconvert into the
-# `tile_re` / `tile_im` SoA tile (one slice per antenna), followed by M
-# antenna-outer correlate passes that accumulate into N correlators
-# (each with its own code replica and `sample_shifts`). All N correlators
-# must agree on the antenna count M.
-#
-# At N=2 this beats fused-N-times by ~37%; at N=3 by ~51% — see the
-# multi-signal-tracking design doc in docs/plans. The single-signal path
-# (N=1) is intentionally NOT routed here — it still uses the in-register
-# static-shifts kernel above, which is ~24% faster at N=1 because the
-# downconverted samples never leave registers.
-#
-# The downconvert phase mirrors the dynamic-shifts kernel above. The
-# correlate phase is `@generated`-unrolled into M sample-outer passes,
-# one per antenna; each pass keeps only N·NC accumulators live so the
-# inner loop fits in 16 ymm registers (AVX2) without spilling. At M=1
-# this collapses to a single pass (same shape as before); at M=2..4 it
-# wins 15-31% over a single fused pass over M·N·NC accumulators.
+# Multiple signals per satellite: one downconvert into the SoA tile, then M
+# antenna-outer correlate passes into N correlators (each with its own code replica
+# and `sample_shifts`, all with the same M). Beats N fused calls by ~37% at N=2 and
+# ~51% at N=3; N=1 keeps the in-register kernel above, ~24% faster there.
 @generated function downconvert_and_correlate_fused_tuple!(
     correlators::Tuple{AbstractCorrelator{M},Vararg{AbstractCorrelator{M},NM1}},
     signal::AbstractArray{Complex{ST}},
@@ -536,30 +485,17 @@ end
     tile_im,
 ) where {M,ST,NM1}
     N = NM1 + 1
-    # Per-signal NC from each SVector's `length` (a compile-time constant
-    # available on the type itself, via the StaticArray Size interface).
     NC_per_signal = Int[length(all_sample_shifts.parameters[i]) for i = 1:N]
 
-    # Block-accumulation chunk length (issue #152). The inner `@simd` reduction
-    # runs in Float32 (fast, full-width), but a plain Float32 sum over the whole
-    # ~10^5-10^6-sample integration loses precision that depends on the SIMD
-    # width. Summing each CHUNK-sample block in Float32 and flushing into a
-    # Float64 total keeps the Float32 partial sum short enough to stay accurate
-    # and width-independent (~1e-8) while preserving Float32 throughput.
+    # Float32 block length before flushing into Float64 (#152, see the kernel above).
     CHUNK = 512
 
-    # Correlate phase: emit M independent passes over `n`, one per antenna.
-    # Each pass keeps only N·NC accumulators live (vs M·N·NC for a single
-    # fused pass), which avoids register spilling on 16-ymm AVX2 targets
-    # and gives 15-31% speedups at M=2..4 (measured against the
-    # single-fused-pass variant during the multi-signal kernel work).
-    # Each antenna's tile slice is streamed exactly once (same as the
-    # single-pass shape); the code replicas are re-read M times across
-    # passes, which costs nothing since each replica fits in L1.
+    # One pass per antenna, each keeping only N·NC accumulators live: no register
+    # spilling on 16-ymm AVX2, 15-31% faster at M=2..4 than one pass over M·N·NC.
+    # The code replicas are re-read per pass, from L1.
     correlate_passes = Expr(:block)
     for j = 1:M
-        # Per-pass accumulator init: ar_j_i_k / ai_j_i_k for THIS antenna.
-        # We keep the global naming so `finalize` resolves to these locals.
+        # ar_j_i_k / ai_j_i_k for this antenna, named so `finalize` finds them.
         pass_init = Expr(:block)
         block_init = Expr(:block)
         flush_block = Expr(:block)
@@ -602,13 +538,7 @@ end
             cr = Symbol("cr_$(i)")
             for k = 1:NC_per_signal[i]
                 sh = Symbol("sh_$(i)_$(k)")
-                # `gen_code_replica!` writes its first sample at index
-                # `start_sample` (absolute), so the prompt code for the
-                # tile's sample `n` lives at `start_sample - 1 + n` (+tap
-                # shift). Indexing from `n` alone silently reads the wrong
-                # code for every integration whose `start_sample != 1`
-                # (i.e. all but the first per chunk) — see the in-register
-                # kernel above, which reads at the same absolute offset.
+                # The replica starts at absolute index `start_sample`.
                 push!(pass_body.args, :(c = Float32($cr[start_sample-1+n+$sh])))
                 push!(
                     pass_body.args,
@@ -646,8 +576,7 @@ end
         )
     end
 
-    # Build the per-tap accumulator expression: scalar Complex for M==1,
-    # SVector{M, ComplexF64} for M>1.
+    # Per-tap accumulator: Complex for M==1, SVector{M,ComplexF64} for M>1.
     function tap_accum_expr(i, k)
         if M == 1
             return quote

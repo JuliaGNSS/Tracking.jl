@@ -1,32 +1,30 @@
 # Tracking.jl
 
-This package implements the tracking functionality of GNSS satellites that's part of the larger GNSS receiver.
-Tracking.jl primarily consists of two main blocks:
+Tracking.jl tracks GNSS satellites as part of a receiver in two blocks:
 
-1. Signal down-conversion and correlation
-2. Code and carrier estimation to generate replicas and close the loop
+1. downconversion and correlation, with SIMD-optimized CPU kernels;
+2. code and carrier estimation, closing the loop (by default FLL-assisted PLL
+   and DLL).
 
-Tracking.jl provides defaults for both blocks, but it provides mechanisms to hook in your own implementation (by using multiple dispatch).
-For signal down-conversion and correlation Tracking.jl provides a highly optimized CPU implementation using hand-tuned SIMD intrinsics.
-With respect to the second block Tracking.jl provides conventional DLLs and PLLs with FLL-assisted carrier tracking as the default.
+Both can be replaced through multiple dispatch.
 
-Down-conversion and correlation is done in full code blocks meaning from code start to code end or multiples of that (e.g. in GPS L1 C/A from 0 to `N`*1023).
-The factor `N` can be specified, but will be `1` as long as the bit start is unknown — Tracking.jl uses single-code-period integrations to locate the bit edge. Once the bit start is known for every tracked satellite, longer coherent integrations become available and the result is handed over to the code-and-carrier estimation block.
+Correlation runs over whole code blocks: `N` primary code periods (e.g. `N`·1023
+chips for GPS L1 C/A), with `N = 1` until the bit edge or secondary code is
+found. Antenna-array samples are correlated with one replica, preserving their
+phase relationships. One satellite can be tracked on several signals at once
+(e.g. GPS L1 C/A, L1C-D and L1C-P), sharing the carrier downconvert, with a
+correlator per signal.
 
-Moreover, Tracking.jl allows tracking of signals from phased antenna arrays meaning that they are down-converted and correlated by the very same replica to conserve phase relationships.
-Multi-signal tracking is supported: a single satellite can be tracked on several signals at once (e.g. GPS L1 C/A together with L1C-D and L1C-P) sharing one carrier downconvert per outer iteration, with a per-signal correlator each.
-
-The per-record loop arithmetic — correlators, discriminators, the bit buffer,
-the C/N₀ estimators and the Doppler estimators — lives in
-[TrackingLoops.jl](https://github.com/JuliaGNSS/TrackingLoops.jl), so that a
-hardware correlator's loop process can run the same code without this
-package's sample-domain half. Reading results needs only Tracking.jl: it
-re-exports the TrackingLoops functions that read them — [`estimate_cn0`](@extref TrackingLoops.estimate_cn0-Tuple{MomentsCN0Estimator, Any}),
-[`get_prompt`](@extref TrackingLoops.get_prompt), `get_soft_bits`, `has_bit_or_secondary_code_been_found`
-and a few more. Load
-TrackingLoops next to it to configure a correlator, a C/N₀ or noise estimator,
-a Doppler estimator or a post-correlation filter, or for vector tracking. Its
-API is documented in the
+The per-record loop arithmetic (correlators, discriminators, bit buffer, C/N₀
+and Doppler estimators) lives in
+[TrackingLoops.jl](https://github.com/JuliaGNSS/TrackingLoops.jl), so a hardware
+correlator's loop can run the same code. Tracking.jl re-exports the functions
+that read results:
+[`estimate_cn0`](@extref TrackingLoops.estimate_cn0-Tuple{MomentsCN0Estimator, Any}),
+[`get_prompt`](@extref TrackingLoops.get_prompt), `get_soft_bits`,
+`has_bit_or_secondary_code_been_found` and a few more. Load TrackingLoops to
+configure a correlator, a C/N₀ or noise estimator, a Doppler estimator or a
+post-correlation filter, or for vector tracking; see the
 [TrackingLoops.jl manual](https://juliagnss.github.io/TrackingLoops.jl/stable/).
 
 ```julia
@@ -35,21 +33,11 @@ using Tracking, TrackingLoops, GNSSSignals
 
 ## Supported signals
 
-Tracking.jl tracks **every** concrete signal type GNSSSignals.jl defines — GPS
+Tracking.jl tracks **every** concrete signal type GNSSSignals.jl defines: GPS
 L1 C/A, L1C, L2C and L5, Galileo E1, E5a (including the E5a-QP acquisition aid),
-E5b and E6, and BeiDou B1I, B3I, B1C, B2a and B2b.
-
-The [signal support matrix](signals.md) lists each one with its coherent
-integration length, its sync feature, whether it carries navigation data, and
-the PRNs its code table defines — plus the known per-signal limitations.
-`test/signal_coverage.jl` checks that matrix against the live GNSSSignals type
-tree, so a release that adds a signal fails the test suite rather than a user's
-`get_default_correlator` call.
-
-Signals sharing a band can be tracked in one [`BandMeasurement`](@ref)
-regardless of constellation: Galileo E5b and BeiDou B2b share the 1207.14 MHz
-carrier (`E5b` for both), BeiDou B2a shares `L5` with GPS L5 and Galileo E5a,
-and BeiDou B1C shares `L1` with GPS L1 C/A, GPS L1C and Galileo E1.
+E5b and E6, and BeiDou B1I, B3I, B1C, B2a and B2b. The
+[signal support matrix](signals.md) lists each one's integration length, sync
+feature, navigation data, PRNs and known limitations.
 
 ```@contents
 Pages = [
@@ -107,22 +95,19 @@ julia> get_code_phase(track_state, 1)
 50.00064935064897
 ```
 
-`estimate_cn0(track_state, prn)` returns the CN0 estimate in dB-Hz. With a noise-free test signal it is `Inf dB-Hz`; real signals typically land in 30–50 dB-Hz.
+`estimate_cn0(track_state, prn)` returns the C/N₀ in dB-Hz: `Inf dB-Hz` for a noise-free test signal, typically 30–50 dB-Hz for real ones.
 
-Everything beyond this minimal case — multi-satellite, multi-system, multi-signal, multi-band, phased arrays, acquisition handoff, removing satellites, the accessor ladder — is covered in [Tracking State](tracking_state.md). Real-time loop patterns (hoisting the correlator, `track!`, allocation behavior) are covered in [Track](track.md).
+Multiple satellites, systems, signals and bands, antenna arrays, acquisition handoff and the accessors are covered in [Tracking State](tracking_state.md); real-time loops in [Track](track.md).
 
 !!! tip "Real-time loops: hoist the correlator"
-    For loops processing many chunks in sequence, construct
-    [`CPUThreadedDownconvertAndCorrelator`](@ref) (or
-    [`CPUDownconvertAndCorrelator`](@ref)) **once outside** the loop and
-    pass it via `downconvert_and_correlator =`. See [Track](track.md#Real-time-use).
+    Construct [`CPUThreadedDownconvertAndCorrelator`](@ref) (or
+    [`CPUDownconvertAndCorrelator`](@ref)) **once outside** the loop and pass it
+    via `downconvert_and_correlator =`. See [Track](track.md#Real-time-loops).
 
 ## Q/A
 
 - Why are the correlator values zero?
 
-The correlator output given by `get_last_fully_integrated_correlator` is the correlation result after the
-code phase has reached the full code length or multiples of the code length. If the current
-tracked signal does not include the end of the PRN sequence (or multiples of that), the
-correlator from the last complete integration will be returned. At the very start of tracking,
-before any complete integration has occurred, the correlator values will be zero.
+`get_last_fully_integrated_correlator` returns the last *completed* integration,
+one that reached the end of its code blocks. Before the first one completes it
+is zero.

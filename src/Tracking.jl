@@ -12,17 +12,12 @@ using Accessors
 using Polyester
 using Random: AbstractRNG, Xoshiro
 
-# The device-independent loop core — correlator records, discriminators, the
-# bit buffer and its per-signal sync detectors, the C/N₀ estimators and the
-# noise window, the loop-filter rules and the Doppler estimators' per-record
-# `step_loop` — lives in TrackingLoops.jl, so that a hardware correlator's loop
-# process runs the very same code without this package's sample-domain half.
-# Its API is its own: users load it next to Tracking to configure a correlator,
-# an estimator or a filter, and this package does not re-export it — except the
-# functions a user reads this package's results with, below the export list.
-# Only what the code here calls, extends or re-exports is imported, by name, so
-# that a binding TrackingLoops renames or drops fails at precompile rather than
-# on the first call that reaches it.
+# The device-independent loop core (correlator records, discriminators, bit
+# buffer and sync, C/N₀ and noise estimation, loop filters, the Doppler
+# estimators' `step_loop`) lives in TrackingLoops.jl, so a hardware correlator's
+# loop runs the same code. Users load it next to Tracking; it is not re-exported,
+# except the result readers below the export list. Imported by name so a binding
+# TrackingLoops renames or drops fails at precompile.
 import TrackingLoops
 import TrackingLoops:
     AbstractCN0Estimator,
@@ -149,10 +144,8 @@ export get_prn,
     get_intermediate_frequency,
     calc_signal_samples_to_integrate
 
-# TrackingLoops functions a user of this package reads its results with: the
-# ones this package implements for its states, satellites and signals, and the
-# accessors of the correlators it hands back. Re-exported so reading a C/N₀, a
-# prompt or the decoded bits needs no second package.
+# TrackingLoops functions that read this package's results, re-exported so
+# reading them needs no second package.
 export estimate_cn0,
     get_soft_bits,
     has_bit_or_secondary_code_been_found,
@@ -168,21 +161,14 @@ TupleLike{T<:Tuple} = Union{T,NamedTuple{<:Any,T}}
 """
 $(SIGNATURES)
 
-Abstract downconverter and correlator type. Structs for
-downconversion and correlation must have this abstract type as a
-parent.
+Supertype of the downconvert-and-correlate backends.
 
-The per-sat correlation loop, per-group body, and public
-`downconvert_and_correlate(!)` entry points are defined once on this abstract
-type (see `downconvert_and_correlate_cpu.jl`); a subtype customises behaviour by
-overriding the dispatch hooks it needs — `_despread_one_signal!` (the one
-correlation primitive, which both the per-satellite path and the noise reference
-go through), `_correlate_signals` / `_scratch_buffers` (multi-signal kernel +
-scratch), `_threading` (serial vs. Polyester `@batch`, default serial), and
-`_check_sample_type` (per-backend sample-type check, default no-op). A subtype
-that overrides none inherits the single-threaded CPU plumbing rather than getting
-a `MethodError`; one that overrides only `_despread_one_signal!` gets a working
-single-signal path, satellites and noise measurement alike.
+The `downconvert_and_correlate(!)` loops are defined once on this type (see
+`downconvert_and_correlate_cpu.jl`); a subtype implements the hooks:
+`_despread_one_signal!` (the correlation primitive, for satellites and the noise
+reference alike; alone it gives a working single-signal backend),
+`_correlate_signals` / `_scratch_buffers` (multi-signal kernel and scratch),
+`_threading` (default serial) and `_check_sample_type` (default no-op).
 """
 abstract type AbstractDownconvertAndCorrelator end
 
@@ -203,58 +189,43 @@ include("band_measurement.jl")
 include("code_replica.jl")
 include("carrier_replica.jl")
 include("downconvert.jl")
-# The software fill path of the noise reference: despreading an untracked PRN
-# through this package's own kernels (the window itself is TrackingLoops').
+# Software fill path of the noise reference: despreading an untracked PRN.
 include("noise_estimators/correlator.jl")
 include("sat_state.jl")
 
 """
 $(SIGNATURES)
 
-Main tracking state container holding satellite states for multiple GNSS
-systems and the Doppler estimator (e.g., PLL/DLL). This is the primary
-struct used for tracking operations.
+The tracking state: the satellites of every signal group and the Doppler
+estimator.
 
-`groups` is a NamedTuple of [`SignalGroup`](@ref)s. Each group bundles its
-per-group `satellites` dictionary, signal-instance tuple, band, and
-antenna count.
+`groups` is a NamedTuple of [`SignalGroup`](@ref)s.
 
-`noise_estimators` is a NamedTuple of [`AbstractNoiseEstimator`](@extref TrackingLoops.AbstractNoiseEstimator)s keyed by
-**signal** id (`GNSSSignals.get_signal_id` — `:GPSL1CA`, `:GalileoE1B`, …), the
-same NamedTuple idiom [`BandMeasurements`](@ref) uses for bands, so a lookup
-folds to a compile-time constant. Keyed by signal and not by band because the
-floor a record divides by is the *post-correlation* one, which depends on the
-despreading modulation (see [`AbstractNoiseEstimator`](@extref TrackingLoops.AbstractNoiseEstimator)). A signal gets an
-entry only where its C/N₀ estimator reads a noise density (see
-[`requires_noise_density`](@extref TrackingLoops.requires_noise_density-Tuple{Type{<:AbstractCN0Estimator}})); signals with no such estimator get none, and
-then the noise measurement costs exactly nothing. Each estimator averages **in
-place**, so `TrackState` itself is never rebuilt for a noise update.
+`noise_estimators` is a NamedTuple of
+[`AbstractNoiseEstimator`](@extref TrackingLoops.AbstractNoiseEstimator)s keyed by
+**signal** id (`GNSSSignals.get_signal_id`), since the post-correlation floor
+depends on the despreading modulation. Only signals whose C/N₀ estimator reads a
+noise density (see
+[`requires_noise_density`](@extref TrackingLoops.requires_noise_density-Tuple{Type{<:AbstractCN0Estimator}}))
+get one, so the others pay nothing. They average **in place**.
 
-`noise_descriptor` is per-call **scratch**, not state: one reusable heap cell in
-which the correlate step parks the chunk's noise descriptors so that a threaded
-backend's parallel loop can reach them through a single pointer instead of a
-by-value copy (see `_park_noise_items!`). It is shared — not copied — by every
-`TrackState` derived from this one, exactly as the per-satellite scratch vectors
-are, and nothing outside one `downconvert_and_correlate!` call reads it.
+`noise_descriptor` is per-call **scratch**: a heap cell where the correlate step
+parks the chunk's noise descriptors, so a threaded backend reaches them through
+one pointer (see `_park_noise_items!`). Shared by every derived `TrackState`.
 
-`sample_offsets` counts, per band (keyed by `get_band_id`), the samples every
-[`track!`](@ref) call before this one consumed: the origin of the current
-measurement on a sample grid that runs on across calls. The correlate phase
-indexes its records from the current measurement's start, and the estimate phase
-adds the band's offset when it hands a record to the Doppler estimator, so an
-estimator that keeps per-satellite state of its own (TrackingLoops'
-`VectorPLLAndDLL`) sees every satellite of the band on one time grid. The
-in-place mutators share it with the state they return; [`track`](@ref) and the
-non-mutating constructors ([`merge_sats`](@ref), [`add_satellite`](@ref),
-[`remove_satellite`](@ref)) give their result a copy, so tracking the result
-leaves the input's grid where it was.
+`sample_offsets` counts, per band (keyed by `get_band_id`), the samples earlier
+[`track!`](@ref) calls consumed: the origin of the current measurement on a
+sample grid that runs on across calls. The estimate phase adds it to a record's
+index, so an estimator with per-satellite state of its own (TrackingLoops'
+`VectorPLLAndDLL`) sees every satellite on one time grid. The in-place mutators
+share it; [`track`](@ref), [`merge_sats`](@ref), [`add_satellite`](@ref) and
+[`remove_satellite`](@ref) give their result a copy.
 
-A fresh `TrackState` starts every band at `0`. To carry an estimator that keeps
-state of its own over into a rebuilt `TrackState` (to track another band with
-the same `VectorPLLAndDLL`, say), pass the old state's offsets as the
-constructor's `sample_offsets` keyword. Otherwise the estimator receives records
-that lie in its past. A band the old state did not track starts on the same
-time grid at `elapsed_time * sampling_frequency` (in samples of the new band).
+A fresh `TrackState` starts every band at `0`. To carry such an estimator over
+into a rebuilt `TrackState` (e.g. to add a band), pass the old state's offsets
+as the `sample_offsets` keyword, or the estimator receives records from its
+past. A band the old state did not track starts at
+`elapsed_time * sampling_frequency` samples of the new band.
 """
 struct TrackState{G<:SignalGroups,DE<:AbstractDopplerEstimator,NE<:NoiseEstimators}
     groups::G
@@ -264,11 +235,8 @@ struct TrackState{G<:SignalGroups,DE<:AbstractDopplerEstimator,NE<:NoiseEstimato
     sample_offsets::Dict{Symbol,Int}
 end
 
-# Three-argument construction: the descriptor cell is scratch, so a freshly built
-# `TrackState` starts with an empty one and fills it on its first correlate call.
-# Every *derived* state (`TrackState(track_state; …)` and the in-place mutators)
-# threads the existing cell through instead, which is what keeps the box inside it
-# alive across `track!`'s copies and the steady state allocation-free.
+# A fresh state gets an empty descriptor cell; derived states pass theirs on,
+# which keeps the steady state allocation-free.
 TrackState(
     groups::SignalGroups,
     doppler_estimator::AbstractDopplerEstimator,
@@ -282,9 +250,7 @@ TrackState(
     _initial_sample_offsets(groups, sample_offsets),
 )
 
-# Every band of `groups` at `0`, overridden by the `sample_offsets` the caller
-# carries over (a `NamedTuple` or `AbstractDict` keyed by `get_band_id`). The
-# result is always a fresh `Dict`, so it never aliases the caller's.
+# Every band at `0`, overridden by the caller's `sample_offsets`, in a fresh `Dict`.
 function _initial_sample_offsets(groups::SignalGroups, sample_offsets)
     offsets = Dict{Symbol,Int}(get_band_id(group.band) => 0 for group in groups)
     isnothing(sample_offsets) && return offsets

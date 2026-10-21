@@ -25,30 +25,26 @@ using Tracking:
 using TrackingLoops: CorrelatorOutput
 
 @testset "smallest-code-period default resolution" begin
-    # `nothing` doppler_update_interval => smallest primary-code period across all
-    # signals in all groups. GPS L1 C/A: 1023 chips / 1.023 MHz = 1 ms.
+    # `nothing`: the shortest primary-code period of all signals.
     ts = TrackState(; signal = GPSL1CA())
     dt = Tracking._smallest_code_period(ts)
     @test uconvert(NoUnits, dt * get_code_frequency(GPSL1CA())) ≈ get_code_length(GPSL1CA())
     @test dt ≈ 1e-3 * s
 
-    # Mixed L1 C/A (1 ms) + Galileo E1B (4 ms): the smaller wins.
     ts_mixed = TrackState(; signals = (l1ca = (GPSL1CA(),), e1b = (GalileoE1B(),)))
     @test Tracking._smallest_code_period(ts_mixed) ≈ 1e-3 * s
 end
 
 @testset "chunk-grid arithmetic (`_chunk_last_sample`)" begin
-    # Boundaries lie on a shared time grid, re-anchored to the absolute chunk
-    # index so different bands stay time-aligned without cumulative drift.
+    # Boundaries are computed from the absolute chunk index, so bands stay
+    # aligned without drift.
     @test Tracking._chunk_last_sample(1e-3 * s, 0, 5e6Hz, 100_000) == 5000
     @test Tracking._chunk_last_sample(1e-3 * s, 1, 5e6Hz, 100_000) == 10_000
     @test Tracking._chunk_last_sample(1e-3 * s, 9, 5e6Hz, 100_000) == 50_000
     # A second band at a different sampling rate, same 1 ms time grid.
     @test Tracking._chunk_last_sample(1e-3 * s, 0, 13e6Hz, 200_000) == 13_000
     @test Tracking._chunk_last_sample(1e-3 * s, 4, 13e6Hz, 200_000) == 65_000
-    # Clamps to the buffer end on the final chunk.
     @test Tracking._chunk_last_sample(1e-3 * s, 20, 5e6Hz, 12_345) == 12_345
-    # `nothing` => no chunking, whole buffer at once.
     @test Tracking._chunk_last_sample(nothing, 0, 5e6Hz, 12_345) == 12_345
 end
 
@@ -87,8 +83,7 @@ end
     dc = CPUDownconvertAndCorrelator()
     measurements = (L1 = BandMeasurement(signal, fs),)
 
-    # One chunk spanning all three periods, NCO held fixed, estimator not run,
-    # so the collected outputs survive for inspection.
+    # Correlate only, so the outputs survive.
     downconvert_and_correlate!(
         dc,
         measurements,
@@ -101,8 +96,6 @@ end
     @test length(outputs) == n_periods
     @test all(o -> o isa CorrelatorOutput, outputs)
     for (i, o) in enumerate(outputs)
-        # Each integration ends on its code-period boundary; the recorded end
-        # sample index and integrated-sample count reflect that.
         @test isapprox(o.sample_index, i * period; atol = 2)
         @test isapprox(o.integrated_samples, period; atol = 2)
     end
@@ -121,9 +114,7 @@ end
 end
 
 @testset "enlarged doppler_update_interval still converges" begin
-    # A long continuous buffer with a constant true Doppler; the initial
-    # estimate is offset. Both the default (per-code-period) and a 4 ms
-    # (4-periods-per-chunk) update interval must pull the carrier Doppler in.
+    # Both the per-period default and a 4 ms interval pull the Doppler in.
     gpsl1 = GPSL1CA()
     fs = 4e6Hz
     prn = 1

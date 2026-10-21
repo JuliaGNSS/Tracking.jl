@@ -17,10 +17,7 @@ using TrackingLoops:
 rotl(x::T, r, N) where {T} =
     r == 0 ? x : ((x << r) | (x >> (N - r))) & ((one(T) << N) - one(T))
 
-# `GalileoE1C` (full CBOC) and `GalileoE1C_BOC11` (BOC(1,1) approximation)
-# share primary code, code length, code rate, CS25 secondary code, and band
-# — only the modulation differs — so all tracking-side traits behave
-# identically. Parameterise over both.
+# `GalileoE1C` (CBOC) and `GalileoE1C_BOC11` differ only in modulation.
 @testset "Galileo E1C ($(nameof(typeof(galileo_e1c))))" for galileo_e1c in (
     GalileoE1C(),
     GalileoE1C_BOC11(),
@@ -29,8 +26,7 @@ rotl(x::T, r, N) where {T} =
     N = get_secondary_code_length(galileo_e1c)  # 25 (CS25)
     @test N == 25
 
-    # E1C is the E1 pilot: no data, a 25-chip CS25 secondary code is the sync
-    # feature. Below one full period the detector returns `found = false`.
+    # The E1 pilot syncs on its CS25 secondary code.
     @test @inferred(
         detect_bit_or_secondary_code_sync(galileo_e1c, prn, UInt32(0x0), N - 1)
     ).found == false
@@ -51,21 +47,16 @@ rotl(x::T, r, N) where {T} =
         @test res.polarity == -1
     end
 
-    # E1C shares the E1 modulation family with E1B → VeryEarlyPromptLate default.
     @test @inferred(get_default_correlator(galileo_e1c, NumAnts(1))) ==
           VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(1))
     @test @inferred(get_default_correlator(galileo_e1c, NumAnts(3))) ==
           VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
-    # Same as E1B: the flat 18 Hz carrier default and the unclamped 1 Hz DLL
-    # reference.
     @test @inferred(default_narrow_carrier_loop_filter_bandwidth(galileo_e1c)) == 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(galileo_e1c)) ≈ 1.0Hz
 
-    # 25-block CS25 window fits in a UInt32.
     @test @inferred(get_code_block_buffer_type(galileo_e1c)) === UInt32
 
-    # CS25 (25 chips) is short enough for the soft, CFAR secondary-code detector.
     @test TrackingLoops.uses_soft_secondary_code_detection(galileo_e1c) == true
 end
 

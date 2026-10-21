@@ -1,120 +1,62 @@
-# Integer (`Complex{Int16}`) hybrid-blocked downconvert + correlate backend.
+# Integer (`Complex{Int16}`, 12-bit ADC) hybrid-blocked downconvert + correlate backend,
+# the integer counterpart of the Float32 fused path. The integration is strip-mined into
+# `blk`-sample blocks whose code and carrier are regenerated into L1-resident scratch
+# (docs/plans/2026-06-30-int16-hybrid-blocked-downconvert-and-correlate.md):
 #
-# This is the integer counterpart of the Float32 fused path
-# (`downconvert_and_correlate_fused.jl`). It targets `Complex{Int16}` (12-bit
-# ADC) sample buffers and gets its speed from an all-integer pipeline, ported
-# from the GNSSSignals integration benchmark's `correlate_epl_hybrid_blocked!`
-# (the fastest variant there) and generalised to Tracking's arbitrary correlator
-# tap count, antenna count, and `ComplexF64` accumulators:
+#   * code — Int8 ±1 (CBOC ±13/±25) replica, one-shot `gen_code!` per block (exact
+#     across block seams, non-baked secondaries such as GPS L5I NH10 applied).
+#   * carrier — Int8 sin/cos from SinCosLUT's table lookup (`_int16_fill_carrier!`).
+#   * wipe + correlate — DI = mᵣ·cos + mᵢ·sin, DQ = mᵢ·cos − mᵣ·sin, in Int16 where it
+#     cannot overflow (`_int16_choose_carrier`) and exact Int32 otherwise; Σ codeₓ·DI
+#     accumulates in Int32 lanes flushed into Int64 totals every block.
 #
-#   * code   — Int8 ±1 (CBOC ±13/±25) replica from GNSSSignals' embedded SIMD
-#              LUT, generated per block by the value-threaded `CodeFillEngine`
-#              (`code_engine(signal, prn, fs, fc; …)` + `code_state` +
-#              `gen_code!(out, eng, st)`): allocation-free, thread-safe (the
-#              caller threads the state), exact across block seams, and applies
-#              non-baked secondaries (e.g. GPS L5I NH10).
-#   * carrier — Int8 sin/cos from SinCosLUT's register-resident table lookup,
-#              filled per block 4-way-unrolled (`_int16_fill_carrier!`).
-#   * wipe + correlate — the shared-carrier wipe DI = mᵣ·cos + mᵢ·sin,
-#              DQ = mᵢ·cos − mᵣ·sin runs in Int16 when `2·max|meas|·amp ≤
-#              typemax(Int16)` (`choose_carrier`), and the code accumulate
-#              Σ codeₓ·DI uses the fused widening `vpmaddwd` (Int16×Int16→Int32)
-#              on x86; otherwise the exact Int32 path. Per-tap lane accumulators
-#              are flushed into Int64 totals every block so no integration length
-#              or code amplitude can overflow.
-#
-# Multiple antennas (M>1): the sample buffer is a dense `Matrix` (rows = samples,
-# columns = antennas). One code + carrier block is filled per strip-mine block
-# and shared across `M` antenna-outer correlate passes (each pass keeps only its
-# own NC tap accumulators live, mirroring the Float32 tile-share kernel), so the
-# carrier wipe-off is computed once-per-antenna against the shared code/carrier.
-#
-# Strategy is "hybrid-blocked": strip-mine the integration into `blk`-sample
-# blocks, regenerating BOTH code and carrier into small, L1-resident scratch
-# reused across blocks. See docs/plans/2026-06-30-int16-hybrid-blocked-...
-#
-# Accumulators are converted to `ComplexF64` (M=1) / `SVector{M,ComplexF64}`
-# (M>1), scaled by the constant carrier amplitude, at finalize — so every
-# downstream consumer (discriminators, C/N0, bit buffer — all ratio/normalised)
-# is unaffected.
-#
-# Scope: one signal per sat, static correlator tap counts (EPL NC=3, VEPL NC=5);
-# the kernel is `@generated` over (NC, M).
+# With M > 1 antennas (a dense `Matrix`, one column per antenna) one code + carrier block
+# serves M antenna-outer correlate passes; a satellite's signals on one carrier also share
+# the wipe (tile-share, below). Results are `ComplexF64` (M=1) / `SVector{M,ComplexF64}`
+# (M>1) with the carrier amplitude divided out. The kernels are `@generated` over the tap
+# count NC and M, with a runtime-tap-count fallback.
 
 import SinCosLUT
 using SinCosLUT: SinCosTable, carrier_engine, carrier_state, carrier_lookup, carrier_advance
 
-# SIMD width of the Int8 carrier/code LUT backend on this host (compile-time
-# const), mirroring the benchmark's `_CORR_W`. SinCosLUT's Int8 table and the
-# GNSSSignals Int8 code LUT use the same width per backend.
+# SIMD width of the Int8 carrier and code LUTs on this host.
 const _INT16_W = let be = SinCosLUT.default_backend(Int8, 64)
     be isa SinCosLUT.AVX512 ? 64 : be isa SinCosLUT.AVX2 ? 32 : be isa SinCosLUT.Neon ? 16 : 1
 end
 
-# The fused widening `vpmaddwd` accumulate (Int16×Int16→Int32 pairwise) is x86
-# (AVX2/AVX-512) only. Other backends use the exact Int32 multiply path.
+# The fused widening `vpmaddwd` accumulate (Int16×Int16→Int32 pairwise) is x86-only.
 const _INT16_HAS_MADDWD = Sys.ARCH in (:x86_64, :i686) && _INT16_W in (32, 64)
 
-# Whether to run the carrier wipe in Int16 (vs. exact Int32). An Int16 wipe halves
-# both the wipe's SIMD op count (8 Int16 lanes per 128-bit register vs. 4 Int32)
-# and the DI/DQ memory traffic, and it lets the code accumulate `Σ codeₓ·DI` use a
-# widening multiply-accumulate: x86 gets the pairwise `vpmaddwd`, and aarch64 gets
-# NEON `SMLAL`/`SMLAL2` — LLVM auto-selects the latter from a `sext(i16)·sext(i16)`
-# accumulate (verified in @code_native), so no intrinsic is needed there. Both need
-# `2·max_meas·amp ≤ typemax(Int16)` (the `a ≥ 1` case in `_int16_choose_carrier`) to
-# keep the wipe from overflowing Int16. On other arches / narrow-SIMD hosts the
-# Int16 wipe would gain nothing (no widening-MAC lowering), so keep the exact Int32
-# path there.
+# Whether to run the carrier wipe in Int16 rather than exact Int32: half the SIMD ops and
+# DI/DQ traffic, and the code accumulate becomes a widening MAC — `vpmaddwd` on x86, NEON
+# `SMLAL`/`SMLAL2` on aarch64 (LLVM selects it from a `sext(i16)·sext(i16)` accumulate).
+# Elsewhere there is no widening MAC to gain, so the wipe stays Int32.
 const _INT16_WIDE_WIPE = _INT16_HAS_MADDWD || Sys.ARCH === :aarch64
 
-# Choose the carrier-replica amplitude (and wipe arithmetic type) from `max_meas`,
-# the caller-declared largest `|real|`/`|imag|` of a measurement sample (e.g. 2^11
-# for a 12-bit ADC). Pick the LARGEST Int16-safe amplitude — the largest `amp` with
-# `2·max_meas·amp ≤ typemax(Int16)` — capped at the Int8 storage limit. The factor
-# of 2 is NOT slack: the carrier wipe is a COMPLEX multiply `DI = mᵣ·cos + mᵢ·sin`,
-# `DQ = mᵢ·cos − mᵣ·sin` — two products SUMMED per output — so `|DI| ≤ |mᵣ·cos| +
-# |mᵢ·sin| ≤ 2·max_meas·amp`; sizing against that keeps BOTH the intermediate
-# products and their sum within Int16. Keeping the wipe within Int16 enables the
-# widening-MAC fast path (`vpmaddwd` on x86, `SMLAL` on aarch64; see
-# `_INT16_WIDE_WIPE`) and keeps `|DI| ≤ typemax(Int16)`. The wipe TYPE differs by
-# backend (Int16 on the wide-wipe arches; exact Int32 elsewhere) but the AMPLITUDE
-# is the same — using a larger Int32-only amplitude (the old behaviour) overflowed
-# the accumulator for CBOC on the scalar path.
+# Choose the Int8 carrier amplitude and wipe type from `max_meas`, the declared largest
+# `|real|`/`|imag|` of a sample (e.g. 2^11 for a 12-bit ADC): the largest `amp` with
+# `2·max_meas·amp ≤ typemax(Int16)`, capped at `typemax(Int8)`. The factor 2 is because
+# the complex wipe sums two products, `|DI| ≤ |mᵣ·cos| + |mᵢ·sin|`. The amplitude is the
+# same on every backend, only the wipe type differs (see `_INT16_WIDE_WIPE`): a larger
+# Int32-only amplitude overflowed the CBOC accumulate on the scalar path.
 #
-# `max_meas` is a required positional argument of both constructors (no default):
-# under-declaring it silently overflows the Int16 wipe and corrupts the correlation
-# catastrophically, so the caller must state their front end's full-scale.
-#
-# Three guards keep the per-block Σ codeₓ·DI within Int32 (the horizontal reduce is
-# widened to Int64, and two block-length caps bound the lanes themselves):
-#   * The horizontal reduction ACROSS lanes at flush is the full block total, which
-#     can exceed typemax(Int32) on this Int16-safe path even though each lane stays
-#     within Int32 — it is widened to Int64 first (see `_wide64`, #165).
-#   * For `max_meas ≥ 2^14` no amp ≥ 1 keeps the wipe within Int16, so we fall back
-#     to full Int8 amplitude + Int32 wipe. That voids the `|DI| ≤ typemax(Int16)`
-#     premise (`|DI|` can reach `2·max_meas·127`), so even a single lane's per-block
-#     Σ can wrap Int32; `_int16_safe_blk` shrinks the strip-mine block on that path
-#     to keep the whole-block sum bounded (#167).
-#   * On the SinCosLUT `Portable` backend (`_INT16_W == 1`) a single Int32 lane sums
-#     a whole block, so `_int16_flush_len` shrinks the block by the SIMD width so no
-#     lane can wrap (#166); a no-op for W ≥ 16, so the hot path is unchanged.
+# Three guards keep the per-block Σ codeₓ·DI from wrapping:
+#   * the cross-lane flush reduce is widened to Int64 (`_wide64`, #165);
+#   * for `max_meas ≥ 2^14` no `amp ≥ 1` is Int16-safe, so the wipe falls back to amp 127
+#     in Int32 and `_int16_safe_blk` shrinks the block (#167);
+#   * on the SinCosLUT `Portable` backend (`_INT16_W == 1`) one lane sums a whole block,
+#     so `_int16_flush_len` shrinks it (#166).
 function _int16_choose_carrier(max_meas::Integer)
     a = Int(typemax(Int16)) ÷ (2 * Int(max_meas))
     a >= 1 || return (Int(typemax(Int8)), Int32)
     (min(a, Int(typemax(Int8))), _INT16_WIDE_WIPE ? Int16 : Int32)
 end
 
-# Largest multi-level code sub-carrier magnitude the correlate accumulate must
-# tolerate (Galileo E1B CBOC ±25); used to bound the per-block Int32 accumulator.
+# Largest code magnitude (Galileo E1B CBOC ±25), bounding the Int32 lane sums.
 const _INT16_MAX_CODE = 25
 
-# Per-instance safe strip-mine block length. Each SIMD lane sums the per-sample
-# products `codeₓ·DI` (|code| ≤ `_INT16_MAX_CODE`, |DI| ≤ 2·max_meas·amp) over one
-# block into an Int32 accumulator before the per-block Int64 flush, and the flush
-# reduces those lanes in Int32. On the Int16-safe amplitude path this stays bounded
-# at the default block, so `blk` is returned unchanged; on the `max_meas ≥ 2^14`
-# fallback (amp = 127, Int32 wipe) the block is shrunk so the whole-block sum still
-# fits Int32 — trading throughput for correctness on that rare full-scale path (#167).
+# Block length keeping a lane's per-block Σ codeₓ·DI within Int32 on the `max_meas ≥ 2^14`
+# fallback (amp 127, Int32 wipe, #167); `blk` unchanged on the Int16-safe path.
 function _int16_safe_blk(blk::Integer, max_meas::Integer, amp::Integer)
     di_max = 2 * Int(max_meas) * Int(amp)                     # |DI| = |mᵣ·cos + mᵢ·sin|
     di_max <= Int(typemax(Int16)) && return Int(blk)          # Int16-safe path: unchanged
@@ -122,38 +64,23 @@ function _int16_safe_blk(blk::Integer, max_meas::Integer, amp::Integer)
     min(Int(blk), max(1, safe))
 end
 
-# Default strip-mine block length (samples); multiple of every backend `W`,
-# sized so the per-block L1 scratch (code + sin + cos) stays in L1.
+# Default strip-mine block length (samples): a multiple of every backend `W`, small enough
+# for the code + sin + cos scratch to stay in L1.
 const _INT16_BLK = 8192
 
-# Strip-mine block length that keeps the per-block Int32 lane accumulator from
-# overflowing on narrow-SIMD hosts. Each Int32 lane sums the `code·DI` products of
-# its own samples before the per-block Int64 flush: `fld(L, W)` products on the
-# exact-Int32 path, twice that on the x86 `vpmaddwd` path (adjacent pairs are
-# pre-summed). With the Int16-safe amplitude the wipe `|DI| ≤ typemax(Int16)` and
-# the code peaks at CBOC ±25, so a lane sums at most `2·fld(L,W)·(_INT16_MAX_CODE·
-# max_wipe)`, which must stay within `typemax(Int32)`. Solving for L gives the cap
-# below. On wide-SIMD hosts (`W ≥ 16`) it exceeds the default block, so the block —
-# and thus the hot path — is unchanged; on the SinCosLUT `Portable` fallback
-# (`W == 1`: non-AVX2 x86, non-x86/aarch64 arches) it shrinks the block so a single
-# Int32 lane can no longer accumulate a whole block and wrap (issue #166). Composed
-# with `_int16_safe_blk` (which shrinks `dc.blk` on the amp = 127 path, #167) by
-# `min`, so both overflow axes are covered.
+# Block length keeping an Int32 lane from wrapping before its per-block Int64 flush. A lane
+# sums `fld(L, W)` products (twice that with `vpmaddwd`'s pair pre-sum) of at most
+# `_INT16_MAX_CODE·max_wipe`. For `W ≥ 16` the cap exceeds the default block; on the
+# SinCosLUT `Portable` fallback (`W == 1`) it shrinks it (#166). Composed by `min` with
+# `_int16_safe_blk` (#167).
 function _int16_flush_len(W::Integer, max_wipe::Integer, blk::Integer)
     max_product = _INT16_MAX_CODE * Int(max_wipe)
     products_per_lane = Int(typemax(Int32)) ÷ (2 * max_product)   # 2× covers the vpmaddwd path
     min(Int(blk), max(Int(W), products_per_lane * Int(W)))
 end
 
-# Reject a strip-mine block length that would hang `track!`, then apply the
-# amp = 127 fallback clamp. `blk ≤ 0` makes the strip-mine loop
-# `len = min(blk, num_samples - blk_off) = 0` never advance, so `track!` spins
-# forever (issue #169 (a); with the threaded backend it wedges the Polyester
-# workers) — rejected here. An oversized `blk` is deliberately NOT rejected: the
-# per-lane Int32 overflow it used to risk (issue #169 (b)) is bounded at run time
-# by `_int16_flush_len` (#166), and the amp = 127 wipe fallback is bounded by
-# `_int16_safe_blk` (#167, applied below) — so a large `blk` is safely clamped,
-# never corrupting.
+# `blk ≤ 0` would never advance the strip-mine loop and hang `track!` (#169), so reject it;
+# an oversized `blk` is safe, as `_int16_flush_len` and `_int16_safe_blk` clamp it.
 function _int16_validate_blk(blk::Integer, max_meas::Integer, amp::Integer)
     blk >= 1 || throw(
         ArgumentError(
@@ -164,23 +91,18 @@ function _int16_validate_blk(blk::Integer, max_meas::Integer, amp::Integer)
     _int16_safe_blk(blk, max_meas, amp)   # clamp on the amp = 127 fallback (#167)
 end
 
-# ── Widening / vpmaddwd helpers (ported from the GNSSSignals benchmark) ───────
+# ── Widening / vpmaddwd helpers ───────────────────────────────────────────────
 @inline _wide32(v::SIMD.Vec{W,Int8}) where {W} = convert(SIMD.Vec{W,Int32}, v)
 @inline _wide32(v::SIMD.Vec{W,Int16}) where {W} = convert(SIMD.Vec{W,Int32}, v)
 @inline _wide32(v::SIMD.Vec{W,Int32}) where {W} = v   # already widened (Int32 wipe tile)
 @inline _wide16(v::SIMD.Vec{W,Int8}) where {W} = convert(SIMD.Vec{W,Int16}, v)
-# Widen the Int32 lane accumulator to Int64 BEFORE the block-flush horizontal `sum`.
-# The per-lane bound keeps each Int32 lane safe, but the reduction ACROSS lanes is the
-# full block total (up to ~2.7×typemax(Int32) for a strong, code-aligned, full-scale
-# CBOC capture at default settings), which wraps if summed in Int32 (#165). Widening
-# first makes the reduction and the running Int64 total exact. Cost is negligible: the
-# flush runs once per block.
+# Widen the Int32 lanes to Int64 before the flush's horizontal `sum`: each lane is safe,
+# but the block total can exceed typemax(Int32) (~2.7× for a strong, code-aligned,
+# full-scale CBOC capture at default settings, #165).
 @inline _wide64(v::SIMD.Vec{W,Int32}) where {W} = convert(SIMD.Vec{W,Int64}, v)
 
-# vpmaddwd: Int16×Int16 → Int32 pairwise-add — the dot-product primitive for the
-# code accumulate Σ codeₓ·DI. Native 512-/256-bit intrinsics tiled to width W;
-# x86-only (gated on `_INT16_HAS_MADDWD`). Output is Vec{W÷2,Int32} (adjacent
-# samples pre-summed); the final `sum` is bit-exact with a per-lane Int32 reduce.
+# vpmaddwd (Int16×Int16 → Int32, adjacent pairs summed) for Σ codeₓ·DI, from the native
+# 512-/256-bit intrinsics tiled to width W; returns Vec{W÷2,Int32}.
 @static if Sys.ARCH in (:x86_64, :i686)
     @inline _madd_tile(a::SIMD.Vec{M,Int16}, ::Val{o}, ::Val{t}) where {M,o,t} =
         shufflevector(a, Val(ntuple(i -> i - 1 + o, Val(t))))
@@ -234,26 +156,17 @@ attributes #0 = { alwaysinline }""",
     end
 end
 
-# Per-(thread) scratch: the strip-mine block code buffer (`extb`, Int8, sized
-# `blk + tap-span`) plus the carrier sin/cos blocks (`csb`/`ccb`, Int8). Grown
-# lazily and reused, so a hoisted backend is allocation-free in steady state.
-# `TI` is the carrier-wipe element type (Int16 on the x86 vpmaddwd fast path,
-# Int32 on the exact fallback), chosen per backend instance from the declared
-# measurement amplitude.
-# Immutable: the buffers are only ever `resize!`d / indexed in place (their fields
-# are never reassigned), so no mutability is needed.
+# Per-thread scratch, grown lazily and reused (allocation-free in steady state): the block
+# code `extb` (`blk + tap-span`) and carrier sin/cos `csb`/`ccb`, all Int8. `TI` is the
+# wipe element type chosen by `_int16_choose_carrier`.
 struct Int16ScratchBuffers{TI}
     extb::Vector{Int8}
     csb::Vector{Int8}
     ccb::Vector{Int8}
-    # Shared DI/DQ tile (the carrier-wiped measurement) for the multi-signal-per-
-    # sat tile-share path: filled once per block and reused across the sat's
-    # signals (one downconvert per sat, not per signal). Wipe element type `TI`.
+    # Shared DI/DQ tile (the carrier-wiped measurement) of the tile-share and dynamic paths.
     dib::Vector{TI}
     dqb::Vector{TI}
-    # Int64 tap totals (`M·NC`, flattened) for the runtime `AbstractVector`-shifts
-    # fallback, hoisted here so that path allocates only its result vector (not
-    # fresh totals) per integration. Unused by the `@generated` static path.
+    # Int64 tap totals (`M·NC`) of the runtime-tap-count fallback.
     tsumI::Vector{Int64}
     tsumQ::Vector{Int64}
 end
@@ -266,80 +179,57 @@ $(SIGNATURES)
 Integer (`Complex{Int16}`) hybrid-blocked CPU downconvert + correlate backend
 (single-threaded). Opt-in alternative to [`CPUDownconvertAndCorrelator`] for
 `Complex{Int16}` sample buffers; errors on any other sample element type.
-Construct **once outside** the `track!` loop and pass it via the
-`downconvert_and_correlator` keyword for an allocation-free steady state on the
-static correlator path (EPL/VEPL and any `SVector`-shifts correlator). The
-runtime `AbstractVector`-shifts fallback additionally allocates the small
-`Vector` it returns each integration, but reuses the same thread-local scratch.
+Construct it **once outside** the `track!` loop and pass it via the
+`downconvert_and_correlator` keyword: allocation-free in steady state for `SVector`
+sample shifts (EPL/VEPL); runtime `AbstractVector` shifts allocate only the returned
+`Vector`.
 
 # Arguments
 
-`max_meas` (the first positional argument, **required — no default**) is the
-largest `|real|`/`|imag|` any measurement sample will take, i.e. your front end's
-full-scale (e.g. `2^11` for a 12-bit ADC). From it the constructor picks the
-LARGEST carrier-replica amplitude whose carrier wipe still fits `Int16`, and the
-wipe arithmetic type (`Int16` on the fast path, else `Int32`). The carrier
-wipe is a **complex** multiply `DI = mᵣ·cos + mᵢ·sin`, `DQ = mᵢ·cos − mᵣ·sin` —
-two products summed per output — so the amplitude is sized against
-`2·max_meas·amplitude ≤ typemax(Int16)`, bounding both the products and their sum.
-There is deliberately no default: **under-declaring `max_meas` silently overflows
-the `Int16` wipe and corrupts the correlation catastrophically**, so you must
-state it explicitly. Over-declaring is safe and only coarsens the carrier
-quantisation.
+`max_meas` (required, no default) is the largest `|real|`/`|imag|` any sample will
+take, i.e. the front end's full-scale (e.g. `2^11` for a 12-bit ADC). The carrier
+amplitude is the largest with `2·max_meas·amplitude ≤ typemax(Int16)`, since the complex
+wipe `DI = mᵣ·cos + mᵢ·sin` sums two products. **Under-declaring `max_meas` silently
+overflows the `Int16` wipe and corrupts the correlation**; over-declaring is safe and
+only coarsens the carrier quantisation.
 
 !!! note "Performance: keep `max_meas < 2^14`"
 
-    For `max_meas ≥ 2^14` no `Int16`-safe carrier amplitude `≥ 1` exists, so the
-    backend falls back to an exact `Int32` carrier wipe — the on-x86 `vpmaddwd`
-    Int16 fast path no longer applies — and shrinks the strip-mine block to keep
-    the correlation accumulators from overflowing. This stays correct but is
-    measurably slower. This backend is tuned for ≤12-bit sample buffers; keep
-    `max_meas` below `2^14` to stay on the fast path.
+    For `max_meas ≥ 2^14` no `Int16`-safe amplitude `≥ 1` exists: the backend falls
+    back to an exact `Int32` wipe (off the `vpmaddwd` fast path) and a shorter
+    strip-mine block. Correct, but measurably slower.
 
-The `blk` keyword sets the strip-mine block length (samples). It must be `≥ 1`,
-validated at construction — `blk ≤ 0` would make the strip-mine loop never
-advance and hang `track!` (issue #169). A `blk` larger than the overflow-safe
-block is accepted and simply clamped for the flush (see `_int16_flush_len` /
-`_int16_safe_blk`), so the correlation accumulators never wrap.
+`blk` is the strip-mine block length in samples. It must be `≥ 1` (`blk ≤ 0` would
+hang `track!`, #169); a larger-than-safe `blk` is clamped so the accumulators never wrap.
 """
 struct Int16DownconvertAndCorrelator{TBL<:SinCosTable,TI} <:
        AbstractDownconvertAndCorrelator
     buffers::Int16ScratchBuffers{TI}
     table::TBL
     blk::Int
-    # Peak amplitude of the Int8 carrier replica (`_int16_choose_carrier`). The wipe
-    # `DI = mᵣ·cos + mᵢ·sin` scales the correlation by this factor, so the finalize
-    # divides it back out — the Float32 backend's carrier is unit-amplitude, so this
-    # keeps the two backends' absolute magnitudes equal (not just their ratios).
+    # Peak of the Int8 carrier replica, divided out at finalize so the magnitudes match
+    # the unit-carrier Float32 backend.
     carrier_amplitude::Int
 end
 
 """
 $(SIGNATURES)
 
-Multi-threaded integer (`Complex{Int16}`) hybrid-blocked backend. One
-`Int16ScratchBuffers` per thread (indexed by `Threads.threadid()` inside
-`@batch`); the carrier `table` is immutable and shared. See
-[`Int16DownconvertAndCorrelator`](@ref) for the `max_meas` amplitude argument.
+Multi-threaded [`Int16DownconvertAndCorrelator`](@ref): one `Int16ScratchBuffers` per
+thread, the immutable carrier `table` shared.
 """
 struct Int16ThreadedDownconvertAndCorrelator{TBL<:SinCosTable,TI} <:
        AbstractDownconvertAndCorrelator
     buffers::Vector{Int16ScratchBuffers{TI}}
     table::TBL
     blk::Int
-    # Peak amplitude of the Int8 carrier replica; divided out at finalize. See
-    # [`Int16DownconvertAndCorrelator`](@ref).
+    # Peak of the Int8 carrier replica, divided out at finalize.
     carrier_amplitude::Int
 end
 
-# The kernels stride the sample buffer by the compile-time constant `_INT16_W`
-# (the Int8 LUT SIMD width at the default `steps = 64`), but the carrier engine's
-# actual chunk width is set by the table's backend, which SinCosLUT selects from
-# `steps`. A `steps` that yields a different width desynchronises the carrier fill
-# from the kernel stride and silently corrupts the carrier replica (#168), so
-# reject it at construction. The width is checked against the engine the kernel
-# actually builds (`carrier_engine(table, …)`), so `steps` values that happen to
-# keep the same backend width (e.g. `steps = 128` on an AVX-512 host) are allowed.
+# The kernels stride by the compile-time `_INT16_W`, but the carrier engine's width follows
+# the backend SinCosLUT picks from `steps`; a mismatch silently corrupts the carrier (#168).
+# `steps` values keeping the same width are allowed.
 function _int16_assert_engine_width(table::SinCosTable)
     W = SinCosLUT.carrier_width(carrier_engine(table, 0))
     W == _INT16_W || throw(
@@ -398,9 +288,8 @@ const _Int16DC = Union{Int16DownconvertAndCorrelator,Int16ThreadedDownconvertAnd
 @inline _scratch_buffers(dc::Int16ThreadedDownconvertAndCorrelator) =
     dc.buffers[Threads.threadid()]
 
-# Fill `len` carrier samples (sin→csb, cos→ccb) starting at absolute sample
-# `start`, 4-way unrolled so the permute lookups pipeline (the value engine is
-# latency-bound single-stream). Ported from the benchmark's `_epl_fill_carrier!`.
+# Fill `len` carrier samples (sin→csb, cos→ccb) from absolute sample `start`, 4-way
+# unrolled so the latency-bound lookups pipeline.
 @inline function _int16_fill_carrier!(
     csb::Vector{Int8},
     ccb::Vector{Int8},
@@ -445,13 +334,10 @@ const _Int16DC = Union{Int16DownconvertAndCorrelator,Int16ThreadedDownconvertAnd
 end
 
 # ── The integer hybrid-blocked kernel ────────────────────────────────────────
-# Returns this integration's correlation contribution: `SVector{NC,ComplexF64}`
-# (M=1) or `SVector{NC,SVector{M,ComplexF64}}` (M>1), one (multi-antenna) complex
-# sum per tap, to be added to the correlator's running accumulators. `@generated`
-# over (NC = length(sample_shifts), M = antenna count): NC tap accumulators per
-# antenna live in named locals, and the M antenna-outer correlate passes are
-# emitted explicitly (each keeps only its own NC accumulators live). Path (Int16
-# vpmaddwd vs exact Int32) is chosen at generation time from host-derived consts.
+# Returns this integration's contribution per tap, `SVector{NC}` of `ComplexF64` (M=1) or
+# `SVector{M,ComplexF64}` (M>1). `@generated` over (NC, M): each of the M antenna passes
+# keeps only its own NC accumulators live; the accumulate (vpmaddwd / SMLAL / exact Int32)
+# is chosen at generation time.
 @generated function _int16_hybrid_blocked!(
     dc::_Int16DC,
     signal::AbstractVecOrMat{Complex{Int16}},
@@ -470,9 +356,7 @@ end
     W = _INT16_W
     TI = dc.parameters[2]              # carrier-wipe element type, per backend instance
     use_madd = _INT16_HAS_MADDWD && TI === Int16
-    # aarch64 Int16-wipe accumulate: widen code+DI to Int32 and MAC — LLVM lowers
-    # the `sext(i16)·sext(i16)` accumulate to NEON `SMLAL`/`SMLAL2` (no pairwise
-    # pre-sum, so `AW = W`, unlike x86's `vpmaddwd`).
+    # aarch64 Int16 wipe: widen to Int32 and MAC (→ SMLAL); no pair pre-sum, so `AW = W`.
     use_smlal = TI === Int16 && !use_madd
     AW = use_madd ? W ÷ 2 : W          # vpmaddwd pre-sums adjacent pairs → W÷2
     MT = TI === Int16 ? Int16 : Int32  # meas/wipe SIMD element type
@@ -492,7 +376,7 @@ end
         push!(init.args, :($(Symbol("tQ_$(j)_$k")) = zero(Int64)))
     end
 
-    # One antenna-outer correlate pass over the current block (emitted per j).
+    # One antenna pass over the current block.
     function antenna_pass(j)
         blk_init = Expr(:block);
         flush = Expr(:block);
@@ -575,9 +459,7 @@ end
         push!(correlate_passes.args, antenna_pass(j))
     end
 
-    # Finalize: one accumulator per tap — ComplexF64 (M=1) or SVector{M} (M>1).
-    # `carrier_amp` (defined in the returned quote) divides out the Int8 carrier's
-    # peak amplitude so the magnitude matches the unit-carrier Float32 backend.
+    # Finalize, dividing out the carrier amplitude.
     function tap_expr(k)
         if M == 1
             :(complex(
@@ -606,8 +488,7 @@ end
         num_rows = size(signal, 1)
 
         bufs = _scratch_buffers(dc)
-        # Cap the block so a single Int32 lane can't overflow before its per-block
-        # Int64 flush (issue #166: the `W == 1` Portable path). No-op for W ≥ 16.
+        # Lane-overflow cap for the `W == 1` Portable path (#166).
         blk = _int16_flush_len(W, typemax(Int16), dc.blk)
         ncar = (cld(blk, W) + 4) * W            # room for the 4-way carrier fill tail
         length(bufs.extb) < blk + span && resize!(bufs.extb, blk + span)
@@ -622,13 +503,9 @@ end
         reng = carrier_engine(dc.table, carrier_freq / sampling_freq)
         phase0 = Float64(carrier_phase)
 
-        # Per-block code is generated one-shot from the block's analytically
-        # advanced start phase — alloc-free, no engine build (a continuing
-        # CodeFillEngine would heap-allocate per sat per integration, which
-        # dominates at low oversampling where the kernel itself is tiny). The
-        # first emitted sample is output sample `min_shift`, so the earliest tap
-        # reads real code (no zero edge) and tap k at output n reads
-        # `extb[n + shift_k - min_shift]`.
+        # Code is generated one-shot per block from its analytically advanced phase (a
+        # continuing engine would allocate per sat per integration). The block starts at
+        # output sample `min_shift`, so tap k at output n reads `extb[n + shift_k - min_shift]`.
         cps = Float64(upreferred(code_frequency / Hz)) / sampling_freq
         code_phase0 = Float64(code_phase)
 
@@ -639,7 +516,7 @@ end
         @inbounds while blk_off < num_samples
             len = min(blk, num_samples - blk_off)
 
-            # 1. Fill this block's code into extb[1 .. len+span] (one-shot).
+            # 1. This block's code into extb[1 .. len+span].
             gen_code!(
                 view(extb, 1:(len+span)),
                 signal_type,
@@ -650,11 +527,10 @@ end
                 min_shift,
             )
 
-            # 2. Fill this block's carrier sin/cos (shared across antennas).
+            # 2. This block's carrier sin/cos, shared across antennas.
             _int16_fill_carrier!(csb, ccb, reng, blk_off, len, phase0, Val(W))
 
-            # 3. M antenna-outer correlate passes (wipe + per-tap accumulate),
-            #    flushed per block. `base` = 1-based signal row of local n=0.
+            # 3. M antenna passes, flushed per block; `base` = signal row of local n=0.
             base = signal_start_sample + blk_off
             $correlate_passes
 
@@ -665,13 +541,9 @@ end
     end
 end
 
-# One block's correlate for the dynamic fallback: accumulate every antenna/tap
-# from the shared DI/DQ tile into the Int64 `tI`/`tQ` totals, flushing the
-# `Vec{W,Int32}` lane accumulator once per (block, antenna, tap). Split out as a
-# `Val{W}`-parameterized barrier — like `_int16_fill_carrier!` — so `W` and the
-# tile element type `TIw` are compile-time constants in the SIMD type positions
-# (a bare local `W` is not reliably const-folded into `SIMD.Vec{W,…}` on every
-# Julia version, which would box the accumulators and allocate per block).
+# One block of the dynamic fallback: accumulate every antenna/tap from the DI/DQ tile into
+# the Int64 totals. A `Val{W}` function barrier so `W` and `TIw` are constants in the SIMD
+# types (a bare local `W` would box the accumulators and allocate per block).
 @inline function _int16_dyn_accumulate_block!(
     tI::Vector{Int64},
     tQ::Vector{Int64},
@@ -694,9 +566,7 @@ end
             aQ = zero(SIMD.Vec{W,Int32})
             n = 1
             while n + W - 1 <= len
-                # When the tile is Int16 (wide-wipe arches) widen code through Int16
-                # so the `sext(i16)·sext(i16)` MAC lowers to NEON SMLAL; the `TIw`
-                # branch is a compile-time constant. Int32 tiles keep the exact path.
+                # Int16 tile: widen code through Int16 so the MAC lowers to SMLAL.
                 if TIw === Int16
                     codev = _wide32(_wide16(vload(SIMD.Vec{W,Int8}, extb, n + offk)))
                 else
@@ -721,19 +591,10 @@ end
     nothing
 end
 
-# Dynamic (runtime tap count) fallback: correlators whose sample shifts are a
-# runtime-sized `AbstractVector` (e.g. a `Vector`-accumulator correlator —
-# issue #126 (b)). `SVector` shifts are more specific and dispatch to the
-# `@generated` method above, so EPL/VEPL keep the fast unrolled kernel; this
-# path stays correct for any runtime tap count. It mirrors that kernel's
-# structure so it is not gratuitously slow: per block it fills the shared DI/DQ
-# tile once (`_int16_fill_ditile!`), then for each antenna/tap accumulates into a
-# register `Vec{W,Int32}` lane accumulator flushed into Int64 totals once per
-# block — no per-chunk horizontal reduction. The totals live in the thread-local
-# scratch, so the only per-call allocation is the returned result vector:
-# `Vector{ComplexF64}` (M=1) or `Vector{SVector{M,ComplexF64}}` (M>1). The exact
-# Int32 accumulate (widening the `TI` tile) is used regardless of backend — the
-# `vpmaddwd` fast path is reserved for the `@generated` hot path.
+# Dynamic fallback for runtime-sized `AbstractVector` sample shifts (#126); `SVector`
+# shifts dispatch to the `@generated` kernel. Per block it fills the DI/DQ tile once
+# (`_int16_fill_ditile!`) and accumulates each antenna/tap with the exact Int32 accumulate.
+# Returns a `Vector` of `ComplexF64` (M=1) or `SVector{M,ComplexF64}` (M>1).
 function _int16_hybrid_blocked!(
     dc::_Int16DC,
     signal::AbstractVecOrMat{Complex{Int16}},
@@ -830,7 +691,7 @@ function _int16_hybrid_blocked!(
         blk_off += len
     end
 
-    # Divide out the Int8 carrier's peak amplitude (see the @generated kernel).
+    # Divide out the carrier amplitude.
     carrier_amp = Float64(dc.carrier_amplitude)
     if M == 1
         return [
@@ -852,17 +713,12 @@ function _int16_hybrid_blocked!(
 end
 
 # ── Multi-signal-per-sat tile-share ───────────────────────────────────────────
-# A satellite carrying several signals on one carrier (e.g. GPS L1 C/A + L1C-D +
-# L1C-P) shares the carrier and therefore the per-sample carrier wipe-off. So
-# per strip-mine block we fill the carrier once and materialise the shared DI/DQ
-# tile (the carrier-wiped measurement) once — ONE downconvert per sat, not per
-# signal — then correlate each signal's own code against that tile. Mirrors the
-# Float32 `downconvert_and_correlate_fused_tuple!`, adapted to the hybrid-blocked
-# strip-mine + integer pipeline.
+# Signals on one carrier (e.g. GPS L1 C/A + L1C-D + L1C-P) share the carrier wipe, so per
+# block the carrier and DI/DQ tile are filled once and each signal correlates its own code
+# against the tile: one downconvert per sat, as in the Float32
+# `downconvert_and_correlate_fused_tuple!`.
 
-# Fill the shared DI/DQ tile for the current block: per antenna `j`, the slice
-# `dib/dqb[(j-1)*len + n]` holds the carrier-wiped measurement at sample n.
-# `@generated` so the M antenna slices unroll.
+# Fill the DI/DQ tile for the current block: antenna `j`'s slice is `dib/dqb[(j-1)*len + n]`.
 @generated function _int16_fill_ditile!(
     dib,
     dqb,
@@ -916,12 +772,8 @@ end
     end
 end
 
-# Tile-share kernel for N signals sharing a carrier. Returns a tuple of N
-# per-signal accumulators (`SVector{NCᵢ,ComplexF64}` or `…{SVector{M,…}}`).
-# `@generated` over (M, the signals tuple) so each signal's tap count NCᵢ and the
-# M antenna passes unroll. Per block: fill carrier + DI/DQ tile once, then for
-# each signal fill its code (one-shot `gen_code!` at the block's analytically
-# advanced phase, into the reused `extb`) and accumulate its taps from the tile.
+# Tile-share kernel for the signals of one satellite. Returns a tuple of per-signal
+# `SVector{NCᵢ}`s, `@generated` over (M, the signals tuple).
 @generated function _int16_hybrid_blocked_multi!(
     dc::_Int16DC,
     signal::AbstractVecOrMat{Complex{Int16}},
@@ -940,7 +792,7 @@ end
     W = _INT16_W
     TI = dc.parameters[2]              # carrier-wipe element type, per backend instance
     use_madd = _INT16_HAS_MADDWD && TI === Int16
-    use_smlal = TI === Int16 && !use_madd   # aarch64 widening MAC (SMLAL); see the single-signal kernel
+    use_smlal = TI === Int16 && !use_madd   # see the single-signal kernel
     AW = use_madd ? W ÷ 2 : W
     N = length(all_shifts.parameters)
     NCs = [length(all_shifts.parameters[i]) for i = 1:N]
@@ -974,8 +826,7 @@ end
         end
     end
 
-    # Per-signal: one-shot code fill into `extb`, then M antenna passes that
-    # accumulate the signal's taps from the shared DI/DQ tile.
+    # Per signal: fill its code, then M antenna passes over the shared DI/DQ tile.
     function signal_corr(i)
         b = Expr(:block)
         push!(b.args, :(blk_phase = code_phases[$i] + $(Symbol("cps_$i")) * blk_off))
@@ -1064,8 +915,7 @@ end
         push!(sigs.args, signal_corr(i))
     end
 
-    # `carrier_amp` (defined in the returned quote) divides out the Int8 carrier's
-    # peak amplitude so the magnitude matches the unit-carrier Float32 backend.
+    # Divide out the carrier amplitude.
     function tap(i, k)
         if M == 1
             :(complex(
@@ -1100,8 +950,7 @@ end
         maxspan_v = $maxspan
 
         bufs = _scratch_buffers(dc)
-        # Cap the block so a single Int32 lane can't overflow before its per-block
-        # Int64 flush (issue #166: the `W == 1` Portable path). No-op for W ≥ 16.
+        # Lane-overflow cap for the `W == 1` Portable path (#166).
         blk = _int16_flush_len(W, typemax(Int16), dc.blk)
         ncar = (cld(blk, W) + 4) * W
         length(bufs.extb) < blk + maxspan_v && resize!(bufs.extb, blk + maxspan_v)
@@ -1141,9 +990,8 @@ end
     end
 end
 
-# Multi-signal-per-sat correlate: shares one carrier downconvert across the sat's
-# signals via the tile-share kernel. Returns the per-signal
-# `(new_correlator, is_integration_completed)` tuples.
+# Several signals per sat: one carrier downconvert shared through the tile-share kernel.
+# Returns the per-signal `(new_correlator, is_integration_completed)` tuples.
 @inline function _correlate_signals(
     signals::Tuple{TrackedSignal,TrackedSignal,Vararg{TrackedSignal}},
     per_signal_completed::Tuple,
@@ -1194,16 +1042,9 @@ end
     map(tuple, new_corrs, per_signal_completed)
 end
 
-# The despread primitive on this backend's kernel — see `_despread_one_signal!`
-# in downconvert_and_correlate_cpu.jl for the contract and for why the noise
-# reference must go through the same kernel as the prompt. Serves the
-# per-satellite single-signal path and the open-loop noise reference alike; the
-# shared `_correlate_signals` above it needs no `_Int16DC` method of its own.
-#
-# `code_replica_size` is ignored: this backend packs the code sign plane inside
-# the kernel, so there is no replica buffer to size (which is also why it costs
-# the noise reference nothing here). So is `use_band_cache` — the shared band
-# sign planes are a bit-wise-backend thing; this kernel packs per call.
+# The despread primitive on this backend's kernel; see `_despread_one_signal!` in
+# downconvert_and_correlate_cpu.jl. `code_replica_size` and `use_band_cache` are ignored:
+# the kernel generates its code block in its own scratch and has no band cache.
 @inline _despread_one_signal!(
     dc::_Int16DC,
     correlator,
@@ -1240,14 +1081,9 @@ end
 )
 
 # ── Group/measurement plumbing ────────────────────────────────────────────────
-# The per-sat loop (`_update_tracked_sat_correlator`), the group body
-# (`_dc_one_group!`), and the public `downconvert_and_correlate(!)` entry points
-# are all backend-agnostic and inherited from the CPU backend
-# (`downconvert_and_correlate_cpu.jl`) via `AbstractDownconvertAndCorrelator` —
-# the integer-specific work already routes through `_despread_one_signal!` /
-# `_correlate_signals` and `_scratch_buffers` dispatch. This backend only supplies
-# the two hooks the shared plumbing dispatches on: a sample-type check and a
-# threading trait.
+# The per-sat loop, group body and `downconvert_and_correlate(!)` entry points are the
+# backend-agnostic ones of downconvert_and_correlate_cpu.jl; beyond the kernel hooks above
+# this backend adds only the sample-type check and the threading trait.
 
 # Reject non-`Complex{Int16}` sample buffers up front (12-bit ADC contract).
 @inline _check_sample_type(::_Int16DC, m) =

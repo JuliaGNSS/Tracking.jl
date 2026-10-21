@@ -1,91 +1,93 @@
 # Bit and Secondary-Code Sync
 
-Once a satellite is being tracked, the next milestone is locking onto its
-**bit/symbol boundary** (and, for pilots like GPS L1C-P, the
-**secondary-code phase**). These are what let the receiver:
+Until a signal's **bit boundary** (or, for a pilot, its **secondary-code
+phase**) is found it integrates one primary code period at a time. Sync unlocks
+longer coherent integrations (e.g. 20 ms for GPS L1 C/A), decoded bits, and the
+code phase modulo a whole symbol, which a pseudorange needs.
 
-- Switch from 1-ms coherent integrations to full-symbol coherent
-  integrations (e.g. 20 ms for L1 C/A), driving the PLL phase-noise floor
-  down.
-- Hand over a decoded bit stream to a navigation-message parser.
-- Reconstruct the absolute code phase modulo the longest secondary-code
-  cycle, so downstream consumers (e.g. PositionVelocityTime.jl) can
-  pseudorange.
-
-This page is a deep dive into the mechanism. The high-level user only
-needs to know: call `has_bit_or_secondary_code_been_found` per signal
-(see the [per-signal accessor table](tracking_state.md#What-you-can-read))
-and `get_soft_bits` once it returns `true`. The rest of the machinery is
-internal.
+Users only need `has_bit_or_secondary_code_been_found` per signal (see the
+[per-signal accessor table](tracking_state.md#What-you-can-read)) to gate
+`get_soft_bits`. The detectors and the bit buffer are TrackingLoops'; see
+[`BitBuffer`](@extref TrackingLoops.BitBuffer).
 
 ## Code-phase wrap period
 
-The shared `TrackedSat.code_phase` wraps at two distinct values depending on the per-signal sync state:
+The shared `TrackedSat.code_phase` wraps at the least common multiple of the
+signals' wraps (#129), each of which depends on the signal's sync state:
 
-- **Before any signal has synced** — wrap is the largest primary code length across the sat's signals. For a sat tracking only L1 C/A this is 1023 chips. The wrap is intentionally narrow at this stage because we don't yet know which data bit or secondary-code chip the current primary period belongs to.
-
-- **After a signal syncs** — its contribution to the wrap widens to one full *symbol period*: `primary × secondary_code_length` for a pilot, or `primary × blocks_per_data_bit` for a data-bearing signal. The shared wrap is then the `max` across signals, so the longest synced signal pins it.
-
-Concrete values:
+- **Before sync**: its primary code length, since the bit or secondary chip of
+  the current period is unknown.
+- **After sync**: one *symbol period*, `primary × secondary_code_length` for a
+  pilot and `primary × blocks_per_data_bit` for a data signal.
 
 | Sat tracks         | Before sync | After full sync                          |
 |--------------------|-------------|------------------------------------------|
 | GPS L1 C/A only    | 1023        | 1023 × 20 = **20460** (one 50 Hz data bit) |
 | GPS L5I only       | 10230       | 10230 × 10 = **102300** (one NH10 cycle / one data bit) |
 | GPS L1C-P only     | 10230       | 10230 × 1800 ≈ **18.4 M** (one overlay-code cycle, ≈ 18 s) |
-| L1C-P + L1C-D + L1CA | 10230 (longest primary) | 18.4 M (L1C-P dominates) |
+| L1C-P + L1C-D + L1CA | 10230 | 18.4 M (L1C-P dominates) |
 
-The post-sync widening is what lets downstream consumers (e.g. PositionVelocityTime.jl) distinguish which primary-code period within the symbol they're currently in — `mod(code_phase, primary)` gives the per-signal replica phase, while `div(code_phase, primary)` gives the symbol-internal position.
-
-[`max_code_length`](@ref) returns the *upper bound* (the post-full-sync value) at compile time. [`current_code_wrap`](@ref) returns the *runtime* value honoring the current per-signal sync state — this is what the inner loop's `mod` actually uses.
+`mod(code_phase, primary)` is a signal's replica phase, `div(code_phase, primary)`
+its position within the symbol. [`max_code_length`](@ref) is the post-sync bound,
+[`current_code_wrap`](@ref) the runtime wrap.
 
 ```@docs
 max_code_length
 current_code_wrap
 ```
 
-## Bit-sync and secondary-code-sync detection
+## Sync detection
 
-Each per-signal `BitBuffer` runs an `detect_bit_or_secondary_code_sync` detector against the running buffer of primary-code-block signs. The detector returns a `SyncResult` containing whether sync was found, the secondary-code phase (chip offset within the secondary code, used for code-phase seeding — see below), and the locked polarity (±1).
+Each signal's detector (`detect_bit_or_secondary_code_sync`) comes in one of three
+families:
 
-There are three detector families:
+- **Soft, maximum-energy CFAR**: GPS L1 C/A's bit edge and every short secondary
+  code (`1 < N ≤ 100`). It locks when the peak hypothesis beats its runner-up at
+  the confidence `get_bit_edge_detection_confidence` (default `0.999`), needs
+  two periods first, and fires on a period boundary, so it reports **`phase = 0`**.
+- **Hard rotation sweep**: the 1800-chip overlay pilots GPS L1C-P and BeiDou
+  B1C-P. It matches the prompt signs against the overlay at every rotation within
+  `get_bit_edge_or_secondary_code_tolerance`, locks after one period at any
+  alignment and reports the recovered chip `phase`.
+- **Trivial**: one symbol per primary period (Galileo E1B, E6-B, GPS L1C-D, L2CM,
+  BeiDou B2b-I, B1C-D), and Galileo E5a-QP (no data, no overlay), sync on the first
+  block. GPS L2CL, a pilot without secondary code, never syncs and stays pre-sync.
 
-- **Soft, maximum-energy CFAR** — GPS L1 C/A (bit-edge, `_detect_bit_edge_cfar`) and every signal with a short secondary code, `1 < N ≤ 100` (overlay-rotation, `_detect_secondary_code_cfar`): GPS L5I/L5Q, Galileo E1C/E5a-I/E5a-Q/E5b-I/E5b-Q/E6-C and BeiDou B1I/B3I/B2a-data/B2a-pilot. These accumulate per-hypothesis, coherently-summed bin energy in `PhaseAccumulators` and lock when the peak hypothesis beats its runner-up with a Student-t confidence (`get_bit_edge_detection_confidence`, default `0.999`). They self-pace with C/N₀ and fire only at the winning hypothesis's own boundary — so they report **`phase = 0`** (the upcoming integration starts a fresh data bit / secondary-code period). Selected by `uses_soft_bit_edge_detection` / `uses_soft_secondary_code_detection`.
-- **Hard-decision rotation/Hamming sweep** (`_secondary_code_search`) — among the currently implemented signals, the two 1800-chip overlay pilots: GPS L1C-P and BeiDou B1C-pilot. It matches packed prompt *signs* against the known overlay at every rotation, accepting the best within `get_bit_edge_or_secondary_code_tolerance`; it locks in **one** full period worst case (matches at any alignment) and reports the recovered secondary-chip `phase`.
-- **Trivial / none** — Galileo E1B and E6-B, GPS L1C-D and L2CM, and BeiDou B2b-I and B1C-data broadcast one channel symbol per primary period, so their detector returns `SyncResult(true, 0, +1)` immediately; GPS L2CL is a dataless pilot with no sync.
+*Min-to-fire* is the number of blocks before a detector can lock.
 
-*Min-to-fire* is the smallest `num_code_blocks` the detector accepts before it can lock. The soft CFAR detectors need `2 × period` blocks before a runner-up (and hence a decision) exists, then fire at the next winning-hypothesis boundary; the hard sweep needs `1 × period`. *Buffer width* is `get_code_block_buffer_type(signal)`; note it sizes the packed prompt-sign buffer that **only the hard sweep consults** — the soft detectors read `PhaseAccumulators` instead, so for them the packed buffer is vestigial.
+| Signal | Detector | Min-to-fire | Accept rule | Phase | Blocks per symbol |
+|--------|----------|-------------|-------------|-------|---------------------|
+| GPS L1 C/A | soft bit-edge CFAR | 40 blocks (2 × 20) | confidence 0.999 | 0 | 20 |
+| Galileo E1B | trivial | n/a | always | 0 | 1 |
+| GPS L5I | soft secondary CFAR | 20 blocks (2 × NH10) | confidence 0.999 | 0 | 10 |
+| GPS L5Q | soft secondary CFAR | 40 blocks (2 × NH20) | confidence 0.999 | 0 | 20 (pilot) |
+| GPS L1C-D | trivial | n/a | always | 0 | 1 |
+| GPS L1C-P | **hard** rotation sweep | 1800 blocks | 45 errors (2.5 %) | `0..1799` | n/a (pilot) |
+| GPS L2CM | trivial | n/a | always | 0 | 1 |
+| GPS L2CL | none (dataless pilot) | n/a | n/a | 0 | n/a (pilot) |
+| Galileo E1C | soft secondary CFAR | 50 blocks (2 × CS25) | confidence 0.999 | 0 | 25 (pilot) |
+| Galileo E5a-I | soft secondary CFAR | 40 blocks (2 × CS20) | confidence 0.999 | 0 | 20 |
+| Galileo E5a-Q | soft secondary CFAR | 200 blocks (2 × CS100) | confidence 0.999 | 0 | 100 (pilot) |
+| Galileo E5b-I | soft secondary CFAR | 8 blocks (2 × CS4) | confidence 0.999 | 0 | 4 |
+| Galileo E5b-Q | soft secondary CFAR | 200 blocks (2 × CS100) | confidence 0.999 | 0 | 100 (pilot) |
+| Galileo E5a-QP | trivial | n/a | always | 0 | n/a (pilot) |
+| Galileo E6-B | trivial | n/a | always | 0 | 1 |
+| Galileo E6-C | soft secondary CFAR | 200 blocks (2 × CS100) | confidence 0.999 | 0 | 100 (pilot) |
+| BeiDou B1I | soft secondary CFAR | 40 blocks (2 × NH20) | confidence 0.999 | 0 | 20 |
+| BeiDou B3I | soft secondary CFAR | 40 blocks (2 × NH20) | confidence 0.999 | 0 | 20 |
+| BeiDou B2b-I | trivial | n/a | always | 0 | 1 |
+| BeiDou B2a data | soft secondary CFAR | 10 blocks (2 × 5) | confidence 0.999 | 0 | 5 |
+| BeiDou B2a pilot | soft secondary CFAR | 200 blocks (2 × 100) | confidence 0.999 | 0 | 100 (pilot) |
+| BeiDou B1C data | trivial | n/a | always | 0 | 1 |
+| BeiDou B1C pilot | **hard** rotation sweep | 1800 blocks | 45 errors (2.5 %) | `0..1799` | n/a (pilot) |
 
-| Signal | Detector | Min-to-fire | Buffer width | Accept rule | Phase | Blocks per symbol |
-|--------|----------|-------------|--------------|-------------|-------|---------------------|
-| GPS L1 C/A | soft bit-edge CFAR | 40 blocks (2 × 20) | `UInt64` (vestigial) | confidence 0.999 | 0 | 20 |
-| Galileo E1B | trivial | n/a | `UInt8` (unused) | always | 0 | 1 |
-| GPS L5I | soft secondary CFAR | 20 blocks (2 × NH10) | `UInt32` (vestigial) | confidence 0.999 | 0 | 10 |
-| GPS L5Q | soft secondary CFAR | 40 blocks (2 × NH20) | `UInt32` (vestigial) | confidence 0.999 | 0 | 20 (pilot) |
-| GPS L1C-D | trivial | n/a | `UInt8` (unused) | always | 0 | 1 |
-| GPS L1C-P | **hard** rotation sweep | 1800 blocks | `UInt1800` (exact width) | 45 errors (2.5 %) | `0..1799` | n/a (pilot) |
-| GPS L2CM | trivial | n/a | `UInt8` (unused) | always | 0 | 1 |
-| GPS L2CL | never fires | `UInt8` (unused) | none (dataless pilot) | n/a | 0 | n/a (pilot) |
-| Galileo E1C | soft secondary CFAR | 50 blocks (2 × CS25) | `UInt32` (vestigial) | confidence 0.999 | 0 | 25 (pilot) |
-| Galileo E5a-I | soft secondary CFAR | 40 blocks (2 × CS20) | `UInt32` (vestigial) | confidence 0.999 | 0 | 20 |
-| Galileo E5a-Q | soft secondary CFAR | 200 blocks (2 × CS100) | `UInt128` (vestigial) | confidence 0.999 | 0 | 100 (pilot) |
-| Galileo E5b-I | soft secondary CFAR | 8 blocks (2 × CS4) | `UInt32` (vestigial) | confidence 0.999 | 0 | 4 |
-| Galileo E5b-Q | soft secondary CFAR | 200 blocks (2 × CS100) | `UInt128` (vestigial) | confidence 0.999 | 0 | 100 (pilot) |
-| Galileo E6-B | trivial | n/a | `UInt8` (unused) | always | 0 | 1 |
-| Galileo E6-C | soft secondary CFAR | 200 blocks (2 × CS100) | `UInt128` (vestigial) | confidence 0.999 | 0 | 100 (pilot) |
-| BeiDou B1I | soft secondary CFAR | 40 blocks (2 × NH20) | `UInt32` (vestigial) | confidence 0.999 | 0 | 20 |
-| BeiDou B3I | soft secondary CFAR | 40 blocks (2 × NH20) | `UInt32` (vestigial) | confidence 0.999 | 0 | 20 |
-| BeiDou B2b-I | trivial | n/a | `UInt8` (unused) | always | 0 | 1 |
-| BeiDou B2a data | soft secondary CFAR | 10 blocks (2 × 5) | `UInt32` (vestigial) | confidence 0.999 | 0 | 5 |
-| BeiDou B2a pilot | soft secondary CFAR | 200 blocks (2 × 100) | `UInt128` (vestigial) | confidence 0.999 | 0 | 100 (pilot) |
-| BeiDou B1C data | trivial | n/a | `UInt8` (unused) | always | 0 | 1 |
-| BeiDou B1C pilot | **hard** rotation sweep | 1800 blocks | `UInt1800` (exact width) | 45 errors (2.5 %) | `0..1799` | n/a (pilot) |
+BeiDou B1I/B3I GEO satellites (PRN 1-5, 59-63) carry no NH20 overlay and
+broadcast D2, so the detector never locks on them: they track and range but stay
+pre-sync (see [Known limitations](signals.md#Known-limitations)).
 
-On the BeiDou GEO satellites (PRN 1-5, 59-63) the B1I/B3I overlay column is all-ones — those satellites carry no NH20 (BDS-SIS-ICD-B1I-3.0 §5.2.1) — and they are also the ones broadcasting D2 at 500 sym/s. An all-ones reference is rotation-invariant, so the soft detector's 20 per-rotation bins are separated only by the *data* transitions they straddle; with 2-block D2 symbols each 20-block bin averages ~10 random symbols and no rotation stands out, so the CFAR test never accepts and those satellites stay pre-sync (they still track and range). The two facts only cancel together: an absent overlay at the *D1* rate would leave exactly the bit-edge search GPS L1 C/A uses, locking on the symbol boundary. Either way the signal type reports `get_secondary_code_length == 20`, so B1I/B3I never route to `_detect_bit_edge_cfar` itself.
-
-The buffer-width type threads through `BitBuffer{B}` and `TrackedSignal{Sig, B, C, PCF, CN0}` as a type parameter. The two 1800-chip overlay pilots (GPS L1C-P, BeiDou B1C-pilot) use an exact-width `UInt1800` defined via `BitIntegers.@define_integers 1800`. The soft secondary CFAR detectors take the ±1 overlay chip directly from `get_secondary_code(signal)` per rotation, so a new short-secondary-code signal needs no bespoke template — only for `uses_soft_secondary_code_detection` to return `true` (secondary length `1 < N ≤ 100`).
-
-The soft CFAR confidence is package-wide and adjustable per signal via `get_bit_edge_detection_confidence`; the hard-sweep Hamming tolerance is adjustable per (hard-path) signal via `get_bit_edge_or_secondary_code_tolerance`:
+The confidence (soft detectors) and the tolerance (hard sweep only) can be
+overridden per signal; the hard sweep reads its tolerance on every call, so no
+`TrackState` rebuild is needed:
 
 ```jldoctest tolerance_override
 julia> using Tracking, TrackingLoops, GNSSSignals
@@ -100,26 +102,14 @@ julia> TrackingLoops.get_bit_edge_or_secondary_code_tolerance(GPSL1C_P())  # aft
 0.05
 ```
 
-The hard sweep reads the tolerance at its call site and converts to an integer error budget via `floor(Int, tolerance × window_size)`, so the override picks up the next time `detect_bit_or_secondary_code_sync` runs — no `TrackState` rebuild needed. It has no effect on the soft-detector signals (tune their confidence instead); the trivial detectors ignore both.
+### Code-phase seeding
 
-### Lifecycle of a `BitBuffer`
+When a signal with a secondary code syncs, its `secondary_phase` snaps
+`TrackedSat.code_phase` into the right secondary-code window, by a multiple of
+the primary length; the within-period phase is kept (#117). Of several synced
+signals, the one with the longest `primary × secondary` length wins.
 
-Two distinct phases, separated by the `found::Bool` flag:
-
-1. **Pre-sync search** (`found = false`). Each completed integration folds the prompt into the running state and the detector is called; while it returns `SyncResult(false, ...)` the loop keeps integrating one primary code period at a time. The **soft CFAR** detectors (GPS L1 C/A bit-edge; every short-secondary-code signal's overlay) fold each prompt into `PhaseAccumulators` and lock only at the winning hypothesis's own boundary — so the call that flips `found` lands exactly on a data-bit / secondary-code-period boundary and reports `phase = 0` (the upcoming integration starts a fresh period). The **hard rotation-sweep** detector (the 1800-chip overlay pilots GPS L1C-P and BeiDou B1C-pilot) instead shifts each prompt sign into `code_block_buffer::B` and locks as soon as one full overlay period has been buffered — at *any* alignment — reporting the recovered `phase` (the upcoming integration's secondary chip); the integration cadence then re-aligns to that boundary (see below).
-
-2. **Post-sync accumulation** (`found = true`). The post-sync branch in `TrackingLoops.buffer` ignores `code_block_buffer` and instead accumulates the complex prompt into `prompt_accumulator`. (Pilot signals such as GPS L1C-P carry no data bits, so for them this branch is a no-op — the buffer just retains `found` / `secondary_phase` / `polarity`.) Because each post-sync integration spans to the next secondary-code (data-bit) boundary, bit decoding stays aligned even when sync fired mid-period. Each integration also bumps `prompt_accumulator_integrated_code_blocks`. Once that counter reaches the per-signal "blocks per symbol" value above — `_calc_num_code_blocks_that_form_a_bit(signal) = get_code_frequency(signal) / (get_code_length(signal) * get_data_frequency(signal))` — one decoded bit is committed as a **soft bit** — the polarity-corrected coherent prompt sum, sign = hard decision, magnitude = confidence — pushed onto the unbounded `soft_bits` vector (a hard decision is just the sign), and the accumulator resets to zero. For Galileo E1B and GPS L1C-D the counter is `1`, so one symbol commits per integration; for GPS L1 C/A it's `20`, so the loop counts 20 primary-code periods (≈ 20 × 1023 chips = 20460 chips of `code_phase` advance, modulo wrap) per data bit; for GPS L5I it's `10`. The polarity flag flips the accumulator's sign at commit time when the detector locked at negative polarity, so downstream consumers always see `1 = data symbol 0`.
-
-3. **Resync on a bit-boundary overshoot.** The commit test in step 2 is an equality, so a record that carries the counter *past* the blocks-per-symbol value (18 accumulated + a 3-block record = 21 for GPS L1 C/A) would never meet it again: the counter would climb forever, no further bit would ever be pushed, and tracking, C/N₀ and the lock detectors would all keep looking perfect. Only an external `CorrelatorOutput` producer can get there — the software correlate phase truncates the first post-sync integration onto the boundary and hands over whole bits afterwards. `TrackingLoops.buffer` therefore treats `> blocks per symbol` as a lost sync: it warns (once per signal and PRN), drops `found`, `secondary_phase`, `polarity`, the partial accumulation and the search window, zeroes the `PhaseAccumulators`, and keeps the `soft_bits` decoded so far. The detector then re-runs from a clean accumulator and the caller reverts to single-block records, because `calc_num_code_blocks_for_bit_buffer` reads the same `found` flag. The straddling record's energy belongs to two different bits, so committing at `>=` and carrying the overshoot instead would soft-corrupt both that bit and its successor with nothing downstream able to tell (issue #238).
-
-Pilot signals (`get_data_frequency = 0 Hz`, e.g. GPS L1C-P) never enter the post-sync accumulation branch — their `bit_buffer` carries the recovered secondary-code phase but no decoded bits, and the post-sync work is purely the [code-phase seeding](#Code-phase-seeding-from-the-secondary-code-phase) described next.
-
-### Code-phase seeding from the secondary-code phase
-
-When a signal with a secondary code (`secondary_code_length > 1`) syncs — any of the short-secondary-code signals, or one of the 1800-chip overlay pilots — its `secondary_phase` seeds `TrackedSat.code_phase` so subsequent wrap-mod-[`current_code_wrap`](@ref) arithmetic gives the absolute position in the longest secondary-code cycle. The seeding follows a fallback chain: the synced signal with the largest `(primary × secondary)` code length wins. For the soft-CFAR signals `secondary_phase` is always `0` (they fire on a period boundary, so the upcoming integration is at chip 0); for the hard-sweep overlay pilots it is the recovered chip offset. Either way it is a multiple-of-primary snap into the correct secondary window.
-
-Signals with `secondary_code_length == 1` (bit-edge only, e.g. GPS L1 C/A) do **not** carry an explicit `secondary_phase` to snap — there's no per-PRN overlay to recover a chip offset from. Instead, their post-sync bit-edge alignment is captured by **two complementary mechanisms**:
-
-1. The `BitBuffer.prompt_accumulator_integrated_code_blocks` counter tracks "how many of the next N primary periods have I integrated since the last bit commit." `reset(bit_buffer)` preserves it, so the bit cadence survives intra-call resets without re-syncing.
-
-2. The wrap returned by [`current_code_wrap`](@ref) widens from `primary` to `primary × blocks_per_data_bit` (e.g. 1023 → 20460 for L1 C/A) the moment `bit_buffer.found` flips to `true`. From that point on `mod(code_phase, primary)` continues to give the replica phase, while `div(code_phase, primary)` reads off which primary period within the data bit we're in. The transition is one-shot: on the call that flips `found`, `code_phase` is implicitly the start of a fresh data bit because the detector only matches at a true bit boundary (the `[0, primary)` range of `code_phase` then represents primary period 0 of the new bit), so no explicit snap is needed.
+A signal without secondary code (e.g. GPS L1 C/A) needs no snap: its detector
+locks at a true bit boundary, so the widened wrap starts at the bit's first
+period, and the bit buffer's block counter, which `reset` preserves, keeps the
+bit cadence across `track!` calls.

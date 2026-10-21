@@ -1,17 +1,13 @@
-# Precompile workload (PrecompileTools). The first `track!` of a session costs
-# 2.6 s of compilation for the float backend and another 1.7 s for the Int16
-# backend on a workstation, three to four times that on an embedded ARM host,
-# and a live receiver pays it on its first tracked satellite, i.e. after the
-# stream has started (GNSSReceiver.jl#107). The tracking kernels are
-# specialised on the signal type, so every signal this package can track is
-# tracked here — one satellite through a few code periods, with both sample
-# element types and the threaded backends a receiver uses — so the loop
-# filters, prompt filter, C/N₀ estimator and bit buffer of each compile at
-# precompile time instead of on the first satellite of a run.
+# Precompile workload. The first `track!` of a session costs 2.6 s of compilation
+# for the float backend and 1.7 s more for Int16 on a workstation, three to four
+# times that on an embedded ARM host, and a live receiver pays it after its
+# stream has started (GNSSReceiver.jl#107). The kernels specialise on the signal
+# type, so each signal below tracks one satellite for a few code periods, with
+# both sample types and the threaded backends a receiver uses.
 using PrecompileTools: @setup_workload, @compile_workload
 
-# Every signal Tracking has a default correlator for. (The Galileo E5/E6 and
-# BeiDou B1C/B2a signals are defined by GNSSSignals but not tracked yet.)
+# The precompiled signals. Galileo E5/E6 and BeiDou B1C/B2a are tracked too
+# (docs/src/signals.md) but not precompiled.
 const _PRECOMPILE_SIGNALS = (
     GPSL1CA(),
     GPSL1C_D(),
@@ -25,28 +21,22 @@ const _PRECOMPILE_SIGNALS = (
     GalileoE1C(),
     GalileoE1C_BOC11(),
     BeiDouB1I(),
-    # BeiDou B2b is left out for now: tracking a clean B2b replica yields an
-    # all-zero prompt after the first code period, the discriminators turn that
-    # into a NaN Doppler and the next `track!` throws `InexactError` — a
-    # robustness bug in its own right, reported separately.
+    # BeiDou B2b is left out: a clean replica yields an all-zero prompt, a NaN
+    # Doppler and then an `InexactError` (#234).
     BeiDouB3I(),
 )
 
-# Sampling frequency for one signal's workload. The BOC-modulated signals (GPS
-# L1C, Galileo E1, BeiDou B1C) need at least their sub-chip rate — twelve times
-# the chip rate for TMBOC/CBOC/QMBOC — so every signal at the 1.023 MHz chip
-# rate is sampled at 24 chips per sample period; the 5.115 and 10.23 MHz BPSK
-# codes get four samples per chip.
-# Float64-valued, like the `5e6Hz` a receiver passes: the kernels specialise on
-# the frequency's element type, and an `Int`-valued rate would compile a
-# specialisation nobody calls.
+# The BOC signals need at least their sub-chip rate (12× the chip rate for
+# TMBOC/CBOC/QMBOC), so 1.023 MHz codes get 24 samples per chip and the faster
+# BPSK codes four. Float64, like the `5e6Hz` a receiver passes: the kernels
+# specialise on the frequency's element type.
 function _precompile_sampling_frequency(system)
     code_frequency = get_code_frequency(system)
     code_frequency <= 1.1e6Hz ? 24.0 * code_frequency : 4.0 * code_frequency
 end
 
-# One code period of a clean replica at four samples per chip, with a small
-# carrier Doppler, so the loops have something to pull on.
+# One code period of a clean replica with a small carrier Doppler for the loops
+# to pull on.
 function _precompile_signal(system)
     sampling_frequency = _precompile_sampling_frequency(system)
     num_samples = round(
@@ -65,11 +55,8 @@ function _precompile_signal(system)
     signal_f32, Complex{Int16}.(round.(signal_f32 .* 512)), sampling_frequency
 end
 
-# One signal's workload, as a function so every call inside it is statically
-# dispatched on the concrete signal type — the specialisations then land in
-# the package image. Iterating the signal tuple in a loop instead dispatches
-# dynamically, and the methods compiled that way were not all cached (the
-# first `track!` of a session still cost ~1 s).
+# A function, so every call is statically dispatched on the signal type; methods
+# compiled through dynamic dispatch were not all cached.
 function _precompile_track(system, signal_f32, signal_i16, sampling_frequency, backend16)
     state = TrackState(system, [TrackedSat(system, 1, 0.0, 180.0Hz)])
     for _ = 1:3

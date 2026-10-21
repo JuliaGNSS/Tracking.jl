@@ -21,7 +21,7 @@ using TrackingLoops:
     @test w1 === 1.0 + 0.0im
     @test @inferred(_combine_antennas(w1, complex(1.2, 1.3))) === complex(1.2, 1.3)
 
-    # Multi antenna: the last element is selected, exactly as before.
+    # Multi antenna: the last element is selected.
     w2 = @inferred get_weights(default_post_corr_filter, NumAnts(2))
     @test w2 === SVector{2,ComplexF64}(0.0 + 0.0im, 1.0 + 0.0im)
     tap = SVector(complex(1.2, 1.3), complex(2.2, 4.3))
@@ -40,15 +40,12 @@ end
     # A scalar gain of g scales the floor by |g|².
     @test _reduce_noise_density(density, 2.0 + 0.0im) ≈ 4 * density
 
-    # A covariance reduces to wᴴRw. Under `DefaultPostCorrFilter`'s weights that
-    # is exactly the last antenna's own floor — the value the single-antenna
-    # path would have measured.
+    # A covariance reduces to wᴴRw, here the last antenna's own floor.
     R = SMatrix{2,2,ComplexF64,4}(4.0, 1.0 - 2.0im, 1.0 + 2.0im, 9.0) / 1.0Hz
     w_last = get_weights(DefaultPostCorrFilter(), NumAnts(2))
     @test @inferred(_reduce_noise_density(R, w_last)) ≈ real(R[2, 2])
 
-    # An averaging beamformer sees a floor its weights actually produce, which
-    # for correlated antennas is not the mean of the diagonal.
+    # With correlated antennas an average's floor is not the mean diagonal.
     w_mean = SVector{2,ComplexF64}(0.5, 0.5)
     @test _reduce_noise_density(R, w_mean) ≈
           real(0.25 * (R[1, 1] + R[1, 2] + R[2, 1] + R[2, 2]))

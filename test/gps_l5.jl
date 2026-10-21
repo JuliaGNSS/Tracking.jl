@@ -14,27 +14,22 @@ using TrackingLoops:
     EarlyPromptLateCorrelator,
     NumAnts
 
-# Rotate the low `N` bits of `x` left by `r` (emulates a prompt buffer whose
-# upcoming integration sits `r` secondary chips into the period).
+# Rotate the low `N` bits of `x` left by `r`: a buffer whose upcoming
+# integration is `r` secondary chips into the period.
 rotl(x::T, r, N) where {T} =
     r == 0 ? x : ((x << r) | (x >> (N - r))) & ((one(T) << N) - one(T))
 
 @testset "GPS L5I" begin
     gpsl5 = GPSL5I()
     prn = 1
-    # NH10 packed newest-first from `get_secondary_code` — `0x3ca`
-    # (= 1111001010), matched at positive polarity. The ICD writes NH10 as
-    # `0000110101`; GNSSSignals carries the ±1 chips, and
-    # `_packed_secondary_code` sets a bit per `+1` chip, so the packed
-    # reference is that pattern's complement. Only the reported polarity sign
-    # rides on the convention, and it is the same convention the post-sync
-    # replica and the soft detector apply.
+    # NH10 packed newest-first, one bit per `+1` chip: `0x3ca`, the complement
+    # of the ICD's `0000110101`. Only the polarity sign depends on that
+    # convention, shared with the replica and the soft detector.
     @test TrackingLoops._packed_secondary_code(UInt32, gpsl5, prn) == UInt32(0x3ca)
     res = @inferred(detect_bit_or_secondary_code_sync(gpsl5, prn, UInt32(0x3ca), 50))
     @test res.found == true
     @test res.polarity == +1
 
-    # Buffer not yet at 10 blocks.
     @test @inferred(detect_bit_or_secondary_code_sync(gpsl5, prn, UInt32(0x3ca), 5)).found ==
           false
 
@@ -50,22 +45,15 @@ rotl(x::T, r, N) where {T} =
     @test @inferred(get_default_correlator(gpsl5, NumAnts(3))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
-    # L5I has a 1 ms primary code period (10230 chips at 10.23 Mcps), same
-    # as L1 C/A — so the per-signal default BL falls out the same: 18 Hz /
-    # 1 Hz. Longer coherent integration is unlocked by secondary-code sync
-    # at runtime, not changed by this default.
     @test @inferred(default_narrow_carrier_loop_filter_bandwidth(gpsl5)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(gpsl5)) ≈ 1.0Hz
 
-    # 20-block sync window (2 × NH10) fits in a UInt32.
     @test @inferred(get_code_block_buffer_type(gpsl5)) === UInt32
 
-    # NH10 (10 chips) is short enough for the soft, CFAR secondary-code detector.
     @test TrackingLoops.uses_soft_secondary_code_detection(gpsl5) == true
 
     @testset "Hamming tolerance" begin
-        # 2.5 % ceiling over a 10-block window discretizes to "exact match"
-        # (floor(0.025 × 10) = 0) — any single bit-flip rejects.
+        # floor(0.025 × 10) = 0 errors allowed.
         template = TrackingLoops._packed_secondary_code(UInt32, gpsl5, prn)
         @test detect_bit_or_secondary_code_sync(gpsl5, prn, template, 10).found == true
         @test detect_bit_or_secondary_code_sync(gpsl5, prn, template ⊻ UInt32(0x1), 10).found ==
@@ -79,8 +67,6 @@ end
     N = get_secondary_code_length(gpsl5q)  # 20 (NH20)
     @test N == 20
 
-    # Below the NH20 horizon the detector returns `found = false` without
-    # running the sweep; from one full period on it locks.
     @test @inferred(detect_bit_or_secondary_code_sync(gpsl5q, prn, UInt32(0x0), N - 1)).found ==
           false
 
@@ -102,28 +88,23 @@ end
     end
 
     @testset "Hamming tolerance" begin
-        # 2.5 % over a 20-block window discretizes to exact match
-        # (floor(0.025 × 20) = 0) — any single bit-flip rejects.
+        # floor(0.025 × 20) = 0 errors allowed.
         reference = TrackingLoops._packed_secondary_code(UInt32, gpsl5q, prn)
         @test detect_bit_or_secondary_code_sync(gpsl5q, prn, reference, N).found == true
         @test detect_bit_or_secondary_code_sync(gpsl5q, prn, reference ⊻ UInt32(0x1), N).found ==
               false
     end
 
-    # L5Q is BPSK on L5 — EarlyPromptLate default, same as L5I.
     @test @inferred(get_default_correlator(gpsl5q, NumAnts(1))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
     @test @inferred(get_default_correlator(gpsl5q, NumAnts(3))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
-    # 1 ms primary period (10230 chips at 10.23 Mcps), same as L5I → 18 Hz / 1 Hz.
     @test @inferred(default_narrow_carrier_loop_filter_bandwidth(gpsl5q)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(gpsl5q)) ≈ 1.0Hz
 
-    # 20-block NH20 window fits in a UInt32.
     @test @inferred(get_code_block_buffer_type(gpsl5q)) === UInt32
 
-    # NH20 (20 chips) is short enough for the soft, CFAR secondary-code detector.
     @test TrackingLoops.uses_soft_secondary_code_detection(gpsl5q) == true
 end
 
