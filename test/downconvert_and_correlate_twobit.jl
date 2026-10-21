@@ -22,6 +22,8 @@ using Tracking:
     downconvert_and_correlate,
     BandMeasurement,
     get_sat_state,
+    get_sat_states,
+    add_satellite!,
     get_carrier_doppler,
     TrackedSignal,
     CPUThreadedDownconvertAndCorrelator,
@@ -704,6 +706,67 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             @test get_prompt(shared) == get_prompt(alone)
             @test get_early(shared) == get_early(alone)
             @test get_late(shared) == get_late(alone)
+        end
+    end
+
+    @testset "band planes stay per band on samples_unchanged calls: $n_l1 + $n_l5 sats, $(nameof(typeof(dc)))" for (
+            n_l1,
+            n_l5,
+        ) in (
+            (2, 2),
+            (1, 2),
+        ),
+        dc in (TwoBitDownconvertAndCorrelator(), TwoBitThreadedDownconvertAndCorrelator())
+        # Groups on two bands share one `dc`; a `samples_unchanged` call (as `track!`
+        # makes on every chunk after the first) must not hand the L5 group's band planes
+        # to the L1 group. With one L1 sat the L1 group reads band planes only if some
+        # are left over, which pins the single-sat path too.
+        meas = (
+            L1 = BandMeasurement(
+                make_capture(GPSL1CA(), 1, 5e6Hz, 5000, 200Hz, 100.0),
+                5e6Hz,
+                0.0Hz,
+            ),
+            L5 = BandMeasurement(
+                make_capture(GPSL5I(), 1, 25e6Hz, 25000, -100Hz, 300.0),
+                25e6Hz,
+                0.0Hz,
+            ),
+        )
+        function make_state()
+            ts = TrackState(; signals = (l1 = (GPSL1CA(),), l5 = (GPSL5I(),)))
+            for prn in (1, 5)[1:n_l1]
+                ts = add_satellite!(
+                    ts;
+                    prn,
+                    group = :l1,
+                    code_phase = 100.0,
+                    carrier_doppler = 200Hz,
+                )
+            end
+            for prn in (1, 5)[1:n_l5]
+                ts = add_satellite!(
+                    ts;
+                    prn,
+                    group = :l5,
+                    code_phase = 300.0,
+                    carrier_doppler = -100Hz,
+                )
+            end
+            ts
+        end
+        fresh = downconvert_and_correlate(dc, meas, make_state())
+        again = downconvert_and_correlate(dc, meas, make_state(); samples_unchanged = true)
+        for (group, n) in ((:l1, n_l1), (:l5, n_l5)), prn in (1, 5)[1:n]
+            @test get_accumulators(
+                _completed_or_partial_correlator(
+                    first(get_sat_states(again, group)[prn].signals),
+                ),
+            ) == get_accumulators(
+                _completed_or_partial_correlator(
+                    first(get_sat_states(fresh, group)[prn].signals),
+                ),
+            )
         end
     end
 

@@ -256,6 +256,8 @@ OneBitScratchBuffers() =
 # the funnel realign) and share them across sats. Each sat then funnel-shifts its slice into its
 # thread-local block buffer instead of re-deinterleaving/movemasking the Int16 samples. Filled
 # serially in `_dc_one_group!` before the per-sat (`@batch`) loop, then read-only across threads.
+# Each band keeps its own planes (`dc.bands`), and `dc.band` points the kernels at the
+# current group's, so a group never reads another band's planes on a `samples_unchanged` call.
 struct OneBitBandBuffers
     mrband::Vector{UInt64}
     miband::Vector{UInt64}
@@ -351,7 +353,8 @@ amplitude is immaterial.
 """
 struct OneBitDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator
     buffers::OneBitScratchBuffers
-    band::OneBitBandBuffers
+    band::Base.RefValue{OneBitBandBuffers}
+    bands::Dict{Symbol,OneBitBandBuffers}
     blk::Int
 end
 
@@ -364,17 +367,24 @@ Multi-threaded one-bit bit-wise backend. One `OneBitScratchBuffers` per thread
 """
 struct OneBitThreadedDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator
     buffers::Vector{OneBitScratchBuffers}
-    band::OneBitBandBuffers
+    band::Base.RefValue{OneBitBandBuffers}
+    bands::Dict{Symbol,OneBitBandBuffers}
     blk::Int
 end
 
 OneBitDownconvertAndCorrelator(; blk::Integer = _ONEBIT_BLK) =
-    OneBitDownconvertAndCorrelator(OneBitScratchBuffers(), OneBitBandBuffers(), Int(blk))
+    OneBitDownconvertAndCorrelator(
+        OneBitScratchBuffers(),
+        Ref(OneBitBandBuffers()),
+        Dict{Symbol,OneBitBandBuffers}(),
+        Int(blk),
+    )
 
 OneBitThreadedDownconvertAndCorrelator(; blk::Integer = _ONEBIT_BLK) =
     OneBitThreadedDownconvertAndCorrelator(
         [OneBitScratchBuffers() for _ = 1:Threads.maxthreadid()],
-        OneBitBandBuffers(),
+        Ref(OneBitBandBuffers()),
+        Dict{Symbol,OneBitBandBuffers}(),
         Int(blk),
     )
 
@@ -503,7 +513,7 @@ const _OneBitDC =
         code_phase0 = Float64(code_phase)
         num_rows = size(signal, 1)
         p_sig = Ptr{Int16}(pointer(signal))
-        band = dc.band                              # band-shared measurement sign planes (>1 sat)
+        band = dc.band[]                            # band-shared measurement sign planes (>1 sat)
         band_shared = use_band_cache && !isempty(band.mrband)  # pre-packed per group when it pays off
         bandstride = cld(num_rows, 64) + 2          # per-antenna plane stride in `band` (see _ob_pack_band!)
 
@@ -692,7 +702,7 @@ function _onebit_hybrid_blocked!(
     code_phase0 = Float64(code_phase)
     num_rows = size(signal, 1)
     p_sig = Ptr{Int16}(pointer(signal))
-    band = dc.band                              # band-shared measurement sign planes (>1 sat)
+    band = dc.band[]                            # band-shared measurement sign planes (>1 sat)
     band_shared = use_band_cache && !isempty(band.mrband)
     bandstride = cld(num_rows, 64) + 2
 
@@ -1095,7 +1105,7 @@ end
         carphase = Float64(carrier_phase)
         num_rows = size(signal, 1)
         p_sig = Ptr{Int16}(pointer(signal))
-        band = dc.band                              # band-shared measurement sign planes (>1 sat)
+        band = dc.band[]                            # band-shared measurement sign planes (>1 sat)
         band_shared = !isempty(band.mrband)
         bandstride = cld(num_rows, 64) + 2
         $setup
@@ -1274,7 +1284,8 @@ end
 )
     vals = g.satellites.values
     isempty(vals) && n_noise == 0 && return nothing
-    m = measurements[get_band_id(g.band)]
+    band_id = get_band_id(g.band)
+    m = measurements[band_id]
     _check_sample_type(dc, m)
     # The pack below is sized by the *satellite* count alone: a noise item riding
     # this loop passes `use_band_cache = false` (its band may not even be this one),
@@ -1283,17 +1294,18 @@ end
     # Pack the band's measurement sign planes ONCE, shared across sats — but only for >1 sat:
     # for a single sat the shared pack + per-sat realign copy is slower than packing that one sat
     # directly, so empty the band buffer to select the kernel's per-sat path.
+    band = get!(OneBitBandBuffers, dc.bands, band_id)
+    dc.band[] = band
     samples = m.samples
-    if samples_unchanged
-        # Same buffer content as the previous call with this dc (track! passes
-        # this on every chunk/pass after the first): the shared band pack — or
-        # the emptied single-sat state — is still valid, keep it.
+    if samples_unchanged && (length(vals) <= 1 || !isempty(band.mrband))
+        # Same buffer as this band's previous call with this dc: its planes still hold.
+        # A >1-sat group repacks planes a single-sat group emptied.
     elseif length(vals) > 1
         nsamp = get_num_samples(m)
         M = samples isa AbstractMatrix ? size(samples, 2) : 1
         num_rows = samples isa AbstractMatrix ? size(samples, 1) : length(samples)
         GC.@preserve samples _ob_pack_band!(
-            dc.band,
+            band,
             samples,
             nsamp,
             M,
@@ -1301,8 +1313,8 @@ end
             num_rows,
         )
     else
-        resize!(dc.band.mrband, 0)
-        resize!(dc.band.miband, 0)
+        resize!(band.mrband, 0)
+        resize!(band.miband, 0)
     end
     num_samples = get_num_samples(m)
     chunk_last_sample =
