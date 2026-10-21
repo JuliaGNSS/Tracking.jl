@@ -304,8 +304,9 @@ at the record's end (`code_phase`), and one time grid for all satellites of a
 band. The correlate phase counts samples from the start of the current
 measurement; the estimate phase adds the band's running offset (the
 `TrackState`'s `sample_offsets`, advanced by every `track!` call) when it
-builds the record. Step every satellite at least every half navigation cycle
-(50 ms by default), which any `track!` call on a shorter chunk does.
+builds the record. Step every satellite at least every half
+`vt_update_interval` (50 ms by default), which any `track!` call on a shorter
+chunk does.
 
 The estimator's engine and the state's offsets belong together. A
 `TrackState` built afresh around an estimator that has already run starts
@@ -314,9 +315,13 @@ constructor (see [`TrackState`](@ref)). To branch a state, `deepcopy` it
 rather than calling [`track`](@ref) twice on it, since `track` shares the
 estimator with its input.
 
+While a satellite is in the vector loop, the navigation filter alone sets its
+carrier NCO, and a residual PLL follows the carrier on the prompts without
+steering it; `carrier_loop_stage` reports `VECTOR_LOOP`.
 [`reset_loop_filters!`](@ref) re-seeds the inner loop and keeps the satellite
-in the vector loop. It drops the corrections, which the converged Dopplers
-already contain, until the filter's next cycle sets new ones.
+in the vector loop. It drops the code correction, which the converged Dopplers
+already contain, until the filter's next cycle sets a new one, and keeps the
+filter's carrier command, which they do not.
 
 In the TrackingLoops manual:
 

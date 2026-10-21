@@ -189,7 +189,8 @@ end
         @test report.decoder isa typeof(TrackingLoops.GNSSDecoderState(GalileoE1B(), 11))
         @test isnothing(satellite_report(estimator, GalileoE1B(), 11))
         @test estimator.navigation.registrations == 1
-        @test get_doppler_estimator_state(get_sat_state(track_state, :e1, 11)).slot == 1
+        state = get_doppler_estimator_state(get_sat_state(track_state, :e1, 11))
+        @test state.slot_index == 1
     end
 end
 
