@@ -43,7 +43,6 @@ using TrackingLoops:
     navigation_cycle,
     navigation_epoch,
     satellite_report,
-    VTStatus,
     SPEED_OF_LIGHT
 
 include("lnav_encoder.jl")
