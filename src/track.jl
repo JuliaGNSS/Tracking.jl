@@ -1,12 +1,11 @@
 """
 $(SIGNATURES)
 
-Main tracking function that processes one or more `BandMeasurement`s and updates
-the tracking state. Performs downconversion, correlation, and Doppler
-estimation for all satellites in the track state. Returns an updated
-`TrackState` with new phase/Doppler estimates and decoded bits.
+Track one or more `BandMeasurement`s: downconvert, correlate and estimate the
+Dopplers of every satellite, and return the updated `TrackState` with new
+phase/Doppler estimates and decoded bits.
 
-Three input shapes for the first positional argument:
+The first argument is one of:
 
 | Argument                                | Meaning                                                                        |
 |:--------------------------------------- |:------------------------------------------------------------------------------ |
@@ -14,49 +13,30 @@ Three input shapes for the first positional argument:
 | `BandMeasurement`                       | One band's bundled buffer + sample rate. Single-band TrackState.               |
 | `NamedTuple{...}` of `BandMeasurement`s | Multi-band: one `BandMeasurement` per band id (see `GNSSSignals.get_band_id`). |
 
-The bare-buffer form `track(buf, state, fs; intermediate_frequency = ...)`
-is preserved as a thin wrapper that builds a single-entry
-`NamedTuple{(get_band_id(band),)}` internally. The two-phase inner loop
-(downconvert+correlate across all groups, then estimate across the whole
-TrackState) is the same shape regardless of how many measurements are
-passed.
+The bare buffer takes `sampling_frequency` as the next positional argument and
+an `intermediate_frequency` keyword (default `0`). Every form runs the same
+per-chunk loop: downconvert and correlate all groups, then estimate.
 
-The returned `TrackState` is *structurally* detached from the input:
-each group's key set and slot vector are copied, so
-[`add_satellite!`](@ref) / [`remove_satellite!`](@ref) and tracking
-itself on either state never affect the other's satellites. The copy
-is shallow, however — per-satellite scratch vectors (each signal's
-`filtered_prompts` and `correlator_outputs`, the soft-bit buffer, and
-the CN0 estimator's prompt buffer) are shared with the input and are
-overwritten by the next `track` call on either state. Treat the input
-as a stale handle after the call; `deepcopy` it first if you need to
-snapshot those buffers. The same applies to a bare
-`downconvert_and_correlate`: the returned state's
-`correlator_outputs` alias the input's, so reuse of one input state
-across several calls appends to the same buffers.
+The returned `TrackState` is *structurally* detached from the input: each
+group's key set and slot vector are copied, so adding, removing or tracking
+satellites on one never affects the other. The copy is shallow, though, and
+these are shared with the input (treat it as a stale handle, or `deepcopy` it
+first):
 
-Each signal's noise estimator is shared the same way, and `track` advances it:
-a [`CorrelatorNoiseEstimator`](@extref TrackingLoops.CorrelatorNoiseEstimator)'s sliding window and RNG stream are written
-in place, so branching two states from one input leaves them dividing by one
-shared noise reference, and advancing two of them concurrently races on it. Build
-a separate `TrackState` per thread rather than branching one — see
-`downconvert_and_correlate` for why the window is not copied.
+  - the per-satellite scratch vectors (`filtered_prompts`, `correlator_outputs`,
+    the soft bits, the C/N₀ estimator's buffer), overwritten by the next call on
+    either state; a bare `downconvert_and_correlate` likewise appends to the
+    input's `correlator_outputs`;
+  - each signal's noise estimator, which `track` advances in place: branched
+    states divide by one noise reference, and advancing two concurrently races,
+    so build one `TrackState` per thread (see `downconvert_and_correlate` for why
+    the window is not copied);
+  - the `doppler_estimator` itself, so results can be read off the instance you
+    passed in. One with state of its own (TrackingLoops' `VectorPLLAndDLL`) is
+    advanced by `track` as by [`track!`](@ref), and two branches would mix their
+    records in one navigation filter.
 
-The Doppler estimator is shared too: the returned state holds the input's
-`doppler_estimator` itself, not a copy. You can therefore keep reading results
-off the instance you passed in. An estimator with state of its own
-(TrackingLoops' `VectorPLLAndDLL`, whose navigation engine keeps every
-satellite's slot and the filter's cycle) is advanced by `track` as it is by
-[`track!`](@ref). Each result gets its own copy of the band's sample offsets,
-but branching two states from one input still steps one engine with both
-branches' records: the second branch hands it records from its past, and the
-two branches' measurements mix in one navigation filter. To branch such a
-state, `deepcopy` the input first, which copies the estimator together with
-the satellites that point into it.
-
-For real-time loops processing many chunks of signal in sequence, **construct
-the correlator once outside the loop** and pass it via the
-`downconvert_and_correlator` keyword argument:
+For real-time loops, **construct the correlator once outside the loop**:
 
 ```julia
 dc = CPUThreadedDownconvertAndCorrelator()
@@ -67,41 +47,26 @@ while got_chunk(rx)
 end
 ```
 
-The default kwarg value builds a fresh correlator (with fresh per-thread
-scratch buffers) on every call, which is fine for one-shot use but
-defeats the allocation-free design in tight loops. See also [`track!`](@ref)
-for the in-place variant that avoids rebuilding `track_state` per call.
+The default builds fresh per-thread scratch buffers on every call. See
+[`track!`](@ref) for the in-place variant.
 
-The coherent-integration length is a **per-signal** setting that lives on each
-[`TrackedSignal`](@ref) (its `preferred_num_code_blocks_to_integrate` field,
-addressed by `(group, prn, signal)`), not a `track!` argument. Set it with
-[`set_preferred_num_code_blocks_to_integrate!`](@ref); the actual length is
-capped per integration by the signal's bit/secondary-code period and held at 1
-until bit/secondary sync. Defaults to 1 (1 ms for GPS L5I / L1 C/A). Different
-satellites — and different signals on one satellite — can therefore integrate
-for different lengths:
+The coherent-integration length is set **per signal** with
+[`set_preferred_num_code_blocks_to_integrate!`](@ref), not passed to `track`:
 
 ```julia
 set_preferred_num_code_blocks_to_integrate!(track_state, :gps_l5, 1, GPSL5I, 10)  # PRN 1 L5I: 10 ms
 ```
 
-The conventional estimator caps each loop bandwidth by its stability product
-against the actual integration time (the carrier at `0.09 / T_int`, the code at
-`0.018 / T_int`), so longer integration stays stable without re-tuning (see [`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL)).
+The conventional estimator caps the carrier loop bandwidth at `0.09 / T_int` and
+the code loop's at `0.018 / T_int`, so longer integration stays stable (see
+[`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL)).
 """
 function track(
     measurements::BandMeasurements,
     track_state::TS;
     kwargs...,
 ) where {TS<:TrackState}
-    # Detach the slot storage from the input once — keys (`Indices`) *and*
-    # values (`_detach_groups_slot_vectors`, #123) — so a later
-    # `add_satellite!`/`remove_satellite!` on the returned state cannot
-    # corrupt the input's key set. Then run the fully in-place pipeline on
-    # the detached copy, which avoids re-copying the slot vectors twice per
-    # chunk iteration (issue #133). The copy is otherwise shallow:
-    # per-satellite scratch vectors are shared with the input — see the
-    # docstring above.
+    # Detach keys and values once (#123), then run in place (#133).
     detached = TrackState(
         track_state;
         groups = _detach_groups_slot_vectors(track_state.groups),
@@ -110,10 +75,7 @@ function track(
     track!(measurements, detached; kwargs...)::TS
 end
 
-# Wrap a bare buffer / single `BandMeasurement` into the one-entry
-# `BandMeasurements` NamedTuple keyed by the TrackState's only band. Shared
-# by the `track` and `track!` convenience wrappers; errors (via
-# `_single_band`) on multi-band TrackStates.
+# Key a single measurement by the state's only band (errors if multi-band).
 @inline function _single_band_measurements(
     measurement::BandMeasurement,
     track_state::TrackState,
@@ -142,47 +104,17 @@ end
 """
 $(SIGNATURES)
 
-In-place version of [`track`](@ref). Mutates `track_state` by overwriting the
-`Vector{TrackedSat}` slots inside each group instead of rebuilding new
-immutable wrappers. Returns the same `track_state` object.
+In-place version of [`track`](@ref): overwrites the satellite slots of
+`track_state` and returns it.
 
-After one warmup call (which seats each satellite's `filtered_prompts`
-buffer capacity), the single-threaded path is fully allocation-free.
+After one warmup call the single-threaded path is allocation-free. The threaded
+path (`CPUThreadedDownconvertAndCorrelator`) keeps a residual of about 96 B per
+group per correlate pass (one per `doppler_update_interval` chunk, so it scales
+with the buffer length), when running on more than one thread with more than one
+work item in the group (the noise despreads count, riding the first group); see
+[`CPUThreadedDownconvertAndCorrelator`](@ref) for why.
 
-The threaded path (`CPUThreadedDownconvertAndCorrelator`) keeps a small
-residual — about 96 B per **completed code-block integration** per group —
-but only when the process runs with more than one thread *and* the group's
-loop holds more than one work item (so Polyester's `@batch` actually
-distributes work). `track!` launches one `@batch` per code block, so this
-residual scales with the chunk length rather than staying flat per call; for a
-real-time loop with fixed-size chunks it is bounded per call and, in
-practice, dwarfed by the input sample buffer the caller allocates each
-chunk. The single-threaded backend has none of it.
-
-A `TrackState` whose C/N₀ estimators read a measured noise density pays the
-**same** ~96 B, even though its per-signal noise despread rides that same
-parallel loop: the loop reaches the despread's descriptor through one pointer
-rather than by value. It does mean a group with a *single* satellite now has
-two work items, so it pays the residual where it previously paid none.
-
-The root cause is not the per-satellite state per se — it is that the
-GNSS **signal** object is not an `isbits` type: `GPSL1CA`, for example, holds
-a `Matrix{Int16}` code table and a (also non-`isbits`) `SignalLUT`. Polyester
-roots bare `Array`s and `isbits` values into its worker tasks for free (that
-is why a `Vector{Float64}` kernel is allocation-free), but it pays a small
-per-launch allocation to root any *other* non-`isbits` object touched inside
-the `@batch` region. Each satellite's `downconvert_and_correlate` reaches its
-signal (for code-replica generation), so the parallel loop touches that
-non-`isbits` object once per launch. It could be removed by generating the code
-from the LUT's *bare arrays* (a prototype doing so inside the loop measures 0 B
-at full parallel throughput) — which needs a GNSSSignals-side bare-array
-`gen_code!` — or, in-tree, by a serial code-gen pre-pass (allocation-free but
-slower, since it serializes ~30 % of the work). Neither is currently worth
-~64 B/block. See [`CPUThreadedDownconvertAndCorrelator`](@ref) for the full
-analysis.
-
-For real-time loops, **construct the correlator once outside the loop**
-and pass it via the `downconvert_and_correlator` keyword argument:
+For real-time loops, **construct the correlator once outside the loop**:
 
 ```julia
 track_state = TrackState(signal, initial_sats)
@@ -194,8 +126,7 @@ while got_chunk(rx)
 end
 ```
 
-The correlator holds long-lived per-thread scratch buffers that grow on
-first use; rebuilding it via the default kwarg value would re-grow them
+Its per-thread scratch buffers grow on first use; the default would regrow them
 every call.
 """
 function track!(
@@ -206,30 +137,17 @@ function track!(
 )
     _validate_measurements(track_state, measurements)
     reset_start_sample_and_bit_buffer!(track_state)
-    # Resolve the Doppler-update / chunk interval. `nothing` => auto: the
-    # smallest primary-code period across all tracked signals, so a default
-    # chunk holds one code period of the shortest signal. The measurement is
-    # walked chunk by chunk: each chunk correlates (collecting every completed
-    # correlator output per signal into its `correlator_outputs` buffer) with
-    # the NCO Doppler held fixed, then the estimator folds over those outputs
-    # and updates every sat's NCO once — a common epoch across all sats.
     chunk_duration = _resolve_doppler_update_interval(doppler_update_interval, track_state)
     _validate_doppler_update_interval(chunk_duration, measurements)
-    # One correlate pass + one estimate per chunk. The pass runs each satellite
-    # from wherever it stands to its last completed code-block boundary inside
-    # the chunk (`stop_before_partial` — the chunk-clamped trailing partial is
-    # NOT integrated); the estimator then folds the collected outputs and
-    # writes the new NCO Doppler. The residue is picked up by the NEXT chunk's
-    # pass, which therefore covers boundary → boundary in a single kernel
-    # window, entirely at the just-updated Doppler. So every completed
-    # integration is produced by a single NCO Doppler and each correction takes
-    # effect right at its completing boundary (the classic per-completion loop
-    # timing), while the estimator still runs once per chunk at a common epoch
-    # — without splitting each code period into two kernel invocations.
+    # Per chunk, one correlate pass at fixed NCO Doppler, then one estimate that
+    # updates every satellite at a common epoch. The pass stops at each
+    # satellite's last completed code-block boundary (`stop_before_partial`), so
+    # the next pass covers boundary to boundary at the updated Doppler: every
+    # integration sees one Doppler, and each correction takes effect at its
+    # completing boundary.
     #
-    # `samples_unchanged`: the measurement buffers are fixed for the whole
-    # call, so sample-derived backend caches (the bit backends' shared band
-    # pack) are built on the very first pass and reused ever after.
+    # The buffers are fixed for the call, so sample-derived caches (the bit
+    # backends' band pack) are built on the first pass only.
     chunk_index = 0
     while _chunks_left(chunk_duration, chunk_index, measurements)
         downconvert_and_correlate!(
@@ -244,17 +162,10 @@ function track!(
         estimate_dopplers_and_filter_prompt!(track_state, measurements)
         chunk_index += 1
     end
-    # Drain the buffer: consume every satellite's trailing partial — from its
-    # last completed boundary to the buffer end — into its live accumulator (at
-    # the final chunk's Doppler), so the integration carries into the next
-    # `track!` call. A boundary landing exactly on the buffer end completes
-    # here, so fold once more; a no-op (per-sat early return) otherwise.
-    #
-    # `measure_noise = false` unless this is the only pass: unchunked, this call
-    # sees the whole buffer as one chunk, so measuring here would enter every
-    # sample into the noise window a second time. When no chunk ran at all
-    # (`chunk_index == 0`, a buffer shorter than one chunk) this *is* the pass
-    # that measures it.
+    # Drain each satellite's trailing partial into its accumulator, carried into
+    # the next call; a boundary exactly at the buffer end completes here, hence
+    # the fold. Noise is measured here only if no chunk ran, or every sample
+    # would enter the noise window twice.
     downconvert_and_correlate!(
         downconvert_and_correlator,
         measurements,
@@ -267,8 +178,7 @@ function track!(
     return track_state
 end
 
-# The next measurement of every band starts where this one ended. A tuple walk,
-# so the bands' differently typed measurements stay statically dispatched.
+# The next measurement of every band starts where this one ended.
 @inline _advance_sample_offsets!(
     sample_offsets::Dict{Symbol,Int},
     measurements::BandMeasurements,
@@ -303,13 +213,8 @@ function track!(measurement::BandMeasurement, track_state::TrackState; kwargs...
     track!(_single_band_measurements(measurement, track_state), track_state; kwargs...)
 end
 
-# Loop termination: the chunk grid is walked until the previous chunk's end
-# already reached the buffer end on every band (`_chunk_last_sample` clamps at
-# `num_samples`, so the count is finite and independent of per-sat progress —
-# satellites lagging behind a chunk boundary are caught up by later passes and
-# by `track!`'s final buffer-draining pass). For `chunk_index == 0` the
-# convention `_chunk_last_sample(…, -1, …) == 0` makes this "is the buffer
-# non-empty on any band".
+# True until the previous chunk reached the buffer end on every band, independent
+# of per-satellite progress. For `chunk_index == 0`: is any buffer non-empty.
 @inline function _chunks_left(chunk_duration, chunk_index::Int, measurements)
     for m in measurements
         n = get_num_samples(m)
@@ -319,10 +224,7 @@ end
     false
 end
 
-# Resolve the per-chunk update interval to a concrete time. `nothing` => auto:
-# the smallest primary-code period across every signal in every group, so the
-# default chunk holds exactly one code period of the shortest signal (e.g. 1 ms
-# for a GPS L1 C/A + Galileo E1B track state).
+# `nothing` => the smallest primary-code period of any tracked signal.
 @inline _resolve_doppler_update_interval(doppler_update_interval, ::TrackState) =
     doppler_update_interval
 @inline function _resolve_doppler_update_interval(::Nothing, track_state::TrackState)
@@ -345,19 +247,13 @@ end
 
 function _smallest_code_period(track_state::TrackState)
     groups = Tuple(track_state.groups)
-    # Every TrackState has at least one group and every group at least one
-    # signal, so seeding from the first signal's period is safe and keeps the
-    # reduction type-stable across heterogeneous signal tuples.
+    # Seeded from the first signal, which always exists, for type stability.
     init = _code_period(first(first(groups).signals))
     _min_group_code_period(groups, init)
 end
 
-# A chunk must cover at least one sample on every band, otherwise the chunk
-# grid could fail to advance and `track!` would not terminate. The default
-# (smallest code period) is always many samples; this only guards against a
-# user-supplied `doppler_update_interval` shorter than a sample period. The dimension
-# check turns a plain number (e.g. `doppler_update_interval = 1e-3`) into a clear
-# ArgumentError instead of a cryptic Unitful conversion error.
+# A chunk must cover a sample on every band, or `track!` would not terminate. A
+# plain number gets a clear error rather than a Unitful one.
 function _validate_doppler_update_interval(chunk_duration, measurements::BandMeasurements)
     dimension(chunk_duration) == dimension(1.0s) || throw(
         ArgumentError(

@@ -60,11 +60,9 @@ import Tracking
 using StaticArrays: SVector
 using Unitful: ustrip, uconvert
 
-# Normalise a code replica to unit peak amplitude. The embedded-LUT CBOC code
-# (Galileo E1B) has integer sub-carrier amplitudes (±25/±13) while BPSK codes are
-# ±1; when two systems are summed into one fixed-point sample buffer this would
-# otherwise let E1B dominate and crush the GPS SNR. Normalising each code first
-# keeps the systems at comparable power (matching the old sqrt-power codes).
+# Normalise a code replica to unit peak amplitude. The CBOC code (Galileo E1B) has
+# integer sub-carrier amplitudes (±25/±13) against ±1 for BPSK, and would swamp
+# GPS in a shared fixed-point buffer.
 _unit_code(c) = (m = maximum(abs, c); m == 0 ? float(c) : c ./ m)
 
 @testset "Tracking with signal of type $type" for type in
@@ -145,22 +143,6 @@ _unit_code(c) = (m = maximum(abs, c); m == 0 ? float(c) : c ./ m)
     end
     @test tracked_code_phases[end] ≈ code_phases[end] atol = 5e-5
     @test tracked_carrier_phases[end] + π ≈ carrier_phases[end] atol = 1e-3
-
-    #    using PyPlot
-    #    pygui(true)
-    #    figure("carrier_phases")
-    #    plot(tracked_carrier_phases)
-    #    plot(carrier_phases)
-    #    grid(true)
-    #    figure("Code Phases")
-    #    plot(300 * (tracked_code_phases .- code_phases))
-    #    figure("Carrier Doppler")
-    #    plot(tracked_carrier_dopplers)
-    #    figure("Code Doppler")
-    #    plot(tracked_code_dopplers)
-    #    figure("Prompt")
-    #    plot(real.(tracked_prompts))
-    #    plot(imag.(tracked_prompts))
 end
 
 # GPS L1 C/A PRN 1 at a 1 kHz Doppler in noise, cut into 1 ms chunks at 4 MHz.
@@ -181,12 +163,10 @@ function _noisy_gpsl1_chunks(num_chunks)
 end
 
 @testset "Through track, the NCO-referenced and the vector loops are the conventional assisted loop" begin
-    # `track` hands the estimator the chunk's own replica word and no landing
-    # sample, so the delay-aware estimator must reproduce the conventional one
-    # exactly — including after its loop filters are reset — given the same
-    # bandwidths: it pulls in at the narrow 18 Hz by default, as a wider loop
-    # tolerates less command delay. Out of the vector loop, the vector estimator
-    # is the scalar loop it wraps, bit for bit.
+    # `track` hands over the chunk's own replica word and no landing sample, so
+    # the delay-aware estimator must equal the conventional one at the same
+    # bandwidths (it pulls in at 18 Hz by default), also after a reset. Outside
+    # a vector loop the vector estimator is the scalar loop it wraps, bit for bit.
     gpsl1, fs, carrier_doppler, chunks = _noisy_gpsl1_chunks(200)
     function run(estimator)
         track_state = TrackState(; signal = gpsl1, doppler_estimator = estimator)
@@ -226,9 +206,8 @@ end
     end
 end
 
-# An estimator Tracking has never heard of, implementing only TrackingLoops'
-# estimator interface: it hands every record to the loop it wraps and counts
-# the records it saw.
+# An estimator implementing only TrackingLoops' interface, counting the records
+# it hands to the loop it wraps.
 struct CountingEstimator{E<:TrackingLoops.AbstractDopplerEstimator} <:
        TrackingLoops.AbstractDopplerEstimator
     inner::E
@@ -264,9 +243,8 @@ function TrackingLoops.step_loop(
 end
 
 @testset "reset_loop_filters! keeps the stage the carrier loop has reached" begin
-    # A reset is a handoff, to a new integration length say, not a
-    # re-acquisition: the loop keeps its stage. A satellite added anew pulls in
-    # from the start, FLL-assisted.
+    # A reset is a handoff, not a re-acquisition. A new satellite starts
+    # FLL-assisted.
     gpsl1, fs, carrier_doppler, chunks = _noisy_gpsl1_chunks(800)
     track_state = TrackState(; signal = gpsl1)
     track_state =
@@ -353,9 +331,8 @@ function TrackingLoops.step_loop(
 end
 
 @testset "Through track, the records name their satellite and share one sample grid" begin
-    # What an estimator with per-satellite state of its own (the vector loop) needs:
-    # the satellite, the replica's code phase at the record's end, and a sample
-    # index that runs on across `track` calls instead of restarting with each.
+    # What the vector loop needs: the satellite, the replica's code phase at the
+    # record's end, and a sample index that runs on across `track` calls.
     gpsl1, fs, carrier_doppler, chunks = _noisy_gpsl1_chunks(20)
     estimator =
         RecordingEstimator(ConventionalAssistedPLLAndDLL(), Tuple{Int,Int,Int,Float64}[])
@@ -420,7 +397,6 @@ end
         ]
         track_state = TrackState(gpsl1, sat_states; doppler_estimator)
 
-        # Initial tracking step
         signal =
             cis.(
                 2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase,
@@ -428,7 +404,6 @@ end
             gen_code(4000, gpsl1, prn, sampling_frequency, code_frequency, start_code_phase)
         track_state = track(signal, track_state, sampling_frequency)
 
-        # Run tracking iterations
         for i = 1:iterations
             carrier_phase =
                 mod2pi(
@@ -451,25 +426,14 @@ end
         return error <= tolerance
     end
 
-    # ConventionalPLLAndDLL: converges at 65Hz offset, never at 100Hz. Without
-    # an FLL the loop pulls in by cycle slipping, so its range follows the loop
-    # bandwidth it pulls in at, the wide 50 Hz: it converged up to 68 Hz and from
-    # 94 Hz on (up to 240 Hz) it did not, and in between it depends on where the
-    # slips leave it. At the 18 Hz it pulled in at before the carrier loop was
-    # staged the edge was between 65 and 75 Hz; it was 90 Hz while the loop ran
-    # about 5.6× wider than configured (#244).
+    # Without an FLL the loop pulls in by cycle slipping at the wide 50 Hz: it
+    # converged up to 68 Hz and not from 94 Hz on; in between it depends on
+    # where the slips leave it.
     @test test_convergence(65Hz, false) == true
     @test test_convergence(100Hz, false) == false
 
-    # ConventionalAssistedPLLAndDLL: converges at 245Hz offset, fails at 255Hz.
-    # That edge is the FLL discriminator's unambiguous range of ±1/(4T) = 250 Hz
-    # at 1 ms, independent of the loop bandwidth: past it the loop locks onto
-    # the alias 500 Hz away. Exactly 250 Hz is ambiguous and can go either way.
-    #
-    # The two-pass chunk (completions → NCO update → residue at the updated
-    # Doppler) keeps every integration on a single Doppler and applies each
-    # correction at its completing boundary, so the FLL pull-in edge matches
-    # the classic per-code-period update.
+    # The FLL's unambiguous range, ±1/(4T) = 250 Hz at 1 ms, independent of the
+    # bandwidth: past it the loop locks onto the alias 500 Hz away.
     @test test_convergence(245Hz, true) == true
     @test test_convergence(255Hz, true) == false
 end
@@ -492,10 +456,7 @@ end
     range = 0:3999
     start_carrier_phase = π / 2
 
-    # Pin the loop bandwidths explicitly: this is a convergence test, so it
-    # fixes the bandwidth it was calibrated for rather than depending on the
-    # per-signal auto defaults (which would give Galileo E1B a tighter 4.5 Hz
-    # loop that converges more slowly over this chunk schedule).
+    # Pinned to the bandwidths this convergence test was calibrated for.
     estimator = ConventionalAssistedPLLAndDLL(;
         wide_carrier_loop_filter_bandwidth = 18.0Hz,
         narrow_carrier_loop_filter_bandwidth = 18.0Hz,
@@ -545,7 +506,7 @@ end
                 start_code_phase,
             ),
         )
-    # Scale to fill (half) the integer type's range from the (unit-amplitude) signal.
+    # Fill half the integer type's range.
     scaling =
         type <: Integer ? fld(typemax(type), 2 * ceil(Int, maximum(abs, signal_temp))) : 1
     signal =
@@ -641,14 +602,9 @@ end
     @test mod(get_carrier_phase(track_state, :gps, 1), π) ≈ mod(comp_carrier_phase_gps, π) atol =
         2e-2
     @test get_code_phase(track_state, :gal, 1) ≈ comp_code_phase_gal atol = 5e-3
-    # Galileo E1B carrier phase: the GNSSSignals 3 embedded-LUT CBOC code is an Int8
-    # integer approximation of the true BOC(1,1)/BOC(6,1) subcarrier mix, which leaves
-    # ~0.006 rad (~0.4°) of residual phase — excellent tracking, but just over the
-    # original 5e-3. This residual comes from the code *model*, not the input sample
-    # type: it measures identically (to <1e-7 rad) for every `type` from Int16 through
-    # Float64, so Int16 sample quantisation contributes essentially nothing (~2e-8 rad).
-    # Bound at 1e-2 — comfortably above the deterministic ~0.006 rad residual, yet tight
-    # enough to catch a real tracking regression (see GNSSSignals #90).
+    # The Int8 CBOC code approximates the BOC(1,1)/BOC(6,1) mix and leaves a
+    # deterministic ~0.006 rad residual, the same for every sample type
+    # (GNSSSignals #90).
     @test mod(get_carrier_phase(track_state, :gal, 1), π) ≈ mod(comp_carrier_phase_gal, π) atol =
         1e-2
 end
@@ -739,22 +695,6 @@ end
     end
     @test tracked_code_phases[end] ≈ code_phases[end] atol = 5e-5
     @test tracked_carrier_phases[end] + π ≈ carrier_phases[end] atol = 5e-5
-
-    #    using PyPlot
-    #    pygui(true)
-    #    figure("carrier_phases")
-    #    plot(tracked_carrier_phases)
-    #    plot(carrier_phases)
-    #    grid(true)
-    #    figure("Code Phases")
-    #    plot(300 * (tracked_code_phases .- code_phases))
-    #    figure("Carrier Doppler")
-    #    plot(tracked_carrier_dopplers)
-    #    figure("Code Doppler")
-    #    plot(tracked_code_dopplers)
-    #    figure("Prompt")
-    #    plot(real.(tracked_prompts))
-    #    plot(imag.(tracked_prompts))
 end
 
 @testset "Track multiple signals with signal of type $type" for type in (
@@ -853,36 +793,17 @@ end
     end
     @test tracked_code_phases[end] ≈ code_phases[end] atol = 5e-5
     @test tracked_carrier_phases[end] + π ≈ carrier_phases[end] atol = 5e-5
-
-    #    using PyPlot
-    #    pygui(true)
-    #    figure("carrier_phases")
-    #    plot(tracked_carrier_phases)
-    #    plot(carrier_phases)
-    #    grid(true)
-    #    figure("Code Phases")
-    #    plot(300 * (tracked_code_phases .- code_phases))
-    #    figure("Carrier Doppler")
-    #    plot(tracked_carrier_dopplers)
-    #    figure("Code Doppler")
-    #    plot(tracked_code_dopplers)
-    #    figure("Prompt")
-    #    plot(real.(tracked_prompts))
-    #    plot(imag.(tracked_prompts))
 end
 
-# The testset above tracks three antennas, but its columns are `repeat`-identical
-# and noise-free, so which column the noise reference reads is unobservable there.
-# These two pin the antenna array's C/N₀ on a sky where it *is* observable: each
-# column carries independent noise at its own level, so every antenna has a
-# different floor and picking the wrong one shows up immediately.
+# The testset above has identical, noise-free columns. Here each antenna has
+# independent noise at its own level, so reading the wrong floor shows.
 @testset "Multi-antenna C/N₀ under the default filter matches its own column" begin
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     prn = 1
     samples_per_code = 5000
     num_ants = 3
-    # Distinct per-antenna noise levels: antenna m's floor is `scaleₘ²·σ²/f_s`.
+    # Antenna m's floor is `scaleₘ²·σ²/f_s`.
     scales = (1.0, 1.5, 2.0)
 
     function make_array_signal(rng, code_idx)
@@ -902,7 +823,7 @@ end
         )
     end
 
-    # One array run, and one single-antenna control fed the *same* last column.
+    # A single-antenna control is fed the array's last column.
     array_state = @inferred TrackState(
         gpsl1,
         [TrackedSat(gpsl1, prn, 0.0, 0.0Hz; num_ants = NumAnts(num_ants))],
@@ -923,22 +844,17 @@ end
         )
     end
 
-    # The array's window measures a covariance, one entry per antenna pair.
     R = get_noise_density(array_state.noise_estimators.GPSL1CA)
     @test size(R) == (num_ants, num_ants)
-    # `DefaultPostCorrFilter` combines to the last antenna, and the covariance
-    # reduced through those weights is that antenna's own floor — so the array
-    # run and the control report the identical C/N₀, not merely a close one.
+    # `DefaultPostCorrFilter` picks the last antenna, so the covariance reduces
+    # to its floor and the C/N₀ is identical, not merely close.
     @test estimate_cn0(array_state, 1) === estimate_cn0(single_state, 1)
     @test isfinite(ustrip(uconvert(dBHz, estimate_cn0(array_state, 1))))
 end
 
 @testset "A beamformer's C/N₀ follows its own weights" begin
-    # The case the covariance exists for. An equal-weight combiner over antennas
-    # with *independent* noise gets `‖w‖²` of the average floor — here 1/3 of it
-    # — while the signal adds coherently, so its C/N₀ is ~10log10(3) dB above the
-    # single-antenna one. Under the old fixed-column floor the denominator would
-    # not have moved at all and the reported gain would have been wrong.
+    # An equal-weight combiner over independent noise gets `‖w‖²` = 1/3 of the
+    # floor while the signal adds coherently: ~10log10(3) dB of gain.
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     prn = 1
@@ -1002,7 +918,6 @@ end
     prn = 1
     samples_per_code = 4000  # one GPS L1 code period at 4 MHz
 
-    # Generates a signal of `num_codes` full code periods of noise-free GPS L1.
     function make_signal(num_codes, start_carrier_phase, start_code_phase)
         n = samples_per_code * num_codes
         signal = zeros(ComplexF64, n)
@@ -1040,47 +955,34 @@ end
     track_state =
         TrackState(gpsl1, [TrackedSat(gpsl1, prn, start_code_phase, carrier_doppler)])
 
-    # First call: 10 code periods -> expect 10 filtered prompts
     signal1 = make_signal(10, π / 2, start_code_phase)
     track_state = track(signal1, track_state, sampling_frequency)
     sat = get_sat_state(track_state, prn)
     prompts1 = get_filtered_prompts(sat)
     @test prompts1 isa Vector{ComplexF64}
     @test length(prompts1) == 10
-    # Last entry is exposed by the existing scalar accessor
     @test prompts1[end] == get_last_fully_integrated_filtered_prompt(track_state)
-    # Save the buffer reference to verify it is reused, not reallocated.
     buffer_ref = prompts1
 
-    # Second call: 5 code periods -> buffer is reset, so length is 5, not 15.
+    # The buffer is reset per call (5, not 15) and reused, not reallocated.
     signal2 = make_signal(5, π / 2, start_code_phase)
     track_state = track(signal2, track_state, sampling_frequency)
     sat = get_sat_state(track_state, prn)
     prompts2 = get_filtered_prompts(sat)
     @test length(prompts2) == 5
     @test prompts2[end] == get_last_fully_integrated_filtered_prompt(track_state)
-    # Same underlying Vector object across calls -> capacity is retained and
-    # no reallocation happens on a call that fits in the existing buffer.
     @test prompts2 === buffer_ref
 
-    # Third call with 0 completed integrations: buffer empties.
-    signal3 = zeros(ComplexF64, samples_per_code ÷ 4)  # less than one code period
+    # No completed integration: the buffer empties.
+    signal3 = zeros(ComplexF64, samples_per_code ÷ 4)
     track_state = track(signal3, track_state, sampling_frequency)
     prompts3 = get_filtered_prompts(get_sat_state(track_state, prn))
     @test isempty(prompts3)
     @test prompts3 === buffer_ref
 end
 
-# Integration tests for L1C-D and L1C-P. Their 10-ms primary code period
-# (vs 1 ms for L1 C/A) means each `track` call needs enough samples to land
-# at least one primary-code boundary; the parameterized loop uses one full
-# 10-ms primary period per iteration so each call completes exactly one
-# integration. L1C-D has data bits (50 Hz), L1C-P is the pilot — both still
-# need a working signal-path with a closed PLL/DLL.
-#
-# These tests rely on the default loop bandwidths: the 18 Hz carrier default,
-# capped to 9 Hz at 10 ms, and the 1 Hz code loop — both well inside the
-# `BL * T < 0.4` stability bound for 10 ms integration.
+# L1C-D and L1C-P, one 10 ms primary period per call, at the default bandwidths
+# (18 Hz carrier capped to 9 Hz at 10 ms, 1 Hz code).
 @testset "Tracking single signal $name with $type samples" for (name, sig_type) in (
         ("GPSL1C_D", GPSL1C_D),
         ("GPSL1C_P", GPSL1C_P),
@@ -1093,9 +995,7 @@ end
     code_frequency =
         carrier_doppler * get_code_center_frequency_ratio(signal) +
         get_code_frequency(signal)
-    # L1C-P's TMBOC modulation requires `fs > 2 × code_freq × subcarrier_factor`
-    # (~12.28 MHz minimum); use 15 MHz for both signals so the test fits the
-    # same loop. L1C-D BPSK has no such floor but happily accepts 15 MHz too.
+    # L1C-P's TMBOC needs fs > ~12.28 MHz.
     sampling_frequency = 15e6Hz
     prn = 1
     primary_period_samples = 150000  # 10 ms at 15 MHz
@@ -1124,7 +1024,6 @@ end
         Complex{type}.(s)
     end
 
-    # First iteration to seed the loop filters.
     track!(
         build_signal(start_carrier_phase, start_code_phase),
         track_state,
@@ -1147,30 +1046,17 @@ end
         )
         track!(build_signal(carrier_phase, code_phase), track_state, sampling_frequency)
     end
-    # By now the PLL/DLL has had 100 × 10 ms = 1 s to converge on a clean
-    # signal seeded 5 Hz off — should be well inside 1 Hz.
+    # 1 s from a 5 Hz offset, noise-free.
     final_doppler = get_carrier_doppler(track_state, :default, prn)
     @test abs(final_doppler - carrier_doppler) < 1.0Hz
 end
 
-# Regression test for the GPS L1C-D BOC(1,1) DLL early-late spacing.
-#
-# L1C-D's autocorrelation has nulls at ~±0.29 chip and side-lobes beyond, so
-# the C/A-style 0.5-chip early/late taps land on the side-lobes and bias the
-# DLL discriminator — the code loop then walks off the main peak as soon as the
-# code is perturbed off-center (as it always is after an acquisition handoff).
-# `get_default_correlator(::GPSL1C_D)` uses a narrow 0.1-chip spacing that keeps
-# the taps on the main peak. This is exactly what the earlier single-signal
-# L1C-D test above does NOT catch: it generates the signal at the tracker's own
-# code phase (zero offset), where the symmetric autocorrelation gives E == L and
-# the bias never shows, and it only asserts carrier-Doppler convergence (the
-# bias corrupts the *code* loop, not the carrier).
-#
-# Here we feed a noisy 45 dB-Hz signal, seed the satellite 0.2 chip off the true
-# code phase, and assert the estimated C/N0 stays high. With the narrow default
-# spacing the loop pulls in and holds ~45 dB-Hz; with the buggy 0.5-chip spacing
-# the code walks off and C/N0 collapses to ~31 dB-Hz. A wider-than-default code
-# loop (4 Hz vs 1 Hz) just makes the divergence show within ~1.3 s.
+# GPS L1C-D's BOC(1,1) autocorrelation has nulls at ~±0.29 chip, so 0.5-chip
+# early/late taps land on the side lobes and the code loop walks off the peak
+# once the code starts off-center. The test above starts on the code phase,
+# where E == L, so it cannot catch this. Seeded 0.2 chip off at 45 dB-Hz, the
+# default correlator holds ~45 dB-Hz and 0.5-chip taps collapse to ~31 dB-Hz;
+# the 4 Hz code loop makes that show within ~1.3 s.
 @testset "GPS L1C-D BOC code tracking holds lock under a code offset" begin
     Random.seed!(1234)
     signal = GPSL1C_D()
@@ -1190,9 +1076,7 @@ end
         code_loop_filter_bandwidth = 4.0Hz,
     )
     track_state = TrackState(; signal, doppler_estimator = estimator)
-    # 0.2-chip seed offset — a realistic acquisition handoff error that puts the
-    # DLL discriminator onto the BOC autocorrelation slope. Uses the group's
-    # default correlator, so reverting the default spacing breaks this test.
+    # A realistic handoff error, on the group's default correlator.
     track_state =
         add_satellite!(track_state; prn, code_phase = 0.2, carrier_doppler = 0.0Hz)
 
@@ -1205,23 +1089,19 @@ end
         track!(build(code_phase), track_state, sampling_frequency)
     end
 
-    # Narrow spacing holds ~45 dB-Hz; the 0.5-chip bug collapses to ~31 dB-Hz.
     @test estimate_cn0(track_state, prn) > 40dBHz
 end
 
-# Multi-signal integration test for the README's flagship use case: a single
-# satellite tracked on the modern GPS L1 signal trio (L1C_P pilot + L1C_D
-# data + L1 C/A legacy). Verifies all three signals' correlators run, and
-# that the PLL/DLL — driven by `signals[1]` = L1C_P (the pilot) — converges.
+# The README's use case: one satellite on L1C_P, L1C_D and L1 C/A, with the loop
+# driven by `signals[1]`, the L1C_P pilot.
 @testset "Tracking multi-signal (L1C_P, L1C_D, L1CA) on one sat" begin
-    # L1C-P's TMBOC modulation requires fs > ~12.28 MHz; use 15 MHz.
+    # L1C-P's TMBOC needs fs > ~12.28 MHz.
     sampling_frequency = 15e6Hz
     n_samples = 150000  # 10 ms — one L1C-P/D primary period; ten L1CA periods
     prn = 11
     carrier_doppler = 1234.0Hz
     init_offset = 5.0Hz
 
-    # Driver is signals[1] = L1C_P at 10 ms, with the default loop bandwidths.
     track_state =
         TrackState(; signals = (modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),))
     track_state = add_satellite!(
@@ -1232,8 +1112,7 @@ end
         carrier_doppler = carrier_doppler - init_offset,
     )
 
-    # Synthesize a signal that contains all three signals on the same carrier
-    # (modeling what a real GPS satellite broadcasts on L1).
+    # All three signals on one carrier.
     range = 0:(n_samples-1)
     function build_signal(code_phase, carrier_phase)
         carrier =
@@ -1251,8 +1130,6 @@ end
         signal_ca = let s = GPSL1CA()
             cf =
                 carrier_doppler * get_code_center_frequency_ratio(s) + get_code_frequency(s)
-            # L1 C/A code phase wraps every 1023 chips; map the shared phase
-            # to its primary period.
             carrier .* gen_code(
                 n_samples,
                 s,
@@ -1265,7 +1142,6 @@ end
         signal_cp .+ signal_cd .+ signal_ca
     end
 
-    # Seed + 200 iterations of clean signal at 10 ms per call.
     track!(build_signal(0.0, 0.0), track_state, sampling_frequency)
 
     iterations = 200
@@ -1273,8 +1149,6 @@ end
     for i = 1:iterations
         carrier_phase =
             mod2pi(2π * carrier_doppler * n_samples * i / sampling_frequency + π) - π
-        # Drive code_phase off the L1C_P/L1C_D primary length (10230 chips);
-        # L1CA mods inside build_signal.
         cf_cp =
             carrier_doppler * get_code_center_frequency_ratio(GPSL1C_P()) +
             get_code_frequency(GPSL1C_P())
@@ -1282,36 +1156,19 @@ end
         track!(build_signal(code_phase, carrier_phase), track_state, sampling_frequency)
     end
 
-    # All three signals must have completed integrations.
     sat = get_sat_state(track_state, :modern_gps, prn)
     @test length(get_filtered_prompts(sat.signals[1])) > 0  # L1C_P
     @test length(get_filtered_prompts(sat.signals[2])) > 0  # L1C_D
     @test length(get_filtered_prompts(sat.signals[3])) > 0  # L1CA
 
-    # PLL/DLL has had ~2 s to converge on a clean superposition.
     final_doppler = get_carrier_doppler(track_state, :modern_gps, prn)
     @test abs(final_doppler - carrier_doppler) < 5.0Hz
 end
 
-# Regression test for issue #117: a satellite must not deadlock when fed
-# chunks of exactly one code period.
-#
-# The trigger is a *continuous* signal sliced into fixed one-primary-code-
-# period chunks (the most natural streaming pattern — 1 ms of GPS L5I at
-# 20 MHz = 20000 samples = one code period) together with a *negative*
-# code Doppler. With negative Doppler a full code block spans slightly
-# more than one chunk (`ceil(10230·fs/(f_code+Δ)) = 20001 > 20000`), so a
-# block can never complete inside a single chunk; it must carry forward.
-#
-# Before the fix, once GPS L5I's NH10 secondary code synced, the per-call
-# code-phase snap re-anchored `code_phase` to a primary-block boundary on
-# *every* call — discarding the partial integration's within-block phase
-# and pinning `code_phase` to a value from which no future chunk could
-# ever complete the block. The satellite wedged forever: `code_phase`
-# frozen, `integrated_samples` growing without bound, the correlator
-# output frozen. Crucially this needs a real secondary-code sync, so the
-# signal is generated continuously (not re-aligned per call) and fed in
-# fixed slices.
+# A continuous signal in one-code-period chunks with a negative code Doppler: a
+# block spans 20001 > 20000 samples, so it always carries into the next chunk.
+# A code-phase snap on every call after the NH10 sync would discard that partial
+# block and wedge the satellite (#117).
 @testset "Does not deadlock on one-code-period chunks (issue #117)" begin
     signal = GPSL5I()
     carrier_doppler = -200Hz                 # negative ⇒ negative code Doppler
@@ -1323,7 +1180,6 @@ end
     chunk = 20000                            # 1 ms = one L5I code period at 20 MHz
     num_calls = 60                           # well past the 10-block NH10 sync
 
-    # One continuous signal, sliced into fixed `chunk`-sample pieces.
     total_samples = chunk * (num_calls + 1)
     t = 0:(total_samples-1)
     long_signal =
@@ -1348,21 +1204,11 @@ end
 
     sat = get_sat_state(track_state, prn)
 
-    # The secondary code must actually have synced — that's the regime
-    # the bug lived in.
     @test has_bit_or_secondary_code_been_found(sat)
-
-    # Deadlock signature: `integrated_samples` grows without bound because
-    # no integration ever completes. After the fix it completes every
-    # block, so it stays within one chunk's worth of samples.
+    # A wedged satellite grows `integrated_samples` without bound and freezes
+    # its prompt.
     @test get_integrated_samples(track_state, prn) <= 2 * chunk
-
-    # Deadlock signature: the correlator output freezes. After the fix the
-    # prompt keeps updating, so the last several prompts are not all equal.
     @test length(unique(prompts[(end-9):end])) > 1
-
-    # And it actually tracks: the loops stay locked on the true Doppler
-    # rather than diverging or freezing.
     @test abs(get_carrier_doppler(track_state, prn) - carrier_doppler) < 5.0Hz
 end
 

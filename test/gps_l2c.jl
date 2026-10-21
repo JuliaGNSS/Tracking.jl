@@ -17,10 +17,8 @@ using TrackingLoops:
     gpsl2cm = GPSL2CM()
     prn = 1
 
-    # L2CM broadcasts one CNAV symbol per 20 ms L2CM code period (50 sps) —
-    # one block per symbol, no sub-symbol boundary to find, so the detector
-    # reports `found = true` from the start. Polarity ambiguity is resolved
-    # downstream by GNSSDecoder.jl.
+    # One symbol per 20 ms block: synced from the start (polarity is left to
+    # the decoder).
     for (bits, n) in ((UInt8(0x0), 0), (UInt8(0x1), 1), (UInt8(0xff), 32))
         res = @inferred detect_bit_or_secondary_code_sync(gpsl2cm, prn, bits, n)
         @test res.found == true
@@ -28,14 +26,10 @@ using TrackingLoops:
         @test res.polarity == +1
     end
 
-    # L2CM is BPSK — EarlyPromptLate default.
     @test @inferred(get_default_correlator(gpsl2cm, NumAnts(1))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
 
-    # Both defaults are flat (18 Hz carrier, 1 Hz code) and are capped at filter
-    # time against the actual integration time rather than the code period: the
-    # carrier to 4.5 Hz (`effective_carrier_loop_filter_bandwidth`) and the code
-    # to 0.9 Hz (`effective_code_loop_filter_bandwidth`) for a 20 ms integration.
+    # Flat 18 Hz / 1 Hz, capped at filter time to 4.5 Hz / 0.9 Hz for 20 ms.
     @test @inferred(default_narrow_carrier_loop_filter_bandwidth(gpsl2cm)) == 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(gpsl2cm)) ≈ 1.0Hz
     @test @inferred(
@@ -45,12 +39,8 @@ using TrackingLoops:
         )
     ) ≈ 0.9Hz
 
-    # 1 symbol = 1 primary period; sync buffer is dead state, but a concrete
-    # type is still required.
     @test @inferred(get_code_block_buffer_type(gpsl2cm)) === UInt8
 
-    # L2C introduces the L2 band; get_band_id maps it into the multi-band
-    # `track` measurement keys.
     @test get_band_id(get_band(gpsl2cm)) == :L2
     @test get_band_id(get_band(GPSL2CL())) == :L2
 end
@@ -59,10 +49,8 @@ end
     gpsl2cl = GPSL2CL()
     prn = 1
 
-    # L2CL is a dataless pilot with no secondary/overlay code and a single
-    # 767250-chip code (1.5 s period). There is no bit and no secondary code
-    # to lock, so the detector never reports `found` — the tracker keeps one
-    # code block per integration and simply tracks.
+    # A dataless 1.5 s code with no overlay: nothing to sync, one block per
+    # integration.
     for (bits, n) in ((UInt8(0x0), 0), (UInt8(0x1), 10), (UInt8(0xff), 1000))
         res = @inferred detect_bit_or_secondary_code_sync(gpsl2cl, prn, bits, n)
         @test res.found == false
@@ -71,9 +59,7 @@ end
     @test @inferred(get_default_correlator(gpsl2cl, NumAnts(1))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
 
-    # Both defaults stay flat (18 Hz carrier, 1 Hz code); their stability caps
-    # pull them down at filter time, where the update interval is actually known
-    # (0.06 Hz carrier and 0.012 Hz code for a 1.5 s integration).
+    # Capped at filter time to 0.06 Hz / 0.012 Hz for 1.5 s.
     @test @inferred(default_narrow_carrier_loop_filter_bandwidth(gpsl2cl)) == 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(gpsl2cl)) ≈ 1.0Hz
     @test @inferred(
@@ -83,8 +69,6 @@ end
         )
     ) ≈ 0.012Hz
 
-    # No sync feature; the search buffer is dead state but a concrete type is
-    # still required.
     @test @inferred(get_code_block_buffer_type(gpsl2cl)) === UInt8
 end
 

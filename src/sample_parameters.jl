@@ -34,10 +34,8 @@ end
 """
 $(SIGNATURES)
 
-Calculate the number of signal samples to integrate and whether the integration
-will complete a full code period. Returns a tuple of (samples_to_integrate,
-is_integration_completed). Takes into account available signal samples and
-code block boundaries.
+Return `(samples_to_integrate, is_integration_completed)`: the samples up to the
+end of the integration's code blocks, or of the signal if that comes first.
 """
 function calc_signal_samples_to_integrate(
     signal::AbstractGNSSSignal,

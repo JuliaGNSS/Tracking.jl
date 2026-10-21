@@ -6,17 +6,15 @@ using VectorizationBase: pick_vector_width
 # Optimal SIMD width for type T, determined at precompile time from CPU features.
 _simd_width(::Type{T}) where {T} = Int(pick_vector_width(T))
 
-# Convert Vec{N,S} to Vec{N,T}. No-op when S == T.
-# Uses @generated to unroll element-wise conversion, avoiding ntuple heap allocation
-# that occurs for large N (e.g. N=16 on AVX-512).
+# Convert Vec{N,S} to Vec{N,T}. @generated, as `ntuple` heap-allocates at large N
+# (e.g. N=16 on AVX-512).
 @inline _to_vec(::Type{SIMD.Vec{N,T}}, v::SIMD.Vec{N,T}) where {N,T} = v
 @inline @generated function _to_vec(::Type{SIMD.Vec{N,T}}, v::SIMD.Vec{N,S}) where {N,T,S}
     elems = [:(T(v[$k])) for k = 1:N]
     :(SIMD.Vec{$N,T}(($(elems...),)))
 end
 
-# SIMD deinterleave load: load N interleaved complex pairs [re1,im1,re2,im2,...]
-# and separate into (re_vec, im_vec) using shufflevector.
+# Load N interleaved complex pairs [re1,im1,re2,im2,...] as (re_vec, im_vec).
 @inline @generated function _deinterleave_load(
     ::Type{SIMD.Vec{N,T}},
     p::Ptr{ST},

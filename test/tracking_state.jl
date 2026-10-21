@@ -52,32 +52,25 @@ using TrackingLoops:
     ConventionalAssistedPLLAndDLL,
     ConventionalPLLAndDLL
 
-# No real GNSS signal pair mixes chip rates on a single band, so fake one to
-# exercise the SignalGroup chip-rate invariant (issue #129): L1 band like
-# GPS L1 C/A, but at double the chip rate. Only `get_band` and
-# `get_code_frequency` are needed — validation throws before the group
-# touches any other part of the signal API.
+# No real signal pair mixes chip rates on one band, so fake an L1 signal at
+# double the chip rate (#129). Validation throws before any other signal API
+# is needed.
 struct FakeDoubleRateL1Signal <: AbstractGNSSSignal{Matrix{Int16}} end
 GNSSSignals.get_band(::FakeDoubleRateL1Signal) = GNSSSignals.L1()
 GNSSSignals.get_code_frequency(::FakeDoubleRateL1Signal) = 2_046_000Hz
 
 @testset "SignalGroup rejects mixed bands and mixed chip rates (issue #129)" begin
-    # (a) Band homogeneity: every signal in a group is downconverted against
-    # the single band measurement the group's `band` routes to, so an L5
-    # signal in an L1 group would silently correlate against L1 samples.
+    # A group correlates against one band's samples.
     @test_throws ArgumentError SignalGroup((GPSL1CA(), GPSL5I()))
     @test_throws ArgumentError TrackState(; signals = (mix = (GPSL1CA(), GPSL5I()),))
-    # An explicit `band` override that contradicts the signals is just as wrong.
     @test_throws ArgumentError SignalGroup((GPSL1CA(),); band = GNSSSignals.L5())
 
-    # (b) Shared chip rate: the shared `code_phase` advances at `signals[1]`'s
-    # code frequency, so a signal with a different chip rate silently mistracks.
+    # The shared `code_phase` advances at `signals[1]`'s chip rate.
     @test_throws ArgumentError SignalGroup((GPSL1CA(), FakeDoubleRateL1Signal()))
     @test_throws ArgumentError TrackState(;
         signals = (l1 = (GPSL1CA(), FakeDoubleRateL1Signal()),),
     )
 
-    # Valid same-band, same-chip-rate combinations still construct.
     @test SignalGroup((GPSL1C_P(), GPSL1C_D(), GPSL1CA())) isa SignalGroup
     ts =
         TrackState(; signals = (l1 = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()), l5 = (GPSL5I(),)))
@@ -129,12 +122,8 @@ end
 end
 
 @testset "Positional TrackState(satellites::SatelliteDicts) infers default estimator" begin
-    # With no estimator kwarg, the default is the auto-bandwidth
-    # `ConventionalAssistedPLLAndDLL`; each group's sats are then seeded with
-    # the bandwidth recommended for that group's own driver signal — the loop
-    # runs on each group's driver, so there is no cross-group compromise. The
-    # GPS L1 C/A sat gets 18 Hz while the Galileo E1B sat gets 4.5 Hz, from
-    # the one shared (auto) estimator.
+    # One shared auto-bandwidth estimator seeds each group's sats from that
+    # group's own driver signal.
     gpsl1 = GPSL1CA()
     galileo = GalileoE1B()
     estimator = ConventionalAssistedPLLAndDLL()
@@ -156,8 +145,6 @@ end
 end
 
 @testset "Positional TrackState(dict) default estimator inference" begin
-    # `_default_estimator_for_sats_dict` (non-empty path) sizes a default
-    # estimator from the dict's first sat's driver signal.
     gpsl1 = GPSL1CA()
     estimator = ConventionalAssistedPLLAndDLL()
     sat = TrackedSat(gpsl1, 1, 10.5, 10.0Hz; doppler_estimator = estimator)
@@ -166,8 +153,6 @@ end
 end
 
 @testset "Positional TrackState constructor rejects sats with a different estimator" begin
-    # `_assert_doppler_estimator_types_match` errors when sat-state and
-    # the configured estimator would produce different concrete types.
     gpsl1 = GPSL1CA()
     sat_default = TrackedSat(gpsl1, 1, 10.5, 10.0Hz)  # default estimator
     different = ConventionalPLLAndDLL(;
@@ -187,52 +172,37 @@ end
     a = TrackedSat(gpsl1, 1, 10.5, 10.0Hz; doppler_estimator = estimator)
     sats = dictionary([1 => a])
 
-    # `_copy_slot_vector` is the cheap per-iteration copy used inside
-    # `track`'s loop (`downconvert_and_correlate` / `estimate`): it detaches
-    # the slot *values* but deliberately *shares* the key set (`Indices`), so
-    # the hash table is not copied on every loop iteration. The key set is
-    # detached once at the `track` boundary instead (see below, #123).
+    # The per-iteration copy inside `track` shares the key set; the boundary
+    # copy detaches it too.
     shared = Tracking._copy_slot_vector(sats)
     @test shared.values !== sats.values
     @test keys(shared) === keys(sats)
 
-    # `_detach_slot_vector` is the boundary copy: keys *and* values detached.
     detached = Tracking._detach_slot_vector(sats)
     @test detached.values !== sats.values
     @test keys(detached) !== keys(sats)
 end
 
 @testset "Immutable boundary copies do not share Dictionary Indices (#123)" begin
-    # `reset_start_sample_and_bit_buffer` is the boundary copy `track` makes
-    # of the caller's live state. With a shared `Indices`, `add_satellite!`
-    # on the copy would grow the original's key set without resizing its
-    # values vector — leaving the original claiming keys it has no values for
-    # (UndefRefError or silent garbage on access).
+    # With a shared key set, `add_satellite!` on the copy would grow the
+    # original's keys without its values.
     ts = TrackState(; signal = GPSL1CA())
     ts = add_satellite!(ts; prn = 1, carrier_doppler = 100.0Hz)
 
     ts2 = Tracking.reset_start_sample_and_bit_buffer(ts)
     ts2 = add_satellite!(ts2; prn = 2, carrier_doppler = 200.0Hz)
 
-    # The original must be untouched: still exactly one satellite.
     @test length(get_sat_states(ts, :default)) == 1
     @test collect(keys(get_sat_states(ts, :default))) == [1]
     @test get_prn(ts, :default, 1) == 1
-    # The copy got the new satellite.
     @test length(get_sat_states(ts2, :default)) == 2
 
-    # Removal on the copy must not shrink the original's key set either.
     ts2 = remove_satellite!(ts2; prn = 1)
     @test length(get_sat_states(ts, :default)) == 1
     @test get_prn(ts, :default, 1) == 1
 end
 
 @testset "track output is structurally detached from input (#123)" begin
-    # The public contract: `add_satellite!` on `track`'s output must not
-    # corrupt the input state, even though the hot loop shares key sets among
-    # its throwaway intermediates. The detach at the `track` boundary
-    # (`reset_start_sample_and_bit_buffer`) makes the output's key set
-    # independent of the input's.
     sampling_frequency = 5e6Hz
     gpsl1 = GPSL1CA()
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 10.5, 10.0Hz)])
@@ -241,7 +211,6 @@ end
     ts2 = Tracking.track(signal, ts, sampling_frequency)
     ts2 = add_satellite!(ts2; prn = 2, carrier_doppler = 200.0Hz)
 
-    # Input keeps exactly its one satellite; output has two.
     @test length(get_sat_states(ts, :default)) == 1
     @test collect(keys(get_sat_states(ts, :default))) == [1]
     @test get_prn(ts, :default, 1) == 1
@@ -261,12 +230,9 @@ end
 end
 
 @testset "remove_satellite(!) leaves no #undef hole → track! is safe (issue #182)" begin
-    # `Dictionaries.delete!` only rehashes/compacts once deletions cross ~1/3
-    # of the entries; a single removal from a larger group otherwise leaves a
-    # `#undef` slot in the backing `values` vector, which the tracking hot
-    # paths iterate directly (`_reset_one_group!` et al.) and dereference into
-    # an `UndefRefError`. Ten satellites keep the deletion below the rehash
-    # threshold, so the removed slot survives as a hole unless we compact.
+    # `Dictionaries.delete!` compacts only past ~1/3 deletions, so one removal
+    # out of ten leaves an `#undef` slot in `values`, which the hot loops
+    # iterate directly.
     signal = rand(ComplexF32, 20000)
     build() = foldl(
         (ts, prn) -> add_satellite!(ts; prn = prn, carrier_doppler = (100.0 * prn)Hz),
@@ -282,12 +248,9 @@ end
         sats = get_sat_states(ts, :default)
         @test length(sats) == 9
         @test !haskey(sats, 3)
-        # No hole: the backing vector holds exactly the live entries, all
-        # assigned — the precondition the hot loops rely on.
         vals = sats.values
         @test length(vals) == 9
         @test all(i -> isassigned(vals, i), eachindex(vals))
-        # The regression itself: `track` must not throw an `UndefRefError`.
         ts2 = Tracking.track(signal, ts, 5e6Hz)
         @test length(get_sat_states(ts2, :default)) == 9
     end
@@ -296,10 +259,8 @@ end
 @testset "remove_satellite! throws KeyError for a missing PRN" begin
     ts = TrackState(; signal = GPSL1CA())
     ts = add_satellite!(ts; prn = 5, carrier_doppler = 100.0Hz)
-    # Same contract as the immutable `remove_satellite`.
     @test_throws KeyError remove_satellite!(ts; prn = 99)
     @test_throws KeyError remove_satellite(ts; prn = 99)
-    # The existing sat is untouched after the failed remove.
     @test get_prn(ts, :default, 5) == 5
 end
 
@@ -443,11 +404,9 @@ end
     gpsl1 = GPSL1CA()
     estimator = ConventionalAssistedPLLAndDLL()
 
-    # Build TrackedSats directly with the doppler estimator attached.
     sat = TrackedSat(gpsl1, 1, 10.5, 10.0Hz; doppler_estimator = estimator)
     sat2 = TrackedSat(gpsl1, 2, 11.5, 20.0Hz; doppler_estimator = estimator)
 
-    # TrackState accepts vectors, dictionaries, or single sats.
     ts_from_vec = TrackState(gpsl1, [sat, sat2]; doppler_estimator = estimator)
     @test length(get_sat_states(ts_from_vec)) == 2
     ts_from_one = TrackState(gpsl1, sat; doppler_estimator = estimator)
@@ -456,15 +415,12 @@ end
         TrackState(dictionary([1 => sat, 2 => sat2]); doppler_estimator = estimator)
     @test length(get_sat_states(ts_from_dict)) == 2
 
-    # Direct accessors on TrackedSat
     @test sat.prn == 1
     @test get_doppler_estimator_state(sat) isa SatConventionalPLLAndDLL
 
-    # In-place reset on a single TrackedSat (the `!` overload).
     track_state = TrackState(gpsl1, [sat, sat2]; doppler_estimator = estimator)
     track_state2 = reset_start_sample_and_bit_buffer!(track_state)
     @test track_state2 === track_state
-    # Each TrackedSat in the dict has signal_start_sample reset to 1.
     for tsat in get_sat_states(track_state).values
         @test tsat.signal_start_sample == 1
     end
@@ -474,10 +430,7 @@ end
     import Tracking
     using TrackingLoops: AbstractDopplerEstimator
 
-    # Immutable estimator with growing shared state held in a resizable
-    # Vector. update_estimator_on_handoff mutates the vectors in place
-    # and returns the same `est` object — concrete type is preserved, no
-    # new heap-allocated wrapper per call.
+    # Immutable, with its state in vectors the hook mutates in place.
     struct CountingEstimator <: AbstractDopplerEstimator
         sats_added::Vector{Int}
         last_batch_prns::Vector{Int}
@@ -526,8 +479,7 @@ end
     @test track_state3.doppler_estimator.sats_added[1] == 3
     @test sort(track_state3.doppler_estimator.last_batch_prns) == [3, 4]
 
-    # Default fallback: estimators that don't override the hook keep the
-    # estimator object unchanged through merge_sats.
+    # Without an override the estimator is unchanged.
     default_estimator = ConventionalAssistedPLLAndDLL()
     default_track_state = TrackState(
         gpsl1,
@@ -546,9 +498,8 @@ end
     import Tracking
     using TrackingLoops: AbstractDopplerEstimator
 
-    # Spec-conforming estimator that *rebuilds itself* on handoff — same
-    # concrete type, replaced field — the style the
-    # `update_estimator_on_handoff` docstring explicitly sanctions.
+    # Rebuilds itself on handoff, same concrete type, as the
+    # `update_estimator_on_handoff` docstring allows.
     struct RebuildingEstimator <: AbstractDopplerEstimator
         num_registered::Int
     end
@@ -561,15 +512,13 @@ end
     Tracking.update_estimator_on_handoff(est::RebuildingEstimator, new_sats) =
         RebuildingEstimator(est.num_registered + length(new_sats))
 
-    # Keyword form: the returned TrackState carries the rebuilt estimator.
     ts = TrackState(; signal = GPSL1CA(), doppler_estimator = RebuildingEstimator(0))
     ts2 = add_satellite!(ts; prn = 1, carrier_doppler = 100.0Hz)
     @test ts2.doppler_estimator.num_registered == 1
-    # The dictionary mutation is still in place — shared with the input.
+    # The dictionary is still mutated in place.
     @test length(get_sat_states(ts, :default)) == 1
     @test get_sat_states(ts2, :default) === get_sat_states(ts, :default)
 
-    # Escape-hatch overload behaves the same.
     sat = get_sat_state(ts2, :default, 1)
     sat2 = TrackedSat(
         sat.prn + 1,
@@ -585,18 +534,13 @@ end
     @test ts3.doppler_estimator.num_registered == 2
     @test length(get_sat_states(ts3, :default)) == 2
 
-    # Estimators that update in place (or don't override the hook) keep
-    # the in-place contract: the identical TrackState comes back.
+    # Otherwise the identical TrackState comes back.
     conventional_ts = TrackState(; signal = GPSL1CA())
     ret = add_satellite!(conventional_ts; prn = 5, carrier_doppler = 100.0Hz)
     @test ret === conventional_ts
 end
 
-# Type stability matters because every accessor is on the path between
-# user code and the hot tracking loop. A widened return type here can
-# silently propagate into a dynamic dispatch in the caller; `@inferred`
-# trips the moment the compiler's narrowest prediction stops matching
-# the actual return.
+# A widened accessor return type turns into dynamic dispatch in the caller.
 @testset "Accessor type stability — single-group, single-signal" begin
     track_state = TrackState(; signal = GPSL1CA())
     track_state =
@@ -622,15 +566,14 @@ end
     @inferred estimate_cn0(track_state, 1)
     @inferred get_signal(track_state)
     @inferred get_sat_state(track_state, 1)
-    @test true   # gives the testset a passing assertion if all `@inferred` succeed
+    @test true
 end
 
 @testset "preferred_num_code_blocks_to_integrate validation (issue #128)" begin
     gpsl1 = GPSL1CA()
     track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 0.0Hz)])
 
-    # GPS L1 C/A has 20 code blocks per bit; only divisors keep integrations
-    # aligned to bit boundaries, so only divisors are accepted.
+    # Only divisors of the 20 blocks per bit keep integrations on the bit grid.
     for valid in (1, 2, 4, 5, 10, 20)
         set_preferred_num_code_blocks_to_integrate!(track_state, 1, valid)
         @test get_preferred_num_code_blocks_to_integrate(track_state, 1) == valid
@@ -645,7 +588,7 @@ end
     # A rejected value leaves the previous one untouched.
     @test get_preferred_num_code_blocks_to_integrate(track_state, 1) == 20
 
-    # Validated at construction, too — not only via the setter.
+    # Validated at construction, too.
     @test_throws ArgumentError Tracking.TrackedSignal(
         gpsl1;
         preferred_num_code_blocks_to_integrate = 3,
@@ -654,17 +597,15 @@ end
         Tracking.TrackedSignal(gpsl1; preferred_num_code_blocks_to_integrate = 10),
     ) == 10
 
-    # GPS L5I has 10 blocks per bit — 4 doesn't divide it (issue #128), 10 does.
+    # GPS L5I has 10 blocks per bit.
     gpsl5 = GPSL5I()
     l5_state = TrackState(gpsl5, [TrackedSat(gpsl5, 1, 0.0, 0.0Hz)])
     @test_throws ArgumentError set_preferred_num_code_blocks_to_integrate!(l5_state, 1, 4)
     set_preferred_num_code_blocks_to_integrate!(l5_state, 1, 10)
     @test get_preferred_num_code_blocks_to_integrate(l5_state, 1) == 10
 
-    # Pilot signals carry no data bits, so the setter accepts any length of
-    # at least one block. Post-sync the integration is bounded by the
-    # secondary-code period (and divisor-clamped to it at runtime, issue
-    # #134), see `calc_num_code_blocks_to_integrate`.
+    # A pilot has no bit grid, so any length ≥ 1 is accepted; at runtime it is
+    # clamped to a divisor of the secondary-code period (#134).
     gpsl1c_p = GPSL1C_P()
     p_state = TrackState(gpsl1c_p, [TrackedSat(gpsl1c_p, 1, 0.0, 0.0Hz)])
     set_preferred_num_code_blocks_to_integrate!(p_state, 1, 7)
@@ -675,11 +616,8 @@ end
 @testset "get_filtered_prompts TrackState accessor (issue #134)" begin
     ts = TrackState(; signal = GPSL1CA())
     ts = add_satellite!(ts; prn = 1)
-    # Sibling of `get_soft_bits(ts, 1)` — must resolve through the same
-    # accessor ladder instead of throwing a MethodError.
     @test get_filtered_prompts(ts, 1) isa Vector{ComplexF64}
     @test isempty(get_filtered_prompts(ts, 1))
-    # Per-signal form `(group, prn, signal selector)`.
     @test get_filtered_prompts(ts, :default, 1, 1) isa Vector{ComplexF64}
     @test get_filtered_prompts(ts, :default, 1, GPSL1CA) isa Vector{ComplexF64}
 end
@@ -689,8 +627,6 @@ end
     @test get_signal(ts, :gps) isa GPSL1CA
     @test get_signal(ts, :gal) isa GalileoE1B
     @test get_signal(ts, 1) isa GPSL1CA
-    # `Val` group keys resolve at compile time (same convention as
-    # `get_sat_states`).
     @test @inferred(get_signal(ts, Val(:gal))) isa GalileoE1B
     single = TrackState(; signal = GPSL1CA())
     @test get_signal(single) isa GPSL1CA
@@ -713,8 +649,7 @@ end
     gpsl1 = GPSL1CA()
     sat = TrackedSat(gpsl1, 1, 0.0, 0.0Hz)
     empty_dict = Dictionary{Int,typeof(sat)}(Int[], typeof(sat)[])
-    # Must be the curated ArgumentError from `_signal_group_from_dict`,
-    # not a raw BoundsError from the estimator kwarg default.
+    # The ArgumentError from `_signal_group_from_dict`, not a BoundsError.
     @test_throws ArgumentError TrackState((gps = empty_dict,))
 end
 
@@ -748,8 +683,8 @@ end
 @testset "merge_sats rejects sats whose full slot type mismatches (issue #134)" begin
     gpsl1 = GPSL1CA()
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 10.5, 10.0Hz)])
-    # Same estimator-state type, different correlator type — must hit the
-    # curated slot-type ArgumentError, not a downstream MethodError.
+    # Same estimator state, different correlator: an ArgumentError, not a
+    # MethodError downstream.
     odd = TrackedSat(gpsl1, 2, 0.0, 0.0Hz; correlator = VeryEarlyPromptLateCorrelator())
     @test_throws ArgumentError merge_sats(ts, 1, odd)
 end
@@ -779,12 +714,11 @@ end
 
     reset_loop_filters!(ts, 1)
     state = get_doppler_estimator_state(get_sat_state(ts, 1))
-    # The per-sat bandwidth override survives the reset…
     @test state.bandwidths.wide_carrier == 5.0Hz
     @test state.bandwidths.narrow_carrier == 4.0Hz
     @test state.bandwidths.code == 0.25Hz
-    # …and the FLL's previous-prompt memory is cleared, so the first
-    # post-reset fll_disc doesn't span the old integration interval.
+    # The FLL's previous prompt is cleared, so the first discriminator after
+    # the reset does not span the old integration.
     @test get_last_fully_integrated_filtered_prompt(ts, 1) == 0.0 + 0.0im
 end
 
@@ -792,42 +726,35 @@ end
     gpsl1 = GPSL1CA()
     track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 100.0Hz)])
 
-    # Defaults to one block; settable per signal; persists.
     @test get_preferred_num_code_blocks_to_integrate(track_state, 1) == 1
     set_preferred_num_code_blocks_to_integrate!(track_state, 1, 20)
     @test get_preferred_num_code_blocks_to_integrate(track_state, 1) == 20
     set_preferred_num_code_blocks_to_integrate!(track_state, :default, 1, GPSL1CA, 5)   # by signal type
     @test get_preferred_num_code_blocks_to_integrate(track_state, 1) == 5
-    # Selector-less (group, prn) form mirrors `get_…(ts, group, prn)`.
     set_preferred_num_code_blocks_to_integrate!(track_state, :default, 1, 4)
     @test get_preferred_num_code_blocks_to_integrate(track_state, :default, 1) == 4
-    # No-id form mirrors `get_…(ts)` on a 1-group/1-sat state.
     set_preferred_num_code_blocks_to_integrate!(track_state, 10)
     @test get_preferred_num_code_blocks_to_integrate(track_state) == 10
 
-    # The estimator state starts seeded at the init Doppler (100 Hz).
     @test get_doppler_estimator_state(get_sat_state(track_state, 1)).init_carrier_doppler ==
           100.0Hz
 
-    # Simulate the loop having converged to a different carrier/code Doppler.
+    # As if the loop had converged elsewhere.
     sats = get_sat_states(track_state)
     sats[1] = TrackedSat(sats[1]; carrier_doppler = 137.0Hz, code_doppler = 0.5Hz)
     @test get_carrier_doppler(track_state, 1) == 137.0Hz
-    # The estimator state is still anchored at the original init (100 Hz).
     @test get_doppler_estimator_state(get_sat_state(track_state, 1)).init_carrier_doppler ==
           100.0Hz
 
     reset_loop_filters!(track_state, 1)
-    # Carrier/code Doppler preserved across the reset.
+    # The reset keeps the Doppler and re-seeds the estimator from it.
     @test get_carrier_doppler(track_state, 1) == 137.0Hz
     @test get_code_doppler(track_state, 1) == 0.5Hz
-    # …and the estimator is re-seeded from the converged Doppler.
     @test get_doppler_estimator_state(get_sat_state(track_state, 1)).init_carrier_doppler ==
           137.0Hz
     @test get_doppler_estimator_state(get_sat_state(track_state, 1)).init_code_doppler ==
           0.5Hz
 
-    # Whole-TrackState form resets every satellite and preserves Doppler.
     sats[1] = TrackedSat(sats[1]; carrier_doppler = 201.0Hz)
     reset_loop_filters!(track_state)
     @test get_carrier_doppler(track_state, 1) == 201.0Hz
@@ -862,8 +789,8 @@ end
     @test TrackState(; signal = gpsl1).sample_offsets == Dict(l1 => 0)
     @test TrackState(; signal = gpsl1, sample_offsets = Dict(l1 => 8000)).sample_offsets ==
           Dict(l1 => 8000)
-    # A rebuilt state that adds a band carries the old band's offset and
-    # starts the new one at 0 unless told otherwise; it never aliases the input.
+    # A rebuilt state with a new band keeps the old offset, starts the new band
+    # at 0, and does not alias the input.
     old = TrackState(; signal = gpsl1, sample_offsets = (; l1 => 8000))
     rebuilt = TrackState(;
         signals = (l1 = (gpsl1,), l5 = (GPSL5I(),)),

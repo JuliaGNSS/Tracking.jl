@@ -46,20 +46,19 @@ const GEO_PRN = 1   # GEO (D2) — carries no overlay
         @test res.polarity == -1
     end
 
-    # As on B1I, the GEO satellites carry no overlay — modelled as an all-ones
-    # column, which the soft detector handles as a data-bit-edge search.
+    # As on B1I, GEO satellites carry no overlay (an all-ones column) and still
+    # take the soft secondary-code detector, which at their D2 rate never locks
+    # (`test/beidou_b1i.jl`).
     @test TrackingLoops._packed_secondary_code(UInt32, b3i, GEO_PRN) ==
           (one(UInt32) << N) - one(UInt32)
     @test TrackingLoops.uses_soft_secondary_code_detection(b3i) == true
     @test TrackingLoops.uses_soft_bit_edge_detection(b3i) == false
 
-    # Plain BPSK (`LOC`) → EarlyPromptLate default.
     @test @inferred(get_default_correlator(b3i, NumAnts(1))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
     @test @inferred(get_default_correlator(b3i, NumAnts(3))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
-    # 1 ms primary period (10230 chips at 10.23 Mcps) → 18 Hz / 1 Hz.
     @test @inferred(default_narrow_carrier_loop_filter_bandwidth(b3i)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(b3i)) ≈ 1.0Hz
 

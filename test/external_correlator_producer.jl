@@ -32,9 +32,8 @@ using TrackingLoops:
     append_noise_observation!,
     noise_observation_from_samples
 
-# A track state with one L1 C/A sat, an offset initial Doppler, and its
-# `correlator_outputs` buffer filled by the software correlate phase (so the
-# outputs are realistic). Returns the state plus the measurements used.
+# One L1 C/A satellite, its `correlator_outputs` filled by the software
+# correlate step. Returns the state and the measurements.
 function correlated_state(; fs = 4e6Hz, prn = 1, num_samples = 12_000)
     gpsl1 = GPSL1CA()
     code_frequency = get_code_frequency(gpsl1)
@@ -42,8 +41,7 @@ function correlated_state(; fs = 4e6Hz, prn = 1, num_samples = 12_000)
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, prn, 0.0, 100.0Hz)])
     dc = CPUDownconvertAndCorrelator()
     measurements = (L1 = BandMeasurement(signal, fs),)
-    # One big chunk spanning the whole buffer, estimator NOT run, so the
-    # collected outputs survive for the estimator calls below.
+    # Correlate only, so the outputs survive for the estimate calls below.
     downconvert_and_correlate!(
         dc,
         measurements,
@@ -58,7 +56,6 @@ end
     fs = 4e6Hz
     ts_meas, measurements = correlated_state(; fs)
     ts_fs, _ = correlated_state(; fs)
-    # Same inputs went into both, so the collected outputs are identical.
     @test length(get_correlator_outputs(only(get_signals(get_sat_state(ts_meas, 1))))) ==
           length(get_correlator_outputs(only(get_signals(get_sat_state(ts_fs, 1)))))
 
@@ -69,7 +66,6 @@ end
     @test get_code_doppler(ts_fs, 1) == get_code_doppler(ts_meas, 1)
     @test get_last_fully_integrated_filtered_prompt(ts_fs, 1) ==
           get_last_fully_integrated_filtered_prompt(ts_meas, 1)
-    # Both consumed and cleared the buffer.
     @test isempty(get_correlator_outputs(only(get_signals(get_sat_state(ts_fs, 1)))))
     @test isempty(get_correlator_outputs(only(get_signals(get_sat_state(ts_meas, 1)))))
 end
@@ -106,32 +102,26 @@ end
     ts = TrackState(; signal = GPSL1CA())
     ts = Tracking.add_satellite!(ts; prn = 1, code_phase = 0.0, carrier_doppler = 0.0Hz)
 
-    # TrackState-level, single group/sat/signal.
     append_correlator_output!(ts, out)
     @test length(get_correlator_outputs(ts)) == 1
-    # TrackState-level with a prn selector.
     append_correlator_output!(ts, out, 1)
     @test length(get_correlator_outputs(ts, 1)) == 2
-    # TrackState-level per-signal form (group, prn, signal selector).
     append_correlator_output!(ts, out, :default, 1, 1)
     @test length(get_correlator_outputs(ts, :default, 1, 1)) == 3
-    # TrackedSat-level.
     sat = get_sat_state(ts, 1)
     append_correlator_output!(sat, out)
     @test length(get_correlator_outputs(sat)) == 4
-    # TrackedSignal-level (returns the signal).
     sig = only(get_signals(sat))
     @test append_correlator_output!(sig, out) === sig
     @test length(get_correlator_outputs(sig)) == 5
 
-    # The estimator consumes and clears whatever an external producer appended.
     estimate_dopplers_and_filter_prompt!(ts, (L1 = 4e6Hz,))
     @test isempty(get_correlator_outputs(ts))
 end
 
 @testset "external-producer standalone estimate (no downconvert_and_correlate!)" begin
-    # Emulate an FPGA: build outputs by hand, append per signal in sample_index
-    # order, then fold them through the estimator with only a per-band rate.
+    # As an FPGA would: hand-built outputs in `sample_index` order, folded with
+    # only a per-band rate.
     fs = 4e6Hz
     corr = get_default_correlator(GPSL1CA(), NumAnts(1))
     shift = corr.preferred_early_late_to_prompt_code_shift
@@ -154,8 +144,7 @@ end
     @test isfinite(get_code_doppler(ts, 3) / Hz)
 end
 
-# One producer, one buffer of hand-built outputs, folded once — the shape the two
-# C/N₀ assertions below differ only by.
+# One producer and one buffer of hand-built outputs, folded once.
 function _ingest_and_fold!(ts; fs = 4e6Hz, prn = 3, num_records = 3, period = 4000)
     corr = get_default_correlator(GPSL1CA(), NumAnts(1))
     shift = corr.preferred_early_late_to_prompt_code_shift
@@ -171,16 +160,9 @@ end
 
 @testset "the ingest path's C/N₀ needs a noise observation under the default" begin
     # The default C/N₀ estimator is noise-referenced, so a correlator-ingest
-    # producer has TWO things to feed, not one. Doppler tracking works off the
-    # outputs alone — the testset above — and this is the part that does not: with
-    # no noise observation the fold skips every C/N₀ update and the satellite
-    # reports `-Inf dB-Hz` forever, which downstream reads as loss of lock.
-    #
-    # Asserted rather than merely documented because it is invisible from the
-    # ingest path itself: nothing here throws, nothing returns an error, and the
-    # one warning is `maxlog = 1`. This is also the assertion that makes a future
-    # move of `default_cn0_estimator` show up in CI as a behavior change on this
-    # path instead of as silence.
+    # producer must also feed noise: without it the satellite reports
+    # `-Inf dB-Hz` for good, which reads as loss of lock. Nothing throws and the
+    # one warning is `maxlog = 1`, hence the assertion.
     fs = 4e6Hz
     starved = Tracking.add_satellite!(
         TrackState(; signal = GPSL1CA());
@@ -193,10 +175,8 @@ end
     @test TrackingLoops.estimate_cn0(starved, 3) == -Inf * dBHz
     @test Base.length(Tracking.get_cn0_estimator(starved, 3)) == 0
 
-    # Feed the second half of the contract and the same producer reports a real
-    # figure. `Σ|x|²` over `n` samples at a per-sample variance of `σ² = 1e-6·f_s`
-    # gives `N₀ = 1e-6 Hz⁻¹`, against a normalised prompt power of
-    # `(3000/4000)² = 0.5625`.
+    # With noise fed: `σ² = 1e-6·f_s` per sample gives `N₀ = 1e-6 Hz⁻¹`,
+    # against a normalised prompt power of `(3000/4000)² = 0.5625`.
     fed = Tracking.add_satellite!(
         TrackState(; signal = GPSL1CA());
         prn = 3,
@@ -216,9 +196,8 @@ end
 end
 
 @testset "a producer record straddling a bit boundary warns and drops sync" begin
-    # The bit buffer only reports the overshoot; this package is what logs it.
-    # A synced L1 C/A signal 18 blocks into its bit, then a three-block record:
-    # 21 of 20 blocks, which only a producer not aligned to the bit grid sends.
+    # The bit buffer reports the overshoot and this package logs it: 18 blocks
+    # into a bit, a three-block record from a producer off the bit grid.
     fs = 4e6Hz
     ts = Tracking.add_satellite!(
         TrackState(; signal = GPSL1CA());

@@ -1,14 +1,9 @@
 """
 $(SIGNATURES)
 
-Generate a code replica for the given `signal`. The
-replica contains `num_samples` prompt samples as well as an additional
-number of early and late samples specified by `correlator_sample_shifts`.
-The codefrequency is specified by `code_frequency`, while the sampling
-rate is given by `sampling_frequency`. The phase of the first prompt
-sample is given by `start_code_phase`. The generated signal is returned
-in the array `code_replica` with the first generated sample written to
-index start_sample.
+Write the code replica of `signal` into `code_replica` from index `start_sample`:
+`num_samples` prompt samples, widened by the early and late
+`correlator_sample_shifts`, with the first prompt sample at `start_code_phase`.
 """
 function gen_code_replica!(
     code_replica,
@@ -60,11 +55,6 @@ function update_code_phase(
         get_code_length(signal) *
         (secondary_code_or_bit_found ? secondary_code_or_bit_length : 1)
     mod(code_frequency * num_samples / sampling_frequency + start_code_phase, code_length)
-    #    fixed_point = sizeof(Int) * 8 - 1 - min_bits_for_code_length(S)
-    #    delta = floor(Int, code_frequency * 1 << fixed_point / sampling_frequency)
-    #    fixed_point_start_phase = floor(Int, start_code_phase * 1 << fixed_point)
-    #    phase_fixed_point = delta * num_samples + fixed_point_start_phase
-    #    mod(phase_fixed_point / 1 << fixed_point, code_length)
 end
 
 """

@@ -1,101 +1,61 @@
 # Correlator
 
-The correlator computes the correlation between the incoming signal and the
-locally generated replica code at multiple code-phase offsets (early,
-prompt, late, …). Each [`TrackedSignal`](@ref) on a [`TrackedSat`](@ref)
-holds its own correlator, so a multi-signal satellite carries one
-correlator per signal.
+The correlator correlates the incoming signal with the local code replica at several
+code-phase offsets (early, prompt, late, …). Each [`TrackedSignal`](@ref) holds its
+own correlator, so a multi-signal satellite carries one per signal.
 
 ## Why early/late spacing matters
 
-The prompt accumulator is what the PLL discriminator and CN0 estimator
-consume; the surrounding early/late accumulators exist purely to give the
-DLL a slope estimate of the code-correlation triangle. The early-minus-late
-amplitude crosses zero exactly when the replica is aligned with the
-incoming code, and its sign on either side tells the DLL which direction
+The PLL discriminator and C/N₀ estimator consume the prompt; the early and late
+accumulators give the DLL the slope of the code-correlation triangle. Early minus
+late crosses zero when the replica is aligned, and its sign tells the DLL which way
 to push.
 
-Notation used below:
+Notation: `d` is the early-to-late spacing in chips (`d = 0.5`: E and L ½ chip
+apart), `ε` the code-phase error in chips, `B_fe` the front-end (analog + ADC)
+bandwidth, `T_chip = 1 / f_code` the chip period, `f_code` the chip rate (1.023 MHz
+for GPS L1 C/A) and `Fs` the sampling frequency.
 
-- `d` — early-to-late spacing, expressed as a fraction of one PRN chip
-  (so `d = 0.5` means E and L sit ½ chip apart).
-- `ε` — code-phase error: the offset between the locally generated
-  replica and the incoming code, in chips. `ε = 0` is perfect lock.
-- `E`, `P`, `L` — early, prompt, and late correlator outputs (complex
-  accumulators).
-- `B_fe` — pre-correlation (front-end) bandwidth in Hz: the analog +
-  ADC bandwidth that limits how sharp the correlation peak can be.
-- `T_chip` — one PRN chip period in seconds (`1 / f_code`); equivalently
-  `B_fe · T_chip` is the front-end bandwidth measured in chip-rate
-  units.
-- `Fs` — sampling frequency in Hz.
-- `f_code` — chip rate in Hz (1.023 MHz for GPS L1 C/A).
+- **Thermal-noise jitter** decreases as `d` shrinks, because the noise on E and L is
+  correlated and partially cancels in their difference (Van Dierendonck, Fenton &
+  Ford, "Theory and Performance of Narrow Correlator Spacing in a GPS Receiver",
+  NAVIGATION 39(3), 1992). A wider spacing only smooths a time-multiplexed
+  (dither) DLL; Tracking.jl computes E, P and L simultaneously from the same samples.
+- **Multipath error** also decreases as `d` shrinks, as the discriminator samples
+  the correlation function nearer the peak (same paper).
+- **Robustness to dynamics decreases as `d` shrinks.** The discriminator is linear
+  only over `|ε| < d/2` (the pull-in range `T_DLL`, Springer Handbook of GNSS,
+  §14.4.4); beyond it the slope drops to zero with the sign still correct. The lock
+  rule of thumb `3σ_DLL + ε_D ≤ T_DLL ≈ d/2` (eq. 14.57) leaves a narrow `d` less
+  budget for dynamic stress error `ε_D`, which is why NovAtel's narrow-correlator
+  design widens `d` during acquisition and narrows it once locked.
+- **Front-end bandwidth** caps the gains: below roughly `d ≈ 1 / (B_fe · T_chip)`
+  the band-limited peak is rounded, the slope flattens and jitter grows again. Van
+  Dierendonck reports `d ≈ 0.1` as optimal at 8 MHz on L1 C/A.
 
-With those names settled, the spacing `d` determines several DLL
-properties together:
+### The sample rate sets the minimum `d`
 
-- **Thermal-noise jitter** decreases as `d` shrinks, because the noise on
-  the early and late accumulators is correlated and partially cancels in
-  the early-minus-late difference. This is the central result of Van
-  Dierendonck, Fenton & Ford ("Theory and Performance of Narrow
-  Correlator Spacing in a GPS Receiver", NAVIGATION 39(3), 1992) and is
-  contrary to the intuition that wider should give a smoother
-  discriminator — it only does so when E and L are time-multiplexed
-  (dither-DLL), which Tracking.jl does **not** do; here E, P, L are
-  computed simultaneously from the same sample stream.
-- **Multipath error** also decreases as `d` shrinks: a narrower
-  discriminator samples the correlation function nearer the peak, where
-  multipath distortion is smallest. Same source, same paper.
-- **Robustness to dynamics decreases as `d` shrinks.** The
-  discriminator is only linear in `ε` over `|ε| < d/2` (the Springer
-  Handbook of GNSS, §14.4.4, calls this the pull-in range `T_DLL`);
-  outside it the slope drops to zero with the sign still correct, so
-  the loop converges but no longer behaves as designed. The lock
-  rule of thumb (Springer eq. 14.57) is `3σ_DLL + ε_D ≤ T_DLL ≈ d/2`,
-  so a narrow `d` shrinks the budget for dynamic stress error `ε_D`
-  and the receiver is more prone to losing lock under fast LOS
-  acceleration or scintillation. This is why NovAtel's original
-  narrow-correlator design widens `d` during acquisition and only
-  narrows once in steady-state lock.
-- **Front-end bandwidth interaction.** The benefits above saturate (and
-  eventually reverse) once `d` drops below roughly `1 / (B_fe · T_chip)`:
-  a band-limited correlation peak is rounded, so the early-minus-late
-  slope flattens and noise jitter starts to grow again. Van Dierendonck
-  reports `d ≈ 0.1` is optimal at 8 MHz front-end bandwidth on L1 C/A.
+`preferred_early_late_to_prompt_code_shift` is the early-to-prompt (and
+prompt-to-late) shift, so `d` is twice it. It is rounded to the nearest whole sample
+shift, at least one, so the realized spacing is
+`d = 2 · max(1, round(shift · Fs / f_code)) · f_code / Fs` chips. A `d ≈ 0.1` on
+L1 C/A needs `Fs ≥ 20 · f_code ≈ 20.46 MHz`; at 4 MHz `d` saturates at
+`2 · 1.023e6 / 4e6 ≈ 0.51` chips whatever the preferred value.
 
-So "narrower is better, up to a point that the front-end bandwidth
-allows" — there is no fundamental noise penalty until the band-limit
-kicks in.
-
-### Tracking.jl-specific constraint: sample rate sets the minimum `d`
-
-Tracking.jl expresses the spacing as a
-`preferred_early_late_to_prompt_code_shift` fraction-of-chip; the actual
-sample shift is the nearest integer at the current sampling rate, with a
-**floor of one sample**. The realized `d` is therefore
-`max(1, round(d_pref · Fs / f_code)) · f_code / Fs` chips. To realize the
-recommended narrow `d ≈ 0.1` on L1 C/A (1.023 MHz chip rate) the
-sampling rate has to be at least `10 · f_code ≈ 10.23 MHz`; at 4 MHz the
-nearest integer shift saturates the spacing at `1 / (4e6 / 1.023e6) ≈
-0.26` chips regardless of what `preferred_early_late_to_prompt_code_shift`
-is set to. So narrow-correlator operation in Tracking.jl is bottlenecked
-by both the front-end bandwidth (the physical argument above) and the
-ADC/sampling rate (this implementation detail).
-
-The `VeryEarlyPromptLateCorrelator` adds a second outer pair (very-early /
-very-late) to handle the multi-peaked code-correlation function of
-BOC-modulated signals like Galileo E1B — the inner pair locks the central
-peak and the outer pair disambiguates from the side-peaks.
+The `VeryEarlyPromptLateCorrelator` adds a very-early / very-late pair for the
+multi-peaked correlation function of BOC signals like Galileo E1B: the inner pair
+locks the central peak, the outer pair disambiguates it from the side peaks.
 
 ## Default Correlators
 
-The default correlator depends on the GNSS signal type and is returned by
-[`get_default_correlator`](@extref TrackingLoops.get_default_correlator):
+[`get_default_correlator`](@extref TrackingLoops.get_default_correlator) returns, per
+signal type:
 
-- [`EarlyPromptLateCorrelator`](@extref TrackingLoops.EarlyPromptLateCorrelator) for GPS L1 C/A, GPS L2CM, GPS L2CL,
-  GPS L5I, GPS L5Q, Galileo E5a-I, Galileo E5a-Q (BPSK modulation)
-- [`VeryEarlyPromptLateCorrelator`](@extref TrackingLoops.VeryEarlyPromptLateCorrelator) for GPS L1C-D, GPS L1C-P, Galileo E1B
-  and Galileo E1C (BOC / CBOC / TMBOC modulation)
+- [`VeryEarlyPromptLateCorrelator`](@extref TrackingLoops.VeryEarlyPromptLateCorrelator)
+  for the BOC-family signals GPS L1C-D, GPS L1C-P, Galileo E1B, Galileo E1C and
+  BeiDou B1C;
+- [`EarlyPromptLateCorrelator`](@extref TrackingLoops.EarlyPromptLateCorrelator) for
+  every other signal.
 
 ## Correlator Types
 
@@ -135,11 +95,9 @@ In the TrackingLoops manual:
 
 ## Sample shifts
 
-The downconvert/correlate inner loop walks the incoming sample buffer once
-and asks the correlator where to lay down each accumulator relative to the
-prompt — that mapping is `get_correlator_sample_shifts`. The spacing in
-*samples* between the outermost shifts is `get_early_late_sample_spacing`,
-which is what the DLL uses to scale its discriminator output back to chips.
+`get_correlator_sample_shifts` places each accumulator relative to the prompt, in
+samples; `get_early_late_sample_spacing`, the spacing of the outermost pair, scales
+the DLL discriminator back to chips.
 
 In the TrackingLoops manual:
 
@@ -157,18 +115,15 @@ In the TrackingLoops manual:
 
 ## Post-correlation filter
 
-A post-correlation filter reduces the correlator's per-antenna taps to the single
-channel the Doppler estimator and the C/N₀ estimator see. It does not combine the
-taps itself: it declares its combining weights through [`get_weights`](@extref TrackingLoops.get_weights), and
-Tracking applies them. That indirection is what keeps the C/N₀ honest on an
-antenna array — the measured noise covariance is reduced through the *same*
-weights, so numerator and denominator describe the same channel (see
-[CN0 Estimator](cn0_estimator.md)).
+A post-correlation filter reduces the per-antenna taps to the single channel the
+Doppler and C/N₀ estimators see. It declares its combining weights through
+[`get_weights`](@extref TrackingLoops.get_weights) and Tracking applies them, so the
+measured noise covariance is reduced through the *same* weights and the C/N₀'s
+numerator and denominator describe one channel (see [CN0 Estimator](cn0_estimator.md)).
 
-[`DefaultPostCorrFilter`](@extref TrackingLoops.DefaultPostCorrFilter) is the identity for a single antenna and selects
-the last element for an array. For multi-antenna tracking a beamformer is the
-natural override; see the worked example in
-[Tracking State](tracking_state.md).
+[`DefaultPostCorrFilter`](@extref TrackingLoops.DefaultPostCorrFilter) is the identity
+for a single antenna and selects the last element for an array. For an array a
+beamformer is the natural override; see [Tracking State](tracking_state.md).
 
 In the TrackingLoops manual:
 
@@ -185,10 +140,8 @@ calc_signal_samples_to_integrate
 
 ## Adjusting the spacing of the stock correlator
 
-The stock `EarlyPromptLateCorrelator` already exposes its spacing as a
-constructor knob — you do **not** need a custom correlator type just to
-change `d`. Pass the desired chip fraction via
-`preferred_early_late_to_prompt_code_shift` and hand it to a `TrackedSat`:
+Changing `d` needs no custom correlator: pass `d / 2` in chips as
+`preferred_early_late_to_prompt_code_shift` (here `d = 0.2`):
 
 ```jldoctest narrow_corr
 julia> using Tracking, TrackingLoops, GNSSSignals
@@ -208,23 +161,15 @@ julia> get_correlator(track_state, :default, 1, 1).preferred_early_late_to_promp
 0.1
 ```
 
-Likewise `VeryEarlyPromptLateCorrelator` exposes both the inner
-(`preferred_early_late_to_prompt_code_shift`, default `0.15`) and the
-outer (`preferred_very_early_late_to_prompt_code_shift`, default `0.6`)
-spacing.
-
-Remember the sample-rate floor: the actual realized `d` is the nearest
-integer sample shift at the current sampling rate (minimum 1), so on
-low-`Fs` configurations the *preferred* value may be rounded to a coarser
-realized value (see the Tracking.jl-specific constraint above).
+`VeryEarlyPromptLateCorrelator` exposes the inner
+(`preferred_early_late_to_prompt_code_shift`, default `0.15`) and the outer
+(`preferred_very_early_late_to_prompt_code_shift`, default `0.6`) shift. Either is
+subject to the sample-rate floor above.
 
 ### Changing the spacing of a satellite that's already tracking
 
-`TrackedSat`, `TrackedSignal`, and `EarlyPromptLateCorrelator` are all
-immutable structs, so changing the spacing means producing a replacement
-sat with the new value and writing it into the satellites-dictionary slot.
-The cleanest way is `Accessors.@set` for the deeply-nested field update,
-followed by `Dictionaries.set!` for the dictionary write:
+The sat, signal and correlator are immutable, so build a replacement sat with
+`Accessors.@set` and write it into the slot with `Dictionaries.set!`:
 
 ```jldoctest narrow_corr
 julia> using Accessors, Dictionaries
@@ -239,21 +184,15 @@ julia> get_correlator(track_state, :default, 1, 1).preferred_early_late_to_promp
 0.7
 ```
 
-`@set` preserves everything else on the correlator (including the
-in-flight accumulator), only swapping the one field. The dictionary slot
-is reassigned in place, so the `TrackState`'s concrete type doesn't
-change and the hot path stays type-stable across the swap.
+`@set` keeps everything else, including the in-flight accumulator, and the
+`TrackState`'s concrete type does not change.
 
 ## Custom Correlators
 
-Roll your own correlator when you need a *layout* the stock types don't
-provide — extra taps, asymmetric shifts, a non-standard
-`get_correlator_sample_shifts` mapping, or a different `get_prompt_index`
-arrangement. Subtype `AbstractCorrelator` (or
-`AbstractEarlyPromptLateCorrelator` to inherit the early/late accessors)
-and implement a small interface.
-
-### What to implement
+Write a correlator for a *layout* the stock types lack: extra taps, asymmetric
+shifts, or a different prompt index. Subtype `AbstractCorrelator` (or
+`AbstractEarlyPromptLateCorrelator` to inherit the early/late accessors) and
+implement:
 
 | Method | Purpose |
 |--------|---------|
@@ -262,16 +201,13 @@ and implement a small interface.
 | `update_accumulator(c, accumulators)` | Construct a fresh correlator instance with the given accumulators (immutable update). |
 | `get_correlator_sample_shifts(c, sampling_frequency, code_frequency)` | Return an `SVector{N,Int}` of sample offsets relative to the prompt, ordered from latest replica to earliest. |
 
-The `get_prompt_index` default places the prompt at the middle of the
-accumulator vector — if you want a different layout (e.g. asymmetric
-shifts) override that too.
+`get_prompt_index` defaults to the middle accumulator; override it for an
+asymmetric layout.
 
 ### Skeleton
 
-A 7-tap correlator with three early and three late accumulators (e.g. as
-a building block for a custom multipath-mitigation discriminator that
-fits a slope over multiple early/late samples rather than using a single
-E−L difference):
+A 7-tap correlator, e.g. for a multipath-mitigation discriminator that fits a slope
+over several early/late taps:
 
 ```jldoctest multitap
 julia> using Tracking, TrackingLoops, GNSSSignals, StaticArrays
@@ -286,8 +222,7 @@ julia> using TrackingLoops:
 julia> struct MultiTapCorrelator{M,T} <: AbstractEarlyPromptLateCorrelator{M}
            accumulators::SVector{7,T}
            tap_spacing_chips::Float64
-           # Dispatch on accumulator-vector element type to pin M, mirroring
-           # the pattern in `src/correlators/early_prompt_late.jl`.
+           # Pin M from the accumulator element type, as TrackingLoops' EPL does.
            function MultiTapCorrelator(
                accumulators::AbstractVector{SVector{M,T}}, tap_spacing_chips,
            ) where {M,T<:Complex}
@@ -300,7 +235,7 @@ julia> struct MultiTapCorrelator{M,T} <: AbstractEarlyPromptLateCorrelator{M}
            end
        end
 
-julia> # Convenience kwarg-only constructor — matches the EPL surface
+julia> # Keyword constructor, like the EPL one
        function MultiTapCorrelator(; num_ants::NumAnts = NumAnts(1),
                                      tap_spacing_chips = 0.1)
            MultiTapCorrelator(
@@ -322,9 +257,8 @@ julia> function TrackingLoops.get_correlator_sample_shifts(
        end;
 ```
 
-To use it, plug it into a `TrackedSat` and build the `TrackState` from
-that sat (so the slot type is taken from the custom correlator rather
-than the default `EarlyPromptLateCorrelator`):
+Build the `TrackState` from a sat carrying it, so the slot type is the custom
+correlator's:
 
 ```jldoctest multitap
 julia> using Tracking: Hz
@@ -338,10 +272,8 @@ julia> get_num_accumulators(get_correlator(track_state, 1))
 7
 ```
 
-The default DLL discriminator only reads the outermost early/late pair,
-so a multi-tap correlator like this is most useful in combination with a
-custom Doppler estimator (see [Custom Doppler Estimator](custom_doppler_estimator.md))
-that walks every accumulator. The reference implementations in
-`src/correlators/early_prompt_late.jl` and
-`src/correlators/very_early_prompt_late.jl` show the full pattern
-including the multi-antenna `SVector` element type.
+The default DLL discriminator reads only the outermost early/late pair, so pair a
+multi-tap correlator with a [Custom Doppler Estimator](custom_doppler_estimator.md).
+TrackingLoops' `src/correlators/early_prompt_late.jl` and
+`very_early_prompt_late.jl` show the full pattern, including multi-antenna
+accumulators.

@@ -26,34 +26,21 @@ using TrackingLoops:
     @test @inferred(get_default_correlator(gpsl1, NumAnts(3))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
-    # Per-signal default loop bandwidths: sized for the 1 ms primary code
-    # period at BL·T ≈ 0.018. Historically the package shipped 18 Hz / 1 Hz
-    # as the universal default — that value falls out of the formula here.
     @test @inferred(default_narrow_carrier_loop_filter_bandwidth(gpsl1)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(gpsl1)) ≈ 1.0Hz
 
-    # 40-block sync window fits in a UInt64.
     @test @inferred(get_code_block_buffer_type(gpsl1)) === UInt64
 
     @testset "Soft bit-edge detection traits" begin
-        # GPS L1 C/A uses the soft, maximum-energy CFAR bit-edge detector.
         @test @inferred(uses_soft_bit_edge_detection(gpsl1)) == true
-        # Default confidence target.
         @test @inferred(get_bit_edge_detection_confidence(gpsl1)) ≈ 0.999
     end
 end
 
-# User override of the bit-edge detection confidence via dispatch on
-# `get_bit_edge_detection_confidence`. The detector picks up the override
-# immediately — no TrackState rebuild needed.
-#
-# `Core.eval` is used so the override executes at test time rather than at
-# module-parse time (a literal method definition is hoisted to module scope and
-# would be in effect for the whole file), and it
-# evaluates into *this* module rather than into `Tracking`, which is where a
-# user's override would live too. The generic belongs to TrackingLoops and the
-# argument type to GNSSSignals, so a method owned by `Tracking` would be type
-# piracy by the package itself, which Aqua rightly refuses.
+# A user override of `get_bit_edge_detection_confidence` takes effect without a
+# TrackState rebuild. `Core.eval` defines it at test time, not for the whole
+# file, and in this module, where a user's would live: in `Tracking` it would be
+# type piracy, which Aqua refuses.
 @testset "GPS L1 — confidence override" begin
     gpsl1 = GPSL1CA()
     @test get_bit_edge_detection_confidence(gpsl1) ≈ 0.999
@@ -64,8 +51,7 @@ end
     try
         @test get_bit_edge_detection_confidence(gpsl1) ≈ 0.95
     finally
-        # Remove the override, so the tests after this one see the generic
-        # default again rather than a second override that happens to match it.
+        # Remove the override for the tests after this one.
         Base.delete_method(which(get_bit_edge_detection_confidence, (GPSL1CA,)))
     end
     @test get_bit_edge_detection_confidence(gpsl1) ≈ 0.999

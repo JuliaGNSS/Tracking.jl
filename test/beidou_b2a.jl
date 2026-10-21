@@ -23,8 +23,7 @@ rotl(x::T, r, N) where {T} =
     N = get_secondary_code_length(b2a_i)  # 5
     @test N == 5
 
-    # B2a carries B-CNAV2 at 200 sym/s; one 5-chip secondary period is one
-    # symbol. Below one full period the detector returns `found = false`.
+    # B-CNAV2 at 200 sym/s: one 5-chip secondary period is one symbol.
     @test @inferred(detect_bit_or_secondary_code_sync(b2a_i, prn, UInt32(0x0), N - 1)).found ==
           false
 
@@ -55,7 +54,6 @@ rotl(x::T, r, N) where {T} =
     @test @inferred(get_default_correlator(b2a_i, NumAnts(3))) ==
           EarlyPromptLateCorrelator(; num_ants = NumAnts(3))
 
-    # 1 ms primary period (10230 chips at 10.23 Mcps) → 18 Hz / 1 Hz.
     @test @inferred(default_narrow_carrier_loop_filter_bandwidth(b2a_i)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(b2a_i)) ≈ 1.0Hz
 
@@ -98,7 +96,6 @@ end
     @test @inferred(default_narrow_carrier_loop_filter_bandwidth(b2a_q)) ≈ 18.0Hz
     @test @inferred(default_code_loop_filter_bandwidth(b2a_q)) ≈ 1.0Hz
 
-    # 100-block overlay window needs UInt128.
     @test @inferred(get_code_block_buffer_type(b2a_q)) === UInt128
 
     @test TrackingLoops.uses_soft_secondary_code_detection(b2a_q) == true

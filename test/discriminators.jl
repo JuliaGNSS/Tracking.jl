@@ -102,10 +102,9 @@ end
     @test @inferred(dll_disc(gpsl1, very_late_correlator, 0.0Hz, sampling_frequency)) == 0.5
 end
 
-# A chips-calibrated discriminator has an S-curve slope of 1 at the origin: sweep a true
-# code offset τ over the linear region, build the accumulators by correlating the
-# (noiseless) code against tap replicas at the correlator's actual sample-quantized
-# offsets, and least-squares fit `dll_disc`'s output against τ.
+# A chips-calibrated discriminator has slope 1 at the origin: correlate the noiseless
+# code at offsets τ against taps at their sample-quantized offsets and fit `dll_disc`
+# against τ.
 function dll_disc_s_curve_slope(
     signal,
     correlator,
@@ -143,10 +142,9 @@ end
     # rates that quantize the taps differently (±3/±12 and ±12/±47 samples).
     @test dll_disc_s_curve_slope(GalileoE1B_BOC11(), veml, 20MHz) ≈ 1.0 atol = 0.02
     @test dll_disc_s_curve_slope(GalileoE1B_BOC11(), veml, 79.5MHz) ≈ 1.0 atol = 0.02
-    # VEML on the full modulations: BOC(1,1) is the modulation model the normalization
-    # assumes, so its residual gain error is the modulation mismatch — a few percent for
-    # the additive CBOC⁺ (E1B) and TMBOC (L1C pilot), more for E1C's anti-phased CBOC⁻,
-    # whose subtracted BOC(6,1) component flattens the correlation peak.
+    # VEML on the full modulations is off by their mismatch to BOC(1,1): a few percent
+    # for CBOC⁺ (E1B) and TMBOC (L1C pilot), more for E1C's CBOC⁻, whose subtracted
+    # BOC(6,1) flattens the peak.
     @test dll_disc_s_curve_slope(GalileoE1B(), veml, 20MHz) ≈ 1.0 atol = 0.1
     @test dll_disc_s_curve_slope(GPSL1C_P(), veml, 20MHz) ≈ 1.0 atol = 0.1
     @test dll_disc_s_curve_slope(GalileoE1C(), veml, 20MHz) ≈ 1.0 atol = 0.2

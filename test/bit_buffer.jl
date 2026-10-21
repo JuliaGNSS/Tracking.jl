@@ -41,22 +41,17 @@ end
     @test _norm_quantile(0.975) ≈ 1.959964 atol = 1e-6     # tabulated Φ⁻¹
     @test _norm_quantile(0.999) ≈ 3.090232 atol = 1e-6
     @test _norm_quantile(0.025) ≈ -_norm_quantile(0.975) atol = 1e-12
-    # The open-interval contract: `_t_quantile` clamps before calling in, so
-    # the ±Inf endpoints are documented behaviour rather than an error.
+    # `_t_quantile` clamps first; the endpoints give ±Inf, not an error.
     @test _norm_quantile(1.0) == Inf
     @test _norm_quantile(0.0) == -Inf
 end
 
-# `@allocated` at module scope picks up boxing from untyped global lookups, so
-# the measurement goes through a typed function — the same reason
-# `test/track_in_place.jl` measures inside helpers.
+# In a function: `@allocated` at module scope counts untyped-global boxing.
 _measure_t_quantile_alloc(probability::Float64, dof::Int) =
     (_t_quantile(probability, dof); @allocated _t_quantile(probability, dof))
 
 @testset "_t_quantile" begin
-    # Median is exactly 0 — and, as a regression guard, `probability == 0.5`
-    # must return directly rather than recurse into `_t_quantile(1 - 0.5, dof)`
-    # (which previously self-recursed forever → stack overflow).
+    # Exactly 0, returned directly: reflecting 0.5 would recurse forever.
     @test _t_quantile(0.5, 1) === 0.0
     @test _t_quantile(0.5, 30) === 0.0
     # dof = 1 is the standard Cauchy, quantile(p) = tan(π(p − 0.5)).
@@ -65,14 +60,9 @@ _measure_t_quantile_alloc(probability::Float64, dof::Int) =
     # Symmetric about 0.
     @test _t_quantile(0.25, 1) ≈ -_t_quantile(0.75, 1) atol = 1e-9
     @test _t_quantile(0.001, 7) ≈ -_t_quantile(0.999, 7) atol = 1e-6
-    # Accuracy against standard Student-t tables. `dof = 1` (Cauchy) and
-    # `dof = 2` are closed forms and land on the exact value; above that Hill's
-    # series carries a small relative error (worst ~2e-4 around dof 3–10),
-    # which is still orders of magnitude finer than the nominal-d.o.f.
-    # modelling error the threshold is built on — and far too fine to move
-    # which block the detector locks on.
-    # (The two closed forms are pinned at the precision of the table literal
-    # itself, 7 significant digits — they agree with the exact value to ~1e-16.)
+    # Against Student-t tables. `dof` 1 and 2 are closed forms, exact to the
+    # table's 7 digits; Hill's series above them is off by up to ~2e-4 (dof
+    # 3–10), far too little to move the lock block.
     @test _t_quantile(0.975, 1) ≈ 12.706205 rtol = 1e-7
     @test _t_quantile(0.975, 2) ≈ 4.302653 rtol = 1e-7
     @test _t_quantile(0.995, 3) ≈ 5.840909 rtol = 1e-4
@@ -86,42 +76,31 @@ _measure_t_quantile_alloc(probability::Float64, dof::Int) =
     normal_limit = 3.87813           # tabulated Φ⁻¹(p), the dof → ∞ limit
     @test _t_quantile(p, 1) > _t_quantile(p, 10) > _t_quantile(p, 1000) > normal_limit
     @test _t_quantile(p, 100_000) ≈ normal_limit atol = 1e-3
-    # The behaviour the fix relies on: at 1 d.o.f. (2 bins) the threshold is huge,
-    # so the observed z ≈ 40 reacquisition fluctuation is rejected; by ~70 bins a
-    # clean z ≈ 3.9 clears it.
+    # At 2 bins the threshold rejects the z ≈ 40 seen on reacquisition; by ~70
+    # bins a clean z ≈ 3.9 clears it.
     @test _t_quantile(p, 1) > 1000
     @test _t_quantile(p, 69) < 4.2
-    # Monotone in dof over the whole range the detector sweeps — no branch seam
-    # between the closed forms (dof ≤ 2) and Hill's two series.
+    # Monotone over the swept range, with no seam between the branches.
     @test issorted([_t_quantile(p, dof) for dof = 1:400]; rev = true)
-    # Allocation-free at every dof. The detector calls this once per
-    # primary-code block for every unsynced satellite, so an allocating
-    # quantile makes `track!` allocate in proportion to the signal length
-    # (the exact `SpecialFunctions.beta_inc_inv` inversion did, via internal
-    # `zeros(31)` scratch, from ~12 d.o.f. upwards). `test/track_in_place.jl`
-    # guards the same property end-to-end; this pins it per dof, where the
-    # allocating stretches of the range are unmissable.
+    # Allocation-free at every dof: it runs once per block per unsynced
+    # satellite (end-to-end guard in `test/track_in_place.jl`).
     @test all(_measure_t_quantile_alloc(p, dof) == 0 for dof = 1:400)
     @test _measure_t_quantile_alloc(0.25, 7) == 0    # the reflected branch too
-    # The detector clamps its argument to the open interval; the endpoint must
-    # still produce a finite (huge) threshold rather than NaN, or the
-    # `z_score < threshold` gate would silently pass.
+    # Finite, not NaN, at the clamped endpoint, or `z_score < threshold` would
+    # silently pass.
     @test isfinite(_t_quantile(prevfloat(1.0), 1))
     @test isfinite(_t_quantile(prevfloat(1.0), 40))
 end
 
 const L1CA_BLOCKS_PER_BIT = 20  # primary-code blocks per L1 C/A navigation bit
 
-# Build a noiseless ±1 soft-prompt stream from a list of data bits, one bit =
-# `L1CA_BLOCKS_PER_BIT` blocks, scaled by `amp`.
+# A noiseless ±`amp` prompt stream, `L1CA_BLOCKS_PER_BIT` blocks per data bit.
 _bitstream(bits; amp = 1.0) =
     ComplexF64[amp * (b == 1 ? 1.0 : -1.0) for b in bits for _ = 1:L1CA_BLOCKS_PER_BIT]
 
-# Fold a prompt stream into a fresh set of phase accumulators (mirrors what
-# `_buffer_find_bit` does) and run the detector after the n-th block. With
-# `upto = 0` it runs after every block and returns the (1-based) block index
-# at which it first locks (0 if never), else it returns the SyncResult after
-# exactly `upto` blocks.
+# Fold prompts into fresh accumulators as `_buffer_find_bit` does, running the
+# detector after each block. Returns the 1-based block of the first lock (0 if
+# none) for `upto = 0`, else the SyncResult after `upto` blocks.
 function _detect_over(prompts, confidence; upto = 0)
     accumulators = PhaseAccumulators()
     _seed_phase_accumulators!(accumulators, L1CA_BLOCKS_PER_BIT)
@@ -152,14 +131,13 @@ end
 
 @testset "_detect_bit_edge_cfar" begin
     @testset "Needs at least two bins" begin
-        # 39 blocks (< 2L) — never enough to nominate a runner-up.
+        # < 2L blocks: no runner-up yet.
         @test _detect_over(_bitstream([0, 1])[1:39], 0.999; upto = 39).found == false
     end
 
     @testset "Noiseless lock fires at the true bit boundary, not one early" begin
-        # Data 0,0,1: first transition preceded by a repeated bit (the
-        # exact issue-#124 trigger). The true edge is at block 60; the old
-        # tolerant matcher fired at 59.
+        # A repeated bit before the first transition (#124): the edge is at
+        # block 60, not 59.
         @test _detect_over(_bitstream([0, 0, 1])[1:59], 0.999; upto = 59).found == false
         res = _detect_over(_bitstream([0, 0, 1]), 0.999; upto = 60)
         @test res.found == true
@@ -173,15 +151,12 @@ end
     end
 
     @testset "No data transition never locks" begin
-        # A constant data stream carries no edge information.
         @test _detect_over(_bitstream(fill(1, 5)), 0.999) == 0
     end
 
     @testset "Confidence drives lock latency in noise" begin
-        # Alternating bits give a transition at every boundary — the
-        # cleanest possible edge evidence. Add noise and feed the stream
-        # block-by-block; a higher confidence target locks no earlier than a
-        # lower one, and always at a true bit boundary.
+        # Alternating bits in noise: higher confidence never locks earlier,
+        # and always on a bit boundary.
         function lock_block(confidence, seed)
             rng = MersenneTwister(seed)
             clean = _bitstream([bit % 2 for bit = 0:39]; amp = 8.0)
@@ -191,36 +166,29 @@ end
         for seed = 1:5
             low_confidence_lock = lock_block(0.95, seed)
             high_confidence_lock = lock_block(0.99999, seed)
-            # Both lock on this high-SNR stream within the window.
             @test low_confidence_lock > 0
             @test high_confidence_lock > 0
-            # More confidence ⇒ never an earlier lock.
             @test high_confidence_lock >= low_confidence_lock
-            # Whenever it does lock it is at a true bit boundary.
             @test low_confidence_lock % L1CA_BLOCKS_PER_BIT == 0
             @test high_confidence_lock % L1CA_BLOCKS_PER_BIT == 0
         end
     end
 
     @testset "confidence = 1.0 stays conservative, not an instant lock" begin
-        # On a *noisy* signal (finite z) confidence 1.0 must be maximally
-        # conservative, not lock at the first boundary the way the old
-        # NaN-threshold path did. (A noiseless edge has z = Inf and still
-        # locks — genuine certainty, exercised above.)
+        # With noise (finite z) confidence 1.0 is maximally conservative; a
+        # noiseless edge (z = Inf) still locks.
         rng = MersenneTwister(7)
         clean = _bitstream([bit % 2 for bit = 0:39]; amp = 3.0)
         noisy = ComplexF64[prompt + complex(randn(rng), randn(rng)) for prompt in clean]
         low_confidence_lock = _detect_over(noisy, 0.99)
         high_confidence_lock = _detect_over(noisy, 1.0)
-        @test low_confidence_lock > 0                                      # locks at moderate confidence
-        @test high_confidence_lock == 0 || high_confidence_lock > low_confidence_lock  # 1.0 never earlier
+        @test low_confidence_lock > 0
+        @test high_confidence_lock == 0 || high_confidence_lock > low_confidence_lock
     end
 
     @testset "no false lock on a long near-constant run (Welford stability)" begin
-        # High-magnitude, near-constant prompts with a tiny systematic drift
-        # and no real bit edge. A naive Σe² − (Σe)²/M variance would lose
-        # precision and could read zero (→ infinite confidence → false lock)
-        # at large bin counts; Welford keeps it stable, so this never locks.
+        # Large, slowly drifting prompts with no edge. A naive Σe² − (Σe)²/M
+        # variance could cancel to zero (infinite z); Welford's does not.
         accumulators = PhaseAccumulators()
         _seed_phase_accumulators!(accumulators, L1CA_BLOCKS_PER_BIT)
         found = false
@@ -241,12 +209,10 @@ end
 end
 
 @testset "_cfar_decide" begin
-    # The shared CFAR decision core: peak vs. runner-up, Welford noise scale,
-    # Student-t threshold. `period` is the bin length = hypothesis count.
+    # `period` is both the bin length and the hypothesis count.
     period = 5
 
     @testset "Needs two bins on some hypothesis" begin
-        # num_blocks < 2 * period ⇒ no runner-up can exist yet.
         mean = [10.0, 1.0, 1.0, 1.0, 1.0]
         m2 = zeros(5)
         @test _cfar_decide(mean, m2, 2 * period - 1, period, 0.999) == (false, -1, 0)
@@ -269,8 +235,7 @@ end
     end
 
     @testset "A large peak variance suppresses the lock" begin
-        # Same energy gap, but the peak's own bin-to-bin spread is huge, so the
-        # z-score stays below threshold and it does not lock.
+        # Same gap, but a huge spread on the peak keeps z below threshold.
         mean = [10.0, 1.0, 1.0, 1.0, 1.0]
         quiet = zeros(5)
         loud = [1.0e6, 0.0, 0.0, 0.0, 0.0]         # M₂ only on the peak
@@ -290,10 +255,8 @@ _secondary_chips(signal, prn) = [
 # NH10 packed newest-first, as the hard detector references it.
 _packed_l5i() = _packed_secondary_code(UInt32, GPSL5I(), 1)
 
-# Build a prompt stream for a secondary-coded signal: block `i` (0-based) carries
-# secondary chip `(i + start_chip) % N` times a per-period data symbol (constant
-# over each period, flipped pseudo-randomly at period boundaries) times `amp`,
-# plus optional complex Gaussian noise.
+# Block `i` (0-based) carries secondary chip `(i + start_chip) % N` times a
+# random per-period data symbol times `amp`, plus optional noise.
 function _secondary_stream(
     signal,
     prn,
@@ -318,10 +281,7 @@ function _secondary_stream(
     prompts
 end
 
-# Fold a prompt stream into fresh secondary accumulators (mirrors what
-# `_buffer_find_bit` does) and run the detector after each block. `upto = 0`
-# returns the 1-based block index of the first lock (0 if never); otherwise it
-# returns the SyncResult after exactly `upto` blocks.
+# As `_detect_over`, for the secondary-code detector.
 function _secondary_detect_over(prompts, signal, prn, confidence; upto = 0)
     N = get_secondary_code_length(signal)
     accumulators = PhaseAccumulators()
@@ -344,9 +304,8 @@ function _secondary_detect_over(prompts, signal, prn, confidence; upto = 0)
 end
 
 @testset "_update_secondary_accumulators!" begin
-    # Feed two clean NH10 periods aligned to chip 0. The correct rotation wipes
-    # the overlay so its bin sums coherently (energy ≈ (N·amp)²); every other
-    # rotation straddles the fixed NH transitions and loses energy.
+    # Two clean NH10 periods from chip 0: only rotation 0 wipes the overlay and
+    # sums coherently to (N·amp)².
     signal = GPSL5I()
     prn = 1
     N = get_secondary_code_length(signal)          # 10
@@ -359,10 +318,8 @@ end
     end
     energies = accumulators.mean_bin_energy
     peak = argmax(energies) - 1                    # 0-based winning rotation
-    # Aligned to chip 0 ⇒ the winning rotation is 0.
     @test peak == 0
     @test energies[peak+1] ≈ (N * amp)^2
-    # The peak dwarfs every competitor by a wide margin.
     runner_up = maximum(energies[2:end])
     @test energies[1] > 20 * runner_up
 end
@@ -383,8 +340,7 @@ end
             prompts = _secondary_stream(signal, prn, 4N; start_chip, amp = 8.0)
             synced = _secondary_detect_over(prompts, signal, prn, 0.999)
             @test synced >= 2N                     # never before two periods
-            # Fires only at a true NH10 boundary: the just-processed block is the
-            # last (chip N-1) of the winning rotation's period.
+            # The just-processed block is chip N-1.
             @test (start_chip + synced - 1) % N == N - 1
             res = _secondary_detect_over(prompts, signal, prn, 0.999; upto = synced)
             @test res.found
@@ -394,7 +350,6 @@ end
 
     @testset "Polarity follows the winning period's sign" begin
         chips = _secondary_chips(signal, prn)
-        # A period that is exactly +overlay locks at +1; the negated overlay at −1.
         pos = ComplexF64[8.0 * c for c in chips]
         neg = ComplexF64[-8.0 * c for c in chips]
         @test _secondary_detect_over(vcat(pos, pos, pos), signal, prn, 0.999; upto = 3N).polarity ==
@@ -404,33 +359,26 @@ end
     end
 
     @testset "No false lock on pure noise (the TEX-CUP PRN 8 symptom)" begin
-        # The hard sign-template match (NH10, exact-match budget) accepts a random
-        # 10-bit window whenever noise happens to align it with one of the ~20
-        # rotation×polarity templates — a ~2 % per-window chance that accumulates
-        # into false locks over a long pre-lock stretch. The soft CFAR detector,
-        # feeding on the same noise, requires a significant energy gap over many
-        # periods, so it does not lock on noise.
+        # The hard exact match accepts a random 10-bit window ~2 % of the time
+        # (one of ~20 rotation×polarity templates), which adds up over a long
+        # pre-lock stretch; the soft detector needs an energy gap over periods.
         hard_false_locks = 0
         soft_locks = 0
         for seed = 1:200
             rng = MersenneTwister(1000 + seed)
-            # Soft: 40 blocks of pure complex-Gaussian noise (no signal).
             noise = ComplexF64[complex(randn(rng), randn(rng)) for _ = 1:4N]
             _secondary_detect_over(noise, signal, prn, 0.999) != 0 && (soft_locks += 1)
-            # Hard: a random 10-bit sign window through the rotation sweep.
             window = rand(rng, UInt32) & UInt32((1 << N) - 1)
             _secondary_code_search(window, _packed_l5i(), N, 0).found &&
                 (hard_false_locks += 1)
         end
         @test soft_locks == 0
-        # Sanity: the hard exact-match detector really is noise-prone here.
         @test hard_false_locks > 0
     end
 end
 
-# Feed a noiseless ±1 prompt stream (one code block per call) through
-# `buffer()` and return the 1-based block index at which the detector locked
-# (0 if it never locked) together with the final bit buffer.
+# Feed prompts one block at a time through `buffer()`; return the 1-based lock
+# block (0 if none) and the final bit buffer.
 function _feed_prompts(prompts)
     signal = GPSL1CA()
     bit_buffer = BitBuffer{UInt64}()
@@ -445,19 +393,14 @@ function _feed_prompts(prompts)
 end
 
 @testset "L1CA bit-edge lock is not one block early through buffer() (issue #124)" begin
-    # Data bits 0, 0, 1 — the first transition is preceded by a repeated
-    # bit. The buggy tolerant matcher fired at block 59 (one block before
-    # the true edge); the soft edge-locked detector fires exactly at 60.
     found_at, bit_buffer = _feed_prompts([fill(-1.0 + 0.0im, 40); fill(1.0 + 0.0im, 20)])
     @test found_at == 60
     @test bit_buffer.polarity == +1
 
-    # Mirror pattern 1, 1, 0 locks at the same block with negative polarity.
     found_at, bit_buffer = _feed_prompts([fill(1.0 + 0.0im, 40); fill(-1.0 + 0.0im, 20)])
     @test found_at == 60
     @test bit_buffer.polarity == -1
 
-    # A constant prompt stream (no data transition) never locks.
     found_at, _ = _feed_prompts(fill(1.0 + 0.0im, 80))
     @test found_at == 0
 end
@@ -501,13 +444,8 @@ end
     end
 
     @testset "Find bit start and buffer the pre-sync bits (negative polarity)" begin
-        # Drive a clean data-1,1,0 stream (20 blocks each, +,+,-) through
-        # `buffer()`. The soft detector locks at the true bit boundary
-        # (block 60); the last completed bin is the "0", so the lock is at
-        # negative polarity. The three pre-sync bits are decoded with that
-        # polarity applied — the same sign-flip every post-sync bit gets — so
-        # they stay consistent across the sync boundary (issue #127): block
-        # signs +,+,- decode as bits 0,0,1, i.e. soft bits -,-,+.
+        # Block signs +,+,-: the last bin is negative, so the polarity is -1,
+        # applied to the pre-sync bits as to every later one (#127).
         found_at, bit_buffer =
             _feed_prompts([fill(1.0 + 0.0im, 40); fill(-1.0 + 0.0im, 20)])
         @test found_at == 60
@@ -521,11 +459,8 @@ end
     end
 
     @testset "Find bit start and buffer the pre-sync bits (positive polarity)" begin
-        # The whole-signal sign flip of the case above: data 0,0,1 (block
-        # signs -,-,+). The last completed bin is the "1", so the lock is at
-        # positive polarity. Because a global RF sign flip is exactly the
-        # ambiguity polarity resolves, the recovered soft-bit signs are
-        # identical to the negative-polarity case (issue #127): soft -,-,+.
+        # The sign-flipped stream: polarity absorbs the flip, so the soft bits
+        # match the case above (#127).
         found_at, bit_buffer =
             _feed_prompts([fill(-1.0 + 0.0im, 40); fill(1.0 + 0.0im, 20)])
         @test found_at == 60
@@ -571,7 +506,7 @@ end
         signal = GPSL1CA()
 
         next_bit_buffer = @inferred buffer(signal, 1, bit_buffer, 1, -2 + 0im)
-        # Seeded soft bits -,+ plus the completed bit (-10+2im plus -2 → -12).
+        # Seeded -,+ plus the completed bit, -12.
         @test sign.(get_soft_bits(next_bit_buffer)) == Float32[-1, 1, -1]
         @test length(next_bit_buffer) == 3
         @test next_bit_buffer.prompt_accumulator == 0 + 0im
@@ -592,7 +527,7 @@ end
         signal = GPSL1CA()
 
         next_bit_buffer = @inferred buffer(signal, 1, bit_buffer, 10, 10 + 1im)
-        # Seeded soft bits +,+ plus the completed bit (10+2im plus 10+1im → +20).
+        # Seeded +,+ plus the completed bit, +20.
         @test sign.(get_soft_bits(next_bit_buffer)) == Float32[1, 1, 1]
         @test length(next_bit_buffer) == 3
         @test next_bit_buffer.prompt_accumulator == 0 + 0im
@@ -619,8 +554,7 @@ end
             )
             signal = GPSL1CA()
 
-            # 20th code block completes the bit; soft bit = real of the sum.
-            # It lands after the two soft bits the buffer was seeded with.
+            # The 20th block completes the bit; its soft bit is the real sum.
             next_bit_buffer = buffer(signal, 1, bit_buffer, 1, -2 + 0im)
             @test get_soft_bits(next_bit_buffer) == Float32[-1.0, 1.0, -12.0]
             @test eltype(get_soft_bits(next_bit_buffer)) == Float32
@@ -643,25 +577,16 @@ end
         end
 
         @testset "Pre-sync recovered soft bits are amplitude-scaled (issue #134)" begin
-            # Same data-1,1,0 stream as the negative-polarity lock test, but
-            # at amplitude 2 rather than 1. At sync the pre-sync bits only
-            # have ±1 prompt signs available, so each recovered bit's sign
-            # vote (±20 over the 20 blocks/bit, polarity-corrected) is scaled
-            # by the sync-time prompt magnitude — so these soft bits live in
-            # the same coherent-amplitude-sum units as the post-sync bits
-            # instead of being bare vote counts (issue #134).
+            # Pre-sync only signs are kept, so each recovered bit's vote count
+            # is scaled by the sync-time prompt magnitude, in the units of the
+            # post-sync sums.
             found_at, bit_buffer =
                 _feed_prompts([fill(2.0 + 0.0im, 40); fill(-2.0 + 0.0im, 20)])
             @test found_at == 60
             @test length(bit_buffer) == 3
             soft = get_soft_bits(bit_buffer)
-            # 20 sign votes × |prompt| (2) = magnitude 40; signs match the
-            # decoded bits (0,0,1 → soft -,-,+, as in the polarity test).
             @test soft == Float32[-40.0, -40.0, 40.0]
 
-            # Unit-amplitude prompts give magnitude 20 — i.e. the magnitude
-            # tracks |prompt|, confirming the scaling (a raw vote count would
-            # be ±20 in both runs).
             _, unit_buffer = _feed_prompts([fill(1.0 + 0.0im, 40); fill(-1.0 + 0.0im, 20)])
             @test get_soft_bits(unit_buffer) == Float32[-20.0, -20.0, 20.0]
         end
@@ -673,16 +598,13 @@ end
 
             reset_bit_buffer = reset(bit_buffer)
             @test isempty(get_soft_bits(reset_bit_buffer))
-            # Same vector is reused (non-allocating after the first track calls)
             @test get_soft_bits(reset_bit_buffer) === soft_bits
         end
     end
 
     @testset "A record crossing the bit boundary resynchronises (issue #238)" begin
-        # The commit test used to be an equality only, so a record that stepped
-        # the accumulator over the boundary (18 + 3 = 21 for GPS L1 C/A) could
-        # never meet it again: the count climbed forever and not one further bit
-        # was pushed, while tracking and the lock detectors kept looking fine.
+        # A record stepping the accumulator past the boundary (18 + 3 = 21)
+        # would never meet it again and stall the bits silently.
         signal = GPSL1CA()
 
         @testset "Sync is dropped and the completed bits are kept" begin
@@ -692,9 +614,8 @@ end
             bit_buffer.phase_acc.mean_bin_energy[3] = 42.0
             bit_buffer.phase_acc.last_bin_polarity[3] = Int8(-1)
 
-            # The overshoot is *reported* by the bit buffer and logged by the
-            # caller — `Tracking._warn_bit_boundary_overshoot`, from the fold —
-            # so that the loop process can step this code without a logger.
+            # Reported here, logged by the fold
+            # (`Tracking._warn_bit_boundary_overshoot`).
             next_bit_buffer = @inferred buffer(signal, 1, bit_buffer, 3, 1.0 + 0.0im)
 
             @test has_bit_or_secondary_code_been_found(next_bit_buffer) == false
@@ -704,12 +625,11 @@ end
             @test next_bit_buffer.code_block_buffer_length == 0
             @test next_bit_buffer.polarity == 0
             @test next_bit_buffer.secondary_phase == 0
-            # The straddling record contributes nothing: its energy belongs to
-            # two different bits, so no (soft-corrupted) bit is committed.
+            # The straddling record spans two bits and commits none.
             @test get_soft_bits(next_bit_buffer) === soft_bits
             @test get_soft_bits(next_bit_buffer) == Float32[1.0, -1.0]
             # The old lock's bin statistics must not bias the new search.
-            @test all(iszero, next_bit_buffer.phase_acc.mean_bin_energy)
+        @test all(iszero, next_bit_buffer.phase_acc.mean_bin_energy)
             @test all(iszero, next_bit_buffer.phase_acc.open_bin_sum)
             @test all(
                 iszero,
@@ -719,10 +639,8 @@ end
         end
 
         @testset "The overshoot is reported to the caller, which warns" begin
-            # The message is the one thing a user sees when an external
-            # correlator sizes its records across a bit boundary, so it is
-            # asserted here rather than left to the fold that emits it. A PRN of
-            # its own, because the warning is `maxlog = 1` per signal and PRN.
+            # What a user sees when external records cross a bit boundary. A
+            # PRN of its own: the warning is `maxlog = 1` per signal and PRN.
             @test_logs (:warn, r"past the navigation-bit boundary") match_mode = :any _warn_bit_boundary_overshoot(
                 get_signal_id(signal),
                 99,
@@ -732,8 +650,7 @@ end
         end
 
         @testset "Landing exactly on the boundary still commits a bit" begin
-            # The guard must fire on `>`, not on any multi-block record: a
-            # record that lands on the boundary is the normal post-sync case.
+            # The guard fires on `>`; landing on the boundary is normal.
             bit_buffer = BitBuffer(UInt64(0xff), 8, true, complex(10.0, 0.0), 17)
             next_bit_buffer = @inferred buffer(signal, 3, bit_buffer, 3, 3.0 + 0.0im)
             @test has_bit_or_secondary_code_been_found(next_bit_buffer) == true
@@ -742,8 +659,7 @@ end
         end
 
         @testset "Secondary-code signals resynchronise too" begin
-            # GPS L5I: 10 primary blocks per bit, and the recovered
-            # secondary-code phase goes with the dropped lock.
+            # GPS L5I: the secondary-code phase goes with the lock.
             l5i = GPSL5I()
             bit_buffer = BitBuffer{UInt16}(
                 UInt16(0x3ff),
@@ -765,10 +681,8 @@ end
         end
 
         @testset "Bits keep coming after the straddling record" begin
-            # End-to-end over a clean ±1 prompt stream: sync, decode bits, take
-            # one 3-block record at 18 accumulated blocks, and keep feeding
-            # single blocks. Before the fix the soft-bit count froze here for
-            # good; now the detector re-locks and bits resume on the true grid.
+            # Sync, decode, inject one 3-block record at 18 accumulated blocks,
+            # and keep feeding: the detector re-locks on the true grid.
             rng = MersenneTwister(1234)
             data_bits = rand(rng, (-1.0, 1.0), 80)
             prompts = ComplexF64.(repeat(data_bits, inner = 20))
@@ -808,23 +722,17 @@ end
 
             @test injected
             @test bits_at_injection > 0
-            # The detector ran again from a clean accumulator...
             @test bits_at_relock >= 0
             @test has_bit_or_secondary_code_been_found(bit_buffer)
-            # ...and the bit stream resumed rather than starving.
             @test length(get_soft_bits(bit_buffer)) > bits_at_relock
-            # The accumulator never ran away again.
             @test max_accumulated_after < 20
-            # Every bit committed after the re-lock is a full coherent sum of 20
-            # equal-sign blocks, i.e. the new lock sits on the true bit grid.
+            # Every later bit sums 20 equal-sign blocks.
             @test all(≈(20.0f0), abs.(get_soft_bits(bit_buffer)[(bits_at_relock+1):end]))
         end
     end
 
     @testset "Bit accumulation is unbounded" begin
-        # Bits accumulate as soft bits with no ceiling (the fixed UInt128 that
-        # used to overflow at 128 bits — issue #134 — is gone). A fold that
-        # spans more than 128 bits must keep counting instead of throwing.
+        # More than 128 bits in one fold (#134).
         signal = GPSL1CA()
         bit_buffer = BitBuffer(UInt128(0), 0, true, complex(0.0, 0.0), 0)
         for _ = 1:(200*20)

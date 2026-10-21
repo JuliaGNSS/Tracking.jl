@@ -47,15 +47,10 @@ using TrackingLoops:
     get_default_correlator,
     CorrelatorOutput
 
-# Build a stub `(L1 = BandMeasurement(...),)` NamedTuple to pass to the
-# estimator. Samples are unused by `estimate_dopplers_and_filter_prompt`
-# (it only reads `sampling_frequency` per group), so an empty buffer
-# suffices.
+# The estimate step only reads `sampling_frequency`.
 _meas_l1(fs) = (L1 = BandMeasurement(ComplexF64[], fs),)
 
-# Build a signal carrying one completed integration as a `CorrelatorOutput`
-# record — the estimate phase folds over `correlator_outputs`. `sample_index`
-# is metadata here (no vector-tracking consumer).
+# A signal carrying one completed integration as a `CorrelatorOutput`.
 _completed_signal(sig, correlator, num_samples) = TrackedSignal(
     sig;
     correlator_outputs = [CorrelatorOutput(correlator, num_samples, num_samples)],
@@ -106,8 +101,6 @@ end
     @test from_sat_state.bandwidths.wide_carrier == 25.0Hz
     @test from_sat_state.bandwidths.code == 2.0Hz
 
-    # Update-from-existing constructor preserves bandwidth when not overridden,
-    # and overrides when provided.
     preserved = @inferred SatConventionalPLLAndDLL(from_sat_state)
     @test preserved.bandwidths == from_sat_state.bandwidths
 
@@ -132,7 +125,7 @@ end
 
     sat_state = TrackedSat(gpsl1, prn, code_phase, carrier_doppler; doppler_estimator)
 
-    # Number of samples too small to generate a new estimate for phases and dopplers
+    # No completed integration: nothing changes.
     num_samples = 2000
     correlator = update_accumulator(
         get_default_correlator(gpsl1),
@@ -156,15 +149,13 @@ end
         _meas_l1(sampling_frequency),
     )
 
-    # Since number of samples is too small the state doesn't change
     @test get_carrier_doppler(new_track_state) == carrier_doppler
     @test get_code_doppler(new_track_state) ==
           get_code_center_frequency_ratio(gpsl1) * carrier_doppler
     @test get_last_fully_integrated_filtered_prompt(new_track_state) == 0.0
-    # No integration completed -> no filtered prompt recorded
     @test isempty(get_filtered_prompts(get_sat_state(new_track_state, prn)))
 
-    # This time it is large enough to produce new dopplers and phases
+    # One completed integration.
     num_samples = 5000
     sat_state_after_full_integration = TrackedSat(
         sat_state;
@@ -183,8 +174,6 @@ end
     @test get_last_fully_integrated_filtered_prompt(
         new_track_state_after_full_integration,
     ) == 0.4 + 0.004im
-    # One integration completed -> one filtered prompt recorded, equal to the
-    # last_fully_integrated_filtered_prompt value.
     let prompts =
             get_filtered_prompts(get_sat_state(new_track_state_after_full_integration, prn))
         @test length(prompts) == 1
@@ -193,14 +182,10 @@ end
 end
 
 @testset "loop bandwidth follows the record's actual integration length" begin
-    # The carrier bandwidth's stability cap must pair with the time a record
-    # ACTUALLY covered (recovered from its sample count), not the intended
-    # integration length: a single-block record folded when the bit buffer
-    # already reports sync — a mid-fold sync detection with an enlarged
-    # `doppler_update_interval`, or the truncated first post-sync integration —
-    # must be filtered at the full single-period bandwidth. The Doppler update
-    # therefore depends only on the record itself, not on the preferred
-    # integration length or the sync state.
+    # The carrier cap pairs with the time the record covered (from its sample
+    # count), not the intended length: a single-block record after sync (a
+    # mid-fold sync, or the truncated first post-sync integration) gets the full
+    # single-period bandwidth.
     sampling_frequency = 5e6Hz
     gpsl1 = GPSL1CA()
     carrier_doppler = 100.0Hz
@@ -211,8 +196,7 @@ end
     )
     doppler_estimator = ConventionalPLLAndDLL()
 
-    # Same-typed bit buffer with the bit/secondary sync already found
-    # (secondary phase 0, polarity +1).
+    # Synced at secondary phase 0, polarity +1.
     synced(::TrackingLoops.BitBuffer{B}) where {B} = TrackingLoops.BitBuffer{B}(
         zero(B),
         0,
@@ -243,51 +227,37 @@ end
     end
 
     one_block = 5000                      # one 1 ms L1 C/A code period at 5 MHz
-    # Synced with a 20-block preferred length, but the record covered a single
-    # block: full bandwidth — exactly the plain single-block baseline. (Capping
-    # against the intended length would narrow the bandwidth to 4.5 Hz here.)
+    # Capping against the intended 20 blocks would give 4.5 Hz.
     @test doppler_after(20, true, one_block) == doppler_after(1, false, one_block)
 
-    # A record that actually covered 20 blocks is capped at 0.09 / 20 ms
-    # regardless of the preferred integration length.
+    # 20 covered blocks are capped at 0.09 / 20 ms either way.
     @test doppler_after(20, true, 20 * one_block) == doppler_after(1, true, 20 * one_block)
 end
 
-# The DLL bandwidth is an absolute value, not a per-primary-period reference: a
-# longer coherent integration must not narrow it, because nothing that sets it —
-# thermal noise, pull-in time, the absence of dynamic stress on a carrier-aided
-# loop — scales with the integration length. Only its own `BL·Δt` stability
-# product may cap it, and only once the update interval is long enough to
-# threaten stability. A `1/N` scaling here would take a 20 ms L1 C/A
-# integration to 0.05 Hz, where stability allows 0.9 Hz — the same pull-in sag
-# that sizing the DLL off the carrier default used to cause per signal,
-# re-introduced through the integration length.
+# The DLL bandwidth is absolute: nothing that sets it scales with the
+# integration length, so only its `BL·Δt` stability cap may narrow it. A `1/N`
+# scaling would take a 20 ms L1 C/A integration to 0.05 Hz where 0.9 Hz is
+# stable.
 @testset "code loop bandwidth is not narrowed by the integration length" begin
     bw = 1.0Hz
     l1ca_period = 1ms  # 1023 chips at 1.023 Mcps
 
-    # Single 1 ms block, and 10 ms / 20 ms coherent integrations: the cap starts
-    # binding only past 18 ms, so the first two run at the full reference.
+    # The cap binds only past 18 ms.
     @test TrackingLoops.effective_code_loop_filter_bandwidth(bw, l1ca_period) == bw
     @test TrackingLoops.effective_code_loop_filter_bandwidth(bw, 10 * l1ca_period) == bw
     @test TrackingLoops.effective_code_loop_filter_bandwidth(bw, 20 * l1ca_period) ≈ 0.9Hz
 
-    # Where it binds it holds the stability product, not a block ratio.
     for num_blocks in (20, 100, 1500)
         integration_time = num_blocks * l1ca_period
         @test TrackingLoops.effective_code_loop_filter_bandwidth(bw, integration_time) *
               integration_time ≈ TrackingLoops.MAX_CODE_LOOP_BANDWIDTH_TIME_PRODUCT
     end
 
-    # An explicit bandwidth below the cap is used verbatim, at any length.
     @test TrackingLoops.effective_code_loop_filter_bandwidth(0.25Hz, 20 * l1ca_period) ==
           0.25Hz
 
-    # End to end through the estimator, on a 4 ms (4-block) integration whose cap
-    # sits at 4.5 Hz: two configured bandwidths above the cap must produce the
-    # same code Doppler, because both saturate to it. Under a `1/N` scaling they
-    # would come out at 5/4 and 10/4 Hz and differ — so this pins "capped" rather
-    # than "scaled" through the real fold.
+    # Through the estimator at 4 ms, where the cap is 4.5 Hz: 5 and 10 Hz both
+    # saturate (a `1/N` scaling would make them differ).
     sampling_frequency = 5e6Hz
     gpsl1 = GPSL1CA()
     correlator = update_accumulator(
@@ -312,8 +282,6 @@ end
     one_block = 5000
     @test code_doppler_after(4 * one_block, 5.0Hz) ==
           code_doppler_after(4 * one_block, 10.0Hz)
-    # Below the cap the configured value still drives the loop, so it is a cap
-    # and not a ceiling on everything.
     @test code_doppler_after(4 * one_block, 1.0Hz) !=
           code_doppler_after(4 * one_block, 4.0Hz)
 end
@@ -329,8 +297,7 @@ end
         SVector(1000.0 + 10im, 2000.0 + 20im, 750.0 + 10im),
     )
 
-    # Two sats, both fully integrated with the same correlator: any difference
-    # in the Doppler update must come from per-sat bandwidths.
+    # Same correlator for both: only the bandwidths differ.
     doppler_estimator = ConventionalPLLAndDLL()
     sat1_initial = TrackedSat(gpsl1, 1, code_phase, carrier_doppler; doppler_estimator)
     sat2_initial = TrackedSat(gpsl1, 2, code_phase, carrier_doppler; doppler_estimator)
@@ -342,8 +309,6 @@ end
         sat2_initial;
         signals = (_completed_signal(only(sat2_initial.signals), correlator, num_samples),),
     )
-    # Bump sat2's bandwidths by replacing its doppler estimator state with a
-    # custom-configured SatConventionalPLLAndDLL.
     sat1_de = sat1.doppler_estimator_state
     sat2_de = SatConventionalPLLAndDLL(
         sat2_pre.doppler_estimator_state;
@@ -371,11 +336,10 @@ end
         _meas_l1(sampling_frequency),
     )
 
-    # Sat 1 matches the baseline result from the previous testset.
+    # Sat 1 matches the testset above.
     @test get_carrier_doppler(new_track_state, 1) == 100.23888678999913Hz
     @test get_code_doppler(new_track_state, 1) == -0.1609215874910254Hz
 
-    # Sat 2 has different bandwidths so must produce a different update.
     @test get_carrier_doppler(new_track_state, 2) != get_carrier_doppler(new_track_state, 1)
     @test get_code_doppler(new_track_state, 2) != get_code_doppler(new_track_state, 1)
 end
@@ -389,13 +353,10 @@ end
     )
     @test estimator.wide_carrier_loop_filter_bandwidth == 22.0Hz
     @test estimator.code_loop_filter_bandwidth == 1.5Hz
-    # init_estimator_state seeds each sat with the configured bandwidths.
     de_state = init_estimator_state(estimator, sat_state)
     @test de_state.bandwidths.wide_carrier == 22.0Hz
     @test de_state.bandwidths.code == 1.5Hz
 
-    # Kwarg-update constructor returns a new estimator with overridden
-    # bandwidths and preserves the carrier/code filter type parameters.
     bumped = ConventionalPLLAndDLL(estimator; wide_carrier_loop_filter_bandwidth = 30.0Hz)
     @test bumped.wide_carrier_loop_filter_bandwidth == 30.0Hz
     @test bumped.code_loop_filter_bandwidth == 1.5Hz  # unchanged
@@ -413,8 +374,7 @@ end
     sat1 = TrackedSat(gpsl1, 1, 0.5, 100.0Hz; doppler_estimator = estimator)
     track_state = TrackState(gpsl1, sat1; doppler_estimator = estimator)
 
-    # The incoming sat must be constructed with the same estimator
-    # (TrackState's slot type pins the doppler_estimator_state type).
+    # The slot type pins the estimator-state type.
     sat2 = TrackedSat(gpsl1, 2, 0.25, 200.0Hz; doppler_estimator = estimator)
     merged = merge_sats(track_state, sat2)
 
@@ -432,8 +392,7 @@ end
     sat1 = TrackedSat(gpsl1, 1, 0.5, 100.0Hz; doppler_estimator = estimator)
     track_state = TrackState(gpsl1, sat1; doppler_estimator = estimator)
 
-    # Default estimator is ConventionalAssistedPLLAndDLL — produces a
-    # different concrete state type than the TrackState's estimator.
+    # The default `ConventionalAssistedPLLAndDLL` has another state type.
     bad_sat = TrackedSat(gpsl1, 2, 0.25, 200.0Hz)
     @test_throws ArgumentError merge_sats(track_state, bad_sat)
 end
@@ -469,9 +428,8 @@ end
 
 @testset "A record hands the FLL its previous prompt only at an unchanged polarity" begin
     sampling_frequency = 5e6Hz
-    # Steps the satellite through one record per call, the bit buffer synced as
-    # `synced` makes it, and returns the record's (previous prompt, carrier phase
-    # polarity) and the prompt it left on the signal.
+    # One record per call; returns the records' (previous prompt, polarity)
+    # and the prompts left on the signal.
     function step_records(signal, synced, num_blocks_per_record)
         estimator = PromptRecordingEstimator(
             ConventionalAssistedPLLAndDLL(),
@@ -534,9 +492,8 @@ end
     @test records[4][1] == prompts[3]
     @test all(r -> r[2] == 0, records)
 
-    # A pilot synced to its secondary code knows its prompt's sign: the sync
-    # polarity, as the sync reads it off primary-only prompts. The FLL compares
-    # no prompts across the switch from the unknown sign.
+    # A synced pilot knows its prompt's sign, the sync polarity. The FLL
+    # compares no prompts across the switch from the unknown sign.
     records, prompts = step_records(GalileoE1C(), synced, (1, 1))
     @test records[1] == (0, -1)
     @test records[2] == (prompts[1], -1)
@@ -577,13 +534,10 @@ function TrackingLoops.step_loop(
 end
 
 @testset "A synced pilot's carrier phase polarity is its prompt's sign" begin
-    # Before the sync the replica wraps at one primary period, so it overlays
-    # every block with secondary chip 0, and block k of the received signal
-    # carries chip k: the prompt is sign · chip(k) · chip(0). Once synced the
-    # replica wipes the overlay and the prompt is the sign itself, which the
-    # four-quadrant discriminators must read it with. Galileo E1C's CS25 starts
-    # with a negative chip, so taking the pre-sync prompts as they come would
-    # read the opposite sign, a half-cycle PLL error.
+    # Pre-sync the replica carries chip 0 on every block, so the prompt is
+    # sign · chip(k) · chip(0); synced, it is the sign. E1C's CS25 starts with a
+    # negative chip, so reading the pre-sync prompts as they come flips the
+    # sign, a half-cycle PLL error.
     e1c = GalileoE1C()
     prn = 1
     chip(k) = GNSSSignals.secondary_value(get_secondary_code(e1c), prn, k)

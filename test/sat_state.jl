@@ -37,8 +37,7 @@ using Tracking:
 import TrackingLoops
 using TrackingLoops: has_bit_or_secondary_code_been_found
 
-# `_make_acq`: shared Acquisition-version shim for building
-# `AcquisitionResults` — see test/acquisition_test_helpers.jl.
+# `_make_acq`, an Acquisition-version shim.
 include("acquisition_test_helpers.jl")
 
 @testset "Satellite state" begin
@@ -56,8 +55,6 @@ include("acquisition_test_helpers.jl")
     @test has_bit_or_secondary_code_been_found(sat_state) == false
     @test length(get_bit_buffer(sat_state)) == 0
 
-    # `_make_acq` is the shared Acquisition-version shim — see
-    # test/acquisition_test_helpers.jl.
     acq = _make_acq(gpsl1, 5, 524.6, 100.0Hz)
     sat_state = @inferred TrackedSat(acq)
     @test get_prn(sat_state) == 5
@@ -77,29 +74,21 @@ end
     gpsl1 = GPSL1CA()
     sat = TrackedSat(gpsl1, 11, 10.5, 100.0Hz)
 
-    # `get_signals` returns the per-signal tuple.
     sigs = @inferred get_signals(sat)
     @test length(sigs) == 1
     @test sigs[1].signal isa GPSL1CA
 
-    # `to_dictionary` on an already-dictionary input is a no-op.
     d = dictionary([11 => sat])
     @test to_dictionary(d) === d
 
-    # `get_sat_state(::Dictionary)` (no identifier) returns the only sat.
     @test get_sat_state(d).prn == 11
 
-    # `max_code_length` is the upper-bound wrap for L1 C/A: 1023 chips
-    # × 20 blocks per data bit = 20460. The runtime wrap returned by
-    # `current_code_wrap` shrinks to 1023 until bit-edge sync, then
-    # widens to 20460 — exercised below.
+    # The upper bound, 1023 chips × 20 blocks per bit; the runtime wrap is
+    # 1023 until sync, then 20460.
     @test @inferred(max_code_length(sat.signals)) == 20460
 
-    # Before sync `bit_buffer.found == false`, so `current_code_wrap`
-    # returns just the primary code length.
     @test @inferred(Tracking.current_code_wrap(sat.signals)) == 1023
 
-    # After sync the runtime wrap widens to the full data-bit period.
     synced_sig = Tracking.TrackedSignal(
         only(sat.signals);
         bit_buffer = TrackingLoops.BitBuffer{UInt64}(
@@ -117,22 +106,19 @@ end
     synced_signals = (synced_sig,)
     @test @inferred(Tracking.current_code_wrap(synced_signals)) == 20460
 
-    # `_max_code_length` recursion terminator on an empty tuple — 1, the
-    # lcm identity. Not reachable via TrackedSat itself (signals tuple is
-    # always non-empty), but exercised here so the base case counts as
-    # covered.
+    # The recursion's base case, the lcm identity; a TrackedSat never has an
+    # empty signal tuple.
     @test Tracking._max_code_length(()) == 1
     @test Tracking._current_code_wrap(()) == 1
 
     @testset "_post_sync_code_length per signal" begin
-        # Worst-case wrap contributions across all supported signals.
         import GNSSSignals: GalileoE1B, GalileoE1B_BOC11, GPSL5I, GPSL1C_D, GPSL1C_P
         @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL1CA())) ==
               1023 * 20
         @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GalileoE1B())) ==
               4092 * 1   # 1 block per symbol
         @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GalileoE1B_BOC11())) ==
-              4092 * 1   # BOC(1,1) approximation — same 1-block-per-symbol shape
+              4092 * 1
         @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL5I())) ==
               10230 * 10
         @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL1C_D())) ==
@@ -142,11 +128,8 @@ end
     end
 end
 
-# Pilot-style signal (data frequency 0) with arbitrary primary / secondary
-# code lengths. All real signal pairings have wrap periods that divide each
-# other, so the lcm-vs-max distinction in the shared code wrap (issue #129)
-# is only observable with fabricated lengths. Pre-sync the signal
-# contributes `code_length`; post-sync `code_length × secondary_code_length`.
+# A pilot with arbitrary code lengths: real signal pairings have wraps that
+# divide each other, so lcm and max agree on them (#129).
 struct FakeWrapSignal <: AbstractGNSSSignal{Matrix{Int16}}
     code_length::Int
     secondary_code_length::Int
@@ -156,10 +139,8 @@ GNSSSignals.get_secondary_code_length(s::FakeWrapSignal) = s.secondary_code_leng
 GNSSSignals.get_data_frequency(::FakeWrapSignal) = 0Hz
 
 @testset "shared code wrap is a common multiple, not a max (issue #129)" begin
-    # The per-signal code phase is re-derived as
-    # `mod(code_phase, _replica_code_wrap(signal))`, which is only correct
-    # when the shared wrap is an integer multiple of *every* signal's
-    # replica wrap — `max` is not a common multiple in general.
+    # Each signal re-derives its phase as `mod(code_phase, wrap)`, correct only
+    # if the shared wrap is a multiple of every signal's.
     base = Tracking.TrackedSignal(GPSL1CA())
     synced_buffer(::TrackingLoops.BitBuffer{B}) where {B} = TrackingLoops.BitBuffer{B}(
         zero(B),
@@ -187,32 +168,27 @@ GNSSSignals.get_data_frequency(::FakeWrapSignal) = 0Hz
         base.preferred_num_code_blocks_to_integrate,
     )
 
-    # Pre-sync wraps 4 and 6: the shared wrap must be 12 (max would give 6,
-    # under which a phase of e.g. 5 re-derives as 1 for the 4-chip signal —
-    # but so does a phase of 9, silently corrupting the 4-chip signal).
+    # Wraps 4 and 6: 12, where max would give 6, no multiple of 4.
     s4 = fake_tracked_signal(4, 5, false)
     s6 = fake_tracked_signal(6, 1, false)
     @test @inferred(Tracking.current_code_wrap((s4, s6))) == 12
 
-    # Once the 4-chip signal syncs, its wrap widens to 4 × 5 = 20 → lcm 60.
+    # Synced, the 4-chip signal wraps at 4 × 5 = 20.
     s4_synced = fake_tracked_signal(4, 5, true)
     @test @inferred(Tracking.current_code_wrap((s4_synced, s6))) == 60
 
-    # The compile-time bound covers the all-synced worst case: lcm(20, 6).
+    # The bound is the all-synced case.
     @test @inferred(max_code_length((s4, s6))) == 60
 end
 
 @testset "Public multi-signal TrackedSat constructor" begin
-    # Issue #133 item 2: a tuple of signals must be constructible directly,
-    # without hand-rolling the bare-sat → init_estimator_state → rebuild
-    # two-stage build.
+    # #133.
     sigs = (GPSL1C_P(), GPSL1C_D(), GPSL1CA())
     sat = @inferred TrackedSat(sigs, 11, 1234.5, 500.0Hz)
     @test get_prn(sat) == 11
     @test get_code_phase(sat) == 1234.5
     @test get_carrier_doppler(sat) == 500.0Hz
-    # The default code doppler scales by the estimator-driver signal's
-    # (signals[1]) code/center frequency ratio.
+    # Code Doppler from the driver, `signals[1]`.
     @test get_code_doppler(sat) == 500.0Hz * get_code_center_frequency_ratio(GPSL1C_P())
     @test get_signal_start_sample(sat) == 1
     sigs_on_sat = get_signals(sat)
@@ -222,15 +198,11 @@ end
     @test sigs_on_sat[3].signal isa GPSL1CA
     @test sat.doppler_estimator_state isa TrackingLoops.SatConventionalPLLAndDLL
 
-    # A one-tuple builds the same concrete type as the scalar-signal form.
     sat_tuple = @inferred TrackedSat((GPSL1CA(),), 1, 10.0, 500.0Hz)
     sat_scalar = @inferred TrackedSat(GPSL1CA(), 1, 10.0, 500.0Hz)
     @test typeof(sat_tuple) === typeof(sat_scalar)
 
-    # Kwargs flow through: explicit carrier phase, code doppler, estimator.
-    # The default (auto-bandwidth) estimator sizes the sat's loop from its
-    # own driver signal (signals[1] = GPS L1C-P), not from a fixed value on the
-    # estimator (which is `nothing` = auto).
+    # The auto-bandwidth estimator sizes the loop from the driver, GPS L1C-P.
     estimator = TrackingLoops.ConventionalAssistedPLLAndDLL()
     @test estimator.wide_carrier_loop_filter_bandwidth === nothing
     sat_kw = TrackedSat(
@@ -249,19 +221,14 @@ end
 end
 
 @testset "Last fully integrated integration time" begin
-    # C/N₀ is processing-independent, so a consumer asking a *detectability*
-    # question of the last record — is the peak still above the noise? — needs
-    # the record's own integration time, because post-integration SNR is
-    # C/N₀ · T. Before these accessors that number was only reachable as a
-    # private field, and the obvious public stand-in is a trap: see the
-    # `get_integrated_samples` check below.
+    # Post-integration SNR is C/N₀ · T, so judging the last record needs its
+    # own integration time.
     gpsl1 = GPSL1CA()
     code_period = get_code_length(gpsl1) / get_code_frequency(gpsl1)
     @test upreferred(code_period) ≈ 1ms
 
     tsig = Tracking.TrackedSignal(gpsl1)
-    # A fresh signal has completed nothing, so it reports one block — the
-    # divisor `estimate_cn0` used before it knew any better.
+    # Nothing completed yet: one block.
     @test get_last_fully_integrated_num_code_blocks(tsig) == 1
     @test get_last_fully_integrated_integration_time(tsig) ≈ code_period
 
@@ -271,17 +238,12 @@ end
         @test get_last_fully_integrated_integration_time(t) ≈ num_blocks * code_period
     end
 
-    # A full GPS L1 C/A bit is 20 blocks = 20 ms.
     twenty = Tracking.TrackedSignal(tsig; last_fully_integrated_num_code_blocks = 20)
     @test upreferred(get_last_fully_integrated_integration_time(twenty)) ≈ 20ms
 
-    # Not the same thing as `get_integrated_samples`, which counts the record
-    # *currently* accumulating and is reset to zero whenever one completes — so
-    # at the moment a consumer reads a completed record it is not the length of
-    # anything.
+    # Not `get_integrated_samples`, which counts the record in progress.
     @test get_integrated_samples(twenty) == 0
 
-    # Forwarded at the satellite and track-state levels like its siblings.
     sat = TrackedSat(gpsl1, 1, 10.0, 500.0Hz)
     @test get_last_fully_integrated_num_code_blocks(sat) == 1
     @test get_last_fully_integrated_integration_time(sat) ≈ code_period

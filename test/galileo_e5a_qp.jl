@@ -2,12 +2,9 @@ module GalileoE5aQPTest
 
 # Galileo E5a-QP — the E5a quick-acquisition aid (OS SIS ICD v2.2 §2.3.1.4).
 #
-# A dataless BPSK(5) component at 5.115 Mcps whose primary code is only 330
-# chips, repeated 31 times within 2 ms with no overlay. Tracking it is a
-# *policy* decision, not just a dispatch method: one primary code block is
-# 64.5 µs, so the tracker must group whole 31-block (2 ms) code cycles into one
-# coherent integration, or the loop would run at 15.5 kHz. These tests pin that
-# policy, its arithmetic and the resulting end-to-end pass (issue #236).
+# Dataless BPSK(5) at 5.115 Mcps, a 330-chip code repeated 31 times in 2 ms with
+# no overlay. One block is 64.5 µs, so it integrates whole 31-block cycles, or
+# the loop would run at 15.5 kHz (#236).
 
 using Test: @test, @testset, @inferred, @test_throws
 using Unitful: Hz, dBHz, ms, upreferred, ustrip
@@ -51,44 +48,37 @@ using TrackingLoops:
     max_num_code_blocks_to_integrate,
     has_bit_or_secondary_code_been_found
 
-# 31 primary code blocks = 10230 chips = 2 ms — the ICD's own "repeated 31
-# times within 2 ms", and the unit this package integrates E5a-QP in.
+# 31 blocks = 10230 chips = 2 ms, the ICD's "repeated 31 times within 2 ms".
 const BLOCKS_PER_CYCLE = 31
 
 @testset "Galileo E5a-QP" begin
     e5a_qp = GalileoE5aQP()
     prn = 6
 
-    # The reproducer from issue #236: default construction used to throw a
-    # MethodError from `get_default_correlator`.
+    # The reproducer from #236.
     @test TrackedSat(e5a_qp, prn, 0.0, 0.0Hz) isa TrackedSat
 
     @testset "Signal shape the policy rests on" begin
         @test get_code_length(e5a_qp) == 330
         @test get_code_frequency(e5a_qp) == 5_115_000Hz
-        # Dataless and overlay-free: no bit and no secondary code to sync on.
         @test get_data_frequency(e5a_qp) == 0Hz
         @test get_secondary_code_length(e5a_qp) == 1
-        # 31 primary blocks are exactly 2 ms, and exactly 10230 chips.
         @test BLOCKS_PER_CYCLE * get_code_length(e5a_qp) == 10230
         @test upreferred(
             BLOCKS_PER_CYCLE * get_code_length(e5a_qp) / get_code_frequency(e5a_qp),
         ) ≈ upreferred(2ms)
-        # E5a-QP shares the E5a carrier with E5a-I / E5a-Q.
         @test get_band_id(e5a_qp) === :L5
         @test get_band_id(GalileoE5aI()) === :L5
     end
 
     @testset "Correlator, sync and search-buffer defaults" begin
-        # Plain BPSK(5) (`LOC`) → the C/A-style EarlyPromptLate default.
         for n in (1, 3)
             @test @inferred(get_default_correlator(e5a_qp, NumAnts(n))) ==
                   EarlyPromptLateCorrelator(; num_ants = NumAnts(n))
         end
 
-        # No data bit and no overlay, so there is no boundary to find: the
-        # detector reports sync immediately and unconditionally, which is what
-        # unlocks the multi-block integration below.
+        # Nothing to find: sync is immediate, which unlocks the multi-block
+        # integration.
         for (bits, n) in ((UInt8(0x0), 0), (UInt8(0x1), 1), (UInt8(0xff), 97))
             res = @inferred detect_bit_or_secondary_code_sync(e5a_qp, prn, bits, n)
             @test res.found == true
@@ -96,29 +86,23 @@ const BLOCKS_PER_CYCLE = 31
             @test res.polarity == +1
         end
 
-        # Neither soft detector applies (one needs a multi-block data bit, the
-        # other an overlay), so the hard path above is the one that runs.
         @test TrackingLoops.uses_soft_bit_edge_detection(e5a_qp) == false
         @test TrackingLoops.uses_soft_secondary_code_detection(e5a_qp) == false
 
-        # Nothing to search for, so the packed sign window is dead state.
         @test @inferred(get_code_block_buffer_type(e5a_qp)) === UInt8
     end
 
     @testset "Short-period integration policy" begin
-        # One 2 ms code cycle is both the ceiling and the default: the code
-        # repeats with no structure to straddle, so integrating longer is a
-        # coherence question for the caller, not a correctness one.
+        # One 2 ms cycle is ceiling and default; longer is a coherence
+        # question for the caller.
         @test @inferred(max_num_code_blocks_to_integrate(e5a_qp)) == BLOCKS_PER_CYCLE
         @test @inferred(default_num_code_blocks_to_integrate(e5a_qp)) == BLOCKS_PER_CYCLE
         @test get_preferred_num_code_blocks_to_integrate(TrackedSignal(e5a_qp)) ==
               BLOCKS_PER_CYCLE
 
-        # Every other signal keeps the historical single-block default.
         for signal in (GalileoE5aI(), GalileoE5aQ(), GPSL5I())
             @test @inferred(default_num_code_blocks_to_integrate(signal)) == 1
         end
-        # …and their ceiling is still the data bit / overlay period.
         @test max_num_code_blocks_to_integrate(GalileoE5aI()) == 20
         @test max_num_code_blocks_to_integrate(GalileoE5aQ()) == 100
 
@@ -133,9 +117,7 @@ const BLOCKS_PER_CYCLE = 31
     end
 
     @testset "Not a co-tracked E5a component — chip rate rules it out" begin
-        # E5a-QP runs at half the E5a-I/Q chip rate, so it cannot share a
-        # satellite's SignalGroup with them (see issue #151); it is acquired
-        # and tracked on its own and handed over, not paired.
+        # Half the E5a-I/Q chip rate, so it cannot share their group (#151).
         @test get_code_frequency(e5a_qp) != get_code_frequency(GalileoE5aI())
         @test_throws ArgumentError SignalGroup((GalileoE5aI(), e5a_qp))
         @test SignalGroup((e5a_qp,)) isa SignalGroup
@@ -164,23 +146,15 @@ const BLOCKS_PER_CYCLE = 31
         track_state = track(samples, track_state, sampling_frequency)
         sat_state = get_sat_state(track_state, prn)
 
-        # Zero Doppler, so the code phase after a whole number of blocks is the
-        # one that was seeded.
         @test get_code_phase(sat_state) ≈ start_code_phase atol = 0.1
-        # The detector fires on the first block, so every later integration is
-        # a full 2 ms cycle.
         @test has_bit_or_secondary_code_been_found(sat_state) == true
         @test get_last_fully_integrated_num_code_blocks(sat_state) == BLOCKS_PER_CYCLE
 
-        # A pilot carries no navigation data: correlation and tracking work,
-        # but no bit is ever emitted and none may be required of it.
         @test get_num_bits(sat_state) == 0
     end
 
     @testset "Pulls a Doppler offset in over 2 ms integrations" begin
-        # The software reference check the policy is really about: a 5 Hz
-        # carrier-Doppler error on a clean replica, closed by the loop over
-        # 240 ms of 2 ms integrations at the default 18 Hz carrier bandwidth.
+        # A 5 Hz error closed over 240 ms of 2 ms integrations at 18 Hz.
         doppler = 200.0Hz
         samples_per_chip = 4
         sampling_frequency = samples_per_chip * get_code_frequency(e5a_qp)
@@ -198,7 +172,6 @@ const BLOCKS_PER_CYCLE = 31
             ) .* code,
         )
 
-        # Start 5 Hz off and feed one 2 ms cycle per `track` call.
         track_state = TrackState(e5a_qp, [TrackedSat(e5a_qp, prn, 0.0, 195.0Hz)])
         for cycle = 1:num_cycles
             track_state = track(
@@ -210,13 +183,11 @@ const BLOCKS_PER_CYCLE = 31
         sat_state = get_sat_state(track_state, prn)
 
         @test get_carrier_doppler(sat_state) ≈ doppler atol = 2.0Hz
-        # The loop has rotated the prompt onto the real axis, and no energy was
-        # lost to the 2 ms coherent integration.
+        # On the real axis, with no energy lost to the 2 ms integration.
         prompt = Tracking.get_last_fully_integrated_filtered_prompt(sat_state)
         @test real(prompt) / abs(prompt) > 0.9
         @test abs(prompt) > 0.9
         @test get_last_fully_integrated_num_code_blocks(sat_state) == BLOCKS_PER_CYCLE
-        # Still a pilot: tracking observables, never a navigation bit.
         @test get_num_bits(sat_state) == 0
         @test estimate_cn0(track_state, prn) > 40.0dBHz
     end
