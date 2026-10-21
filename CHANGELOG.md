@@ -1,5 +1,12 @@
 # Changelog
 
+# [11.1.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v11.0.0...v11.1.0) (2026-10-21)
+
+
+### Features
+
+* **track:** support TrackingLoops 6 ([bc4a671](https://github.com/JuliaGNSS/Tracking.jl/commit/bc4a6710f37549da6d19a414fd00771d207b4ef0))
+
 # [11.0.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v10.0.0...v11.0.0) (2026-10-14)
 
 
