@@ -343,6 +343,44 @@ end
         end
     end
 
+    # The fallback needs the same overflow guards as the @generated kernel: the
+    # Int64-widened flush reduce (#165) and the `_int16_flush_len` block cap (#166).
+    # Full-scale, code-aligned E1B, as in the #165 testset below.
+    @testset "dynamic Vector-shifts fallback does not wrap Int32" begin
+        sig, fs = GalileoE1B(), 15e6Hz
+        fc = get_code_frequency(sig)
+        shifts_s = get_correlator_sample_shifts(EarlyPromptLateCorrelator(), fs, fc)
+        run(dc, cap, shifts) = Tracking._int16_hybrid_blocked!(
+            dc,
+            cap,
+            NumAnts{1}(),
+            sig,
+            1,
+            shifts,
+            0.0,
+            0.0,
+            fc,
+            0.0Hz,
+            fs,
+            1,
+            length(cap),
+        )
+        # nsamp 15000 overflows the cross-lane reduce at the default blk; 1M samples
+        # in one 10^7-sample block overflow a lane at any SIMD width.
+        for (nsamp, blk) in ((15_000, Tracking._INT16_BLK), (1_000_000, 10^7))
+            code = gen_code(nsamp, sig, 1, fs, fc, 0.0)
+            cap = complex.(round.(Int16, 2048 .* sign.(real.(code))), zero(Int16))
+            dc = Int16DownconvertAndCorrelator(TEST_MAX_MEAS; blk)
+            as = run(dc, cap, shifts_s)
+            ad = run(dc, cap, collect(shifts_s))
+            # Precondition: the raw prompt total exceeds typemax(Int32).
+            @test abs(as[2]) * dc.carrier_amplitude > typemax(Int32)
+            for k = 1:3
+                @test ad[k] ≈ as[k] rtol = 1e-9
+            end
+        end
+    end
+
     # The AbstractVector-shifts fallback hoists its offsets/totals into the
     # thread-local scratch and flushes per block, so its only per-call allocation
     # is the length-NC result `Vector` it returns — the pre-fix path also built an

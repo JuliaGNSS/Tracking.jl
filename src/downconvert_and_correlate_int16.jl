@@ -708,8 +708,8 @@ end
                 aQ += codev * DQ
                 n += W
             end
-            tI[idx] += Int64(sum(aI))
-            tQ[idx] += Int64(sum(aQ))
+            tI[idx] += sum(_wide64(aI))   # #165
+            tQ[idx] += sum(_wide64(aQ))
             while n <= len
                 c = Int32(extb[n+offk])
                 tI[idx] += Int64(c * Int32(dib[toff+n]))
@@ -757,7 +757,7 @@ function _int16_hybrid_blocked!(
     num_rows = size(signal, 1)
 
     bufs = _scratch_buffers(dc)
-    blk = dc.blk
+    blk = _int16_flush_len(W, typemax(Int16), dc.blk)   # lane-overflow cap (#166)
     ncar = (cld(blk, W) + 4) * W
     ntile = blk * M
     length(bufs.extb) < blk + span && resize!(bufs.extb, blk + span)
