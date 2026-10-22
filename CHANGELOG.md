@@ -1,5 +1,12 @@
 # Changelog
 
+# [11.2.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v11.1.0...v11.2.0) (2026-10-22)
+
+
+### Features
+
+* **track:** read the carrier phase correction of the vector loop ([035a7a3](https://github.com/JuliaGNSS/Tracking.jl/commit/035a7a32083625b13bab3532d47aa24a651c431d))
+
 # [11.1.0](https://github.com/JuliaGNSS/Tracking.jl/compare/v11.0.0...v11.1.0) (2026-10-21)
 
 
