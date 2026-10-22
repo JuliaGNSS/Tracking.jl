@@ -15,7 +15,6 @@ using GNSSSignals:
     get_secondary_code
 using TrackingLoopFilters: ThirdOrderBilinearLF, SecondOrderBilinearLF
 using StaticArrays: SVector
-using Dictionaries: Dictionary
 using Tracking:
     get_bit_buffer,
     TrackedSignal,
@@ -37,7 +36,6 @@ using Tracking:
 import TrackingLoops
 using TrackingLoops:
     SatConventionalPLLAndDLL,
-    EarlyPromptLateCorrelator,
     init_estimator_state,
     ConventionalPLLAndDLL,
     ConventionalAssistedPLLAndDLL,

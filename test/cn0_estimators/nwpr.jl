@@ -2,7 +2,7 @@ module NWPRCN0EstimatorTest
 
 using Test: @test, @testset, @inferred
 using Random: Random, Xoshiro
-using Unitful: kHz, MHz, Hz, ms, dBHz, ustrip, uconvert
+using Unitful: kHz, MHz, Hz, dBHz, ustrip, uconvert
 using GNSSSignals: GPSL1CA, get_code, gen_code
 using GNSSSignals: get_code_frequency
 import Tracking

@@ -1,18 +1,11 @@
 module CorrelatorNoiseEstimatorTest
 
-using Test: @test, @testset, @test_logs, collect_test_logs
+using Test: @test, @testset, collect_test_logs
 using Logging: Warn
 using Random: Xoshiro, randn
 using StaticArrays: SMatrix
 using Unitful: Hz, s, ms, dBHz, ustrip, uconvert
-using GNSSSignals:
-    GPSL1CA,
-    GPSL1C_P,
-    GPSL5I,
-    GalileoE1B_BOC11,
-    gen_code,
-    get_code_frequency,
-    get_code_length
+using GNSSSignals: GPSL1CA, GPSL1C_P, GPSL5I, GalileoE1B_BOC11, gen_code, get_code_frequency
 import Tracking
 using Tracking:
     BandMeasurement,

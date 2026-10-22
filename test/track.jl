@@ -2,8 +2,7 @@ module TrackTest
 
 using Test: @test, @testset, @inferred
 using Random: Random
-using Unitful: Hz, kHz, MHz, dBHz
-using Statistics: mean
+using Unitful: Hz, dBHz
 using Dictionaries: dictionary
 using GNSSSignals:
     GPSL1CA,
@@ -37,8 +36,7 @@ using Tracking:
     get_integrated_samples,
     get_sat_state,
     get_doppler_estimator_state,
-    reset_loop_filters!,
-    get_sat_states
+    reset_loop_filters!
 import TrackingLoops
 using TrackingLoops:
     get_prompt,
@@ -47,7 +45,6 @@ using TrackingLoops:
     NumAnts,
     get_num_ants,
     get_noise_density,
-    get_weights,
     AbstractPostCorrFilter,
     DefaultPostCorrFilter,
     ConventionalPLLAndDLL,

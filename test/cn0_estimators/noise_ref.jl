@@ -4,7 +4,7 @@ using Test: @test, @testset, @test_logs, collect_test_logs
 using Logging: Warn
 using Dictionaries: dictionary
 using StaticArrays: SVector
-using Unitful: Hz, s, dBHz, ustrip, uconvert
+using Unitful: Hz, dBHz, ustrip, uconvert
 using GNSSSignals: GPSL1CA, GPSL5I
 import Tracking
 using Tracking:
@@ -14,7 +14,6 @@ using Tracking:
     estimate_dopplers_and_filter_prompt!,
     get_cn0_estimator
 using TrackingLoops:
-    CorrelatorNoiseEstimator,
     CorrelatorOutput,
     EarlyPromptLateCorrelator,
     MomentsCN0Estimator,

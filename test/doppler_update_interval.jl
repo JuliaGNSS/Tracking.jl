@@ -20,8 +20,7 @@ using Tracking:
     downconvert_and_correlate!,
     get_correlator_outputs,
     get_sat_state,
-    get_carrier_doppler,
-    get_code_doppler
+    get_carrier_doppler
 using TrackingLoops: CorrelatorOutput
 
 @testset "smallest-code-period default resolution" begin

@@ -24,15 +24,12 @@ using Tracking:
     get_carrier_phase,
     get_code_doppler,
     get_carrier_doppler,
-    get_signal_start_sample,
     get_last_fully_integrated_filtered_prompt,
     get_filtered_prompts,
     get_sat_state,
     CPUDownconvertAndCorrelator,
     CPUThreadedDownconvertAndCorrelator
 using TrackingLoops:
-    NumAnts,
-    ConventionalAssistedPLLAndDLL,
     NoiseRefCN0Estimator,
     NWPRCN0Estimator,
     append_noise_observation!,

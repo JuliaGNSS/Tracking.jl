@@ -15,7 +15,6 @@ using Tracking:
     TrackedSat,
     TrackState,
     track,
-    get_sat_state,
     get_code_phase,
     get_num_bits,
     get_filtered_prompts,
