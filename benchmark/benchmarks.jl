@@ -244,7 +244,7 @@ function bench_downconvert_and_correlate(;
                 10.5,
                 1000.0Hz,
                 NumAnts(num_ants);
-                cn0_estimator = Tracking.MomentsCN0Estimator(100),
+                cn0_estimator = _LOOP_CORE.MomentsCN0Estimator(100),
             ),
         ],
     )
