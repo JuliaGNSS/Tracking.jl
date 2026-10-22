@@ -6,7 +6,6 @@ using GNSSSignals
 using SIMD
 using SinCosLUT
 using StaticArrays
-using TrackingLoopFilters
 using Dictionaries
 using Accessors
 using Polyester
