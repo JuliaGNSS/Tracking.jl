@@ -830,6 +830,55 @@ get_carrier_doppler(s::TrackState, id...) = get_carrier_doppler(get_sat_state(s,
 get_signal_start_sample(s::TrackState, id...) =
     get_signal_start_sample(get_sat_state(s, id...))
 
+"""
+$(SIGNATURES)
+
+The carrier phase (radians, not wrapped) the Doppler estimator adds to the
+replica's [`get_carrier_phase`](@ref) for its estimate of the incoming carrier
+phase, the carrier-phase measurement (RINEX `L`); `0.0` for the scalar loops and
+for a satellite out of the vector loop.
+
+In TrackingLoops' `VectorPLLAndDLL` loop the navigation filter sets the carrier
+NCO, and the residual PLL follows the carrier without steering it, so the
+replica drifts off the carrier by whole cycles; this is the residual PLL's
+prediction at the end of the latest [`track`](@ref)/[`track!`](@ref) call, every
+cycle counted (see `TrackingLoops.carrier_phase_correction`, which also names
+where it steps). `sampling_frequency` is the band's. The group can be omitted on
+a single-group `TrackState`.
+
+The whole cycles only count against a replica phase that counts them too:
+`get_carrier_phase` wraps, so a RINEX host builds `L` from its own accumulated
+replica phase (e.g. the integrated carrier Doppler) plus this.
+
+Only valid right after `track`/`track!`: a host feeding records through
+[`append_correlator_output!`](@ref) calls `TrackingLoops.carrier_phase_correction`
+with its own NCO words and sample instead.
+"""
+function get_carrier_phase_correction(
+    track_state::TrackState{<:SignalGroups{N}},
+    group_idx::Union{Symbol,Integer,Val},
+    sat_identifier,
+    sampling_frequency,
+) where {N}
+    group = _index_group(track_state.groups, group_idx)
+    sat = get_sat_state(group.satellites, sat_identifier)
+    # `track!` leaves the replica at the end of the measurement, the band's sample
+    # offset, having run on the satellite's Doppler since its latest record.
+    sample = get(track_state.sample_offsets, get_band_id(group.band), 0)
+    2π * carrier_phase_correction(
+        sat.doppler_estimator_state,
+        _software_words(sat),
+        sample,
+        sampling_frequency,
+    )
+end
+
+get_carrier_phase_correction(
+    track_state::TrackState{<:SignalGroups{1}},
+    sat_identifier,
+    sampling_frequency,
+) = get_carrier_phase_correction(track_state, 1, sat_identifier, sampling_frequency)
+
 # Per-signal accessors, addressed as (using `get_correlator`):
 #   * `get_correlator(track_state)` — 1 group, 1 sat, 1 signal.
 #   * `get_correlator(track_state, prn)` — 1 group, 1 signal.

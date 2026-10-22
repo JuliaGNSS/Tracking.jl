@@ -35,7 +35,8 @@ using PositionVelocityTime:
     calc_satellite_position_and_velocity,
     calc_ρ_hat!,
     BiasColumns
-using Tracking: TrackState, track!, add_satellite!
+using Tracking:
+    TrackState, track!, add_satellite!, get_carrier_phase, get_carrier_phase_correction
 using TrackingLoops:
     VectorPLLAndDLL,
     navigation_solution,
@@ -173,6 +174,7 @@ end
     rng = Xoshiro(1)
     samples = Vector{ComplexF32}(undef, CHUNK)
     errors = Float64[]
+    phase_offsets = [Float64[] for _ in sats]
     seeded_at = nothing
     num_chunks = round(Int, 30.0 / (CHUNK / FS))
     for k = 0:(num_chunks-1)
@@ -192,11 +194,30 @@ end
                 errors,
                 norm(SVector(pvt.position.x, pvt.position.y, pvt.position.z) - position),
             )
+            # The replica's phase plus the correction against the true phase at the
+            # next chunk's first sample, modulo one cycle (both phases wrap).
+            for (sat, decoder, offsets) in zip(sats, decoders, phase_offsets)
+                satellite_report(track_state, SIGNAL, decoder.prn).in_vector_loop ||
+                    continue
+                estimate =
+                    (
+                        get_carrier_phase(track_state, decoder.prn) +
+                        get_carrier_phase_correction(track_state, decoder.prn, FS * Hz)
+                    ) / 2π
+                push!(offsets, rem(estimate - sat.carrier_phase, 1.0, RoundNearest))
+            end
         end
     end
     status = navigation_status(estimator)
+    # Off the truth by the Costas ambiguity the hand-over left, 0 or ½ cycle, and
+    # by the same amount at every epoch: no cycle or half cycle slips.
+    phase_drifts =
+        [rem.(offsets .- first(offsets), 1.0, RoundNearest) for offsets in phase_offsets]
+    costas_errors = [rem.(offsets, 0.5, RoundNearest) for offsets in phase_offsets]
+    rms(x) = sqrt(sum(abs2, x) / length(x))
     @info "Vector tracking from IF samples" seeded_at max_tail_error =
-        maximum(errors[(end-250):end]) position_std = status.position_std
+        maximum(errors[(end-250):end]) position_std = status.position_std rms_phase_drift =
+        maximum(rms, phase_drifts)
     # The first fix comes once every satellite has decoded subframe 3, 8 + 18 s in.
     @test seeded_at !== nothing && 26.0 < seeded_at < 28.0
     @test status.running
@@ -212,6 +233,10 @@ end
         @test report.decoder.data.sqrt_A == decoder.data.sqrt_A
     end
     @test maximum(errors[(end-250):end]) < 10.0
+    @test all(offsets -> length(offsets) > 250, phase_offsets)
+    # Without the correction the RMS is 0.085 cycles; with it 0.025.
+    @test all(d -> maximum(abs, d) < 0.1 && rms(d) < 0.04, phase_drifts)
+    @test all(e -> rms(e) < 0.04, costas_errors)
 end
 
 end
