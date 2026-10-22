@@ -36,7 +36,15 @@ using PositionVelocityTime:
     calc_ρ_hat!,
     BiasColumns
 using Tracking:
-    TrackState, track!, add_satellite!, get_carrier_phase, get_carrier_phase_correction
+    TrackState,
+    track!,
+    add_satellite!,
+    get_carrier_phase,
+    get_carrier_phase_correction,
+    get_carrier_doppler,
+    get_code_doppler,
+    get_doppler_estimator_state,
+    get_sat_state
 using TrackingLoops:
     VectorPLLAndDLL,
     navigation_solution,
@@ -44,6 +52,8 @@ using TrackingLoops:
     navigation_cycle,
     navigation_epoch,
     satellite_report,
+    carrier_phase_correction,
+    FixedNCOWord,
     SPEED_OF_LIGHT
 
 include("lnav_encoder.jl")
@@ -175,6 +185,7 @@ end
     samples = Vector{ComplexF32}(undef, CHUNK)
     errors = Float64[]
     phase_offsets = [Float64[] for _ in sats]
+    corrections_at_chunk_end = true
     seeded_at = nothing
     num_chunks = round(Int, 30.0 / (CHUNK / FS))
     for k = 0:(num_chunks-1)
@@ -205,6 +216,22 @@ end
                         get_carrier_phase_correction(track_state, decoder.prn, FS * Hz)
                     ) / 2π
                 push!(offsets, rem(estimate - sat.carrier_phase, 1.0, RoundNearest))
+                # The residual frequency here is too small for the truth to tell the
+                # sample the correction is read at, so pin it to the end of this chunk
+                # on the test's own count.
+                sat_state = get_sat_state(track_state, decoder.prn)
+                words = FixedNCOWord(
+                    ustrip(Hz, get_carrier_doppler(sat_state)),
+                    ustrip(Hz, get_code_doppler(sat_state)),
+                )
+                corrections_at_chunk_end &=
+                    get_carrier_phase_correction(track_state, decoder.prn, FS * Hz) ==
+                    2π * carrier_phase_correction(
+                        get_doppler_estimator_state(sat_state),
+                        words,
+                        (k + 1) * CHUNK,
+                        FS * Hz,
+                    )
             end
         end
     end
@@ -237,6 +264,7 @@ end
     # Without the correction the RMS is 0.085 cycles; with it 0.025.
     @test all(d -> maximum(abs, d) < 0.1 && rms(d) < 0.04, phase_drifts)
     @test all(e -> rms(e) < 0.04, costas_errors)
+    @test corrections_at_chunk_end
 end
 
 end
