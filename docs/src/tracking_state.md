@@ -452,6 +452,7 @@ The trailing `sig` selector is either:
 | `get_code_phase` | Shared code phase (wraps at [`max_code_length`](@ref)). |
 | `get_code_doppler` | Shared code Doppler. |
 | `get_carrier_phase` | Shared carrier phase in radians. |
+| [`get_carrier_phase_correction`](@ref) | What the estimator adds to `get_carrier_phase` for the carrier-phase measurement (vector loop only; takes the band's sampling frequency). |
 | `get_carrier_doppler` | Shared carrier Doppler. |
 | `get_signal_start_sample` | Index of the next sample to integrate. |
 
@@ -502,6 +503,7 @@ SatelliteDicts
 get_sat_states
 get_sat_state
 get_signal
+get_carrier_phase_correction
 ```
 
 ## TrackedSat
