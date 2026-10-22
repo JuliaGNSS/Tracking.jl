@@ -10,7 +10,6 @@ using TrackingLoopFilters
 using Dictionaries
 using Accessors
 using Polyester
-using Random: AbstractRNG, Xoshiro
 
 # The device-independent loop core (correlator records, discriminators, bit
 # buffer and sync, C/N₀ and noise estimation, loop filters, the Doppler
@@ -27,7 +26,6 @@ import TrackingLoops:
     AbstractPostCorrFilter,
     append_noise_observation!,
     BitBuffer,
-    buffer,
     _calc_num_code_blocks_that_form_a_bit,
     calc_num_code_blocks_to_integrate,
     carrier_phase_correction,
@@ -42,7 +40,6 @@ import TrackingLoops:
     FixedNCOWord,
     apply_record,
     get_accumulators,
-    get_code_block_buffer_type,
     get_correlator_sample_shifts,
     get_default_correlator,
     get_early,
@@ -56,7 +53,6 @@ import TrackingLoops:
     LoopRecord,
     SignalLoopState,
     Maybe,
-    MomentsCN0Estimator,
     _next_noise_prn,
     NO_LANDING_SAMPLE,
     _noise_density_and_ready,
@@ -74,13 +70,13 @@ import TrackingLoops:
     requires_noise_density,
     reset,
     reset_estimator_state,
-    SatConventionalPLLAndDLL,
     step_loop,
     update,
     update_accumulator,
     update_noise!
 
-using Unitful: upreferred, uconvert, ustrip, dimension, NoUnits, Hz, dBHz, ms, s
+# `dBHz` serves the manual: its custom C/N₀ estimator doctest reads `Tracking.dBHz`.
+using Unitful: upreferred, uconvert, ustrip, dimension, NoUnits, Hz, dBHz, s
 # Extended with the methods that hand tracked satellites over for a PVT solve; see
 # `position_velocity_time.jl`.
 import PositionVelocityTime
