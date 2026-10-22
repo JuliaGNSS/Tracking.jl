@@ -15,15 +15,10 @@ module VectorTrackingTest
 
 using Test: @test, @testset, @test_skip
 using Random: Xoshiro, randn
-using Unitful: Hz, ustrip, @u_str
+using Unitful: Hz, ustrip
 using LinearAlgebra: norm
 using StaticArrays: SVector
-using GNSSSignals:
-    GPSL1CA,
-    gen_code,
-    get_code_frequency,
-    get_center_frequency,
-    get_code_center_frequency_ratio
+using GNSSSignals: GPSL1CA, gen_code, get_code_frequency, get_center_frequency
 using GNSSDecoder: GNSSDecoderState, get_time_of_week
 using PositionVelocityTime:
     _precompile_states,

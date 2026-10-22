@@ -13,7 +13,6 @@ using GNSSSignals:
     AbstractGNSSSignal,
     LOC,
     gen_code,
-    get_code_center_frequency_ratio,
     get_code_frequency,
     get_code_length,
     get_data_frequency,

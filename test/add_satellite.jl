@@ -3,7 +3,7 @@ module AddSatelliteTest
 # `TrackState(; signals)`, `add_satellite!` / `add_satellite` and their
 # acquisition handoff.
 
-using Test: @test, @testset, @test_throws, @inferred
+using Test: @test, @testset, @test_throws
 using Unitful: Hz
 using GNSSSignals:
     GPSL1CA,
@@ -17,7 +17,6 @@ using Acquisition: Acquisition, AcquisitionResults
 using Tracking:
     TrackState,
     TrackedSat,
-    TrackedSignal,
     SignalGroup,
     add_satellite!,
     add_satellite,
@@ -27,11 +26,7 @@ using Tracking:
     get_carrier_doppler,
     get_code_doppler
 using TrackingLoops:
-    NumAnts,
-    ConventionalAssistedPLLAndDLL,
-    ConventionalPLLAndDLL,
-    SatConventionalPLLAndDLL,
-    init_estimator_state
+    NumAnts, ConventionalAssistedPLLAndDLL, ConventionalPLLAndDLL, SatConventionalPLLAndDLL
 
 @testset "TrackState(; signals = ...) — single-group shortcut" begin
     track_state = TrackState(; signal = GPSL1CA())

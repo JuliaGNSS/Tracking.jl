@@ -5,7 +5,6 @@ module MultiSignalTest
 
 using Test: @test, @testset, @test_throws
 using Unitful: Hz, dBHz
-using Dictionaries: dictionary
 using GNSSSignals: GPSL1CA, gen_code, get_code_frequency, get_code_center_frequency_ratio
 using Tracking:
     TrackedSat,
@@ -18,7 +17,6 @@ using Tracking:
     get_signal,
     get_correlator,
     get_last_fully_integrated_correlator,
-    get_last_fully_integrated_filtered_prompt,
     get_post_corr_filter,
     get_cn0_estimator,
     get_bit_buffer,
@@ -34,7 +32,6 @@ using TrackingLoops:
     EarlyPromptLateCorrelator,
     NumAnts,
     DefaultPostCorrFilter,
-    NWPRCN0Estimator,
     NoiseRefCN0Estimator,
     BitBuffer
 using GNSSSignals: GPSL1C_P, GPSL1C_D, GalileoE1B

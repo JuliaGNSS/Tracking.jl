@@ -25,7 +25,6 @@ using Tracking:
     get_sampling_frequency,
     get_intermediate_frequency,
     get_carrier_doppler,
-    get_code_doppler,
     _validate_equal_durations
 using TrackingLoops: NumAnts, get_num_ants
 

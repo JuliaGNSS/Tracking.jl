@@ -44,7 +44,6 @@ using TrackingLoops:
     has_bit_or_secondary_code_been_found,
     estimate_cn0,
     DefaultPostCorrFilter,
-    NWPRCN0Estimator,
     NoiseRefCN0Estimator,
     BitBuffer,
     NumAnts,

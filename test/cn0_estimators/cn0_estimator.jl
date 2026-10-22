@@ -2,7 +2,7 @@ module CN0EstimatorTest
 
 using Test: @test, @testset, @inferred, @test_throws
 using Random: Random
-using Unitful: Hz, ms, dBHz, ustrip
+using Unitful: Hz, dBHz, ustrip
 import Unitful
 using GNSSSignals: GPSL1CA, GPSL1C_P, gen_code, get_code_frequency
 import Tracking
@@ -17,11 +17,8 @@ using Tracking:
 import TrackingLoops
 using TrackingLoops:
     MomentsCN0Estimator,
-    NWPRCN0Estimator,
     NoiseRefCN0Estimator,
     default_cn0_estimator,
-    get_fallback_cn0_estimator,
-    get_prompt_buffer,
     requires_noise_density,
     update,
     estimate_cn0

@@ -2,8 +2,7 @@ module DownconvertAndCorrelateTest
 
 using Test: @test, @testset, @inferred
 using Unitful: Hz
-using GNSSSignals:
-    GPSL1CA, gen_code, get_code_frequency, get_code_center_frequency_ratio, get_code_type
+using GNSSSignals: GPSL1CA, gen_code, get_code_frequency, get_code_center_frequency_ratio
 import Tracking
 using Tracking:
     CPUDownconvertAndCorrelator,
@@ -21,8 +20,7 @@ using TrackingLoops:
     EarlyPromptLateCorrelator,
     NumAnts,
     get_accumulators,
-    get_correlator_sample_shifts,
-    update_accumulator
+    get_correlator_sample_shifts
 
 @testset "Downconvert and Correlator" begin
     # Scratch grows lazily, so default construction needs no setup.
@@ -222,8 +220,6 @@ end
 end
 
 @testset "Fused downconvert and correlate multi-antenna" begin
-    using StaticArrays: SVector
-
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     code_phase = 10.5
@@ -708,8 +704,6 @@ TrackingLoops.get_correlator_sample_shifts(
 end
 
 @testset "Fused downconvert and correlate tuple kernel" begin
-    using StaticArrays: SVector
-
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     code_phase = 10.5

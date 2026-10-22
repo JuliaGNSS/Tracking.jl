@@ -30,7 +30,6 @@ using TrackingLoops:
     get_late,
     get_accumulators,
     get_correlator_sample_shifts,
-    update_accumulator,
     AbstractCorrelator,
     EarlyPromptLateCorrelator,
     VeryEarlyPromptLateCorrelator,

@@ -10,21 +10,18 @@ module NoiseRefInTheLoopTest
 using Test: @test, @testset
 using Random: Xoshiro, randn, rand
 using Statistics: std
-using Unitful: Hz, s, ms, dBHz, ustrip, uconvert
-using GNSSSignals: GPSL1CA, gen_code, get_code_frequency, get_code_length
+using Unitful: Hz, dBHz, ustrip, uconvert
+using GNSSSignals: GPSL1CA, gen_code, get_code_frequency
 import Tracking
 using Tracking:
-    BandMeasurement,
     CPUDownconvertAndCorrelator,
     TrackState,
     TrackedSat,
-    get_cn0_estimator,
     reset_loop_filters!,
     set_preferred_num_code_blocks_to_integrate!,
     track!
 using TrackingLoops:
     CorrelatorNoiseEstimator,
-    MomentsCN0Estimator,
     NWPRCN0Estimator,
     NoiseRefCN0Estimator,
     estimate_cn0,
