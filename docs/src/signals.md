@@ -102,9 +102,9 @@ and the ICD says it will eventually be discontinued.
 - **BeiDou GEO satellites (PRN 1-5, 59-63) never sync on B1I/B3I.** They carry
   no NH20 overlay and broadcast D2 at 500 sym/s instead of D1 at 50 sym/s, so
   the secondary-code detector has nothing to lock onto. They track and can be
-  *ranged* on, but are not decoded: a D2 bit-edge search would need a per-PRN
-  data rate, while `get_bit_rate` reports D1's for every PRN. See
-  TrackingLoops' `src/beidou/b1i.jl`.
+  *ranged* on, but are not decoded: TrackingLoops' sync searches the signal's
+  D1 bit grid, not the per-satellite rate GNSSSignals reports as
+  `get_bit_rate(signal, prn)`. See TrackingLoops' `src/beidou/b1i.jl`.
 - **BeiDou B2b-I** correlates to an all-zero prompt on a clean replica, which
   takes the loop down through a NaN Doppler
   ([#234](https://github.com/JuliaGNSS/Tracking.jl/issues/234)); its defaults
