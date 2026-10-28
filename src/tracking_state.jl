@@ -467,13 +467,13 @@ end
 function get_sat_state(
     track_state::TrackState{<:SignalGroups{N}},
     group_idx::Union{Symbol,Integer,Val},
-    sat_identifier,
+    prn,
 ) where {N}
-    get_sat_state(get_sat_states(track_state, group_idx), sat_identifier)
+    get_sat_state(get_sat_states(track_state, group_idx), prn)
 end
 
-function get_sat_state(track_state::TrackState{<:SignalGroups{1}}, sat_identifier)
-    get_sat_state(track_state, 1, sat_identifier)
+function get_sat_state(track_state::TrackState{<:SignalGroups{1}}, prn)
+    get_sat_state(track_state, 1, prn)
 end
 
 function get_sat_state(track_state::TrackState{<:SignalGroups{1}})
@@ -857,11 +857,11 @@ with its own NCO words and sample instead.
 function get_carrier_phase_correction(
     track_state::TrackState{<:SignalGroups{N}},
     group_idx::Union{Symbol,Integer,Val},
-    sat_identifier,
+    prn,
     sampling_frequency,
 ) where {N}
     group = _index_group(track_state.groups, group_idx)
-    sat = get_sat_state(group.satellites, sat_identifier)
+    sat = get_sat_state(group.satellites, prn)
     # `track!` leaves the replica at the end of the measurement, the band's sample
     # offset, having run on the satellite's Doppler since its latest record.
     sample = get(track_state.sample_offsets, get_band_id(group.band), 0)
@@ -875,9 +875,9 @@ end
 
 get_carrier_phase_correction(
     track_state::TrackState{<:SignalGroups{1}},
-    sat_identifier,
+    prn,
     sampling_frequency,
-) = get_carrier_phase_correction(track_state, 1, sat_identifier, sampling_frequency)
+) = get_carrier_phase_correction(track_state, 1, prn, sampling_frequency)
 
 # Per-signal accessors, addressed as (using `get_correlator`):
 #   * `get_correlator(track_state)` — 1 group, 1 sat, 1 signal.
@@ -911,9 +911,9 @@ for fn in (
         $fn(
             s::TrackState{<:SignalGroups},
             group::Union{Symbol,Integer,Val},
-            sat_id,
+            prn,
             sig::_SignalSelector,
-        ) = $fn(get_sat_state(s, group, sat_id), sig)
+        ) = $fn(get_sat_state(s, group, prn), sig)
     end
 end
 
@@ -939,9 +939,9 @@ append_correlator_output!(
     s::TrackState{<:SignalGroups},
     output::CorrelatorOutput,
     group::Union{Symbol,Integer,Val},
-    sat_id,
+    prn,
     sig::_SignalSelector,
-) = (append_correlator_output!(get_sat_state(s, group, sat_id), output, sig); s)
+) = (append_correlator_output!(get_sat_state(s, group, prn), output, sig); s)
 
 """
 $(SIGNATURES)
@@ -1082,14 +1082,14 @@ Mutates `track_state` in place and returns it.
 function set_preferred_num_code_blocks_to_integrate!(
     track_state::TrackState{<:SignalGroups},
     group::Union{Symbol,Integer,Val},
-    sat_id::Integer,
+    prn::Integer,
     sig::_SignalSelector,
     num_code_blocks::Integer,
 )
     _set_preferred_blocks!(
         track_state,
         get_sat_states(track_state, group),
-        sat_id,
+        prn,
         num_code_blocks,
         sig,
     )
@@ -1098,40 +1098,34 @@ end
 function set_preferred_num_code_blocks_to_integrate!(
     track_state::TrackState{<:SignalGroups},
     group::Union{Symbol,Integer,Val},
-    sat_id::Integer,
+    prn::Integer,
     num_code_blocks::Integer,
 )
     _set_preferred_blocks!(
         track_state,
         get_sat_states(track_state, group),
-        sat_id,
+        prn,
         num_code_blocks,
     )
 end
 
 function set_preferred_num_code_blocks_to_integrate!(
     track_state::TrackState{<:SignalGroups{1}},
-    sat_id::Integer,
+    prn::Integer,
     num_code_blocks::Integer,
 )
-    _set_preferred_blocks!(
-        track_state,
-        get_sat_states(track_state),
-        sat_id,
-        num_code_blocks,
-    )
+    _set_preferred_blocks!(track_state, get_sat_states(track_state), prn, num_code_blocks)
 end
 
 # Shared body for the three addressing overloads above.
 @inline function _set_preferred_blocks!(
     track_state::TrackState,
     sats,
-    sat_id,
+    prn,
     num_code_blocks::Integer,
     sel...,
 )
-    sats[sat_id] =
-        _set_sat_signal_preferred_blocks(sats[sat_id], Int(num_code_blocks), sel...)
+    sats[prn] = _set_sat_signal_preferred_blocks(sats[prn], Int(num_code_blocks), sel...)
     track_state
 end
 
@@ -1140,8 +1134,8 @@ function set_preferred_num_code_blocks_to_integrate!(
     num_code_blocks::Integer,
 )
     sats = get_sat_states(track_state)
-    sat_id = only(keys(sats))
-    sats[sat_id] = _set_sat_signal_preferred_blocks(sats[sat_id], Int(num_code_blocks))
+    prn = only(keys(sats))
+    sats[prn] = _set_sat_signal_preferred_blocks(sats[prn], Int(num_code_blocks))
     track_state
 end
 
@@ -1203,15 +1197,15 @@ end
 function reset_loop_filters!(
     track_state::TrackState{<:SignalGroups},
     group::Union{Symbol,Integer,Val},
-    sat_id,
+    prn,
 )
     sats = get_sat_states(track_state, group)
-    sats[sat_id] = _reset_sat_loop_filters(track_state, sats[sat_id])
+    sats[prn] = _reset_sat_loop_filters(track_state, sats[prn])
     track_state
 end
 
-reset_loop_filters!(track_state::TrackState{<:SignalGroups{1}}, sat_id) =
-    reset_loop_filters!(track_state, 1, sat_id)
+reset_loop_filters!(track_state::TrackState{<:SignalGroups{1}}, prn) =
+    reset_loop_filters!(track_state, 1, prn)
 
 # Distinct band ids across `groups`, in first-encounter order; folds at compile time.
 @inline _band_keys_in_groups(::Tuple{}, acc::Tuple{Vararg{Symbol}}) = acc
