@@ -21,9 +21,6 @@ using Tracking:
     track!,
     add_satellite!,
     band_keys,
-    get_samples,
-    get_sampling_frequency,
-    get_intermediate_frequency,
     get_carrier_doppler,
     _validate_equal_durations
 using TrackingLoops: NumAnts, get_num_ants
@@ -45,27 +42,27 @@ function _make_signal(
     gen_code(num_samples, s, prn, sampling_frequency, code_freq, start_code_phase)
 end
 
-@testset "BandMeasurement kwarg constructor and accessors" begin
+@testset "BandMeasurement kwarg constructor" begin
     buf = zeros(ComplexF64, 100)
     m_kw =
         BandMeasurement(buf; sampling_frequency = 4e6Hz, intermediate_frequency = 1.5e6Hz)
-    @test get_samples(m_kw) === buf
-    @test get_sampling_frequency(m_kw) == 4e6Hz
-    @test get_intermediate_frequency(m_kw) == 1.5e6Hz
+    @test m_kw.samples === buf
+    @test m_kw.sampling_frequency == 4e6Hz
+    @test m_kw.intermediate_frequency == 1.5e6Hz
 
     m_kw_default = BandMeasurement(buf; sampling_frequency = 4e6Hz)
-    @test get_intermediate_frequency(m_kw_default) == 0.0Hz
+    @test m_kw_default.intermediate_frequency == 0.0Hz
 end
 
 @testset "BandMeasurement promotes mixed frequency types" begin
     buf = zeros(ComplexF64, 100)
     # An integer IF with a Float64 sampling frequency promotes.
     m = @inferred BandMeasurement(buf, 4e6Hz, 100Hz)
-    @test get_sampling_frequency(m) === 4e6Hz
-    @test get_intermediate_frequency(m) === 100.0Hz
+    @test m.sampling_frequency === 4e6Hz
+    @test m.intermediate_frequency === 100.0Hz
 
     m_kw = BandMeasurement(buf; sampling_frequency = 4e6Hz, intermediate_frequency = 100Hz)
-    @test get_intermediate_frequency(m_kw) === 100.0Hz
+    @test m_kw.intermediate_frequency === 100.0Hz
 end
 
 @testset "track with integer-typed intermediate_frequency" begin

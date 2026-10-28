@@ -83,9 +83,6 @@ function BandMeasurement(
     BandMeasurement(samples, sampling_frequency, intermediate_frequency)
 end
 
-@inline get_samples(m::BandMeasurement) = m.samples
-@inline get_sampling_frequency(m::BandMeasurement) = m.sampling_frequency
-@inline get_intermediate_frequency(m::BandMeasurement) = m.intermediate_frequency
 @inline get_num_samples(m::BandMeasurement) = get_num_samples(m.samples)
 
 """
