@@ -38,7 +38,7 @@ satellites. The signal path (downconvert, correlate) is estimator-agnostic and p
    [`reset_loop_filters!`](@ref). Register sats into shared state in
    `update_estimator_on_handoff`, never here.
 
-4. **(Optional) An [`update_estimator_on_handoff`](@ref) method**, if shared state
+4. **(Optional) An [`update_estimator_on_handoff`](@ref Tracking.update_estimator_on_handoff) method**, if shared state
    has to change when sats join (joint-channel covariance, normalization terms, …):
 
    ```julia
@@ -177,8 +177,8 @@ estimator.
 ## API reference
 
 ```@docs
-init_estimator_state
-update_estimator_on_handoff
+TrackingLoops.init_estimator_state(::AbstractDopplerEstimator, ::TrackedSat)
+Tracking.update_estimator_on_handoff
 Tracking.estimate_dopplers_and_filter_prompt
 Tracking.estimate_dopplers_and_filter_prompt!
 ```

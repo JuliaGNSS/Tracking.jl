@@ -490,7 +490,7 @@ unchanged). `tracked_sats` may be a single `TrackedSat`, a `Vector`, or a
 
 Each sat's type must match the group's slot type, including the
 `doppler_estimator_state` the configured estimator produces. The estimator's
-[`update_estimator_on_handoff`](@ref) hook is called once with the incoming sats.
+[`update_estimator_on_handoff`](@ref Tracking.update_estimator_on_handoff) hook is called once with the incoming sats.
 
 For a single-group `TrackState` the `group_idx` may be omitted.
 """
@@ -537,7 +537,7 @@ filter from the acquisition handoff (`prn`, `code_phase`, `code_doppler`,
 `ArgumentError` names the available groups.
 
 Keep using the *returned* `TrackState`: an estimator whose
-[`update_estimator_on_handoff`](@ref) returns a rebuilt estimator can only hand
+[`update_estimator_on_handoff`](@ref Tracking.update_estimator_on_handoff) returns a rebuilt estimator can only hand
 it back there (`TrackState` is immutable). Estimators that update in place,
 the conventional ones included, return the same `track_state`.
 

@@ -170,10 +170,34 @@ function TrackedSignal(
 end
 
 get_signal(t::TrackedSignal) = t.signal
+
+"""
+$(SIGNATURES)
+
+The working correlator: the accumulators of the record in progress.
+"""
 get_correlator(t::TrackedSignal) = t.correlator
+
+"""
+$(SIGNATURES)
+
+The correlator of the most recently completed record.
+"""
 get_last_fully_integrated_correlator(t::TrackedSignal) = t.last_fully_integrated_correlator
+
+"""
+$(SIGNATURES)
+
+The post-correlation-filtered prompt of the most recently completed record.
+"""
 get_last_fully_integrated_filtered_prompt(t::TrackedSignal) =
     t.loop_state.last_filtered_prompt
+
+"""
+$(SIGNATURES)
+
+The number of primary code blocks the most recently completed record integrated.
+"""
 get_last_fully_integrated_num_code_blocks(t::TrackedSignal) =
     t.loop_state.last_num_code_blocks
 
@@ -191,6 +215,11 @@ get_last_fully_integrated_integration_time(t::TrackedSignal) =
     get_last_fully_integrated_num_code_blocks(t) * get_code_length(get_signal(t)) /
     get_chip_rate(get_signal(t))
 
+"""
+$(SIGNATURES)
+
+The filtered prompts of the records the most recent `track` call completed, in order.
+"""
 get_filtered_prompts(t::TrackedSignal) = t.filtered_prompts
 
 """
@@ -219,12 +248,38 @@ append_correlator_output!(t::TrackedSignal, output::CorrelatorOutput) =
 
 get_post_corr_filter(t::TrackedSignal) = t.loop_state.post_corr_filter
 get_cn0_estimator(t::TrackedSignal) = t.loop_state.cn0_estimator
+
+"""
+$(SIGNATURES)
+
+The signal's [`BitBuffer`](@extref TrackingLoops.BitBuffer): bit or secondary-code
+sync and the soft bits for the decoder.
+"""
 get_bit_buffer(t::TrackedSignal) = t.loop_state.bit_buffer
 get_soft_bits(t::TrackedSignal) = get_soft_bits(get_bit_buffer(t))
+
+"""
+$(SIGNATURES)
+
+The number of soft bits in the bit buffer (see `get_soft_bits`).
+"""
 get_num_bits(t::TrackedSignal) = length(get_bit_buffer(t))
 has_bit_or_secondary_code_been_found(t::TrackedSignal) =
     has_bit_or_secondary_code_been_found(get_bit_buffer(t))
+
+"""
+$(SIGNATURES)
+
+The number of samples accumulated into the record in progress.
+"""
 get_integrated_samples(t::TrackedSignal) = t.integrated_samples
+
+"""
+$(SIGNATURES)
+
+The number of code blocks the signal integrates per record once synced (see
+[`set_preferred_num_code_blocks_to_integrate!`](@ref)).
+"""
 get_preferred_num_code_blocks_to_integrate(t::TrackedSignal) =
     t.preferred_num_code_blocks_to_integrate
 
@@ -243,7 +298,7 @@ update their own filters, C/N₀ and bit buffers on theirs. A custom
 [`AbstractDopplerEstimator`](@extref TrackingLoops.AbstractDopplerEstimator) may
 use any signal.
 
-The shared `code_phase` wraps at [`max_code_wrap`](@ref).
+The shared `code_phase` wraps at [`max_code_wrap`](@ref Tracking.max_code_wrap).
 """
 struct TrackedSat{Signals<:Tuple{Vararg{TrackedSignal}},D}
     prn::Int
@@ -278,7 +333,7 @@ common multiple of the per-signal wraps once *every* signal has synced (GPS
 L1 C/A: 1023 × 20 = 20460, one data bit; L1C-P: 10230 × 1800, one
 secondary-code cycle). Folds to a literal for a concrete `signals` type.
 
-The runtime wrap, [`current_code_wrap`](@ref), is shorter for unsynced signals.
+The runtime wrap, [`current_code_wrap`](@ref Tracking.current_code_wrap), is shorter for unsynced signals.
 """
 @inline max_code_wrap(signals::Tuple{Vararg{TrackedSignal}}) = _max_code_wrap(signals)
 
@@ -300,7 +355,7 @@ end
 $(SIGNATURES)
 
 The runtime wrap period of the shared `sat.code_phase`, in chips: like
-[`max_code_wrap`](@ref), but a signal not yet synced (`bit_buffer.found`
+[`max_code_wrap`](@ref Tracking.max_code_wrap), but a signal not yet synced (`bit_buffer.found`
 false) contributes only its primary code length, since its bit or secondary
 chip is unknown. The least common multiple keeps the wrap a multiple of every
 signal's replica wrap (#129).
@@ -558,7 +613,7 @@ get_num_ants(
 $(SIGNATURES)
 
 Get the satellite's shared code phase in chips, wrapping at
-[`max_code_wrap`](@ref). Mod by a signal's primary code length for its replica
+[`max_code_wrap`](@ref Tracking.max_code_wrap). Mod by a signal's primary code length for its replica
 phase.
 """
 get_code_phase(s::TrackedSat) = s.code_phase
@@ -700,7 +755,7 @@ this form or TrackingLoops' four-argument one.
 It must be **pure**: it also builds the PRN-0 template sat that fixes a group's
 slot type, probes types when validating pre-built sats, and re-seeds in
 [`reset_loop_filters!`](@ref). Register satellites in shared state in
-[`update_estimator_on_handoff`](@ref) instead.
+[`update_estimator_on_handoff`](@ref Tracking.update_estimator_on_handoff) instead.
 """
 init_estimator_state(estimator::AbstractDopplerEstimator, sat::TrackedSat) =
     init_estimator_state(

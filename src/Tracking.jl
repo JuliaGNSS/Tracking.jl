@@ -104,9 +104,6 @@ export get_prn,
     get_signal,
     get_signals,
     get_doppler_estimator_state,
-    max_code_wrap,
-    current_code_wrap,
-    update_estimator_on_handoff,
     CPUDownconvertAndCorrelator,
     CPUThreadedDownconvertAndCorrelator,
     Int16DownconvertAndCorrelator,
@@ -123,14 +120,9 @@ export get_prn,
     merge_sats,
     get_sat_states,
     get_sat_state,
-    AbstractDownconvertAndCorrelator,
-    SatelliteDicts,
     SignalGroup,
-    SignalGroups,
     BandMeasurement,
-    BandMeasurements,
-    get_band_ids,
-    calc_signal_samples_to_integrate
+    get_band_ids
 
 # TrackingLoops functions that read this package's results, re-exported so
 # reading them needs no second package.

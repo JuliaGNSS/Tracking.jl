@@ -28,12 +28,12 @@ signals' wraps (#129), each of which depends on the signal's sync state:
 | L1C-P + L1C-D + L1CA | 10230 | 18.4 M (L1C-P dominates) |
 
 `mod(code_phase, primary)` is a signal's replica phase, `div(code_phase, primary)`
-its position within the symbol. [`max_code_wrap`](@ref) is the post-sync bound,
-[`current_code_wrap`](@ref) the runtime wrap.
+its position within the symbol. [`max_code_wrap`](@ref Tracking.max_code_wrap) is the post-sync bound,
+[`current_code_wrap`](@ref Tracking.current_code_wrap) the runtime wrap.
 
 ```@docs
-max_code_wrap
-current_code_wrap
+Tracking.max_code_wrap
+Tracking.current_code_wrap
 ```
 
 ## Sync detection

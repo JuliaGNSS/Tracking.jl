@@ -135,7 +135,7 @@ In the TrackingLoops manual:
 ## Integration sizing
 
 ```@docs
-calc_signal_samples_to_integrate
+Tracking.calc_signal_samples_to_integrate
 ```
 
 ## Adjusting the spacing of the stock correlator

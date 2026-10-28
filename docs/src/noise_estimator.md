@@ -66,7 +66,7 @@ so you configure
 and only fill it differently.
 
 ```@docs
-append_noise_observation!
+TrackingLoops.append_noise_observation!(::TrackState, ::TrackingLoops.NoiseObservation, ::Symbol)
 ```
 
 In the TrackingLoops manual:

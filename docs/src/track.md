@@ -77,7 +77,7 @@ Per chunk:
    # or: estimate_dopplers_and_filter_prompt!(track_state, Dict(:L1 => 25e6Hz))
    ```
 
-   [`BandMeasurements`](@ref) work too. The call **consumes and clears** each signal's `correlator_outputs`.
+   [`BandMeasurements`](@ref Tracking.BandMeasurements) work too. The call **consumes and clears** each signal's `correlator_outputs`.
 
 3. **Marshal** the updated [`get_code_doppler`](@ref) / [`get_carrier_doppler`](@ref) back to the hardware NCOs.
 
@@ -122,7 +122,7 @@ Noise, not `zeros`: the default C/N₀ estimator measures the noise floor from t
 
 ```@docs
 BandMeasurement
-BandMeasurements
+Tracking.BandMeasurements
 ```
 
 ## Downconversion and correlation
@@ -160,7 +160,9 @@ OneBitDownconvertAndCorrelator
 OneBitThreadedDownconvertAndCorrelator
 TwoBitDownconvertAndCorrelator
 TwoBitThreadedDownconvertAndCorrelator
-AbstractDownconvertAndCorrelator
+Tracking.AbstractDownconvertAndCorrelator
+Tracking.downconvert_and_correlate
+Tracking.downconvert_and_correlate!
 ```
 
 Correlator sample shifts and the early/late spacing are documented in [Correlator](correlator.md#Sample-shifts).
