@@ -29,7 +29,8 @@ using PositionVelocityTime:
     calc_transmit_time,
     calc_satellite_position_and_velocity,
     predict_pseudoranges!,
-    BiasColumns
+    BiasColumns,
+    SPEED_OF_LIGHT
 using Tracking:
     TrackState,
     track!,
@@ -48,8 +49,7 @@ using TrackingLoops:
     navigation_epoch,
     satellite_report,
     carrier_phase_correction,
-    FixedNCOWord,
-    SPEED_OF_LIGHT
+    FixedNCOWord
 
 include("lnav_encoder.jl")
 

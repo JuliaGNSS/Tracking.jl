@@ -7,7 +7,6 @@ using GNSSSignals: GPSL1CA, get_code
 import Tracking
 using TrackingLoops:
     MomentsCN0Estimator,
-    get_current_index,
     update,
     EarlyPromptLateCorrelator,
     get_prompt,
@@ -56,7 +55,6 @@ using TrackingLoops:
         )
         cn0_estimator = update(cn0_estimator, get_prompt(correlator))
     end
-    @test @inferred(get_current_index(cn0_estimator)) == 100
     @test @inferred(Base.length(cn0_estimator)) == 100
     cn0_estimate = @inferred estimate_cn0(cn0_estimator, 1ms)
 

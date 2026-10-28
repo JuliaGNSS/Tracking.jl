@@ -267,12 +267,11 @@ end
 end
 
 # Pre-sync allocation guard (#198). The per-stage test above measures its
-# estimate step with no records to fold, so never the pre-sync bit-edge search
-# (`TrackingLoops._buffer_find_bit`). Noise never locks, so the search runs on
-# every block, and a warm call must allocate nothing at any length: a per-block
-# leak grows with the chunk.
+# estimate step with no records to fold, so never TrackingLoops' pre-sync bit-edge
+# search. Noise never locks, so the search runs on every block, and a warm call
+# must allocate nothing at any length: a per-block leak grows with the chunk.
 #
-# `_detect_bit_edge_cfar` scores nothing below `2 * blocks_per_bit` (40 blocks),
+# The soft bit-edge detector scores nothing below `2 * blocks_per_bit` (40 blocks),
 # so 2 and 20 blocks cannot see a leak in the Student-t threshold. Its
 # incomplete-beta inverse once allocated ~600 B per block, at `dof` around 11 and
 # from ~42 up. The measured second call sweeps `dof ≈ n/20 … n/10`, so 200 blocks

@@ -189,10 +189,9 @@ end
 
 # GPS L5I secondary-code (NH10) sync and phase recovery.
 #
-# Starting at every NH10 phase, the soft CFAR rotation search
-# (`TrackingLoops._detect_secondary_code_cfar`) must not fire before two periods,
-# must fire on a true NH10 boundary, and must anchor `code_phase` to the upcoming
-# integration's chip 0.
+# Starting at every NH10 phase, TrackingLoops' soft CFAR rotation search must not
+# fire before two periods, must fire on a true NH10 boundary, and must anchor
+# `code_phase` to the upcoming integration's chip 0.
 @testset "GPS L5I secondary-code sync and phase recovery" begin
     gpsl5 = GPSL5I()
     prn = 1

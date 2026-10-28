@@ -10,7 +10,8 @@ using Test: @test, @testset
 using Logging: NullLogger, with_logger
 using Unitful: Hz
 using StaticArrays: SVector
-using GNSSSignals: GalileoE1B, GalileoE1C, get_carrier_phase_offset
+using GNSSSignals: GalileoE1B, GalileoE1C, get_carrier_phase_offset, get_signal_id
+using GNSSDecoder: GNSSDecoderState
 using Tracking:
     TrackState,
     add_satellite!,
@@ -63,7 +64,7 @@ function TrackingLoops.step_loop(
     push!(
         e.seen,
         (
-            TrackingLoops.get_signal_id(record.signal),
+            get_signal_id(record.signal),
             record.sample_index,
             record.bit_synced,
             length(record.new_soft_bits),
@@ -186,7 +187,7 @@ end
         report = satellite_report(estimator, GalileoE1C(), 11)
         @test report.tracked && report.bit_synced
         @test report.decoder.prn == 11
-        @test report.decoder isa typeof(TrackingLoops.GNSSDecoderState(GalileoE1B(), 11))
+        @test report.decoder isa typeof(GNSSDecoderState(GalileoE1B(), 11))
         @test isnothing(satellite_report(estimator, GalileoE1B(), 11))
         @test estimator.navigation.registrations == 1
         state = get_doppler_estimator_state(get_sat_state(track_state, :e1, 11))
