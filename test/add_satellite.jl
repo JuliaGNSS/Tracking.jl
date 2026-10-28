@@ -165,7 +165,7 @@ end
     @test de_state.bandwidths.code == 1.5Hz
 end
 
-# `_make_acq`, an Acquisition-version shim.
+# `_make_acq` builds an `AcquisitionResults`.
 include("acquisition_test_helpers.jl")
 
 @testset "add_satellite!(ts, acq) — single-group shortcut" begin
