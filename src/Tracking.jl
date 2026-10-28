@@ -133,10 +133,7 @@ export get_prn,
     BandMeasurement,
     BandMeasurements,
     get_band_ids,
-    get_signal_observations,
-    get_samples,
-    get_sampling_frequency,
-    get_intermediate_frequency
+    get_signal_observations
 
 # TrackingLoops functions that read this package's results, re-exported so
 # reading them needs no second package.
