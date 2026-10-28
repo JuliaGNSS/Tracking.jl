@@ -231,7 +231,7 @@ function Tracking.add_satellite(
 end
 
 # A shorter signal's code phase would alias inside the longest primary code, which
-# sets the group's `max_code_length` wrap.
+# sets the group's `max_code_wrap` wrap.
 @inline function _assert_acq_matches_group(
     track_state::TrackState,
     group::Symbol,

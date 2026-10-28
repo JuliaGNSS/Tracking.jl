@@ -243,7 +243,7 @@ update their own filters, C/N₀ and bit buffers on theirs. A custom
 [`AbstractDopplerEstimator`](@extref TrackingLoops.AbstractDopplerEstimator) may
 use any signal.
 
-The shared `code_phase` wraps at [`max_code_length`](@ref).
+The shared `code_phase` wraps at [`max_code_wrap`](@ref).
 """
 struct TrackedSat{Signals<:Tuple{Vararg{TrackedSignal}},D}
     prn::Int
@@ -259,16 +259,16 @@ end
 # A signal's post-sync wrap in chips: the secondary-code period for a pilot, and
 # the longer of secondary-code and data-bit period otherwise (GPS L1 C/A:
 # 1023 × 20, no secondary code).
-@inline function _post_sync_code_length(tsig::TrackedSignal)
+@inline function _post_sync_code_wrap(tsig::TrackedSignal)
     sig = tsig.signal
     get_code_length(sig) * max(get_secondary_code_length(sig), get_code_blocks_per_bit(sig))
 end
 
 # `lcm`, not `max`: per-signal phases are `mod(code_phase, _replica_code_wrap(...))`,
 # correct only if the shared wrap is a multiple of every signal's (#129).
-@inline _max_code_length(::Tuple{}) = 1
-@inline _max_code_length(t::Tuple) =
-    lcm(_post_sync_code_length(first(t)), _max_code_length(Base.tail(t)))
+@inline _max_code_wrap(::Tuple{}) = 1
+@inline _max_code_wrap(t::Tuple) =
+    lcm(_post_sync_code_wrap(first(t)), _max_code_wrap(Base.tail(t)))
 
 """
 $(SIGNATURES)
@@ -280,27 +280,27 @@ secondary-code cycle). Folds to a literal for a concrete `signals` type.
 
 The runtime wrap, [`current_code_wrap`](@ref), is shorter for unsynced signals.
 """
-@inline max_code_length(signals::Tuple{Vararg{TrackedSignal}}) = _max_code_length(signals)
+@inline max_code_wrap(signals::Tuple{Vararg{TrackedSignal}}) = _max_code_wrap(signals)
 
-# Primary code length until synced, then `_post_sync_code_length`.
-@inline function _current_code_length(tsig::TrackedSignal)
+# Primary code length until synced, then `_post_sync_code_wrap`.
+@inline function _signal_code_wrap(tsig::TrackedSignal)
     if get_bit_buffer(tsig).found
-        _post_sync_code_length(tsig)
+        _post_sync_code_wrap(tsig)
     else
         get_code_length(tsig.signal)
     end
 end
 
-# `lcm` for the same reason as `_max_code_length`.
+# `lcm` for the same reason as `_max_code_wrap`.
 @inline _current_code_wrap(::Tuple{}) = 1
 @inline _current_code_wrap(t::Tuple) =
-    lcm(_current_code_length(first(t)), _current_code_wrap(Base.tail(t)))
+    lcm(_signal_code_wrap(first(t)), _current_code_wrap(Base.tail(t)))
 
 """
 $(SIGNATURES)
 
 The runtime wrap period of the shared `sat.code_phase`, in chips: like
-[`max_code_length`](@ref), but a signal not yet synced (`bit_buffer.found`
+[`max_code_wrap`](@ref), but a signal not yet synced (`bit_buffer.found`
 false) contributes only its primary code length, since its bit or secondary
 chip is unknown. The least common multiple keeps the wrap a multiple of every
 signal's replica wrap (#129).
@@ -558,7 +558,7 @@ get_num_ants(
 $(SIGNATURES)
 
 Get the satellite's shared code phase in chips, wrapping at
-[`max_code_length`](@ref). Mod by a signal's primary code length for its replica
+[`max_code_wrap`](@ref). Mod by a signal's primary code length for its replica
 phase.
 """
 get_code_phase(s::TrackedSat) = s.code_phase

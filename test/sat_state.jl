@@ -33,7 +33,7 @@ using Tracking:
     get_sat_state,
     get_bit_buffer,
     to_dictionary,
-    max_code_length
+    max_code_wrap
 import TrackingLoops
 using TrackingLoops: has_bit_or_secondary_code_been_found
 
@@ -87,7 +87,7 @@ end
 
     # The upper bound, 1023 chips × 20 blocks per bit; the runtime wrap is
     # 1023 until sync, then 20460.
-    @test @inferred(max_code_length(sat.signals)) == 20460
+    @test @inferred(max_code_wrap(sat.signals)) == 20460
 
     @test @inferred(Tracking.current_code_wrap(sat.signals)) == 1023
 
@@ -110,22 +110,19 @@ end
 
     # The recursion's base case, the lcm identity; a TrackedSat never has an
     # empty signal tuple.
-    @test Tracking._max_code_length(()) == 1
+    @test Tracking._max_code_wrap(()) == 1
     @test Tracking._current_code_wrap(()) == 1
 
-    @testset "_post_sync_code_length per signal" begin
+    @testset "_post_sync_code_wrap per signal" begin
         import GNSSSignals: GalileoE1B, GalileoE1B_BOC11, GPSL5I, GPSL1C_D, GPSL1C_P
-        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL1CA())) ==
-              1023 * 20
-        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GalileoE1B())) ==
+        @test Tracking._post_sync_code_wrap(Tracking.TrackedSignal(GPSL1CA())) == 1023 * 20
+        @test Tracking._post_sync_code_wrap(Tracking.TrackedSignal(GalileoE1B())) ==
               4092 * 1   # 1 block per symbol
-        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GalileoE1B_BOC11())) ==
+        @test Tracking._post_sync_code_wrap(Tracking.TrackedSignal(GalileoE1B_BOC11())) ==
               4092 * 1
-        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL5I())) ==
-              10230 * 10
-        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL1C_D())) ==
-              10230 * 1
-        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL1C_P())) ==
+        @test Tracking._post_sync_code_wrap(Tracking.TrackedSignal(GPSL5I())) == 10230 * 10
+        @test Tracking._post_sync_code_wrap(Tracking.TrackedSignal(GPSL1C_D())) == 10230 * 1
+        @test Tracking._post_sync_code_wrap(Tracking.TrackedSignal(GPSL1C_P())) ==
               10230 * 1800
     end
 end
@@ -180,7 +177,7 @@ GNSSSignals.get_bit_rate(::Type{FakeWrapSignal}) = 0Hz
     @test @inferred(Tracking.current_code_wrap((s4_synced, s6))) == 60
 
     # The bound is the all-synced case.
-    @test @inferred(max_code_length((s4, s6))) == 60
+    @test @inferred(max_code_wrap((s4, s6))) == 60
 end
 
 @testset "Public multi-signal TrackedSat constructor" begin

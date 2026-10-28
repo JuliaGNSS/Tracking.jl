@@ -419,10 +419,10 @@ SignalGroups
 
 ### Band routing
 
-[`band_keys`](@ref) lists the band ids a `TrackState` expects as measurement keys.
+[`get_band_ids`](@ref) lists the band ids a `TrackState` expects as measurement keys.
 
 ```@docs
-band_keys
+get_band_ids
 ```
 
 ## Addressing satellites and signals
@@ -449,7 +449,7 @@ The trailing `sig` selector is either:
 |----------|---------|
 | `get_prn` | PRN number. |
 | `get_num_ants` | Number of antenna elements. |
-| `get_code_phase` | Shared code phase (wraps at [`max_code_length`](@ref)). |
+| `get_code_phase` | Shared code phase (wraps at [`max_code_wrap`](@ref)). |
 | `get_code_doppler` | Shared code Doppler. |
 | `get_carrier_phase` | Shared carrier phase in radians. |
 | [`get_carrier_phase_correction`](@ref) | What the estimator adds to `get_carrier_phase` for the carrier-phase measurement (vector loop only; takes the band's sampling frequency). |

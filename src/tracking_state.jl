@@ -1208,11 +1208,11 @@ reset_loop_filters!(track_state::TrackState{<:SignalGroups{1}}, prn) =
     reset_loop_filters!(track_state, 1, prn)
 
 # Distinct band ids across `groups`, in first-encounter order; folds at compile time.
-@inline _band_keys_in_groups(::Tuple{}, acc::Tuple{Vararg{Symbol}}) = acc
-@inline function _band_keys_in_groups(t::Tuple, acc::Tuple{Vararg{Symbol}})
+@inline _band_ids_in_groups(::Tuple{}, acc::Tuple{Vararg{Symbol}}) = acc
+@inline function _band_ids_in_groups(t::Tuple, acc::Tuple{Vararg{Symbol}})
     k = get_band_id(first(t).band)
     new_acc = k in acc ? acc : (acc..., k)
-    _band_keys_in_groups(Base.tail(t), new_acc)
+    _band_ids_in_groups(Base.tail(t), new_acc)
 end
 
 """
@@ -1223,15 +1223,15 @@ first-encounter order: the keys a multi-band measurements NamedTuple must use.
 
 ```julia
 ts = TrackState(; signals = (legacy_gps = (GPSL1CA(),), gps_l5 = (GPSL5I(),)))
-band_keys(ts) == (:L1, :L5)
+get_band_ids(ts) == (:L1, :L5)
 ```
 """
-@inline band_keys(track_state::TrackState) =
-    _band_keys_in_groups(Tuple(track_state.groups), ())
+@inline get_band_ids(track_state::TrackState) =
+    _band_ids_in_groups(Tuple(track_state.groups), ())
 
 # The one band of a single-band state, for the bare-buffer `track` entry points.
 @inline function _single_band(track_state::TrackState)
-    keys_tuple = band_keys(track_state)
+    keys_tuple = get_band_ids(track_state)
     if length(keys_tuple) != 1
         throw(
             ArgumentError(
@@ -1260,7 +1260,7 @@ end
     track_state::TrackState,
     measurements::BandMeasurements,
 )
-    expected_keys = band_keys(track_state)
+    expected_keys = get_band_ids(track_state)
     got_keys = keys(measurements)
     if !_tuple_sets_equal(expected_keys, got_keys)
         throw(

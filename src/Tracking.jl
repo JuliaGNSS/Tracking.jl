@@ -104,7 +104,7 @@ export get_prn,
     get_signal,
     get_signals,
     get_doppler_estimator_state,
-    max_code_length,
+    max_code_wrap,
     current_code_wrap,
     update_estimator_on_handoff,
     CPUDownconvertAndCorrelator,
@@ -129,7 +129,7 @@ export get_prn,
     SignalGroups,
     BandMeasurement,
     BandMeasurements,
-    band_keys,
+    get_band_ids,
     calc_signal_samples_to_integrate
 
 # TrackingLoops functions that read this package's results, re-exported so

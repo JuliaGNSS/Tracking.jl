@@ -468,7 +468,7 @@ end
 # unchanged, as `calc_num_chips_to_integrate` re-mods by the primary length.
 # `num_blocks` is unused.
 @inline _replica_code_wrap(tsig::TrackedSignal, num_blocks::Integer) =
-    has_bit_or_secondary_code_been_found(tsig) ? _post_sync_code_length(tsig) :
+    has_bit_or_secondary_code_been_found(tsig) ? _post_sync_code_wrap(tsig) :
     get_code_length(tsig.signal)
 
 # All per-signal replica/kernel parameters, derived in one place so the boundary
