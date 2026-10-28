@@ -319,7 +319,7 @@ merge_sats
 
 Satellites broadcast on several RF bands (GPS L1 and L5, Galileo E1 and E5a), which arrive from separate front ends, generally at different sample rates. Each group of a multi-band `TrackState` sits on one band. Two bands give near-independent observations of one path: for ionosphere-free combinations, wider code bandwidth, and cross-band aiding, as the L1/L5 Doppler ratio is that of the carrier frequencies.
 
-Tracking.jl provides per-band groups, measurement routing and an estimate phase that sees every band's records at once; for joint cross-band estimation see [docs/plans/2026-05-15-multi-band-tracking-design.md](https://github.com/JuliaGNSS/Tracking.jl/blob/master/docs/plans/2026-05-15-multi-band-tracking-design.md).
+Tracking.jl provides per-band groups, measurement routing and an estimate phase that sees every band's records at once; joint cross-band estimation is up to the Doppler estimator, which receives them (see [Custom Doppler Estimator](custom_doppler_estimator.md)).
 
 ### Declaring bands
 

@@ -1,15 +1,14 @@
 module CN0EstimatorComparisonTest
 
-# Baseline for docs/plans/2026-08-06-per-band-noise-estimation-for-cn0.md: pins, by
-# Monte Carlo over the post-correlation prompt model, the plan's structural claims —
-# NWPR degenerates at low C/N₀, is biased, saturates in relative error, and loses to
-# a coherent noise reference at every C/N₀.
+# Pins, by Monte Carlo over the post-correlation prompt model, why the C/N₀ default is
+# a noise reference rather than NWPR: NWPR degenerates at low C/N₀, is biased,
+# saturates in relative error, and loses to a coherent noise reference at every C/N₀.
 #
 # `NWPRCN0Estimator` is the shipped implementation (bare-prompt-stream `update`),
 # given its best case: perfect phase, no bit transitions. The noise-reference columns
 # are reference implementations with the noise power known exactly and no other
-# satellites, so none of the cross-correlation / self-leakage bias the plan
-# quantifies; "unbiased" below is about the estimator, not a full sky.
+# satellites, so none of the cross-correlation / self-leakage bias of a full sky;
+# "unbiased" below is about the estimator, not a full sky.
 
 using Test: @test, @testset
 using Random: Xoshiro, randn
@@ -154,7 +153,7 @@ end
 end
 
 @testset "A coherent noise reference beats NWPR at every C/N₀" begin
-    # The plan's central claim: same coherent gain, noise measured directly.
+    # Same coherent gain, noise measured directly.
     for cn0 in CN0S_DBHZ
         @test SWEEP[cn0].coh.σ_db < SWEEP[cn0].nwpr.σ_db
     end
@@ -162,13 +161,13 @@ end
 
 @testset "Non-coherent squaring loss is real below ~28 dB-Hz" begin
     # At 1 ms records, dropping NWPR's coherent window costs variance at low C/N₀
-    # (ratio √(M−1) = 2) and pays off only above the crossover — why the plan
-    # lengthens `preferred_num_code_blocks_to_integrate` instead.
+    # (ratio √(M−1) = 2) and pays off only above the crossover — why a longer
+    # `preferred_num_code_blocks_to_integrate` is the remedy instead.
     @test SWEEP[20].noncoh.σ_db > SWEEP[20].nwpr.σ_db
     @test SWEEP[40].noncoh.σ_db < SWEEP[40].nwpr.σ_db
 end
 
-# Printed so a regression shows what moved and the plan's numbers stay reproducible.
+# Printed so a regression shows what moved and the numbers stay reproducible.
 @testset "baseline table" begin
     println(
         "\nC/N₀ vs estimator, $(NUM_RECORDS) records of $(INTEGRATION_TIME), ",
