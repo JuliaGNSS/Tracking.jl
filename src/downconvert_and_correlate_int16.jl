@@ -1,7 +1,6 @@
 # Integer (`Complex{Int16}`, 12-bit ADC) hybrid-blocked downconvert + correlate backend,
 # the integer counterpart of the Float32 fused path. The integration is strip-mined into
-# `blk`-sample blocks whose code and carrier are regenerated into L1-resident scratch
-# (docs/plans/2026-06-30-int16-hybrid-blocked-downconvert-and-correlate.md):
+# `blk`-sample blocks whose code and carrier are regenerated into L1-resident scratch:
 #
 #   * code — Int8 ±1 (CBOC ±13/±25) replica, one-shot `gen_code!` per block (exact
 #     across block seams, non-baked secondaries such as GPS L5I NH10 applied).
