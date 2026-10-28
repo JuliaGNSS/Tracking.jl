@@ -42,18 +42,15 @@ function validate_preferred_num_code_blocks_to_integrate(
             "$preferred_num_code_blocks",
         ),
     )
-    num_code_blocks_that_form_a_bit = _calc_num_code_blocks_that_form_a_bit(signal)
-    num_code_blocks_that_form_a_bit == 0 && return nothing
-    if num_code_blocks_that_form_a_bit % preferred_num_code_blocks != 0
-        valid = filter(
-            d -> num_code_blocks_that_form_a_bit % d == 0,
-            1:num_code_blocks_that_form_a_bit,
-        )
+    num_code_blocks_per_bit = get_code_blocks_per_bit(signal)
+    num_code_blocks_per_bit == 0 && return nothing
+    if num_code_blocks_per_bit % preferred_num_code_blocks != 0
+        valid = filter(d -> num_code_blocks_per_bit % d == 0, 1:num_code_blocks_per_bit)
         throw(
             ArgumentError(
                 "preferred_num_code_blocks_to_integrate = $preferred_num_code_blocks " *
-                "must evenly divide the $num_code_blocks_that_form_a_bit code blocks " *
-                "that form one bit of $(get_signal_name(signal)) — an integration " *
+                "must evenly divide the $num_code_blocks_per_bit code blocks " *
+                "of one bit of $(get_signal_name(signal)) — an integration " *
                 "straddling a bit boundary would never emit a bit. Valid values: " *
                 "$(join(valid, ", ")).",
             ),
@@ -70,7 +67,7 @@ post-corr filter and C/N₀ estimator default to the signal's recommended values
 
 `cn0_estimator` accepts any
 [`AbstractCN0Estimator`](@extref TrackingLoops.AbstractCN0Estimator). The default,
-[`default_cn0_estimator`](@extref TrackingLoops.default_cn0_estimator), is a
+[`default_cn0_estimator`](@extref TrackingLoops.default_cn0_estimator-Tuple{AbstractGNSSSignal, Int64}), is a
 [`NoiseRefCN0Estimator`](@extref TrackingLoops.NoiseRefCN0Estimator) over
 `num_prompts_for_cn0_estimation` records against the signal's **measured** noise
 density: `track!` fills that on the sample-driven path, but a
@@ -81,7 +78,7 @@ moment-ratio estimator. Each signal needs its **own** estimator instance: they
 buffer into a vector, so sharing one corrupts both.
 
 `preferred_num_code_blocks_to_integrate` defaults to
-[`default_num_code_blocks_to_integrate`](@extref TrackingLoops.default_num_code_blocks_to_integrate)
+[`default_num_code_blocks_to_integrate`](@extref TrackingLoops.default_num_code_blocks_to_integrate-Tuple{AbstractGNSSSignal})
 and must be valid for `signal` (see
 [`set_preferred_num_code_blocks_to_integrate!`](@ref)).
 """
@@ -192,7 +189,7 @@ Not to be confused with `get_integrated_samples`, the record in progress.
 """
 get_last_fully_integrated_integration_time(t::TrackedSignal) =
     get_last_fully_integrated_num_code_blocks(t) * get_code_length(get_signal(t)) /
-    get_code_frequency(get_signal(t))
+    get_chip_rate(get_signal(t))
 
 get_filtered_prompts(t::TrackedSignal) = t.filtered_prompts
 
@@ -240,7 +237,7 @@ in `doppler_estimator_state`.
 
 `signals[1]` is the **estimator-driver signal**. The conventional estimators
 ([`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL),
-[`ConventionalAssistedPLLAndDLL`](@extref TrackingLoops.ConventionalAssistedPLLAndDLL))
+[`ConventionalAssistedPLLAndDLL`](@extref TrackingLoops.ConventionalAssistedPLLAndDLL-Union{Tuple{}, Tuple{Type{CO}}, Tuple{CO}} where CO<:TrackingLoopFilters.AbstractLoopFilter))
 run their discriminators on it, at its integration boundaries; the other signals
 update their own filters, C/N₀ and bit buffers on theirs. A custom
 [`AbstractDopplerEstimator`](@extref TrackingLoops.AbstractDopplerEstimator) may
@@ -264,15 +261,7 @@ end
 # 1023 × 20, no secondary code).
 @inline function _post_sync_code_length(tsig::TrackedSignal)
     sig = tsig.signal
-    primary = get_code_length(sig)
-    secondary = get_secondary_code_length(sig)
-    df = get_data_frequency(sig)
-    if iszero(df)
-        primary * secondary
-    else
-        blocks_per_bit = Int(get_code_frequency(sig) / (primary * df))
-        primary * max(secondary, blocks_per_bit)
-    end
+    get_code_length(sig) * max(get_secondary_code_length(sig), get_code_blocks_per_bit(sig))
 end
 
 # `lcm`, not `max`: per-signal phases are `mod(code_phase, _replica_code_wrap(...))`,
@@ -401,7 +390,7 @@ function TrackedSat(
     cdop = float(carrier_doppler)
     cd =
         isnothing(code_doppler) ?
-        cdop * get_code_center_frequency_ratio(first(tracked_signals).signal) :
+        cdop * get_chip_rate_to_center_frequency_ratio(first(tracked_signals).signal) :
         float(code_doppler)
     # Built twice so `init_estimator_state` sees a real `TrackedSat`.
     bare = TrackedSat(
@@ -814,7 +803,7 @@ function _validate_signal_group(signals::Tuple{Vararg{AbstractGNSSSignal}}, band
                 ),
             )
         end
-        if get_code_frequency(s) != get_code_frequency(driver)
+        if get_chip_rate(s) != get_chip_rate(driver)
             throw(
                 ArgumentError(
                     string(
@@ -823,11 +812,11 @@ function _validate_signal_group(signals::Tuple{Vararg{AbstractGNSSSignal}}, band
                         "frequency (`",
                         get_signal_id(driver),
                         "`: ",
-                        get_code_frequency(driver),
+                        get_chip_rate(driver),
                         "), but `",
                         get_signal_id(s),
                         "` has ",
-                        get_code_frequency(s),
+                        get_chip_rate(s),
                         ". Track it in its own group instead.",
                     ),
                 ),

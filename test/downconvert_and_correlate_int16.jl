@@ -9,8 +9,8 @@ using GNSSSignals:
     GalileoE1B,
     gen_code,
     get_band_id,
-    get_code_center_frequency_ratio,
-    get_code_frequency
+    get_chip_rate_to_center_frequency_ratio,
+    get_chip_rate
 using Tracking:
     TrackedSat,
     TrackState,
@@ -56,7 +56,7 @@ TrackingLoops.get_correlator_sample_shifts(
 # 12-bit-ADC-style Complex{Int16} capture: carrier × unit-normalised code (keeps
 # CBOC's ±13/±25 levels within range), scaled to `peak` and rounded.
 function make_capture(sig, prn, fs, nsamp, cdopp, cphase; peak = 2000)
-    fc = cdopp * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
+    fc = cdopp * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
     code = gen_code(nsamp, sig, prn, fs, fc, cphase)
     code = code ./ maximum(abs, code)
     s = cis.(2π .* cdopp .* (0:(nsamp-1)) ./ fs .+ 0.6) .* code
@@ -293,7 +293,7 @@ end
     @testset "dynamic Vector-shifts correlator matches static EPL" begin
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
-        fc = 200Hz * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
+        fc = 200Hz * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
         shifts = collect(get_correlator_sample_shifts(EarlyPromptLateCorrelator(), fs, fc))
         dc = Int16ThreadedDownconvertAndCorrelator(TEST_MAX_MEAS)
         cs = correlate_once(dc, sig, fs, nsamp, 200Hz, 100.0)                       # static EPL
@@ -322,7 +322,7 @@ end
     @testset "dynamic Vector-shifts fallback adds no per-call scratch vs static path" begin
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
-        fc = 200Hz * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
+        fc = 200Hz * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
         shifts_s = get_correlator_sample_shifts(EarlyPromptLateCorrelator(), fs, fc)  # SVector → @generated
         shifts_v = collect(shifts_s)                                                  # Vector → fallback
         dc = Int16DownconvertAndCorrelator(TEST_MAX_MEAS)
@@ -451,7 +451,7 @@ end
         sig, fs = GalileoE1B(), 15e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)   # 15000 > 8192-sample block
         cphase = 0.0
-        code = gen_code(nsamp, sig, 1, fs, get_code_frequency(sig), cphase)
+        code = gen_code(nsamp, sig, 1, fs, get_chip_rate(sig), cphase)
         cap = complex.(round.(Int16, 2048 .* sign.(real.(code))), zero(Int16))
         meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
         corr(dc) = first(

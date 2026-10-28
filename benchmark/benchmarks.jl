@@ -34,6 +34,15 @@ const GPSL5I =
     isdefined(GNSSSignals, :GPSL5I) ? getfield(GNSSSignals, :GPSL5I) :
     getfield(GNSSSignals, :GPSL5)
 
+# GNSSSignals 5 (Tracking 12) calls the code frequency the chip rate.
+const _chip_rate =
+    isdefined(GNSSSignals, :get_chip_rate) ? getfield(GNSSSignals, :get_chip_rate) :
+    getfield(GNSSSignals, :get_code_frequency)
+const _chip_rate_to_center_frequency_ratio =
+    isdefined(GNSSSignals, :get_chip_rate_to_center_frequency_ratio) ?
+    getfield(GNSSSignals, :get_chip_rate_to_center_frequency_ratio) :
+    getfield(GNSSSignals, :get_code_center_frequency_ratio)
+
 # Code-replica buffer element type. GNSSSignals' embedded-LUT `gen_code!` (PR #90)
 # is Int8-only; older GNSSSignals emit `get_code_type(signal)` (Int16/Float32).
 # Detect the era so this script builds against both (AirspeedVelocity diffs revs).
@@ -124,8 +133,8 @@ function setup_benchmark(;
     code_phase = 10.5
     carrier_doppler = 1000.0Hz
     code_doppler =
-        carrier_doppler * GNSSSignals.get_code_center_frequency_ratio(gnss_signal)
-    code_frequency = code_doppler + get_code_frequency(gnss_signal)
+        carrier_doppler * _chip_rate_to_center_frequency_ratio(gnss_signal)
+    code_frequency = code_doppler + _chip_rate(gnss_signal)
 
     correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(num_ants))
     static_shifts =
@@ -460,8 +469,8 @@ function bench_fused_tuple_kernel(;
     code_phase = 10.5
     carrier_doppler = 1000.0Hz
     code_doppler =
-        carrier_doppler * GNSSSignals.get_code_center_frequency_ratio(gnss_signal)
-    code_frequency = code_doppler + get_code_frequency(gnss_signal)
+        carrier_doppler * _chip_rate_to_center_frequency_ratio(gnss_signal)
+    code_frequency = code_doppler + _chip_rate(gnss_signal)
 
     correlator_template = EarlyPromptLateCorrelator(; num_ants = NumAnts(num_ants))
     sample_shifts = get_correlator_sample_shifts(
@@ -834,7 +843,7 @@ if _HAS_TRACKED_SIGNAL
                 )
             else
                 code_doppler =
-                    carrier_doppler * GNSSSignals.get_code_center_frequency_ratio(gpsl1)
+                    carrier_doppler * _chip_rate_to_center_frequency_ratio(gpsl1)
                 bare = Tracking.TrackedSat(
                     1,
                     10.5,
@@ -978,7 +987,7 @@ if isdefined(Tracking, :Int16ThreadedDownconvertAndCorrelator)
                 sys,
                 i,
                 sfreq,
-                get_code_frequency(sys) + (d / 1540)Hz,
+                _chip_rate(sys) + (d / 1540)Hz,
                 10.5 + i * 0.1,
             )
             acc .+= 64.0 .* code .* cis.(2π .* d .* (0:(nsamp-1)) ./ fsn)
@@ -1186,8 +1195,8 @@ if isdefined(Tracking, :OneBitThreadedDownconvertAndCorrelator) &&
 
     # dynamic (runtime AbstractVector) tap count — kernel level, all three backends.
     let g = SUITE["track! Int16 vs Float32"]["dynamic taps @ 5 MHz (kernel)"]
-        code_doppler = 1000.0Hz * GNSSSignals.get_code_center_frequency_ratio(_AXES_SIG)
-        code_frequency = code_doppler + get_code_frequency(_AXES_SIG)
+        code_doppler = 1000.0Hz * _chip_rate_to_center_frequency_ratio(_AXES_SIG)
+        code_frequency = code_doppler + _chip_rate(_AXES_SIG)
         correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
         dyn_shifts =
             collect(get_correlator_sample_shifts(correlator, _AXES_FS, code_frequency))

@@ -17,7 +17,7 @@ track!
 - `intermediate_frequency`: the IF, by default `0.0Hz`. Bare-buffer form only; otherwise it lives on each [`BandMeasurement`](@ref).
 - `doppler_update_interval`: the NCO-update interval, a time (e.g. `1u"ms"`). `nothing` means the smallest primary-code period of the tracked signals (1 ms for GPS L1 C/A); see [Chunked Doppler updates](#Chunked-Doppler-updates). Longer intervals cost less estimation at a lower update rate.
 
-The **coherent-integration length** is set per signal with [`set_preferred_num_code_blocks_to_integrate!`](@ref). It starts at [`default_num_code_blocks_to_integrate`](@extref TrackingLoops.default_num_code_blocks_to_integrate) (`1`, except a 31-block, 2 ms code cycle for Galileo E5a-QP, whose 64.5 µs code period is too short to run a loop on), is capped by [`max_num_code_blocks_to_integrate`](@extref TrackingLoops.max_num_code_blocks_to_integrate) (one bit or secondary-code period), and takes effect only after bit or secondary-code sync.
+The **coherent-integration length** is set per signal with [`set_preferred_num_code_blocks_to_integrate!`](@ref). It starts at [`default_num_code_blocks_to_integrate`](@extref TrackingLoops.default_num_code_blocks_to_integrate-Tuple{AbstractGNSSSignal}) (`1`, except a 31-block, 2 ms code cycle for Galileo E5a-QP, whose 64.5 µs code period is too short to run a loop on), is capped by [`max_num_code_blocks_to_integrate`](@extref TrackingLoops.max_num_code_blocks_to_integrate-Tuple{AbstractGNSSSignal}) (one bit or secondary-code period), and takes effect only after bit or secondary-code sync.
 
 ```@docs
 set_preferred_num_code_blocks_to_integrate!
@@ -25,8 +25,8 @@ set_preferred_num_code_blocks_to_integrate!
 
 In the TrackingLoops manual:
 
-- [`default_num_code_blocks_to_integrate`](@extref TrackingLoops.default_num_code_blocks_to_integrate)
-- [`max_num_code_blocks_to_integrate`](@extref TrackingLoops.max_num_code_blocks_to_integrate)
+- [`default_num_code_blocks_to_integrate`](@extref TrackingLoops.default_num_code_blocks_to_integrate-Tuple{AbstractGNSSSignal})
+- [`max_num_code_blocks_to_integrate`](@extref TrackingLoops.max_num_code_blocks_to_integrate-Tuple{AbstractGNSSSignal})
 
 ## Chunked Doppler updates
 

@@ -4,7 +4,7 @@ using Test: @test, @testset, @inferred, @test_throws
 using Random: Random
 using Unitful: Hz, dBHz, ustrip
 import Unitful
-using GNSSSignals: GPSL1CA, GPSL1C_P, gen_code, get_code_frequency
+using GNSSSignals: GPSL1CA, GPSL1C_P, gen_code, get_chip_rate
 import Tracking
 using Tracking:
     TrackedSignal,
@@ -80,8 +80,7 @@ TrackingLoops.estimate_cn0(estimator::CountingCN0Estimator, integration_time) =
     )
 
     # The custom estimator is actually the one `track` feeds: 5 records in.
-    signal =
-        complex.(float.(gen_code(4000, gpsl1, 1, 4e6Hz, get_code_frequency(gpsl1), 0.0)))
+    signal = complex.(float.(gen_code(4000, gpsl1, 1, 4e6Hz, get_chip_rate(gpsl1), 0.0)))
     track_state = TrackState(
         gpsl1,
         [TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = CountingCN0Estimator(0))],

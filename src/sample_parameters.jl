@@ -27,7 +27,7 @@ function calc_num_samples_left_to_integrate(
 )
     chips_to_integrate =
         calc_num_chips_to_integrate(signal, num_code_blocks, current_code_phase)
-    code_frequency = get_code_frequency(signal) + current_code_doppler
+    code_frequency = get_chip_rate(signal) + current_code_doppler
     ceil(Int, chips_to_integrate * sampling_frequency / code_frequency)
 end
 

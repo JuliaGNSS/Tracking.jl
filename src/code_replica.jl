@@ -45,11 +45,8 @@ function update_code_phase(
     secondary_code_or_bit_found,
 )
     secondary_code_or_bit_length =
-        get_data_frequency(signal) == 0Hz ? get_secondary_code_length(signal) :
-        Int(
-            get_code_frequency(signal) /
-            (get_data_frequency(signal) * get_code_length(signal)),
-        )
+        get_bit_rate(signal) == 0Hz ? get_secondary_code_length(signal) :
+        Int(get_chip_rate(signal) / (get_bit_rate(signal) * get_code_length(signal)))
 
     code_length =
         get_code_length(signal) *
@@ -63,5 +60,5 @@ $(SIGNATURES)
 Calculates the current code frequency.
 """
 function get_current_code_frequency(signal::AbstractGNSSSignal, code_doppler)
-    code_doppler + get_code_frequency(signal)
+    code_doppler + get_chip_rate(signal)
 end

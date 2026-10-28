@@ -5,7 +5,7 @@ module MultiSignalTest
 
 using Test: @test, @testset, @test_throws
 using Unitful: Hz, dBHz
-using GNSSSignals: GPSL1CA, gen_code, get_code_frequency, get_code_center_frequency_ratio
+using GNSSSignals: GPSL1CA, gen_code, get_chip_rate, get_chip_rate_to_center_frequency_ratio
 using Tracking:
     TrackedSat,
     TrackedSignal,
@@ -40,8 +40,8 @@ using GNSSSignals: GPSL1C_P, GPSL1C_D, GalileoE1B
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     carrier_doppler = 1000.0Hz
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
-    code_frequency = code_doppler + get_code_frequency(gpsl1)
+    code_doppler = carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1)
+    code_frequency = code_doppler + get_chip_rate(gpsl1)
     start_code_phase = 0.0
     prn = 1
     num_samples = 5000  # 1 ms at 5 MHz
@@ -109,8 +109,8 @@ end
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     carrier_doppler = 1000.0Hz
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
-    code_frequency = code_doppler + get_code_frequency(gpsl1)
+    code_doppler = carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1)
+    code_frequency = code_doppler + get_chip_rate(gpsl1)
     start_code_phase = 0.0
     prn = 1
     num_samples = 50_000  # 10 ms at 5 MHz => 10 L1 C/A code periods

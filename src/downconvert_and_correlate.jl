@@ -12,7 +12,7 @@ function update(
     # All signals of a sat share one band, so one chip rate: drive it from signals[1].
     driver = first(sat.signals).signal
     carrier_frequency = sat.carrier_doppler + intermediate_frequency
-    code_frequency = sat.code_doppler + get_code_frequency(driver)
+    code_frequency = sat.code_doppler + get_chip_rate(driver)
     carrier_phase = update_carrier_phase(
         integrated_samples,
         carrier_frequency,

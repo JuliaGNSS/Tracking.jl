@@ -4,7 +4,7 @@ using Test: @test, @testset, @test_logs
 using Unitful: Hz, s, dBHz, ustrip, uconvert
 using StaticArrays: SVector
 import Tracking
-using GNSSSignals: GPSL1CA, gen_code, get_code_frequency
+using GNSSSignals: GPSL1CA, gen_code, get_chip_rate
 using Tracking:
     TrackedSat,
     TrackedSignal,
@@ -36,7 +36,7 @@ using TrackingLoops:
 # correlate step. Returns the state and the measurements.
 function correlated_state(; fs = 4e6Hz, prn = 1, num_samples = 12_000)
     gpsl1 = GPSL1CA()
-    code_frequency = get_code_frequency(gpsl1)
+    code_frequency = get_chip_rate(gpsl1)
     signal = ComplexF32.(gen_code(num_samples, gpsl1, prn, fs, code_frequency, 0.0))
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, prn, 0.0, 100.0Hz)])
     dc = CPUDownconvertAndCorrelator()

@@ -21,7 +21,7 @@ and Doppler estimators) lives in
 correlator's loop can run the same code. Tracking.jl re-exports the functions
 that read results:
 [`estimate_cn0`](@extref TrackingLoops.estimate_cn0-Tuple{MomentsCN0Estimator, Any}),
-[`get_prompt`](@extref TrackingLoops.get_prompt), `get_soft_bits`,
+[`get_prompt`](@extref TrackingLoops.get_prompt-Tuple{TrackingLoops.AbstractCorrelator}), `get_soft_bits`,
 `has_bit_or_secondary_code_been_found` and a few more. Load TrackingLoops to
 configure a correlator, a C/N₀ or noise estimator, a Doppler estimator or a
 post-correlation filter, or for vector tracking; see the
@@ -69,7 +69,7 @@ julia> using Tracking, GNSSSignals
 
 julia> using Tracking: Hz
 
-julia> using GNSSSignals: gen_code, get_code_frequency, get_code_center_frequency_ratio
+julia> using GNSSSignals: gen_code, get_chip_rate, get_chip_rate_to_center_frequency_ratio
 
 julia> track_state = TrackState(; signal = GPSL1CA());
 
@@ -81,7 +81,7 @@ julia> num_samples = 4000;
 
 julia> signal = GPSL1CA();
 
-julia> code_frequency = 1000.0Hz * get_code_center_frequency_ratio(signal) + get_code_frequency(signal);
+julia> code_frequency = 1000.0Hz * get_chip_rate_to_center_frequency_ratio(signal) + get_chip_rate(signal);
 
 julia> measurement = cis.(2π .* 1000.0Hz .* (0:num_samples-1) ./ sampling_frequency) .*
            gen_code(num_samples, signal, 1, sampling_frequency, code_frequency, 50.0);

@@ -668,8 +668,6 @@ const _TwoBitDC =
 @inline _tb_scratch(dc::TwoBitThreadedDownconvertAndCorrelator) =
     dc.buffers[Threads.threadid()]
 
-@inline _tb_num_ants_val(::AbstractCorrelator{M}) where {M} = NumAnts{M}()
-
 # The bit-wise CBOC gate (see the one-bit kernel).
 @inline function _tb_check_modulation(signal_type)
     get_modulation(signal_type) isa GNSSSignals.CBOC && throw(
@@ -1578,7 +1576,7 @@ end
     get_accumulators(correlator) .+ _twobit_hybrid_blocked!(
         dc,
         samples,
-        _tb_num_ants_val(correlator),
+        NumAnts(correlator),
         signal_type,
         prn,
         sample_shifts,
@@ -1627,7 +1625,7 @@ end
     new_accs = _twobit_hybrid_blocked_multi!(
         dc,
         signal,
-        _tb_num_ants_val(correlators[1]),
+        NumAnts(correlators[1]),
         signal_types,
         prn,
         all_shifts,

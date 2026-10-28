@@ -3,7 +3,7 @@
 The Doppler estimators are TrackingLoops'. [`track!`](@ref) drives any estimator
 through TrackingLoops' estimator interface, so
 [`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL),
-[`ConventionalAssistedPLLAndDLL`](@extref TrackingLoops.ConventionalAssistedPLLAndDLL),
+[`ConventionalAssistedPLLAndDLL`](@extref TrackingLoops.ConventionalAssistedPLLAndDLL-Union{Tuple{}, Tuple{Type{CO}}, Tuple{CO}} where CO<:TrackingLoopFilters.AbstractLoopFilter),
 [`NCOReferencedPLLAndDLL`](@extref TrackingLoops.NCOReferencedPLLAndDLL), the vector
 loop [`VectorPLLAndDLL`](@extref TrackingLoops.VectorPLLAndDLL) and your own (a Kalman
 filter, a joint-channel estimator, …) are interchangeable as `doppler_estimator`.
@@ -186,7 +186,7 @@ Tracking.estimate_dopplers_and_filter_prompt!
 In the TrackingLoops manual:
 
 - [`AbstractDopplerEstimator`](@extref TrackingLoops.AbstractDopplerEstimator)
-- [`reset_estimator_state`](@extref TrackingLoops.reset_estimator_state-Tuple{ConventionalPLLAndDLL, SatConventionalPLLAndDLL, Any, Any})
+- [`reset_estimator_state`](@extref TrackingLoops.reset_estimator_state-Tuple{ConventionalPLLAndDLL, TrackingLoops.SatConventionalPLLAndDLL, Any, Any})
 
 ### One record through a loop
 
@@ -196,7 +196,7 @@ chunk's own replica word and no landing sample.
 
 In the TrackingLoops manual:
 
-- [`step_loop`](@extref TrackingLoops.step_loop-Tuple{ConventionalPLLAndDLL, SatConventionalPLLAndDLL, LoopRecord, Any, Int64})
+- [`step_loop`](@extref TrackingLoops.step_loop-Tuple{ConventionalPLLAndDLL, TrackingLoops.SatConventionalPLLAndDLL, LoopRecord, Any, Int64})
 - [`LoopRecord`](@extref TrackingLoops.LoopRecord)
 - [`SatConventionalPLLAndDLL`](@extref TrackingLoops.SatConventionalPLLAndDLL)
 
@@ -213,8 +213,8 @@ In the TrackingLoops manual:
 - [`NCOReferencedPLLAndDLL`](@extref TrackingLoops.NCOReferencedPLLAndDLL)
 - [`SatNCOReferencedPLLAndDLL`](@extref TrackingLoops.SatNCOReferencedPLLAndDLL)
 - [`NCOTimeline`](@extref TrackingLoops.NCOTimeline)
-- [`scheduled_words`](@extref TrackingLoops.scheduled_words)
-- [`mean_nco_word`](@extref TrackingLoops.mean_nco_word)
+- [`scheduled_words`](@extref TrackingLoops.scheduled_words-Tuple{NCOTimeline})
+- [`mean_nco_word`](@extref TrackingLoops.mean_nco_word-Tuple{NCOTimeline, Real, Real})
 - [`FixedNCOWord`](@extref TrackingLoops.FixedNCOWord)
 
 ### The vector loop

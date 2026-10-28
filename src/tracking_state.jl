@@ -36,7 +36,7 @@ cannot change it. For non-default correlator or PCF *types*, build the
 ([`AbstractNoiseEstimator`](@extref TrackingLoops.AbstractNoiseEstimator)s keyed by
 `GNSSSignals.get_signal_id`, e.g. `:GPSL1CA`). Left at `nothing`, every signal whose
 C/N₀ estimator reads a noise density (see
-[`requires_noise_density`](@extref TrackingLoops.requires_noise_density-Tuple{Type{<:AbstractCN0Estimator}}))
+[`requires_noise_density`](@extref TrackingLoops.requires_noise_density-Tuple{Type{<:TrackingLoops.AbstractCN0Estimator}}))
 gets a [`CorrelatorNoiseEstimator`](@extref TrackingLoops.CorrelatorNoiseEstimator)
 and every other signal none, so a state on
 [`NWPRCN0Estimator`](@extref TrackingLoops.NWPRCN0Estimator) despreads nothing. Pass a
@@ -111,8 +111,8 @@ end
 
 # An explicitly passed estimator must despread as many antennas as its signal's
 # group, or the floor and the prompt describe different arrays. Checked here,
-# where both are known, rather than as a shape error deep in the fold; reading
-# the count off `noise_density_type` covers any `AbstractNoiseEstimator`.
+# where both are known, rather than as a shape error deep in the fold;
+# `NumAnts(estimator)` reads the count of any `AbstractNoiseEstimator`.
 @inline function _validate_noise_estimator_num_ants(
     noise_estimators::NamedTuple,
     groups::SignalGroups,
@@ -121,7 +121,7 @@ end
     foreach(entries) do (signal_id, num_ants)
         haskey(noise_estimators, signal_id) || return nothing
         estimator = noise_estimators[signal_id]
-        measured = _num_ants_of_density_type(noise_density_type(estimator))
+        measured = NumAnts(estimator)
         measured === num_ants && return nothing
         throw(
             ArgumentError(
@@ -964,7 +964,7 @@ PRN (see [`AbstractNoiseEstimator`](@extref TrackingLoops.AbstractNoiseEstimator
 
 The signal must have a noise estimator: provisioned when its C/N₀ estimator reads
 a density (see
-[`requires_noise_density`](@extref TrackingLoops.requires_noise_density-Tuple{Type{<:AbstractCN0Estimator}})),
+[`requires_noise_density`](@extref TrackingLoops.requires_noise_density-Tuple{Type{<:TrackingLoops.AbstractCN0Estimator}})),
 or declared through `TrackState`'s `noise_estimators` keyword.
 """
 append_noise_observation!(

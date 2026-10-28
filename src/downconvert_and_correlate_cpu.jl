@@ -421,7 +421,7 @@ end
 )
     head = first(signals)
     # Measured against the secondary-aware wrap (`_replica_code_wrap`), so a
-    # multi-block window past sync ends on a data-symbol boundary instead of
+    # multi-block window past sync ends on a bit boundary instead of
     # straddling one.
     p = _signal_replica_params(
         head,
@@ -481,7 +481,7 @@ end
     num_samples_signal,
 )
     s = tsig.signal
-    code_frequency = code_doppler + get_code_frequency(s)
+    code_frequency = code_doppler + get_chip_rate(s)
     sample_shifts =
         get_correlator_sample_shifts(tsig.correlator, sampling_frequency, code_frequency)
     code_replica_size = num_samples_signal + maximum(sample_shifts) - minimum(sample_shifts)

@@ -358,8 +358,6 @@ const _OneBitDC =
 @inline _ob_scratch(dc::OneBitThreadedDownconvertAndCorrelator) =
     dc.buffers[Threads.threadid()]
 
-@inline _ob_num_ants_val(::AbstractCorrelator{M}) where {M} = NumAnts{M}()
-
 # ── The one-bit hybrid-blocked kernel ─────────────────────────────────────────
 # Returns this integration's contribution per tap, `SVector{NC}` of `ComplexF64` (M=1) or
 # `SVector{M,ComplexF64}` (M>1). `@generated` over (NC, M), the per-(antenna, tap) popcount
@@ -1116,7 +1114,7 @@ end
     get_accumulators(correlator) .+ _onebit_hybrid_blocked!(
         dc,
         samples,
-        _ob_num_ants_val(correlator),
+        NumAnts(correlator),
         signal_type,
         prn,
         sample_shifts,
@@ -1166,7 +1164,7 @@ end
     new_accs = _onebit_hybrid_blocked_multi!(
         dc,
         signal,
-        _ob_num_ants_val(correlators[1]),
+        NumAnts(correlators[1]),
         signal_types,
         prn,
         all_shifts,

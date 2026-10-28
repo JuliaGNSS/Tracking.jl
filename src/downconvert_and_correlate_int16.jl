@@ -1024,7 +1024,7 @@ end
     new_accs = _int16_hybrid_blocked_multi!(
         dc,
         signal,
-        _num_ants_val(correlators[1]),
+        NumAnts(correlators[1]),
         signal_types,
         prn,
         all_shifts,
@@ -1066,7 +1066,7 @@ end
     get_accumulators(correlator) .+ _int16_hybrid_blocked!(
         dc,
         samples,
-        _num_ants_val(correlator),
+        NumAnts(correlator),
         signal_type,
         prn,
         sample_shifts,

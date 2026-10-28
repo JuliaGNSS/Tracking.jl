@@ -4,7 +4,7 @@ using Test: @test, @testset, @inferred
 using Random: Random, Xoshiro
 using Unitful: kHz, MHz, Hz, dBHz, ustrip, uconvert
 using GNSSSignals: GPSL1CA, get_code, gen_code
-using GNSSSignals: get_code_frequency
+using GNSSSignals: get_chip_rate
 import Tracking
 using Tracking: TrackedSat, TrackState, get_cn0_estimator, track
 using TrackingLoops:
@@ -64,7 +64,7 @@ end
     gpsl1 = GPSL1CA()
     sampling_frequency = 4e6Hz
     num_samples = 4000
-    code_frequency = get_code_frequency(gpsl1)
+    code_frequency = get_chip_rate(gpsl1)
 
     # `fade_to` continues at another C/N₀ for `fade_blocks` more records, to
     # reach post-sync at a C/N₀ where bit sync would never lock from cold.

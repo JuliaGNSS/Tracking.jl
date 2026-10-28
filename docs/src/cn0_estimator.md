@@ -72,7 +72,7 @@ signal.
 In the TrackingLoops manual:
 
 - [`NoiseRefCN0Estimator`](@extref TrackingLoops.NoiseRefCN0Estimator)
-- [`default_cn0_estimator`](@extref TrackingLoops.default_cn0_estimator)
+- [`default_cn0_estimator`](@extref TrackingLoops.default_cn0_estimator-Tuple{AbstractGNSSSignal, Int64})
 
 ### Getting the low-C/N₀ variance
 
@@ -404,7 +404,7 @@ julia> using Tracking, GNSSSignals, Random
 
 julia> using Tracking: Hz
 
-julia> using GNSSSignals: gen_code, get_code_frequency
+julia> using GNSSSignals: gen_code, get_chip_rate
 
 julia> function run_cn0_demo()
            sys = GPSL1CA()
@@ -413,7 +413,7 @@ julia> function run_cn0_demo()
            prn = 1
            cn0_db_hz = 45.0
            sigma = sqrt((fs/Hz) / 10^(cn0_db_hz/10) / 2)
-           code_freq = get_code_frequency(sys)
+           code_freq = get_chip_rate(sys)
            rng = MersenneTwister(0)
            track_state = TrackState(; signal = GPSL1CA())
            track_state =
@@ -461,10 +461,10 @@ instead; the tracking loop calls this form, whose default drops the context.
 In the TrackingLoops manual:
 
 - [`update(::MomentsCN0Estimator, ::Any)`](@extref TrackingLoops.update-Tuple{MomentsCN0Estimator, Any})
-- [`update(::AbstractCN0Estimator, ::Any, ::CN0UpdateContext)`](@extref TrackingLoops.update-Tuple{AbstractCN0Estimator, Any, CN0UpdateContext})
-- [`update(::NWPRCN0Estimator, ::Any, ::CN0UpdateContext)`](@extref TrackingLoops.update-Tuple{NWPRCN0Estimator, Any, CN0UpdateContext})
+- [`update(::AbstractCN0Estimator, ::Any, ::CN0UpdateContext)`](@extref TrackingLoops.update-Tuple{TrackingLoops.AbstractCN0Estimator, Any, TrackingLoops.CN0UpdateContext})
+- [`update(::NWPRCN0Estimator, ::Any, ::CN0UpdateContext)`](@extref TrackingLoops.update-Tuple{NWPRCN0Estimator, Any, TrackingLoops.CN0UpdateContext})
 - [`update(::NWPRCN0Estimator, ::Any)`](@extref TrackingLoops.update-Tuple{NWPRCN0Estimator, Any})
-- [`update(::NoiseRefCN0Estimator, ::Any, ::CN0UpdateContext)`](@extref TrackingLoops.update-Tuple{NoiseRefCN0Estimator, Any, CN0UpdateContext})
+- [`update(::NoiseRefCN0Estimator, ::Any, ::CN0UpdateContext)`](@extref TrackingLoops.update-Tuple{NoiseRefCN0Estimator, Any, TrackingLoops.CN0UpdateContext})
 - [`update(::NoiseRefCN0Estimator, ::Any)`](@extref TrackingLoops.update-Tuple{NoiseRefCN0Estimator, Any})
 - [`update(::NoCN0Estimator, ::Any)`](@extref TrackingLoops.update-Tuple{NoCN0Estimator, Any})
 

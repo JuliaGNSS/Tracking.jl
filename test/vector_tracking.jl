@@ -18,17 +18,17 @@ using Random: Xoshiro, randn
 using Unitful: Hz, ustrip
 using LinearAlgebra: norm
 using StaticArrays: SVector
-using GNSSSignals: GPSL1CA, gen_code, get_code_frequency, get_center_frequency
-using GNSSDecoder: GNSSDecoderState, get_time_of_week
+using GNSSSignals: GPSL1CA, gen_code, get_chip_rate, get_center_frequency, get_time_of_week
+using GNSSDecoder: BroadcastEphemeris, GNSSDecoderState, get_broadcast_ephemeris
 using PositionVelocityTime:
     _precompile_states,
     _PRECOMPILE_GPS_L1CA_STATES,
     SatelliteState,
     SignalGroup,
     calc_pvt,
-    calc_corrected_time,
+    calc_transmit_time,
     calc_satellite_position_and_velocity,
-    calc_ρ_hat!,
+    predict_pseudoranges!,
     BiasColumns
 using Tracking:
     TrackState,
@@ -56,11 +56,12 @@ include("lnav_encoder.jl")
 const FS = 2.048e6
 const CHUNK = 8192 # 4 ms
 const SIGNAL = GPSL1CA()
-const CODE_FREQUENCY = ustrip(Hz, get_code_frequency(SIGNAL))
+const CODE_FREQUENCY = ustrip(Hz, get_chip_rate(SIGNAL))
 const CENTER_FREQUENCY = ustrip(Hz, get_center_frequency(SIGNAL))
 
 mutable struct TrueSat
     decoder::GNSSDecoderState
+    ephemeris::BroadcastEphemeris
     stream::LNAVStream
     clock_offset::Float64 # corrected − uncorrected transmit time
     transmit_time::Float64 # warm start of the range iteration
@@ -74,8 +75,8 @@ function transmit_time!(sat::TrueSat, position, t)
     ρ = [0.0]
     t_t = sat.transmit_time
     for _ = 1:4
-        orbit = calc_satellite_position_and_velocity(sat.decoder, t_t)
-        calc_ρ_hat!(ρ, [SVector{3,Float64}(orbit.position)], ξ, columns)
+        orbit = calc_satellite_position_and_velocity(sat.ephemeris, t_t)
+        predict_pseudoranges!(ρ, [SVector{3,Float64}(orbit.position)], ξ, columns)
         t_t = t - ρ[1] / SPEED_OF_LIGHT
     end
     sat.transmit_time = t_t
@@ -86,7 +87,14 @@ uncorrected_transmit_time(sat::TrueSat, position, t) =
     transmit_time!(sat, position, t) - sat.clock_offset
 
 function TrueSat(decoder, position, t)
-    sat = TrueSat(decoder, LNAVStream(decoder.data), 0.0, t - 0.075, 0.0)
+    sat = TrueSat(
+        decoder,
+        get_broadcast_ephemeris(decoder),
+        LNAVStream(decoder.data),
+        0.0,
+        t - 0.075,
+        0.0,
+    )
     t_t = transmit_time!(sat, position, t)
     # Invert the satellite clock correction around the transmit time.
     tow = get_time_of_week(decoder)
@@ -95,15 +103,12 @@ function TrueSat(decoder, position, t)
         rate = 50.0
         num_bits = floor(Int, (u - tow) * rate)
         state = SatelliteState(;
-            decoder = GNSSDecoderState(
-                decoder;
-                num_bits_after_valid_syncro_sequence = num_bits,
-            ),
-            system = SIGNAL,
+            decoder = GNSSDecoderState(decoder; num_symbols_since_sync = num_bits),
+            signal = SIGNAL,
             code_phase = (u - tow - num_bits / rate) * CODE_FREQUENCY,
             carrier_doppler = 0.0Hz,
         )
-        u += t_t - calc_corrected_time(state)
+        u += t_t - calc_transmit_time(state)
     end
     sat.clock_offset = t_t - u
     sat
@@ -150,7 +155,7 @@ end
     states = _precompile_states(SIGNAL, _PRECOMPILE_GPS_L1CA_STATES, identity, SIGNAL)
     fix = calc_pvt(SignalGroup(SIGNAL, states); approximate_year = 2021)
     position = SVector(fix.position.x, fix.position.y, fix.position.z)
-    t0 = next_subframe1_start(maximum(calc_corrected_time, states)) - 8.0
+    t0 = next_subframe1_start(maximum(calc_transmit_time, states)) - 8.0
     decoders = [state.decoder for state in states[1:6]]
     sats = [TrueSat(decoder, position, t0) for decoder in decoders]
 
@@ -244,7 +249,7 @@ end
     @test seeded_at !== nothing && 26.0 < seeded_at < 28.0
     @test status.running
     @test status.num_members == length(sats)
-    @test length(navigation_solution(estimator).sats) == length(sats)
+    @test length(navigation_solution(estimator).satellites) == length(sats)
     # The same, asked of the track state, as a receiver does.
     @test navigation_solution(track_state) === navigation_solution(estimator)
     @test navigation_cycle(track_state) == navigation_cycle(estimator) > 250

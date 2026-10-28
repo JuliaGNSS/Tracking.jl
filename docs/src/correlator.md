@@ -68,12 +68,12 @@ In the TrackingLoops manual:
 
 In the TrackingLoops manual:
 
-- [`get_early`](@extref TrackingLoops.get_early)
-- [`get_prompt`](@extref TrackingLoops.get_prompt)
-- [`get_late`](@extref TrackingLoops.get_late)
-- [`get_accumulators`](@extref TrackingLoops.get_accumulators)
-- [`get_num_accumulators`](@extref TrackingLoops.get_num_accumulators)
-- [`get_num_ants(::AbstractCorrelator)`](@extref TrackingLoops.get_num_ants)
+- [`get_early`](@extref TrackingLoops.get_early-Tuple{TrackingLoops.AbstractEarlyPromptLateCorrelator})
+- [`get_prompt`](@extref TrackingLoops.get_prompt-Tuple{TrackingLoops.AbstractCorrelator})
+- [`get_late`](@extref TrackingLoops.get_late-Tuple{TrackingLoops.AbstractEarlyPromptLateCorrelator})
+- [`get_accumulators`](@extref TrackingLoops.get_accumulators-Tuple{TrackingLoops.AbstractCorrelator})
+- [`get_num_accumulators`](@extref TrackingLoops.get_num_accumulators-Tuple{TrackingLoops.AbstractCorrelator})
+- [`get_num_ants(::AbstractCorrelator)`](@extref TrackingLoops.get_num_ants-Union{Tuple{TrackingLoops.AbstractCorrelator{M}}, Tuple{M}} where M)
 
 ## Correlator outputs
 
@@ -102,7 +102,7 @@ the DLL discriminator back to chips.
 In the TrackingLoops manual:
 
 - [`get_correlator_sample_shifts`](@extref TrackingLoops.get_correlator_sample_shifts-Tuple{EarlyPromptLateCorrelator, Any, Any})
-- [`get_early_late_sample_spacing`](@extref TrackingLoops.get_early_late_sample_spacing)
+- [`get_early_late_sample_spacing`](@extref TrackingLoops.get_early_late_sample_spacing-Tuple{TrackingLoops.AbstractEarlyPromptLateCorrelator, Any, Any})
 - [`update_accumulator(::EarlyPromptLateCorrelator, ::Any)`](@extref TrackingLoops.update_accumulator-Tuple{EarlyPromptLateCorrelator, Any})
 - [`update_accumulator(::VeryEarlyPromptLateCorrelator, ::Any)`](@extref TrackingLoops.update_accumulator-Tuple{VeryEarlyPromptLateCorrelator, Any})
 
@@ -268,7 +268,7 @@ julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
 
 julia> track_state = TrackState(GPSL1CA(), sat);
 
-julia> get_num_accumulators(get_correlator(track_state, 1))
+julia> TrackingLoops.get_num_accumulators(get_correlator(track_state, 1))
 7
 ```
 

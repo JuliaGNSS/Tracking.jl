@@ -8,7 +8,7 @@ using GNSSSignals:
     GPSL5Q,
     GPSL1C_P,
     gen_code,
-    get_code_frequency,
+    get_chip_rate,
     get_code_length,
     get_secondary_code_length
 using Tracking:
@@ -28,7 +28,7 @@ using TrackingLoops:
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     num_samples = 5000
-    code_frequency = get_code_frequency(gpsl1)
+    code_frequency = get_chip_rate(gpsl1)
     carrier_doppler = 0.0Hz
 
     # Both lock polarities. This near-noiseless signal locks at block 60, the
@@ -88,7 +88,7 @@ end
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     num_samples = 5000
-    code_frequency = get_code_frequency(gpsl1)
+    code_frequency = get_chip_rate(gpsl1)
 
     multi_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0, 0.0Hz)])
     set_preferred_num_code_blocks_to_integrate!(multi_state, 1, 4)
@@ -150,7 +150,7 @@ end
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     num_samples = 5000
-    code_frequency = get_code_frequency(gpsl1)
+    code_frequency = get_chip_rate(gpsl1)
     num_blocks = 140
 
     signal = ComplexF32[]
@@ -197,7 +197,7 @@ end
     gpsl5 = GPSL5I()
     prn = 1
     sampling_frequency = 25e6Hz   # must exceed L5I's 10.23 Mcps code rate
-    code_frequency = get_code_frequency(gpsl5)
+    code_frequency = get_chip_rate(gpsl5)
     primary_code_length = get_code_length(gpsl5)            # 10230 chips
     secondary_code_length = get_secondary_code_length(gpsl5)  # 10 (NH10)
     num_samples = round(Int, 25e6 / 1000)                  # 1 ms = one primary-code block
@@ -279,7 +279,7 @@ end
     gpsl5 = GPSL5I()
     prn = 1
     sampling_frequency = 25e6Hz
-    code_frequency = get_code_frequency(gpsl5)
+    code_frequency = get_chip_rate(gpsl5)
     primary_code_length = get_code_length(gpsl5)              # 10230 chips
     secondary_code_length = get_secondary_code_length(gpsl5)  # 10 (NH10)
     num_samples = round(Int, 25e6 / 1000)                     # 1 ms = one primary block
@@ -361,7 +361,7 @@ end
     gpsl5 = GPSL5I()
     prn = 1
     sampling_frequency = 25e6Hz
-    code_frequency = get_code_frequency(gpsl5)
+    code_frequency = get_chip_rate(gpsl5)
     primary_code_length = get_code_length(gpsl5)               # 10230 chips
     secondary_code_length = get_secondary_code_length(gpsl5)   # 10 (NH10)
     num_samples = round(Int, 25e6 / 1000)                      # 1 ms = one primary block
@@ -421,7 +421,7 @@ end
     gpsl5q = GPSL5Q()
     prn = 1
     sampling_frequency = 25e6Hz
-    code_frequency = get_code_frequency(gpsl5q)
+    code_frequency = get_chip_rate(gpsl5q)
     secondary_code_length = get_secondary_code_length(gpsl5q)   # 20 (NH20)
     num_samples = round(Int, 25e6 / 1000)                       # 1 ms = one primary block
     # Sync needs ≥ 2 NH20 periods; the rest are full-period integrations.
@@ -464,7 +464,7 @@ end
     prn = 1
     # TMBOC needs fs > ~12.28 MHz; 13 MHz keeps the 18 s run light.
     sampling_frequency = 13e6Hz
-    code_frequency = get_code_frequency(gpsl1c_p)
+    code_frequency = get_chip_rate(gpsl1c_p)
     primary_code_length = get_code_length(gpsl1c_p)             # 10230 chips
     secondary_code_length = get_secondary_code_length(gpsl1c_p)  # 1800
     period_samples = round(Int, 13e6 / 100)                    # 10 ms = one primary period

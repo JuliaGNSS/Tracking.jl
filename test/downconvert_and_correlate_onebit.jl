@@ -10,8 +10,8 @@ using GNSSSignals:
     GalileoE1B,
     gen_code,
     get_band_id,
-    get_code_center_frequency_ratio,
-    get_code_frequency
+    get_chip_rate_to_center_frequency_ratio,
+    get_chip_rate
 using Tracking:
     TrackedSat,
     TrackState,
@@ -59,7 +59,7 @@ TrackingLoops.get_correlator_sample_shifts(
 
 # 12-bit-ADC-style Complex{Int16} capture (carrier × unit-normalised code, scaled to `peak`).
 function make_capture(sig, prn, fs, nsamp, cdopp, cphase; peak = 2000)
-    fc = cdopp * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
+    fc = cdopp * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
     code = gen_code(nsamp, sig, prn, fs, fc, cphase)
     code = code ./ maximum(abs, code)
     s = cis.(2π .* cdopp .* (0:(nsamp-1)) ./ fs .+ 0.6) .* code
@@ -116,7 +116,7 @@ function _track_noisy(
     gpsl1 = GPSL1CA()
     nsamp = round(Int, (fs / 1Hz) * 1e-3)
     prn = 1
-    cfreq = cdopp * get_code_center_frequency_ratio(gpsl1) + get_code_frequency(gpsl1)
+    cfreq = cdopp * get_chip_rate_to_center_frequency_ratio(gpsl1) + get_chip_rate(gpsl1)
     range = 0:(nsamp-1)
     start_code_phase = 100.0
     start_carrier_phase = π / 2
@@ -203,7 +203,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         # part of `_ob_shift_plane!`.
         sig, fs = GPSL1CA(), 100e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
-        fc = 200Hz * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
+        fc = 200Hz * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
         shifts = get_correlator_sample_shifts(
             EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
             fs,
@@ -391,7 +391,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         # @generated EPL kernel (both sum integer popcounts).
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
-        fc = 200Hz * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
+        fc = 200Hz * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
         shifts = collect(get_correlator_sample_shifts(EarlyPromptLateCorrelator(), fs, fc))
         dc = OneBitThreadedDownconvertAndCorrelator()
 
@@ -443,7 +443,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         # (`_ob_realign_meas!`); each sat must equal correlating that PRN alone.
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
-        fc = 200Hz * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
+        fc = 200Hz * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
         shifts = collect(get_correlator_sample_shifts(EarlyPromptLateCorrelator(), fs, fc))
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
         meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)

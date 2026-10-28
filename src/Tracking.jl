@@ -23,9 +23,9 @@ import TrackingLoops:
     AbstractDopplerEstimator,
     AbstractNoiseEstimator,
     AbstractPostCorrFilter,
+    append_despread_noise!,
     append_noise_observation!,
     BitBuffer,
-    _calc_num_code_blocks_that_form_a_bit,
     calc_num_code_blocks_to_integrate,
     carrier_phase_correction,
     ConventionalAssistedPLLAndDLL,
@@ -51,21 +51,15 @@ import TrackingLoops:
     is_dataless_with_secondary_code,
     LoopRecord,
     SignalLoopState,
-    Maybe,
-    _next_noise_prn,
     NO_LANDING_SAMPLE,
-    _noise_density_and_ready,
-    noise_density_type,
-    _noise_observation,
-    _noise_window_filling,
+    noise_correlator,
+    noise_despreads,
+    noise_density_and_ready,
     NoiseEstimators,
     NoiseObservation,
+    noise_window_filling,
     NoiseUpdateContext,
-    _num_ants,
-    _num_ants_of_density_type,
-    _num_ants_val,
     NumAnts,
-    _pool_taps,
     requires_noise_density,
     reset,
     reset_estimator_state,
@@ -154,6 +148,7 @@ export estimate_cn0,
     get_accumulators
 
 TupleLike{T<:Tuple} = Union{T,NamedTuple{<:Any,T}}
+const Maybe{T} = Union{T,Nothing}
 
 """
 $(SIGNATURES)
@@ -203,7 +198,7 @@ estimator.
 **signal** id (`GNSSSignals.get_signal_id`), since the post-correlation floor
 depends on the despreading modulation. Only signals whose C/N₀ estimator reads a
 noise density (see
-[`requires_noise_density`](@extref TrackingLoops.requires_noise_density-Tuple{Type{<:AbstractCN0Estimator}}))
+[`requires_noise_density`](@extref TrackingLoops.requires_noise_density-Tuple{Type{<:TrackingLoops.AbstractCN0Estimator}}))
 get one, so the others pay nothing. They average **in place**.
 
 `noise_descriptor` is per-call **scratch**: a heap cell where the correlate step

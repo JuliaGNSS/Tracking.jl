@@ -9,7 +9,7 @@ The tracking state nests as **TrackState → SignalGroup → TrackedSat → Trac
 
 ### Estimator-driver signal
 
-The first signal of each group's tuple is the **estimator-driver signal**, the one the Doppler estimator updates the shared carrier and code Doppler from. The conventional estimators ([`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL), [`ConventionalAssistedPLLAndDLL`](@extref TrackingLoops.ConventionalAssistedPLLAndDLL)) run their discriminators on it and take its default loop bandwidths (a carrier loop pulling in at 50 Hz and narrowing to 18 Hz, 1 Hz code). A custom [`AbstractDopplerEstimator`](@extref TrackingLoops.AbstractDopplerEstimator) may use any signal.
+The first signal of each group's tuple is the **estimator-driver signal**, the one the Doppler estimator updates the shared carrier and code Doppler from. The conventional estimators ([`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL), [`ConventionalAssistedPLLAndDLL`](@extref TrackingLoops.ConventionalAssistedPLLAndDLL-Union{Tuple{}, Tuple{Type{CO}}, Tuple{CO}} where CO<:TrackingLoopFilters.AbstractLoopFilter)) run their discriminators on it and take its default loop bandwidths (a carrier loop pulling in at 50 Hz and narrowing to 18 Hz, 1 Hz code). A custom [`AbstractDopplerEstimator`](@extref TrackingLoops.AbstractDopplerEstimator) may use any signal.
 
 Bit sync, the post-correlation filter and the **C/N₀ estimator** run per signal, so a multi-signal satellite has one C/N₀ per signal; see [CN0 Estimator](cn0_estimator.md) and [`NoCN0Estimator`](@extref TrackingLoops.NoCN0Estimator), the per-signal opt-out.
 
@@ -79,7 +79,7 @@ TrackedSat(
     num_ants              = NumAnts(1),
     correlator            = get_default_correlator(signal, num_ants),
     carrier_phase         = 0.0,
-    code_doppler          = carrier_doppler * get_code_center_frequency_ratio(signal),
+    code_doppler          = carrier_doppler * get_chip_rate_to_center_frequency_ratio(signal),
     num_prompts_for_cn0_estimation = 100,
     cn0_estimator         = TrackingLoops.default_cn0_estimator(signal, num_prompts_for_cn0_estimation),
     post_corr_filter      = DefaultPostCorrFilter(),
@@ -352,10 +352,10 @@ julia> using Tracking, GNSSSignals
 
 julia> using Tracking: Hz
 
-julia> using GNSSSignals: gen_code, get_code_frequency, get_code_center_frequency_ratio
+julia> using GNSSSignals: gen_code, get_chip_rate, get_chip_rate_to_center_frequency_ratio
 
 julia> function make_signal(sys, prn, carrier_doppler, num_samples, fs)
-           code_freq = carrier_doppler * get_code_center_frequency_ratio(sys) + get_code_frequency(sys)
+           code_freq = carrier_doppler * get_chip_rate_to_center_frequency_ratio(sys) + get_chip_rate(sys)
            range = 0:num_samples-1
            cis.(2π .* carrier_doppler .* range ./ fs) .*
                gen_code(num_samples, sys, prn, fs, code_freq, 0.0)

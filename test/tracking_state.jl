@@ -56,7 +56,7 @@ using TrackingLoops:
 # is needed.
 struct FakeDoubleRateL1Signal <: AbstractGNSSSignal{Matrix{Int16}} end
 GNSSSignals.get_band(::FakeDoubleRateL1Signal) = GNSSSignals.L1()
-GNSSSignals.get_code_frequency(::FakeDoubleRateL1Signal) = 2_046_000Hz
+GNSSSignals.get_chip_rate(::FakeDoubleRateL1Signal) = 2_046_000Hz
 
 @testset "SignalGroup rejects mixed bands and mixed chip rates (issue #129)" begin
     # A group correlates against one band's samples.

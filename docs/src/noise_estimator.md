@@ -56,7 +56,7 @@ dimension-checked.
 
 |                                 | software                                            | hardware                              |
 |:------------------------------- |:--------------------------------------------------- |:------------------------------------- |
-| fills the window via            | `track!` → `downconvert_and_correlate!` → [`update_noise!`](@extref TrackingLoops.update_noise!-Tuple{AbstractNoiseEstimator, Vararg{Any, 4}}) | [`append_noise_observation!`](@ref)   |
+| fills the window via            | `track!` → `downconvert_and_correlate!` → [`update_noise!`](@extref TrackingLoops.update_noise!-Tuple{TrackingLoops.AbstractNoiseEstimator, Vararg{Any, 4}}) | [`append_noise_observation!`](@ref)   |
 | enters `downconvert_and_correlate!`? | yes                                            | **no**                                |
 | needs sample buffers?           | yes                                                  | no                                    |
 
@@ -71,8 +71,8 @@ append_noise_observation!
 
 In the TrackingLoops manual:
 
-- [`update_noise!`](@extref TrackingLoops.update_noise!-Tuple{AbstractNoiseEstimator, Vararg{Any, 4}})
-- [`get_noise_density`](@extref TrackingLoops.get_noise_density-Tuple{AbstractNoiseEstimator})
+- [`update_noise!`](@extref TrackingLoops.update_noise!-Tuple{TrackingLoops.AbstractNoiseEstimator, Vararg{Any, 4}})
+- [`get_noise_density`](@extref TrackingLoops.get_noise_density-Tuple{TrackingLoops.AbstractNoiseEstimator})
 
 ## The software source
 
@@ -143,9 +143,9 @@ indistinguishable from anything finer below 40 dB-Hz.
 In the TrackingLoops manual:
 
 - [`NoiseObservation`](@extref TrackingLoops.NoiseObservation)
-- [`noise_observation`](@extref TrackingLoops.noise_observation)
-- [`noise_observation_from_correlator`](@extref TrackingLoops.noise_observation_from_correlator)
-- [`noise_observation_from_samples`](@extref TrackingLoops.noise_observation_from_samples)
+- [`noise_observation`](@extref TrackingLoops.noise_observation-Tuple{Complex, Any, Any})
+- [`noise_observation_from_correlator`](@extref TrackingLoops.noise_observation_from_correlator-NTuple{4, Any})
+- [`noise_observation_from_samples`](@extref TrackingLoops.noise_observation_from_samples-Tuple{Any, Any, Any})
 
 All three reduce to the same `N₀` on the same white input. The weight is `M`, **the
 number of independent looks, not the sample count**: `M` sub-integrations give a
@@ -225,12 +225,12 @@ TrackState(; signal = GPSL1CA(), noise_estimators = (GPSL1CA = MyPowerMonitor(..
 
 Two contracts: mutate the window **in place** and return the struct (`TrackState` is
 never rebuilt for a noise update), and have
-[`TrackingLoops.noise_density_type`](@extref TrackingLoops.noise_density_type) name the
+[`TrackingLoops.noise_density_type`](@extref TrackingLoops.noise_density_type-Tuple{TrackingLoops.AbstractNoiseEstimator}) name the
 concrete type `get_noise_density` returns (default `typeof(1.0/1.0Hz)`), so the fold
 stays monomorphic.
 
 In the TrackingLoops manual:
 
-- [`noise_density_type`](@extref TrackingLoops.noise_density_type)
+- [`noise_density_type`](@extref TrackingLoops.noise_density_type-Tuple{TrackingLoops.AbstractNoiseEstimator})
 - [`NoiseUpdateContext`](@extref TrackingLoops.NoiseUpdateContext)
-- [`requires_noise_density`](@extref TrackingLoops.requires_noise_density-Tuple{Type{<:AbstractCN0Estimator}})
+- [`requires_noise_density`](@extref TrackingLoops.requires_noise_density-Tuple{Type{<:TrackingLoops.AbstractCN0Estimator}})

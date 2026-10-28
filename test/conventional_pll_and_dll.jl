@@ -9,8 +9,8 @@ import GNSSSignals
 using GNSSSignals:
     GPSL1CA,
     GalileoE1C,
-    get_code_center_frequency_ratio,
-    get_code_frequency,
+    get_chip_rate_to_center_frequency_ratio,
+    get_chip_rate,
     get_code_length,
     get_secondary_code
 using TrackingLoopFilters: ThirdOrderBilinearLF, SecondOrderBilinearLF
@@ -129,7 +129,7 @@ end
 
     @test get_carrier_doppler(new_track_state) == carrier_doppler
     @test get_code_doppler(new_track_state) ==
-          get_code_center_frequency_ratio(gpsl1) * carrier_doppler
+          get_chip_rate_to_center_frequency_ratio(gpsl1) * carrier_doppler
     @test get_last_fully_integrated_filtered_prompt(new_track_state) == 0.0
     @test isempty(get_filtered_prompts(get_sat_state(new_track_state, prn)))
 
@@ -430,7 +430,7 @@ end
             map(_ -> 1000.0 + 10im, TrackingLoops.get_accumulators(correlator)),
         )
         one_block =
-            Int(sampling_frequency * get_code_length(signal) / get_code_frequency(signal))
+            Int(sampling_frequency * get_code_length(signal) / get_chip_rate(signal))
         prompts = ComplexF64[]
         for num_blocks in num_blocks_per_record
             sat = get_sat_states(track_state)[1]

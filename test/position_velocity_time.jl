@@ -19,7 +19,7 @@ using Tracking:
 
     @test state isa PositionVelocityTime.SatelliteState
     @test state.decoder === decoder
-    @test state.system === gpsl1
+    @test state.signal === gpsl1
     @test state.code_phase == get_code_phase(sat_state)
     @test state.carrier_doppler == get_carrier_doppler(sat_state)
     @test state.carrier_phase == get_carrier_phase(sat_state)
@@ -48,7 +48,7 @@ end
     @test collect(keys(groups.galileo.satellites)) == [2]
     # The ranging signal defaults to the group's first.
     @test groups.gps.signal === first(track_state.groups.gps.signals)
-    @test groups.gps.satellites[7].system === groups.gps.signal
+    @test groups.gps.satellites[7].signal === groups.gps.signal
     @test groups.gps.satellites[7].decoder === decoders.gps[7]
     tracked = Tracking.get_sat_state(track_state, :gps, 7)
     @test groups.gps.satellites[7].code_phase == get_code_phase(tracked)

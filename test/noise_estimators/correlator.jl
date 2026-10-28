@@ -5,7 +5,7 @@ using Logging: Warn
 using Random: Xoshiro, randn
 using StaticArrays: SMatrix
 using Unitful: Hz, s, ms, dBHz, ustrip, uconvert
-using GNSSSignals: GPSL1CA, GPSL1C_P, GPSL5I, GalileoE1B_BOC11, gen_code, get_code_frequency
+using GNSSSignals: GPSL1CA, GPSL1C_P, GPSL5I, GalileoE1B_BOC11, gen_code, get_chip_rate
 import Tracking
 using Tracking:
     BandMeasurement,
@@ -22,7 +22,6 @@ using Tracking:
 import TrackingLoops
 using TrackingLoops:
     CorrelatorNoiseEstimator,
-    DefaultPostCorrFilter,
     EarlyPromptLateCorrelator,
     NWPRCN0Estimator,
     NoiseDensity,
@@ -31,7 +30,6 @@ using TrackingLoops:
     get_correlator_sample_shifts,
     estimate_cn0,
     get_noise_density,
-    get_weights,
     noise_density_type,
     noise_window_looks
 
@@ -46,14 +44,11 @@ _median(xs) = (v = sort(collect(xs)); v[div(length(v) + 1, 2)])
 # density is exactly `N₀ = 1 Hz⁻¹`.
 function _sky(cn0_dbhz; seed = 1, num_samples = NUM_SAMPLES, fs = FS, prn = 1)
     rng = Xoshiro(seed)
-    code = gen_code(num_samples, GPSL1, prn, fs, get_code_frequency(GPSL1), 0.0)
+    code = gen_code(num_samples, GPSL1, prn, fs, get_chip_rate(GPSL1), 0.0)
     amplitude = isfinite(cn0_dbhz) ? 10^(cn0_dbhz / 20) : 0.0
     ComplexF64.(amplitude .* code) .+
     sqrt(ustrip(Hz, fs)) .* randn(rng, ComplexF64, num_samples)
 end
-
-# A hardware-style source with no look count; the rank gate must not withhold it.
-struct UncountedNoiseSource <: TrackingLoops.AbstractNoiseEstimator end
 
 _to_int16(signal) = Complex{Int16}.(
     round.(Int16, clamp.(real(signal) ./ 4, -2047, 2047)),
@@ -177,7 +172,7 @@ end
 end
 
 @testset "the PRN rotates through the whole family, tracked codes included" begin
-    # The position is carried in the window's observations (see `_next_noise_prn`).
+    # The position is carried in the window's observations (see `TrackingLoops.noise_despreads`).
     # Tracked PRNs are not skipped; the random phase makes that safe (see
     # `CorrelatorNoiseEstimator` and the two tests below).
     ts = TrackState(;
@@ -246,9 +241,9 @@ end
         preferred_early_late_to_prompt_code_shift = estimator.tap_code_shift,
     )
     for fs in (2e6Hz, 4e6Hz, 10e6Hz, 20e6Hz)
-        shifts = get_correlator_sample_shifts(correlator, fs, get_code_frequency(GPSL1))
+        shifts = get_correlator_sample_shifts(correlator, fs, get_chip_rate(GPSL1))
         spacing_chips =
-            (shifts[end] - shifts[1]) / 2 * ustrip(Hz, get_code_frequency(GPSL1)) /
+            (shifts[end] - shifts[1]) / 2 * ustrip(Hz, get_chip_rate(GPSL1)) /
             ustrip(Hz, fs)
         @test spacing_chips >= 1.0
     end
@@ -608,7 +603,7 @@ function _sky_array(
     prn = 1,
 )
     rng = Xoshiro(seed)
-    code = gen_code(num_samples, GPSL1, prn, fs, get_code_frequency(GPSL1), 0.0)
+    code = gen_code(num_samples, GPSL1, prn, fs, get_chip_rate(GPSL1), 0.0)
     amplitude = isfinite(cn0_dbhz) ? 10^(cn0_dbhz / 20) : 0.0
     signal = ComplexF64.(amplitude .* code)
     sigma = sqrt(ustrip(Hz, fs))
@@ -654,7 +649,7 @@ end
     array = TrackState(GPSL1, [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; num_ants = NumAnts(3))])
     D = noise_density_type(array.noise_estimators.GPSL1CA)
     @test D <: SMatrix{3,3}
-    @test TrackingLoops._num_ants_of_density_type(D) === NumAnts(3)
+    @test NumAnts(D) === NumAnts(3)
 end
 
 @testset "an explicitly-passed estimator must match its group's antenna count" begin
@@ -707,7 +702,8 @@ end
 end
 
 @testset "a covariance is withheld until it spans its own dimensions" begin
-    # The rank gate, see `_sufficient_looks`: `M` looks, i.e. `⌈M/3⌉` observations.
+    # The rank gate of `TrackingLoops.noise_density_and_ready`: `M` looks, i.e. `⌈M/3⌉`
+    # observations.
     # 1 ms buffers give one observation per call, the only shape that hits the gate.
     one_ms(M, seed) = ComplexF32.(
         reduce(
@@ -735,7 +731,7 @@ end
         ready_at = 0
         for call = 1:4
             track!((L1 = BandMeasurement(one_ms(M, call), FS),), ts)
-            _, ready = TrackingLoops._noise_density_and_ready(ts.noise_estimators.GPSL1CA)
+            _, ready = TrackingLoops.noise_density_and_ready(ts.noise_estimators.GPSL1CA)
             if ready && ready_at == 0
                 ready_at = call
             end
@@ -750,7 +746,7 @@ end
     @test noise_window_looks(est) == 3
     # Only the fold defers; the public reader reports what the window holds.
     @test !isnothing(get_noise_density(est))
-    @test TrackingLoops._noise_window_filling(est)
+    @test TrackingLoops.noise_window_filling(est)
     @test estimate_cn0(ts, 1) == -Inf * dBHz
 
     # A filling window is a normal transient: no warning.
@@ -765,15 +761,8 @@ end
     dead_logs, _ = collect_test_logs() do
         track!((L1 = BandMeasurement(zeros(ComplexF32, 4000, 4), FS),), dead)
     end
-    @test !TrackingLoops._noise_window_filling(dead.noise_estimators.GPSL1CA)
+    @test !TrackingLoops.noise_window_filling(dead.noise_estimators.GPSL1CA)
     @test !isempty(filter(r -> r.level == Warn, dead_logs))
-
-    # A source that reports no look count is taken at its word rather than gated.
-    @test noise_window_looks(UncountedNoiseSource()) === nothing
-    @test TrackingLoops._sufficient_looks(zero(SMatrix{4,4,ComplexF64,16}), nothing)
-    @test !TrackingLoops._sufficient_looks(zero(SMatrix{4,4,ComplexF64,16}), 3)
-    @test TrackingLoops._sufficient_looks(zero(SMatrix{4,4,ComplexF64,16}), 4)
-    @test TrackingLoops._sufficient_looks(1.0 / 1.0Hz, 1)      # a scalar has no rank
 end
 
 @testset "the default filter's weights reduce the covariance to its own column" begin
@@ -783,13 +772,11 @@ end
     signal = _sky_array(45.0, scales; seed = 12)
     ts_array = _tracked_array(signal, 3)
     R = get_noise_density(ts_array.noise_estimators.GPSL1CA)
-    w = get_weights(DefaultPostCorrFilter(), NumAnts(3))
-    @test TrackingLoops._reduce_noise_density(R, w) === real(R[3, 3])
 
     ts_single = _tracked(view(signal, :, 3), CPUDownconvertAndCorrelator())
     scalar = get_noise_density(ts_single.noise_estimators.GPSL1CA)
     # Same samples and seeded draws, so equality, not a tolerance.
-    @test TrackingLoops._reduce_noise_density(R, w) === scalar
+    @test real(R[3, 3]) === scalar
     @test estimate_cn0(ts_array, 1) === estimate_cn0(ts_single, 1)
 end
 

@@ -32,7 +32,7 @@ synced to its secondary code) the carrier discriminators turn four-quadrant.
 The defaults are not scaled with the integration time; each is capped at filter time
 by its stability product `BL · T_int`: the PLL by `0.09`, the FLL path by `0.02`, the
 code loop by `0.018`
-([`effective_carrier_loop_filter_bandwidth`](@extref TrackingLoops.effective_carrier_loop_filter_bandwidth)
+([`effective_carrier_loop_filter_bandwidth`](@extref TrackingLoops.effective_carrier_loop_filter_bandwidth-Tuple{Any, Any})
 and siblings). The bandwidths that end up in the loop are:
 
 | Integration time                   |  Wide BL | Narrow BL | FLL-assist BL |  Code BL |
@@ -54,10 +54,10 @@ ran FLL-assisted at one carrier bandwidth throughout; pass equal wide and narrow
 bandwidths for one PLL bandwidth.
 
 Override per signal by defining methods of
-[`default_wide_carrier_loop_filter_bandwidth`](@extref TrackingLoops.default_wide_carrier_loop_filter_bandwidth),
-[`default_narrow_carrier_loop_filter_bandwidth`](@extref TrackingLoops.default_narrow_carrier_loop_filter_bandwidth),
-[`default_fll_assist_loop_filter_bandwidth`](@extref TrackingLoops.default_fll_assist_loop_filter_bandwidth) /
-[`default_code_loop_filter_bandwidth`](@extref TrackingLoops.default_code_loop_filter_bandwidth), or override at construction
+[`default_wide_carrier_loop_filter_bandwidth`](@extref TrackingLoops.default_wide_carrier_loop_filter_bandwidth-Tuple{AbstractGNSSSignal}),
+[`default_narrow_carrier_loop_filter_bandwidth`](@extref TrackingLoops.default_narrow_carrier_loop_filter_bandwidth-Tuple{AbstractGNSSSignal}),
+[`default_fll_assist_loop_filter_bandwidth`](@extref TrackingLoops.default_fll_assist_loop_filter_bandwidth-Tuple{AbstractGNSSSignal}) /
+[`default_code_loop_filter_bandwidth`](@extref TrackingLoops.default_code_loop_filter_bandwidth-Tuple{AbstractGNSSSignal}), or override at construction
 time by passing your own `doppler_estimator =` to `TrackState`.
 
 ## Doppler Estimators
@@ -65,18 +65,18 @@ time by passing your own `doppler_estimator =` to `TrackState`.
 In the TrackingLoops manual:
 
 - [`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL)
-- [`ConventionalAssistedPLLAndDLL`](@extref TrackingLoops.ConventionalAssistedPLLAndDLL)
-- [`default_wide_carrier_loop_filter_bandwidth`](@extref TrackingLoops.default_wide_carrier_loop_filter_bandwidth)
-- [`default_narrow_carrier_loop_filter_bandwidth`](@extref TrackingLoops.default_narrow_carrier_loop_filter_bandwidth)
-- [`default_fll_assist_loop_filter_bandwidth`](@extref TrackingLoops.default_fll_assist_loop_filter_bandwidth)
-- [`default_code_loop_filter_bandwidth`](@extref TrackingLoops.default_code_loop_filter_bandwidth)
-- [`effective_carrier_loop_filter_bandwidth`](@extref TrackingLoops.effective_carrier_loop_filter_bandwidth)
-- [`effective_fll_assist_loop_filter_bandwidth`](@extref TrackingLoops.effective_fll_assist_loop_filter_bandwidth)
-- [`effective_code_loop_filter_bandwidth`](@extref TrackingLoops.effective_code_loop_filter_bandwidth)
+- [`ConventionalAssistedPLLAndDLL`](@extref TrackingLoops.ConventionalAssistedPLLAndDLL-Union{Tuple{}, Tuple{Type{CO}}, Tuple{CO}} where CO<:TrackingLoopFilters.AbstractLoopFilter)
+- [`default_wide_carrier_loop_filter_bandwidth`](@extref TrackingLoops.default_wide_carrier_loop_filter_bandwidth-Tuple{AbstractGNSSSignal})
+- [`default_narrow_carrier_loop_filter_bandwidth`](@extref TrackingLoops.default_narrow_carrier_loop_filter_bandwidth-Tuple{AbstractGNSSSignal})
+- [`default_fll_assist_loop_filter_bandwidth`](@extref TrackingLoops.default_fll_assist_loop_filter_bandwidth-Tuple{AbstractGNSSSignal})
+- [`default_code_loop_filter_bandwidth`](@extref TrackingLoops.default_code_loop_filter_bandwidth-Tuple{AbstractGNSSSignal})
+- [`effective_carrier_loop_filter_bandwidth`](@extref TrackingLoops.effective_carrier_loop_filter_bandwidth-Tuple{Any, Any})
+- [`effective_fll_assist_loop_filter_bandwidth`](@extref TrackingLoops.effective_fll_assist_loop_filter_bandwidth-Tuple{Any, Any})
+- [`effective_code_loop_filter_bandwidth`](@extref TrackingLoops.effective_code_loop_filter_bandwidth-Tuple{Any, Any})
 - [`LoopBandwidths`](@extref TrackingLoops.LoopBandwidths)
 - [`CarrierLoopStage`](@extref TrackingLoops.CarrierLoopStage)
-- [`carrier_loop_stage`](@extref TrackingLoops.carrier_loop_stage)
-- [`phase_lock_indicator`](@extref TrackingLoops.phase_lock_indicator)
+- [`carrier_loop_stage`](@extref TrackingLoops.carrier_loop_stage-Tuple{Union{TrackingLoops.SatConventionalPLLAndDLL, TrackingLoops.SatNCOReferencedPLLAndDLL}})
+- [`phase_lock_indicator`](@extref TrackingLoops.phase_lock_indicator-Tuple{Union{TrackingLoops.SatConventionalPLLAndDLL, TrackingLoops.SatNCOReferencedPLLAndDLL}})
 
 ## Resetting loop filters
 

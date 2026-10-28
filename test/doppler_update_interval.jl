@@ -7,9 +7,9 @@ using GNSSSignals:
     GPSL1CA,
     GalileoE1B,
     gen_code,
-    get_code_frequency,
+    get_chip_rate,
     get_code_length,
-    get_code_center_frequency_ratio
+    get_chip_rate_to_center_frequency_ratio
 using Tracking:
     TrackedSat,
     TrackState,
@@ -27,7 +27,7 @@ using TrackingLoops: CorrelatorOutput
     # `nothing`: the shortest primary-code period of all signals.
     ts = TrackState(; signal = GPSL1CA())
     dt = Tracking._smallest_code_period(ts)
-    @test uconvert(NoUnits, dt * get_code_frequency(GPSL1CA())) ≈ get_code_length(GPSL1CA())
+    @test uconvert(NoUnits, dt * get_chip_rate(GPSL1CA())) ≈ get_code_length(GPSL1CA())
     @test dt ≈ 1e-3 * s
 
     ts_mixed = TrackState(; signals = (l1ca = (GPSL1CA(),), e1b = (GalileoE1B(),)))
@@ -76,7 +76,7 @@ end
     period = 5000                       # 1 ms at 5 MHz = one L1 C/A period
     num_samples = n_periods * period
     signal = ComplexF32.(
-        gen_code(num_samples, gpsl1, prn, fs, get_code_frequency(gpsl1), start_code_phase),
+        gen_code(num_samples, gpsl1, prn, fs, get_chip_rate(gpsl1), start_code_phase),
     )
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, prn, start_code_phase, 0.0Hz)])
     dc = CPUDownconvertAndCorrelator()
@@ -105,8 +105,7 @@ end
     fs = 5e6Hz
     prn = 1
     num_samples = 15_000
-    signal =
-        ComplexF32.(gen_code(num_samples, gpsl1, prn, fs, get_code_frequency(gpsl1), 0.0))
+    signal = ComplexF32.(gen_code(num_samples, gpsl1, prn, fs, get_chip_rate(gpsl1), 0.0))
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, prn, 0.0, 0.0Hz)])
     track!(signal, ts, fs)
     @test isempty(get_correlator_outputs(only(get_sat_state(ts, prn).signals)))
@@ -120,7 +119,7 @@ end
     true_doppler = 300.0Hz
     start_code_phase = 0.0
     code_frequency =
-        true_doppler * get_code_center_frequency_ratio(gpsl1) + get_code_frequency(gpsl1)
+        true_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1) + get_chip_rate(gpsl1)
     num_samples = 400_000                   # 100 ms
     range = 0:(num_samples-1)
     signal = ComplexF32.(

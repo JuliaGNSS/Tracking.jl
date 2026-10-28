@@ -31,9 +31,9 @@ are tracked in
 
 *Blocks per integration* is the coherent integration length in primary code
 blocks a fresh [`TrackedSignal`](@ref) starts at
-([`default_num_code_blocks_to_integrate`](@extref TrackingLoops.default_num_code_blocks_to_integrate)),
+([`default_num_code_blocks_to_integrate`](@extref TrackingLoops.default_num_code_blocks_to_integrate-Tuple{AbstractGNSSSignal})),
 and in brackets the ceiling
-([`max_num_code_blocks_to_integrate`](@extref TrackingLoops.max_num_code_blocks_to_integrate))
+([`max_num_code_blocks_to_integrate`](@extref TrackingLoops.max_num_code_blocks_to_integrate-Tuple{AbstractGNSSSignal}))
 [`set_preferred_num_code_blocks_to_integrate!`](@ref) may raise it to: one data
 bit, overlay period or code cycle. Until sync, one block is integrated regardless.
 
@@ -103,7 +103,7 @@ and the ICD says it will eventually be discontinued.
   no NH20 overlay and broadcast D2 at 500 sym/s instead of D1 at 50 sym/s, so
   the secondary-code detector has nothing to lock onto. They track and can be
   *ranged* on, but are not decoded: a D2 bit-edge search would need a per-PRN
-  data rate, while `get_data_frequency` reports D1's for every PRN. See
+  data rate, while `get_bit_rate` reports D1's for every PRN. See
   TrackingLoops' `src/beidou/b1i.jl`.
 - **BeiDou B2b-I** correlates to an all-zero prompt on a clean replica, which
   takes the loop down through a NaN Doppler

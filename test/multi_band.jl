@@ -10,8 +10,8 @@ using GNSSSignals:
     L5,
     gen_code,
     get_band_id,
-    get_code_frequency,
-    get_code_center_frequency_ratio
+    get_chip_rate,
+    get_chip_rate_to_center_frequency_ratio
 
 using Tracking:
     TrackState,
@@ -38,7 +38,8 @@ function _make_signal(
     sampling_frequency,
 ) where {S}
     s = S()
-    code_freq = carrier_doppler * get_code_center_frequency_ratio(s) + get_code_frequency(s)
+    code_freq =
+        carrier_doppler * get_chip_rate_to_center_frequency_ratio(s) + get_chip_rate(s)
     range = 0:(num_samples-1)
     cis.(2π .* carrier_doppler .* range ./ sampling_frequency) .*
     gen_code(num_samples, s, prn, sampling_frequency, code_freq, start_code_phase)

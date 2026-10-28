@@ -9,9 +9,9 @@ using GNSSSignals:
     GPSL1CA,
     GPSL1C_D,
     GPSL1C_P,
-    get_code_center_frequency_ratio,
+    get_chip_rate_to_center_frequency_ratio,
     get_code_length,
-    get_code_frequency
+    get_chip_rate
 using Acquisition: Acquisition, AcquisitionResults
 import Tracking
 using Tracking:
@@ -45,7 +45,8 @@ include("acquisition_test_helpers.jl")
     sat_state = @inferred TrackedSat(gpsl1, 1, 10.0, 500.0Hz)
     @test get_prn(sat_state) == 1
     @test get_code_phase(sat_state) == 10.0
-    @test get_code_doppler(sat_state) == 500.0Hz * get_code_center_frequency_ratio(gpsl1)
+    @test get_code_doppler(sat_state) ==
+          500.0Hz * get_chip_rate_to_center_frequency_ratio(gpsl1)
     @test get_carrier_phase(sat_state) == 0.0
     @test get_carrier_doppler(sat_state) == 500.0Hz
     @test get_integrated_samples(sat_state) == 0
@@ -59,7 +60,8 @@ include("acquisition_test_helpers.jl")
     sat_state = @inferred TrackedSat(acq)
     @test get_prn(sat_state) == 5
     @test get_code_phase(sat_state) == 524.6
-    @test get_code_doppler(sat_state) == 100.0Hz * get_code_center_frequency_ratio(gpsl1)
+    @test get_code_doppler(sat_state) ==
+          100.0Hz * get_chip_rate_to_center_frequency_ratio(gpsl1)
     @test get_carrier_phase(sat_state) == 0.0
     @test get_carrier_doppler(sat_state) == 100.0Hz
     @test get_integrated_samples(sat_state) == 0.0
@@ -136,7 +138,7 @@ struct FakeWrapSignal <: AbstractGNSSSignal{Matrix{Int16}}
 end
 GNSSSignals.get_code_length(s::FakeWrapSignal) = s.code_length
 GNSSSignals.get_secondary_code_length(s::FakeWrapSignal) = s.secondary_code_length
-GNSSSignals.get_data_frequency(::FakeWrapSignal) = 0Hz
+GNSSSignals.get_bit_rate(::Type{FakeWrapSignal}) = 0Hz
 
 @testset "shared code wrap is a common multiple, not a max (issue #129)" begin
     # Each signal re-derives its phase as `mod(code_phase, wrap)`, correct only
@@ -189,7 +191,8 @@ end
     @test get_code_phase(sat) == 1234.5
     @test get_carrier_doppler(sat) == 500.0Hz
     # Code Doppler from the driver, `signals[1]`.
-    @test get_code_doppler(sat) == 500.0Hz * get_code_center_frequency_ratio(GPSL1C_P())
+    @test get_code_doppler(sat) ==
+          500.0Hz * get_chip_rate_to_center_frequency_ratio(GPSL1C_P())
     @test get_signal_start_sample(sat) == 1
     sigs_on_sat = get_signals(sat)
     @test length(sigs_on_sat) == 3
@@ -224,7 +227,7 @@ end
     # Post-integration SNR is C/N₀ · T, so judging the last record needs its
     # own integration time.
     gpsl1 = GPSL1CA()
-    code_period = get_code_length(gpsl1) / get_code_frequency(gpsl1)
+    code_period = get_code_length(gpsl1) / get_chip_rate(gpsl1)
     @test upreferred(code_period) ≈ 1ms
 
     tsig = Tracking.TrackedSignal(gpsl1)

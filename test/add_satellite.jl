@@ -10,7 +10,7 @@ using GNSSSignals:
     GPSL1C_D,
     GPSL1C_P,
     GalileoE1B,
-    get_code_center_frequency_ratio,
+    get_chip_rate_to_center_frequency_ratio,
     get_codes,
     get_signal_id
 using Acquisition: Acquisition, AcquisitionResults
@@ -87,7 +87,7 @@ end
     @test get_prn(track_state, :default, 11) == 11
     @test get_carrier_doppler(track_state, :default, 11) == 1234.0Hz
     @test get_code_doppler(track_state, :default, 11) ≈
-          1234.0Hz * get_code_center_frequency_ratio(GPSL1CA())
+          1234.0Hz * get_chip_rate_to_center_frequency_ratio(GPSL1CA())
 end
 
 @testset "add_satellite! — multi-group with explicit `group=`" begin

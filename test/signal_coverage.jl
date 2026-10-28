@@ -5,7 +5,7 @@ module SignalCoverageTest
 # `UNSUPPORTED` with a reason. The list comes from the type tree, so a new
 # GNSSSignals signal fails here rather than in user code.
 
-using Test: @test, @testset, @inferred
+using Test: @test, @testset, @inferred, @test_throws
 using Unitful: Hz, upreferred
 using InteractiveUtils: subtypes
 using GNSSSignals
@@ -13,9 +13,10 @@ using GNSSSignals:
     AbstractGNSSSignal,
     LOC,
     gen_code,
-    get_code_frequency,
+    get_code_blocks_per_bit,
+    get_chip_rate,
     get_code_length,
-    get_data_frequency,
+    get_bit_rate,
     get_modulation,
     get_signal_name
 import Tracking
@@ -61,7 +62,7 @@ end
 # 5 samples per chip, at least 25 MHz for BOC signals: a whole number of samples
 # per code period, so whole periods return to the seeded code phase.
 function _sampling_frequency(signal)
-    fs = 5 * get_code_frequency(signal)
+    fs = 5 * get_chip_rate(signal)
     get_modulation(signal) isa LOC ? fs : max(fs, 25.0e6Hz)
 end
 
@@ -107,7 +108,7 @@ end
     # Sane at the default integration (E5a-QP: 31 blocks): carrier below
     # 100 Hz and inside its cap, updates below 2 kHz.
     integration_time =
-        upreferred(get_code_length(signal) * default_blocks / get_code_frequency(signal))
+        upreferred(get_code_length(signal) * default_blocks / get_chip_rate(signal))
     carrier_bandwidth = @inferred effective_carrier_loop_filter_bandwidth(
         default_narrow_carrier_loop_filter_bandwidth(signal),
         integration_time,
@@ -117,7 +118,7 @@ end
     @test carrier_bandwidth * integration_time <=
           TrackingLoops.MAX_CARRIER_LOOP_BANDWIDTH_TIME_PRODUCT + 1e-12
     @test 0.0Hz < code_bandwidth < 100.0Hz
-    @test get_code_frequency(signal) / (get_code_length(signal) * default_blocks) < 2000.0Hz
+    @test get_chip_rate(signal) / (get_code_length(signal) * default_blocks) < 2000.0Hz
 end
 
 # A smoke test of the whole chain over four default integrations (so E5a-QP
@@ -131,7 +132,7 @@ end
     start_code_phase = 100
     sampling_frequency = _sampling_frequency(signal)
     code_length = get_code_length(signal)
-    code_frequency = get_code_frequency(signal)
+    code_frequency = get_chip_rate(signal)
 
     # Zero Doppler, so the code phase returns to the seed.
     samples_per_period = code_length * sampling_frequency / code_frequency
@@ -159,16 +160,16 @@ end
     # A secondary-code lock may snap by whole primary periods.
     @test mod(get_code_phase(sat_state), code_length) ≈ start_code_phase atol = 0.1
 
-    # A dataless signal has 0 blocks per bit and never produces one.
-    if iszero(get_data_frequency(signal))
-        @test TrackingLoops._calc_num_code_blocks_that_form_a_bit(signal) == 0
+    # A dataless signal broadcasts no bits and produces none.
+    if iszero(get_bit_rate(signal))
+        @test get_code_blocks_per_bit(signal) == 0
         @test get_num_bits(sat_state) == 0
     else
         # A bit must be a whole number of blocks.
-        blocks_per_bit = TrackingLoops._calc_num_code_blocks_that_form_a_bit(signal)
+        blocks_per_bit = get_code_blocks_per_bit(signal)
         @test blocks_per_bit >= 1
         @test upreferred(
-            blocks_per_bit * code_length / code_frequency * get_data_frequency(signal),
+            blocks_per_bit * code_length / code_frequency * get_bit_rate(signal),
         ) ≈ 1
     end
 end

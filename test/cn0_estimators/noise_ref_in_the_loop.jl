@@ -11,7 +11,7 @@ using Test: @test, @testset
 using Random: Xoshiro, randn, rand
 using Statistics: std
 using Unitful: Hz, dBHz, ustrip, uconvert
-using GNSSSignals: GPSL1CA, gen_code, get_code_frequency
+using GNSSSignals: GPSL1CA, gen_code, get_chip_rate
 import Tracking
 using Tracking:
     CPUDownconvertAndCorrelator,
@@ -38,7 +38,7 @@ function _track_noisy(cn0_db, num_blocks; seed = 1, cn0_estimator, blocks = 1)
     gpsl1 = GPSL1CA()
     fs = 4e6Hz
     num_samples = 4000
-    code_frequency = get_code_frequency(gpsl1)
+    code_frequency = get_chip_rate(gpsl1)
     rng = Xoshiro(seed)
     amplitude = 10^(cn0_db / 20)
     track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator)])
@@ -101,7 +101,7 @@ end
     gpsl1 = GPSL1CA()
     fs = 4e6Hz
     num_samples = 40_000
-    f_chip = ustrip(Hz, get_code_frequency(gpsl1))
+    f_chip = ustrip(Hz, get_chip_rate(gpsl1))
     rng = Xoshiro(20260806)
     noise = sqrt(ustrip(Hz, fs)) .* randn(rng, ComplexF64, num_samples)
 
@@ -123,8 +123,7 @@ end
     for cn0 in (45.0, 50.0)
         carrier_power = 10^(cn0 / 10)
         satellite =
-            10^(cn0 / 20) .*
-            gen_code(num_samples, gpsl1, 1, fs, get_code_frequency(gpsl1), 0.0)
+            10^(cn0 / 20) .* gen_code(num_samples, gpsl1, 1, fs, get_chip_rate(gpsl1), 0.0)
         ratio = density(ComplexF64.(satellite) .+ noise) / density(noise)
         # `N̂₀ → N₀ + C/f_chip`, i.e. a ratio of `1 + (C/N₀)/f_chip` against the
         # `N₀ = 1 Hz⁻¹` this noise is built to have: 1.031 at 45 dB-Hz, 1.098 at

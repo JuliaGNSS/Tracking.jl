@@ -5,19 +5,19 @@
 # packages define a `SignalGroup`, so it is always qualified below.
 
 """
-    PositionVelocityTime.SatelliteState(decoder::GNSSDecoderState, system, sat_state::TrackedSat)
+    PositionVelocityTime.SatelliteState(decoder::GNSSDecoderState, signal, sat_state::TrackedSat)
 
 One tracked satellite's code phase, carrier Doppler and carrier phase (from
-[`get_sat_state`](@ref)) paired with its decoded navigation data.
+[`get_sat_state`](@ref)) paired with its decoded navigation data, ranging on `signal`.
 """
 function PositionVelocityTime.SatelliteState(
     decoder::GNSSDecoderState,
-    system::AbstractGNSSSignal,
+    signal::AbstractGNSSSignal,
     sat_state::TrackedSat,
 )
     PositionVelocityTime.SatelliteState(
         decoder,
-        system,
+        signal,
         get_code_phase(sat_state),
         get_carrier_doppler(sat_state),
         get_carrier_phase(sat_state),

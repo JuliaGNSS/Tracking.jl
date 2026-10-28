@@ -31,7 +31,7 @@ const _PRECOMPILE_SIGNALS = (
 # BPSK codes four. Float64, like the `5e6Hz` a receiver passes: the kernels
 # specialise on the frequency's element type.
 function _precompile_sampling_frequency(system)
-    code_frequency = get_code_frequency(system)
+    code_frequency = get_chip_rate(system)
     code_frequency <= 1.1e6Hz ? 24.0 * code_frequency : 4.0 * code_frequency
 end
 
@@ -39,14 +39,12 @@ end
 # to pull on.
 function _precompile_signal(system)
     sampling_frequency = _precompile_sampling_frequency(system)
-    num_samples = round(
-        Int,
-        get_code_length(system) * sampling_frequency / get_code_frequency(system),
-    )
+    num_samples =
+        round(Int, get_code_length(system) * sampling_frequency / get_chip_rate(system))
     carrier_doppler = 200.0Hz
     code_frequency =
-        carrier_doppler * get_code_center_frequency_ratio(system) +
-        get_code_frequency(system)
+        carrier_doppler * get_chip_rate_to_center_frequency_ratio(system) +
+        get_chip_rate(system)
     samples = 0:(num_samples-1)
     signal_f32 = ComplexF32.(
         cis.(2π .* 200.0 .* samples ./ ustrip(Hz, sampling_frequency)) .*

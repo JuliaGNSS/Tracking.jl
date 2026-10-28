@@ -5,7 +5,7 @@ Part of the Tracking.jl 1.x → 2.0 bump. No backward-compat shims;
 and `TrackedSignal`'s type parameters all change.
 
 **Upstream dependency.** This redesign requires GNSSSignals.jl ≥ v2.2.1,
-which fixes `get_data_frequency(::GPSL1C_D)` to return the broadcast
+which fixes `get_symbol_frequency(::GPSL1C_D)` to return the broadcast
 100 sps symbol rate instead of the post-LDPC 50 bps info-bit rate
 ([GNSSSignals.jl PR #61](https://github.com/JuliaGNSS/GNSSSignals.jl/pull/61),
 merged). Without it, `_calc_num_code_blocks_that_form_a_bit` computes 2
@@ -84,7 +84,7 @@ boundary for the tracker to find — `is_upcoming_integration_new_bit`
 returns `true` immediately and the tracker hands one prompt-correlator
 sum per primary period to the downstream decoder.
 
-> **Note** — `get_data_frequency` in GNSSSignals.jl reports the channel
+> **Note** — `get_symbol_frequency` in GNSSSignals.jl reports the channel
 > symbol rate (post-FEC, on-air), not the post-decode information bit
 > rate. For L1C-D that's 100 sps, with 50 bps information after rate-½
 > LDPC decoding handled by GNSSDecoder.jl. See GNSSSignals.jl PR #61.
@@ -354,7 +354,7 @@ tolerance to the live CN0 estimator.
    [GNSSSignals.jl PR #61](https://github.com/JuliaGNSS/GNSSSignals.jl/pull/61)
    bump to have landed in `Project.toml`'s `[compat]`; otherwise
    `_calc_num_code_blocks_that_form_a_bit` returns 2 (from the stale
-   50 Hz `get_data_frequency`) and the post-sync prompt-accumulator
+   50 Hz `get_symbol_frequency`) and the post-sync prompt-accumulator
    integrates pairs of symbols, halving the symbol rate to the decoder.
    - **Tests:** in `test/gps_l1c_d.jl`, assert
      `is_upcoming_integration_new_bit(GPSL1C_D(), 0x0, 1)` returns
@@ -391,7 +391,7 @@ tolerance to the live CN0 estimator.
      return type, Hamming-tolerance matching, L1C-D one-symbol-per-block
      sync (no edge search), L1C-P 1800-chip overlay lock, `BitBuffer` is
      now parameterized on `B<:Unsigned`. Also call out the GNSSSignals.jl
-     compat bump and the symbol-rate semantics of `get_data_frequency`.
+     compat bump and the symbol-rate semantics of `get_symbol_frequency`.
 
 Each step is independently revertible. Step 1 is the biggest mechanical
 change; 3–5 are localized; 7 is doc-only and can land alongside or after

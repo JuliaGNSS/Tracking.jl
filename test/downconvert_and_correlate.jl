@@ -2,7 +2,7 @@ module DownconvertAndCorrelateTest
 
 using Test: @test, @testset, @inferred
 using Unitful: Hz
-using GNSSSignals: GPSL1CA, gen_code, get_code_frequency, get_code_center_frequency_ratio
+using GNSSSignals: GPSL1CA, gen_code, get_chip_rate, get_chip_rate_to_center_frequency_ratio
 import Tracking
 using Tracking:
     CPUDownconvertAndCorrelator,
@@ -53,7 +53,7 @@ end
             gpsl1,
             1,
             sampling_frequency,
-            get_code_frequency(gpsl1) + 1000Hz * get_code_center_frequency_ratio(gpsl1),
+            get_chip_rate(gpsl1) + 1000Hz * get_chip_rate_to_center_frequency_ratio(gpsl1),
             code_phase,
         ) .* cis.(2π * (0:(num_samples_signal-1)) * 1000.0Hz / sampling_frequency)
 
@@ -75,7 +75,7 @@ end
             gpsl1,
             2,
             sampling_frequency,
-            get_code_frequency(gpsl1) + 500Hz * get_code_center_frequency_ratio(gpsl1),
+            get_chip_rate(gpsl1) + 500Hz * get_chip_rate_to_center_frequency_ratio(gpsl1),
             11.0,
         ) .* cis.(2π * (0:(num_samples_signal-1)) * 500.0Hz / sampling_frequency)
 
@@ -134,8 +134,8 @@ end
     prn = 1
 
     carrier_frequency = carrier_doppler + 0.0Hz
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
-    code_frequency = code_doppler + get_code_frequency(gpsl1)
+    code_doppler = carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1)
+    code_frequency = code_doppler + get_chip_rate(gpsl1)
 
     correlator = EarlyPromptLateCorrelator()
     sample_shifts =
@@ -229,8 +229,8 @@ end
     num_ants = 2
 
     carrier_frequency = carrier_doppler + 0.0Hz
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
-    code_frequency = code_doppler + get_code_frequency(gpsl1)
+    code_doppler = carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1)
+    code_frequency = code_doppler + get_chip_rate(gpsl1)
 
     correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(num_ants))
     sample_shifts =
@@ -401,8 +401,8 @@ end
     prn = 1
 
     carrier_frequency = carrier_doppler + 0.0Hz
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
-    code_frequency = code_doppler + get_code_frequency(gpsl1)
+    code_doppler = carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1)
+    code_frequency = code_doppler + get_chip_rate(gpsl1)
 
     # Use the same shifts as EarlyPromptLateCorrelator but as a Vector
     epl = EarlyPromptLateCorrelator()
@@ -483,8 +483,8 @@ end
     prn = 1
 
     carrier_frequency = carrier_doppler + 0.0Hz
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
-    code_frequency = code_doppler + get_code_frequency(gpsl1)
+    code_doppler = carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1)
+    code_frequency = code_doppler + get_chip_rate(gpsl1)
 
     correlator = EarlyPromptLateCorrelator()
     sample_shifts =
@@ -595,8 +595,8 @@ TrackingLoops.get_correlator_sample_shifts(
     prn = 1
 
     carrier_frequency = carrier_doppler + 0.0Hz
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
-    code_frequency = code_doppler + get_code_frequency(gpsl1)
+    code_doppler = carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1)
+    code_frequency = code_doppler + get_chip_rate(gpsl1)
 
     epl = EarlyPromptLateCorrelator()
     static_shifts = get_correlator_sample_shifts(epl, sampling_frequency, code_frequency)
@@ -712,8 +712,8 @@ end
     prn = 1
 
     carrier_frequency = carrier_doppler + 0.0Hz
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
-    code_frequency = code_doppler + get_code_frequency(gpsl1)
+    code_doppler = carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1)
+    code_frequency = code_doppler + get_chip_rate(gpsl1)
 
     @testset "Single-antenna, N=$N signals" for N = 2:3
         correlators = ntuple(_ -> EarlyPromptLateCorrelator(), N)

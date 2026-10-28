@@ -8,8 +8,8 @@ using GNSSSignals:
     GPSL5I,
     GalileoE1C,
     gen_code,
-    get_code_center_frequency_ratio,
-    get_code_frequency
+    get_chip_rate_to_center_frequency_ratio,
+    get_chip_rate
 
 using Tracking:
     TrackedSat,
@@ -41,7 +41,8 @@ function make_signal(sampling_frequency)
     carrier_doppler = 200.0Hz
     start_code_phase = 100.0
     code_frequency =
-        carrier_doppler * get_code_center_frequency_ratio(gpsl1) + get_code_frequency(gpsl1)
+        carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1) +
+        get_chip_rate(gpsl1)
     range = 0:3999
     start_carrier_phase = π / 2
     signal_template =

@@ -150,7 +150,7 @@ end
         prn,
         get_bit_buffer(tracked_signal).prompt_accumulator_integrated_code_blocks +
         integrated_code_blocks,
-        _calc_num_code_blocks_that_form_a_bit(tracked_signal.signal),
+        get_code_blocks_per_bit(tracked_signal.signal),
     )
     push!(tracked_signal.filtered_prompts, prompt)
     new_signal = TrackedSignal(
@@ -367,7 +367,7 @@ end
 # id (see the noise estimator manual page for why per signal). No estimator gives
 # `(nothing, true)`, so the wiring mistake surfaces at the first record.
 @inline _signal_noise_density(noise_estimators::NamedTuple, ::Val{K}) where {K} =
-    haskey(noise_estimators, K) ? _noise_density_and_ready(noise_estimators[K]) :
+    haskey(noise_estimators, K) ? noise_density_and_ready(noise_estimators[K]) :
     (nothing, true)
 
 # One `(density, ready)` pair per signal, in `signals` tuple order.
@@ -440,7 +440,7 @@ end
 
 # `haskey` on a NamedTuple folds at compile time.
 @inline _noise_window_still_filling(noise_estimators::NamedTuple, ::Val{K}) where {K} =
-    haskey(noise_estimators, K) ? _noise_window_filling(noise_estimators[K]) : false
+    haskey(noise_estimators, K) ? noise_window_filling(noise_estimators[K]) : false
 
 @noinline function _emit_noise_density_warning(signal_id::Symbol)
     @warn """

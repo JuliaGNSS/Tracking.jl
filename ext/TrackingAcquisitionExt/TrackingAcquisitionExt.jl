@@ -263,7 +263,7 @@ end
 # The signal with the longest primary code (tracking finds the secondary itself);
 # folds at compile time. What matters is the code *period*; chips stand in for it
 # because a group shares one chip rate (`_validate_signal_group`). If that is
-# relaxed (#151), compare `get_code_length(s) / get_code_frequency(s)`.
+# relaxed (#151), compare `get_code_length(s) / get_chip_rate(s)`.
 @inline _longest_code_signal(t::Tuple{AbstractGNSSSignal}) = only(t)
 @inline function _longest_code_signal(
     t::Tuple{AbstractGNSSSignal,AbstractGNSSSignal,Vararg{AbstractGNSSSignal}},

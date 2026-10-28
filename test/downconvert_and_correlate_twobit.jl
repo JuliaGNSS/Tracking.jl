@@ -13,8 +13,8 @@ using GNSSSignals:
     gen_code,
     gen_code!,
     get_band_id,
-    get_code_center_frequency_ratio,
-    get_code_frequency
+    get_chip_rate_to_center_frequency_ratio,
+    get_chip_rate
 using Tracking:
     TrackedSat,
     TrackState,
@@ -63,7 +63,7 @@ TrackingLoops.get_correlator_sample_shifts(
 
 # 12-bit-ADC-style Complex{Int16} capture (carrier × unit-normalised code, scaled to `peak`).
 function make_capture(sig, prn, fs, nsamp, cdopp, cphase; peak = 2000)
-    fc = cdopp * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
+    fc = cdopp * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
     code = gen_code(nsamp, sig, prn, fs, fc, cphase)
     code = code ./ maximum(abs, code)
     s = cis.(2π .* cdopp .* (0:(nsamp-1)) ./ fs .+ 0.6) .* code
@@ -191,7 +191,7 @@ function _track_noisy(
     gpsl1 = GPSL1CA()
     nsamp = round(Int, (fs / 1Hz) * 1e-3)
     prn = 1
-    cfreq = cdopp * get_code_center_frequency_ratio(gpsl1) + get_code_frequency(gpsl1)
+    cfreq = cdopp * get_chip_rate_to_center_frequency_ratio(gpsl1) + get_chip_rate(gpsl1)
     range = 0:(nsamp-1)
     start_code_phase = 100.0
     amp = 10^(cn0_dbhz / 20)
@@ -246,7 +246,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         cdopp, cphase, prn = 250Hz, 100.0, 1
         cap = make_capture(sig, prn, fs, nsamp, cdopp, cphase)
-        fc = cdopp * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
+        fc = cdopp * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
         corr =
             NC == 3 ? EarlyPromptLateCorrelator(; num_ants = NumAnts(1)) :
             VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(1))
@@ -299,7 +299,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         cap[1] = complex(typemin(Int16), typemax(Int16))
         cap[2] = complex(typemax(Int16), typemin(Int16))
         cdopp, cphase, prn = 250Hz, 100.0, 1
-        fc = cdopp * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
+        fc = cdopp * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
         shifts = get_correlator_sample_shifts(
             EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
             fs,
@@ -389,7 +389,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         # 100 MHz through the full plumbing.
         sig, fs = GPSL1CA(), 100e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
-        fc = 200Hz * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
+        fc = 200Hz * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
         shifts = get_correlator_sample_shifts(
             EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
             fs,
@@ -566,7 +566,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
     @testset "dynamic Vector-shifts correlator matches static EPL" begin
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
-        fc = 200Hz * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
+        fc = 200Hz * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
         shifts = collect(get_correlator_sample_shifts(EarlyPromptLateCorrelator(), fs, fc))
         dc = TwoBitThreadedDownconvertAndCorrelator()
 
@@ -616,7 +616,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
     @testset "dynamic Vector-shifts, band-shared (>1 sat) matches per-sat" begin
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
-        fc = 200Hz * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
+        fc = 200Hz * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
         shifts = collect(get_correlator_sample_shifts(EarlyPromptLateCorrelator(), fs, fc))
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
         meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
@@ -720,7 +720,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         Random.seed!(3)
         sig, fs = GPSL1CA(), 5e6Hz
         cdopp, cphase, prn = 1000.0Hz, 0.0, 1
-        fc = cdopp * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
+        fc = cdopp * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
         N = 20000
         A, σ = 40.0, 200.0
         d1 = OneBitThreadedDownconvertAndCorrelator()

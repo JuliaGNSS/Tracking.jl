@@ -11,8 +11,8 @@ using GNSSSignals:
     GPSL5I,
     GalileoE1B,
     gen_code,
-    get_code_center_frequency_ratio,
-    get_code_frequency,
+    get_chip_rate_to_center_frequency_ratio,
+    get_chip_rate,
     get_code,
     get_code_length,
     get_band,
@@ -69,7 +69,8 @@ _unit_code(c) = (m = maximum(abs, c); m == 0 ? float(c) : c ./ m)
     carrier_doppler = 200Hz
     start_code_phase = 100
     code_frequency =
-        carrier_doppler * get_code_center_frequency_ratio(gpsl1) + get_code_frequency(gpsl1)
+        carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1) +
+        get_chip_rate(gpsl1)
     sampling_frequency = 4e6Hz
     prn = 1
     range = 0:3999
@@ -149,10 +150,9 @@ function _noisy_gpsl1_chunks(num_chunks)
     fs = 4e6Hz
     num_samples = 4000 * num_chunks
     carrier_doppler = 1000.0Hz
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
+    code_doppler = carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1)
     t = (0:(num_samples-1)) ./ ustrip(Hz, fs)
-    code =
-        gen_code(num_samples, gpsl1, 1, fs, get_code_frequency(gpsl1) + code_doppler, 100.0)
+    code = gen_code(num_samples, gpsl1, 1, fs, get_chip_rate(gpsl1) + code_doppler, 100.0)
     rng = Random.Xoshiro(1)
     signal =
         ComplexF32.(code .* cis.(2π .* ustrip(Hz, carrier_doppler) .* t .+ 0.3)) .+
@@ -352,7 +352,7 @@ end
     @test last(sample_indices) > 4000 * 18
     @test all(r -> r[3] >= r[2], records)
     # One code period per record: each ends within a sample of a block boundary.
-    code_rate = ustrip(Hz, get_code_frequency(gpsl1)) / ustrip(Hz, fs)
+    code_rate = ustrip(Hz, get_chip_rate(gpsl1)) / ustrip(Hz, fs)
     @test all(r -> abs(rem(r[4], 1023, RoundNearest)) <= code_rate, records)
     @test track_state.sample_offsets[get_band_id(get_band(gpsl1))] == 4000 * 20
     # `track` leaves its input's sample grid where it was.
@@ -375,7 +375,8 @@ end
     carrier_doppler = 200Hz
     start_code_phase = 100.0
     code_frequency =
-        carrier_doppler * get_code_center_frequency_ratio(gpsl1) + get_code_frequency(gpsl1)
+        carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1) +
+        get_chip_rate(gpsl1)
     sampling_frequency = 4e6Hz
     prn = 1
     range = 0:3999 # tracking 1 ms
@@ -448,11 +449,11 @@ end
     carrier_doppler_gal = 1200Hz
     start_code_phase = 100
     code_frequency_gps =
-        carrier_doppler_gps * get_code_center_frequency_ratio(gpsl1) +
-        get_code_frequency(gpsl1)
+        carrier_doppler_gps * get_chip_rate_to_center_frequency_ratio(gpsl1) +
+        get_chip_rate(gpsl1)
     code_frequency_gal =
-        carrier_doppler_gal * get_code_center_frequency_ratio(galileo_e1b) +
-        get_code_frequency(galileo_e1b)
+        carrier_doppler_gal * get_chip_rate_to_center_frequency_ratio(galileo_e1b) +
+        get_chip_rate(galileo_e1b)
     sampling_frequency = 15e6Hz
     prn = 1
     range = 0:3999
@@ -622,7 +623,7 @@ end
     gpsl1 = GPSL1CA()
     carrier_doppler = 200Hz
     start_code_phase = 100
-    code_frequency = carrier_doppler / 1540 + get_code_frequency(gpsl1)
+    code_frequency = carrier_doppler / 1540 + get_chip_rate(gpsl1)
     sampling_frequency = 4e6Hz
     prn = 1
     range = 0:3999
@@ -709,7 +710,7 @@ end
     gpsl1 = GPSL1CA()
     carrier_doppler = 200Hz
     start_code_phase = 100
-    code_frequency = carrier_doppler / 1540 + get_code_frequency(gpsl1)
+    code_frequency = carrier_doppler / 1540 + get_chip_rate(gpsl1)
     sampling_frequency = 4e6Hz
     prn = 1
     range = 0:3999
@@ -811,7 +812,8 @@ end
     function make_array_signal(rng, code_idx)
         code = get_code.(
             gpsl1,
-            get_code_frequency(gpsl1) .* (0:(samples_per_code-1)) ./ sampling_frequency .+ code_idx * get_code_length(gpsl1),
+            get_chip_rate(gpsl1) .* (0:(samples_per_code-1)) ./ sampling_frequency .+
+            code_idx * get_code_length(gpsl1),
             prn,
         )
         clean = 30.0 .* ComplexF64.(code)
@@ -872,7 +874,7 @@ end
     function make_array_signal(rng)
         code = get_code.(
             gpsl1,
-            get_code_frequency(gpsl1) .* (0:(samples_per_code-1)) ./ sampling_frequency,
+            get_chip_rate(gpsl1) .* (0:(samples_per_code-1)) ./ sampling_frequency,
             prn,
         )
         clean = 30.0 .* ComplexF64.(code)
@@ -915,7 +917,8 @@ end
     carrier_doppler = 200Hz
     start_code_phase = 100.0
     code_frequency =
-        carrier_doppler * get_code_center_frequency_ratio(gpsl1) + get_code_frequency(gpsl1)
+        carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1) +
+        get_chip_rate(gpsl1)
     sampling_frequency = 4e6Hz
     prn = 1
     samples_per_code = 4000  # one GPS L1 code period at 4 MHz
@@ -995,8 +998,8 @@ end
     carrier_doppler = 200Hz
     start_code_phase = 100.0
     code_frequency =
-        carrier_doppler * get_code_center_frequency_ratio(signal) +
-        get_code_frequency(signal)
+        carrier_doppler * get_chip_rate_to_center_frequency_ratio(signal) +
+        get_chip_rate(signal)
     # L1C-P's TMBOC needs fs > ~12.28 MHz.
     sampling_frequency = 15e6Hz
     prn = 1
@@ -1066,7 +1069,7 @@ end
     sampling_frequency = 10e6Hz
     period = 100000  # 10 ms at 10 MHz — one L1C-D primary code period
     # Baseband (carrier_doppler = 0), so the code frequency is nominal.
-    code_frequency = get_code_frequency(signal)
+    code_frequency = get_chip_rate(signal)
     primary_len = get_code_length(signal)
     amplitude = 10^(45 / 20)            # 45 dB-Hz with noise_std below
     noise_std = sqrt(10e6)
@@ -1121,17 +1124,20 @@ end
             cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ carrier_phase)
         signal_cp = let s = GPSL1C_P()
             cf =
-                carrier_doppler * get_code_center_frequency_ratio(s) + get_code_frequency(s)
+                carrier_doppler * get_chip_rate_to_center_frequency_ratio(s) +
+                get_chip_rate(s)
             carrier .* gen_code(n_samples, s, prn, sampling_frequency, cf, code_phase)
         end
         signal_cd = let s = GPSL1C_D()
             cf =
-                carrier_doppler * get_code_center_frequency_ratio(s) + get_code_frequency(s)
+                carrier_doppler * get_chip_rate_to_center_frequency_ratio(s) +
+                get_chip_rate(s)
             carrier .* gen_code(n_samples, s, prn, sampling_frequency, cf, code_phase)
         end
         signal_ca = let s = GPSL1CA()
             cf =
-                carrier_doppler * get_code_center_frequency_ratio(s) + get_code_frequency(s)
+                carrier_doppler * get_chip_rate_to_center_frequency_ratio(s) +
+                get_chip_rate(s)
             carrier .* gen_code(
                 n_samples,
                 s,
@@ -1152,8 +1158,8 @@ end
         carrier_phase =
             mod2pi(2π * carrier_doppler * n_samples * i / sampling_frequency + π) - π
         cf_cp =
-            carrier_doppler * get_code_center_frequency_ratio(GPSL1C_P()) +
-            get_code_frequency(GPSL1C_P())
+            carrier_doppler * get_chip_rate_to_center_frequency_ratio(GPSL1C_P()) +
+            get_chip_rate(GPSL1C_P())
         code_phase = mod(cf_cp * n_samples * i / sampling_frequency, cp_primary_len)
         track!(build_signal(code_phase, carrier_phase), track_state, sampling_frequency)
     end
@@ -1175,8 +1181,8 @@ end
     signal = GPSL5I()
     carrier_doppler = -200Hz                 # negative ⇒ negative code Doppler
     code_frequency =
-        carrier_doppler * get_code_center_frequency_ratio(signal) +
-        get_code_frequency(signal)
+        carrier_doppler * get_chip_rate_to_center_frequency_ratio(signal) +
+        get_chip_rate(signal)
     sampling_frequency = 20e6Hz
     prn = 1
     chunk = 20000                            # 1 ms = one L5I code period at 20 MHz

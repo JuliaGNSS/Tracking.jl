@@ -233,7 +233,7 @@ end
 
 # Primary-code period (a time) of one signal.
 @inline _code_period(signal::AbstractGNSSSignal) =
-    get_code_length(signal) / get_code_frequency(signal)
+    get_code_length(signal) / get_chip_rate(signal)
 
 @inline _min_signal_code_period(::Tuple{}, m) = m
 @inline _min_signal_code_period(signals::Tuple, m) =
