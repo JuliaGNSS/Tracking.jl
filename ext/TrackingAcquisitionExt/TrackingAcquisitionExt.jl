@@ -5,13 +5,13 @@ using GNSSSignals: AbstractGNSSSignal, get_code_length, get_signal_id, get_signa
 using Tracking: Tracking, TrackState, TrackedSat
 
 function Tracking.TrackedSat(acq::AcquisitionResults; args...)
-    TrackedSat(acq.system, acq.prn, acq.code_phase, acq.carrier_doppler; args...)
+    TrackedSat(acq.signal, acq.prn, acq.code_phase, acq.carrier_doppler; args...)
 end
 
 """
     TrackState(acq::AcquisitionResults; doppler_estimator, num_ants)
 
-Build a single-group `:default` [`TrackState`](@ref) on `acq.system`, holding the
+Build a single-group `:default` [`TrackState`](@ref) on `acq.signal`, holding the
 satellite of `acq` (its `prn`, `code_phase` and `carrier_doppler`).
 
 ```julia
@@ -20,7 +20,7 @@ ts = TrackState(acq)
 ```
 """
 function Tracking.TrackState(acq::AcquisitionResults; kwargs...)
-    ts = Tracking.TrackState(; signal = acq.system, kwargs...)
+    ts = Tracking.TrackState(; signal = acq.signal, kwargs...)
     Tracking.add_satellite!(ts, acq)
 end
 
@@ -29,11 +29,11 @@ end
 
 Build a [`TrackState`](@ref) holding the satellites of a batch of acquisition results.
 
-  - **Single group**: omit `signals`. All entries must share one `acq.system`, which
+  - **Single group**: omit `signals`. All entries must share one `acq.signal`, which
     becomes the `:default` group's signal; an empty vector errors.
   - **Multi-group**: pass `signals` as to the regular [`TrackState`](@ref)
     constructor. Each acquisition goes to the group whose longest-primary-code
-    signal (ties included) matches `acq.system`; it errors if no group or more than
+    signal (ties included) matches `acq.signal`; it errors if no group or more than
     one matches (then use `add_satellite!` with `group =`).
 
 Other `kwargs` (`doppler_estimator`, `num_ants`, ...) go to the regular constructor.
@@ -64,18 +64,18 @@ function Tracking.TrackState(
                 "or pass at least one acquisition.",
             ),
         )
-        sig = first(acqs).system
+        sig = first(acqs).signal
         # By signal id, not `typeof` (see `_acq_signal_matches`).
         sig_id = get_signal_id(sig)
         for a in acqs
-            get_signal_id(a.system) === sig_id || throw(
+            get_signal_id(a.signal) === sig_id || throw(
                 ArgumentError(
                     string(
-                        "All acquisition results must share the same `system`. ",
+                        "All acquisition results must share the same `signal`. ",
                         "Got ",
                         get_signal_name(sig),
                         " and ",
-                        get_signal_name(a.system),
+                        get_signal_name(a.signal),
                         ". ",
                         "Pass `signals = (...)` to track multiple signals.",
                     ),
@@ -93,27 +93,27 @@ function Tracking.TrackState(
     ts
 end
 
-# Whether `system` is in `sig_tuple` with the group's longest primary code length
+# Whether `signal` is in `sig_tuple` with the group's longest primary code length
 # (ties qualify: GPS L1C-D and L1C-P are both 10230 chips). Compared by signal id,
 # not `typeof`, since the code-matrix type parameter is not part of the identity.
-@inline function _acq_signal_matches(sig_tuple::Tuple, system::AbstractGNSSSignal)
+@inline function _acq_signal_matches(sig_tuple::Tuple, signal::AbstractGNSSSignal)
     longest_len = get_code_length(_longest_code_signal(sig_tuple))
-    sys_id = get_signal_id(system)
+    sys_id = get_signal_id(signal)
     any(s -> get_signal_id(s) === sys_id && get_code_length(s) == longest_len, sig_tuple)
 end
 
-# The key of the one group matching `acq.system`; errors on none or several.
+# The key of the one group matching `acq.signal`; errors on none or several.
 @inline function _find_group_for_acq(track_state::TrackState, acq::AcquisitionResults)
     keys_tuple = keys(track_state.groups)
-    acq_name = get_signal_name(acq.system)
+    acq_name = get_signal_name(acq.signal)
     matches = filter(
-        k -> _acq_signal_matches(track_state.groups[k].signals, acq.system),
+        k -> _acq_signal_matches(track_state.groups[k].signals, acq.signal),
         keys_tuple,
     )
     isempty(matches) && throw(
         ArgumentError(
             string(
-                "No group's longest-primary-code signal matches `acq.system` (",
+                "No group's longest-primary-code signal matches `acq.signal` (",
                 acq_name,
                 ", PRN ",
                 acq.prn,
@@ -126,7 +126,7 @@ end
     length(matches) > 1 && throw(
         ArgumentError(
             string(
-                "Acquisition routing is ambiguous: `acq.system` (",
+                "Acquisition routing is ambiguous: `acq.signal` (",
                 acq_name,
                 ", PRN ",
                 acq.prn,
@@ -145,7 +145,7 @@ end
 Add (or replace) a satellite in `track_state` from an acquisition result: `prn`,
 `code_phase` and `carrier_doppler` from `acq`, the rest at the group's defaults.
 
-`acq.system` must have the **longest code** in the group, the only unambiguous code
+`acq.signal` must have the **longest code** in the group, the only unambiguous code
 phase: for `(GPS L1C-P, GPS L1C-D, GPS L1 C/A)` hand over L1C-P or L1C-D (10230
 chips); L1 C/A's 1023 chips would alias inside the 10230-chip primary.
 
@@ -238,7 +238,7 @@ end
     acq::AcquisitionResults,
 )
     sig_tuple = track_state.groups[group].signals
-    _acq_signal_matches(sig_tuple, acq.system) && return nothing
+    _acq_signal_matches(sig_tuple, acq.signal) && return nothing
     longest = _longest_code_signal(sig_tuple)
     throw(
         ArgumentError(
@@ -247,8 +247,8 @@ end
                 "in group `:",
                 group,
                 "`. ",
-                "Got `acq.system` (",
-                get_signal_name(acq.system),
+                "Got `acq.signal` (",
+                get_signal_name(acq.signal),
                 ") but the group's longest-code signal is ",
                 get_signal_name(longest),
                 ". ",

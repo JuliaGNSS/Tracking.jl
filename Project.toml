@@ -29,7 +29,7 @@ TrackingAcquisitionExt = ["Acquisition"]
 
 [compat]
 Accessors = "0.1"
-Acquisition = "2.5"
+Acquisition = "3"
 Dictionaries = "0.4.1"
 DocStringExtensions = "0.6, 0.7, 0.8, 0.9"
 FastSinCos = "1"

@@ -270,7 +270,7 @@ julia> get_num_ants(track_state, 1)
 
 ### Acquisition handoff
 
-With `using Acquisition`, [`add_satellite!`](@ref) / [`add_satellite`](@ref) accept `AcquisitionResults` (or a vector of them, each routed independently). Without `group =`, an acq goes to the group whose longest-primary-code signal matches `acq.system`.
+With `using Acquisition`, [`add_satellite!`](@ref) / [`add_satellite`](@ref) accept `AcquisitionResults` (or a vector of them, each routed independently). Without `group =`, an acq goes to the group whose longest-primary-code signal matches `acq.signal`.
 
 ```julia
 using Acquisition  # loads the extension

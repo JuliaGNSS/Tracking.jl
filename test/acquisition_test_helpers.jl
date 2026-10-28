@@ -1,4 +1,4 @@
-# Shared helper for building an `AcquisitionResults` (Acquisition 2.5 and later: 15
+# Shared helper for building an `AcquisitionResults` (Acquisition 3: 15
 # positional fields, with `secondary_code_phase` after `code_phase` and
 # `num_secondary_rotations` last).
 #
