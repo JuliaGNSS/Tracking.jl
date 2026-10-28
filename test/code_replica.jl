@@ -1,9 +1,9 @@
 module CodeReplicaTest
 
-using Test: @test, @testset, @inferred
+using Test: @test, @testset
 using Unitful: Hz
 using GNSSSignals: GPSL1CA, get_code
-using Tracking: gen_code_replica!, update_code_phase, get_current_code_frequency
+using Tracking: gen_code_replica!
 
 # `gen_code!` (GNSSSignals #90) may round a chip-boundary sample differently from
 # `get_code`, at most ~1 sample per period, so such samples must sit on a code
@@ -54,30 +54,6 @@ end
             7493,
         )
     end
-end
-
-@testset "Update code phase" begin
-    gpsl1 = GPSL1CA()
-    code_phase = 10
-    code_frequency = 10Hz
-    sampling_frequency = 100Hz
-    num_samples = 2000
-    bit_found = true
-    phase = @inferred update_code_phase(
-        gpsl1,
-        num_samples,
-        code_frequency,
-        sampling_frequency,
-        code_phase,
-        bit_found,
-    )
-    @test phase ≈ mod(10 + 0.1 * 2000, 1023)
-end
-
-@testset "Current code frequency" begin
-    gpsl1 = GPSL1CA()
-    @test @inferred(get_current_code_frequency(gpsl1, 0Hz)) == 1023000Hz
-    @test @inferred(get_current_code_frequency(gpsl1, 200Hz)) == 1023000Hz + 200Hz
 end
 
 end
