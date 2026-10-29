@@ -198,14 +198,14 @@ end
     track_state = add_satellite!(
         track_state;
         prn = prn_l1,
-        group = :legacy_gps_l1,
+        group_key = :legacy_gps_l1,
         code_phase = cp_l1,
         carrier_doppler = cd_l1 - 20Hz,
     )
     track_state = add_satellite!(
         track_state;
         prn = prn_l5,
-        group = :gps_l5,
+        group_key = :gps_l5,
         code_phase = cp_l5,
         carrier_doppler = cd_l5 - 20.0Hz,
     )
@@ -229,8 +229,8 @@ end
 
 @testset "Mismatched durations error (no tolerance)" begin
     ts = TrackState(; signals = (legacy_gps_l1 = (GPSL1CA(),), gps_l5 = (GPSL5I(),)))
-    ts = add_satellite!(ts; prn = 1, group = :legacy_gps_l1, carrier_doppler = 0Hz)
-    ts = add_satellite!(ts; prn = 1, group = :gps_l5, carrier_doppler = 0Hz)
+    ts = add_satellite!(ts; prn = 1, group_key = :legacy_gps_l1, carrier_doppler = 0Hz)
+    ts = add_satellite!(ts; prn = 1, group_key = :gps_l5, carrier_doppler = 0Hz)
 
     # One L5 sample too many.
     m_l1 = BandMeasurement(zeros(ComplexF64, 4000), 4e6Hz)
@@ -271,8 +271,8 @@ end
             gps_l5 = SignalGroup((GPSL5I(),); num_ants = NumAnts(1)),
         ),
     )
-    ts = add_satellite!(ts; prn = 1, group = :legacy_gps_l1, carrier_doppler = 0Hz)
-    ts = add_satellite!(ts; prn = 1, group = :gps_l5, carrier_doppler = 0Hz)
+    ts = add_satellite!(ts; prn = 1, group_key = :legacy_gps_l1, carrier_doppler = 0Hz)
+    ts = add_satellite!(ts; prn = 1, group_key = :gps_l5, carrier_doppler = 0Hz)
 
     @test get_num_ants(ts, :legacy_gps_l1, 1) == 2
     @test get_num_ants(ts, :gps_l5, 1) == 1

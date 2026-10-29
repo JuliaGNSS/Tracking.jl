@@ -263,9 +263,9 @@ end
     @test get_prn(ts, :default, 5) == 5
 end
 
-@testset "remove_satellite!/remove_satellite — multi-group omitted `group=` errors" begin
+@testset "remove_satellite!/remove_satellite — multi-group omitted `group_key=` errors" begin
     ts = TrackState(; signals = (legacy = (GPSL1CA(),), galileo = (GalileoE1B(),)))
-    ts = add_satellite!(ts; prn = 5, group = :legacy, carrier_doppler = 100.0Hz)
+    ts = add_satellite!(ts; prn = 5, group_key = :legacy, carrier_doppler = 100.0Hz)
     @test_throws ArgumentError remove_satellite!(ts; prn = 5)
     @test_throws ArgumentError remove_satellite(ts; prn = 5)
     # A single named group still infers the group when omitted.
@@ -344,7 +344,7 @@ end
     @test @inferred(get_prn(new_track_state, Val(1), 3)) == 3
 
     filtered_new_track_state =
-        @inferred remove_satellite(new_track_state; prn = 2, group = :gps)
+        @inferred remove_satellite(new_track_state; prn = 2, group_key = :gps)
     @test length(get_sat_states(filtered_new_track_state, :gps)) == 2
     @test length(get_sat_states(filtered_new_track_state, :gal)) == 2
     @test length(get_sat_states(filtered_new_track_state, 1)) == 2
@@ -364,7 +364,7 @@ end
     @test get_prn(new_new_track_state, :gps, 2) == 2
 
     filtered_new_new_track_state =
-        @inferred remove_satellite(new_new_track_state; prn = 2, group = :gps)
+        @inferred remove_satellite(new_new_track_state; prn = 2, group_key = :gps)
     @test length(get_sat_states(filtered_new_new_track_state, :gps)) == 2
     @test length(get_sat_states(filtered_new_new_track_state, :gal)) == 2
     @test get_prn(filtered_new_new_track_state, :gps, 1) == 1
@@ -384,9 +384,9 @@ end
     @test get_prn(new_new_new_track_state, :gps, 8) == 8
 
     filtered_new_new_new_track_state = @inferred remove_satellite(
-        @inferred(remove_satellite(new_new_new_track_state; prn = 1, group = :gps));
+        @inferred(remove_satellite(new_new_new_track_state; prn = 1, group_key = :gps));
         prn = 6,
-        group = :gps,
+        group_key = :gps,
     )
 
     @test length(get_sat_states(filtered_new_new_new_track_state, :gps)) == 2

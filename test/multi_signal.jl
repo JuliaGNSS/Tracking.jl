@@ -159,7 +159,7 @@ end
     track_state = add_satellite!(
         track_state;
         prn = 11,
-        group = :modern_gps,
+        group_key = :modern_gps,
         code_phase = 0.0,
         carrier_doppler = 1234.0Hz,
     )
@@ -221,7 +221,7 @@ end
         @test_throws ArgumentError get_num_bits(dup_sat, GPSL1CA)
     end
 
-    @testset "TrackState forwarding: (group, prn, sig)" begin
+    @testset "TrackState forwarding: (group_key, prn, sig)" begin
         @test get_num_bits(track_state, :modern_gps, 11, 1) == 0
         @test get_num_bits(track_state, :modern_gps, 11, GPSL1CA) == 0
         @test get_cn0_estimator(track_state, :modern_gps, 11, 2) isa NoiseRefCN0Estimator

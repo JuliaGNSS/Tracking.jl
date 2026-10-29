@@ -259,8 +259,8 @@ end
             GPSL5I = CorrelatorNoiseEstimator(),
         ),
     )
-    add_satellite!(ts; prn = 1, group = :l1, carrier_doppler = 0.0Hz)
-    add_satellite!(ts; prn = 1, group = :l5, carrier_doppler = 0.0Hz)
+    add_satellite!(ts; prn = 1, group_key = :l1, carrier_doppler = 0.0Hz)
+    add_satellite!(ts; prn = 1, group_key = :l5, carrier_doppler = 0.0Hz)
     # A four-times louder L5 front end, so the two cannot be confused.
     rng = Xoshiro(21)
     l1_samples = ComplexF32.(sqrt(ustrip(Hz, fs_l1)) .* randn(rng, ComplexF64, 40_000))
@@ -296,8 +296,8 @@ end
             samples .+= (σ * 10^(jammer_to_noise_db / 20)) .* cis.(2π * tone_frequency .* t)
         end
         ts = TrackState(; signals = (gps = (GPSL1,), galileo = (e1b,)))
-        add_satellite!(ts; prn = 1, group = :gps, carrier_doppler = 0.0Hz)
-        add_satellite!(ts; prn = 1, group = :galileo, carrier_doppler = 0.0Hz)
+        add_satellite!(ts; prn = 1, group_key = :gps, carrier_doppler = 0.0Hz)
+        add_satellite!(ts; prn = 1, group_key = :galileo, carrier_doppler = 0.0Hz)
         for _ = 1:5
             track!((L1 = BandMeasurement(ComplexF32.(samples), fs),), ts)
         end
@@ -335,9 +335,9 @@ end
         signals = (legacy_gps = (GPSL1,), also_l1 = (GPSL1,)),
         noise_estimators = (GPSL1CA = CorrelatorNoiseEstimator(),),
     )
-    add_satellite!(one_group; prn = 1, group = :legacy_gps, carrier_doppler = 0.0Hz)
-    add_satellite!(two_groups; prn = 1, group = :legacy_gps, carrier_doppler = 0.0Hz)
-    add_satellite!(two_groups; prn = 2, group = :also_l1, carrier_doppler = 0.0Hz)
+    add_satellite!(one_group; prn = 1, group_key = :legacy_gps, carrier_doppler = 0.0Hz)
+    add_satellite!(two_groups; prn = 1, group_key = :legacy_gps, carrier_doppler = 0.0Hz)
+    add_satellite!(two_groups; prn = 2, group_key = :also_l1, carrier_doppler = 0.0Hz)
     signal = _sky(-Inf; seed = 4)
     for ts in (one_group, two_groups)
         track!((L1 = BandMeasurement(signal, FS),), ts)
@@ -353,7 +353,7 @@ end
         signals = (empty_first = (GPSL1,), with_sats = (GPSL1,)),
         noise_estimators = (GPSL1CA = CorrelatorNoiseEstimator(),),
     )
-    add_satellite!(ts; prn = 1, group = :with_sats, carrier_doppler = 0.0Hz)
+    add_satellite!(ts; prn = 1, group_key = :with_sats, carrier_doppler = 0.0Hz)
     @test isempty(Tracking.get_sat_states(ts, :empty_first))
     track!((L1 = BandMeasurement(_sky(-Inf; seed = 11), FS),), ts)
     @test Base.length(ts.noise_estimators.GPSL1CA) == 10
@@ -401,7 +401,7 @@ end
     # noise pass must not index the absent band (a `FieldError`).
     for measure_noise in (true, false)
         ts = TrackState(; signals = (gps_l1 = (GPSL1CA(),), gps_l5 = (GPSL5I(),)))
-        add_satellite!(ts; prn = 1, group = :gps_l1, carrier_doppler = 0.0Hz)
+        add_satellite!(ts; prn = 1, group_key = :gps_l1, carrier_doppler = 0.0Hz)
         @test keys(ts.noise_estimators) == (:GPSL1CA, :GPSL5I)
         downconvert_and_correlate!(
             CPUDownconvertAndCorrelator(),
@@ -417,7 +417,7 @@ end
 
     # `_noise_items` stays type-stable and allocation-free.
     ts = TrackState(; signals = (gps_l1 = (GPSL1CA(),), gps_l5 = (GPSL5I(),)))
-    add_satellite!(ts; prn = 1, group = :gps_l1, carrier_doppler = 0.0Hz)
+    add_satellite!(ts; prn = 1, group_key = :gps_l1, carrier_doppler = 0.0Hz)
     dc = CPUDownconvertAndCorrelator()
     measurements = (L1 = BandMeasurement(_sky(-Inf; seed = 22), FS),)
     items = Tracking._noise_items(dc, ts, measurements, 0, nothing)

@@ -25,7 +25,7 @@ track_state = TrackState(; signal = GPSL1CA())
 ```
 
 This is `TrackState(; signals = (default = (GPSL1CA(),),))`; `add_satellite!`
-may then omit `group=`.
+may then omit `group_key=`.
 
 The per-group `TrackedSat` type (correlator, post-corr filter and
 doppler-estimator-state types) is frozen at construction, so `add_satellite!`
@@ -416,13 +416,13 @@ end
 """
 $(SIGNATURES)
 
-Get the per-group satellite dictionary for a specific signal-group index.
+Get the per-group satellite dictionary for the given `group_key`.
 """
 function get_sat_states(
     satellites::SatelliteDicts{N},
-    group_idx::Union{Symbol,Integer,Val},
+    group_key::Union{Symbol,Integer,Val},
 ) where {N}
-    _index_group(satellites, group_idx)
+    _index_group(satellites, group_key)
 end
 
 # Works for any group-shaped (named) tuple — per-group satellite dicts
@@ -436,9 +436,9 @@ end
 
 function get_sat_states(
     track_state::TrackState{<:SignalGroups{N}},
-    group_idx::Union{Symbol,Integer,Val},
+    group_key::Union{Symbol,Integer,Val},
 ) where {N}
-    get_sat_states(map(g -> g.satellites, track_state.groups), group_idx)
+    get_sat_states(map(g -> g.satellites, track_state.groups), group_key)
 end
 
 function get_sat_states(track_state::TrackState{<:SignalGroups{1}})
@@ -449,15 +449,15 @@ end
 $(SIGNATURES)
 
 Return the first (driver) signal of the given group, also for a group without
-satellites. Resolves at compile time for a literal `group_idx`.
+satellites. Resolves at compile time for a literal `group_key`.
 
-For a single-group `TrackState` the index can be omitted.
+For a single-group `TrackState` the group can be omitted.
 """
 function get_signal(
     track_state::TrackState{<:SignalGroups{N}},
-    group_idx::Union{Symbol,Integer,Val},
+    group_key::Union{Symbol,Integer,Val},
 ) where {N}
-    first(_index_group(track_state.groups, group_idx).signals)
+    first(_index_group(track_state.groups, group_key).signals)
 end
 
 function get_signal(track_state::TrackState{<:SignalGroups{1}})
@@ -466,10 +466,10 @@ end
 
 function get_sat_state(
     track_state::TrackState{<:SignalGroups{N}},
-    group_idx::Union{Symbol,Integer,Val},
+    group_key::Union{Symbol,Integer,Val},
     prn,
 ) where {N}
-    get_sat_state(get_sat_states(track_state, group_idx), prn)
+    get_sat_state(get_sat_states(track_state, group_key), prn)
 end
 
 function get_sat_state(track_state::TrackState{<:SignalGroups{1}}, prn)
@@ -483,7 +483,7 @@ end
 """
 $(SIGNATURES)
 
-Merge already-built [`TrackedSat`](@ref)s into the `group_idx` group of
+Merge already-built [`TrackedSat`](@ref)s into the group `group_key` of
 `track_state`, returning a new [`TrackState`](@ref) (the input is left
 unchanged). `tracked_sats` may be a single `TrackedSat`, a `Vector`, or a
 `Dictionary` keyed by PRN; existing PRNs in the group are overwritten.
@@ -492,11 +492,11 @@ Each sat's type must match the group's slot type, including the
 `doppler_estimator_state` the configured estimator produces. The estimator's
 [`update_estimator_on_handoff`](@ref Tracking.update_estimator_on_handoff) hook is called once with the incoming sats.
 
-For a single-group `TrackState` the `group_idx` may be omitted.
+For a single-group `TrackState` the `group_key` may be omitted.
 """
 function merge_sats(
     track_state::TrackState{G,DE,NE},
-    group_idx::Union{Symbol,Integer},
+    group_key::Union{Symbol,Integer},
     tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}},
 ) where {G<:SignalGroups,DE<:AbstractDopplerEstimator,NE<:NoiseEstimators}
     new_sats_dict = to_dictionary(tracked_sats)
@@ -504,10 +504,10 @@ function merge_sats(
     new_estimator =
         update_estimator_on_handoff(track_state.doppler_estimator, new_sats_dict)
     groups = track_state.groups
-    g = groups[group_idx]
-    _assert_sats_match_slot_type(g, new_sats_dict, group_idx)
+    g = groups[group_key]
+    _assert_sats_match_slot_type(g, new_sats_dict, group_key)
     new_group = SignalGroup(g; satellites = merge(g.satellites, new_sats_dict))
-    new_groups = @set groups[group_idx] = new_group
+    new_groups = @set groups[group_key] = new_group
     TrackState{G,DE,NE}(
         new_groups,
         new_estimator,
@@ -533,7 +533,7 @@ filter from the acquisition handoff (`prn`, `code_phase`, `code_doppler`,
 `carrier_phase`, `carrier_doppler`), its estimator state from
 [`init_estimator_state`](@ref).
 
-`group` may be omitted on a single-group `TrackState`; otherwise an
+`group_key` may be omitted on a single-group `TrackState`; otherwise an
 `ArgumentError` names the available groups.
 
 Keep using the *returned* `TrackState`: an estimator whose
@@ -546,7 +546,7 @@ track_state = TrackState(; signals = (modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL
 add_satellite!(
     track_state;
     prn = 11,
-    group = :modern_gps,
+    group_key = :modern_gps,
     code_phase = 0.0,
     carrier_doppler = 1234.0Hz,
 )
@@ -559,10 +559,10 @@ from such `TrackedSat`s and add more with the
 function add_satellite!(
     track_state::TrackState;
     prn::Int,
-    group::Union{Symbol,Nothing} = nothing,
+    group_key::Union{Symbol,Nothing} = nothing,
     kwargs...,
 )
-    resolved = _resolve_group(track_state, group)
+    resolved = _resolve_group(track_state, group_key)
     sat = _make_default_tracked_sat_for_group(track_state, resolved; prn, kwargs...)
     add_satellite!(track_state, resolved, sat)
 end
@@ -578,11 +578,11 @@ return value, as for the keyword form.
 """
 function add_satellite!(
     track_state::TrackState{G,DE,NE},
-    group::Symbol,
+    group_key::Symbol,
     sat::TrackedSat,
 ) where {G<:SignalGroups,DE<:AbstractDopplerEstimator,NE<:NoiseEstimators}
-    _assert_sat_matches_slot_type(track_state, group, sat)
-    insert_or_set!(_dict_for_group(track_state, group), sat.prn, sat)
+    _assert_sat_matches_slot_type(track_state, group_key, sat)
+    insert_or_set!(_dict_for_group(track_state, group_key), sat.prn, sat)
     new_estimator = update_estimator_on_handoff(
         track_state.doppler_estimator,
         dictionary((sat.prn => sat,)),
@@ -601,16 +601,16 @@ end
 # `convert` MethodError.
 @inline function _assert_sat_matches_slot_type(
     track_state::TrackState,
-    group::Symbol,
+    group_key::Symbol,
     sat::TrackedSat,
 )
-    SlotT = eltype(track_state.groups[group].satellites)
+    SlotT = eltype(track_state.groups[group_key].satellites)
     typeof(sat) === SlotT && return nothing
     throw(
         ArgumentError(
             string(
                 "TrackedSat type does not match the `:",
-                group,
+                group_key,
                 "` group's slot. ",
                 "Got: ",
                 typeof(sat),
@@ -628,7 +628,7 @@ end
 @inline function _assert_sats_match_slot_type(
     g::SignalGroup,
     new_sats_dict::Dictionary{<:Any,<:TrackedSat},
-    group_idx,
+    group_key,
 )
     SlotT = eltype(g.satellites)
     T = eltype(new_sats_dict)
@@ -637,7 +637,7 @@ end
         ArgumentError(
             string(
                 "TrackedSat type does not match the `",
-                group_idx,
+                group_key,
                 "` group's slot. ",
                 "Got: ",
                 T,
@@ -664,29 +664,29 @@ unchanged.
 function add_satellite(
     track_state::TrackState;
     prn::Int,
-    group::Union{Symbol,Nothing} = nothing,
+    group_key::Union{Symbol,Nothing} = nothing,
     kwargs...,
 )
-    resolved = _resolve_group(track_state, group)
+    resolved = _resolve_group(track_state, group_key)
     sat = _make_default_tracked_sat_for_group(track_state, resolved; prn, kwargs...)
     add_satellite(track_state, resolved, sat)
 end
 
 function add_satellite(
     track_state::TrackState{G,DE,NE},
-    group::Symbol,
+    group_key::Symbol,
     sat::TrackedSat,
 ) where {G<:SignalGroups,DE<:AbstractDopplerEstimator,NE<:NoiseEstimators}
-    _assert_sat_matches_slot_type(track_state, group, sat)
+    _assert_sat_matches_slot_type(track_state, group_key, sat)
     new_estimator = update_estimator_on_handoff(
         track_state.doppler_estimator,
         dictionary((sat.prn => sat,)),
     )
     groups = track_state.groups
-    g = groups[group]
+    g = groups[group_key]
     new_dict = merge(g.satellites, dictionary((sat.prn => sat,)))
     new_group = SignalGroup(g; satellites = new_dict)
-    new_groups = @set groups[group] = new_group
+    new_groups = @set groups[group_key] = new_group
     TrackState{G,DE,NE}(
         new_groups,
         new_estimator,
@@ -703,17 +703,17 @@ Remove a satellite from `track_state` in place; a `KeyError` if the group has no
 such `prn`.
 
 ```julia
-remove_satellite!(track_state; prn = 11, group = :modern_gps)
+remove_satellite!(track_state; prn = 11, group_key = :modern_gps)
 ```
 
-`group` may be omitted as for [`add_satellite!`](@ref). Returns `track_state`.
+`group_key` may be omitted as for [`add_satellite!`](@ref). Returns `track_state`.
 """
 function remove_satellite!(
     track_state::TrackState;
     prn::Int,
-    group::Union{Symbol,Nothing} = nothing,
+    group_key::Union{Symbol,Nothing} = nothing,
 )
-    dict = _dict_for_group(track_state, _resolve_group(track_state, group))
+    dict = _dict_for_group(track_state, _resolve_group(track_state, group_key))
     haskey(dict, prn) || throw(KeyError(prn))
     delete!(dict, prn)
     # `delete!` may leave a `#undef` hole (see `_satellites_without`); rebuild in
@@ -738,9 +738,9 @@ unchanged. Errors if no satellite with the given `prn` exists.
 function remove_satellite(
     track_state::TrackState{G,DE,NE};
     prn::Int,
-    group::Union{Symbol,Nothing} = nothing,
+    group_key::Union{Symbol,Nothing} = nothing,
 ) where {G<:SignalGroups,DE<:AbstractDopplerEstimator,NE<:NoiseEstimators}
-    resolved = _resolve_group(track_state, group)
+    resolved = _resolve_group(track_state, group_key)
     dict = _dict_for_group(track_state, resolved)
     haskey(dict, prn) || throw(KeyError(prn))
     new_dict = Dictionary(_satellites_without(dict, prn)...)
@@ -774,12 +774,12 @@ function _satellites_without(dict::Dictionary{I,T}, prn) where {I,T}
     return keys_kept, sats_kept
 end
 
-@inline _dict_for_group(track_state::TrackState, group::Symbol) =
-    track_state.groups[group].satellites
+@inline _dict_for_group(track_state::TrackState, group_key::Symbol) =
+    track_state.groups[group_key].satellites
 
-# Resolve `group=`: `nothing` means the only group of a single-group state
+# Resolve `group_key=`: `nothing` means the only group of a single-group state
 # (folds to a constant), and errors with the candidates otherwise.
-@inline _resolve_group(::TrackState, group::Symbol) = group
+@inline _resolve_group(::TrackState, group_key::Symbol) = group_key
 @inline function _resolve_group(track_state::TrackState, ::Nothing)
     g = keys(track_state.groups)
     length(g) == 1 && return only(g)
@@ -790,7 +790,7 @@ end
                 length(g),
                 " groups ",
                 g,
-                "; pass `group = :one_of_them` to select one.",
+                "; pass `group_key = :one_of_them` to select one.",
             ),
         ),
     )
@@ -800,14 +800,14 @@ end
 # keyword defaults of `add_satellite!`/`add_satellite`.
 function _make_default_tracked_sat_for_group(
     track_state::TrackState,
-    group::Symbol;
+    group_key::Symbol;
     prn::Int,
     code_phase = 0.0,
     code_doppler = nothing,
     carrier_phase = 0.0,
     carrier_doppler = 0.0Hz,
 )
-    g = track_state.groups[group]
+    g = track_state.groups[group_key]
     TrackedSat(
         g.signals,
         prn,
@@ -856,15 +856,15 @@ with its own NCO words and sample instead.
 """
 function get_carrier_phase_correction(
     track_state::TrackState{<:SignalGroups{N}},
-    group_idx::Union{Symbol,Integer,Val},
+    group_key::Union{Symbol,Integer,Val},
     prn,
     sampling_frequency,
 ) where {N}
-    group = _index_group(track_state.groups, group_idx)
-    sat = get_sat_state(group.satellites, prn)
+    signal_group = _index_group(track_state.groups, group_key)
+    sat = get_sat_state(signal_group.satellites, prn)
     # `track!` leaves the replica at the end of the measurement, the band's sample
     # offset, having run on the satellite's Doppler since its latest record.
-    sample = get(track_state.sample_offsets, get_band_id(group.band), 0)
+    sample = get(track_state.sample_offsets, get_band_id(signal_group.band), 0)
     2π * carrier_phase_correction(
         sat.doppler_estimator_state,
         _software_words(sat),
@@ -882,8 +882,8 @@ get_carrier_phase_correction(
 # Per-signal accessors, addressed as (using `get_correlator`):
 #   * `get_correlator(track_state)` — 1 group, 1 sat, 1 signal.
 #   * `get_correlator(track_state, prn)` — 1 group, 1 signal.
-#   * `get_correlator(track_state, group, prn)` — multi-group, 1 signal.
-#   * `get_correlator(track_state, group, prn, sig)` — per-signal, `sig` an index
+#   * `get_correlator(track_state, group_key, prn)` — multi-group, 1 signal.
+#   * `get_correlator(track_state, group_key, prn, sig)` — per-signal, `sig` an index
 #     or signal type; always names the group (`:default` or `1` for one group).
 # Without `sig` they are only valid on single-signal sats.
 const _SignalSelector = Union{Integer,Type{<:AbstractGNSSSignal}}
@@ -910,10 +910,10 @@ for fn in (
         $fn(s::TrackState, id...) = $fn(get_sat_state(s, id...))
         $fn(
             s::TrackState{<:SignalGroups},
-            group::Union{Symbol,Integer,Val},
+            group_key::Union{Symbol,Integer,Val},
             prn,
             sig::_SignalSelector,
-        ) = $fn(get_sat_state(s, group, prn), sig)
+        ) = $fn(get_sat_state(s, group_key, prn), sig)
     end
 end
 
@@ -927,8 +927,8 @@ signal's buffer and return `track_state`. Addressed like the per-signal accessor
 
   - `append_correlator_output!(track_state, output)` — one group, one sat, one signal.
   - `append_correlator_output!(track_state, output, prn)` — one group, one signal.
-  - `append_correlator_output!(track_state, output, group, prn)` — multi-group, one signal.
-  - `append_correlator_output!(track_state, output, group, prn, sig)` — per-signal.
+  - `append_correlator_output!(track_state, output, group_key, prn)` — multi-group, one signal.
+  - `append_correlator_output!(track_state, output, group_key, prn, sig)` — per-signal.
 
 The signal-level method (`append_correlator_output!(::TrackedSignal, output)`)
 carries the contract; see it and [External correlator producers](@ref).
@@ -938,10 +938,10 @@ append_correlator_output!(s::TrackState, output::CorrelatorOutput, id...) =
 append_correlator_output!(
     s::TrackState{<:SignalGroups},
     output::CorrelatorOutput,
-    group::Union{Symbol,Integer,Val},
+    group_key::Union{Symbol,Integer,Val},
     prn,
     sig::_SignalSelector,
-) = (append_correlator_output!(get_sat_state(s, group, prn), output, sig); s)
+) = (append_correlator_output!(get_sat_state(s, group_key, prn), output, sig); s)
 
 """
 $(SIGNATURES)
@@ -1071,7 +1071,7 @@ Addressed like the per-signal accessors; the per-signal form names the group eve
 on a single-group `TrackState`:
 
 ```julia
-set_preferred_num_code_blocks_to_integrate!(ts, :gps_l5, 1, GPSL5I, 10)  # (group, prn, signal)
+set_preferred_num_code_blocks_to_integrate!(ts, :gps_l5, 1, GPSL5I, 10)  # (group_key, prn, signal)
 set_preferred_num_code_blocks_to_integrate!(ts, :gps_l5, 1, 10)          # single-signal sat
 set_preferred_num_code_blocks_to_integrate!(ts, 1, 10)                   # single-group state
 set_preferred_num_code_blocks_to_integrate!(ts, 10)                      # 1 group, 1 sat, 1 signal
@@ -1081,14 +1081,14 @@ Mutates `track_state` in place and returns it.
 """
 function set_preferred_num_code_blocks_to_integrate!(
     track_state::TrackState{<:SignalGroups},
-    group::Union{Symbol,Integer,Val},
+    group_key::Union{Symbol,Integer,Val},
     prn::Integer,
     sig::_SignalSelector,
     num_code_blocks::Integer,
 )
     _set_preferred_blocks!(
         track_state,
-        get_sat_states(track_state, group),
+        get_sat_states(track_state, group_key),
         prn,
         num_code_blocks,
         sig,
@@ -1097,13 +1097,13 @@ end
 
 function set_preferred_num_code_blocks_to_integrate!(
     track_state::TrackState{<:SignalGroups},
-    group::Union{Symbol,Integer,Val},
+    group_key::Union{Symbol,Integer,Val},
     prn::Integer,
     num_code_blocks::Integer,
 )
     _set_preferred_blocks!(
         track_state,
-        get_sat_states(track_state, group),
+        get_sat_states(track_state, group_key),
         prn,
         num_code_blocks,
     )
@@ -1173,7 +1173,7 @@ Use it when a signal's integration length changes mid-track, e.g. GPS L5I from
 integrator state does not carry over to the new update interval, and the
 transient can drag the loop out of lock.
 
-No satellite id resets every satellite; `(group, prn)` or (single-group) `prn`
+No satellite id resets every satellite; `(group_key, prn)` or (single-group) `prn`
 resets one. Mutates `track_state` and returns it. Works for any
 [`AbstractDopplerEstimator`](@extref TrackingLoops.AbstractDopplerEstimator)
 through its [`init_estimator_state`](@ref) hook.
@@ -1196,10 +1196,10 @@ end
 
 function reset_loop_filters!(
     track_state::TrackState{<:SignalGroups},
-    group::Union{Symbol,Integer,Val},
+    group_key::Union{Symbol,Integer,Val},
     prn,
 )
-    sats = get_sat_states(track_state, group)
+    sats = get_sat_states(track_state, group_key)
     sats[prn] = _reset_sat_loop_filters(track_state, sats[prn])
     track_state
 end

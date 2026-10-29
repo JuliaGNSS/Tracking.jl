@@ -27,10 +27,11 @@ end
 
 @testset "PositionVelocityTime: signal groups from a TrackState" begin
     track_state = TrackState(; signals = (gps = (GPSL1CA(),), galileo = (GalileoE1B(),)))
-    for (group, prn, code_phase) in ((:gps, 7, 12.0), (:gps, 8, 13.0), (:galileo, 2, 5.0))
+    for (group_key, prn, code_phase) in
+        ((:gps, 7, 12.0), (:gps, 8, 13.0), (:galileo, 2, 5.0))
         track_state = Tracking.add_satellite!(
             track_state;
-            group,
+            group_key,
             prn,
             carrier_doppler = 100.0Hz,
             code_phase,

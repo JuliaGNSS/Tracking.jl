@@ -1112,7 +1112,7 @@ end
     track_state = add_satellite!(
         track_state;
         prn,
-        group = :modern_gps,
+        group_key = :modern_gps,
         code_phase = 0.0,
         carrier_doppler = carrier_doppler - init_offset,
     )

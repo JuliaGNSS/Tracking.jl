@@ -34,7 +34,7 @@ Build a [`TrackState`](@ref) holding the satellites of a batch of acquisition re
   - **Multi-group**: pass `signals` as to the regular [`TrackState`](@ref)
     constructor. Each acquisition goes to the group whose longest-primary-code
     signal (ties included) matches `acq.signal`; it errors if no group or more than
-    one matches (then use `add_satellite!` with `group =`).
+    one matches (then use `add_satellite!` with `group_key =`).
 
 Other `kwargs` (`doppler_estimator`, `num_ants`, ...) go to the regular constructor.
 
@@ -87,8 +87,8 @@ function Tracking.TrackState(
     end
     ts = Tracking.TrackState(; signals, kwargs...)
     for acq in acqs
-        group = _find_group_for_acq(ts, acq)
-        ts = Tracking.add_satellite!(ts, acq; group)
+        group_key = _find_group_for_acq(ts, acq)
+        ts = Tracking.add_satellite!(ts, acq; group_key)
     end
     ts
 end
@@ -132,7 +132,7 @@ end
                 acq.prn,
                 ") matches groups ",
                 matches,
-                ". Pass `group = <key>` explicitly to pick one.",
+                ". Pass `group_key = <key>` explicitly to pick one.",
             ),
         ),
     )
@@ -140,7 +140,7 @@ end
 end
 
 """
-    add_satellite!(track_state, acq::AcquisitionResults; group = nothing)
+    add_satellite!(track_state, acq::AcquisitionResults; group_key = nothing)
 
 Add (or replace) a satellite in `track_state` from an acquisition result: `prn`,
 `code_phase` and `carrier_doppler` from `acq`, the rest at the group's defaults.
@@ -149,20 +149,20 @@ Add (or replace) a satellite in `track_state` from an acquisition result: `prn`,
 phase: for `(GPS L1C-P, GPS L1C-D, GPS L1 C/A)` hand over L1C-P or L1C-D (10230
 chips); L1 C/A's 1023 chips would alias inside the 10230-chip primary.
 
-With `group = nothing` the group is inferred as in
-[`TrackState(acqs; signals = ...)`](@ref); an explicit `group` is checked instead.
+With `group_key = nothing` the group is inferred as in
+[`TrackState(acqs; signals = ...)`](@ref); an explicit `group_key` is checked instead.
 """
 function Tracking.add_satellite!(
     track_state::TrackState,
     acq::AcquisitionResults;
-    group::Union{Symbol,Nothing} = nothing,
+    group_key::Union{Symbol,Nothing} = nothing,
 )
-    resolved, sat = _group_and_sat_for_acq(track_state, acq, group)
+    resolved, sat = _group_and_sat_for_acq(track_state, acq, group_key)
     Tracking.add_satellite!(track_state, resolved, sat)
 end
 
 """
-    add_satellite(track_state, acq::AcquisitionResults; group = nothing)
+    add_satellite(track_state, acq::AcquisitionResults; group_key = nothing)
 
 Immutable variant of [`add_satellite!`](@ref). Returns a new
 [`TrackState`](@ref); the input is left unchanged.
@@ -170,9 +170,9 @@ Immutable variant of [`add_satellite!`](@ref). Returns a new
 function Tracking.add_satellite(
     track_state::TrackState,
     acq::AcquisitionResults;
-    group::Union{Symbol,Nothing} = nothing,
+    group_key::Union{Symbol,Nothing} = nothing,
 )
-    resolved, sat = _group_and_sat_for_acq(track_state, acq, group)
+    resolved, sat = _group_and_sat_for_acq(track_state, acq, group_key)
     Tracking.add_satellite(track_state, resolved, sat)
 end
 
@@ -180,9 +180,9 @@ end
 @inline function _group_and_sat_for_acq(
     track_state::TrackState,
     acq::AcquisitionResults,
-    group::Union{Symbol,Nothing},
+    group_key::Union{Symbol,Nothing},
 )
-    resolved = isnothing(group) ? _find_group_for_acq(track_state, acq) : group
+    resolved = isnothing(group_key) ? _find_group_for_acq(track_state, acq) : group_key
     _assert_acq_matches_group(track_state, resolved, acq)
     sat = Tracking._make_default_tracked_sat_for_group(
         track_state,
@@ -195,27 +195,27 @@ end
 end
 
 """
-    add_satellite!(track_state, acqs::AbstractVector{<:AcquisitionResults}; group = nothing)
+    add_satellite!(track_state, acqs::AbstractVector{<:AcquisitionResults}; group_key = nothing)
 
 Batch variant: add each entry of `acqs`, validated as in the single form. With
-`group = nothing` each is routed to its group, so a mixed-constellation vector works;
-an explicit `group` applies to every entry. Returns the track state carrying the
+`group_key = nothing` each is routed to its group, so a mixed-constellation vector works;
+an explicit `group_key` applies to every entry. Returns the track state carrying the
 estimator after every [`Tracking.update_estimator_on_handoff`](@ref); keep using the
 return value.
 """
 function Tracking.add_satellite!(
     track_state::TrackState,
     acqs::AbstractVector{<:AcquisitionResults};
-    group::Union{Symbol,Nothing} = nothing,
+    group_key::Union{Symbol,Nothing} = nothing,
 )
     for acq in acqs
-        track_state = Tracking.add_satellite!(track_state, acq; group)
+        track_state = Tracking.add_satellite!(track_state, acq; group_key)
     end
     track_state
 end
 
 """
-    add_satellite(track_state, acqs::AbstractVector{<:AcquisitionResults}; group = nothing)
+    add_satellite(track_state, acqs::AbstractVector{<:AcquisitionResults}; group_key = nothing)
 
 Immutable batch variant of [`add_satellite!`](@ref): returns a new
 [`TrackState`](@ref) with every entry of `acqs` added, the input unchanged.
@@ -223,10 +223,10 @@ Immutable batch variant of [`add_satellite!`](@ref): returns a new
 function Tracking.add_satellite(
     track_state::TrackState,
     acqs::AbstractVector{<:AcquisitionResults};
-    group::Union{Symbol,Nothing} = nothing,
+    group_key::Union{Symbol,Nothing} = nothing,
 )
     foldl(acqs; init = track_state) do ts, acq
-        Tracking.add_satellite(ts, acq; group)
+        Tracking.add_satellite(ts, acq; group_key)
     end
 end
 
@@ -234,10 +234,10 @@ end
 # sets the group's `max_code_wrap` wrap.
 @inline function _assert_acq_matches_group(
     track_state::TrackState,
-    group::Symbol,
+    group_key::Symbol,
     acq::AcquisitionResults,
 )
-    sig_tuple = track_state.groups[group].signals
+    sig_tuple = track_state.groups[group_key].signals
     _acq_signal_matches(sig_tuple, acq.signal) && return nothing
     longest = _longest_code_signal(sig_tuple)
     throw(
@@ -245,7 +245,7 @@ end
             string(
                 "Acquisition signal does not match a longest-code signal ",
                 "in group `:",
-                group,
+                group_key,
                 "`. ",
                 "Got `acq.signal` (",
                 get_signal_name(acq.signal),

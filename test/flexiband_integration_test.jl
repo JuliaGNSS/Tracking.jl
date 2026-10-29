@@ -270,21 +270,23 @@ else
             ),
         )
         for a in acq_l1
-            track_state = add_satellite!(track_state, a; group = :gps_l1)
+            track_state = add_satellite!(track_state, a; group_key = :gps_l1)
         end
         for a in acq_e1
-            track_state = add_satellite!(track_state, a; group = :galileo)
+            track_state = add_satellite!(track_state, a; group_key = :galileo)
         end
         for a in acq_l5
-            track_state = add_satellite!(track_state, a; group = :gps_l5)
+            track_state = add_satellite!(track_state, a; group_key = :gps_l5)
         end
 
         # Record each satellite's carrier Doppler after every chunk.
         groups_acqs = ((:gps_l1, acq_l1), (:galileo, acq_e1), (:gps_l5, acq_l5))
         nl1 = round(Int, ustrip(Hz, FS_L1) * chunk_seconds)
         nl5 = nl1 ÷ 2
-        doppler_trail =
-            Dict((group, a.prn) => Float64[] for (group, acqs) in groups_acqs for a in acqs)
+        doppler_trail = Dict(
+            (group_key, a.prn) => Float64[] for (group_key, acqs) in groups_acqs for
+            a in acqs
+        )
         for c = 1:n_chunks
             l1c = @view l1[((c-1)*nl1+1):(c*nl1)]
             l5c = @view l5[((c-1)*nl5+1):(c*nl5)]
@@ -295,10 +297,10 @@ else
                 ),
                 track_state,
             )
-            for (group, acqs) in groups_acqs, a in acqs
+            for (group_key, acqs) in groups_acqs, a in acqs
                 push!(
-                    doppler_trail[(group, a.prn)],
-                    ustrip(Hz, get_carrier_doppler(track_state, group, a.prn)),
+                    doppler_trail[(group_key, a.prn)],
+                    ustrip(Hz, get_carrier_doppler(track_state, group_key, a.prn)),
                 )
             end
         end
@@ -306,12 +308,12 @@ else
         # Every satellite must stay within half a 250 Hz acquisition bin plus
         # margin of the coarse acquisition (#152), have settled (the last two
         # estimates agree well within a bin), and keep C/N0 above the floor.
-        for (group, acqs) in groups_acqs
+        for (group_key, acqs) in groups_acqs
             for a in acqs
-                trail = doppler_trail[(group, a.prn)]
+                trail = doppler_trail[(group_key, a.prn)]
                 @test abs(trail[end] - ustrip(Hz, a.carrier_doppler)) < 150
                 @test abs(trail[end] - trail[end-1]) < 75
-                @test ustrip(estimate_cn0(track_state, group, a.prn)) > 34
+                @test ustrip(estimate_cn0(track_state, group_key, a.prn)) > 34
             end
         end
     end
@@ -376,13 +378,13 @@ else
             ),
         )
         for a in acq_l1
-            track_state = add_satellite!(track_state, a; group = :gps_l1)
+            track_state = add_satellite!(track_state, a; group_key = :gps_l1)
         end
         for a in acq_e1
-            track_state = add_satellite!(track_state, a; group = :galileo)
+            track_state = add_satellite!(track_state, a; group_key = :galileo)
         end
         for a in acq_l5
-            track_state = add_satellite!(track_state, a; group = :gps_l5)
+            track_state = add_satellite!(track_state, a; group_key = :gps_l5)
         end
 
         groups_acqs = ((:gps_l1, acq_l1), (:galileo, acq_e1), (:gps_l5, acq_l5))
@@ -405,10 +407,10 @@ else
                 ),
                 track_state,
             )
-            for (group, acqs) in groups_acqs, a in acqs
-                doppler = ustrip(Hz, get_carrier_doppler(track_state, group, a.prn))
+            for (group_key, acqs) in groups_acqs, a in acqs
+                doppler = ustrip(Hz, get_carrier_doppler(track_state, group_key, a.prn))
                 @test abs(doppler - ustrip(Hz, a.carrier_doppler)) < 150
-                @test ustrip(estimate_cn0(track_state, group, a.prn)) > 34
+                @test ustrip(estimate_cn0(track_state, group_key, a.prn)) > 34
             end
         end
     end

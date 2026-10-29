@@ -52,7 +52,7 @@ while got_signal_chunk(rx)
     chunk = read_chunk!(rx)
     track!(chunk, track_state, sampling_frequency;
            downconvert_and_correlator = dc)
-    # ... read per-sat state e.g. via get_sat_state(track_state, group, prn) ...
+    # ... read per-sat state e.g. via get_sat_state(track_state, group_key, prn) ...
 end
 ```
 
@@ -67,7 +67,7 @@ Per chunk:
 1. **Ingest.** Build a [`CorrelatorOutput`](@extref TrackingLoops.CorrelatorOutput) from the producer's raw accumulator and append it with [`append_correlator_output!`](@ref), **per signal in `sample_index` order**:
 
    ```julia
-   append_correlator_output!(track_state, output, group, prn, sig)
+   append_correlator_output!(track_state, output, group_key, prn, sig)
    ```
 
 2. **Estimate.** Call [`estimate_dopplers_and_filter_prompt!`](@ref) with the **per-band sampling frequencies** (a `NamedTuple` or `Dict` keyed by `get_band_id`) in place of the samples:
@@ -106,9 +106,9 @@ julia> track_state = TrackState(;
            signals = (legacy_gps_l1 = (GPSL1CA(),), gps_l5 = (GPSL5I(),)),
        );
 
-julia> track_state = add_satellite!(track_state; prn = 1, group = :legacy_gps_l1, code_phase = 0.0, carrier_doppler = 0.0Hz);
+julia> track_state = add_satellite!(track_state; prn = 1, group_key = :legacy_gps_l1, code_phase = 0.0, carrier_doppler = 0.0Hz);
 
-julia> track_state = add_satellite!(track_state; prn = 1, group = :gps_l5,        code_phase = 0.0, carrier_doppler = 0.0Hz);
+julia> track_state = add_satellite!(track_state; prn = 1, group_key = :gps_l5,        code_phase = 0.0, carrier_doppler = 0.0Hz);
 
 julia> buf_l1 = randn(Xoshiro(1), ComplexF64, 4000);   # 1 ms at  4 MHz
 
