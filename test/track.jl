@@ -138,10 +138,10 @@ _unit_code(c) = (m = maximum(abs, c); m == 0 ? float(c) : c ./ m)
         @test get_signal_start_sample(track_state) == 4001
         tracked_prompts[i] = get_last_fully_integrated_filtered_prompt(track_state)
         code_phases[i] = comp_code_phase
-        carrier_phases[i] = comp_carrier_phase
+        carrier_phases[i] = comp_carrier_phase / 2π
     end
     @test tracked_code_phases[end] ≈ code_phases[end] atol = 5e-5
-    @test tracked_carrier_phases[end] + π ≈ carrier_phases[end] atol = 1e-3
+    @test tracked_carrier_phases[end] + 0.5 ≈ carrier_phases[end] atol = 1e-3 / 2π
 end
 
 # GPS L1 C/A PRN 1 at a 1 kHz Doppler in noise, cut into 1 ms chunks at 4 MHz.
@@ -602,14 +602,14 @@ end
         get_code_length(galileo_e1b),
     )
     @test get_code_phase(track_state, :gps, 1) ≈ comp_code_phase_gps atol = 5e-3
-    @test mod(get_carrier_phase(track_state, :gps, 1), π) ≈ mod(comp_carrier_phase_gps, π) atol =
-        2e-2
+    @test mod(get_carrier_phase(track_state, :gps, 1), 0.5) ≈
+          mod(comp_carrier_phase_gps / 2π, 0.5) atol = 2e-2 / 2π
     @test get_code_phase(track_state, :gal, 1) ≈ comp_code_phase_gal atol = 5e-3
     # The Int8 CBOC code approximates the BOC(1,1)/BOC(6,1) mix and leaves a
     # deterministic ~0.006 rad residual, the same for every sample type
     # (GNSSSignals #90).
-    @test mod(get_carrier_phase(track_state, :gal, 1), π) ≈ mod(comp_carrier_phase_gal, π) atol =
-        1e-2
+    @test mod(get_carrier_phase(track_state, :gal, 1), 0.5) ≈
+          mod(comp_carrier_phase_gal / 2π, 0.5) atol = 1e-2 / 2π
 end
 
 @testset "Tracking with intermediate frequency of $intermediate_frequency" for intermediate_frequency in
@@ -694,10 +694,10 @@ end
         tracked_code_dopplers[i] = get_code_doppler(track_state) / Hz
         tracked_prompts[i] = get_last_fully_integrated_filtered_prompt(track_state)
         code_phases[i] = comp_code_phase
-        carrier_phases[i] = comp_carrier_phase
+        carrier_phases[i] = comp_carrier_phase / 2π
     end
     @test tracked_code_phases[end] ≈ code_phases[end] atol = 5e-5
-    @test tracked_carrier_phases[end] + π ≈ carrier_phases[end] atol = 5e-5
+    @test tracked_carrier_phases[end] + 0.5 ≈ carrier_phases[end] atol = 5e-5 / 2π
 end
 
 @testset "Track multiple signals with signal of type $type" for type in (
@@ -792,10 +792,10 @@ end
         tracked_code_dopplers[i] = get_code_doppler(track_state) / Hz
         tracked_prompts[i] = get_last_fully_integrated_filtered_prompt(track_state)
         code_phases[i] = comp_code_phase
-        carrier_phases[i] = comp_carrier_phase
+        carrier_phases[i] = comp_carrier_phase / 2π
     end
     @test tracked_code_phases[end] ≈ code_phases[end] atol = 5e-5
-    @test tracked_carrier_phases[end] + π ≈ carrier_phases[end] atol = 5e-5
+    @test tracked_carrier_phases[end] + 0.5 ≈ carrier_phases[end] atol = 5e-5 / 2π
 end
 
 # The testset above has identical, noise-free columns. Here each antenna has

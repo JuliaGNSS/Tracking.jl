@@ -214,7 +214,9 @@ end
         code_doppler = -0.3Hz,
         doppler_estimator = estimator,
     )
-    @test get_carrier_phase(sat_kw) ≈ 0.5
+    # Stored and reported in cycles, as given.
+    @test sat_kw.carrier_phase == 0.5
+    @test get_carrier_phase(sat_kw) == 0.5
     @test get_code_doppler(sat_kw) == -0.3Hz
     @test sat_kw.doppler_estimator_state.bandwidths.wide_carrier ==
           TrackingLoops.default_wide_carrier_loop_filter_bandwidth(GPSL1C_P())

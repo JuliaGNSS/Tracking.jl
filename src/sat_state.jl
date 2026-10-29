@@ -430,7 +430,7 @@ estimator driver. The estimator state comes from
 [`init_estimator_state`](@ref).
 
 `code_doppler = nothing` derives it from `carrier_doppler` and the driver's
-code/center frequency ratio. `carrier_phase` is in radians.
+code/center frequency ratio. `carrier_phase` is in cycles.
 """
 function TrackedSat(
     tracked_signals::Tuple{TrackedSignal,Vararg{TrackedSignal}},
@@ -452,7 +452,7 @@ function TrackedSat(
         prn,
         float(code_phase),
         cd,
-        float(carrier_phase) / 2π,
+        float(carrier_phase),
         cdop,
         1,
         tracked_signals,
@@ -628,9 +628,9 @@ get_code_doppler(s::TrackedSat) = s.code_doppler
 """
 $(SIGNATURES)
 
-Get the current carrier phase in radians.
+Get the current carrier phase in cycles; tracking wraps it to [-0.5, 0.5).
 """
-get_carrier_phase(s::TrackedSat) = s.carrier_phase * 2π
+get_carrier_phase(s::TrackedSat) = s.carrier_phase
 
 """
 $(SIGNATURES)

@@ -140,7 +140,7 @@ TrackState
 
 ## Adding satellites
 
-[`add_satellite!`](@ref) builds a [`TrackedSat`](@ref) with the default correlator and post-correlation filter from the acquisition handoff (`prn`, `code_phase`, `carrier_doppler`, optionally `code_doppler` and `carrier_phase`). Adding a PRN again overwrites it, as [`merge_sats`](@ref) does.
+[`add_satellite!`](@ref) builds a [`TrackedSat`](@ref) with the default correlator and post-correlation filter from the acquisition handoff (`prn`, `code_phase`, `carrier_doppler`, optionally `code_doppler` and `carrier_phase` in cycles). Adding a PRN again overwrites it, as [`merge_sats`](@ref) does.
 
 ### Multi-satellite tracking
 
@@ -451,7 +451,7 @@ The trailing `sig` selector is either:
 | `get_num_ants` | Number of antenna elements. |
 | `get_code_phase` | Shared code phase (wraps at [`max_code_wrap`](@ref Tracking.max_code_wrap)). |
 | `get_code_doppler` | Shared code Doppler. |
-| `get_carrier_phase` | Shared carrier phase in radians. |
+| `get_carrier_phase` | Shared carrier phase in cycles. |
 | [`get_carrier_phase_correction`](@ref) | What the estimator adds to `get_carrier_phase` for the carrier-phase measurement (vector loop only; takes the band's sampling frequency). |
 | `get_carrier_doppler` | Shared carrier Doppler. |
 | `get_signal_start_sample` | Index of the next sample to integrate. |
