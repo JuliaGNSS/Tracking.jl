@@ -58,21 +58,24 @@ end
     next_sample_index::Int,
     code_phase::Float64,
 )
-    s = first(signals)
+    tsig = first(signals)
     (corr, completed) = first(new_data)
-    total_integrated = s.integrated_samples + integrated_samples
+    total_integrated = tsig.integrated_samples + integrated_samples
     if completed
         push!(
-            s.correlator_bank_outputs,
+            tsig.correlator_bank_outputs,
             CorrelatorBankOutput(corr, total_integrated, next_sample_index - 1, code_phase),
         )
-        new_s = TrackedSignal(s; integrated_samples = 0, correlator_bank = zero(corr))
+        new_tsig = TrackedSignal(tsig; integrated_samples = 0, correlator_bank = zero(corr))
     else
-        new_s =
-            TrackedSignal(s; integrated_samples = total_integrated, correlator_bank = corr)
+        new_tsig = TrackedSignal(
+            tsig;
+            integrated_samples = total_integrated,
+            correlator_bank = corr,
+        )
     end
     (
-        new_s,
+        new_tsig,
         _build_new_signals(
             Base.tail(signals),
             Base.tail(new_data),

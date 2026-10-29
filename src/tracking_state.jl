@@ -823,13 +823,19 @@ function _make_default_tracked_sat_for_group(
 end
 
 # Sat-level accessors: shared by all signals on a sat.
-get_prn(s::TrackState, id...) = get_prn(get_sat_state(s, id...))
-get_num_antennas(s::TrackState, id...) = get_num_antennas(get_sat_state(s, id...))
-get_code_phase(s::TrackState, id...) = get_code_phase(get_sat_state(s, id...))
-get_code_doppler(s::TrackState, id...) = get_code_doppler(get_sat_state(s, id...))
-get_carrier_phase(s::TrackState, id...) = get_carrier_phase(get_sat_state(s, id...))
-get_carrier_doppler(s::TrackState, id...) = get_carrier_doppler(get_sat_state(s, id...))
-get_next_sample_index(s::TrackState, id...) = get_next_sample_index(get_sat_state(s, id...))
+get_prn(track_state::TrackState, id...) = get_prn(get_sat_state(track_state, id...))
+get_num_antennas(track_state::TrackState, id...) =
+    get_num_antennas(get_sat_state(track_state, id...))
+get_code_phase(track_state::TrackState, id...) =
+    get_code_phase(get_sat_state(track_state, id...))
+get_code_doppler(track_state::TrackState, id...) =
+    get_code_doppler(get_sat_state(track_state, id...))
+get_carrier_phase(track_state::TrackState, id...) =
+    get_carrier_phase(get_sat_state(track_state, id...))
+get_carrier_doppler(track_state::TrackState, id...) =
+    get_carrier_doppler(get_sat_state(track_state, id...))
+get_next_sample_index(track_state::TrackState, id...) =
+    get_next_sample_index(get_sat_state(track_state, id...))
 
 """
 $(SIGNATURES)
@@ -908,13 +914,13 @@ for fn in (
     :get_preferred_num_code_blocks_to_integrate,
 )
     @eval begin
-        $fn(s::TrackState, id...) = $fn(get_sat_state(s, id...))
+        $fn(track_state::TrackState, id...) = $fn(get_sat_state(track_state, id...))
         $fn(
-            s::TrackState{<:SignalGroups},
+            track_state::TrackState{<:SignalGroups},
             group_key::Union{Symbol,Integer,Val},
             prn,
             sig::_SignalSelector,
-        ) = $fn(get_sat_state(s, group_key, prn), sig)
+        ) = $fn(get_sat_state(track_state, group_key, prn), sig)
     end
 end
 
@@ -934,15 +940,21 @@ signal's buffer and return `track_state`. Addressed like the per-signal accessor
 The signal-level method (`append_correlator_bank_output!(::TrackedSignal, output)`)
 carries the contract; see it and [External correlator producers](@ref).
 """
-append_correlator_bank_output!(s::TrackState, output::CorrelatorBankOutput, id...) =
-    (append_correlator_bank_output!(get_sat_state(s, id...), output); s)
 append_correlator_bank_output!(
-    s::TrackState{<:SignalGroups},
+    track_state::TrackState,
+    output::CorrelatorBankOutput,
+    id...,
+) = (append_correlator_bank_output!(get_sat_state(track_state, id...), output); track_state)
+append_correlator_bank_output!(
+    track_state::TrackState{<:SignalGroups},
     output::CorrelatorBankOutput,
     group_key::Union{Symbol,Integer,Val},
     prn,
     sig::_SignalSelector,
-) = (append_correlator_bank_output!(get_sat_state(s, group_key, prn), output, sig); s)
+) = (
+    append_correlator_bank_output!(get_sat_state(track_state, group_key, prn), output, sig);
+    track_state
+)
 
 """
 $(SIGNATURES)

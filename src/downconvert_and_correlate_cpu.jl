@@ -992,8 +992,8 @@ end
     signals::Tuple{AbstractGNSSSignal,Vararg{AbstractGNSSSignal}},
     ::Val{K},
 ) where {K}
-    s = first(signals)
-    get_signal_id(typeof(s)) === K ? (s,) :
+    signal = first(signals)
+    get_signal_id(typeof(signal)) === K ? (signal,) :
     _first_signal_with_id(Base.tail(signals), Val(K))
 end
 

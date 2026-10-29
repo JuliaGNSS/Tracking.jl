@@ -50,7 +50,7 @@ function _update_tracked_sat_doppler(
     # The loops lock the driver onto the real axis; each signal's bit-buffer
     # prompt is de-rotated by its phase offset from it, so a quadrature component
     # (e.g. GPS L5, Galileo E5a) decodes off the right axis.
-    driver_carrier_phase = get_carrier_phase_offset(head.signal)
+    driver_carrier_phase_offset = get_carrier_phase_offset(head.signal)
     nco_command = _software_nco_command(sat)
 
     driver_noise_density, driver_noise_density_ready = first(noise)
@@ -63,7 +63,7 @@ function _update_tracked_sat_doppler(
             sampling_frequency,
             driver_noise_density,
             driver_noise_density_ready,
-            driver_carrier_phase,
+            driver_carrier_phase_offset,
             nco_command,
             sample_offset,
         )
@@ -73,7 +73,7 @@ function _update_tracked_sat_doppler(
         sat.prn,
         sampling_frequency,
         Base.tail(noise),
-        driver_carrier_phase,
+        driver_carrier_phase_offset,
         estimator,
         new_doppler_estimator_state,
         nco_command,
@@ -104,8 +104,11 @@ function _update_tracked_sat_doppler(
 end
 
 # Drop an in-flight partial integration (at the sync phase snap).
-@inline _reset_inflight_integration(s::TrackedSignal) =
-    TrackedSignal(s; correlator_bank = zero(s.correlator_bank), integrated_samples = 0)
+@inline _reset_inflight_integration(tsig::TrackedSignal) = TrackedSignal(
+    tsig;
+    correlator_bank = zero(tsig.correlator_bank),
+    integrated_samples = 0,
+)
 
 # Process one completed correlator output of a signal into its predetection
 # integration, shared by the driver and passenger folds (#133): TrackingLoops'
@@ -125,7 +128,7 @@ end
     sampling_frequency,
     noise_density,
     noise_density_ready::Bool,
-    driver_carrier_phase::Real;
+    driver_carrier_phase_offset::Real;
     secondary_code_wiped::Bool,
     batch_end_sample_index::Integer,
     sample_offset::Integer,
@@ -142,7 +145,7 @@ end
         sampling_frequency,
         noise_density,
         noise_density_ready,
-        driver_carrier_phase;
+        driver_carrier_phase_offset;
         secondary_code_wiped,
         batch_end_sample_index,
         sample_index_offset = sample_offset,
@@ -189,7 +192,7 @@ end
     sampling_frequency,
     noise_density,
     noise_density_ready::Bool,
-    driver_carrier_phase::Real,
+    driver_carrier_phase_offset::Real,
     nco_command,
     sample_offset::Int = 0,
 )
@@ -197,11 +200,11 @@ end
     if isempty(outputs)
         return tracked_signal, pll_and_dll_state, sat.carrier_doppler, sat.code_doppler
     end
-    ts = tracked_signal
+    tsig = tracked_signal
     state = pll_and_dll_state
     carrier_doppler = sat.carrier_doppler
     code_doppler = sat.code_doppler
-    found_before_fold = is_bit_or_secondary_code_synced(ts)
+    found_before_fold = is_bit_or_secondary_code_synced(tsig)
     # The fold's command is computed after its last integration; a
     # delay-compensated loop maps each integration onto the delay-free loop's one
     # as far ahead.
@@ -210,14 +213,14 @@ end
         output = outputs[k]
         # A fold that started unsynced was correlated with the pre-sync replica
         # throughout, even past a sync found in it (see `process_correlator_bank_output!`).
-        ts, integration = _process_correlator_bank_output(
-            ts,
+        tsig, integration = _process_correlator_bank_output(
+            tsig,
             output,
             sat.prn,
             sampling_frequency,
             noise_density,
             noise_density_ready,
-            driver_carrier_phase;
+            driver_carrier_phase_offset;
             secondary_code_wiped = found_before_fold,
             batch_end_sample_index,
             sample_offset,
@@ -226,7 +229,7 @@ end
             step_loop!(estimator, state, integration, nco_command, nothing)
     end
     empty!(outputs)
-    return ts, state, carrier_doppler, code_doppler
+    return tsig, state, carrier_doppler, code_doppler
 end
 
 # The passengers (`signals[2:end]`): integrations are stepped through the estimator
@@ -248,7 +251,7 @@ end
     prn::Integer,
     sampling_frequency,
     noise::Tuple,
-    driver_carrier_phase::Real,
+    driver_carrier_phase_offset::Real,
     estimator::AbstractTrackingLoop,
     state,
     nco_command,
@@ -261,7 +264,7 @@ end
         sampling_frequency,
         noise_density,
         noise_density_ready,
-        driver_carrier_phase,
+        driver_carrier_phase_offset,
         estimator,
         state,
         nco_command,
@@ -272,7 +275,7 @@ end
         prn,
         sampling_frequency,
         Base.tail(noise),
-        driver_carrier_phase,
+        driver_carrier_phase_offset,
         estimator,
         state,
         nco_command,
@@ -287,7 +290,7 @@ end
     sampling_frequency,
     noise_density,
     noise_density_ready::Bool,
-    driver_carrier_phase::Real,
+    driver_carrier_phase_offset::Real,
     estimator::AbstractTrackingLoop,
     state,
     nco_command,
@@ -295,20 +298,20 @@ end
 )
     outputs = tracked_signal.correlator_bank_outputs
     isempty(outputs) && return tracked_signal, state
-    ts = tracked_signal
-    found_before_fold = is_bit_or_secondary_code_synced(ts)
+    tsig = tracked_signal
+    found_before_fold = is_bit_or_secondary_code_synced(tsig)
     batch_end_sample_index = last(outputs).sample_index
     @inbounds for k in eachindex(outputs)
         output = outputs[k]
         # Same rule as the driver fold.
-        ts, integration = _process_correlator_bank_output(
-            ts,
+        tsig, integration = _process_correlator_bank_output(
+            tsig,
             output,
             prn,
             sampling_frequency,
             noise_density,
             noise_density_ready,
-            driver_carrier_phase;
+            driver_carrier_phase_offset;
             secondary_code_wiped = found_before_fold,
             batch_end_sample_index,
             sample_offset,
@@ -316,7 +319,7 @@ end
         state, _, _ = step_loop!(estimator, state, integration, nco_command, nothing)
     end
     empty!(outputs)
-    ts, state
+    tsig, state
 end
 
 """

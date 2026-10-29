@@ -558,9 +558,9 @@ $(SIGNATURES)
 
 Get the PRN (Pseudo-Random Noise) number of the satellite.
 """
-get_prn(s::TrackedSat) = s.prn
+get_prn(sat::TrackedSat) = sat.prn
 get_num_antennas(
-    s::TrackedSat{<:Tuple{TrackedSignal{<:Any,<:Any,<:AbstractCorrelatorBank{M}},Vararg}},
+    sat::TrackedSat{<:Tuple{TrackedSignal{<:Any,<:Any,<:AbstractCorrelatorBank{M}},Vararg}},
 ) where {M} = M
 
 """
@@ -570,28 +570,28 @@ Get the satellite's shared code phase in chips, wrapping at
 [`max_code_phase_period`](@ref). Mod by a signal's primary code length for its replica
 phase.
 """
-get_code_phase(s::TrackedSat) = s.code_phase
+get_code_phase(sat::TrackedSat) = sat.code_phase
 
 """
 $(SIGNATURES)
 
 Get the current code Doppler frequency.
 """
-get_code_doppler(s::TrackedSat) = s.code_doppler
+get_code_doppler(sat::TrackedSat) = sat.code_doppler
 
 """
 $(SIGNATURES)
 
 Get the current carrier phase in cycles; tracking wraps it to [-0.5, 0.5).
 """
-get_carrier_phase(s::TrackedSat) = s.carrier_phase
+get_carrier_phase(sat::TrackedSat) = sat.carrier_phase
 
 """
 $(SIGNATURES)
 
 Get the current carrier Doppler frequency.
 """
-get_carrier_doppler(s::TrackedSat) = s.carrier_doppler
+get_carrier_doppler(sat::TrackedSat) = sat.carrier_doppler
 
 """
 $(SIGNATURES)
@@ -600,14 +600,14 @@ Get the index of the next sample of the current samples this satellite
 processes, mid-integration if one is in flight; one past the end once the
 buffer is done. `track` resets it to 1 for each new sample buffer.
 """
-get_next_sample_index(s::TrackedSat) = s.next_sample_index
+get_next_sample_index(sat::TrackedSat) = sat.next_sample_index
 
 """
 $(SIGNATURES)
 
 Get the satellite's tuple of [`TrackedSignal`](@ref)s.
 """
-get_signals(s::TrackedSat) = s.signals
+get_signals(sat::TrackedSat) = sat.signals
 
 """
 $(SIGNATURES)
@@ -615,7 +615,7 @@ $(SIGNATURES)
 Get the per-satellite Doppler estimator state (e.g. the loop-filter state
 for the conventional PLL/DLL).
 """
-get_doppler_estimator_state(s::TrackedSat) = s.doppler_estimator_state
+get_doppler_estimator_state(sat::TrackedSat) = sat.doppler_estimator_state
 
 # Per-signal accessors on a TrackedSat, through `_find_signal`: no selector
 # (single-signal sats only), an `Integer` index, or a signal type (must match
@@ -655,37 +655,37 @@ end
     _assert_no_more_of_type(Base.tail(t), T)
 end
 
-get_signal(s::TrackedSat, sel...) = get_signal(_find_signal(s.signals, sel...))
-get_correlator_bank(s::TrackedSat, sel...) =
-    get_correlator_bank(_find_signal(s.signals, sel...))
-get_last_fully_integrated_correlator(s::TrackedSat, sel...) =
-    get_last_fully_integrated_correlator(_find_signal(s.signals, sel...))
-get_last_fully_integrated_beamformed_prompt(s::TrackedSat, sel...) =
-    get_last_fully_integrated_beamformed_prompt(_find_signal(s.signals, sel...))
-get_last_fully_integrated_num_code_blocks(s::TrackedSat, sel...) =
-    get_last_fully_integrated_num_code_blocks(_find_signal(s.signals, sel...))
-get_last_fully_integrated_integration_time(s::TrackedSat, sel...) =
-    get_last_fully_integrated_integration_time(_find_signal(s.signals, sel...))
-get_beamformed_prompts(s::TrackedSat, sel...) =
-    get_beamformed_prompts(_find_signal(s.signals, sel...))
-get_beamformer(s::TrackedSat, sel...) = get_beamformer(_find_signal(s.signals, sel...))
-get_cn0_estimator(s::TrackedSat, sel...) =
-    get_cn0_estimator(_find_signal(s.signals, sel...))
-get_bit_buffer(s::TrackedSat, sel...) = get_bit_buffer(_find_signal(s.signals, sel...))
-get_soft_bits(s::TrackedSat, sel...) = get_soft_bits(_find_signal(s.signals, sel...))
-get_num_bits(s::TrackedSat, sel...) = get_num_bits(_find_signal(s.signals, sel...))
-is_bit_or_secondary_code_synced(s::TrackedSat, sel...) =
-    is_bit_or_secondary_code_synced(_find_signal(s.signals, sel...))
-get_integrated_samples(s::TrackedSat, sel...) =
-    get_integrated_samples(_find_signal(s.signals, sel...))
-get_correlator_bank_outputs(s::TrackedSat, sel...) =
-    get_correlator_bank_outputs(_find_signal(s.signals, sel...))
-get_preferred_num_code_blocks_to_integrate(s::TrackedSat, sel...) =
-    get_preferred_num_code_blocks_to_integrate(_find_signal(s.signals, sel...))
+get_signal(sat::TrackedSat, sel...) = get_signal(_find_signal(sat.signals, sel...))
+get_correlator_bank(sat::TrackedSat, sel...) =
+    get_correlator_bank(_find_signal(sat.signals, sel...))
+get_last_fully_integrated_correlator(sat::TrackedSat, sel...) =
+    get_last_fully_integrated_correlator(_find_signal(sat.signals, sel...))
+get_last_fully_integrated_beamformed_prompt(sat::TrackedSat, sel...) =
+    get_last_fully_integrated_beamformed_prompt(_find_signal(sat.signals, sel...))
+get_last_fully_integrated_num_code_blocks(sat::TrackedSat, sel...) =
+    get_last_fully_integrated_num_code_blocks(_find_signal(sat.signals, sel...))
+get_last_fully_integrated_integration_time(sat::TrackedSat, sel...) =
+    get_last_fully_integrated_integration_time(_find_signal(sat.signals, sel...))
+get_beamformed_prompts(sat::TrackedSat, sel...) =
+    get_beamformed_prompts(_find_signal(sat.signals, sel...))
+get_beamformer(sat::TrackedSat, sel...) = get_beamformer(_find_signal(sat.signals, sel...))
+get_cn0_estimator(sat::TrackedSat, sel...) =
+    get_cn0_estimator(_find_signal(sat.signals, sel...))
+get_bit_buffer(sat::TrackedSat, sel...) = get_bit_buffer(_find_signal(sat.signals, sel...))
+get_soft_bits(sat::TrackedSat, sel...) = get_soft_bits(_find_signal(sat.signals, sel...))
+get_num_bits(sat::TrackedSat, sel...) = get_num_bits(_find_signal(sat.signals, sel...))
+is_bit_or_secondary_code_synced(sat::TrackedSat, sel...) =
+    is_bit_or_secondary_code_synced(_find_signal(sat.signals, sel...))
+get_integrated_samples(sat::TrackedSat, sel...) =
+    get_integrated_samples(_find_signal(sat.signals, sel...))
+get_correlator_bank_outputs(sat::TrackedSat, sel...) =
+    get_correlator_bank_outputs(_find_signal(sat.signals, sel...))
+get_preferred_num_code_blocks_to_integrate(sat::TrackedSat, sel...) =
+    get_preferred_num_code_blocks_to_integrate(_find_signal(sat.signals, sel...))
 
 # `output` first, so a trailing signal selector works as for the accessors.
-append_correlator_bank_output!(s::TrackedSat, output::CorrelatorBankOutput, sel...) =
-    (append_correlator_bank_output!(_find_signal(s.signals, sel...), output); s)
+append_correlator_bank_output!(sat::TrackedSat, output::CorrelatorBankOutput, sel...) =
+    (append_correlator_bank_output!(_find_signal(sat.signals, sel...), output); sat)
 
 # Between `track` calls: next sample index back to 1, per-signal prompts and
 # outputs emptied in place, bit buffers `reset`.
