@@ -586,7 +586,7 @@ end
     @test isempty(Tracking._scratch_buffers(dc).code_replica)
     ts = _tracked(ComplexF32.(_sky(45.0; seed = 5)), dc)
     @test get_noise_density(ts.noise_estimators.GPSL1CA) !== nothing
-    # Sized to the whole buffer: `gen_code_replica!` writes *at* `start_sample`.
+    # Sized to the whole buffer: `gen_code_replica!` writes *at* `first(sample_range)`.
     @test length(Tracking._scratch_buffers(dc).code_replica) >= NUM_SAMPLES
 end
 

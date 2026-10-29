@@ -338,8 +338,7 @@ end
             fc,
             200Hz + 0.0Hz,
             fs,
-            1,
-            ns,
+            1:ns,
         )
         function minalloc(shifts, mult)
             ns = mult * nsamp

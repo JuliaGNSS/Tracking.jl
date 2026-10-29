@@ -33,7 +33,7 @@ end
     downconvert_and_correlate_fused!(
         correlator, samples, code_replica, sample_shifts,
         carrier_frequency, sampling_frequency, carrier_phase,
-        start_sample, num_samples,
+        sample_range,
     )
 
 Fused downconvert-and-correlate: generates the carrier replica on-the-fly,
@@ -51,8 +51,7 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
     carrier_frequency,
     sampling_frequency,
     carrier_phase,
-    start_sample::Integer,
-    num_samples::Integer,
+    sample_range::AbstractUnitRange{<:Integer},
 ) where {M,ST,NC}
     W = _simd_width(Float32)  # Compute at generation time, embed as literal
     # Flush the Float32 lane accumulators into Float64 every FLUSH_EVERY main-loop
@@ -243,6 +242,8 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
     end
 
     quote
+        start_index = first(sample_range)
+        num_samples = length(sample_range)
         T = Float32
         CT = eltype(code_replica)
         sizeof_CT = sizeof(CT)
@@ -271,7 +272,7 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
         off_3 = _make_offset(T, Val{W}(), Val{3}())
         off_4 = _make_offset(T, Val{W}(), Val{4}())
 
-        # Phase p_u = 2π·freq_ratio·(i - start_sample) + init_u, with
+        # Phase p_u = 2π·freq_ratio·(i - start_index) + init_u, with
         # init_u = 2π·(off_u·freq_ratio + phase0): one muladd per vector, no drift.
         two_pi_fr = SIMD.Vec{W,T}(two_pi * freq_ratio)
         init_1 = two_pi * (off_1 * freq_ratio + phase0)
@@ -279,12 +280,12 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
         init_3 = two_pi * (off_3 * freq_ratio + phase0)
         init_4 = two_pi * (off_4 * freq_ratio + phase0)
 
-        i = start_sample
-        last = start_sample + num_samples - 1
+        i = start_index
+        last = start_index + num_samples - 1
 
         blk = 0
         @inbounds while i + 4W - 1 <= last
-            base_phase = SIMD.Vec{W,T}(T(i - start_sample))
+            base_phase = SIMD.Vec{W,T}(T(i - start_index))
             p_1 = muladd(base_phase, two_pi_fr, init_1)
             p_2 = muladd(base_phase, two_pi_fr, init_2)
             p_3 = muladd(base_phase, two_pi_fr, init_3)
@@ -306,7 +307,7 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
         $flush_block
 
         @inbounds while i + W - 1 <= last
-            base_phase = SIMD.Vec{W,T}(T(i - start_sample))
+            base_phase = SIMD.Vec{W,T}(T(i - start_index))
             phase = muladd(base_phase, two_pi_fr, init_1)
             c_im, c_re = fast_sincos_u100k(phase)
             row_byte_off = (i - 1) * 2 * sizeof_ST
@@ -315,7 +316,7 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
         end
 
         @inbounds while i <= last
-            ph = two_pi * (T(i - start_sample) * freq_ratio + phase0)
+            ph = two_pi * (T(i - start_index) * freq_ratio + phase0)
             c_im_s, c_re_s = sincos(ph)
             $scalar_accum
             i += 1
@@ -337,10 +338,11 @@ end
     carrier_frequency,
     sampling_frequency,
     carrier_phase,
-    start_sample::Integer,
-    num_samples::Integer,
+    sample_range::AbstractUnitRange{<:Integer},
 ) where {ST,M}
     quote
+        start_index = first(sample_range)
+        num_samples = length(sample_range)
         T = Float32
         sizeof_ST = sizeof(ST)
         W = $(_simd_width(Float32))
@@ -358,12 +360,12 @@ end
         two_pi_fr = SIMD.Vec{W,T}(two_pi * freq_ratio)
         init_1 = two_pi * (off_1 * freq_ratio + phase0)
 
-        last = start_sample + num_samples - 1
+        last = start_index + num_samples - 1
 
-        i = start_sample
+        i = start_index
         idx = 1
         @inbounds while i + W - 1 <= last
-            base_phase = SIMD.Vec{W,T}(T(i - start_sample))
+            base_phase = SIMD.Vec{W,T}(T(i - start_index))
             phase = muladd(base_phase, two_pi_fr, init_1)
             ci, cr = fast_sincos_u100k(phase)
             row_byte_off = (i - 1) * 2 * sizeof_ST
@@ -383,7 +385,7 @@ end
             idx += W
         end
         @inbounds while i <= last
-            ph = two_pi * (T(i - start_sample) * freq_ratio + phase0)
+            ph = two_pi * (T(i - start_index) * freq_ratio + phase0)
             c_im_s, c_re_s = sincos(ph)
             Base.Cartesian.@nexprs $M j -> begin
                 sig_j = samples[i, j]
@@ -411,11 +413,12 @@ function downconvert_and_correlate_fused!(
     carrier_frequency,
     sampling_frequency,
     carrier_phase,
-    start_sample::Integer,
-    num_samples::Integer,
+    sample_range::AbstractUnitRange{<:Integer},
     tile_re,
     tile_im,
 ) where {M,ST}
+    start_index = first(sample_range)
+    num_samples = length(sample_range)
     T = Float32
     num_taps = length(sample_shifts)
     min_shift = minimum(sample_shifts)
@@ -429,16 +432,15 @@ function downconvert_and_correlate_fused!(
         carrier_frequency,
         sampling_frequency,
         carrier_phase,
-        start_sample,
-        num_samples,
+        sample_range,
     )
 
     # Correlate: tap-outer, antenna-inner. `gen_code_replica!` writes the replica
-    # at absolute index `start_sample`, hence the `start_sample - 1` offset.
+    # at absolute index `start_index`, hence the `start_index - 1` offset.
     prev = get_accumulators(correlator)
     new_acc = _mutable_copy(prev)
     @inbounds for k = 1:num_taps
-        shift_offset = start_sample - 1 + sample_shifts[k] - min_shift
+        shift_offset = start_index - 1 + sample_shifts[k] - min_shift
         for j = 1:M
             # Float32 blocks of CHUNK samples flushed into Float64 (#152).
             acc_r = zero(Float64)
@@ -479,8 +481,7 @@ end
     carrier_frequency,
     sampling_frequency,
     carrier_phase,
-    start_sample::Integer,
-    num_samples::Integer,
+    sample_range::AbstractUnitRange{<:Integer},
     tile_re,
     tile_im,
 ) where {M,ST,NM1}
@@ -538,8 +539,8 @@ end
             cr = Symbol("cr_$(i)")
             for k = 1:NC_per_signal[i]
                 sh = Symbol("sh_$(i)_$(k)")
-                # The replica starts at absolute index `start_sample`.
-                push!(pass_body.args, :(c = Float32($cr[start_sample-1+n+$sh])))
+                # The replica starts at absolute index `start_index`.
+                push!(pass_body.args, :(c = Float32($cr[start_index-1+n+$sh])))
                 push!(
                     pass_body.args,
                     :(
@@ -615,6 +616,8 @@ end
     end
 
     quote
+        start_index = first(sample_range)
+        num_samples = length(sample_range)
         # ── Phase 1: downconvert into the shared tile (M antennas). ──
         _downconvert_into_tile!(
             tile_re,
@@ -624,8 +627,7 @@ end
             carrier_frequency,
             sampling_frequency,
             carrier_phase,
-            start_sample,
-            num_samples,
+            sample_range,
         )
 
         # ── Phase 2: antenna-outer fused correlate, N·NC accumulators per pass. ──

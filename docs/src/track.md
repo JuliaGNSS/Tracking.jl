@@ -85,7 +85,7 @@ Per chunk:
 
 - `CorrelatorOutput.correlator`: the **raw** accumulator (sum of products over `integrated_samples`, as `normalize` expects), e.g. built with [`EarlyPromptLateCorrelator`](@extref TrackingLoops.EarlyPromptLateCorrelator) / `update_accumulator`.
 - `CorrelatorOutput.integrated_samples`: the producer's true sample count.
-- `CorrelatorOutput.sample_index`: the end sample relative to the start of the current measurement, as the software path writes it (`signal_start_sample` returns to 1 each `track!`). A producer with a free-running **global** counter subtracts the measurement's origin; the estimate phase adds the band's [`TrackState`](@ref) `sample_offsets` before handing the record to the Doppler estimator.
+- `CorrelatorOutput.sample_index`: the end sample relative to the start of the current measurement, as the software path writes it (`resume_index` returns to 1 each `track!`). A producer with a free-running **global** counter subtracts the measurement's origin; the estimate phase adds the band's [`TrackState`](@ref) `sample_offsets` before handing the record to the Doppler estimator.
 
 ### Transport delay
 

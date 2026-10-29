@@ -298,7 +298,7 @@ end
         sat2_pre.code_doppler,
         sat2_pre.carrier_phase,
         sat2_pre.carrier_doppler,
-        sat2_pre.signal_start_sample,
+        sat2_pre.resume_index,
         sat2_pre.signals,
         sat2_de,
     )

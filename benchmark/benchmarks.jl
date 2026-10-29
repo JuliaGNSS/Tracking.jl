@@ -27,6 +27,11 @@ const _chip_rate_to_center_frequency_ratio =
     getfield(GNSSSignals, :get_chip_rate_to_center_frequency_ratio) :
     getfield(GNSSSignals, :get_code_center_frequency_ratio)
 
+# Tracking 12 passes a sample span to the kernels as one range, earlier versions as
+# a start index and a count; splat `_span(first, count)...` into the call.
+const _RANGE_SPANS = isdefined(Tracking, :get_resume_index)
+_span(first, count) = _RANGE_SPANS ? (first:(first+count-1),) : (first, count)
+
 # Per-group storage is a `Dictionary{Int, TrackedSat}` inside the `groups` of
 # `SignalGroup`s, mapped to and from a NamedTuple of dicts.
 @inline _get_group_sats(track_state) = map(g -> g.satellites, track_state.groups)
@@ -87,17 +92,13 @@ function setup_benchmark(;
 
     code_replica =
         Vector{Int8}(undef, num_samples + maximum(static_shifts) - minimum(static_shifts))
-    gen_code_replica!(
-        code_replica,
+    gen_code_replica!(code_replica,
         gnss_signal,
         code_frequency,
         sampling_frequency,
-        code_phase,
-        1,
-        num_samples,
+        code_phase, _span(1, num_samples)...,
         static_shifts,
-        1,
-    )
+        1)
 
     return (;
         correlator,
@@ -168,31 +169,23 @@ function bench_fused_kernel(;
         # Dynamic shifts take caller-supplied SoA tile buffers (11 args).
         tile_re = Vector{Float32}(undef, num_samples * num_ants)
         tile_im = Vector{Float32}(undef, num_samples * num_ants)
-        return @benchmarkable Tracking.downconvert_and_correlate_fused!(
-            $(s.correlator),
+        return @benchmarkable Tracking.downconvert_and_correlate_fused!($(s.correlator),
             $(s.samples),
             $(s.code_replica),
             $(s.dynamic_shifts),
             $(s.carrier_doppler),
             $(s.sampling_frequency),
-            0.0,
-            1,
-            $(s.num_samples),
+            0.0, _span(1, $(s.num_samples))...,
             $tile_re,
-            $tile_im,
-        )
+            $tile_im)
     end
-    @benchmarkable Tracking.downconvert_and_correlate_fused!(
-        $(s.correlator),
+    @benchmarkable Tracking.downconvert_and_correlate_fused!($(s.correlator),
         $(s.samples),
         $(s.code_replica),
         $(s.static_shifts),
         $(s.carrier_doppler),
         $(s.sampling_frequency),
-        0.0,
-        1,
-        $(s.num_samples),
-    )
+        0.0, _span(1, $(s.num_samples))...)
 end
 
 # ── Register benchmarks ───────────────────────────────────────────────────
@@ -271,36 +264,28 @@ function bench_fused_tuple_kernel(;
         ntuple(_ -> EarlyPromptLateCorrelator(; num_ants = NumAnts(num_ants)), n_signals)
     code_replicas = ntuple(n_signals) do _
         cr = Vector{Int8}(undef, code_replica_size)
-        gen_code_replica!(
-            cr,
+        gen_code_replica!(cr,
             gnss_signal,
             code_frequency,
             sampling_frequency,
-            code_phase,
-            1,
-            num_samples,
+            code_phase, _span(1, num_samples)...,
             sample_shifts,
-            1,
-        )
+            1)
         cr
     end
     sample_shifts_tuple = ntuple(_ -> sample_shifts, n_signals)
     tile_re = Vector{Float32}(undef, num_samples * num_ants)
     tile_im = Vector{Float32}(undef, num_samples * num_ants)
 
-    @benchmarkable Tracking.downconvert_and_correlate_fused_tuple!(
-        $correlators,
+    @benchmarkable Tracking.downconvert_and_correlate_fused_tuple!($correlators,
         $samples,
         $code_replicas,
         $sample_shifts_tuple,
         $(carrier_doppler + 0.0Hz),
         $sampling_frequency,
-        0.0,
-        1,
-        $num_samples,
+        0.0, _span(1, $num_samples)...,
         $tile_re,
-        $tile_im,
-    )
+        $tile_im)
 end
 
 for n_signals = 2:3
@@ -762,36 +747,27 @@ let g = SUITE["track! Int16 vs Float32"]["dynamic taps @ 5 MHz (kernel)"]
     span = maximum(dyn_shifts) - minimum(dyn_shifts)
     # Float32 fused kernel, dynamic-shifts (11-arg) path with hoisted SoA tiles.
     code_replica_f = Vector{Int8}(undef, _AXES_NSAMP + span)
-    gen_code_replica!(
-        code_replica_f,
+    gen_code_replica!(code_replica_f,
         _AXES_SIG,
         code_frequency,
         _AXES_FS,
-        10.5,
-        1,
-        _AXES_NSAMP,
+        10.5, _span(1, _AXES_NSAMP)...,
         dyn_shifts,
-        1,
-    )
+        1)
     tile_re = Vector{Float32}(undef, _AXES_NSAMP)
     tile_im = Vector{Float32}(undef, _AXES_NSAMP)
-    g["Float32"] = @benchmarkable Tracking.downconvert_and_correlate_fused!(
-        $correlator,
+    g["Float32"] = @benchmarkable Tracking.downconvert_and_correlate_fused!($correlator,
         $cap,
         $code_replica_f,
         $dyn_shifts,
         $(1000.0Hz + 0.0Hz),
         $_AXES_FS,
-        0.0,
-        1,
-        $_AXES_NSAMP,
+        0.0, _span(1, $_AXES_NSAMP)...,
         $tile_re,
-        $tile_im,
-    )
+        $tile_im)
     # Int16 hybrid-blocked kernel, dynamic-shifts (AbstractVector) fallback.
     dc_i = Tracking.Int16DownconvertAndCorrelator(2^11)
-    g["Int16"] = @benchmarkable Tracking._int16_hybrid_blocked!(
-        $dc_i,
+    g["Int16"] = @benchmarkable Tracking._int16_hybrid_blocked!($dc_i,
         $cap,
         NumAnts{1}(),
         $_AXES_SIG,
@@ -801,14 +777,10 @@ let g = SUITE["track! Int16 vs Float32"]["dynamic taps @ 5 MHz (kernel)"]
         0.0,
         $code_frequency,
         $(1000.0Hz + 0.0Hz),
-        $_AXES_FS,
-        1,
-        $_AXES_NSAMP,
-    )
+        $_AXES_FS, _span(1, $_AXES_NSAMP)...)
     # One-bit bit-wise kernel, dynamic-shifts (AbstractVector) fallback.
     dc_b = Tracking.OneBitDownconvertAndCorrelator()
-    g["OneBit"] = @benchmarkable Tracking._onebit_hybrid_blocked!(
-        $dc_b,
+    g["OneBit"] = @benchmarkable Tracking._onebit_hybrid_blocked!($dc_b,
         $cap,
         NumAnts{1}(),
         $_AXES_SIG,
@@ -818,14 +790,10 @@ let g = SUITE["track! Int16 vs Float32"]["dynamic taps @ 5 MHz (kernel)"]
         0.0,
         $code_frequency,
         $(1000.0Hz + 0.0Hz),
-        $_AXES_FS,
-        1,
-        $_AXES_NSAMP,
-    )
+        $_AXES_FS, _span(1, $_AXES_NSAMP)...)
     # Two-bit bit-wise kernel, dynamic-shifts (AbstractVector) fallback.
     dc_t = Tracking.TwoBitDownconvertAndCorrelator()
-    g["TwoBit"] = @benchmarkable Tracking._twobit_hybrid_blocked!(
-        $dc_t,
+    g["TwoBit"] = @benchmarkable Tracking._twobit_hybrid_blocked!($dc_t,
         $cap,
         NumAnts{1}(),
         $_AXES_SIG,
@@ -835,10 +803,7 @@ let g = SUITE["track! Int16 vs Float32"]["dynamic taps @ 5 MHz (kernel)"]
         0.0,
         $code_frequency,
         $(1000.0Hz + 0.0Hz),
-        $_AXES_FS,
-        1,
-        $_AXES_NSAMP,
-    )
+        $_AXES_FS, _span(1, $_AXES_NSAMP)...)
 end
 
 # ── Int16 / OneBit `track!` in the base-vs-head regression table ───────────────

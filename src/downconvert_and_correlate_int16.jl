@@ -349,8 +349,7 @@ end
     code_frequency,
     carrier_frequency,
     sampling_frequency,
-    signal_start_sample::Integer,
-    num_samples::Integer,
+    sample_range::AbstractUnitRange{<:Integer},
 ) where {M,NC}
     W = _INT16_W
     TI = dc.parameters[2]              # carrier-wipe element type, per backend instance
@@ -479,6 +478,8 @@ end
     result = :(SVector{$NC}(tuple($(taps...))))
 
     quote
+        start_index = first(sample_range)
+        num_samples = length(sample_range)
         W = $W
         carrier_amp = Float64(dc.carrier_amplitude)
         min_shift = minimum(sample_shifts)
@@ -530,7 +531,7 @@ end
             _int16_fill_carrier!(csb, ccb, reng, blk_off, len, phase0, Val(W))
 
             # 3. M antenna passes, flushed per block; `base` = signal row of local n=0.
-            base = signal_start_sample + blk_off
+            base = start_index + blk_off
             $correlate_passes
 
             blk_off += len
@@ -606,9 +607,10 @@ function _int16_hybrid_blocked!(
     code_frequency,
     carrier_frequency,
     sampling_frequency,
-    signal_start_sample::Integer,
-    num_samples::Integer,
+    sample_range::AbstractUnitRange{<:Integer},
 ) where {M}
+    start_index = first(sample_range)
+    num_samples = length(sample_range)
     W = _INT16_W
     NC = length(sample_shifts)
     min_shift = minimum(sample_shifts)
@@ -662,7 +664,7 @@ function _int16_hybrid_blocked!(
             min_shift,
         )
         _int16_fill_carrier!(csb, ccb, reng, blk_off, len, phase0, Val(W))
-        base = signal_start_sample + blk_off
+        base = start_index + blk_off
         _int16_fill_ditile!(
             dib,
             dqb,
@@ -785,8 +787,7 @@ end
     carrier_phase,
     carrier_frequency,
     sampling_frequency,
-    signal_start_sample::Integer,
-    num_samples::Integer,
+    sample_range::AbstractUnitRange{<:Integer},
 ) where {M}
     W = _INT16_W
     TI = dc.parameters[2]              # carrier-wipe element type, per backend instance
@@ -938,6 +939,8 @@ end
     end
 
     quote
+        start_index = first(sample_range)
+        num_samples = length(sample_range)
         W = $W
         carrier_amp = Float64(dc.carrier_amplitude)
         sampling_freq = Float64(upreferred(sampling_frequency / Hz))
@@ -969,7 +972,7 @@ end
         @inbounds while blk_off < num_samples
             len = min(blk, num_samples - blk_off)
             _int16_fill_carrier!(csb, ccb, reng, blk_off, len, phase0, Val(W))
-            base = signal_start_sample + blk_off
+            base = start_index + blk_off
             _int16_fill_ditile!(
                 dib,
                 dqb,
@@ -1001,8 +1004,7 @@ end
     carrier_frequency,
     carrier_phase,
     sampling_frequency,
-    signal_start_sample,
-    samples_to_integrate,
+    sample_range,
     prn,
     num_rows,
 )
@@ -1026,8 +1028,7 @@ end
         carrier_phase,
         carrier_frequency,
         sampling_frequency,
-        signal_start_sample,
-        samples_to_integrate,
+        sample_range,
     )
     new_corrs = map(correlators, new_accs) do c, a
         update_accumulator(c, get_accumulators(c) .+ a)
@@ -1050,8 +1051,7 @@ end
     code_frequency,
     carrier_frequency,
     sampling_frequency,
-    start_sample,
-    num_samples,
+    sample_range,
     ::Any,
     ::Bool = true,
 ) = update_accumulator(
@@ -1068,8 +1068,7 @@ end
         code_frequency,
         carrier_frequency,
         sampling_frequency,
-        start_sample,
-        num_samples,
+        sample_range,
     ),
 )
 

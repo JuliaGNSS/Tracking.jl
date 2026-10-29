@@ -118,7 +118,7 @@ function ref_twobit(
     code_freq,
     carrier_freq,
     fs,
-    start_sample,
+    start_index,
     nsamp,
     thr;
     blk = 8192,
@@ -160,7 +160,7 @@ function ref_twobit(
         for n = 0:(len-1)
             sv = (1 - 2 * Int(bit(ss, n))) * (1 + 2 * Int(bit(sm, n)))
             cv = (1 - 2 * Int(bit(cs, n))) * (1 + 2 * Int(bit(cm, n)))
-            z = cap[start_sample+blk_off+n]
+            z = cap[start_index+blk_off+n]
             re = real(z)
             im = imag(z)
             mr = (re < 0 ? -1 : 1) * (1 + 2 * (abs(Int(re)) >= thr))
@@ -264,8 +264,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             fc,
             cdopp,
             fs,
-            1,
-            nsamp,
+            1:nsamp,
         )
         want = ref_twobit(cap, sig, prn, shifts, cphase, 0.35, fc, cdopp, fs, 1, nsamp, thr)
         @test got == want
@@ -283,8 +282,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             fc,
             cdopp,
             fs,
-            1,
-            nsamp,
+            1:nsamp,
         )
         @test got_dyn == want
     end
@@ -319,8 +317,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
                 fc,
                 cdopp,
                 fs,
-                1,
-                nsamp,
+                1:nsamp,
             )
             want = ref_twobit(
                 cap,

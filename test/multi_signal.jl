@@ -102,9 +102,9 @@ using GNSSSignals: GPSL1C_P, GPSL1C_D, GalileoE1B
 end
 
 @testset "Multi-signal track over a multi-code-period chunk" begin
-    # `gen_code_replica!` writes from `start_sample`, and the multi-signal
+    # `gen_code_replica!` writes from `first(sample_range)`, and the multi-signal
     # `downconvert_and_correlate_fused_tuple!` must read from there too, not
-    # from 1. Ten code periods put nine integrations at `start_sample > 1`; the
+    # from 1. Ten code periods put nine integrations past index 1; the
     # driver must match a single-signal reference bit for bit.
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz

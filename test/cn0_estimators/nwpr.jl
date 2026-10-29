@@ -23,7 +23,7 @@ using TrackingLoops:
     range = 0:3999
     start_carrier_phase = π / 2
     cn0_estimator = MomentsCN0Estimator(100)
-    start_sample = 1
+    start_index = 1
     gpsl1 = GPSL1CA()
 
     track_state = @inferred TrackState(

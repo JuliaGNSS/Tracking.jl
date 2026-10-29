@@ -306,7 +306,7 @@ struct TrackedSat{Signals<:Tuple{Vararg{TrackedSignal}},D}
     code_doppler::typeof(1.0Hz)
     carrier_phase::Float64
     carrier_doppler::typeof(1.0Hz)
-    signal_start_sample::Int
+    resume_index::Int
     signals::Signals
     doppler_estimator_state::D
 end
@@ -465,7 +465,7 @@ function TrackedSat(
         bare.code_doppler,
         bare.carrier_phase,
         bare.carrier_doppler,
-        bare.signal_start_sample,
+        bare.resume_index,
         bare.signals,
         doppler_estimator_state,
     )
@@ -582,7 +582,7 @@ function TrackedSat(
     code_doppler = nothing,
     carrier_phase = nothing,
     carrier_doppler = nothing,
-    signal_start_sample = nothing,
+    resume_index = nothing,
     signals::Maybe{Signals} = nothing,
     doppler_estimator_state::Maybe{D} = nothing,
 ) where {Signals<:Tuple{Vararg{TrackedSignal}},D}
@@ -592,7 +592,7 @@ function TrackedSat(
         isnothing(code_doppler) ? sat.code_doppler : code_doppler,
         isnothing(carrier_phase) ? sat.carrier_phase : carrier_phase,
         isnothing(carrier_doppler) ? sat.carrier_doppler : carrier_doppler,
-        isnothing(signal_start_sample) ? sat.signal_start_sample : signal_start_sample,
+        isnothing(resume_index) ? sat.resume_index : resume_index,
         isnothing(signals) ? sat.signals : signals,
         isnothing(doppler_estimator_state) ? sat.doppler_estimator_state :
         doppler_estimator_state,
@@ -642,9 +642,11 @@ get_carrier_doppler(s::TrackedSat) = s.carrier_doppler
 """
 $(SIGNATURES)
 
-Get the starting sample index in the signal for the next integration.
+Get the index into the current samples where this satellite's processing
+resumes, mid-integration if one is in flight. `track` resets it to 1 for each
+new sample buffer.
 """
-get_signal_start_sample(s::TrackedSat) = s.signal_start_sample
+get_resume_index(s::TrackedSat) = s.resume_index
 
 """
 $(SIGNATURES)
@@ -733,9 +735,9 @@ append_correlator_output!(s::TrackedSat, output::CorrelatorOutput, sel...) =
 
 # Between `track` calls: start sample back to 1, per-signal prompts and outputs
 # emptied in place, bit buffers `reset`.
-function reset_start_sample_and_bit_buffer(sat::TrackedSat)
+function reset_resume_index_and_bit_buffer(sat::TrackedSat)
     new_signals = map(s -> _reset_signal(s), sat.signals)
-    TrackedSat(sat; signal_start_sample = 1, signals = new_signals)
+    TrackedSat(sat; resume_index = 1, signals = new_signals)
 end
 
 @inline function _reset_signal(t::TrackedSignal)
@@ -954,12 +956,12 @@ end
 @inline function _reset_one_group!(g::SignalGroup)
     vals = g.satellites.values
     @inbounds for i in eachindex(vals)
-        vals[i] = reset_start_sample_and_bit_buffer(vals[i])
+        vals[i] = reset_resume_index_and_bit_buffer(vals[i])
     end
     return nothing
 end
 
-function reset_start_sample_and_bit_buffer!(groups::SignalGroups)
+function reset_resume_index_and_bit_buffer!(groups::SignalGroups)
     _foreach_group!(_reset_one_group!, groups)
     return groups
 end

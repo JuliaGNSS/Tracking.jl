@@ -23,7 +23,6 @@ using TrackingLoops:
     range = 0:3999
     start_carrier_phase = π / 2
     cn0_estimator = MomentsCN0Estimator(100)
-    start_sample = 1
     num_samples = 4000
     gpsl1 = GPSL1CA()
 
@@ -50,8 +49,7 @@ using TrackingLoops:
             0.0Hz,
             sampling_frequency,
             0.0,
-            start_sample,
-            num_samples,
+            1:num_samples,
         )
         cn0_estimator = update(cn0_estimator, get_prompt(correlator))
     end

@@ -5,7 +5,7 @@
 """
 $(SIGNATURES)
 
-Measure this signal's noise over samples `first_sample:last_sample` of
+Measure this signal's noise over samples `first_index:last_index` of
 `measurement` and append the resulting observations, returning `estimator`.
 
 Runs each of the slice's
@@ -22,8 +22,8 @@ function TrackingLoops.despread_noise!(
     backend::AbstractDownconvertAndCorrelator,
     estimator::CorrelatorNoiseEstimator,
     measurement::BandMeasurement,
-    first_sample::Integer,
-    last_sample::Integer,
+    first_index::Integer,
+    last_index::Integer,
     context::NoiseUpdateContext,
 )
     signal = context.signal
@@ -32,16 +32,16 @@ function TrackingLoops.despread_noise!(
     # The reference runs at the nominal chip rate, which every despread shares.
     sample_shifts =
         get_correlator_sample_shifts(correlator, sampling_frequency, get_chip_rate(signal))
-    # `gen_code_replica!` writes *at* `start_sample` while the kernel reads it
-    # offset by `start_sample - 1`, so the buffer spans the whole measurement.
+    # `gen_code_replica!` writes *at* `first(sample_range)` while the kernel reads it
+    # offset by `first(sample_range) - 1`, so the buffer spans the whole measurement.
     # Backends that pack the code plane in-kernel ignore it.
     replica_size =
         get_num_samples(measurement) + maximum(sample_shifts) - minimum(sample_shifts)
     for despread in noise_despreads(
         estimator,
         signal,
-        first_sample,
-        last_sample,
+        first_index,
+        last_index,
         sampling_frequency,
         measurement.intermediate_frequency,
     )
@@ -61,8 +61,7 @@ function TrackingLoops.despread_noise!(
                 despread.code_frequency,
                 despread.carrier_frequency,
                 despread.sampling_frequency,
-                despread.first_sample,
-                despread.num_samples,
+                range(despread.first_sample; length = despread.num_samples),
                 replica_size,
                 false,
             ),

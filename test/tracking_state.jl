@@ -17,7 +17,7 @@ using Tracking:
     get_carrier_phase,
     get_carrier_doppler,
     get_integrated_samples,
-    get_signal_start_sample,
+    get_resume_index,
     get_correlator,
     get_last_fully_integrated_correlator,
     get_last_fully_integrated_filtered_prompt,
@@ -88,7 +88,7 @@ end
     @test get_prn(track_state, 2) == 2
     @test get_num_ants(track_state, 1) == 1
     @test get_integrated_samples(track_state, 1) == 0
-    @test get_signal_start_sample(track_state, 1) == 1
+    @test get_resume_index(track_state, 1) == 1
     @test get_correlator(track_state, 1).accumulators == zeros(3)
     @test get_last_fully_integrated_correlator(track_state, 1).accumulators == zeros(3)
     @test get_post_corr_filter(track_state, 1) isa DefaultPostCorrFilter
@@ -188,7 +188,7 @@ end
     ts = TrackState(; signal = GPSL1CA())
     ts = add_satellite!(ts; prn = 1, carrier_doppler = 100.0Hz)
 
-    ts2 = Tracking.reset_start_sample_and_bit_buffer(ts)
+    ts2 = Tracking.reset_resume_index_and_bit_buffer(ts)
     ts2 = add_satellite!(ts2; prn = 2, carrier_doppler = 200.0Hz)
 
     @test length(get_sat_states(ts, :default)) == 1
@@ -397,7 +397,7 @@ end
 
 @testset "TrackedSat helpers" begin
     using Tracking:
-        TrackedSat, get_doppler_estimator_state, reset_start_sample_and_bit_buffer!
+        TrackedSat, get_doppler_estimator_state, reset_resume_index_and_bit_buffer!
     using TrackingLoops: SatConventionalPLLAndDLL
 
     gpsl1 = GPSL1CA()
@@ -418,10 +418,10 @@ end
     @test get_doppler_estimator_state(sat) isa SatConventionalPLLAndDLL
 
     track_state = TrackState(gpsl1, [sat, sat2]; doppler_estimator = estimator)
-    track_state2 = reset_start_sample_and_bit_buffer!(track_state)
+    track_state2 = reset_resume_index_and_bit_buffer!(track_state)
     @test track_state2 === track_state
     for tsat in get_sat_states(track_state).values
-        @test tsat.signal_start_sample == 1
+        @test tsat.resume_index == 1
     end
 end
 
@@ -525,7 +525,7 @@ end
         sat.code_doppler,
         sat.carrier_phase,
         sat.carrier_doppler,
-        sat.signal_start_sample,
+        sat.resume_index,
         sat.signals,
         sat.doppler_estimator_state,
     )
@@ -551,7 +551,7 @@ end
     @inferred get_code_doppler(track_state, 1)
     @inferred get_carrier_phase(track_state, 1)
     @inferred get_carrier_doppler(track_state, 1)
-    @inferred get_signal_start_sample(track_state, 1)
+    @inferred get_resume_index(track_state, 1)
     @inferred get_integrated_samples(track_state, 1)
     @inferred get_correlator(track_state, 1)
     @inferred get_last_fully_integrated_correlator(track_state, 1)
@@ -770,7 +770,7 @@ end
         merge_sats(ts, TrackedSat(gpsl1, 2, 11.5, 20.0Hz)),
         Tracking.add_satellite(ts, :default, TrackedSat(gpsl1, 3, 12.5, 30.0Hz)),
         remove_satellite(ts; prn = 1),
-        Tracking.reset_start_sample_and_bit_buffer(ts),
+        Tracking.reset_resume_index_and_bit_buffer(ts),
     )
     for derived in derived_states
         @test derived.sample_offsets == ts.sample_offsets

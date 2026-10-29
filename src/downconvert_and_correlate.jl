@@ -1,5 +1,5 @@
 # Advances a sat by one downconvert + correlate sub-step of `integrated_samples`
-# samples: the shared carrier and code phase, `signal_start_sample`, and each
+# samples: the shared carrier and code phase, `resume_index`, and each
 # signal's accumulator. `new_signals_data` holds one `(new_correlator, completed)`
 # pair per element of `sat.signals`; see `_build_new_signals` for completion.
 function update(
@@ -27,13 +27,13 @@ function update(
         code_frequency * integrated_samples / sampling_frequency + sat.code_phase,
         code_length,
     )
-    new_signal_start_sample = sat.signal_start_sample + integrated_samples
+    new_resume_index = sat.resume_index + integrated_samples
 
     new_signals = _build_new_signals(
         sat.signals,
         new_signals_data,
         integrated_samples,
-        new_signal_start_sample,
+        new_resume_index,
         Float64(code_phase),
     )
 
@@ -41,7 +41,7 @@ function update(
         sat;
         code_phase,
         carrier_phase,
-        signal_start_sample = new_signal_start_sample,
+        resume_index = new_resume_index,
         signals = new_signals,
     )
 end
@@ -55,7 +55,7 @@ end
     signals::Tuple,
     new_data::Tuple,
     integrated_samples::Int,
-    signal_start_sample::Int,
+    resume_index::Int,
     code_phase::Float64,
 )
     s = first(signals)
@@ -64,7 +64,7 @@ end
     if completed
         push!(
             s.correlator_outputs,
-            CorrelatorOutput(corr, total_integrated, signal_start_sample - 1, code_phase),
+            CorrelatorOutput(corr, total_integrated, resume_index - 1, code_phase),
         )
         new_s = TrackedSignal(s; integrated_samples = 0, correlator = zero(corr))
     else
@@ -76,7 +76,7 @@ end
             Base.tail(signals),
             Base.tail(new_data),
             integrated_samples,
-            signal_start_sample,
+            resume_index,
             code_phase,
         )...,
     )

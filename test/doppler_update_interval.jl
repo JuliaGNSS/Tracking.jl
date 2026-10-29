@@ -34,17 +34,17 @@ using TrackingLoops: CorrelatorOutput
     @test Tracking._smallest_code_period(ts_mixed) ≈ 1e-3 * s
 end
 
-@testset "chunk-grid arithmetic (`_chunk_last_sample`)" begin
+@testset "chunk-grid arithmetic (`_chunk_range`)" begin
     # Boundaries are computed from the absolute chunk index, so bands stay
     # aligned without drift.
-    @test Tracking._chunk_last_sample(1e-3 * s, 0, 5e6Hz, 100_000) == 5000
-    @test Tracking._chunk_last_sample(1e-3 * s, 1, 5e6Hz, 100_000) == 10_000
-    @test Tracking._chunk_last_sample(1e-3 * s, 9, 5e6Hz, 100_000) == 50_000
+    @test last(Tracking._chunk_range(1e-3 * s, 0, 5e6Hz, 100_000)) == 5000
+    @test last(Tracking._chunk_range(1e-3 * s, 1, 5e6Hz, 100_000)) == 10_000
+    @test last(Tracking._chunk_range(1e-3 * s, 9, 5e6Hz, 100_000)) == 50_000
     # A second band at a different sampling rate, same 1 ms time grid.
-    @test Tracking._chunk_last_sample(1e-3 * s, 0, 13e6Hz, 200_000) == 13_000
-    @test Tracking._chunk_last_sample(1e-3 * s, 4, 13e6Hz, 200_000) == 65_000
-    @test Tracking._chunk_last_sample(1e-3 * s, 20, 5e6Hz, 12_345) == 12_345
-    @test Tracking._chunk_last_sample(nothing, 0, 5e6Hz, 12_345) == 12_345
+    @test last(Tracking._chunk_range(1e-3 * s, 0, 13e6Hz, 200_000)) == 13_000
+    @test last(Tracking._chunk_range(1e-3 * s, 4, 13e6Hz, 200_000)) == 65_000
+    @test last(Tracking._chunk_range(1e-3 * s, 20, 5e6Hz, 12_345)) == 12_345
+    @test last(Tracking._chunk_range(nothing, 0, 5e6Hz, 12_345)) == 12_345
 end
 
 @testset "doppler_update_interval shorter than a sample throws" begin

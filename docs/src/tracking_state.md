@@ -454,7 +454,7 @@ The trailing `sig` selector is either:
 | `get_carrier_phase` | Shared carrier phase in cycles. |
 | [`get_carrier_phase_correction`](@ref) | What the estimator adds to `get_carrier_phase` for the carrier-phase measurement (vector loop only; takes the band's sampling frequency). |
 | `get_carrier_doppler` | Shared carrier Doppler. |
-| `get_signal_start_sample` | Index of the next sample to integrate. |
+| `get_resume_index` | Index into the current samples where processing resumes. |
 
 **Per-signal — pass `sig` (index or type) on multi-signal sats:**
 
@@ -520,7 +520,7 @@ get_code_phase(::TrackedSat)
 get_code_doppler(::TrackedSat)
 get_carrier_phase(::TrackedSat)
 get_carrier_doppler(::TrackedSat)
-get_signal_start_sample(::TrackedSat)
+get_resume_index(::TrackedSat)
 get_signals(::TrackedSat)
 get_doppler_estimator_state(::TrackedSat)
 ```
