@@ -86,13 +86,13 @@ end
 
 # Bare-buffer convenience wrapper. Single-band TrackStates only.
 function track(
-    signal::AbstractVecOrMat,
+    samples::AbstractVecOrMat,
     track_state::TrackState,
     sampling_frequency;
     intermediate_frequency = zero(sampling_frequency),
     kwargs...,
 )
-    m = BandMeasurement(signal, sampling_frequency, intermediate_frequency)
+    m = BandMeasurement(samples, sampling_frequency, intermediate_frequency)
     track(_single_band_measurements(m, track_state), track_state; kwargs...)
 end
 
@@ -198,13 +198,13 @@ end
 
 # Bare-buffer convenience wrapper. Single-band TrackStates only.
 function track!(
-    signal::AbstractVecOrMat,
+    samples::AbstractVecOrMat,
     track_state::TrackState,
     sampling_frequency;
     intermediate_frequency = zero(sampling_frequency),
     kwargs...,
 )
-    m = BandMeasurement(signal, sampling_frequency, intermediate_frequency)
+    m = BandMeasurement(samples, sampling_frequency, intermediate_frequency)
     track!(_single_band_measurements(m, track_state), track_state; kwargs...)
 end
 
