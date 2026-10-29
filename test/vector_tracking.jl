@@ -215,10 +215,8 @@ end
                 get_satellite_report(track_state, SIGNAL, decoder.prn).vector_controlled ||
                     continue
                 estimate =
-                    (
-                        get_carrier_phase(track_state, decoder.prn) +
-                        get_carrier_phase_correction(track_state, decoder.prn, FS * Hz)
-                    ) / 2π
+                    get_carrier_phase(track_state, decoder.prn) +
+                    get_carrier_phase_correction(track_state, decoder.prn, FS * Hz)
                 push!(offsets, rem(estimate - sat.carrier_phase, 1.0, RoundNearest))
                 # The residual frequency here is too small for the truth to tell the
                 # sample the correction is read at, so pin it to the end of this chunk
@@ -230,7 +228,7 @@ end
                 )
                 corrections_at_chunk_end &=
                     get_carrier_phase_correction(track_state, decoder.prn, FS * Hz) ==
-                    2π * calc_carrier_phase_correction(
+                    calc_carrier_phase_correction(
                         get_doppler_estimator_state(sat_state),
                         words,
                         (k + 1) * CHUNK,

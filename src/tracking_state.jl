@@ -532,7 +532,7 @@ $(SIGNATURES)
 
 Add (or replace, by `prn`) a satellite in `track_state` in place. Builds a
 [`TrackedSat`](@ref) for the group with the default correlator bank and beamformer from the acquisition handoff (`prn`, `code_phase`, `code_doppler`,
-`carrier_phase`, `carrier_doppler`), its estimator state from
+`carrier_phase` in cycles, `carrier_doppler`), its estimator state from
 [`init_loop_state`](@ref).
 
 `group_key` may be omitted on a single-group `TrackState`; otherwise an
@@ -835,7 +835,7 @@ get_signal_start_sample(s::TrackState, id...) =
 """
 $(SIGNATURES)
 
-The carrier phase (radians, not wrapped) the Doppler estimator adds to the
+The carrier phase (cycles, not wrapped) the Doppler estimator adds to the
 replica's [`get_carrier_phase`](@ref) for its estimate of the incoming carrier
 phase, the carrier-phase measurement (RINEX `L`); `0.0` for the scalar loops and
 for a satellite out of the vector loop.
@@ -867,7 +867,7 @@ function get_carrier_phase_correction(
     # `track!` leaves the replica at the end of the measurement, the band's sample
     # offset, having run on the satellite's Doppler since its latest record.
     sample = get(track_state.sample_offsets, get_band_id(group.band), 0)
-    2π * calc_carrier_phase_correction(
+    calc_carrier_phase_correction(
         sat.doppler_estimator_state,
         _software_nco_command(sat),
         sample,
