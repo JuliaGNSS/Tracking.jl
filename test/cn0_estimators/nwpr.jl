@@ -40,7 +40,7 @@ using TrackingLoops:
     )
 
     for i = 1:100
-        signal =
+        samples =
             get_code.(
                 gpsl1,
                 code_frequency .* range ./ sampling_frequency .+ start_code_phase,
@@ -48,7 +48,7 @@ using TrackingLoops:
             ) .* 10^(45 / 20) .+ randn(ComplexF64, length(range)) .* sqrt(4e6)
         start_code_phase =
             code_frequency * length(range) ./ sampling_frequency + start_code_phase
-        track_state = @inferred track(signal, track_state, sampling_frequency)
+        track_state = @inferred track(samples, track_state, sampling_frequency)
     end
     cn0_estimate = @inferred estimate_cn0(track_state)
     # 20 pre-sync windows near NWPR's upper limit (`µ̂ → M`), where one

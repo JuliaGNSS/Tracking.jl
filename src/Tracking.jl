@@ -156,14 +156,14 @@ abstract type AbstractDownconvertAndCorrelator end
 """
 $(SIGNATURES)
 
-Get the number of samples in the signal.
+Get the number of samples per antenna in `samples`.
 """
-@inline function get_num_samples(signal)
-    length(signal)
+@inline function get_num_samples(samples)
+    length(samples)
 end
 
-@inline function get_num_samples(signal::AbstractMatrix)
-    size(signal, 1)
+@inline function get_num_samples(samples::AbstractMatrix)
+    size(samples, 1)
 end
 
 include("band_measurement.jl")

@@ -50,17 +50,17 @@ end
 @testset "doppler_update_interval shorter than a sample throws" begin
     gpsl1 = GPSL1CA()
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 100.0Hz)])
-    signal = zeros(ComplexF32, 4000)
-    @test_throws ArgumentError track(signal, ts, 4e6Hz; doppler_update_interval = 1e-9 * s)
+    samples = zeros(ComplexF32, 4000)
+    @test_throws ArgumentError track(samples, ts, 4e6Hz; doppler_update_interval = 1e-9 * s)
 end
 
 @testset "doppler_update_interval without time units throws a clear error" begin
     gpsl1 = GPSL1CA()
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 100.0Hz)])
-    signal = zeros(ComplexF32, 4000)
-    @test_throws ArgumentError track(signal, ts, 4e6Hz; doppler_update_interval = 1e-3)
+    samples = zeros(ComplexF32, 4000)
+    @test_throws ArgumentError track(samples, ts, 4e6Hz; doppler_update_interval = 1e-3)
     err = try
-        track(signal, ts, 4e6Hz; doppler_update_interval = 1e-3)
+        track(samples, ts, 4e6Hz; doppler_update_interval = 1e-3)
     catch e
         e
     end
@@ -75,12 +75,12 @@ end
     n_periods = 3
     period = 5000                       # 1 ms at 5 MHz = one L1 C/A period
     num_samples = n_periods * period
-    signal = ComplexF32.(
+    samples = ComplexF32.(
         gen_code(num_samples, gpsl1, prn, fs, get_chip_rate(gpsl1), start_code_phase),
     )
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, prn, start_code_phase, 0.0Hz)])
     dc = CPUDownconvertAndCorrelator()
-    measurements = (L1 = BandMeasurement(signal, fs),)
+    measurements = (L1 = BandMeasurement(samples, fs),)
 
     # Correlate only, so the outputs survive.
     downconvert_and_correlate!(
@@ -105,9 +105,9 @@ end
     fs = 5e6Hz
     prn = 1
     num_samples = 15_000
-    signal = ComplexF32.(gen_code(num_samples, gpsl1, prn, fs, get_chip_rate(gpsl1), 0.0))
+    samples = ComplexF32.(gen_code(num_samples, gpsl1, prn, fs, get_chip_rate(gpsl1), 0.0))
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, prn, 0.0, 0.0Hz)])
-    track!(signal, ts, fs)
+    track!(samples, ts, fs)
     @test isempty(get_correlator_outputs(only(get_sat_state(ts, prn).signals)))
 end
 
@@ -122,14 +122,14 @@ end
         true_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1) + get_chip_rate(gpsl1)
     num_samples = 400_000                   # 100 ms
     range = 0:(num_samples-1)
-    signal = ComplexF32.(
+    samples = ComplexF32.(
         cis.(2π .* true_doppler .* range ./ fs) .*
         gen_code(num_samples, gpsl1, prn, fs, code_frequency, start_code_phase),
     )
 
     converged(doppler_update_interval) = begin
         ts = TrackState(gpsl1, [TrackedSat(gpsl1, prn, start_code_phase, true_doppler - 30Hz)])
-        ts = track(signal, ts, fs; doppler_update_interval)
+        ts = track(samples, ts, fs; doppler_update_interval)
         abs(get_carrier_doppler(ts) / Hz - true_doppler / Hz)
     end
 

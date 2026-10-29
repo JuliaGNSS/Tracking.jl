@@ -31,13 +31,13 @@ end
 
 """
     downconvert_and_correlate_fused!(
-        correlator, signal, code_replica, sample_shifts,
+        correlator, samples, code_replica, sample_shifts,
         carrier_frequency, sampling_frequency, carrier_phase,
         start_sample, num_samples,
     )
 
 Fused downconvert-and-correlate: generates the carrier replica on-the-fly,
-downconverts the signal, and immediately accumulates the result against
+downconverts the samples, and immediately accumulates the result against
 shifted code replicas.  Returns an updated correlator of the same type.
 
 Both antennas (M) and taps (NC) are fully unrolled at compile time via
@@ -45,7 +45,7 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
 """
 @generated function downconvert_and_correlate_fused!(
     correlator::AbstractCorrelator{M},
-    signal::AbstractArray{Complex{ST}},
+    samples::AbstractArray{Complex{ST}},
     code_replica,
     sample_shifts::SVector{NC},
     carrier_frequency,
@@ -188,7 +188,7 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
         si_j = Symbol("si_s_$(j)")
         dre_j = Symbol("dre_s_$(j)")
         dim_j = Symbol("dim_s_$(j)")
-        push!(scalar_accum.args, :($sig_j = signal[i, $j]))
+        push!(scalar_accum.args, :($sig_j = samples[i, $j]))
         push!(scalar_accum.args, :($sr_j = T(real($sig_j))))
         push!(scalar_accum.args, :($si_j = T(imag($sig_j))))
         push!(scalar_accum.args, :($dre_j = $sr_j * c_re_s + $si_j * c_im_s))
@@ -256,9 +256,9 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
         two_pi = T(2π)
         freq_ratio = carrier_freq / sampling_freq
 
-        num_samples_signal = size(signal, 1)
-        p_sig = Ptr{ST}(pointer(signal))
-        sig_col_bytes = num_samples_signal * 2 * sizeof_ST
+        num_rows = size(samples, 1)
+        p_sig = Ptr{ST}(pointer(samples))
+        sig_col_bytes = num_rows * 2 * sizeof_ST
         p_code = Ptr{CT}(pointer(code_replica))
 
         z32 = zero(SIMD.Vec{W,T})
@@ -326,13 +326,13 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
 end
 
 # ── Shared downconvert-into-tile phase ────────────────────────────────
-# Downconverts `signal` into the SoA tile, one `num_samples` slice per antenna
+# Downconverts `samples` into the SoA tile, one `num_samples` slice per antenna
 # (`tile_re/tile_im[(j-1)*num_samples + idx]`). Shared by the dynamic-shifts and the
 # tuple tile-share kernels so they cannot drift (#133).
 @generated function _downconvert_into_tile!(
     tile_re,
     tile_im,
-    signal::AbstractArray{Complex{ST}},
+    samples::AbstractArray{Complex{ST}},
     ::NumAnts{M},
     carrier_frequency,
     sampling_frequency,
@@ -350,9 +350,9 @@ end
         two_pi = T(2π)
         freq_ratio = carrier_freq / T(upreferred(sampling_frequency / Hz))
 
-        num_samples_signal = size(signal, 1)
-        p_sig = Ptr{ST}(pointer(signal))
-        sig_col_bytes = num_samples_signal * 2 * sizeof_ST
+        num_rows = size(samples, 1)
+        p_sig = Ptr{ST}(pointer(samples))
+        sig_col_bytes = num_rows * 2 * sizeof_ST
 
         off_1 = _make_offset(T, Val{W}(), Val{1}())
         two_pi_fr = SIMD.Vec{W,T}(two_pi * freq_ratio)
@@ -386,7 +386,7 @@ end
             ph = two_pi * (T(i - start_sample) * freq_ratio + phase0)
             c_im_s, c_re_s = sincos(ph)
             Base.Cartesian.@nexprs $M j -> begin
-                sig_j = signal[i, j]
+                sig_j = samples[i, j]
                 tile_re[(j-1)*num_samples+idx] =
                     T(real(sig_j)) * c_re_s + T(imag(sig_j)) * c_im_s
                 tile_im[(j-1)*num_samples+idx] =
@@ -405,7 +405,7 @@ end
 # `AbstractVector{Float32}` with `pointer`, e.g. a `ScratchView`).
 function downconvert_and_correlate_fused!(
     correlator::AbstractCorrelator{M},
-    signal::AbstractArray{Complex{ST}},
+    samples::AbstractArray{Complex{ST}},
     code_replica,
     sample_shifts::AbstractVector,
     carrier_frequency,
@@ -424,7 +424,7 @@ function downconvert_and_correlate_fused!(
     _downconvert_into_tile!(
         tile_re,
         tile_im,
-        signal,
+        samples,
         NumAnts{M}(),
         carrier_frequency,
         sampling_frequency,
@@ -473,7 +473,7 @@ end
 # ~51% at N=3; N=1 keeps the in-register kernel above, ~24% faster there.
 @generated function downconvert_and_correlate_fused_tuple!(
     correlators::Tuple{AbstractCorrelator{M},Vararg{AbstractCorrelator{M},NM1}},
-    signal::AbstractArray{Complex{ST}},
+    samples::AbstractArray{Complex{ST}},
     code_replicas::Tuple{Any,Vararg{Any,NM1}},
     all_sample_shifts::Tuple{SVector,Vararg{SVector,NM1}},
     carrier_frequency,
@@ -619,7 +619,7 @@ end
         _downconvert_into_tile!(
             tile_re,
             tile_im,
-            signal,
+            samples,
             NumAnts{$M}(),
             carrier_frequency,
             sampling_frequency,

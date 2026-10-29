@@ -46,7 +46,7 @@ using TrackingLoops:
             code_phase = (index - 1) * num_samples * code_frequency / sampling_frequency
             carrier_phase =
                 2π * (index - 1) * num_samples * carrier_doppler / sampling_frequency
-            signal =
+            samples =
                 (bit * 2 - 1) .* cis.(
                     2π * (0:(num_samples-1)) * carrier_doppler / sampling_frequency .+
                     carrier_phase,
@@ -58,7 +58,7 @@ using TrackingLoops:
                     code_frequency,
                     code_phase,
                 )
-            track_state = track(signal, track_state, sampling_frequency)
+            track_state = track(samples, track_state, sampling_frequency)
             @test has_bit_or_secondary_code_been_found(track_state) == (index >= 60)
             # Sync at block 60 recovers the 3 buffered bits (the UInt64 sign
             # window holds all 60), then one bit per 20 blocks.
@@ -103,7 +103,7 @@ end
     bits = vcat(ones(20), zeros(20), ones(20), zeros(20), ones(20))
     foreach(enumerate(bits)) do (index, bit)
         code_phase = (index - 1) * num_samples * code_frequency / sampling_frequency
-        signal = ComplexF32.(
+        samples = ComplexF32.(
             (bit * 2 - 1) .* gen_code(
                 num_samples,
                 gpsl1,
@@ -113,8 +113,8 @@ end
                 code_phase,
             ),
         )
-        multi_state = track(signal, multi_state, sampling_frequency)
-        single_state = track(signal, single_state, sampling_frequency)
+        multi_state = track(samples, multi_state, sampling_frequency)
+        single_state = track(samples, single_state, sampling_frequency)
         @test has_bit_or_secondary_code_been_found(multi_state) == (index >= 60)
         expected_num_bits = index == 60 ? 3 : (index > 60 && index % 20 == 0 ? 1 : 0)
         @test get_num_bits(multi_state) == expected_num_bits
@@ -153,13 +153,13 @@ end
     code_frequency = get_chip_rate(gpsl1)
     num_blocks = 140
 
-    signal = ComplexF32[]
+    samples = ComplexF32[]
     for index = 1:num_blocks
         # ±1 data bit, flipping every 20 code blocks.
         data_bit_sign = iseven(div(index - 1, 20)) ? 1.0 : -1.0
         code_phase = (index - 1) * num_samples * code_frequency / sampling_frequency
         append!(
-            signal,
+            samples,
             ComplexF32.(
                 data_bit_sign .* gen_code(
                     num_samples,
@@ -179,7 +179,7 @@ end
     for doppler_update_interval in (1e-3s, 3e-3s, 7e-3s, 13e-3s)
         track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0, 0.0Hz)])
         track_state =
-            track(signal, track_state, sampling_frequency; doppler_update_interval)
+            track(samples, track_state, sampling_frequency; doppler_update_interval)
         soft_bits = get_soft_bits(track_state, 1)
         # 3 replayed at the block-60 lock, then one per 20 blocks.
         @test length(soft_bits) == 3 + div(num_blocks - 60, 20)
@@ -208,7 +208,7 @@ end
         for index = 1:40
             # Block `index` carries NH10 chip `(start_secondary_chip + index - 1) % 10`.
             gen_code_phase = (start_secondary_chip + (index - 1)) * primary_code_length
-            signal = ComplexF32.(
+            samples = ComplexF32.(
                 gen_code(
                     num_samples,
                     gpsl5,
@@ -218,7 +218,7 @@ end
                     gen_code_phase,
                 ),
             )
-            track_state = track(signal, track_state, sampling_frequency)
+            track_state = track(samples, track_state, sampling_frequency)
             if has_bit_or_secondary_code_been_found(track_state) && synced_at_block < 0
                 synced_at_block = index
                 synced_code_phase = get_code_phase(track_state)
@@ -248,7 +248,7 @@ end
     for k in (0, 1, 5, 9, 13)
         start_phase = (k + 0.5) * primary_code_length
         num_blocks = 60
-        signal = ComplexF32.(
+        samples = ComplexF32.(
             gen_code(
                 num_blocks * num_samples,
                 gpsl5,
@@ -259,7 +259,7 @@ end
             ),
         )
         track_state = TrackState(gpsl5, [TrackedSat(gpsl5, prn, start_phase, 0.0Hz)])
-        track_state = track(signal, track_state, sampling_frequency)
+        track_state = track(samples, track_state, sampling_frequency)
         @test has_bit_or_secondary_code_been_found(track_state)
         # Up to a floating-point residual (~5e-7 chip) of the code loop.
         @test get_code_phase(track_state) ≈
@@ -293,7 +293,7 @@ end
         # One `track` call: fixed per-call chunks would drift against the loop's
         # sub-sample code Doppler and drop bits.
         total_blocks = secondary_code_length * length(data_bits) - start_secondary_chip
-        signal = ComplexF32.(
+        samples = ComplexF32.(
             gen_code(
                 total_blocks * num_samples,
                 gpsl5,
@@ -307,7 +307,7 @@ end
             abs_block = start_secondary_chip + b
             data_bit = data_bits[div(abs_block, secondary_code_length)+1]
             block_range = (b*num_samples+1):((b+1)*num_samples)
-            @views signal[block_range] .*= ComplexF32(2 * data_bit - 1)
+            @views samples[block_range] .*= ComplexF32(2 * data_bit - 1)
         end
 
         track_state = TrackState(
@@ -315,7 +315,7 @@ end
             [TrackedSat(gpsl5, prn, start_secondary_chip * primary_code_length, 0.0Hz)],
         )
         set_preferred_num_code_blocks_to_integrate!(track_state, prn, preferred_blocks)
-        track_state = track(signal, track_state, sampling_frequency)
+        track_state = track(samples, track_state, sampling_frequency)
 
         @test has_bit_or_secondary_code_been_found(track_state)
 
@@ -368,7 +368,7 @@ end
 
     function decode(doppler_update_interval, start_secondary_chip)
         total_blocks = secondary_code_length * length(data_bits) - start_secondary_chip
-        signal = ComplexF32.(
+        samples = ComplexF32.(
             gen_code(
                 total_blocks * num_samples,
                 gpsl5,
@@ -380,7 +380,7 @@ end
         )
         for b = 0:(total_blocks-1)
             data_bit = data_bits[div(start_secondary_chip+b, secondary_code_length)+1]
-            @views signal[(b*num_samples+1):((b+1)*num_samples)] .*=
+            @views samples[(b*num_samples+1):((b+1)*num_samples)] .*=
                 ComplexF32(2 * data_bit - 1)
         end
         track_state = TrackState(
@@ -388,7 +388,7 @@ end
             [TrackedSat(gpsl5, prn, start_secondary_chip * primary_code_length, 0.0Hz)],
         )
         get_soft_bits(
-            track(signal, track_state, sampling_frequency; doppler_update_interval),
+            track(samples, track_state, sampling_frequency; doppler_update_interval),
         )
     end
 
@@ -425,7 +425,7 @@ end
     num_samples = round(Int, 25e6 / 1000)                       # 1 ms = one primary block
     # Sync needs ≥ 2 NH20 periods; the rest are full-period integrations.
     num_blocks = 240
-    signal = ComplexF32.(
+    samples = ComplexF32.(
         gen_code(
             num_blocks * num_samples,
             gpsl5q,
@@ -440,7 +440,7 @@ end
         track_state = TrackState(gpsl5q, [TrackedSat(gpsl5q, prn, 0.0, 0.0Hz)])
         set_preferred_num_code_blocks_to_integrate!(track_state, prn, secondary_code_length)
         track_state =
-            track(signal, track_state, sampling_frequency; doppler_update_interval)
+            track(samples, track_state, sampling_frequency; doppler_update_interval)
 
         @test has_bit_or_secondary_code_been_found(track_state)
         @test get_last_fully_integrated_num_code_blocks(track_state, prn) ==
@@ -486,7 +486,7 @@ end
     synced_code_phase = NaN
     for index = 1:(secondary_code_length+5)
         gen_code_phase = (index - 1) * primary_code_length
-        signal = ComplexF32.(
+        samples = ComplexF32.(
             gen_code(
                 period_samples,
                 gpsl1c_p,
@@ -496,7 +496,7 @@ end
                 gen_code_phase,
             ),
         )
-        track_state = track(signal, track_state, sampling_frequency)
+        track_state = track(samples, track_state, sampling_frequency)
         if has_bit_or_secondary_code_been_found(track_state) && synced_at_block < 0
             synced_at_block = index
             synced_code_phase = get_code_phase(track_state)

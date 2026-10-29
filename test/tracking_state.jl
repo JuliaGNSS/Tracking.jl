@@ -205,9 +205,9 @@ end
     sampling_frequency = 5e6Hz
     gpsl1 = GPSL1CA()
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 10.5, 10.0Hz)])
-    signal = rand(ComplexF64, 5000)
+    samples = rand(ComplexF64, 5000)
 
-    ts2 = Tracking.track(signal, ts, sampling_frequency)
+    ts2 = Tracking.track(samples, ts, sampling_frequency)
     ts2 = add_satellite!(ts2; prn = 2, carrier_doppler = 200.0Hz)
 
     @test length(get_sat_states(ts, :default)) == 1
@@ -232,7 +232,7 @@ end
     # `Dictionaries.delete!` compacts only past ~1/3 deletions, so one removal
     # out of ten leaves an `#undef` slot in `values`, which the hot loops
     # iterate directly.
-    signal = rand(ComplexF32, 20000)
+    samples = rand(ComplexF32, 20000)
     build() = foldl(
         (ts, prn) -> add_satellite!(ts; prn = prn, carrier_doppler = (100.0 * prn)Hz),
         1:10;
@@ -250,7 +250,7 @@ end
         vals = sats.values
         @test length(vals) == 9
         @test all(i -> isassigned(vals, i), eachindex(vals))
-        ts2 = Tracking.track(signal, ts, 5e6Hz)
+        ts2 = Tracking.track(samples, ts, 5e6Hz)
         @test length(get_sat_states(ts2, :default)) == 9
     end
 end
@@ -315,7 +315,7 @@ end
     @test @inferred(get_prn(filtered_new_new_track_state, 8)) == 8
 end
 
-@testset "Add and remove satellite state to track state with multiple systems" begin
+@testset "Add and remove satellite state to track state with multiple constellations" begin
     sampling_frequency = 5e6Hz
     gpsl1 = GPSL1CA()
     galileo_e1b = GalileoE1B()

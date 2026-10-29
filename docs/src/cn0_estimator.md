@@ -407,19 +407,19 @@ julia> using Tracking: Hz
 julia> using GNSSSignals: gen_code, get_chip_rate
 
 julia> function run_cn0_demo()
-           sys = GPSL1CA()
+           signal = GPSL1CA()
            fs = 4e6Hz
            num_samples = 4000  # 1 ms at 4 MHz
            prn = 1
            cn0_db_hz = 45.0
            sigma = sqrt((fs/Hz) / 10^(cn0_db_hz/10) / 2)
-           code_freq = get_chip_rate(sys)
+           code_freq = get_chip_rate(signal)
            rng = MersenneTwister(0)
-           track_state = TrackState(; signal = GPSL1CA())
+           track_state = TrackState(; signal)
            track_state =
                add_satellite!(track_state; prn, code_phase = 0.0, carrier_doppler = 0.0Hz)
            for _ = 1:25
-               clean = gen_code(num_samples, sys, prn, fs, code_freq, 0.0)
+               clean = gen_code(num_samples, signal, prn, fs, code_freq, 0.0)
                noise = sigma .* randn(rng, ComplexF64, num_samples)
                track_state = track(clean .+ noise, track_state, fs)
            end

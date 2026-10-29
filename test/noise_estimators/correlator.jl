@@ -50,21 +50,21 @@ function _sky(cn0_dbhz; seed = 1, num_samples = NUM_SAMPLES, fs = FS, prn = 1)
     sqrt(ustrip(Hz, fs)) .* randn(rng, ComplexF64, num_samples)
 end
 
-_to_int16(signal) = Complex{Int16}.(
-    round.(Int16, clamp.(real(signal) ./ 4, -2047, 2047)),
-    round.(Int16, clamp.(imag(signal) ./ 4, -2047, 2047)),
+_to_int16(samples) = Complex{Int16}.(
+    round.(Int16, clamp.(real(samples) ./ 4, -2047, 2047)),
+    round.(Int16, clamp.(imag(samples) ./ 4, -2047, 2047)),
 )
 
 # 20 calls: the window's relative error is `1/√(3K)`, so `K = 200` gives σ ≈ 0.22 dB
 # and a 1 dB gate is ≈4.5σ for any draw (at `K = 50` it would be ≈0.6 dB).
-function _tracked(signal, dc; fs = FS, num_calls = 20, kwargs...)
+function _tracked(samples, dc; fs = FS, num_calls = 20, kwargs...)
     ts = TrackState(
         GPSL1,
         [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator())];
         kwargs...,
     )
     for _ = 1:num_calls
-        track!((L1 = BandMeasurement(signal, fs),), ts; downconvert_and_correlator = dc)
+        track!((L1 = BandMeasurement(samples, fs),), ts; downconvert_and_correlator = dc)
     end
     ts
 end
@@ -84,9 +84,9 @@ end
         GPSL1,
         [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator())],
     )
-    signal = _sky(45.0)
+    samples = _sky(45.0)
     logs, _ = collect_test_logs() do
-        track!((L1 = BandMeasurement(signal, FS),), ts)
+        track!((L1 = BandMeasurement(samples, FS),), ts)
     end
     @test isempty(filter(r -> r.level == Warn, logs))
     @test Base.length(ts.noise_estimators.GPSL1CA) > 0
@@ -111,8 +111,8 @@ end
     # The reference must use the prompt's kernel (see `CorrelatorNoiseEstimator`),
     # so each backend reports the C/N₀ its own quantiser delivers with no
     # correction: 1-bit ≈2 dB lower (plus ≈1 dB for the 1-bit carrier), 2-bit ≈1 dB.
-    signal = _sky(45.0; seed = 3)
-    ts = _tracked(quantise ? _to_int16(signal) : ComplexF32.(signal), build())
+    samples = _sky(45.0; seed = 3)
+    ts = _tracked(quantise ? _to_int16(samples) : ComplexF32.(samples), build())
     cn0 = _db(estimate_cn0(ts, 1))
     @test Base.length(ts.noise_estimators.GPSL1CA) == 200
     if DC === OneBitDownconvertAndCorrelator
@@ -128,14 +128,14 @@ end
     # `num_sub = max(1, round(chunk_duration / code_period))` per chunk, and none
     # from the drain pass — gating on `samples_unchanged` would freeze the window
     # after chunk 0.
-    signal = _sky(-Inf; seed = 11)
+    samples = _sky(-Inf; seed = 11)
     for (interval, expected_num_sub) in ((1ms, 1), (4ms, 4), (20ms, 20))
         ts = TrackState(
             GPSL1,
             [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator())],
         )
         # 40 ms of buffer: 40 / 20 / 2 chunks at the three intervals.
-        long = repeat(signal, 4)
+        long = repeat(samples, 4)
         num_chunks = ceil(Int, 40 / ustrip(ms, interval))
         track!((L1 = BandMeasurement(long, FS),), ts; doppler_update_interval = interval)
         @test Base.length(ts.noise_estimators.GPSL1CA) == num_chunks * expected_num_sub
@@ -159,12 +159,13 @@ end
     fs = 20e6Hz
     l1cp = GPSL1C_P()
     num_samples = 200_000                       # 10 ms — one L1C-P code period
-    signal = ComplexF32.(sqrt(ustrip(Hz, fs)) .* randn(Xoshiro(5), ComplexF64, num_samples))
+    samples =
+        ComplexF32.(sqrt(ustrip(Hz, fs)) .* randn(Xoshiro(5), ComplexF64, num_samples))
     ts = TrackState(
         l1cp,
         [TrackedSat(l1cp, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator())],
     )
-    track!((L1 = BandMeasurement(signal, fs),), ts; doppler_update_interval = 1ms)
+    track!((L1 = BandMeasurement(samples, fs),), ts; doppler_update_interval = 1ms)
     # Ten 1 ms chunks, each a tenth of a code period — one slice apiece, not zero.
     @test Base.length(ts.noise_estimators.GPSL1C_P) == 10
     # 30 looks ⇒ σ ≈ 18 %: a sanity check, not a precision claim.
@@ -338,9 +339,9 @@ end
     add_satellite!(one_group; prn = 1, group_key = :legacy_gps, carrier_doppler = 0.0Hz)
     add_satellite!(two_groups; prn = 1, group_key = :legacy_gps, carrier_doppler = 0.0Hz)
     add_satellite!(two_groups; prn = 2, group_key = :also_l1, carrier_doppler = 0.0Hz)
-    signal = _sky(-Inf; seed = 4)
+    samples = _sky(-Inf; seed = 4)
     for ts in (one_group, two_groups)
-        track!((L1 = BandMeasurement(signal, FS),), ts)
+        track!((L1 = BandMeasurement(samples, FS),), ts)
     end
     @test Base.length(one_group.noise_estimators.GPSL1CA) ==
           Base.length(two_groups.noise_estimators.GPSL1CA)
@@ -363,10 +364,10 @@ end
 @testset "the serial and threaded loops measure bit-identically" begin
     # One work item is the sole writer of its window and RNG, so the seeded draws
     # match and the windows agree bit for bit; catches shared state in `@batch`.
-    signal = ComplexF32.(_sky(45.0; seed = 12))
+    samples = ComplexF32.(_sky(45.0; seed = 12))
     densities =
         map((CPUDownconvertAndCorrelator(), CPUThreadedDownconvertAndCorrelator()),) do dc
-            ts = _tracked(signal, dc)
+            ts = _tracked(samples, dc)
             (
                 Base.length(ts.noise_estimators.GPSL1CA),
                 get_noise_density(ts.noise_estimators.GPSL1CA),
@@ -378,8 +379,8 @@ end
 
 @testset "an unchunked call measures once, and a re-pass says so" begin
     # `measure_noise` decides; `samples_unchanged` (a cache-reuse hint) must not.
-    signal = _sky(-Inf; seed = 6)
-    measurements = (L1 = BandMeasurement(signal, FS),)
+    samples = _sky(-Inf; seed = 6)
+    measurements = (L1 = BandMeasurement(samples, FS),)
     ts = TrackState(
         GPSL1,
         [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator())],
@@ -469,8 +470,8 @@ if VERSION >= v"1.11"
             @allocated downconvert_and_correlate!(dc, measurements, ts; chunk_index = 0)
         end
         raw = _sky(45.0; seed = 8)
-        signal = quantise ? _to_int16(raw) : ComplexF32.(raw)
-        measurements = (L1 = BandMeasurement(signal, FS),)
+        samples = quantise ? _to_int16(raw) : ComplexF32.(raw)
+        measurements = (L1 = BandMeasurement(samples, FS),)
         # Paired with a reference-free state, isolating the measurement.
         state(cn0) =
             TrackState(GPSL1, [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = cn0())])
@@ -495,13 +496,13 @@ end
     noise = sqrt(ustrip(Hz, fs)) .* randn(rng, ComplexF64, n)
     with_offset = ComplexF32.(noise .+ offset)
 
-    function density(signal, interval)
+    function density(samples, interval)
         ts = TrackState(;
             signal = GPSL1,
             noise_estimators = (GPSL1CA = CorrelatorNoiseEstimator(),),
         )
         add_satellite!(ts; prn = 1, carrier_doppler = 0.0Hz)
-        track!((L1 = BandMeasurement(signal, fs),), ts; doppler_update_interval = interval)
+        track!((L1 = BandMeasurement(samples, fs),), ts; doppler_update_interval = interval)
         ustrip(Hz^-1, get_noise_density(ts.noise_estimators.GPSL1CA))
     end
 
@@ -571,8 +572,8 @@ end
     # No replica buffer in the estimator: `_despread_one_signal!` borrows the
     # backend's scratch (a byte per sample per signal saved).
     @test :code_replica ∉ fieldnames(CorrelatorNoiseEstimator)
-    signal = _sky(45.0; seed = 5)
-    ts = _tracked(quantise ? _to_int16(signal) : ComplexF32.(signal), build())
+    samples = _sky(45.0; seed = 5)
+    ts = _tracked(quantise ? _to_int16(samples) : ComplexF32.(samples), build())
     estimator = ts.noise_estimators.GPSL1CA
     @test get_noise_density(estimator) !== nothing      # it still measured
 end
@@ -605,18 +606,18 @@ function _sky_array(
     rng = Xoshiro(seed)
     code = gen_code(num_samples, GPSL1, prn, fs, get_chip_rate(GPSL1), 0.0)
     amplitude = isfinite(cn0_dbhz) ? 10^(cn0_dbhz / 20) : 0.0
-    signal = ComplexF64.(amplitude .* code)
+    samples = ComplexF64.(amplitude .* code)
     sigma = sqrt(ustrip(Hz, fs))
     reduce(
         hcat,
         (
-            signal .+ (scale * sigma) .* randn(rng, ComplexF64, num_samples) for
+            samples .+ (scale * sigma) .* randn(rng, ComplexF64, num_samples) for
             scale in noise_scales
         ),
     )
 end
 
-function _tracked_array(signal, num_ants; fs = FS, num_calls = 20, kwargs...)
+function _tracked_array(samples, num_ants; fs = FS, num_calls = 20, kwargs...)
     ts = TrackState(
         GPSL1,
         [
@@ -632,7 +633,7 @@ function _tracked_array(signal, num_ants; fs = FS, num_calls = 20, kwargs...)
         kwargs...,
     )
     for _ = 1:num_calls
-        track!((L1 = BandMeasurement(signal, fs),), ts)
+        track!((L1 = BandMeasurement(samples, fs),), ts)
     end
     ts
 end
@@ -769,11 +770,11 @@ end
     # Through `DefaultPostCorrFilter`'s weights the covariance is the last
     # antenna's floor, so array and single-antenna runs match exactly.
     scales = (1.0, 1.5, 2.0)
-    signal = _sky_array(45.0, scales; seed = 12)
-    ts_array = _tracked_array(signal, 3)
+    samples = _sky_array(45.0, scales; seed = 12)
+    ts_array = _tracked_array(samples, 3)
     R = get_noise_density(ts_array.noise_estimators.GPSL1CA)
 
-    ts_single = _tracked(view(signal, :, 3), CPUDownconvertAndCorrelator())
+    ts_single = _tracked(view(samples, :, 3), CPUDownconvertAndCorrelator())
     scalar = get_noise_density(ts_single.noise_estimators.GPSL1CA)
     # Same samples and seeded draws, so equality, not a tolerance.
     @test real(R[3, 3]) === scalar
@@ -790,8 +791,8 @@ if VERSION >= v"1.11"
             end
             @allocated downconvert_and_correlate!(dc, measurements, ts; chunk_index = 0)
         end
-        signal = ComplexF32.(_sky_array(45.0, (1.0, 1.5, 2.0); seed = 13))
-        measurements = (L1 = BandMeasurement(signal, FS),)
+        samples = ComplexF32.(_sky_array(45.0, (1.0, 1.5, 2.0); seed = 13))
+        measurements = (L1 = BandMeasurement(samples, FS),)
         state(cn0) = TrackState(
             GPSL1,
             [

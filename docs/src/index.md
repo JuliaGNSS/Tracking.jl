@@ -97,7 +97,7 @@ julia> get_code_phase(track_state, 1)
 
 `estimate_cn0(track_state, prn)` returns the C/N₀ in dB-Hz: `Inf dB-Hz` for a noise-free test signal, typically 30–50 dB-Hz for real ones.
 
-Multiple satellites, systems, signals and bands, antenna arrays, acquisition handoff and the accessors are covered in [Tracking State](tracking_state.md); real-time loops in [Track](track.md).
+Multiple satellites, constellations, signals and bands, antenna arrays, acquisition handoff and the accessors are covered in [Tracking State](tracking_state.md); real-time loops in [Track](track.md).
 
 !!! tip "Real-time loops: hoist the correlator"
     Construct [`CPUThreadedDownconvertAndCorrelator`](@ref) (or

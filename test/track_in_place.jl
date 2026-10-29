@@ -36,7 +36,7 @@ using TrackingLoops:
     noise_observation_from_samples
 
 # 1 ms of GPS L1 C/A PRN 1 with a known carrier Doppler and code phase.
-function make_signal(sampling_frequency)
+function gen_samples(sampling_frequency)
     gpsl1 = GPSL1CA()
     carrier_doppler = 200.0Hz
     start_code_phase = 100.0
@@ -45,10 +45,10 @@ function make_signal(sampling_frequency)
         get_chip_rate(gpsl1)
     range = 0:3999
     start_carrier_phase = π / 2
-    signal_template =
+    samples_template =
         cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase) .*
         gen_code(4000, gpsl1, 1, sampling_frequency, code_frequency, start_code_phase)
-    ComplexF32.(signal_template), gpsl1, carrier_doppler, start_code_phase
+    ComplexF32.(samples_template), gpsl1, carrier_doppler, start_code_phase
 end
 
 @testset "track! produces same result as track for $DC" for DC in (
@@ -56,7 +56,7 @@ end
     CPUThreadedDownconvertAndCorrelator,
 )
     sampling_frequency = 4e6Hz
-    signal, gpsl1, carrier_doppler, start_code_phase = make_signal(sampling_frequency)
+    samples, gpsl1, carrier_doppler, start_code_phase = gen_samples(sampling_frequency)
 
     sat_immutable = TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)
     sat_mutable = TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)
@@ -67,8 +67,8 @@ end
     dc = DC()
 
     ts_immutable =
-        track(signal, ts_immutable, sampling_frequency; downconvert_and_correlator = dc)
-    track!(signal, ts_mutable, sampling_frequency; downconvert_and_correlator = dc)
+        track(samples, ts_immutable, sampling_frequency; downconvert_and_correlator = dc)
+    track!(samples, ts_mutable, sampling_frequency; downconvert_and_correlator = dc)
 
     @test get_code_phase(ts_immutable) == get_code_phase(ts_mutable)
     @test get_carrier_phase(ts_immutable) == get_carrier_phase(ts_mutable)
@@ -82,10 +82,10 @@ end
 
 @testset "track! returns same TrackState identity" begin
     sampling_frequency = 4e6Hz
-    signal, gpsl1, carrier_doppler, start_code_phase = make_signal(sampling_frequency)
+    samples, gpsl1, carrier_doppler, start_code_phase = gen_samples(sampling_frequency)
     track_state =
         TrackState(gpsl1, [TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)])
-    returned = track!(signal, track_state, sampling_frequency)
+    returned = track!(samples, track_state, sampling_frequency)
     @test returned === track_state
 end
 
@@ -100,8 +100,8 @@ function measure_reset!(track_state)
     @allocated reset_start_sample_and_bit_buffer!(track_state)
 end
 
-function measure_dc!(dc, signal, track_state, sampling_frequency)
-    measurements = (L1 = BandMeasurement(signal, sampling_frequency),)
+function measure_dc!(dc, samples, track_state, sampling_frequency)
+    measurements = (L1 = BandMeasurement(samples, sampling_frequency),)
     for _ = 1:8
         downconvert_and_correlate!(dc, measurements, track_state)
     end
@@ -122,7 +122,7 @@ end
     CPUThreadedDownconvertAndCorrelator,
 )
     sampling_frequency = 4e6Hz
-    signal, gpsl1, carrier_doppler, start_code_phase = make_signal(sampling_frequency)
+    samples, gpsl1, carrier_doppler, start_code_phase = gen_samples(sampling_frequency)
 
     # An estimator that reads no noise density: the default's per-signal despread
     # has its own test below, gated to Julia >= 1.11.
@@ -142,7 +142,7 @@ end
 
     # Warm up: compile, and settle the bit buffer and `filtered_prompts`.
     for _ = 1:8
-        track!(signal, track_state, sampling_frequency; downconvert_and_correlator = dc)
+        track!(samples, track_state, sampling_frequency; downconvert_and_correlator = dc)
     end
 
     @test measure_reset!(track_state) == 0
@@ -151,9 +151,9 @@ end
     # capped loosely enough to still catch per-satellite allocations.
     @test measure_est!(track_state, sampling_frequency) == 0
     if DC === CPUDownconvertAndCorrelator
-        @test measure_dc!(dc, signal, track_state, sampling_frequency) == 0
+        @test measure_dc!(dc, samples, track_state, sampling_frequency) == 0
     else
-        @test measure_dc!(dc, signal, track_state, sampling_frequency) <= 1024
+        @test measure_dc!(dc, samples, track_state, sampling_frequency) <= 1024
     end
 end
 
@@ -167,7 +167,7 @@ end
         CPUThreadedDownconvertAndCorrelator,
     )
         sampling_frequency = 4e6Hz
-        signal, gpsl1, carrier_doppler, start_code_phase = make_signal(sampling_frequency)
+        samples, gpsl1, carrier_doppler, start_code_phase = gen_samples(sampling_frequency)
         track_state = TrackState(
             gpsl1,
             [
@@ -185,14 +185,19 @@ end
         observation = noise_observation_from_samples(4000.0, 4000, sampling_frequency)
         for _ = 1:8
             append_noise_observation!(track_state, observation, :GPSL1CA)
-            track!(signal, track_state, sampling_frequency; downconvert_and_correlator = dc)
+            track!(
+                samples,
+                track_state,
+                sampling_frequency;
+                downconvert_and_correlator = dc,
+            )
         end
 
         @test measure_est!(track_state, sampling_frequency) == 0
         if DC === CPUDownconvertAndCorrelator
-            @test measure_dc!(dc, signal, track_state, sampling_frequency) == 0
+            @test measure_dc!(dc, samples, track_state, sampling_frequency) == 0
         else
-            @test measure_dc!(dc, signal, track_state, sampling_frequency) <= 1024
+            @test measure_dc!(dc, samples, track_state, sampling_frequency) <= 1024
         end
     end
 end
@@ -205,7 +210,7 @@ end
 @static if VERSION >= v"1.11"
     @testset "the noise reference adds nothing to the threaded launch residual" begin
         sampling_frequency = 4e6Hz
-        signal, gpsl1, carrier_doppler, start_code_phase = make_signal(sampling_frequency)
+        samples, gpsl1, carrier_doppler, start_code_phase = gen_samples(sampling_frequency)
         make_state(make_cn0_estimator) = TrackState(
             gpsl1,
             [
@@ -227,35 +232,35 @@ end
         noise_dc = CPUThreadedDownconvertAndCorrelator()
         for _ = 1:8
             track!(
-                signal,
+                samples,
                 plain_state,
                 sampling_frequency;
                 downconvert_and_correlator = plain_dc,
             )
             track!(
-                signal,
+                samples,
                 noise_state,
                 sampling_frequency;
                 downconvert_and_correlator = noise_dc,
             )
         end
 
-        @test measure_dc!(noise_dc, signal, noise_state, sampling_frequency) ==
-              measure_dc!(plain_dc, signal, plain_state, sampling_frequency)
+        @test measure_dc!(noise_dc, samples, noise_state, sampling_frequency) ==
+              measure_dc!(plain_dc, samples, plain_state, sampling_frequency)
 
         # The box is provisioned once and survives the copies `track` and
         # `track!` make.
         box = noise_state.noise_descriptor[]
         @test box isa Base.RefValue
         track!(
-            signal,
+            samples,
             noise_state,
             sampling_frequency;
             downconvert_and_correlator = noise_dc,
         )
         @test noise_state.noise_descriptor[] === box
         @test track(
-            signal,
+            samples,
             noise_state,
             sampling_frequency;
             downconvert_and_correlator = noise_dc,
@@ -287,9 +292,10 @@ if VERSION >= v"1.11"
             gpsl1 = GPSL1CA()
             track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 10.5, 1000.0Hz)])
             dc = CPUDownconvertAndCorrelator()
-            signal = rand(MersenneTwister(nblocks), ComplexF32, samples_per_block * nblocks)
+            samples =
+                rand(MersenneTwister(nblocks), ComplexF32, samples_per_block * nblocks)
             call() = track!(
-                signal,
+                samples,
                 track_state,
                 sampling_frequency;
                 downconvert_and_correlator = dc,
@@ -314,9 +320,10 @@ if VERSION >= v"1.11"
             gpsl5i = GPSL5I()
             track_state = TrackState(gpsl5i, [TrackedSat(gpsl5i, 1, 10.5, 1000.0Hz)])
             dc = CPUDownconvertAndCorrelator()
-            signal = rand(MersenneTwister(nblocks), ComplexF32, samples_per_block * nblocks)
+            samples =
+                rand(MersenneTwister(nblocks), ComplexF32, samples_per_block * nblocks)
             call() = track!(
-                signal,
+                samples,
                 track_state,
                 sampling_frequency;
                 downconvert_and_correlator = dc,
@@ -338,9 +345,10 @@ if VERSION >= v"1.11"
             e1c = GalileoE1C()
             track_state = TrackState(e1c, [TrackedSat(e1c, 1, 10.5, 1000.0Hz)])
             dc = CPUDownconvertAndCorrelator()
-            signal = rand(MersenneTwister(nblocks), ComplexF32, samples_per_block * nblocks)
+            samples =
+                rand(MersenneTwister(nblocks), ComplexF32, samples_per_block * nblocks)
             call() = track!(
-                signal,
+                samples,
                 track_state,
                 sampling_frequency;
                 downconvert_and_correlator = dc,

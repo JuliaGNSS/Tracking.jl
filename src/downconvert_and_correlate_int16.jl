@@ -339,9 +339,9 @@ end
 # is chosen at generation time.
 @generated function _int16_hybrid_blocked!(
     dc::_Int16DC,
-    signal::AbstractVecOrMat{Complex{Int16}},
+    samples::AbstractVecOrMat{Complex{Int16}},
     ::NumAnts{M},
-    signal_type,
+    signal,
     prn::Integer,
     sample_shifts::SVector{NC},
     code_phase,
@@ -441,7 +441,7 @@ end
             end
             $flush
             while n <= len
-                sig = signal[base+n-1, $j]
+                sig = samples[base+n-1, $j]
                 mr_s = Int32(real(sig));
                 mi_s = Int32(imag(sig))
                 cc_s = Int32(ccb[n]);
@@ -484,7 +484,7 @@ end
         min_shift = minimum(sample_shifts)
         max_shift = maximum(sample_shifts)
         span = max_shift - min_shift
-        num_rows = size(signal, 1)
+        num_rows = size(samples, 1)
 
         bufs = _scratch_buffers(dc)
         # Lane-overflow cap for the `W == 1` Portable path (#166).
@@ -509,7 +509,7 @@ end
         code_phase0 = Float64(code_phase)
 
         $init
-        p_sig = Ptr{Int16}(pointer(signal))
+        p_sig = Ptr{Int16}(pointer(samples))
 
         blk_off = 0
         @inbounds while blk_off < num_samples
@@ -518,7 +518,7 @@ end
             # 1. This block's code into extb[1 .. len+span].
             gen_code!(
                 view(extb, 1:(len+span)),
-                signal_type,
+                signal,
                 prn,
                 sampling_frequency,
                 code_frequency,
@@ -596,9 +596,9 @@ end
 # Returns a `Vector` of `ComplexF64` (M=1) or `SVector{M,ComplexF64}` (M>1).
 function _int16_hybrid_blocked!(
     dc::_Int16DC,
-    signal::AbstractVecOrMat{Complex{Int16}},
+    samples::AbstractVecOrMat{Complex{Int16}},
     ::NumAnts{M},
-    signal_type,
+    signal,
     prn::Integer,
     sample_shifts::AbstractVector,
     code_phase,
@@ -614,7 +614,7 @@ function _int16_hybrid_blocked!(
     min_shift = minimum(sample_shifts)
     max_shift = maximum(sample_shifts)
     span = max_shift - min_shift
-    num_rows = size(signal, 1)
+    num_rows = size(samples, 1)
 
     bufs = _scratch_buffers(dc)
     blk = dc.blk
@@ -647,14 +647,14 @@ function _int16_hybrid_blocked!(
     cps = Float64(upreferred(code_frequency / Hz)) / sampling_freq
     code_phase0 = Float64(code_phase)
 
-    p_sig = Ptr{Int16}(pointer(signal))
+    p_sig = Ptr{Int16}(pointer(samples))
 
     blk_off = 0
     @inbounds while blk_off < num_samples
         len = min(blk, num_samples - blk_off)
         gen_code!(
             view(extb, 1:(len+span)),
-            signal_type,
+            signal,
             prn,
             sampling_frequency,
             code_frequency,
@@ -666,7 +666,7 @@ function _int16_hybrid_blocked!(
         _int16_fill_ditile!(
             dib,
             dqb,
-            signal,
+            samples,
             NumAnts{M}(),
             csb,
             ccb,
@@ -721,7 +721,7 @@ end
 @generated function _int16_fill_ditile!(
     dib,
     dqb,
-    signal,
+    samples,
     ::NumAnts{M},
     csb,
     ccb,
@@ -751,7 +751,7 @@ end
                     n += $W
                 end
                 while n <= len
-                    sig = signal[base+n-1, $j]
+                    sig = samples[base+n-1, $j]
                     mr_s = $TI(real(sig));
                     mi_s = $TI(imag(sig))
                     cc_s = $TI(ccb[n]);
@@ -775,9 +775,9 @@ end
 # `SVector{NCᵢ}`s, `@generated` over (M, the signals tuple).
 @generated function _int16_hybrid_blocked_multi!(
     dc::_Int16DC,
-    signal::AbstractVecOrMat{Complex{Int16}},
+    samples::AbstractVecOrMat{Complex{Int16}},
     ::NumAnts{M},
-    signal_types::Tuple,
+    gnss_signals::Tuple,
     prn::Integer,
     all_shifts::Tuple{Vararg{SVector}},
     code_phases::Tuple,
@@ -833,7 +833,7 @@ end
             b.args,
             :(gen_code!(
                 view(extb, 1:(len+$(Symbol("span_$i")))),
-                signal_types[$i],
+                gnss_signals[$i],
                 prn,
                 sampling_frequency,
                 code_freqs[$i],
@@ -944,7 +944,7 @@ end
         carrier_freq = Float64(upreferred(carrier_frequency / Hz))
         reng = carrier_engine(dc.table, carrier_freq / sampling_freq)
         phase0 = Float64(carrier_phase)
-        num_rows = size(signal, 1)
+        num_rows = size(samples, 1)
         $setup
         maxspan_v = $maxspan
 
@@ -964,7 +964,7 @@ end
         dib = bufs.dib;
         dqb = bufs.dqb
 
-        p_sig = Ptr{Int16}(pointer(signal))
+        p_sig = Ptr{Int16}(pointer(samples))
         blk_off = 0
         @inbounds while blk_off < num_samples
             len = min(blk, num_samples - blk_off)
@@ -973,7 +973,7 @@ end
             _int16_fill_ditile!(
                 dib,
                 dqb,
-                signal,
+                samples,
                 NumAnts{$M}(),
                 csb,
                 ccb,
@@ -995,7 +995,7 @@ end
     signals::Tuple{TrackedSignal,TrackedSignal,Vararg{TrackedSignal}},
     per_signal_completed::Tuple,
     dc::_Int16DC,
-    signal,
+    samples,
     code_doppler,
     code_phase,
     carrier_frequency,
@@ -1004,27 +1004,21 @@ end
     signal_start_sample,
     samples_to_integrate,
     prn,
-    num_samples_signal,
+    num_rows,
 )
     params = map(signals) do head
-        _signal_replica_params(
-            head,
-            code_doppler,
-            code_phase,
-            sampling_frequency,
-            num_samples_signal,
-        )
+        _signal_replica_params(head, code_doppler, code_phase, sampling_frequency, num_rows)
     end
     correlators = map(s -> s.correlator, signals)
-    signal_types = map(s -> s.signal, signals)
+    gnss_signals = map(s -> s.signal, signals)
     all_shifts = map(p -> p.sample_shifts, params)
     code_phases = map(p -> p.signal_code_phase, params)
     code_freqs = map(p -> p.code_frequency, params)
     new_accs = _int16_hybrid_blocked_multi!(
         dc,
-        signal,
+        samples,
         NumAnts(correlators[1]),
-        signal_types,
+        gnss_signals,
         prn,
         all_shifts,
         code_phases,
@@ -1048,7 +1042,7 @@ end
     dc::_Int16DC,
     correlator,
     samples,
-    signal_type,
+    signal,
     prn,
     sample_shifts,
     code_phase,
@@ -1066,7 +1060,7 @@ end
         dc,
         samples,
         NumAnts(correlator),
-        signal_type,
+        signal,
         prn,
         sample_shifts,
         code_phase,

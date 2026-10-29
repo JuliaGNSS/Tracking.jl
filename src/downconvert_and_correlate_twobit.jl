@@ -346,7 +346,7 @@ end
     gmrb::Vector{UInt64},
     gmib::Vector{UInt64},
     joff::Int,
-    signal,
+    samples,
     j::Int,
     p_sig::Ptr{Int16},
     colbase::Int,
@@ -381,7 +381,7 @@ end
         wgr = zero(UInt64);
         wgi = zero(UInt64)
         @inbounds for i = 0:(r-1)
-            sig = signal[base+(full<<6)+i, j]
+            sig = samples[base+(full<<6)+i, j]
             re = real(sig);
             im = imag(sig)
             (re < 0) && (wr |= UInt64(1) << i)
@@ -445,7 +445,7 @@ const _TB_BAND_PAR_MIN = 512
 # across threads.
 function _tb_pack_band!(
     band::TwoBitBandBuffers,
-    signal,
+    samples,
     num_samples::Int,
     M::Int,
     p_sig::Ptr{Int16},
@@ -506,7 +506,7 @@ function _tb_pack_band!(
             wgr = zero(UInt64);
             wgi = zero(UInt64)
             for i = 0:(r-1)
-                sig = signal[full*64+i+1, j]
+                sig = samples[full*64+i+1, j]
                 re = real(sig);
                 im = imag(sig)
                 (re < 0) && (wr |= UInt64(1) << i)
@@ -669,15 +669,15 @@ const _TwoBitDC =
     dc.buffers[Threads.threadid()]
 
 # The bit-wise CBOC gate (see the one-bit kernel).
-@inline function _tb_check_modulation(signal_type)
-    get_modulation(signal_type) isa GNSSSignals.CBOC && throw(
+@inline function _tb_check_modulation(signal)
+    get_modulation(signal) isa GNSSSignals.CBOC && throw(
         ArgumentError(
             string(
                 "TwoBitDownconvertAndCorrelator supports binary (±1) codes only ",
                 "(BPSK, BOC, TMBOC); got ",
-                get_signal_name(signal_type),
+                get_signal_name(signal),
                 " with ",
-                typeof(get_modulation(signal_type)),
+                typeof(get_modulation(signal)),
                 " modulation. Bit-wise correlation keeps only the code sign, so it ",
                 "cannot represent CBOC — a multi-level, amplitude-carrying code.",
             ),
@@ -692,9 +692,9 @@ end
 # GXA accumulators are named locals.
 @generated function _twobit_hybrid_blocked!(
     dc::_TwoBitDC,
-    signal::AbstractVecOrMat{Complex{Int16}},
+    samples::AbstractVecOrMat{Complex{Int16}},
     ::NumAnts{M},
-    signal_type,
+    signal,
     prn::Integer,
     sample_shifts::SVector{NC},
     code_phase,
@@ -806,7 +806,7 @@ end
     ret = :(SVector{$NC}(tuple($([tapval(k) for k = 1:NC]...))))
 
     quote
-        _tb_check_modulation(signal_type)
+        _tb_check_modulation(signal)
         N = Int(num_samples)
         min_shift = minimum(sample_shifts)
         span = maximum(sample_shifts) - min_shift
@@ -819,8 +819,8 @@ end
         carphase = Float64(carrier_phase)
         cps_code = Float64(upreferred(code_frequency / Hz)) / sampling_freq
         code_phase0 = Float64(code_phase)
-        num_rows = size(signal, 1)
-        p_sig = Ptr{Int16}(pointer(signal))
+        num_rows = size(samples, 1)
+        p_sig = Ptr{Int16}(pointer(samples))
         band = dc.band                              # band-shared measurement planes (>1 sat)
         band_shared = use_band_cache && !isempty(band.mrband)  # pre-packed per group when it pays off
         bandstride = cld(num_rows, 64) + 2          # per-antenna plane stride in `band`
@@ -863,7 +863,7 @@ end
             # code (Int8 ±1) for samples [min_shift, len+span): pack once, funnel-shift per tap
             gen_code!(
                 view(extb, 1:(len+span)),
-                signal_type,
+                signal,
                 prn,
                 sampling_frequency,
                 code_frequency,
@@ -940,7 +940,7 @@ end
                                 gmrb,
                                 gmib,
                                 $(j - 1) * wpbv,
-                                signal,
+                                samples,
                                 $j,
                                 p_sig,
                                 $(j - 1) * num_rows,
@@ -978,9 +978,9 @@ end
 # bit-identical to the `@generated` kernel, returns a `Vector`.
 function _twobit_hybrid_blocked!(
     dc::_TwoBitDC,
-    signal::AbstractVecOrMat{Complex{Int16}},
+    samples::AbstractVecOrMat{Complex{Int16}},
     ::NumAnts{M},
-    signal_type,
+    signal,
     prn::Integer,
     sample_shifts::AbstractVector,
     code_phase,
@@ -992,7 +992,7 @@ function _twobit_hybrid_blocked!(
     num_samples::Integer,
     use_band_cache::Bool = true,
 ) where {M}
-    _tb_check_modulation(signal_type)
+    _tb_check_modulation(signal)
     NC = length(sample_shifts)
     N = Int(num_samples)
     min_shift = Int(minimum(sample_shifts))
@@ -1006,8 +1006,8 @@ function _twobit_hybrid_blocked!(
     carphase = Float64(carrier_phase)
     cps_code = Float64(upreferred(code_frequency / Hz)) / sampling_freq
     code_phase0 = Float64(code_phase)
-    num_rows = size(signal, 1)
-    p_sig = Ptr{Int16}(pointer(signal))
+    num_rows = size(samples, 1)
+    p_sig = Ptr{Int16}(pointer(samples))
     band = dc.band
     band_shared = use_band_cache && !isempty(band.mrband)
     bandstride = cld(num_rows, 64) + 2
@@ -1055,7 +1055,7 @@ function _twobit_hybrid_blocked!(
         r = len & 63
         gen_code!(
             view(extb, 1:(len+span)),
-            signal_type,
+            signal,
             prn,
             sampling_frequency,
             code_frequency,
@@ -1111,7 +1111,7 @@ function _twobit_hybrid_blocked!(
                     gmrb,
                     gmib,
                     (j - 1) * wpbv,
-                    signal,
+                    samples,
                     j,
                     p_sig,
                     (j - 1) * num_rows,
@@ -1193,9 +1193,9 @@ end
 # too and accumulate during the first signal's pass only.
 @generated function _twobit_hybrid_blocked_multi!(
     dc::_TwoBitDC,
-    signal::AbstractVecOrMat{Complex{Int16}},
+    samples::AbstractVecOrMat{Complex{Int16}},
     ::NumAnts{M},
-    signal_types::Tuple,
+    gnss_signals::Tuple,
     prn::Integer,
     all_shifts::Tuple{Vararg{SVector}},
     code_phases::Tuple,
@@ -1253,7 +1253,7 @@ end
 
     gates = Expr(:block)
     for i = 1:N
-        push!(gates.args, :(_tb_check_modulation(signal_types[$i])))
+        push!(gates.args, :(_tb_check_modulation(gnss_signals[$i])))
     end
 
     # Measurement planes per antenna (band realign or direct pack), once per block.
@@ -1289,7 +1289,7 @@ end
                     gmrb,
                     gmib,
                     $(j - 1) * wpbv,
-                    signal,
+                    samples,
                     $j,
                     p_sig,
                     $(j - 1) * num_rows,
@@ -1316,7 +1316,7 @@ end
             b.args,
             :(gen_code!(
                 view(extb, 1:(len+$(Symbol("span_$i")))),
-                signal_types[$i],
+                gnss_signals[$i],
                 prn,
                 sampling_frequency,
                 code_freqs[$i],
@@ -1481,8 +1481,8 @@ end
         carrier_freq = Float64(upreferred(carrier_frequency / Hz))
         cps_car = carrier_freq / sampling_freq
         carphase = Float64(carrier_phase)
-        num_rows = size(signal, 1)
-        p_sig = Ptr{Int16}(pointer(signal))
+        num_rows = size(samples, 1)
+        p_sig = Ptr{Int16}(pointer(samples))
         band = dc.band                              # band-shared measurement planes (>1 sat)
         band_shared = !isempty(band.mrband)
         bandstride = cld(num_rows, 64) + 2
@@ -1559,7 +1559,7 @@ end
     dc::_TwoBitDC,
     correlator,
     samples,
-    signal_type,
+    signal,
     prn,
     sample_shifts,
     code_phase,
@@ -1577,7 +1577,7 @@ end
         dc,
         samples,
         NumAnts(correlator),
-        signal_type,
+        signal,
         prn,
         sample_shifts,
         code_phase,
@@ -1597,7 +1597,7 @@ end
     signals::Tuple{TrackedSignal,TrackedSignal,Vararg{TrackedSignal}},
     per_signal_completed::Tuple,
     dc::_TwoBitDC,
-    signal,
+    samples,
     code_doppler,
     code_phase,
     carrier_frequency,
@@ -1606,27 +1606,21 @@ end
     signal_start_sample,
     samples_to_integrate,
     prn,
-    num_samples_signal,
+    num_rows,
 )
     params = map(signals) do head
-        _signal_replica_params(
-            head,
-            code_doppler,
-            code_phase,
-            sampling_frequency,
-            num_samples_signal,
-        )
+        _signal_replica_params(head, code_doppler, code_phase, sampling_frequency, num_rows)
     end
     correlators = map(s -> s.correlator, signals)
-    signal_types = map(s -> s.signal, signals)
+    gnss_signals = map(s -> s.signal, signals)
     all_shifts = map(p -> p.sample_shifts, params)
     code_phases = map(p -> p.signal_code_phase, params)
     code_freqs = map(p -> p.code_frequency, params)
     new_accs = _twobit_hybrid_blocked_multi!(
         dc,
-        signal,
+        samples,
         NumAnts(correlators[1]),
-        signal_types,
+        gnss_signals,
         prn,
         all_shifts,
         code_phases,

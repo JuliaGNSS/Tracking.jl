@@ -239,7 +239,7 @@ end
     @test get_prn(ts, :gal, 12) == 12
 end
 
-@testset "add_satellite!(ts, acqs::Vector) — mixed-system batch auto-routes" begin
+@testset "add_satellite!(ts, acqs::Vector) — mixed-constellation batch auto-routes" begin
     ts = TrackState(; signals = (gps = (GPSL1CA(),), gal = (GalileoE1B(),)))
     acqs = [
         _make_acq(GPSL1CA(), 11, 1.5, 50.0Hz),
@@ -355,7 +355,7 @@ end
     @test get_carrier_doppler(ts, :gal, 12) == 60.0Hz
 end
 
-@testset "TrackState(acqs; signals = ...) errors on unmatched system" begin
+@testset "TrackState(acqs; signals = ...) errors on unmatched signal" begin
     acqs = [_make_acq(GalileoE1B(), 5, 10.0, 100.0Hz)]
     @test_throws ArgumentError TrackState(acqs; signals = (gps = (GPSL1CA(),),))
 end

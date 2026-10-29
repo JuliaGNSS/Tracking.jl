@@ -183,7 +183,7 @@ end
     mrb::Vector{UInt64},
     mib::Vector{UInt64},
     joff::Int,
-    signal,
+    samples,
     j::Int,
     p_sig::Ptr{Int16},
     colbase::Int,
@@ -203,7 +203,7 @@ end
         wr = zero(UInt64);
         wi = zero(UInt64)
         @inbounds for i = 0:(r-1)
-            sig = signal[base+(full<<6)+i, j]
+            sig = samples[base+(full<<6)+i, j]
             (real(sig) < 0) && (wr |= UInt64(1) << i)
             (imag(sig) < 0) && (wi |= UInt64(1) << i)
         end
@@ -242,7 +242,7 @@ OneBitBandBuffers() = OneBitBandBuffers(UInt64[], UInt64[])
 # `(j-1)*stride`, ending in zero funnel pad words.
 function _ob_pack_band!(
     band::OneBitBandBuffers,
-    signal,
+    samples,
     num_samples::Int,
     M::Int,
     p_sig::Ptr{Int16},
@@ -267,7 +267,7 @@ function _ob_pack_band!(
             wr = zero(UInt64);
             wi = zero(UInt64)
             for i = 0:(r-1)
-                sig = signal[full*64+i+1, j]
+                sig = samples[full*64+i+1, j]
                 (real(sig) < 0) && (wr |= UInt64(1) << i)
                 (imag(sig) < 0) && (wi |= UInt64(1) << i)
             end
@@ -365,9 +365,9 @@ const _OneBitDC =
 # `Vector` at the noise reference's call site (112 B per despread).
 @generated function _onebit_hybrid_blocked!(
     dc::_OneBitDC,
-    signal::AbstractVecOrMat{Complex{Int16}},
+    samples::AbstractVecOrMat{Complex{Int16}},
     ::NumAnts{M},
-    signal_type,
+    signal,
     prn::Integer,
     sample_shifts::SVector{NC},
     code_phase,
@@ -438,14 +438,14 @@ const _OneBitDC =
         # The code plane keeps only the sign, exact for binary codes (BPSK, BOC, TMBOC) but
         # not for CBOC's multi-level amplitude. Gate on the modulation: GNSSSignals'
         # CBOC replica is integer-typed too.
-        get_modulation(signal_type) isa GNSSSignals.CBOC && throw(
+        get_modulation(signal) isa GNSSSignals.CBOC && throw(
             ArgumentError(
                 string(
                     "OneBitDownconvertAndCorrelator supports binary (±1) codes only ",
                     "(BPSK, BOC, TMBOC); got ",
-                    get_signal_name(signal_type),
+                    get_signal_name(signal),
                     " with ",
-                    typeof(get_modulation(signal_type)),
+                    typeof(get_modulation(signal)),
                     " modulation. Bit-wise correlation keeps only the code sign, so it ",
                     "cannot represent CBOC — a multi-level, amplitude-carrying code.",
                 ),
@@ -462,8 +462,8 @@ const _OneBitDC =
         carphase = Float64(carrier_phase)
         cps_code = Float64(upreferred(code_frequency / Hz)) / sampling_freq
         code_phase0 = Float64(code_phase)
-        num_rows = size(signal, 1)
-        p_sig = Ptr{Int16}(pointer(signal))
+        num_rows = size(samples, 1)
+        p_sig = Ptr{Int16}(pointer(samples))
         band = dc.band                              # band-shared measurement sign planes (>1 sat)
         band_shared = use_band_cache && !isempty(band.mrband)  # pre-packed per group when it pays off
         bandstride = cld(num_rows, 64) + 2          # per-antenna plane stride in `band` (see _ob_pack_band!)
@@ -498,7 +498,7 @@ const _OneBitDC =
             # code (Int8 ±1) for samples [min_shift, len+span): pack once, funnel-shift per tap
             gen_code!(
                 view(extb, 1:(len+span)),
-                signal_type,
+                signal,
                 prn,
                 sampling_frequency,
                 code_frequency,
@@ -566,7 +566,7 @@ const _OneBitDC =
                                 mrb,
                                 mib,
                                 $(j - 1) * wpbv,
-                                signal,
+                                samples,
                                 $j,
                                 p_sig,
                                 $(j - 1) * num_rows,
@@ -601,9 +601,9 @@ end
 # `Vector` of `ComplexF64` (M=1) or `SVector{M,ComplexF64}` (M>1).
 function _onebit_hybrid_blocked!(
     dc::_OneBitDC,
-    signal::AbstractVecOrMat{Complex{Int16}},
+    samples::AbstractVecOrMat{Complex{Int16}},
     ::NumAnts{M},
-    signal_type,
+    signal,
     prn::Integer,
     sample_shifts::AbstractVector,
     code_phase,
@@ -615,14 +615,14 @@ function _onebit_hybrid_blocked!(
     num_samples::Integer,
     use_band_cache::Bool = true,
 ) where {M}
-    get_modulation(signal_type) isa GNSSSignals.CBOC && throw(
+    get_modulation(signal) isa GNSSSignals.CBOC && throw(
         ArgumentError(
             string(
                 "OneBitDownconvertAndCorrelator supports binary (±1) codes only ",
                 "(BPSK, BOC, TMBOC); got ",
-                get_signal_name(signal_type),
+                get_signal_name(signal),
                 " with ",
-                typeof(get_modulation(signal_type)),
+                typeof(get_modulation(signal)),
                 " modulation. Bit-wise correlation keeps only the code sign, so it ",
                 "cannot represent CBOC — a multi-level, amplitude-carrying code.",
             ),
@@ -640,8 +640,8 @@ function _onebit_hybrid_blocked!(
     carphase = Float64(carrier_phase)
     cps_code = Float64(upreferred(code_frequency / Hz)) / sampling_freq
     code_phase0 = Float64(code_phase)
-    num_rows = size(signal, 1)
-    p_sig = Ptr{Int16}(pointer(signal))
+    num_rows = size(samples, 1)
+    p_sig = Ptr{Int16}(pointer(samples))
     band = dc.band                              # band-shared measurement sign planes (>1 sat)
     band_shared = use_band_cache && !isempty(band.mrband)
     bandstride = cld(num_rows, 64) + 2
@@ -680,7 +680,7 @@ function _onebit_hybrid_blocked!(
         r = len & 63
         gen_code!(
             view(extb, 1:(len+span)),
-            signal_type,
+            signal,
             prn,
             sampling_frequency,
             code_frequency,
@@ -726,7 +726,7 @@ function _onebit_hybrid_blocked!(
                     mrb,
                     mib,
                     (j - 1) * wpbv,
-                    signal,
+                    samples,
                     j,
                     p_sig,
                     (j - 1) * num_rows,
@@ -792,9 +792,9 @@ end
 # (M, the signals tuple); `SVector` shifts only, like the other tile-shares.
 @generated function _onebit_hybrid_blocked_multi!(
     dc::_OneBitDC,
-    signal::AbstractVecOrMat{Complex{Int16}},
+    samples::AbstractVecOrMat{Complex{Int16}},
     ::NumAnts{M},
-    signal_types::Tuple,
+    gnss_signals::Tuple,
     prn::Integer,
     all_shifts::Tuple{Vararg{SVector}},
     code_phases::Tuple,
@@ -857,14 +857,14 @@ end
         push!(
             gates.args,
             :(
-                get_modulation(signal_types[$i]) isa GNSSSignals.CBOC && throw(
+                get_modulation(gnss_signals[$i]) isa GNSSSignals.CBOC && throw(
                     ArgumentError(
                         string(
                             "OneBitDownconvertAndCorrelator supports binary (±1) codes ",
                             "only (BPSK, BOC, TMBOC); got ",
-                            get_signal_name(signal_types[$i]),
+                            get_signal_name(gnss_signals[$i]),
                             " with ",
-                            typeof(get_modulation(signal_types[$i])),
+                            typeof(get_modulation(gnss_signals[$i])),
                             " modulation. Bit-wise correlation keeps only the code sign, ",
                             "so it cannot represent CBOC — a multi-level, amplitude-",
                             "carrying code.",
@@ -902,7 +902,7 @@ end
                     mrb,
                     mib,
                     $(j - 1) * wpbv,
-                    signal,
+                    samples,
                     $j,
                     p_sig,
                     $(j - 1) * num_rows,
@@ -925,7 +925,7 @@ end
             b.args,
             :(gen_code!(
                 view(extb, 1:(len+$(Symbol("span_$i")))),
-                signal_types[$i],
+                gnss_signals[$i],
                 prn,
                 sampling_frequency,
                 code_freqs[$i],
@@ -1027,8 +1027,8 @@ end
         carrier_freq = Float64(upreferred(carrier_frequency / Hz))
         cps_car = carrier_freq / sampling_freq
         carphase = Float64(carrier_phase)
-        num_rows = size(signal, 1)
-        p_sig = Ptr{Int16}(pointer(signal))
+        num_rows = size(samples, 1)
+        p_sig = Ptr{Int16}(pointer(samples))
         band = dc.band                              # band-shared measurement sign planes (>1 sat)
         band_shared = !isempty(band.mrband)
         bandstride = cld(num_rows, 64) + 2
@@ -1097,7 +1097,7 @@ end
     dc::_OneBitDC,
     correlator,
     samples,
-    signal_type,
+    signal,
     prn,
     sample_shifts,
     code_phase,
@@ -1115,7 +1115,7 @@ end
         dc,
         samples,
         NumAnts(correlator),
-        signal_type,
+        signal,
         prn,
         sample_shifts,
         code_phase,
@@ -1136,7 +1136,7 @@ end
     signals::Tuple{TrackedSignal,TrackedSignal,Vararg{TrackedSignal}},
     per_signal_completed::Tuple,
     dc::_OneBitDC,
-    signal,
+    samples,
     code_doppler,
     code_phase,
     carrier_frequency,
@@ -1145,27 +1145,21 @@ end
     signal_start_sample,
     samples_to_integrate,
     prn,
-    num_samples_signal,
+    num_rows,
 )
     params = map(signals) do head
-        _signal_replica_params(
-            head,
-            code_doppler,
-            code_phase,
-            sampling_frequency,
-            num_samples_signal,
-        )
+        _signal_replica_params(head, code_doppler, code_phase, sampling_frequency, num_rows)
     end
     correlators = map(s -> s.correlator, signals)
-    signal_types = map(s -> s.signal, signals)
+    gnss_signals = map(s -> s.signal, signals)
     all_shifts = map(p -> p.sample_shifts, params)
     code_phases = map(p -> p.signal_code_phase, params)
     code_freqs = map(p -> p.code_frequency, params)
     new_accs = _onebit_hybrid_blocked_multi!(
         dc,
-        signal,
+        samples,
         NumAnts(correlators[1]),
-        signal_types,
+        gnss_signals,
         prn,
         all_shifts,
         code_phases,

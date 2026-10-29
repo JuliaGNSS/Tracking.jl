@@ -163,7 +163,7 @@ end
         carrier_doppler = carrier_doppler - 20Hz,
     )
 
-    signal = _make_signal(
+    samples = _make_signal(
         GPSL1CA,
         prn,
         carrier_doppler,
@@ -172,7 +172,7 @@ end
         sampling_frequency,
     )
 
-    track!(signal, track_state, sampling_frequency)
+    track!(samples, track_state, sampling_frequency)
     @test abs(get_carrier_doppler(track_state, :default, prn) - carrier_doppler) < 50Hz
 end
 

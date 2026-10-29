@@ -105,7 +105,7 @@ end
     rng = Xoshiro(20260806)
     noise = sqrt(ustrip(Hz, fs)) .* randn(rng, ComplexF64, num_samples)
 
-    function density(signal)
+    function density(samples)
         # A freshly seeded generator per run, so both borrow the same codes in
         # the same order *and* despread them at the same phases and carriers.
         ts = TrackState(
@@ -115,7 +115,7 @@ end
         )
         dc = CPUDownconvertAndCorrelator()
         for _ = 1:10
-            track!(signal, ts, fs; downconvert_and_correlator = dc)
+            track!(samples, ts, fs; downconvert_and_correlator = dc)
         end
         ustrip(Hz^-1, get_noise_density(ts.noise_estimators.GPSL1CA))
     end

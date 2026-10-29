@@ -63,8 +63,8 @@ using Unitful: ustrip, uconvert
 # GPS in a shared fixed-point buffer.
 _unit_code(c) = (m = maximum(abs, c); m == 0 ? float(c) : c ./ m)
 
-@testset "Tracking with signal of type $type" for type in
-                                                  (Int16, Int32, Int64, Float32, Float64)
+@testset "Tracking with samples of type $type" for type in
+                                                   (Int16, Int32, Int64, Float32, Float64)
     gpsl1 = GPSL1CA()
     carrier_doppler = 200Hz
     start_code_phase = 100
@@ -81,18 +81,18 @@ _unit_code(c) = (m = maximum(abs, c); m == 0 ? float(c) : c ./ m)
         [TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)],
     )
 
-    signal_temp =
+    samples_temp =
         cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase) .*
         gen_code(4000, gpsl1, prn, sampling_frequency, code_frequency, start_code_phase)
     scaling = 512
-    signal =
+    samples =
         type <: Integer ?
         complex.(
-            round.(type, real.(signal_temp) * scaling),
-            round.(type, imag.(signal_temp) * scaling),
-        ) : Complex{type}.(signal_temp)
+            round.(type, real.(samples_temp) * scaling),
+            round.(type, imag.(samples_temp) * scaling),
+        ) : Complex{type}.(samples_temp)
 
-    track_state = @inferred track(signal, track_state, sampling_frequency)
+    track_state = @inferred track(samples, track_state, sampling_frequency)
 
     iterations = 20000
     code_phases = zeros(iterations)
@@ -111,16 +111,16 @@ _unit_code(c) = (m = maximum(abs, c); m == 0 ? float(c) : c ./ m)
             ) - π
         code_phase =
             mod(code_frequency * 4000 * i / sampling_frequency + start_code_phase, 1023)
-        signal_temp =
+        samples_temp =
             cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ carrier_phase) .*
             gen_code(4000, gpsl1, prn, sampling_frequency, code_frequency, code_phase)
-        signal =
+        samples =
             type <: Integer ?
             complex.(
-                round.(type, real.(signal_temp) * scaling),
-                round.(type, imag.(signal_temp) * scaling),
-            ) : Complex{type}.(signal_temp)
-        track_state = @inferred track(signal, track_state, sampling_frequency)
+                round.(type, real.(samples_temp) * scaling),
+                round.(type, imag.(samples_temp) * scaling),
+            ) : Complex{type}.(samples_temp)
+        track_state = @inferred track(samples, track_state, sampling_frequency)
         comp_carrier_phase =
             mod2pi(
                 2π * carrier_doppler * 4000 * (i + 1) / sampling_frequency +
@@ -154,10 +154,10 @@ function _noisy_gpsl1_chunks(num_chunks)
     t = (0:(num_samples-1)) ./ ustrip(Hz, fs)
     code = gen_code(num_samples, gpsl1, 1, fs, get_chip_rate(gpsl1) + code_doppler, 100.0)
     rng = Random.Xoshiro(1)
-    signal =
+    samples =
         ComplexF32.(code .* cis.(2π .* ustrip(Hz, carrier_doppler) .* t .+ 0.3)) .+
         0.5f0 .* randn(rng, ComplexF32, num_samples)
-    gpsl1, fs, carrier_doppler, [signal[((k-1)*4000+1):(k*4000)] for k = 1:num_chunks]
+    gpsl1, fs, carrier_doppler, [samples[((k-1)*4000+1):(k*4000)] for k = 1:num_chunks]
 end
 
 @testset "Through track, the NCO-referenced and the vector loops are the conventional assisted loop" begin
@@ -400,12 +400,12 @@ end
         ]
         track_state = TrackState(gpsl1, sat_states; doppler_estimator)
 
-        signal =
+        samples =
             cis.(
                 2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase,
             ) .*
             gen_code(4000, gpsl1, prn, sampling_frequency, code_frequency, start_code_phase)
-        track_state = track(signal, track_state, sampling_frequency)
+        track_state = track(samples, track_state, sampling_frequency)
 
         for i = 1:iterations
             carrier_phase =
@@ -416,12 +416,12 @@ end
                 ) - π
             code_phase =
                 mod(code_frequency * 4000 * i / sampling_frequency + start_code_phase, 1023)
-            signal =
+            samples =
                 cis.(
                     2π .* carrier_doppler .* range ./ sampling_frequency .+ carrier_phase,
                 ) .*
                 gen_code(4000, gpsl1, prn, sampling_frequency, code_frequency, code_phase)
-            track_state = track(signal, track_state, sampling_frequency)
+            track_state = track(samples, track_state, sampling_frequency)
         end
 
         final_doppler = get_carrier_doppler(track_state) / Hz
@@ -441,8 +441,13 @@ end
     @test test_convergence(255Hz, true) == false
 end
 
-@testset "Track multiple systems of type $type" for type in
-                                                    (Int16, Int32, Int64, Float32, Float64)
+@testset "Track multiple constellations with samples of type $type" for type in (
+    Int16,
+    Int32,
+    Int64,
+    Float32,
+    Float64,
+)
     gpsl1 = GPSL1CA()
     galileo_e1b = GalileoE1B()
     carrier_doppler_gps = 200Hz
@@ -484,7 +489,7 @@ end
         doppler_estimator = estimator,
     )
 
-    signal_temp =
+    samples_temp =
         cis.(
             2π .* carrier_doppler_gps .* range ./ sampling_frequency .+ start_carrier_phase,
         ) .* _unit_code(
@@ -511,15 +516,15 @@ end
         )
     # Fill half the integer type's range.
     scaling =
-        type <: Integer ? fld(typemax(type), 2 * ceil(Int, maximum(abs, signal_temp))) : 1
-    signal =
+        type <: Integer ? fld(typemax(type), 2 * ceil(Int, maximum(abs, samples_temp))) : 1
+    samples =
         type <: Integer ?
         complex.(
-            round.(type, real.(signal_temp) * scaling),
-            round.(type, imag.(signal_temp) * scaling),
-        ) : Complex{type}.(signal_temp)
+            round.(type, real.(samples_temp) * scaling),
+            round.(type, imag.(samples_temp) * scaling),
+        ) : Complex{type}.(samples_temp)
 
-    track_state = @inferred track(signal, track_state, sampling_frequency)
+    track_state = @inferred track(samples, track_state, sampling_frequency)
 
     # 1.33 s: the 18 Hz carrier loop settles the 90° start phase in about 1.2 s.
     iterations = 5000
@@ -544,7 +549,7 @@ end
             code_frequency_gal * 4000 * i / sampling_frequency + start_code_phase,
             get_code_length(galileo_e1b),
         )
-        signal_temp =
+        samples_temp =
             cis.(
                 2π .* carrier_doppler_gps .* range ./ sampling_frequency .+
                 carrier_phase_gps,
@@ -571,13 +576,13 @@ end
                     code_phase_gal,
                 ),
             )
-        signal =
+        samples =
             type <: Integer ?
             complex.(
-                round.(type, real.(signal_temp) * scaling),
-                round.(type, imag.(signal_temp) * scaling),
-            ) : Complex{type}.(signal_temp)
-        track_state = @inferred track(signal, track_state, sampling_frequency)
+                round.(type, real.(samples_temp) * scaling),
+                round.(type, imag.(samples_temp) * scaling),
+            ) : Complex{type}.(samples_temp)
+        track_state = @inferred track(samples, track_state, sampling_frequency)
     end
     comp_carrier_phase_gps =
         mod2pi(
@@ -634,7 +639,7 @@ end
         [TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)];
     )
 
-    signal =
+    samples =
         cis.(
             2π .* (carrier_doppler + intermediate_frequency) .* range ./
             sampling_frequency .+ start_carrier_phase,
@@ -645,7 +650,7 @@ end
         )
 
     track_state =
-        @inferred track(signal, track_state, sampling_frequency; intermediate_frequency)
+        @inferred track(samples, track_state, sampling_frequency; intermediate_frequency)
 
     # 3.5 s: the 18 Hz carrier loop settles the 20 Hz start offset in about 3.2 s.
     iterations = 3500
@@ -666,7 +671,7 @@ end
             ) - π
         code_phase =
             mod(code_frequency * 4000 * i / sampling_frequency + start_code_phase, 1023)
-        signal =
+        samples =
             cis.(
                 2π .* (carrier_doppler + intermediate_frequency) .* range ./
                 sampling_frequency .+ carrier_phase,
@@ -675,8 +680,12 @@ end
                 code_frequency .* range ./ sampling_frequency .+ code_phase,
                 prn,
             )
-        track_state =
-            @inferred track(signal, track_state, sampling_frequency; intermediate_frequency)
+        track_state = @inferred track(
+            samples,
+            track_state,
+            sampling_frequency;
+            intermediate_frequency,
+        )
         comp_carrier_phase =
             mod2pi(
                 2π * (carrier_doppler + intermediate_frequency) * 4000 * (i + 1) /
@@ -700,7 +709,7 @@ end
     @test tracked_carrier_phases[end] + 0.5 ≈ carrier_phases[end] atol = 5e-5 / 2π
 end
 
-@testset "Track multiple signals with signal of type $type" for type in (
+@testset "Track multiple signals with samples of type $type" for type in (
     Int16,
     Int32,
     Int64,
@@ -731,14 +740,14 @@ end
 
     @test get_num_ants(track_state) == 3
 
-    signal =
+    samples =
         cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase) .*
         get_code.(
             gpsl1,
             code_frequency .* range ./ sampling_frequency .+ start_code_phase,
             prn,
         )
-    signal_mat_temp = repeat(signal; outer = (1, 3))
+    signal_mat_temp = repeat(samples; outer = (1, 3))
     scaling = 512
     signal_mat =
         type <: Integer ?
@@ -767,14 +776,14 @@ end
             ) - π
         code_phase =
             mod(code_frequency * 4000 * i / sampling_frequency + start_code_phase, 1023)
-        signal =
+        samples =
             cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ carrier_phase) .*
             get_code.(
                 gpsl1,
                 code_frequency .* range ./ sampling_frequency .+ code_phase,
                 prn,
             )
-        signal_mat = repeat(signal; outer = (1, 3))
+        signal_mat = repeat(samples; outer = (1, 3))
         track_state = @inferred track(signal_mat, track_state, sampling_frequency)
         comp_carrier_phase =
             mod2pi(
@@ -925,7 +934,7 @@ end
 
     function make_signal(num_codes, start_carrier_phase, start_code_phase)
         n = samples_per_code * num_codes
-        signal = zeros(ComplexF64, n)
+        samples = zeros(ComplexF64, n)
         for code_idx = 0:(num_codes-1)
             carrier_phase =
                 mod2pi(
@@ -941,7 +950,7 @@ end
             )
             r = (code_idx*samples_per_code):((code_idx+1)*samples_per_code-1)
             local_range = 0:(samples_per_code-1)
-            signal[(code_idx*samples_per_code+1):((code_idx+1)*samples_per_code)] .=
+            samples[(code_idx*samples_per_code+1):((code_idx+1)*samples_per_code)] .=
                 cis.(
                     2π .* carrier_doppler .* local_range ./ sampling_frequency .+
                     carrier_phase,
@@ -954,7 +963,7 @@ end
                     code_phase,
                 )
         end
-        signal
+        samples
     end
 
     track_state =

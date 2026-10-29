@@ -71,7 +71,7 @@ Polyester copies everything the `@batch` region references into one argument tup
 per launch. A tuple of only `isbits` members (bare `Array`s qualify, as `PtrArray`s)
 is elided; otherwise it is heap-allocated at its `sizeof`, with immutable structs
 copied by value and mutable objects as one pointer. The non-`isbits` member here is
-the GNSS signal (`GPSL1CA` wraps a `Matrix{Int16}` and a non-`isbits` `SignalLUT`),
+the GNSS samples (`GPSL1CA` wraps a `Matrix{Int16}` and a non-`isbits` `SignalLUT`),
 which code-replica generation needs. A prototype that generates from the LUT's bare
 arrays passed as separate arguments measures 0 B/launch at full throughput, but needs
 a GNSSSignals API that does not re-wrap them in a struct; a serial code-gen pre-pass
@@ -170,7 +170,7 @@ end
     dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
     correlator,
     samples,
-    signal_type,
+    signal,
     prn,
     sample_shifts,
     code_phase,
@@ -188,7 +188,7 @@ end
     _with_code_replica_buffer(dc, Int8, code_replica_size) do code_replica
         gen_code_replica!(
             code_replica,
-            signal_type,
+            signal,
             code_frequency,
             sampling_frequency,
             code_phase,
@@ -217,7 +217,7 @@ end
 @inline function _fused_with_tile_scratch!(
     dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
     correlator::AbstractCorrelator{M},
-    signal,
+    samples,
     code_replica,
     sample_shifts::SVector,
     carrier_frequency,
@@ -228,7 +228,7 @@ end
 ) where {M}
     downconvert_and_correlate_fused!(
         correlator,
-        signal,
+        samples,
         code_replica,
         sample_shifts,
         carrier_frequency,
@@ -242,7 +242,7 @@ end
 @inline function _fused_with_tile_scratch!(
     dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
     correlator::AbstractCorrelator{M},
-    signal,
+    samples,
     code_replica,
     sample_shifts::AbstractVector,
     carrier_frequency,
@@ -254,7 +254,7 @@ end
     _with_tile_buffers(dc, num_samples, M) do tile_re, tile_im
         downconvert_and_correlate_fused!(
             correlator,
-            signal,
+            samples,
             code_replica,
             sample_shifts,
             carrier_frequency,
@@ -272,7 +272,7 @@ end
 # `ScratchBuffers`: `AbstractVector` shifts allocate their tile buffers per call.
 @inline function _fused_standalone!(
     correlator::AbstractCorrelator{M},
-    signal,
+    samples,
     code_replica,
     sample_shifts::SVector,
     carrier_frequency,
@@ -283,7 +283,7 @@ end
 ) where {M}
     downconvert_and_correlate_fused!(
         correlator,
-        signal,
+        samples,
         code_replica,
         sample_shifts,
         carrier_frequency,
@@ -296,7 +296,7 @@ end
 
 @inline function _fused_standalone!(
     correlator::AbstractCorrelator{M},
-    signal,
+    samples,
     code_replica,
     sample_shifts::AbstractVector,
     carrier_frequency,
@@ -309,7 +309,7 @@ end
     tile_im = Vector{Float32}(undef, num_samples * M)
     downconvert_and_correlate_fused!(
         correlator,
-        signal,
+        samples,
         code_replica,
         sample_shifts,
         carrier_frequency,
@@ -327,8 +327,8 @@ end
 function _update_tracked_sat_correlator(
     sat::TrackedSat,
     dc::AbstractDownconvertAndCorrelator,
-    signal,
-    num_samples_signal,
+    samples,
+    num_rows,
     chunk_last_sample,
     sampling_frequency,
     intermediate_frequency,
@@ -349,7 +349,7 @@ function _update_tracked_sat_correlator(
             sampling_frequency,
             sat.code_doppler,
             sat.code_phase,
-            num_samples_signal,
+            num_rows,
             chunk_last_sample,
         )
         samples_to_integrate == 0 && break
@@ -360,7 +360,7 @@ function _update_tracked_sat_correlator(
             sat.signals,
             per_signal_completed,
             dc,
-            signal,
+            samples,
             sat.code_doppler,
             sat.code_phase,
             carrier_frequency,
@@ -369,7 +369,7 @@ function _update_tracked_sat_correlator(
             sat.signal_start_sample,
             samples_to_integrate,
             sat.prn,
-            num_samples_signal,
+            num_rows,
         )
         sat = update(
             sat,
@@ -391,7 +391,7 @@ end
     sampling_frequency,
     code_doppler,
     code_phase,
-    num_samples_signal,
+    num_rows,
     chunk_last_sample,
 )
     per_signal_to_boundary = _per_signal_samples_to_boundary(
@@ -400,7 +400,7 @@ end
         sampling_frequency,
         code_doppler,
         code_phase,
-        num_samples_signal,
+        num_rows,
     )
     samples_to_integrate = _min_of_tuple(per_signal_to_boundary)
     samples_left = chunk_last_sample - signal_start_sample + 1
@@ -417,19 +417,13 @@ end
     sampling_frequency,
     code_doppler,
     code_phase,
-    num_samples_signal,
+    num_rows,
 )
     head = first(signals)
     # Measured against the secondary-aware wrap (`_replica_code_wrap`), so a
     # multi-block window past sync ends on a bit boundary instead of
     # straddling one.
-    p = _signal_replica_params(
-        head,
-        code_doppler,
-        code_phase,
-        sampling_frequency,
-        num_samples_signal,
-    )
+    p = _signal_replica_params(head, code_doppler, code_phase, sampling_frequency, num_rows)
     n = calc_num_samples_left_to_integrate(
         head.signal,
         p.n_blocks,
@@ -445,7 +439,7 @@ end
             sampling_frequency,
             code_doppler,
             code_phase,
-            num_samples_signal,
+            num_rows,
         )...,
     )
 end
@@ -478,13 +472,13 @@ end
     code_doppler,
     code_phase,
     sampling_frequency,
-    num_samples_signal,
+    num_rows,
 )
     s = tsig.signal
     code_frequency = code_doppler + get_chip_rate(s)
     sample_shifts =
         get_correlator_sample_shifts(tsig.correlator, sampling_frequency, code_frequency)
-    code_replica_size = num_samples_signal + maximum(sample_shifts) - minimum(sample_shifts)
+    code_replica_size = num_rows + maximum(sample_shifts) - minimum(sample_shifts)
     n_blocks = calc_num_code_blocks_to_integrate(
         s,
         tsig.preferred_num_code_blocks_to_integrate,
@@ -500,7 +494,7 @@ end
     signals::Tuple{TrackedSignal},
     per_signal_completed::Tuple{Bool},
     dc,
-    signal,
+    samples,
     code_doppler,
     code_phase,
     carrier_frequency,
@@ -509,20 +503,14 @@ end
     signal_start_sample,
     samples_to_integrate,
     prn,
-    num_samples_signal,
+    num_rows,
 )
     head = signals[1]
-    p = _signal_replica_params(
-        head,
-        code_doppler,
-        code_phase,
-        sampling_frequency,
-        num_samples_signal,
-    )
+    p = _signal_replica_params(head, code_doppler, code_phase, sampling_frequency, num_rows)
     new_corr = _despread_one_signal!(
         dc,
         head.correlator,
-        signal,
+        samples,
         head.signal,
         prn,
         p.sample_shifts,
@@ -545,7 +533,7 @@ end
     signals::Tuple{TrackedSignal,TrackedSignal,Vararg{TrackedSignal}},
     per_signal_completed::Tuple,
     dc,
-    signal,
+    samples,
     code_doppler,
     code_phase,
     carrier_frequency,
@@ -554,7 +542,7 @@ end
     signal_start_sample,
     samples_to_integrate,
     prn,
-    num_samples_signal,
+    num_rows,
 )
     # The replica views hold raw pointers into `dc`'s scratch, so root `dc`.
     new_correlators = GC.@preserve dc begin
@@ -567,7 +555,7 @@ end
             signal_start_sample,
             samples_to_integrate,
             prn,
-            num_samples_signal,
+            num_rows,
         )
         correlators = _signal_correlators(signals)
         sample_shifts_tuple = _signal_sample_shifts(
@@ -575,14 +563,14 @@ end
             code_doppler,
             code_phase,
             sampling_frequency,
-            num_samples_signal,
+            num_rows,
         )
         # All correlators of a sat share M (enforced by SignalGroup).
         num_ants = get_num_ants(correlators[1])
-        _with_tile_buffers(dc, num_samples_signal, num_ants) do tile_re, tile_im
+        _with_tile_buffers(dc, num_rows, num_ants) do tile_re, tile_im
             downconvert_and_correlate_fused_tuple!(
                 correlators,
-                signal,
+                samples,
                 code_replicas,
                 sample_shifts_tuple,
                 carrier_frequency,
@@ -609,7 +597,7 @@ end
     signal_start_sample,
     samples_to_integrate,
     prn,
-    num_samples_signal,
+    num_rows,
 )
     bufs = _scratch_buffers(dc)
     idx_tuple = ntuple(identity, length(signals))
@@ -620,7 +608,7 @@ end
             code_doppler,
             code_phase,
             sampling_frequency,
-            num_samples_signal,
+            num_rows,
         )
         slot = _code_replica_slot(bufs, i)
         CT = Int8  # embedded-LUT `gen_code!` is Int8-only; see `_despread_one_signal!`
@@ -650,15 +638,9 @@ end
     code_doppler,
     code_phase,
     sampling_frequency,
-    num_samples_signal,
+    num_rows,
 ) = map(signals) do head
-    _signal_replica_params(
-        head,
-        code_doppler,
-        code_phase,
-        sampling_frequency,
-        num_samples_signal,
-    ).sample_shifts
+    _signal_replica_params(head, code_doppler, code_phase, sampling_frequency, num_rows).sample_shifts
 end
 
 @inline _zip_correlators_with_completed(corrs::Tuple, completed::Tuple) =
@@ -679,7 +661,7 @@ shared, see [`track`](@ref). The only per-call allocation is the slot-value copy
 The **noise estimators are shared too**, and this call advances them: a
 [`CorrelatorNoiseEstimator`](@extref TrackingLoops.CorrelatorNoiseEstimator)'s window
 and RNG stream are written in place, so the input's window grows and its draws
-advance. Copying a window (~1000 observations per signal) per call would cost O(K)
+advance. Copying a window (~1000 observations per samples) per call would cost O(K)
 and reset the reference's PRN rotation. Hence:
 
   - Two outputs branched from one input share its noise reference: the same samples
@@ -711,7 +693,7 @@ time grid: each satellite integrates up to sample
 `min(round((chunk_index + 1) * chunk_duration * sampling_frequency), num_samples)`,
 re-anchored to the absolute `chunk_index` so rounding never drifts and bands stay
 aligned. `chunk_duration = nothing` (the default) consumes the whole buffer. Every
-completed integration is snapshotted into its signal's `correlator_outputs`; only the
+completed integration is snapshotted into its samples's `correlator_outputs`; only the
 trailing partial stays in the live correlator.
 
 `stop_before_partial = true` stops each satellite at its last code-block boundary
@@ -1142,8 +1124,8 @@ $(SIGNATURES)
 Downconvert and correlate a single satellite on the CPU.
 """
 function downconvert_and_correlate!(
-    signal_type,
     signal,
+    samples,
     correlator::AbstractCorrelator{M},
     code_replica,
     code_phase,
@@ -1159,7 +1141,7 @@ function downconvert_and_correlate!(
         get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
     gen_code_replica!(
         code_replica,
-        signal_type,
+        signal,
         code_frequency,
         sampling_frequency,
         code_phase,
@@ -1170,7 +1152,7 @@ function downconvert_and_correlate!(
     )
     _fused_standalone!(
         correlator,
-        signal,
+        samples,
         code_replica,
         sample_shifts,
         carrier_frequency,

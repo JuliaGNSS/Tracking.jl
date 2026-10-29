@@ -110,12 +110,12 @@ julia> track_state = add_satellite!(track_state; prn = 1, group_key = :legacy_gp
 
 julia> track_state = add_satellite!(track_state; prn = 1, group_key = :gps_l5,        code_phase = 0.0, carrier_doppler = 0.0Hz);
 
-julia> buf_l1 = randn(Xoshiro(1), ComplexF64, 4000);   # 1 ms at  4 MHz
+julia> samples_l1 = randn(Xoshiro(1), ComplexF64, 4000);   # 1 ms at  4 MHz
 
-julia> buf_l5 = randn(Xoshiro(2), ComplexF64, 25000);  # 1 ms at 25 MHz
+julia> samples_l5 = randn(Xoshiro(2), ComplexF64, 25000);  # 1 ms at 25 MHz
 
-julia> track!((L1 = BandMeasurement(buf_l1, 4e6Hz),
-               L5 = BandMeasurement(buf_l5, 25e6Hz)), track_state);
+julia> track!((L1 = BandMeasurement(samples_l1, 4e6Hz),
+               L5 = BandMeasurement(samples_l5, 25e6Hz)), track_state);
 ```
 
 Noise, not `zeros`: the default C/N₀ estimator measures the noise floor from the samples, and `track!` warns, once per signal, about an all-zero buffer (see [`AbstractNoiseEstimator`](@extref TrackingLoops.AbstractNoiseEstimator)). See [Multi-band tracking](tracking_state.md#Multi-band-tracking) for the full setup.
