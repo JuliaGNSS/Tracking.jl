@@ -10,10 +10,10 @@ Users only need `is_bit_or_secondary_code_synced` per signal (see the
 `get_soft_bits`. The detectors and the bit synchronizer are TrackingLoops'; see
 [`BitSynchronizer`](@extref TrackingLoops.BitSynchronizer).
 
-## Code-phase wrap period
+## Code-phase period
 
 The shared `TrackedSat.code_phase` wraps at the least common multiple of the
-signals' wraps (#129), each of which depends on the signal's sync state:
+signals' periods (#129), each of which depends on the signal's sync state:
 
 - **Before sync**: its primary code length, since the bit or secondary chip of
   the current period is unknown.
@@ -28,12 +28,12 @@ signals' wraps (#129), each of which depends on the signal's sync state:
 | L1C-P + L1C-D + L1CA | 10230 | 18.4 M (L1C-P dominates) |
 
 `mod(code_phase, primary)` is a signal's replica phase, `div(code_phase, primary)`
-its position within the symbol. [`max_code_length`](@ref) is the post-sync bound,
-[`current_code_wrap`](@ref) the runtime wrap.
+its position within the symbol. [`max_code_phase_period`](@ref) is the post-sync bound,
+[`current_code_phase_period`](@ref) the runtime period.
 
 ```@docs
-max_code_length
-current_code_wrap
+max_code_phase_period
+current_code_phase_period
 ```
 
 ## Sync detection
@@ -110,7 +110,7 @@ the primary length; the within-period phase is kept (#117). Of several synced
 signals, the one with the longest `primary × secondary` length wins.
 
 A signal without secondary code (e.g. GPS L1 C/A) needs no snap: its detector
-locks at a true bit boundary, so the widened wrap starts at the bit's first
+locks at a true bit boundary, so the widened period starts at the bit's first
 period, and the bit synchronizer's code-period counter
 (`num_code_periods_into_bit`), which draining the soft bits between `track!` calls
 preserves, keeps the bit cadence across them.

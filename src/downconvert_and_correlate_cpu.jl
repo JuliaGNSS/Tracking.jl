@@ -418,7 +418,7 @@ end
     num_samples_signal,
 )
     head = first(signals)
-    # Measured against the secondary-aware wrap (`_replica_code_wrap`), so a
+    # Measured against the secondary-aware period (`_replica_code_phase_period`), so a
     # multi-block window past sync ends on a bit boundary instead of
     # straddling one.
     p = _signal_replica_params(
@@ -458,14 +458,14 @@ end
 @inline _flag_completed(t::Tuple, chosen) =
     (first(t) == chosen, _flag_completed(Base.tail(t), chosen)...)
 
-# Code-phase wrap for a signal's replica and integration window. Past sync it is
+# Code-phase period for a signal's replica and integration window. Past sync it is
 # the secondary-/bit-period length, so `gen_code!` bakes the secondary chip of the
 # current block into the replica and wipes the overlay at every integration length
 # (#125); before sync only the primary phase is known. At one block the boundary is
 # unchanged, as `calc_num_chips_to_integrate` re-mods by the primary length.
 # `num_blocks` is unused.
-@inline _replica_code_wrap(tsig::TrackedSignal, num_blocks::Integer) =
-    is_bit_or_secondary_code_synced(tsig) ? _post_sync_code_length(tsig) :
+@inline _replica_code_phase_period(tsig::TrackedSignal, num_blocks::Integer) =
+    is_bit_or_secondary_code_synced(tsig) ? _post_sync_code_phase_period(tsig) :
     get_code_length(tsig.signal)
 
 # All per-signal replica/kernel parameters, derived in one place so the boundary
@@ -490,7 +490,7 @@ end
         tsig.preferred_num_code_blocks_to_integrate,
         is_bit_or_secondary_code_synced(tsig),
     )
-    signal_code_phase = mod(code_phase, _replica_code_wrap(tsig, n_blocks))
+    signal_code_phase = mod(code_phase, _replica_code_phase_period(tsig, n_blocks))
     (; code_frequency, sample_shifts, code_replica_size, n_blocks, signal_code_phase)
 end
 

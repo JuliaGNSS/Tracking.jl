@@ -35,7 +35,7 @@ using Tracking:
     get_sat_state,
     get_bit_buffer,
     to_dictionary,
-    max_code_length
+    max_code_phase_period
 import TrackingLoops
 using TrackingLoops: is_bit_or_secondary_code_synced
 
@@ -89,9 +89,9 @@ end
 
     # The upper bound, 1023 chips × 20 blocks per bit; the runtime wrap is
     # 1023 until sync, then 20460.
-    @test @inferred(max_code_length(sat.signals)) == 20460
+    @test @inferred(max_code_phase_period(sat.signals)) == 20460
 
-    @test @inferred(Tracking.current_code_wrap(sat.signals)) == 1023
+    @test @inferred(Tracking.current_code_phase_period(sat.signals)) == 1023
 
     synced_sig = Tracking.TrackedSignal(
         only(sat.signals);
@@ -108,27 +108,29 @@ end
         ),
     )
     synced_signals = (synced_sig,)
-    @test @inferred(Tracking.current_code_wrap(synced_signals)) == 20460
+    @test @inferred(Tracking.current_code_phase_period(synced_signals)) == 20460
 
     # The recursion's base case, the lcm identity; a TrackedSat never has an
     # empty signal tuple.
-    @test Tracking._max_code_length(()) == 1
-    @test Tracking._current_code_wrap(()) == 1
+    @test Tracking._max_code_phase_period(()) == 1
+    @test Tracking._current_code_phase_period(()) == 1
 
-    @testset "_post_sync_code_length per signal" begin
+    @testset "_post_sync_code_phase_period per signal" begin
         import GNSSSignals: GalileoE1B, GPSL5I, GPSL1C_D, GPSL1C_P
-        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL1CA())) ==
+        @test Tracking._post_sync_code_phase_period(Tracking.TrackedSignal(GPSL1CA())) ==
               1023 * 20
-        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GalileoE1B(CBOC))) ==
-              4092 * 1   # 1 block per symbol
-        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GalileoE1B())) ==
+        @test Tracking._post_sync_code_phase_period(
+            Tracking.TrackedSignal(GalileoE1B(CBOC)),
+        ) == 4092 * 1   # 1 block per symbol
+        @test Tracking._post_sync_code_phase_period(Tracking.TrackedSignal(GalileoE1B())) ==
               4092 * 1
-        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL5I())) ==
+        @test Tracking._post_sync_code_phase_period(Tracking.TrackedSignal(GPSL5I())) ==
               10230 * 10
-        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL1C_D())) ==
+        @test Tracking._post_sync_code_phase_period(Tracking.TrackedSignal(GPSL1C_D())) ==
               10230 * 1
-        @test Tracking._post_sync_code_length(Tracking.TrackedSignal(GPSL1C_P(TMBOC))) ==
-              10230 * 1800
+        @test Tracking._post_sync_code_phase_period(
+            Tracking.TrackedSignal(GPSL1C_P(TMBOC)),
+        ) == 10230 * 1800
     end
 end
 
@@ -144,7 +146,7 @@ GNSSSignals.get_bit_rate(::Type{FakeWrapSignal}) = 0Hz
 
 @testset "shared code wrap is a common multiple, not a max (issue #129)" begin
     # Each signal re-derives its phase as `mod(code_phase, wrap)`, correct only
-    # if the shared wrap is a multiple of every signal's.
+    # if the shared period is a multiple of every signal's.
     base = Tracking.TrackedSignal(GPSL1CA())
     synced_buffer(::TrackingLoops.BitSynchronizer{B}) where {B} =
         TrackingLoops.BitSynchronizer{B}(
@@ -176,14 +178,14 @@ GNSSSignals.get_bit_rate(::Type{FakeWrapSignal}) = 0Hz
     # Wraps 4 and 6: 12, where max would give 6, no multiple of 4.
     s4 = fake_tracked_signal(4, 5, false)
     s6 = fake_tracked_signal(6, 1, false)
-    @test @inferred(Tracking.current_code_wrap((s4, s6))) == 12
+    @test @inferred(Tracking.current_code_phase_period((s4, s6))) == 12
 
     # Synced, the 4-chip signal wraps at 4 × 5 = 20.
     s4_synced = fake_tracked_signal(4, 5, true)
-    @test @inferred(Tracking.current_code_wrap((s4_synced, s6))) == 60
+    @test @inferred(Tracking.current_code_phase_period((s4_synced, s6))) == 60
 
     # The bound is the all-synced case.
-    @test @inferred(max_code_length((s4, s6))) == 60
+    @test @inferred(max_code_phase_period((s4, s6))) == 60
 end
 
 @testset "Public multi-signal TrackedSat constructor" begin

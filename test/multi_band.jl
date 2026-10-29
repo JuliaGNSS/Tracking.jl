@@ -21,7 +21,7 @@ using Tracking:
     track,
     track!,
     add_satellite!,
-    band_keys,
+    get_band_ids,
     get_samples,
     get_sampling_frequency,
     get_intermediate_frequency,
@@ -136,19 +136,19 @@ end
     @test_throws ArgumentError track!(zeros(ComplexF64, 4000), ts, 4e6Hz)
 end
 
-@testset "band_keys for single-band TrackState" begin
+@testset "get_band_ids for single-band TrackState" begin
     ts = TrackState(; signal = GPSL1CA())
-    @test band_keys(ts) == (:L1,)
+    @test get_band_ids(ts) == (:L1,)
 end
 
-@testset "band_keys for multi-band TrackState" begin
+@testset "get_band_ids for multi-band TrackState" begin
     ts = TrackState(; signals = (legacy_gps_l1 = (GPSL1CA(),), gps_l5 = (GPSL5I(),)))
-    @test band_keys(ts) == (:L1, :L5)
+    @test get_band_ids(ts) == (:L1, :L5)
 end
 
 @testset "Two groups sharing a band yield one band key" begin
     ts = TrackState(; signals = (legacy_gps = (GPSL1CA(),), another_l1 = (GPSL1CA(),)))
-    @test band_keys(ts) == (:L1,)
+    @test get_band_ids(ts) == (:L1,)
 end
 
 @testset "Single-band track! still accepts bare buffer" begin
@@ -299,7 +299,7 @@ end
             galileo = SignalGroup((GalileoE1B(CBOC),); num_antennas = NumAntennas(2)),
         ),
     )
-    @test band_keys(ts) == (:L1,)
+    @test get_band_ids(ts) == (:L1,)
 end
 
 end # module

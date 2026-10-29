@@ -21,8 +21,8 @@ function _advance_sat(
     )
     # Wraps at the primary code before sync and at the bit / secondary-code
     # period after (GPS L1 C/A: 1023, then 20460), so consumers such as
-    # PositionVelocityTime.jl know the code block; see `current_code_wrap`.
-    code_length = current_code_wrap(sat.signals)
+    # PositionVelocityTime.jl know the code block; see `current_code_phase_period`.
+    code_length = current_code_phase_period(sat.signals)
     code_phase = mod(
         code_frequency * integrated_samples / sampling_frequency + sat.code_phase,
         code_length,
