@@ -30,36 +30,3 @@ function calc_num_samples_left_to_integrate(
     code_frequency = get_chip_rate(signal) + current_code_doppler
     ceil(Int, chips_to_integrate * sampling_frequency / code_frequency)
 end
-
-"""
-$(SIGNATURES)
-
-Return `(samples_to_integrate, is_integration_completed)`: the samples up to the
-end of the integration's code blocks, or of the signal if that comes first.
-"""
-function calc_signal_samples_to_integrate(
-    signal::AbstractGNSSSignal,
-    signal_start_sample::Int,
-    sampling_frequency,
-    code_doppler,
-    code_phase,
-    preferred_num_code_blocks_to_integrate::Int,
-    secondary_code_or_bit_found::Bool,
-    num_samples_signal::Int,
-)
-    num_code_blocks_to_integrate = calc_num_code_blocks_to_integrate(
-        signal,
-        preferred_num_code_blocks_to_integrate,
-        secondary_code_or_bit_found,
-    )
-    samples_to_integrate_until_code_end = calc_num_samples_left_to_integrate(
-        signal,
-        num_code_blocks_to_integrate,
-        sampling_frequency,
-        code_doppler,
-        code_phase,
-    )
-    signal_samples_left = num_samples_signal - signal_start_sample + 1
-    samples_to_integrate = min(samples_to_integrate_until_code_end, signal_samples_left)
-    return samples_to_integrate, samples_to_integrate == samples_to_integrate_until_code_end
-end

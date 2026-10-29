@@ -396,7 +396,6 @@ end
 )
     per_signal_to_boundary = _per_signal_samples_to_boundary(
         signals,
-        signal_start_sample,
         sampling_frequency,
         code_doppler,
         code_phase,
@@ -410,10 +409,9 @@ end
 end
 
 # Each signal's samples to the end of its integration window.
-@inline _per_signal_samples_to_boundary(::Tuple{}, _, _, _, _, _) = ()
+@inline _per_signal_samples_to_boundary(::Tuple{}, _, _, _, _) = ()
 @inline function _per_signal_samples_to_boundary(
     signals::Tuple,
-    signal_start_sample,
     sampling_frequency,
     code_doppler,
     code_phase,
@@ -435,7 +433,6 @@ end
         n,
         _per_signal_samples_to_boundary(
             Base.tail(signals),
-            signal_start_sample,
             sampling_frequency,
             code_doppler,
             code_phase,

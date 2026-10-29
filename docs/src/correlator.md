@@ -132,12 +132,6 @@ In the TrackingLoops manual:
 - [`update(::DefaultPostCorrFilter, ::Any)`](@extref TrackingLoops.update-Tuple{DefaultPostCorrFilter, Any})
 - [`get_weights`](@extref TrackingLoops.get_weights)
 
-## Integration sizing
-
-```@docs
-Tracking.calc_signal_samples_to_integrate
-```
-
 ## Adjusting the spacing of the stock correlator
 
 Changing `d` needs no custom correlator: pass `d / 2` in chips as
