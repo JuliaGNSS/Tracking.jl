@@ -1,6 +1,7 @@
 module BitDetectionIntegrationTest
 
 using Test: @test, @testset
+using GNSSSignals: TMBOC
 using Unitful: Hz, s
 using GNSSSignals:
     GPSL1CA,
@@ -8,7 +9,7 @@ using GNSSSignals:
     GPSL5Q,
     GPSL1C_P,
     gen_code,
-    get_code_frequency,
+    get_chip_rate,
     get_code_length,
     get_secondary_code_length
 using Tracking:
@@ -17,18 +18,18 @@ using Tracking:
     track,
     get_code_phase,
     get_num_bits,
-    get_filtered_prompts,
-    get_last_fully_integrated_filtered_prompt,
+    get_beamformed_prompts,
+    get_last_fully_integrated_beamformed_prompt,
     get_last_fully_integrated_num_code_blocks,
     set_preferred_num_code_blocks_to_integrate!
 using TrackingLoops:
-    get_soft_bits, has_bit_or_secondary_code_been_found, EarlyPromptLateCorrelator
+    get_soft_bits, is_bit_or_secondary_code_synced, EarlyPromptLateCorrelatorBank
 
 @testset "Bit detection integration test" begin
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     num_samples = 5000
-    code_frequency = get_code_frequency(gpsl1)
+    code_frequency = get_chip_rate(gpsl1)
     carrier_doppler = 0.0Hz
 
     # Both lock polarities. This near-noiseless signal locks at block 60, the
@@ -59,7 +60,7 @@ using TrackingLoops:
                     code_phase,
                 )
             track_state = track(signal, track_state, sampling_frequency)
-            @test has_bit_or_secondary_code_been_found(track_state) == (index >= 60)
+            @test is_bit_or_secondary_code_synced(track_state) == (index >= 60)
             # Sync at block 60 recovers the 3 buffered bits (the UInt64 sign
             # window holds all 60), then one bit per 20 blocks.
             expected_num_bits = index == 60 ? 3 : (index > 60 && index % 20 == 0 ? 1 : 0)
@@ -88,7 +89,7 @@ end
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     num_samples = 5000
-    code_frequency = get_code_frequency(gpsl1)
+    code_frequency = get_chip_rate(gpsl1)
 
     multi_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0, 0.0Hz)])
     set_preferred_num_code_blocks_to_integrate!(multi_state, 1, 4)
@@ -115,7 +116,7 @@ end
         )
         multi_state = track(signal, multi_state, sampling_frequency)
         single_state = track(signal, single_state, sampling_frequency)
-        @test has_bit_or_secondary_code_been_found(multi_state) == (index >= 60)
+        @test is_bit_or_secondary_code_synced(multi_state) == (index >= 60)
         expected_num_bits = index == 60 ? 3 : (index > 60 && index % 20 == 0 ? 1 : 0)
         @test get_num_bits(multi_state) == expected_num_bits
         @test get_num_bits(single_state) == expected_num_bits
@@ -150,7 +151,7 @@ end
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     num_samples = 5000
-    code_frequency = get_code_frequency(gpsl1)
+    code_frequency = get_chip_rate(gpsl1)
     num_blocks = 140
 
     signal = ComplexF32[]
@@ -189,15 +190,14 @@ end
 
 # GPS L5I secondary-code (NH10) sync and phase recovery.
 #
-# Starting at every NH10 phase, the soft CFAR rotation search
-# (`TrackingLoops._detect_secondary_code_cfar`) must not fire before two periods,
-# must fire on a true NH10 boundary, and must anchor `code_phase` to the upcoming
-# integration's chip 0.
+# Starting at every NH10 phase, TrackingLoops' soft CFAR rotation search must not
+# fire before two periods, must fire on a true NH10 boundary, and must anchor
+# `code_phase` to the upcoming integration's chip 0.
 @testset "GPS L5I secondary-code sync and phase recovery" begin
     gpsl5 = GPSL5I()
     prn = 1
     sampling_frequency = 25e6Hz   # must exceed L5I's 10.23 Mcps code rate
-    code_frequency = get_code_frequency(gpsl5)
+    code_frequency = get_chip_rate(gpsl5)
     primary_code_length = get_code_length(gpsl5)            # 10230 chips
     secondary_code_length = get_secondary_code_length(gpsl5)  # 10 (NH10)
     num_samples = round(Int, 25e6 / 1000)                  # 1 ms = one primary-code block
@@ -220,7 +220,7 @@ end
                 ),
             )
             track_state = track(signal, track_state, sampling_frequency)
-            if has_bit_or_secondary_code_been_found(track_state) && synced_at_block < 0
+            if is_bit_or_secondary_code_synced(track_state) && synced_at_block < 0
                 synced_at_block = index
                 synced_code_phase = get_code_phase(track_state)
             end
@@ -261,7 +261,7 @@ end
         )
         track_state = TrackState(gpsl5, [TrackedSat(gpsl5, prn, start_phase, 0.0Hz)])
         track_state = track(signal, track_state, sampling_frequency)
-        @test has_bit_or_secondary_code_been_found(track_state)
+        @test is_bit_or_secondary_code_synced(track_state)
         # Up to a floating-point residual (~5e-7 chip) of the code loop.
         @test get_code_phase(track_state) ≈
               (k % secondary_code_length) * primary_code_length + 0.5 * primary_code_length atol =
@@ -279,7 +279,7 @@ end
     gpsl5 = GPSL5I()
     prn = 1
     sampling_frequency = 25e6Hz
-    code_frequency = get_code_frequency(gpsl5)
+    code_frequency = get_chip_rate(gpsl5)
     primary_code_length = get_code_length(gpsl5)              # 10230 chips
     secondary_code_length = get_secondary_code_length(gpsl5)  # 10 (NH10)
     num_samples = round(Int, 25e6 / 1000)                     # 1 ms = one primary block
@@ -318,7 +318,7 @@ end
         set_preferred_num_code_blocks_to_integrate!(track_state, prn, preferred_blocks)
         track_state = track(signal, track_state, sampling_frequency)
 
-        @test has_bit_or_secondary_code_been_found(track_state)
+        @test is_bit_or_secondary_code_synced(track_state)
 
         # Deterministic on this noiseless signal: the winning rotation is
         # `d* = mod(N − start, N)`, so the lock lands at the first block count
@@ -361,7 +361,7 @@ end
     gpsl5 = GPSL5I()
     prn = 1
     sampling_frequency = 25e6Hz
-    code_frequency = get_code_frequency(gpsl5)
+    code_frequency = get_chip_rate(gpsl5)
     primary_code_length = get_code_length(gpsl5)               # 10230 chips
     secondary_code_length = get_secondary_code_length(gpsl5)   # 10 (NH10)
     num_samples = round(Int, 25e6 / 1000)                      # 1 ms = one primary block
@@ -421,7 +421,7 @@ end
     gpsl5q = GPSL5Q()
     prn = 1
     sampling_frequency = 25e6Hz
-    code_frequency = get_code_frequency(gpsl5q)
+    code_frequency = get_chip_rate(gpsl5q)
     secondary_code_length = get_secondary_code_length(gpsl5q)   # 20 (NH20)
     num_samples = round(Int, 25e6 / 1000)                       # 1 ms = one primary block
     # Sync needs ≥ 2 NH20 periods; the rest are full-period integrations.
@@ -443,14 +443,14 @@ end
         track_state =
             track(signal, track_state, sampling_frequency; doppler_update_interval)
 
-        @test has_bit_or_secondary_code_been_found(track_state)
+        @test is_bit_or_secondary_code_synced(track_state)
         @test get_last_fully_integrated_num_code_blocks(track_state, prn) ==
               secondary_code_length
         # The overlay is wiped across all 20 blocks, so the normalised prompt
         # keeps its full magnitude.
-        @test abs(get_last_fully_integrated_filtered_prompt(track_state, prn)) > 0.99
+        @test abs(get_last_fully_integrated_beamformed_prompt(track_state, prn)) > 0.99
         # The last five prompts all postdate sync.
-        prompts = get_filtered_prompts(track_state, prn)
+        prompts = get_beamformed_prompts(track_state, prn)
         @test all(>(0.99), abs.(prompts[(end-4):end]))
     end
 end
@@ -460,11 +460,11 @@ end
 # The rotation search over the per-PRN 1800-chip overlay must lock at the 1800th
 # block, one full 18 s cycle, anchored to overlay chip 0.
 @testset "GPS L1C-P overlay sync (18 s end-to-end)" begin
-    gpsl1c_p = GPSL1C_P()
+    gpsl1c_p = GPSL1C_P(TMBOC)
     prn = 1
     # TMBOC needs fs > ~12.28 MHz; 13 MHz keeps the 18 s run light.
     sampling_frequency = 13e6Hz
-    code_frequency = get_code_frequency(gpsl1c_p)
+    code_frequency = get_chip_rate(gpsl1c_p)
     primary_code_length = get_code_length(gpsl1c_p)             # 10230 chips
     secondary_code_length = get_secondary_code_length(gpsl1c_p)  # 1800
     period_samples = round(Int, 13e6 / 100)                    # 10 ms = one primary period
@@ -477,8 +477,8 @@ end
                 prn,
                 0.0,
                 0.0Hz;
-                correlator = EarlyPromptLateCorrelator(;
-                    preferred_early_late_to_prompt_code_shift = 0.1,
+                correlator_bank = EarlyPromptLateCorrelatorBank(;
+                    preferred_early_late_to_prompt_spacing = 0.1,
                 ),
             ),
         ],
@@ -498,7 +498,7 @@ end
             ),
         )
         track_state = track(signal, track_state, sampling_frequency)
-        if has_bit_or_secondary_code_been_found(track_state) && synced_at_block < 0
+        if is_bit_or_secondary_code_synced(track_state) && synced_at_block < 0
             synced_at_block = index
             synced_code_phase = get_code_phase(track_state)
         end

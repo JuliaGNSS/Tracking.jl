@@ -1,10 +1,11 @@
 module CN0EstimatorTest
 
 using Test: @test, @testset, @inferred, @test_throws
+using GNSSSignals: TMBOC
 using Random: Random
 using Unitful: Hz, dBHz, ustrip
 import Unitful
-using GNSSSignals: GPSL1CA, GPSL1C_P, gen_code, get_code_frequency
+using GNSSSignals: GPSL1CA, GPSL1C_P, gen_code, get_chip_rate
 import Tracking
 using Tracking:
     TrackedSignal,
@@ -17,10 +18,10 @@ using Tracking:
 import TrackingLoops
 using TrackingLoops:
     MomentsCN0Estimator,
-    NoiseRefCN0Estimator,
+    NoiseReferencedCN0Estimator,
     default_cn0_estimator,
     requires_noise_density,
-    update,
+    update!,
     estimate_cn0
 
 # A minimal custom estimator: it only proves that the type is stored and its
@@ -28,7 +29,7 @@ using TrackingLoops:
 struct CountingCN0Estimator <: TrackingLoops.AbstractCN0Estimator
     num_prompts::Int
 end
-TrackingLoops.update(estimator::CountingCN0Estimator, prompt) =
+TrackingLoops.update!(estimator::CountingCN0Estimator, prompt) =
     CountingCN0Estimator(estimator.num_prompts + 1)
 TrackingLoops.estimate_cn0(estimator::CountingCN0Estimator, integration_time) =
     estimator.num_prompts * dBHz
@@ -54,34 +55,36 @@ TrackingLoops.estimate_cn0(estimator::CountingCN0Estimator, integration_time) =
     @test estimate_cn0(track_state, 1) == 3dBHz
 
     multi = TrackedSat(
-        (GPSL1C_P(), GPSL1CA()),
+        (GPSL1C_P(TMBOC), GPSL1CA()),
         1,
         0.0,
         0.0Hz;
-        cn0_estimator = (CountingCN0Estimator(1), MomentsCN0Estimator(10)),
+        cn0_estimator = (
+            CountingCN0Estimator(1),
+            MomentsCN0Estimator(; num_integrations = 10),
+        ),
     )
     @test estimate_cn0(multi, GPSL1C_P) == 1dBHz
     @test get_cn0_estimator(multi, GPSL1CA) isa MomentsCN0Estimator
     # Estimators buffer into a vector, so one instance may not be shared by two
     # signals of the same satellite — that would corrupt both.
     @test_throws ArgumentError TrackedSat(
-        (GPSL1C_P(), GPSL1CA()),
+        (GPSL1C_P(TMBOC), GPSL1CA()),
         1,
         0.0,
         0.0Hz;
-        cn0_estimator = MomentsCN0Estimator(10),
+        cn0_estimator = MomentsCN0Estimator(; num_integrations = 10),
     )
     @test_throws ArgumentError TrackedSat(
-        (GPSL1C_P(), GPSL1CA()),
+        (GPSL1C_P(TMBOC), GPSL1CA()),
         1,
         0.0,
         0.0Hz;
-        cn0_estimator = (MomentsCN0Estimator(10),),
+        cn0_estimator = (MomentsCN0Estimator(; num_integrations = 10),),
     )
 
     # The custom estimator is actually the one `track` feeds: 5 records in.
-    signal =
-        complex.(float.(gen_code(4000, gpsl1, 1, 4e6Hz, get_code_frequency(gpsl1), 0.0)))
+    signal = complex.(float.(gen_code(4000, gpsl1, 1, 4e6Hz, get_chip_rate(gpsl1), 0.0)))
     track_state = TrackState(
         gpsl1,
         [TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = CountingCN0Estimator(0))],
@@ -94,13 +97,13 @@ TrackingLoops.estimate_cn0(estimator::CountingCN0Estimator, integration_time) =
     # `num_prompts_for_cn0_estimation` still sizes the default estimator's
     # averaging span.
     default = get_cn0_estimator(TrackedSignal(gpsl1; num_prompts_for_cn0_estimation = 40))
-    @test default isa NoiseRefCN0Estimator
-    @test default.num_records == 40
+    @test default isa NoiseReferencedCN0Estimator
+    @test default.num_integrations == 40
     @test Base.length(default.buffered_cn0) == 40
     # The default reads a measured noise density, which is what makes the band
     # provision a source for it.
     @test requires_noise_density(default_cn0_estimator(gpsl1, 100))
-    @test requires_noise_density(default_cn0_estimator(GPSL1C_P(), 100))
+    @test requires_noise_density(default_cn0_estimator(GPSL1C_P(TMBOC), 100))
 end
 
 @testset "estimate_cn0 overloads on TrackState" begin
@@ -122,13 +125,16 @@ end
     # Fixed amplitude with noise shrinking as √N is what a longer coherent
     # integration delivers, so both block counts must report the same C/N₀.
     # Pinned to `MomentsCN0Estimator`, which takes one `T` at `estimate_cn0`
-    # time; `NoiseRefCN0Estimator` applies `T` per record (tested in
+    # time; `NoiseReferencedCN0Estimator` applies `T` per record (tested in
     # TrackingLoops).
     function cn0_at(num_blocks, prompts)
-        tsig = Tracking.TrackedSignal(gpsl1; cn0_estimator = MomentsCN0Estimator(100))
+        tsig = Tracking.TrackedSignal(
+            gpsl1;
+            cn0_estimator = MomentsCN0Estimator(; num_integrations = 100),
+        )
         estimator = get_cn0_estimator(tsig)
         for p in prompts
-            estimator = update(estimator, p)
+            estimator = update!(estimator, p)
         end
         tsig = Tracking.TrackedSignal(
             tsig;
@@ -162,10 +168,13 @@ end
     # C/N₀ × `get_last_fully_integrated_integration_time` is the
     # post-integration SNR, so it must not depend on the block count.
     function snr_at(num_blocks, prompts)
-        tsig = Tracking.TrackedSignal(gpsl1; cn0_estimator = MomentsCN0Estimator(100))
+        tsig = Tracking.TrackedSignal(
+            gpsl1;
+            cn0_estimator = MomentsCN0Estimator(; num_integrations = 100),
+        )
         estimator = get_cn0_estimator(tsig)
         for p in prompts
-            estimator = update(estimator, p)
+            estimator = update!(estimator, p)
         end
         tsig = Tracking.TrackedSignal(
             tsig;

@@ -3,6 +3,7 @@ module NoCN0EstimatorTest
 # `NoCN0Estimator` itself is tested in TrackingLoops.
 
 using Test: @test, @testset
+using GNSSSignals: TMBOC
 using Unitful: Hz, dBHz
 using GNSSSignals: GPSL1CA, GPSL1C_P
 import Tracking
@@ -11,7 +12,7 @@ using TrackingLoops: NoCN0Estimator, NWPRCN0Estimator, estimate_cn0
 
 @testset "NoCN0Estimator plugs into one signal of a multi-signal satellite" begin
     sat = TrackedSat(
-        (GPSL1C_P(), GPSL1CA()),
+        (GPSL1C_P(TMBOC), GPSL1CA()),
         1,
         0.0,
         0.0Hz;

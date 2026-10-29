@@ -13,18 +13,18 @@ chips for GPS L1 C/A), with `N = 1` until the bit edge or secondary code is
 found. Antenna-array samples are correlated with one replica, preserving their
 phase relationships. One satellite can be tracked on several signals at once
 (e.g. GPS L1 C/A, L1C-D and L1C-P), sharing the carrier downconvert, with a
-correlator per signal.
+correlator bank per signal.
 
-The per-record loop arithmetic (correlators, discriminators, bit buffer, C/N₀
-and Doppler estimators) lives in
+The per-integration loop arithmetic (correlators, discriminators, bit
+synchronization, C/N₀ estimators and tracking loops) lives in
 [TrackingLoops.jl](https://github.com/JuliaGNSS/TrackingLoops.jl), so a hardware
 correlator's loop can run the same code. Tracking.jl re-exports the functions
 that read results:
 [`estimate_cn0`](@extref TrackingLoops.estimate_cn0-Tuple{MomentsCN0Estimator, Any}),
-[`get_prompt`](@extref TrackingLoops.get_prompt), `get_soft_bits`,
-`has_bit_or_secondary_code_been_found` and a few more. Load TrackingLoops to
-configure a correlator, a C/N₀ or noise estimator, a Doppler estimator or a
-post-correlation filter, or for vector tracking; see the
+[`get_prompt`](@extref TrackingLoops.get_prompt-Tuple{TrackingLoops.AbstractCorrelatorBank}), `get_soft_bits`,
+`is_bit_or_secondary_code_synced` and a few more. Load TrackingLoops to
+configure a correlator bank, a C/N₀ or noise estimator, a tracking loop or a
+beamformer, or for vector tracking; see the
 [TrackingLoops.jl manual](https://juliagnss.github.io/TrackingLoops.jl/stable/).
 
 ```julia
@@ -69,7 +69,7 @@ julia> using Tracking, GNSSSignals
 
 julia> using Tracking: Hz
 
-julia> using GNSSSignals: gen_code, get_code_frequency, get_code_center_frequency_ratio
+julia> using GNSSSignals: gen_code, get_chip_rate, get_chip_rate_to_center_frequency_ratio
 
 julia> track_state = TrackState(; signal = GPSL1CA());
 
@@ -81,7 +81,7 @@ julia> num_samples = 4000;
 
 julia> signal = GPSL1CA();
 
-julia> code_frequency = 1000.0Hz * get_code_center_frequency_ratio(signal) + get_code_frequency(signal);
+julia> code_frequency = 1000.0Hz * get_chip_rate_to_center_frequency_ratio(signal) + get_chip_rate(signal);
 
 julia> measurement = cis.(2π .* 1000.0Hz .* (0:num_samples-1) ./ sampling_frequency) .*
            gen_code(num_samples, signal, 1, sampling_frequency, code_frequency, 50.0);
@@ -99,14 +99,14 @@ julia> get_code_phase(track_state, 1)
 
 Multiple satellites, systems, signals and bands, antenna arrays, acquisition handoff and the accessors are covered in [Tracking State](tracking_state.md); real-time loops in [Track](track.md).
 
-!!! tip "Real-time loops: hoist the correlator"
+!!! tip "Real-time loops: hoist the backend"
     Construct [`CPUThreadedDownconvertAndCorrelator`](@ref) (or
     [`CPUDownconvertAndCorrelator`](@ref)) **once outside** the loop and pass it
     via `downconvert_and_correlator =`. See [Track](track.md#Real-time-loops).
 
 ## Q/A
 
-- Why are the correlator values zero?
+- Why are the correlator outputs zero?
 
 `get_last_fully_integrated_correlator` returns the last *completed* integration,
 one that reached the end of its code blocks. Before the first one completes it

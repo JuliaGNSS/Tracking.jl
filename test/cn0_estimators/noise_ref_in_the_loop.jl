@@ -1,6 +1,6 @@
 module NoiseRefInTheLoopTest
 
-# Why `NoiseRefCN0Estimator` is the default, in the loop (that it serves the
+# Why `NoiseReferencedCN0Estimator` is the default, in the loop (that it serves the
 # signals `NWPRCN0Estimator` cannot, #217, is tested in TrackingLoops):
 #
 #   1. It beats NWPR where lock decisions are made, and is immune to the
@@ -11,7 +11,7 @@ using Test: @test, @testset
 using Random: Xoshiro, randn, rand
 using Statistics: std
 using Unitful: Hz, dBHz, ustrip, uconvert
-using GNSSSignals: GPSL1CA, gen_code, get_code_frequency
+using GNSSSignals: GPSL1CA, gen_code, get_chip_rate
 import Tracking
 using Tracking:
     CPUDownconvertAndCorrelator,
@@ -23,10 +23,10 @@ using Tracking:
 using TrackingLoops:
     CorrelatorNoiseEstimator,
     NWPRCN0Estimator,
-    NoiseRefCN0Estimator,
+    NoiseReferencedCN0Estimator,
     estimate_cn0,
     get_noise_density,
-    has_bit_or_secondary_code_been_found
+    is_bit_or_secondary_code_synced
 
 _db(x) = ustrip(uconvert(dBHz, x))
 _median(xs) = (v = sort(collect(xs)); v[div(length(v) + 1, 2)])
@@ -38,7 +38,7 @@ function _track_noisy(cn0_db, num_blocks; seed = 1, cn0_estimator, blocks = 1)
     gpsl1 = GPSL1CA()
     fs = 4e6Hz
     num_samples = 4000
-    code_frequency = get_code_frequency(gpsl1)
+    code_frequency = get_chip_rate(gpsl1)
     rng = Xoshiro(seed)
     amplitude = 10^(cn0_db / 20)
     track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator)])
@@ -52,7 +52,7 @@ function _track_noisy(cn0_db, num_blocks; seed = 1, cn0_estimator, blocks = 1)
             gen_code(num_samples, gpsl1, 1, fs, code_frequency, ustrip(code_phase))
         noise = randn(rng, ComplexF64, num_samples) .* sqrt(ustrip(Hz, fs))
         track!(clean .+ noise, track_state, fs; downconvert_and_correlator = dc)
-        if blocks > 1 && !promoted && has_bit_or_secondary_code_been_found(track_state, 1)
+        if blocks > 1 && !promoted && is_bit_or_secondary_code_synced(track_state, 1)
             set_preferred_num_code_blocks_to_integrate!(track_state, 1, blocks)
             reset_loop_filters!(track_state, 1)
             promoted = true
@@ -73,13 +73,13 @@ end
     # 1-block records, 25 dB-Hz: the noise reference has no `1 < μ̂ < M` bound,
     # so it never degenerates. NWPR's degenerate count is not asserted: five
     # seeds cannot pin it and it varies with the Julia version's RNG stream.
-    ref_low = run(25.0, () -> NoiseRefCN0Estimator())
+    ref_low = run(25.0, () -> NoiseReferencedCN0Estimator())
     @test count(!isfinite, ref_low) == 0
     @test _median(ref_low) ≈ 25 atol = 3.0
 
     # 45 dB-Hz, 1-block records: both work, the reference is tighter and closer.
     nwpr_high = run(45.0, () -> NWPRCN0Estimator(gpsl1))
-    ref_high = run(45.0, () -> NoiseRefCN0Estimator())
+    ref_high = run(45.0, () -> NoiseReferencedCN0Estimator())
     @test _median(ref_high) ≈ 45 atol = 1.0
     @test abs(_median(ref_high) - 45) <= abs(_median(nwpr_high) - 45) + 0.1
     @test std(ref_high) < std(nwpr_high)
@@ -87,7 +87,7 @@ end
     # 20-block records (a whole L1 C/A bit): NWPR falls back for good, the
     # non-coherent reference is unaffected by the loop's phase noise.
     nwpr_long = run(45.0, () -> NWPRCN0Estimator(gpsl1); blocks = 20)
-    ref_long = run(45.0, () -> NoiseRefCN0Estimator(); blocks = 20)
+    ref_long = run(45.0, () -> NoiseReferencedCN0Estimator(); blocks = 20)
     @test _median(ref_long) ≈ 45 atol = 1.5
     @test _median(ref_long) - _median(nwpr_long) > 5
     # ... and the reference barely moves between the two record lengths.
@@ -95,13 +95,13 @@ end
 end
 
 @testset "the reference's self-leakage is the size the design says" begin
-    # `ε_self = C/f_chip`; see `NoiseRefCN0Estimator`. A paired comparison with
+    # `ε_self = C/f_chip`; see `NoiseReferencedCN0Estimator`. A paired comparison with
     # and without the satellite (same noise, same seeded draws), so the loop's σ
     # cancels.
     gpsl1 = GPSL1CA()
     fs = 4e6Hz
     num_samples = 40_000
-    f_chip = ustrip(Hz, get_code_frequency(gpsl1))
+    f_chip = ustrip(Hz, get_chip_rate(gpsl1))
     rng = Xoshiro(20260806)
     noise = sqrt(ustrip(Hz, fs)) .* randn(rng, ComplexF64, num_samples)
 
@@ -123,8 +123,7 @@ end
     for cn0 in (45.0, 50.0)
         carrier_power = 10^(cn0 / 10)
         satellite =
-            10^(cn0 / 20) .*
-            gen_code(num_samples, gpsl1, 1, fs, get_code_frequency(gpsl1), 0.0)
+            10^(cn0 / 20) .* gen_code(num_samples, gpsl1, 1, fs, get_chip_rate(gpsl1), 0.0)
         ratio = density(ComplexF64.(satellite) .+ noise) / density(noise)
         # `N̂₀ → N₀ + C/f_chip`, i.e. a ratio of `1 + (C/N₀)/f_chip` against the
         # `N₀ = 1 Hz⁻¹` this noise is built to have: 1.031 at 45 dB-Hz, 1.098 at

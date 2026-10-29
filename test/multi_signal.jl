@@ -4,20 +4,22 @@ module MultiSignalTest
 # signals correlate, and only `signals[1]` drives the loop.
 
 using Test: @test, @testset, @test_throws
+using GNSSSignals: TMBOC
+using TrackingLoopFilters: ThirdOrderAssistedBilinearLF
 using Unitful: Hz, dBHz
-using GNSSSignals: GPSL1CA, gen_code, get_code_frequency, get_code_center_frequency_ratio
+using GNSSSignals: GPSL1CA, gen_code, get_chip_rate, get_chip_rate_to_center_frequency_ratio
 using Tracking:
     TrackedSat,
     TrackedSignal,
     TrackState,
     add_satellite!,
     track,
-    get_filtered_prompts,
+    get_beamformed_prompts,
     get_sat_state,
     get_signal,
-    get_correlator,
+    get_correlator_bank,
     get_last_fully_integrated_correlator,
-    get_post_corr_filter,
+    get_beamformer,
     get_cn0_estimator,
     get_bit_buffer,
     get_num_bits,
@@ -27,37 +29,37 @@ using Tracking:
 using TrackingLoops:
     estimate_cn0,
     get_soft_bits,
-    has_bit_or_secondary_code_been_found,
-    ConventionalAssistedPLLAndDLL,
-    EarlyPromptLateCorrelator,
-    NumAnts,
-    DefaultPostCorrFilter,
-    NoiseRefCN0Estimator,
-    BitBuffer
+    is_bit_or_secondary_code_synced,
+    ScalarTrackingLoop,
+    EarlyPromptLateCorrelatorBank,
+    NumAntennas,
+    DefaultBeamformer,
+    NoiseReferencedCN0Estimator,
+    BitSynchronizer
 using GNSSSignals: GPSL1C_P, GPSL1C_D, GalileoE1B
 
 @testset "Multi-signal track on a single sat" begin
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     carrier_doppler = 1000.0Hz
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
-    code_frequency = code_doppler + get_code_frequency(gpsl1)
+    code_doppler = carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1)
+    code_frequency = code_doppler + get_chip_rate(gpsl1)
     start_code_phase = 0.0
     prn = 1
     num_samples = 5000  # 1 ms at 5 MHz
 
-    estimator = ConventionalAssistedPLLAndDLL()
+    estimator = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)
     signal_a = TrackedSignal(
         gpsl1;
-        num_ants = NumAnts(1),
-        correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
-        post_corr_filter = DefaultPostCorrFilter(),
+        num_antennas = NumAntennas(1),
+        correlator_bank = EarlyPromptLateCorrelatorBank(; num_antennas = NumAntennas(1)),
+        beamformer = DefaultBeamformer(),
     )
     signal_b = TrackedSignal(
         gpsl1;
-        num_ants = NumAnts(1),
-        correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
-        post_corr_filter = DefaultPostCorrFilter(),
+        num_antennas = NumAntennas(1),
+        correlator_bank = EarlyPromptLateCorrelatorBank(; num_antennas = NumAntennas(1)),
+        beamformer = DefaultBeamformer(),
     )
     sat = TrackedSat(
         (signal_a, signal_b),
@@ -83,22 +85,22 @@ using GNSSSignals: GPSL1C_P, GPSL1C_D, GalileoE1B
     new_track_state = track(signal_buf, track_state, sampling_frequency)
 
     new_sat = get_sat_state(new_track_state, prn)
-    @test length(get_filtered_prompts(new_sat.signals[1])) == 1
-    @test length(get_filtered_prompts(new_sat.signals[2])) == 1
+    @test length(get_beamformed_prompts(new_sat.signals[1])) == 1
+    @test length(get_beamformed_prompts(new_sat.signals[2])) == 1
 
     corr_1 = get_last_fully_integrated_correlator(new_sat.signals[1])
     corr_2 = get_last_fully_integrated_correlator(new_sat.signals[2])
-    @test corr_1.accumulators != zero(corr_1.accumulators)
-    @test corr_2.accumulators != zero(corr_2.accumulators)
+    @test corr_1.correlator_outputs != zero(corr_1.correlator_outputs)
+    @test corr_2.correlator_outputs != zero(corr_2.correlator_outputs)
 
-    @test corr_1.accumulators ≈ corr_2.accumulators
+    @test corr_1.correlator_outputs ≈ corr_2.correlator_outputs
 
     # A per-signal accessor needs a selector on a multi-signal sat.
-    @test_throws "pass a signal selector" get_correlator(new_sat)
+    @test_throws "pass a signal selector" get_correlator_bank(new_sat)
     @test_throws "pass a signal selector" get_cn0_estimator(new_sat)
-    @test_throws "pass a signal selector" get_correlator(new_track_state, prn)
-    @test get_correlator(new_sat, 1) isa EarlyPromptLateCorrelator
-    @test get_correlator(new_sat, 2) isa EarlyPromptLateCorrelator
+    @test_throws "pass a signal selector" get_correlator_bank(new_track_state, prn)
+    @test get_correlator_bank(new_sat, 1) isa EarlyPromptLateCorrelatorBank
+    @test get_correlator_bank(new_sat, 2) isa EarlyPromptLateCorrelatorBank
 end
 
 @testset "Multi-signal track over a multi-code-period chunk" begin
@@ -109,8 +111,8 @@ end
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     carrier_doppler = 1000.0Hz
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
-    code_frequency = code_doppler + get_code_frequency(gpsl1)
+    code_doppler = carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1)
+    code_frequency = code_doppler + get_chip_rate(gpsl1)
     start_code_phase = 0.0
     prn = 1
     num_samples = 50_000  # 10 ms at 5 MHz => 10 L1 C/A code periods
@@ -138,24 +140,25 @@ end
     multi_state = track(signal_buf, multi_state, sampling_frequency)
     multi_sat = get_sat_state(multi_state, prn)
 
-    @test length(get_filtered_prompts(multi_sat.signals[1])) == 10
+    @test length(get_beamformed_prompts(multi_sat.signals[1])) == 10
 
-    ref_corr = get_last_fully_integrated_correlator(ref_sat).accumulators
-    multi_corr = get_last_fully_integrated_correlator(multi_sat.signals[1]).accumulators
+    ref_corr = get_last_fully_integrated_correlator(ref_sat).correlator_outputs
+    multi_corr =
+        get_last_fully_integrated_correlator(multi_sat.signals[1]).correlator_outputs
     @test multi_corr ≈ ref_corr rtol = 1e-4
     @test get_carrier_doppler(multi_sat) ≈ get_carrier_doppler(ref_sat) rtol = 1e-6
     @test get_code_doppler(multi_sat) ≈ get_code_doppler(ref_sat) rtol = 1e-6
-    @test get_filtered_prompts(multi_sat.signals[1]) ≈ get_filtered_prompts(ref_sat) rtol =
+    @test get_beamformed_prompts(multi_sat.signals[1]) ≈ get_beamformed_prompts(ref_sat) rtol =
         1e-4
 
-    @test get_last_fully_integrated_correlator(multi_sat.signals[2]).accumulators ≈
+    @test get_last_fully_integrated_correlator(multi_sat.signals[2]).correlator_outputs ≈
           multi_corr
 end
 
 @testset "Per-signal accessors on multi-signal TrackedSat / TrackState" begin
     # Distinct signal types, so a type selector is unambiguous.
     track_state =
-        TrackState(; signals = (modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),))
+        TrackState(; signals = (modern_gps = (GPSL1C_P(TMBOC), GPSL1C_D(), GPSL1CA()),))
     track_state = add_satellite!(
         track_state;
         prn = 11,
@@ -173,10 +176,10 @@ end
         @test get_num_bits(sat, 2) == 0
         @test get_num_bits(sat, 3) == 0
         @test get_integrated_samples(sat, 1) == 0
-        @test has_bit_or_secondary_code_been_found(sat, 1) == false
-        @test get_cn0_estimator(sat, 1) isa NoiseRefCN0Estimator
-        @test get_bit_buffer(sat, 1) isa BitBuffer
-        @test get_post_corr_filter(sat, 1) isa DefaultPostCorrFilter
+        @test is_bit_or_secondary_code_synced(sat, 1) == false
+        @test get_cn0_estimator(sat, 1) isa NoiseReferencedCN0Estimator
+        @test get_bit_buffer(sat, 1) isa BitSynchronizer
+        @test get_beamformer(sat, 1) isa DefaultBeamformer
     end
 
     @testset "TrackedSat: signal type" begin
@@ -184,7 +187,7 @@ end
         @test get_signal(sat, GPSL1C_D) isa GPSL1C_D
         @test get_signal(sat, GPSL1CA) isa GPSL1CA
         @test get_num_bits(sat, GPSL1CA) == 0
-        @test get_cn0_estimator(sat, GPSL1C_P) isa NoiseRefCN0Estimator
+        @test get_cn0_estimator(sat, GPSL1C_P) isa NoiseReferencedCN0Estimator
     end
 
     @testset "TrackedSat: error on missing signal type" begin
@@ -197,22 +200,26 @@ end
         gpsl1 = GPSL1CA()
         s_a = TrackedSignal(
             gpsl1;
-            num_ants = NumAnts(1),
-            correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
-            post_corr_filter = DefaultPostCorrFilter(),
+            num_antennas = NumAntennas(1),
+            correlator_bank = EarlyPromptLateCorrelatorBank(;
+                num_antennas = NumAntennas(1),
+            ),
+            beamformer = DefaultBeamformer(),
         )
         s_b = TrackedSignal(
             gpsl1;
-            num_ants = NumAnts(1),
-            correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
-            post_corr_filter = DefaultPostCorrFilter(),
+            num_antennas = NumAntennas(1),
+            correlator_bank = EarlyPromptLateCorrelatorBank(;
+                num_antennas = NumAntennas(1),
+            ),
+            beamformer = DefaultBeamformer(),
         )
         dup_sat = TrackedSat(
             (s_a, s_b),
             1,
             0.0,
             0.0Hz;
-            doppler_estimator = ConventionalAssistedPLLAndDLL(),
+            doppler_estimator = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF),
         )
         # Integer index still works.
         @test get_signal(dup_sat, 1) isa GPSL1CA
@@ -224,10 +231,11 @@ end
     @testset "TrackState forwarding: (group, prn, sig)" begin
         @test get_num_bits(track_state, :modern_gps, 11, 1) == 0
         @test get_num_bits(track_state, :modern_gps, 11, GPSL1CA) == 0
-        @test get_cn0_estimator(track_state, :modern_gps, 11, 2) isa NoiseRefCN0Estimator
+        @test get_cn0_estimator(track_state, :modern_gps, 11, 2) isa
+              NoiseReferencedCN0Estimator
         @test get_cn0_estimator(track_state, :modern_gps, 11, GPSL1C_D) isa
-              NoiseRefCN0Estimator
-        @test get_bit_buffer(track_state, :modern_gps, 11, 3) isa BitBuffer
+              NoiseReferencedCN0Estimator
+        @test get_bit_buffer(track_state, :modern_gps, 11, 3) isa BitSynchronizer
         @test isempty(get_soft_bits(track_state, :modern_gps, 11, GPSL1CA))
         @test estimate_cn0(track_state, :modern_gps, 11, 1) == -Inf * dBHz
         @test estimate_cn0(track_state, :modern_gps, 11, GPSL1CA) == -Inf * dBHz

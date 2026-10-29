@@ -40,11 +40,11 @@ Fused downconvert-and-correlate: generates the carrier replica on-the-fly,
 downconverts the signal, and immediately accumulates the result against
 shifted code replicas.  Returns an updated correlator of the same type.
 
-Both antennas (M) and taps (NC) are fully unrolled at compile time via
+Both antennas (M) and correlators (NC) are fully unrolled at compile time via
 `@generated`, so all accumulators live in named local variables (registers).
 """
 @generated function downconvert_and_correlate_fused!(
-    correlator::AbstractCorrelator{M},
+    correlator_bank::AbstractCorrelatorBank{M},
     signal::AbstractArray{Complex{ST}},
     code_replica,
     sample_shifts::SVector{NC},
@@ -88,7 +88,7 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
         push!(flush_block.args, :($fim = z32))
     end
 
-    # ── Precompute per-tap shifted code pointers ──
+    # ── Precompute per-correlator shifted code pointers ──
     shift_init = Expr(:block)
     for k = 1:NC
         push!(
@@ -237,9 +237,9 @@ Both antennas (M) and taps (NC) are fully unrolled at compile time via
 
     result_expr = quote
         accumulators_result = SVector(tuple($(tap_exprs...)))
-        prev = get_accumulators(correlator)
+        prev = get_correlator_outputs(correlator_bank)
         new_acc = map(+, prev, accumulators_result)
-        update_accumulator(correlator, new_acc)
+        with_correlator_outputs(correlator_bank, new_acc)
     end
 
     quote
@@ -333,7 +333,7 @@ end
     tile_re,
     tile_im,
     signal::AbstractArray{Complex{ST}},
-    ::NumAnts{M},
+    ::NumAntennas{M},
     carrier_frequency,
     sampling_frequency,
     carrier_phase,
@@ -404,7 +404,7 @@ end
 # caller-supplied Float32 SoA tiles of length `num_samples * M` (any
 # `AbstractVector{Float32}` with `pointer`, e.g. a `ScratchView`).
 function downconvert_and_correlate_fused!(
-    correlator::AbstractCorrelator{M},
+    correlator_bank::AbstractCorrelatorBank{M},
     signal::AbstractArray{Complex{ST}},
     code_replica,
     sample_shifts::AbstractVector,
@@ -425,7 +425,7 @@ function downconvert_and_correlate_fused!(
         tile_re,
         tile_im,
         signal,
-        NumAnts{M}(),
+        NumAntennas{M}(),
         carrier_frequency,
         sampling_frequency,
         carrier_phase,
@@ -433,9 +433,9 @@ function downconvert_and_correlate_fused!(
         num_samples,
     )
 
-    # Correlate: tap-outer, antenna-inner. `gen_code_replica!` writes the replica
+    # Correlate: correlator-outer, antenna-inner. `gen_code_replica!` writes the replica
     # at absolute index `start_sample`, hence the `start_sample - 1` offset.
-    prev = get_accumulators(correlator)
+    prev = get_correlator_outputs(correlator_bank)
     new_acc = _mutable_copy(prev)
     @inbounds for k = 1:num_taps
         shift_offset = start_sample - 1 + sample_shifts[k] - min_shift
@@ -463,7 +463,7 @@ function downconvert_and_correlate_fused!(
         end
     end
 
-    update_accumulator(correlator, _to_immutable(new_acc))
+    with_correlator_outputs(correlator_bank, _to_immutable(new_acc))
 end
 
 # ── Tuple-of-correlators tile-share fused kernel ──────────────────────
@@ -472,7 +472,10 @@ end
 # and `sample_shifts`, all with the same M). Beats N fused calls by ~37% at N=2 and
 # ~51% at N=3; N=1 keeps the in-register kernel above, ~24% faster there.
 @generated function downconvert_and_correlate_fused_tuple!(
-    correlators::Tuple{AbstractCorrelator{M},Vararg{AbstractCorrelator{M},NM1}},
+    correlator_banks::Tuple{
+        AbstractCorrelatorBank{M},
+        Vararg{AbstractCorrelatorBank{M},NM1},
+    },
     signal::AbstractArray{Complex{ST}},
     code_replicas::Tuple{Any,Vararg{Any,NM1}},
     all_sample_shifts::Tuple{SVector,Vararg{SVector,NM1}},
@@ -512,7 +515,7 @@ end
             push!(flush_block.args, :($ar += Float64($far)))
             push!(flush_block.args, :($ai += Float64($fai)))
         end
-        # Per-pass locals: code_replica pointers + per-tap shift offsets.
+        # Per-pass locals: code_replica pointers + per-correlator shift offsets.
         pass_locals = Expr(:block)
         for i = 1:N
             push!(pass_locals.args, :($(Symbol("cr_$(i)")) = code_replicas[$i]))
@@ -576,7 +579,7 @@ end
         )
     end
 
-    # Per-tap accumulator: Complex for M==1, SVector{M,ComplexF64} for M>1.
+    # Per-correlator accumulator: Complex for M==1, SVector{M,ComplexF64} for M>1.
     function tap_accum_expr(i, k)
         if M == 1
             return quote
@@ -598,18 +601,18 @@ end
         end
     end
 
-    # Finalize: write each accumulator back into its correlator.
+    # Finalize: write each accumulator back into its correlator bank.
     finalize = Expr(:block)
     push!(finalize.args, :(updated = ()))
     for i = 1:N
         nc = NC_per_signal[i]
         tap_exprs = [tap_accum_expr(i, k) for k = 1:nc]
-        push!(finalize.args, :(corr_i = correlators[$i]))
-        push!(finalize.args, :(prev_i = get_accumulators(corr_i)))
+        push!(finalize.args, :(corr_i = correlator_banks[$i]))
+        push!(finalize.args, :(prev_i = get_correlator_outputs(corr_i)))
         push!(finalize.args, :(new_accs_i = SVector{$nc}(($(tap_exprs...),))))
         push!(
             finalize.args,
-            :(new_corr_i = update_accumulator(corr_i, prev_i .+ new_accs_i)),
+            :(new_corr_i = with_correlator_outputs(corr_i, prev_i .+ new_accs_i)),
         )
         push!(finalize.args, :(updated = (updated..., new_corr_i)))
     end
@@ -620,7 +623,7 @@ end
             tile_re,
             tile_im,
             signal,
-            NumAnts{$M}(),
+            NumAntennas{$M}(),
             carrier_frequency,
             sampling_frequency,
             carrier_phase,

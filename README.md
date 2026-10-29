@@ -11,12 +11,12 @@ correlation (SIMD-optimized CPU kernels), and code and carrier estimation that
 closes the loop (by default FLL-assisted PLL and DLL). Both can be replaced
 through multiple dispatch.
 
-The per-record loop arithmetic (correlators, discriminators, bit buffer, C/N₀
-and Doppler estimators) lives in [TrackingLoops.jl](https://github.com/JuliaGNSS/TrackingLoops.jl),
+The per-integration loop arithmetic (correlators, discriminators, bit
+synchronization, C/N₀ estimators and tracking loops) lives in [TrackingLoops.jl](https://github.com/JuliaGNSS/TrackingLoops.jl),
 so a hardware correlator's loop can run the same code. Tracking.jl re-exports the
 functions that read results (`estimate_cn0`, `get_prompt`, `get_soft_bits`, …);
-load TrackingLoops next to it to configure a correlator, an estimator or a
-post-correlation filter (`using Tracking, TrackingLoops, GNSSSignals`).
+load TrackingLoops next to it to configure a correlator, a tracking loop, a C/N₀
+estimator or a beamformer (`using Tracking, TrackingLoops, GNSSSignals`).
 
 ## Features
 

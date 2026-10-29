@@ -1,11 +1,12 @@
 module CorrelatorNoiseEstimatorTest
 
 using Test: @test, @testset, collect_test_logs
+using GNSSSignals: TMBOC
 using Logging: Warn
 using Random: Xoshiro, randn
 using StaticArrays: SMatrix
 using Unitful: Hz, s, ms, dBHz, ustrip, uconvert
-using GNSSSignals: GPSL1CA, GPSL1C_P, GPSL5I, GalileoE1B_BOC11, gen_code, get_code_frequency
+using GNSSSignals: GPSL1CA, GPSL1C_P, GPSL5I, GalileoE1B, gen_code, get_chip_rate
 import Tracking
 using Tracking:
     BandMeasurement,
@@ -22,18 +23,16 @@ using Tracking:
 import TrackingLoops
 using TrackingLoops:
     CorrelatorNoiseEstimator,
-    DefaultPostCorrFilter,
-    EarlyPromptLateCorrelator,
+    EarlyPromptLateCorrelatorBank,
     NWPRCN0Estimator,
     NoiseDensity,
-    NoiseRefCN0Estimator,
-    NumAnts,
-    get_correlator_sample_shifts,
+    NoiseReferencedCN0Estimator,
+    NumAntennas,
+    calc_correlator_sample_offsets,
     estimate_cn0,
     get_noise_density,
-    get_weights,
     noise_density_type,
-    noise_window_looks
+    get_num_squared_magnitudes
 
 const FS = 4e6Hz
 const NUM_SAMPLES = 40_000                      # 10 ms at 4 MHz
@@ -46,14 +45,11 @@ _median(xs) = (v = sort(collect(xs)); v[div(length(v) + 1, 2)])
 # density is exactly `N₀ = 1 Hz⁻¹`.
 function _sky(cn0_dbhz; seed = 1, num_samples = NUM_SAMPLES, fs = FS, prn = 1)
     rng = Xoshiro(seed)
-    code = gen_code(num_samples, GPSL1, prn, fs, get_code_frequency(GPSL1), 0.0)
+    code = gen_code(num_samples, GPSL1, prn, fs, get_chip_rate(GPSL1), 0.0)
     amplitude = isfinite(cn0_dbhz) ? 10^(cn0_dbhz / 20) : 0.0
     ComplexF64.(amplitude .* code) .+
     sqrt(ustrip(Hz, fs)) .* randn(rng, ComplexF64, num_samples)
 end
-
-# A hardware-style source with no look count; the rank gate must not withhold it.
-struct UncountedNoiseSource <: TrackingLoops.AbstractNoiseEstimator end
 
 _to_int16(signal) = Complex{Int16}.(
     round.(Int16, clamp.(real(signal) ./ 4, -2047, 2047)),
@@ -65,7 +61,7 @@ _to_int16(signal) = Complex{Int16}.(
 function _tracked(signal, dc; fs = FS, num_calls = 20, kwargs...)
     ts = TrackState(
         GPSL1,
-        [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator())];
+        [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator())];
         kwargs...,
     )
     for _ = 1:num_calls
@@ -87,7 +83,7 @@ end
     # the sample-driven path measures before the fold reads, so no warning.
     ts = TrackState(
         GPSL1,
-        [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator())],
+        [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator())],
     )
     signal = _sky(45.0)
     logs, _ = collect_test_logs() do
@@ -137,7 +133,15 @@ end
     for (interval, expected_num_sub) in ((1ms, 1), (4ms, 4), (20ms, 20))
         ts = TrackState(
             GPSL1,
-            [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator())],
+            [
+                TrackedSat(
+                    GPSL1,
+                    1,
+                    0.0,
+                    0.0Hz;
+                    cn0_estimator = NoiseReferencedCN0Estimator(),
+                ),
+            ],
         )
         # 40 ms of buffer: 40 / 20 / 2 chunks at the three intervals.
         long = repeat(signal, 4)
@@ -149,7 +153,7 @@ end
     # Another sampling frequency: the count follows duration, not sample count.
     ts = TrackState(
         GPSL1,
-        [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator())],
+        [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator())],
     )
     fast = _sky(-Inf; seed = 12, num_samples = 100_000, fs = 10e6Hz)
     track!((L1 = BandMeasurement(fast, 10e6Hz),), ts; doppler_update_interval = 4ms)
@@ -162,12 +166,12 @@ end
     # The `max(1, …)`: GPS L1C-P (10 ms code) at 1 ms chunks, reachable when
     # another signal forces a shorter `doppler_update_interval`.
     fs = 20e6Hz
-    l1cp = GPSL1C_P()
+    l1cp = GPSL1C_P(TMBOC)
     num_samples = 200_000                       # 10 ms — one L1C-P code period
     signal = ComplexF32.(sqrt(ustrip(Hz, fs)) .* randn(Xoshiro(5), ComplexF64, num_samples))
     ts = TrackState(
         l1cp,
-        [TrackedSat(l1cp, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator())],
+        [TrackedSat(l1cp, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator())],
     )
     track!((L1 = BandMeasurement(signal, fs),), ts; doppler_update_interval = 1ms)
     # Ten 1 ms chunks, each a tenth of a code period — one slice apiece, not zero.
@@ -177,7 +181,7 @@ end
 end
 
 @testset "the PRN rotates through the whole family, tracked codes included" begin
-    # The position is carried in the window's observations (see `_next_noise_prn`).
+    # The position is carried in the window's observations (see `TrackingLoops.noise_despreads`).
     # Tracked PRNs are not skipped; the random phase makes that safe (see
     # `CorrelatorNoiseEstimator` and the two tests below).
     ts = TrackState(;
@@ -187,7 +191,7 @@ end
     add_satellite!(ts; prn = 3, carrier_doppler = 0.0Hz)
     add_satellite!(ts; prn = 4, carrier_doppler = 0.0Hz)
     track!((L1 = BandMeasurement(_sky(-Inf; seed = 2), FS),), ts)
-    prns = [obs.prn for obs in ts.noise_estimators.GPSL1CA.buffered]
+    prns = [obs.prn for obs in ts.noise_estimators.GPSL1CA.observations]
     @test length(prns) == 10
     @test allunique(prns)                       # it really does advance
     @test prns == Int16[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -204,11 +208,10 @@ end
         TrackingLoops.update_noise!(
             estimator,
             m,
-            1,
-            NUM_SAMPLES,
+            1:NUM_SAMPLES,
             TrackingLoops.NoiseUpdateContext(GPSL1, 0, dc),
         )
-        [ustrip(Hz^-1, o.noise_density) for o in estimator.buffered]
+        [ustrip(Hz^-1, o.noise_density) for o in estimator.observations]
     end
     @test densities(1) == densities(1)          # seeded, so a run is reproducible
     @test densities(1) != densities(2)          # ... and the draws reach the kernel
@@ -228,10 +231,11 @@ end
     )
     context = TrackingLoops.NoiseUpdateContext(GPSL1, 0, dc)
     for _ = 1:40
-        TrackingLoops.update_noise!(estimator, m, 1, NUM_SAMPLES, context)
+        TrackingLoops.update_noise!(estimator, m, 1:NUM_SAMPLES, context)
     end
-    on_seven = [ustrip(Hz^-1, o.noise_density) for o in estimator.buffered if o.prn == 7]
-    others = [ustrip(Hz^-1, o.noise_density) for o in estimator.buffered if o.prn != 7]
+    on_seven =
+        [ustrip(Hz^-1, o.noise_density) for o in estimator.observations if o.prn == 7]
+    others = [ustrip(Hz^-1, o.noise_density) for o in estimator.observations if o.prn != 7]
     @test length(on_seven) >= 10
     # Medians: a rare outlier is expected, a standing bias (ratio ≈11 at a fixed
     # phase) is not.
@@ -239,16 +243,16 @@ end
 end
 
 @testset "the reference's taps are spaced wide enough to be independent" begin
-    # Why ≥1 chip: see `tap_code_shift` in `CorrelatorNoiseEstimator`. This pins
+    # Why ≥1 chip: see `early_late_to_prompt_spacing` in `CorrelatorNoiseEstimator`. This pins
     # that sample rounding at the band's `f_s` keeps 1.5 chips at ≥1 chip.
     estimator = CorrelatorNoiseEstimator()
-    correlator = EarlyPromptLateCorrelator(;
-        preferred_early_late_to_prompt_code_shift = estimator.tap_code_shift,
+    correlator_bank = EarlyPromptLateCorrelatorBank(;
+        preferred_early_late_to_prompt_spacing = estimator.early_late_to_prompt_spacing,
     )
     for fs in (2e6Hz, 4e6Hz, 10e6Hz, 20e6Hz)
-        shifts = get_correlator_sample_shifts(correlator, fs, get_code_frequency(GPSL1))
+        shifts = calc_correlator_sample_offsets(correlator_bank, fs, get_chip_rate(GPSL1))
         spacing_chips =
-            (shifts[end] - shifts[1]) / 2 * ustrip(Hz, get_code_frequency(GPSL1)) /
+            (shifts[end] - shifts[1]) / 2 * ustrip(Hz, get_chip_rate(GPSL1)) /
             ustrip(Hz, fs)
         @test spacing_chips >= 1.0
     end
@@ -285,12 +289,12 @@ end
 end
 
 @testset "two signals on one band measure different floors under a CW tone" begin
-    # Why the estimator is keyed by signal (see `AbstractNoiseEstimator`): the tone
+    # Why the estimator is keyed by signal (see `AbstractNoiseDensityEstimator`): the tone
     # moves BPSK(1) and BOC(1,1) floors in *opposite* directions, which no common
-    # scale factor can. `GalileoE1B_BOC11` because CBOC needs f_s ≥ 12.276 MHz.
+    # scale factor can. The BOC(1,1) `GalileoE1B()` because CBOC needs f_s ≥ 12.276 MHz.
     fs = 4e6Hz
     n = 40_000
-    e1b = GalileoE1B_BOC11()
+    e1b = GalileoE1B()
 
     function densities(tone_frequency; seed = 17, jammer_to_noise_db = 13)
         rng = Xoshiro(seed)
@@ -308,7 +312,7 @@ end
         end
         (
             l1ca = ustrip(Hz^-1, get_noise_density(ts.noise_estimators.GPSL1CA)),
-            e1b = ustrip(Hz^-1, get_noise_density(ts.noise_estimators.GalileoE1B_BOC11)),
+            e1b = ustrip(Hz^-1, get_noise_density(ts.noise_estimators.GalileoE1B)),
         )
     end
 
@@ -387,7 +391,7 @@ end
     measurements = (L1 = BandMeasurement(signal, FS),)
     ts = TrackState(
         GPSL1,
-        [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator())],
+        [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator())],
     )
     dc = CPUDownconvertAndCorrelator()
     # Unchunked: 10 ms in 1 ms code-period slices.
@@ -479,7 +483,7 @@ if VERSION >= v"1.11"
         # Paired with a reference-free state, isolating the measurement.
         state(cn0) =
             TrackState(GPSL1, [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = cn0())])
-        ts = state(NoiseRefCN0Estimator)
+        ts = state(NoiseReferencedCN0Estimator)
         plain_ts = state(() -> NWPRCN0Estimator(GPSL1))
         dc = build()
         plain_dc = build()
@@ -517,10 +521,11 @@ end
 @testset "the window's running totals stay exact" begin
     # The cached sums (`NoiseWindowTotals`) must equal a walk of the window after
     # thousands of appends with mixed entry sizes, where drift would show.
-    exact_span(e) = sum(o.duration for o in e.buffered)
-    exact_looks(e) = sum(o.num_sub_integrations for o in e.buffered)
+    exact_span(e) = sum(o.duration for o in e.observations)
+    exact_num_squared_magnitudes(e) = sum(o.num_squared_magnitudes for o in e.observations)
     exact_density(e) =
-        sum(o.num_sub_integrations * o.noise_density for o in e.buffered) / exact_looks(e)
+        sum(o.num_squared_magnitudes * o.noise_density for o in e.observations) /
+        exact_num_squared_magnitudes(e)
 
     rng = Xoshiro(17)
     window = 50.0ms
@@ -539,13 +544,14 @@ end
         )
         i % 500 == 0 || continue
         @test estimator.totals[].span ≈ exact_span(estimator) rtol = 1e-10
-        @test estimator.totals[].looks == exact_looks(estimator)
+        @test estimator.totals[].num_squared_magnitudes ==
+              exact_num_squared_magnitudes(estimator)
         @test get_noise_density(estimator) ≈ exact_density(estimator) rtol = 1e-10
     end
 
     # The window is minimal but never short of the configured span.
     @test estimator.totals[].span >= window
-    @test estimator.totals[].span - first(estimator.buffered).duration < window
+    @test estimator.totals[].span - first(estimator.observations).duration < window
 end
 
 @testset "reading the window does not walk it" begin
@@ -608,7 +614,7 @@ function _sky_array(
     prn = 1,
 )
     rng = Xoshiro(seed)
-    code = gen_code(num_samples, GPSL1, prn, fs, get_code_frequency(GPSL1), 0.0)
+    code = gen_code(num_samples, GPSL1, prn, fs, get_chip_rate(GPSL1), 0.0)
     amplitude = isfinite(cn0_dbhz) ? 10^(cn0_dbhz / 20) : 0.0
     signal = ComplexF64.(amplitude .* code)
     sigma = sqrt(ustrip(Hz, fs))
@@ -621,7 +627,7 @@ function _sky_array(
     )
 end
 
-function _tracked_array(signal, num_ants; fs = FS, num_calls = 20, kwargs...)
+function _tracked_array(signal, num_antennas; fs = FS, num_calls = 20, kwargs...)
     ts = TrackState(
         GPSL1,
         [
@@ -630,8 +636,8 @@ function _tracked_array(signal, num_ants; fs = FS, num_calls = 20, kwargs...)
                 1,
                 0.0,
                 0.0Hz;
-                num_ants = NumAnts(num_ants),
-                cn0_estimator = NoiseRefCN0Estimator(),
+                num_antennas = NumAntennas(num_antennas),
+                cn0_estimator = NoiseReferencedCN0Estimator(),
             ),
         ];
         kwargs...,
@@ -645,16 +651,17 @@ end
 @testset "the default estimator is provisioned for its group's antenna count" begin
     # `noise_density_type` must follow the group's antenna count.
     @test noise_density_type(CorrelatorNoiseEstimator()) === NoiseDensity
-    @test noise_density_type(CorrelatorNoiseEstimator(; num_ants = NumAnts(1))) ===
+    @test noise_density_type(CorrelatorNoiseEstimator(; num_antennas = NumAntennas(1))) ===
           NoiseDensity
 
     single = TrackState(GPSL1, [TrackedSat(GPSL1, 1, 0.0, 0.0Hz)])
     @test noise_density_type(single.noise_estimators.GPSL1CA) === NoiseDensity
 
-    array = TrackState(GPSL1, [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; num_ants = NumAnts(3))])
+    array =
+        TrackState(GPSL1, [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; num_antennas = NumAntennas(3))])
     D = noise_density_type(array.noise_estimators.GPSL1CA)
     @test D <: SMatrix{3,3}
-    @test TrackingLoops._num_ants_of_density_type(D) === NumAnts(3)
+    @test NumAntennas(D) === NumAntennas(3)
 end
 
 @testset "an explicitly-passed estimator must match its group's antenna count" begin
@@ -662,7 +669,7 @@ end
     err = try
         TrackState(
             GPSL1,
-            [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; num_ants = NumAnts(3))];
+            [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; num_antennas = NumAntennas(3))];
             noise_estimators = (GPSL1CA = CorrelatorNoiseEstimator(),),
         )
         nothing
@@ -671,13 +678,15 @@ end
     end
     @test err isa ArgumentError
     @test occursin("GPSL1CA", err.msg)
-    @test occursin("NumAnts(3)", err.msg)
+    @test occursin("NumAntennas(3)", err.msg)
 
     # Matching counts are accepted.
     @test TrackState(
         GPSL1,
-        [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; num_ants = NumAnts(3))];
-        noise_estimators = (GPSL1CA = CorrelatorNoiseEstimator(; num_ants = NumAnts(3)),),
+        [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; num_antennas = NumAntennas(3))];
+        noise_estimators = (
+            GPSL1CA = CorrelatorNoiseEstimator(; num_antennas = NumAntennas(3)),
+        ),
     ) isa TrackState
     @test TrackState(
         GPSL1,
@@ -707,7 +716,8 @@ end
 end
 
 @testset "a covariance is withheld until it spans its own dimensions" begin
-    # The rank gate, see `_sufficient_looks`: `M` looks, i.e. `⌈M/3⌉` observations.
+    # The rank gate of `TrackingLoops.noise_density_and_ready`: `M` looks, i.e. `⌈M/3⌉`
+    # observations.
     # 1 ms buffers give one observation per call, the only shape that hits the gate.
     one_ms(M, seed) = ComplexF32.(
         reduce(
@@ -723,8 +733,8 @@ end
                 1,
                 0.0,
                 0.0Hz;
-                num_ants = NumAnts(M),
-                cn0_estimator = NoiseRefCN0Estimator(),
+                num_antennas = NumAntennas(M),
+                cn0_estimator = NoiseReferencedCN0Estimator(),
             ),
         ],
     )
@@ -735,7 +745,7 @@ end
         ready_at = 0
         for call = 1:4
             track!((L1 = BandMeasurement(one_ms(M, call), FS),), ts)
-            _, ready = TrackingLoops._noise_density_and_ready(ts.noise_estimators.GPSL1CA)
+            _, ready = TrackingLoops.noise_density_and_ready(ts.noise_estimators.GPSL1CA)
             if ready && ready_at == 0
                 ready_at = call
             end
@@ -747,10 +757,10 @@ end
     ts = array_state(4)
     track!((L1 = BandMeasurement(one_ms(4, 1), FS),), ts)
     est = ts.noise_estimators.GPSL1CA
-    @test noise_window_looks(est) == 3
+    @test get_num_squared_magnitudes(est) == 3
     # Only the fold defers; the public reader reports what the window holds.
     @test !isnothing(get_noise_density(est))
-    @test TrackingLoops._noise_window_filling(est)
+    @test TrackingLoops.noise_window_filling(est)
     @test estimate_cn0(ts, 1) == -Inf * dBHz
 
     # A filling window is a normal transient: no warning.
@@ -765,31 +775,22 @@ end
     dead_logs, _ = collect_test_logs() do
         track!((L1 = BandMeasurement(zeros(ComplexF32, 4000, 4), FS),), dead)
     end
-    @test !TrackingLoops._noise_window_filling(dead.noise_estimators.GPSL1CA)
+    @test !TrackingLoops.noise_window_filling(dead.noise_estimators.GPSL1CA)
     @test !isempty(filter(r -> r.level == Warn, dead_logs))
-
-    # A source that reports no look count is taken at its word rather than gated.
-    @test noise_window_looks(UncountedNoiseSource()) === nothing
-    @test TrackingLoops._sufficient_looks(zero(SMatrix{4,4,ComplexF64,16}), nothing)
-    @test !TrackingLoops._sufficient_looks(zero(SMatrix{4,4,ComplexF64,16}), 3)
-    @test TrackingLoops._sufficient_looks(zero(SMatrix{4,4,ComplexF64,16}), 4)
-    @test TrackingLoops._sufficient_looks(1.0 / 1.0Hz, 1)      # a scalar has no rank
 end
 
 @testset "the default filter's weights reduce the covariance to its own column" begin
-    # Through `DefaultPostCorrFilter`'s weights the covariance is the last
+    # Through `DefaultBeamformer`'s weights the covariance is the last
     # antenna's floor, so array and single-antenna runs match exactly.
     scales = (1.0, 1.5, 2.0)
     signal = _sky_array(45.0, scales; seed = 12)
     ts_array = _tracked_array(signal, 3)
     R = get_noise_density(ts_array.noise_estimators.GPSL1CA)
-    w = get_weights(DefaultPostCorrFilter(), NumAnts(3))
-    @test TrackingLoops._reduce_noise_density(R, w) === real(R[3, 3])
 
     ts_single = _tracked(view(signal, :, 3), CPUDownconvertAndCorrelator())
     scalar = get_noise_density(ts_single.noise_estimators.GPSL1CA)
     # Same samples and seeded draws, so equality, not a tolerance.
-    @test TrackingLoops._reduce_noise_density(R, w) === scalar
+    @test real(R[3, 3]) === scalar
     @test estimate_cn0(ts_array, 1) === estimate_cn0(ts_single, 1)
 end
 
@@ -813,12 +814,12 @@ if VERSION >= v"1.11"
                     1,
                     0.0,
                     0.0Hz;
-                    num_ants = NumAnts(3),
+                    num_antennas = NumAntennas(3),
                     cn0_estimator = cn0(),
                 ),
             ],
         )
-        ts = state(NoiseRefCN0Estimator)
+        ts = state(NoiseReferencedCN0Estimator)
         plain_ts = state(() -> NWPRCN0Estimator(GPSL1))
         @test keys(ts.noise_estimators) == (:GPSL1CA,)
         dc = CPUDownconvertAndCorrelator()

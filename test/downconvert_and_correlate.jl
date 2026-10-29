@@ -2,7 +2,7 @@ module DownconvertAndCorrelateTest
 
 using Test: @test, @testset, @inferred
 using Unitful: Hz
-using GNSSSignals: GPSL1CA, gen_code, get_code_frequency, get_code_center_frequency_ratio
+using GNSSSignals: GPSL1CA, gen_code, get_chip_rate, get_chip_rate_to_center_frequency_ratio
 import Tracking
 using Tracking:
     CPUDownconvertAndCorrelator,
@@ -11,16 +11,16 @@ using Tracking:
     TrackState,
     BandMeasurement,
     downconvert_and_correlate,
-    get_correlator,
-    get_correlator_outputs,
+    get_correlator_bank,
+    get_correlator_bank_outputs,
     get_sat_state
 import TrackingLoops
 using TrackingLoops:
-    AbstractCorrelator,
-    EarlyPromptLateCorrelator,
-    NumAnts,
-    get_accumulators,
-    get_correlator_sample_shifts
+    AbstractCorrelatorBank,
+    EarlyPromptLateCorrelatorBank,
+    NumAntennas,
+    get_correlator_outputs,
+    calc_correlator_sample_offsets
 
 @testset "Downconvert and Correlator" begin
     # Scratch grows lazily, so default construction needs no setup.
@@ -41,11 +41,11 @@ end
     downconvert_and_correlator = DC()
 
     # One code period (~4949 samples) completes in the 5000-sample buffer, so the
-    # result is read from `correlator_outputs` (see `update` in
+    # result is read from `correlator_bank_outputs` (see `_advance_sat` in
     # src/downconvert_and_correlate.jl). Each check uses its own TrackState so the
-    # reused `correlator_outputs` buffer is not carried between calls.
+    # reused `correlator_bank_outputs` buffer is not carried between calls.
     only_output(track_state, prn) =
-        only(get_correlator_outputs(only(get_sat_state(track_state, prn).signals)))
+        only(get_correlator_bank_outputs(only(get_sat_state(track_state, prn).signals)))
 
     signal =
         gen_code(
@@ -53,7 +53,7 @@ end
             gpsl1,
             1,
             sampling_frequency,
-            get_code_frequency(gpsl1) + 1000Hz * get_code_center_frequency_ratio(gpsl1),
+            get_chip_rate(gpsl1) + 1000Hz * get_chip_rate_to_center_frequency_ratio(gpsl1),
             code_phase,
         ) .* cis.(2π * (0:(num_samples_signal-1)) * 1000.0Hz / sampling_frequency)
 
@@ -66,7 +66,7 @@ end
         track_state,
     )
 
-    @test real.(only_output(next_track_state, 1).correlator.accumulators) ≈
+    @test real.(only_output(next_track_state, 1).correlator_bank.correlator_outputs) ≈
           [2921, 4949, 2917] rtol = 1e-3
 
     signal =
@@ -75,7 +75,7 @@ end
             gpsl1,
             2,
             sampling_frequency,
-            get_code_frequency(gpsl1) + 500Hz * get_code_center_frequency_ratio(gpsl1),
+            get_chip_rate(gpsl1) + 500Hz * get_chip_rate_to_center_frequency_ratio(gpsl1),
             11.0,
         ) .* cis.(2π * (0:(num_samples_signal-1)) * 500.0Hz / sampling_frequency)
 
@@ -88,7 +88,7 @@ end
         track_state,
     )
 
-    @test real.(only_output(next_track_state, 2).correlator.accumulators) ≈
+    @test real.(only_output(next_track_state, 2).correlator_bank.correlator_outputs) ≈
           [2919, 4947, 2915] rtol = 1e-3
 end
 
@@ -116,13 +116,13 @@ end
     # Immutable form
     result_skip =
         downconvert_and_correlate(downconvert_and_correlator, measurements, ts_skip)
-    @test get_correlator(result_skip, 1).accumulators ==
-          get_correlator(sat_past_end).accumulators
+    @test get_correlator_bank(result_skip, 1).correlator_outputs ==
+          get_correlator_bank(sat_past_end).correlator_outputs
 
     # In-place form takes the same early return; the sat stays unchanged.
     Tracking.downconvert_and_correlate!(downconvert_and_correlator, measurements, ts_skip)
-    @test get_correlator(ts_skip, 1).accumulators ==
-          get_correlator(sat_past_end).accumulators
+    @test get_correlator_bank(ts_skip, 1).correlator_outputs ==
+          get_correlator_bank(sat_past_end).correlator_outputs
 end
 
 @testset "Fused downconvert and correlate" begin
@@ -134,12 +134,12 @@ end
     prn = 1
 
     carrier_frequency = carrier_doppler + 0.0Hz
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
-    code_frequency = code_doppler + get_code_frequency(gpsl1)
+    code_doppler = carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1)
+    code_frequency = code_doppler + get_chip_rate(gpsl1)
 
-    correlator = EarlyPromptLateCorrelator()
+    correlator_bank = EarlyPromptLateCorrelatorBank()
     sample_shifts =
-        get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
+        calc_correlator_sample_offsets(correlator_bank, sampling_frequency, code_frequency)
 
     signal =
         gen_code(
@@ -182,7 +182,7 @@ end
 
     # Static (@generated) path
     fused_static = Tracking.downconvert_and_correlate_fused!(
-        correlator,
+        correlator_bank,
         signal,
         code_replica,
         sample_shifts,
@@ -193,14 +193,14 @@ end
         num_samples_signal,
     )
 
-    @test get_accumulators(fused_static) ≈ ref_accumulators rtol = 1e-4
+    @test get_correlator_outputs(fused_static) ≈ ref_accumulators rtol = 1e-4
 
     # Dynamic (AbstractVector) path
     dynamic_shifts = collect(sample_shifts)
     tile_re = Vector{Float32}(undef, num_samples_signal)
     tile_im = Vector{Float32}(undef, num_samples_signal)
     fused_dynamic = Tracking.downconvert_and_correlate_fused!(
-        correlator,
+        correlator_bank,
         signal,
         code_replica,
         dynamic_shifts,
@@ -213,10 +213,11 @@ end
         tile_im,
     )
 
-    @test get_accumulators(fused_dynamic) ≈ ref_accumulators rtol = 1e-4
+    @test get_correlator_outputs(fused_dynamic) ≈ ref_accumulators rtol = 1e-4
 
     # Static and dynamic paths should produce nearly identical results
-    @test get_accumulators(fused_static) ≈ get_accumulators(fused_dynamic) rtol = 1e-4
+    @test get_correlator_outputs(fused_static) ≈ get_correlator_outputs(fused_dynamic) rtol =
+        1e-4
 end
 
 @testset "Fused downconvert and correlate multi-antenna" begin
@@ -226,15 +227,16 @@ end
     num_samples_signal = 5000
     carrier_doppler = 1000.0Hz
     prn = 1
-    num_ants = 2
+    num_antennas = 2
 
     carrier_frequency = carrier_doppler + 0.0Hz
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
-    code_frequency = code_doppler + get_code_frequency(gpsl1)
+    code_doppler = carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1)
+    code_frequency = code_doppler + get_chip_rate(gpsl1)
 
-    correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(num_ants))
+    correlator_bank =
+        EarlyPromptLateCorrelatorBank(; num_antennas = NumAntennas(num_antennas))
     sample_shifts =
-        get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
+        calc_correlator_sample_offsets(correlator_bank, sampling_frequency, code_frequency)
 
     # Multi-antenna signal: each antenna gets slightly different data
     signal_ant1 =
@@ -267,11 +269,11 @@ end
     # Scalar reference for multi-antenna
     NC = length(sample_shifts)
     min_shift = minimum(sample_shifts)
-    ref_accumulators = [zeros(ComplexF64, num_ants) for _ = 1:NC]
+    ref_accumulators = [zeros(ComplexF64, num_antennas) for _ = 1:NC]
     carrier_step = 2π * Float64(carrier_frequency / sampling_frequency)
     for i = 1:num_samples_signal
         carrier = cis(-carrier_step * (i - 1))
-        for j = 1:num_ants
+        for j = 1:num_antennas
             dc_sample = signal[i, j] * carrier
             for tap = 1:NC
                 code_idx = i + sample_shifts[tap] - min_shift
@@ -282,7 +284,7 @@ end
 
     # Static (@generated) path
     fused_static = Tracking.downconvert_and_correlate_fused!(
-        correlator,
+        correlator_bank,
         signal,
         code_replica,
         sample_shifts,
@@ -293,16 +295,16 @@ end
         num_samples_signal,
     )
     for tap = 1:NC
-        @test collect(get_accumulators(fused_static)[tap]) ≈ ref_accumulators[tap] rtol =
+        @test collect(get_correlator_outputs(fused_static)[tap]) ≈ ref_accumulators[tap] rtol =
             1e-4
     end
 
     # Dynamic (AbstractVector) path
     dynamic_shifts = collect(sample_shifts)
-    tile_re = Vector{Float32}(undef, num_samples_signal * num_ants)
-    tile_im = Vector{Float32}(undef, num_samples_signal * num_ants)
+    tile_re = Vector{Float32}(undef, num_samples_signal * num_antennas)
+    tile_im = Vector{Float32}(undef, num_samples_signal * num_antennas)
     fused_dynamic = Tracking.downconvert_and_correlate_fused!(
-        correlator,
+        correlator_bank,
         signal,
         code_replica,
         dynamic_shifts,
@@ -315,14 +317,14 @@ end
         tile_im,
     )
     for tap = 1:NC
-        @test collect(get_accumulators(fused_dynamic)[tap]) ≈ ref_accumulators[tap] rtol =
+        @test collect(get_correlator_outputs(fused_dynamic)[tap]) ≈ ref_accumulators[tap] rtol =
             1e-4
     end
 
     # Static and dynamic should match
     for k = 1:NC
-        @test collect(get_accumulators(fused_static)[k]) ≈
-              collect(get_accumulators(fused_dynamic)[k]) rtol = 1e-4
+        @test collect(get_correlator_outputs(fused_static)[k]) ≈
+              collect(get_correlator_outputs(fused_dynamic)[k]) rtol = 1e-4
     end
 
     # Dynamic path with non-SIMD-aligned signal length (covers scalar remainder loop)
@@ -352,10 +354,10 @@ end
         sample_shifts,
         prn,
     )
-    ref_odd = [zeros(ComplexF64, num_ants) for _ = 1:NC]
+    ref_odd = [zeros(ComplexF64, num_antennas) for _ = 1:NC]
     for i = 1:num_samples_odd
         carrier = cis(-carrier_step * (i - 1))
-        for j = 1:num_ants
+        for j = 1:num_antennas
             dc_sample = signal_odd[i, j] * carrier
             for tap = 1:NC
                 ref_odd[tap][j] +=
@@ -363,10 +365,10 @@ end
             end
         end
     end
-    tile_re_odd = Vector{Float32}(undef, num_samples_odd * num_ants)
-    tile_im_odd = Vector{Float32}(undef, num_samples_odd * num_ants)
+    tile_re_odd = Vector{Float32}(undef, num_samples_odd * num_antennas)
+    tile_im_odd = Vector{Float32}(undef, num_samples_odd * num_antennas)
     fused_odd = Tracking.downconvert_and_correlate_fused!(
-        correlator,
+        correlator_bank,
         signal_odd,
         code_replica_odd,
         dynamic_shifts,
@@ -379,18 +381,18 @@ end
         tile_im_odd,
     )
     for tap = 1:NC
-        @test collect(get_accumulators(fused_odd)[tap]) ≈ ref_odd[tap] rtol = 1e-4
+        @test collect(get_correlator_outputs(fused_odd)[tap]) ≈ ref_odd[tap] rtol = 1e-4
     end
 end
 
 @testset "Fused downconvert and correlate with Vector accumulators" begin
     # Minimal correlator with Vector (not SVector) accumulators
-    struct DynamicCorrelator <: AbstractCorrelator{1}
-        accumulators::Vector{ComplexF64}
+    struct DynamicCorrelator <: AbstractCorrelatorBank{1}
+        correlator_outputs::Vector{ComplexF64}
         shifts::Vector{Int}
     end
-    TrackingLoops.get_accumulators(c::DynamicCorrelator) = c.accumulators
-    TrackingLoops.update_accumulator(c::DynamicCorrelator, acc) =
+    TrackingLoops.get_correlator_outputs(c::DynamicCorrelator) = c.correlator_outputs
+    TrackingLoops.with_correlator_outputs(c::DynamicCorrelator, acc) =
         DynamicCorrelator(collect(acc), c.shifts)
 
     gpsl1 = GPSL1CA()
@@ -401,12 +403,12 @@ end
     prn = 1
 
     carrier_frequency = carrier_doppler + 0.0Hz
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
-    code_frequency = code_doppler + get_code_frequency(gpsl1)
+    code_doppler = carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1)
+    code_frequency = code_doppler + get_chip_rate(gpsl1)
 
-    # Use the same shifts as EarlyPromptLateCorrelator but as a Vector
-    epl = EarlyPromptLateCorrelator()
-    static_shifts = get_correlator_sample_shifts(epl, sampling_frequency, code_frequency)
+    # Use the same shifts as EarlyPromptLateCorrelatorBank but as a Vector
+    epl = EarlyPromptLateCorrelatorBank()
+    static_shifts = calc_correlator_sample_offsets(epl, sampling_frequency, code_frequency)
     dynamic_shifts = collect(static_shifts)
 
     dynamic_correlator = DynamicCorrelator(zeros(ComplexF64, 3), dynamic_shifts)
@@ -467,7 +469,7 @@ end
         tile_im,
     )
 
-    @test get_accumulators(fused_dynamic) ≈ ref_accumulators rtol = 1e-4
+    @test get_correlator_outputs(fused_dynamic) ≈ ref_accumulators rtol = 1e-4
 end
 
 @testset "Fused dynamic-shifts kernel with start_sample > 1" begin
@@ -483,12 +485,12 @@ end
     prn = 1
 
     carrier_frequency = carrier_doppler + 0.0Hz
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
-    code_frequency = code_doppler + get_code_frequency(gpsl1)
+    code_doppler = carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1)
+    code_frequency = code_doppler + get_chip_rate(gpsl1)
 
-    correlator = EarlyPromptLateCorrelator()
+    correlator_bank = EarlyPromptLateCorrelatorBank()
     sample_shifts =
-        get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
+        calc_correlator_sample_offsets(correlator_bank, sampling_frequency, code_frequency)
 
     signal =
         gen_code(
@@ -537,7 +539,7 @@ end
     tile_re = Vector{Float32}(undef, num_samples)
     tile_im = Vector{Float32}(undef, num_samples)
     fused_dynamic = Tracking.downconvert_and_correlate_fused!(
-        correlator,
+        correlator_bank,
         signal,
         code_replica,
         dynamic_shifts,
@@ -549,11 +551,11 @@ end
         tile_re,
         tile_im,
     )
-    @test get_accumulators(fused_dynamic) ≈ ref_accumulators rtol = 1e-4
+    @test get_correlator_outputs(fused_dynamic) ≈ ref_accumulators rtol = 1e-4
 
     # Must match the static in-register kernel on the same window
     fused_static = Tracking.downconvert_and_correlate_fused!(
-        correlator,
+        correlator_bank,
         signal,
         code_replica,
         sample_shifts,
@@ -563,19 +565,20 @@ end
         start_sample,
         num_samples,
     )
-    @test get_accumulators(fused_dynamic) ≈ get_accumulators(fused_static) rtol = 1e-4
+    @test get_correlator_outputs(fused_dynamic) ≈ get_correlator_outputs(fused_static) rtol =
+        1e-4
 end
 
-# Custom correlator whose `get_correlator_sample_shifts` returns a plain
+# Custom correlator whose `calc_correlator_sample_offsets` returns a plain
 # `Vector` — a supported, exported extension point (issue #126 (b)).
-struct VectorShiftsCorrelator <: AbstractCorrelator{1}
-    accumulators::Vector{ComplexF64}
+struct VectorShiftsCorrelator <: AbstractCorrelatorBank{1}
+    correlator_outputs::Vector{ComplexF64}
     shifts::Vector{Int}
 end
-TrackingLoops.get_accumulators(c::VectorShiftsCorrelator) = c.accumulators
-TrackingLoops.update_accumulator(c::VectorShiftsCorrelator, acc) =
+TrackingLoops.get_correlator_outputs(c::VectorShiftsCorrelator) = c.correlator_outputs
+TrackingLoops.with_correlator_outputs(c::VectorShiftsCorrelator, acc) =
     VectorShiftsCorrelator(collect(acc), c.shifts)
-TrackingLoops.get_correlator_sample_shifts(
+TrackingLoops.calc_correlator_sample_offsets(
     c::VectorShiftsCorrelator,
     sampling_frequency,
     code_frequency,
@@ -595,13 +598,13 @@ TrackingLoops.get_correlator_sample_shifts(
     prn = 1
 
     carrier_frequency = carrier_doppler + 0.0Hz
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
-    code_frequency = code_doppler + get_code_frequency(gpsl1)
+    code_doppler = carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1)
+    code_frequency = code_doppler + get_chip_rate(gpsl1)
 
-    epl = EarlyPromptLateCorrelator()
-    static_shifts = get_correlator_sample_shifts(epl, sampling_frequency, code_frequency)
+    epl = EarlyPromptLateCorrelatorBank()
+    static_shifts = calc_correlator_sample_offsets(epl, sampling_frequency, code_frequency)
     dynamic_shifts = collect(static_shifts)
-    correlator = VectorShiftsCorrelator(zeros(ComplexF64, 3), dynamic_shifts)
+    correlator_bank = VectorShiftsCorrelator(zeros(ComplexF64, 3), dynamic_shifts)
 
     signal =
         gen_code(
@@ -649,7 +652,7 @@ TrackingLoops.get_correlator_sample_shifts(
     public_result = Tracking.downconvert_and_correlate!(
         gpsl1,
         signal,
-        correlator,
+        correlator_bank,
         code_replica,
         window_code_phase,
         0.0,
@@ -660,13 +663,13 @@ TrackingLoops.get_correlator_sample_shifts(
         num_samples,
         prn,
     )
-    @test get_accumulators(public_result) ≈ ref_accumulators rtol = 1e-4
+    @test get_correlator_outputs(public_result) ≈ ref_accumulators rtol = 1e-4
 
     # Both backends' despread primitive `_despread_one_signal!`.
     for dc in (CPUDownconvertAndCorrelator(), CPUThreadedDownconvertAndCorrelator())
         backend_result = Tracking._despread_one_signal!(
             dc,
-            correlator,
+            correlator_bank,
             signal,
             gpsl1,
             prn,
@@ -680,11 +683,11 @@ TrackingLoops.get_correlator_sample_shifts(
             num_samples,
             code_replica_length,
         )
-        @test get_accumulators(backend_result) ≈ ref_accumulators rtol = 1e-4
+        @test get_correlator_outputs(backend_result) ≈ ref_accumulators rtol = 1e-4
     end
 
     # Same entry point with SVector shifts: covers the static (in-register) branch.
-    epl_static = EarlyPromptLateCorrelator()
+    epl_static = EarlyPromptLateCorrelatorBank()
     static_code_replica = zeros(Int8, code_replica_length)
     static_result = Tracking.downconvert_and_correlate!(
         gpsl1,
@@ -700,7 +703,7 @@ TrackingLoops.get_correlator_sample_shifts(
         num_samples,
         prn,
     )
-    @test get_accumulators(static_result) ≈ ref_accumulators rtol = 1e-4
+    @test get_correlator_outputs(static_result) ≈ ref_accumulators rtol = 1e-4
 end
 
 @testset "Fused downconvert and correlate tuple kernel" begin
@@ -712,13 +715,16 @@ end
     prn = 1
 
     carrier_frequency = carrier_doppler + 0.0Hz
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
-    code_frequency = code_doppler + get_code_frequency(gpsl1)
+    code_doppler = carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1)
+    code_frequency = code_doppler + get_chip_rate(gpsl1)
 
     @testset "Single-antenna, N=$N signals" for N = 2:3
-        correlators = ntuple(_ -> EarlyPromptLateCorrelator(), N)
-        sample_shifts_each =
-            get_correlator_sample_shifts(correlators[1], sampling_frequency, code_frequency)
+        correlator_banks = ntuple(_ -> EarlyPromptLateCorrelatorBank(), N)
+        sample_shifts_each = calc_correlator_sample_offsets(
+            correlator_banks[1],
+            sampling_frequency,
+            code_frequency,
+        )
         all_sample_shifts = ntuple(_ -> sample_shifts_each, N)
 
         signal =
@@ -767,8 +773,8 @@ end
 
         tile_re = Vector{Float32}(undef, num_samples_signal)
         tile_im = Vector{Float32}(undef, num_samples_signal)
-        new_correlators = Tracking.downconvert_and_correlate_fused_tuple!(
-            correlators,
+        new_correlator_banks = Tracking.downconvert_and_correlate_fused_tuple!(
+            correlator_banks,
             signal,
             code_replicas,
             all_sample_shifts,
@@ -781,17 +787,25 @@ end
             tile_im,
         )
 
-        @test length(new_correlators) == N
+        @test length(new_correlator_banks) == N
         for i = 1:N
-            @test get_accumulators(new_correlators[i]) ≈ ref_accumulators rtol = 1e-4
+            @test get_correlator_outputs(new_correlator_banks[i]) ≈ ref_accumulators rtol =
+                1e-4
         end
     end
 
-    @testset "Multi-antenna ($num_ants ants), N=$N signals" for num_ants in (2, 4), N = 2:3
-        correlators =
-            ntuple(_ -> EarlyPromptLateCorrelator(; num_ants = NumAnts(num_ants)), N)
-        sample_shifts_each =
-            get_correlator_sample_shifts(correlators[1], sampling_frequency, code_frequency)
+    @testset "Multi-antenna ($num_antennas ants), N=$N signals" for num_antennas in (2, 4),
+        N = 2:3
+
+        correlator_banks = ntuple(
+            _ -> EarlyPromptLateCorrelatorBank(; num_antennas = NumAntennas(num_antennas)),
+            N,
+        )
+        sample_shifts_each = calc_correlator_sample_offsets(
+            correlator_banks[1],
+            sampling_frequency,
+            code_frequency,
+        )
         all_sample_shifts = ntuple(_ -> sample_shifts_each, N)
 
         # Multi-antenna signal: each antenna gets a phase-shifted copy of the
@@ -806,7 +820,7 @@ end
                 code_phase,
             ) .*
             cis.(2π * (0:(num_samples_signal-1)) * carrier_doppler / sampling_frequency)
-        ant_phase_offsets = collect(0.0:0.3:(0.3*(num_ants-1)))
+        ant_phase_offsets = collect(0.0:0.3:(0.3*(num_antennas-1)))
         signal = hcat([signal_ant1 .* cis(ϕ) for ϕ in ant_phase_offsets]...)
 
         code_replica_length =
@@ -830,11 +844,11 @@ end
         # Scalar reference per antenna.
         NC = length(sample_shifts_each)
         min_shift = minimum(sample_shifts_each)
-        ref_accumulators = [zeros(ComplexF64, num_ants) for _ = 1:NC]
+        ref_accumulators = [zeros(ComplexF64, num_antennas) for _ = 1:NC]
         carrier_step = 2π * Float64(carrier_frequency / sampling_frequency)
         for i = 1:num_samples_signal
             carrier = cis(-carrier_step * (i - 1))
-            for j = 1:num_ants
+            for j = 1:num_antennas
                 dc_sample = signal[i, j] * carrier
                 for tap = 1:NC
                     code_idx = i + sample_shifts_each[tap] - min_shift
@@ -843,10 +857,10 @@ end
             end
         end
 
-        tile_re = Vector{Float32}(undef, num_samples_signal * num_ants)
-        tile_im = Vector{Float32}(undef, num_samples_signal * num_ants)
-        new_correlators = Tracking.downconvert_and_correlate_fused_tuple!(
-            correlators,
+        tile_re = Vector{Float32}(undef, num_samples_signal * num_antennas)
+        tile_im = Vector{Float32}(undef, num_samples_signal * num_antennas)
+        new_correlator_banks = Tracking.downconvert_and_correlate_fused_tuple!(
+            correlator_banks,
             signal,
             code_replicas,
             all_sample_shifts,
@@ -859,10 +873,10 @@ end
             tile_im,
         )
 
-        @test length(new_correlators) == N
+        @test length(new_correlator_banks) == N
         for i = 1:N
             for tap = 1:NC
-                @test collect(get_accumulators(new_correlators[i])[tap]) ≈
+                @test collect(get_correlator_outputs(new_correlator_banks[i])[tap]) ≈
                       ref_accumulators[tap] rtol = 1e-4
             end
         end

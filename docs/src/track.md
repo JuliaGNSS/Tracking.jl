@@ -17,7 +17,7 @@ track!
 - `intermediate_frequency`: the IF, by default `0.0Hz`. Bare-buffer form only; otherwise it lives on each [`BandMeasurement`](@ref).
 - `doppler_update_interval`: the NCO-update interval, a time (e.g. `1u"ms"`). `nothing` means the smallest primary-code period of the tracked signals (1 ms for GPS L1 C/A); see [Chunked Doppler updates](#Chunked-Doppler-updates). Longer intervals cost less estimation at a lower update rate.
 
-The **coherent-integration length** is set per signal with [`set_preferred_num_code_blocks_to_integrate!`](@ref). It starts at [`default_num_code_blocks_to_integrate`](@extref TrackingLoops.default_num_code_blocks_to_integrate) (`1`, except a 31-block, 2 ms code cycle for Galileo E5a-QP, whose 64.5 µs code period is too short to run a loop on), is capped by [`max_num_code_blocks_to_integrate`](@extref TrackingLoops.max_num_code_blocks_to_integrate) (one bit or secondary-code period), and takes effect only after bit or secondary-code sync.
+The **coherent-integration length** is set per signal with [`set_preferred_num_code_blocks_to_integrate!`](@ref). It starts at [`default_num_code_periods_to_integrate`](@extref TrackingLoops.default_num_code_periods_to_integrate-Tuple{AbstractGNSSSignal}) (`1`, except a 31-block, 2 ms code cycle for Galileo E5a-QP, whose 64.5 µs code period is too short to run a loop on), is capped by [`max_num_code_periods_to_integrate`](@extref TrackingLoops.max_num_code_periods_to_integrate-Tuple{AbstractGNSSSignal}) (one bit or secondary-code period), and takes effect only after bit or secondary-code sync.
 
 ```@docs
 set_preferred_num_code_blocks_to_integrate!
@@ -25,21 +25,21 @@ set_preferred_num_code_blocks_to_integrate!
 
 In the TrackingLoops manual:
 
-- [`default_num_code_blocks_to_integrate`](@extref TrackingLoops.default_num_code_blocks_to_integrate)
-- [`max_num_code_blocks_to_integrate`](@extref TrackingLoops.max_num_code_blocks_to_integrate)
+- [`default_num_code_periods_to_integrate`](@extref TrackingLoops.default_num_code_periods_to_integrate-Tuple{AbstractGNSSSignal})
+- [`max_num_code_periods_to_integrate`](@extref TrackingLoops.max_num_code_periods_to_integrate-Tuple{AbstractGNSSSignal})
 
 ## Chunked Doppler updates
 
 `track` / `track!` walk each measurement in chunks of `doppler_update_interval`, each with one correlate pass and one estimate:
 
-1. **Correlate** each satellite up to its last completed integration boundary in the chunk, collecting every completed integration into the signal's `correlator_outputs` as a [`CorrelatorOutput`](@extref TrackingLoops.CorrelatorOutput) tagged with its end sample. A 1 ms code in a 1 ms chunk yields 0, 1 or 2 outputs.
+1. **Correlate** each satellite up to its last completed integration boundary in the chunk, collecting every completed integration into the signal's `correlator_bank_outputs` as a [`CorrelatorBankOutput`](@extref TrackingLoops.CorrelatorBankOutput) tagged with its end sample. A 1 ms code in a 1 ms chunk yields 0, 1 or 2 outputs.
 2. **Estimate**: the Doppler estimator folds the outputs in order and writes every satellite's NCO **once per chunk**, at a common epoch.
 
-The next chunk's pass starts at that boundary, so every integration runs at one NCO Doppler and each correction takes effect at the boundary where its integration completed, as with a per-code-period update. A final pass drains each satellite's trailing partial into its accumulator, carried into the next `track!` call. [`get_correlator_outputs`](@ref) reads a chunk's outputs before the estimate clears them.
+The next chunk's pass starts at that boundary, so every integration runs at one NCO Doppler and each correction takes effect at the boundary where its integration completed, as with a per-code-period update. A final pass drains each satellite's trailing partial into its correlator bank, carried into the next `track!` call. [`get_correlator_bank_outputs`](@ref) reads a chunk's outputs before the estimate clears them.
 
 ## Real-time loops
 
-A typical receiver loop builds the `TrackState` once, hoists the correlator outside the loop, and calls `track!` per chunk:
+A typical receiver loop builds the `TrackState` once, hoists the backend outside the loop, and calls `track!` per chunk:
 
 ```julia
 track_state = TrackState(; signal = GPSL1CA())
@@ -60,14 +60,14 @@ The backends hold per-thread scratch buffers that grow on first use; the keyword
 
 ## External correlator producers
 
-The Doppler estimator reads only each signal's `correlator_outputs`, never the samples, so an **external producer** (e.g. an FPGA streaming correlator dumps) can supply them and the host runs only the loops. (Transport, wire format and NCO marshaling live in [GNSSReceiver.jl](https://github.com/JuliaGNSS/GNSSReceiver.jl).)
+The Doppler estimator reads only each signal's `correlator_bank_outputs`, never the samples, so an **external producer** (e.g. an FPGA streaming correlator dumps) can supply them and the host runs only the loops. (Transport, wire format and NCO marshaling live in [GNSSReceiver.jl](https://github.com/JuliaGNSS/GNSSReceiver.jl).)
 
 Per chunk:
 
-1. **Ingest.** Build a [`CorrelatorOutput`](@extref TrackingLoops.CorrelatorOutput) from the producer's raw accumulator and append it with [`append_correlator_output!`](@ref), **per signal in `sample_index` order**:
+1. **Ingest.** Build a [`CorrelatorBankOutput`](@extref TrackingLoops.CorrelatorBankOutput) from the producer's raw correlator bank and append it with [`append_correlator_bank_output!`](@ref), **per signal in `sample_index` order**:
 
    ```julia
-   append_correlator_output!(track_state, output, group, prn, sig)
+   append_correlator_bank_output!(track_state, output, group, prn, sig)
    ```
 
 2. **Estimate.** Call [`estimate_dopplers_and_filter_prompt!`](@ref) with the **per-band sampling frequencies** (a `NamedTuple` or `Dict` keyed by `get_band_id`) in place of the samples:
@@ -77,15 +77,15 @@ Per chunk:
    # or: estimate_dopplers_and_filter_prompt!(track_state, Dict(:L1 => 25e6Hz))
    ```
 
-   [`BandMeasurements`](@ref) work too. The call **consumes and clears** each signal's `correlator_outputs`.
+   [`BandMeasurements`](@ref) work too. The call **consumes and clears** each signal's `correlator_bank_outputs`.
 
 3. **Marshal** the updated [`get_code_doppler`](@ref) / [`get_carrier_doppler`](@ref) back to the hardware NCOs.
 
 ### Caller contract
 
-- `CorrelatorOutput.correlator`: the **raw** accumulator (sum of products over `integrated_samples`, as `normalize` expects), e.g. built with [`EarlyPromptLateCorrelator`](@extref TrackingLoops.EarlyPromptLateCorrelator) / `update_accumulator`.
-- `CorrelatorOutput.integrated_samples`: the producer's true sample count.
-- `CorrelatorOutput.sample_index`: the end sample relative to the start of the current measurement, as the software path writes it (`signal_start_sample` returns to 1 each `track!`). A producer with a free-running **global** counter subtracts the measurement's origin; the estimate phase adds the band's [`TrackState`](@ref) `sample_offsets` before handing the record to the Doppler estimator.
+- `CorrelatorBankOutput.correlator_bank`: the **raw** correlator bank (sum of products over `integrated_samples`, as `normalize` expects), e.g. built with [`EarlyPromptLateCorrelatorBank`](@extref TrackingLoops.EarlyPromptLateCorrelatorBank) / `with_correlator_outputs`.
+- `CorrelatorBankOutput.integrated_samples`: the producer's true sample count.
+- `CorrelatorBankOutput.sample_index`: the end sample relative to the start of the current measurement, as the software path writes it (`signal_start_sample` returns to 1 each `track!`). A producer with a free-running **global** counter subtracts the measurement's origin; the estimate phase adds the band's [`TrackState`](@ref) `sample_offsets` before handing the record to the Doppler estimator.
 
 ### Transport delay
 
@@ -118,7 +118,7 @@ julia> track!((L1 = BandMeasurement(buf_l1, 4e6Hz),
                L5 = BandMeasurement(buf_l5, 25e6Hz)), track_state);
 ```
 
-Noise, not `zeros`: the default C/N₀ estimator measures the noise floor from the samples, and `track!` warns, once per signal, about an all-zero buffer (see [`AbstractNoiseEstimator`](@extref TrackingLoops.AbstractNoiseEstimator)). See [Multi-band tracking](tracking_state.md#Multi-band-tracking) for the full setup.
+Noise, not `zeros`: the default C/N₀ estimator measures the noise floor from the samples, and `track!` warns, once per signal, about an all-zero buffer (see [`AbstractNoiseDensityEstimator`](@extref TrackingLoops.AbstractNoiseDensityEstimator)). See [Multi-band tracking](tracking_state.md#Multi-band-tracking) for the full setup.
 
 ```@docs
 BandMeasurement

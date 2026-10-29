@@ -1,6 +1,7 @@
 module TrackInPlaceTest
 
 using Test: @test, @testset
+using GNSSSignals: CBOC
 using Random: MersenneTwister
 using Unitful: Hz
 using GNSSSignals:
@@ -8,8 +9,8 @@ using GNSSSignals:
     GPSL5I,
     GalileoE1C,
     gen_code,
-    get_code_center_frequency_ratio,
-    get_code_frequency
+    get_chip_rate_to_center_frequency_ratio,
+    get_chip_rate
 
 using Tracking:
     TrackedSat,
@@ -24,16 +25,16 @@ using Tracking:
     get_carrier_phase,
     get_code_doppler,
     get_carrier_doppler,
-    get_last_fully_integrated_filtered_prompt,
-    get_filtered_prompts,
+    get_last_fully_integrated_beamformed_prompt,
+    get_beamformed_prompts,
     get_sat_state,
     CPUDownconvertAndCorrelator,
     CPUThreadedDownconvertAndCorrelator
 using TrackingLoops:
-    NoiseRefCN0Estimator,
+    NoiseReferencedCN0Estimator,
     NWPRCN0Estimator,
     append_noise_observation!,
-    noise_observation_from_samples
+    calc_noise_observation_from_samples
 
 # 1 ms of GPS L1 C/A PRN 1 with a known carrier Doppler and code phase.
 function make_signal(sampling_frequency)
@@ -41,7 +42,8 @@ function make_signal(sampling_frequency)
     carrier_doppler = 200.0Hz
     start_code_phase = 100.0
     code_frequency =
-        carrier_doppler * get_code_center_frequency_ratio(gpsl1) + get_code_frequency(gpsl1)
+        carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1) +
+        get_chip_rate(gpsl1)
     range = 0:3999
     start_carrier_phase = π / 2
     signal_template =
@@ -73,10 +75,10 @@ end
     @test get_carrier_phase(ts_immutable) == get_carrier_phase(ts_mutable)
     @test get_code_doppler(ts_immutable) == get_code_doppler(ts_mutable)
     @test get_carrier_doppler(ts_immutable) == get_carrier_doppler(ts_mutable)
-    @test get_last_fully_integrated_filtered_prompt(ts_immutable) ==
-          get_last_fully_integrated_filtered_prompt(ts_mutable)
-    @test get_filtered_prompts(get_sat_state(ts_immutable)) ==
-          get_filtered_prompts(get_sat_state(ts_mutable))
+    @test get_last_fully_integrated_beamformed_prompt(ts_immutable) ==
+          get_last_fully_integrated_beamformed_prompt(ts_mutable)
+    @test get_beamformed_prompts(get_sat_state(ts_immutable)) ==
+          get_beamformed_prompts(get_sat_state(ts_mutable))
 end
 
 @testset "track! returns same TrackState identity" begin
@@ -90,7 +92,7 @@ end
 
 # Per-stage allocation measurement, inside functions: `@allocated` at module
 # scope counts the boxing of untyped globals. The warmup calls page in Bumper's
-# slab buffer and settle the capacity of `filtered_prompts`.
+# slab buffer and settle the capacity of `beamformed_prompts`.
 
 function measure_reset!(track_state)
     for _ = 1:8
@@ -139,7 +141,7 @@ end
     )
     dc = DC()
 
-    # Warm up: compile, and settle the bit buffer and `filtered_prompts`.
+    # Warm up: compile, and settle the bit buffer and `beamformed_prompts`.
     for _ = 1:8
         track!(signal, track_state, sampling_frequency; downconvert_and_correlator = dc)
     end
@@ -175,13 +177,13 @@ end
                     1,
                     start_code_phase,
                     carrier_doppler - 20Hz;
-                    cn0_estimator = NoiseRefCN0Estimator(),
+                    cn0_estimator = NoiseReferencedCN0Estimator(),
                 ),
             ],
         )
         dc = DC()
         @test keys(track_state.noise_estimators) == (:GPSL1CA,)
-        observation = noise_observation_from_samples(4000.0, 4000, sampling_frequency)
+        observation = calc_noise_observation_from_samples(4000.0, 4000, sampling_frequency)
         for _ = 1:8
             append_noise_observation!(track_state, observation, :GPSL1CA)
             track!(signal, track_state, sampling_frequency; downconvert_and_correlator = dc)
@@ -218,7 +220,7 @@ end
             ],
         )
         plain_state = make_state(() -> NWPRCN0Estimator(gpsl1))
-        noise_state = make_state(NoiseRefCN0Estimator)
+        noise_state = make_state(NoiseReferencedCN0Estimator)
         @test keys(plain_state.noise_estimators) == ()
         @test keys(noise_state.noise_estimators) == (:GPSL1CA,)
 
@@ -266,12 +268,11 @@ end
 end
 
 # Pre-sync allocation guard (#198). The per-stage test above measures its
-# estimate step with no records to fold, so never the pre-sync bit-edge search
-# (`TrackingLoops._buffer_find_bit`). Noise never locks, so the search runs on
-# every block, and a warm call must allocate nothing at any length: a per-block
-# leak grows with the chunk.
+# estimate step with no records to fold, so never TrackingLoops' pre-sync bit-edge
+# search. Noise never locks, so the search runs on every block, and a warm call
+# must allocate nothing at any length: a per-block leak grows with the chunk.
 #
-# `_detect_bit_edge_cfar` scores nothing below `2 * blocks_per_bit` (40 blocks),
+# The soft bit-edge detector scores nothing below `2 * blocks_per_bit` (40 blocks),
 # so 2 and 20 blocks cannot see a leak in the Student-t threshold. Its
 # incomplete-beta inverse once allocated ~600 B per block, at `dof` around 11 and
 # from ~42 up. The measured second call sweeps `dof ≈ n/20 … n/10`, so 200 blocks
@@ -335,7 +336,7 @@ if VERSION >= v"1.11"
         sampling_frequency = 16.368e6Hz
         samples_per_block = 65472              # 4 ms Galileo E1C code period
         function measure_track_alloc_e1c(nblocks)
-            e1c = GalileoE1C()
+            e1c = GalileoE1C(CBOC)
             track_state = TrackState(e1c, [TrackedSat(e1c, 1, 10.5, 1000.0Hz)])
             dc = CPUDownconvertAndCorrelator()
             signal = rand(MersenneTwister(nblocks), ComplexF32, samples_per_block * nblocks)

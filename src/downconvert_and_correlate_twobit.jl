@@ -23,9 +23,9 @@
 #   Σ codeₓ·m·c = (N − 2·pc S) + 2·(pc X − 2·pc(S & X)) + 8·(pc A − 2·pc(S & A))
 #
 # `pc X + 4·pc A` depends only on the (measurement mag {Gr, Gi}, carrier mag {Hc, Hs}) combo,
-# so it is accumulated once per antenna and chunk (GXA) and shared across taps. Merging
+# so it is accumulated once per antenna and chunk (GXA) and shared across correlators. Merging
 # I = (mr·cos)+(mi·sin) and Q = (mi·cos)−(mr·sin) keeps four lane accumulators per
-# (antenna, tap), as in one-bit:
+# (antenna, correlator), as in one-bit:
 #
 #   IS += pc S_A + pc S_B                 IF += F_A + F_B      F_L = pc(S_L & X_L)
 #   QS += pc S_C − pc S_E                 QF += F_C − F_E            + 4·pc(S_L & A_L)
@@ -281,7 +281,7 @@ const _TB_FAST_PACK = Bool(VectorizationBase.has_feature(Val(:x86_64_bmi2)))
 end
 
 # ── code plane helpers (1-bit code; as in the one-bit backend) ────────────────
-# Pack a tap's code sign plane (see `_ob_pack_code!`).
+# Pack a correlator's code sign plane (see `_ob_pack_code!`).
 @inline function _tb_pack_code!(
     codeb::Vector{UInt64},
     koff::Int,
@@ -297,7 +297,7 @@ end
     nothing
 end
 
-# Funnel-shift a tap plane from the prompt-extended plane; see `_ob_shift_plane!`.
+# Funnel-shift a correlator plane from the prompt-extended plane; see `_ob_shift_plane!`.
 @inline function _tb_shift_plane!(
     dst::Vector{UInt64},
     doff::Int,
@@ -668,8 +668,6 @@ const _TwoBitDC =
 @inline _tb_scratch(dc::TwoBitThreadedDownconvertAndCorrelator) =
     dc.buffers[Threads.threadid()]
 
-@inline _tb_num_ants_val(::AbstractCorrelator{M}) where {M} = NumAnts{M}()
-
 # The bit-wise CBOC gate (see the one-bit kernel).
 @inline function _tb_check_modulation(signal_type)
     get_modulation(signal_type) isa GNSSSignals.CBOC && throw(
@@ -689,13 +687,13 @@ const _TwoBitDC =
 end
 
 # ── The two-bit hybrid-blocked kernel ─────────────────────────────────────────
-# Returns `SVector{NC}` per-tap sums, as the one-bit kernel (and for the same reason not a
-# `Vector`). `@generated` over (NC, M): the per-(antenna, tap) IS/IF/QS/QF and per-antenna
+# Returns `SVector{NC}` per-correlator sums, as the one-bit kernel (and for the same reason not a
+# `Vector`). `@generated` over (NC, M): the per-(antenna, correlator) IS/IF/QS/QF and per-antenna
 # GXA accumulators are named locals.
 @generated function _twobit_hybrid_blocked!(
     dc::_TwoBitDC,
     signal::AbstractVecOrMat{Complex{Int16}},
-    ::NumAnts{M},
+    ::NumAntennas{M},
     signal_type,
     prn::Integer,
     sample_shifts::SVector{NC},
@@ -710,7 +708,7 @@ end
 ) where {M,NC}
     zc = :(zero(SIMD.Vec{_TB_VW,UInt64}))
 
-    # IS/IF (→ I) and QS/QF (→ Q, wrap-around) per (antenna j, tap k), plus the
+    # IS/IF (→ I) and QS/QF (→ Q, wrap-around) per (antenna j, correlator k), plus the
     # per-antenna mask totals GXA_(combo)_j.
     init = Expr(:block)
     for k = 1:NC
@@ -726,7 +724,7 @@ end
     end
 
     # Per VW chunk: per antenna the sample⊻carrier sign products and the four mask combos,
-    # then per tap three popcounts per plane into the four accumulators.
+    # then per correlator three popcounts per plane into the four accumulators.
     body = Expr(:block)
     for j = 1:M
         push!(body.args, :(MR = vload(SIMD.Vec{_TB_VW,UInt64}, mrb, $(j - 1) * wpbv + i)))
@@ -862,7 +860,7 @@ end
             nwb = cld(len, 64)
             nwv = cld(nwb, _TB_VW) * _TB_VW
             r = len & 63
-            # code (Int8 ±1) for samples [min_shift, len+span): pack once, funnel-shift per tap
+            # code (Int8 ±1) for samples [min_shift, len+span): pack once, funnel-shift per correlator
             gen_code!(
                 view(extb, 1:(len+span)),
                 signal_type,
@@ -892,7 +890,7 @@ end
                     end for k = 1:NC
                 )...,
             ))
-            # carrier sign + magnitude planes, shared across antennas and taps
+            # carrier sign + magnitude planes, shared across antennas and correlators
             generate_carrier_signs_mags!(
                 sinw,
                 cosw,
@@ -981,7 +979,7 @@ end
 function _twobit_hybrid_blocked!(
     dc::_TwoBitDC,
     signal::AbstractVecOrMat{Complex{Int16}},
-    ::NumAnts{M},
+    ::NumAntennas{M},
     signal_type,
     prn::Integer,
     sample_shifts::AbstractVector,
@@ -1196,7 +1194,7 @@ end
 @generated function _twobit_hybrid_blocked_multi!(
     dc::_TwoBitDC,
     signal::AbstractVecOrMat{Complex{Int16}},
-    ::NumAnts{M},
+    ::NumAntennas{M},
     signal_types::Tuple,
     prn::Integer,
     all_shifts::Tuple{Vararg{SVector}},
@@ -1213,7 +1211,7 @@ end
     maxNC = maximum(NCs)
     zc = :(zero(SIMD.Vec{_TB_VW,UInt64}))
 
-    # Per-signal shift/span/offset locals, per-(signal, antenna, tap) IS/IF/QS/QF, and the
+    # Per-signal shift/span/offset locals, per-(signal, antenna, correlator) IS/IF/QS/QF, and the
     # sat-shared per-antenna GXA accumulators.
     setup = Expr(:block)
     maxspan = Expr(:call, :max)
@@ -1447,7 +1445,7 @@ end
         push!(sigs.args, signal_block(i))
     end
 
-    # Finalize: per signal, a Vector of NCᵢ tap sums (see the one-bit tile-share).
+    # Finalize: per signal, a Vector of NCᵢ correlator sums (see the one-bit tile-share).
     s(sym) = :(sum($sym) % Int64)
     function tapval(i, k)
         function cplx(j)
@@ -1525,7 +1523,7 @@ end
             nwb = cld(len, 64)
             nwv = cld(nwb, _TB_VW) * _TB_VW
             r = len & 63
-            # carrier sign + magnitude planes, shared across signals, antennas and taps
+            # carrier sign + magnitude planes, shared across signals, antennas and correlators
             generate_carrier_signs_mags!(
                 sinw,
                 cosw,
@@ -1559,7 +1557,7 @@ end
 # downconvert_and_correlate_cpu.jl.
 @inline _despread_one_signal!(
     dc::_TwoBitDC,
-    correlator,
+    correlator_bank,
     samples,
     signal_type,
     prn,
@@ -1573,12 +1571,12 @@ end
     num_samples,
     ::Any,
     use_band_cache::Bool = true,
-) = update_accumulator(
-    correlator,
-    get_accumulators(correlator) .+ _twobit_hybrid_blocked!(
+) = with_correlator_outputs(
+    correlator_bank,
+    get_correlator_outputs(correlator_bank) .+ _twobit_hybrid_blocked!(
         dc,
         samples,
-        _tb_num_ants_val(correlator),
+        NumAntennas(correlator_bank),
         signal_type,
         prn,
         sample_shifts,
@@ -1619,7 +1617,7 @@ end
             num_samples_signal,
         )
     end
-    correlators = map(s -> s.correlator, signals)
+    correlator_banks = map(s -> s.correlator_bank, signals)
     signal_types = map(s -> s.signal, signals)
     all_shifts = map(p -> p.sample_shifts, params)
     code_phases = map(p -> p.signal_code_phase, params)
@@ -1627,7 +1625,7 @@ end
     new_accs = _twobit_hybrid_blocked_multi!(
         dc,
         signal,
-        _tb_num_ants_val(correlators[1]),
+        NumAntennas(correlator_banks[1]),
         signal_types,
         prn,
         all_shifts,
@@ -1639,13 +1637,13 @@ end
         signal_start_sample,
         samples_to_integrate,
     )
-    new_corrs = map(correlators, new_accs) do c, a
-        update_accumulator(c, get_accumulators(c) .+ a)
+    new_corrs = map(correlator_banks, new_accs) do c, a
+        with_correlator_outputs(c, get_correlator_outputs(c) .+ a)
     end
     map(tuple, new_corrs, per_signal_completed)
 end
 
-# The per-sat chunk loop is the generic `_update_tracked_sat_correlator`; the backend
+# The per-sat chunk loop is the generic `_update_tracked_sat_correlator_bank`; the backend
 # boundary is `_correlate_signals` above.
 
 @inline function _dc_one_group!(

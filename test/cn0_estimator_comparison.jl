@@ -4,7 +4,7 @@ module CN0EstimatorComparisonTest
 # a noise reference rather than NWPR: NWPR degenerates at low C/N₀, is biased,
 # saturates in relative error, and loses to a coherent noise reference at every C/N₀.
 #
-# `NWPRCN0Estimator` is the shipped implementation (bare-prompt-stream `update`),
+# `NWPRCN0Estimator` is the shipped implementation (bare-prompt-stream `update!`),
 # given its best case: perfect phase, no bit transitions. The noise-reference columns
 # are reference implementations with the noise power known exactly and no other
 # satellites, so none of the cross-correlation / self-leakage bias of a full sky;
@@ -14,12 +14,13 @@ using Test: @test, @testset
 using Random: Xoshiro, randn
 using Statistics: mean, std
 using Unitful: ms, s, dBHz, ustrip, uconvert
-using TrackingLoops: NWPRCN0Estimator, update, estimate_cn0
+using TrackingLoops: NWPRCN0Estimator, update!, estimate_cn0
 
 # Post-correlation prompts: `λ = (C/N₀)·T` is the per-record SNR; noise is CN(0,1),
 # so λ is also the signal power. Perfect phase, signal on the real axis.
-_prompts(λ, num_records, rng) =
-    sqrt(λ) .+ (randn(rng, num_records) .+ im .* randn(rng, num_records)) ./ sqrt(2)
+_prompts(λ, num_integrations, rng) =
+    sqrt(λ) .+
+    (randn(rng, num_integrations) .+ im .* randn(rng, num_integrations)) ./ sqrt(2)
 
 # Non-coherent noise reference: λ̂ = ⟨|P|²⟩ − 1 (known noise power).
 _noise_ref_noncoherent(prompts) = mean(abs2, prompts) - 1
@@ -40,12 +41,12 @@ function _noise_ref_coherent(prompts, M)
 end
 
 # The shipped estimator over the same prompts, returning λ̂ so all three share a
-# scale. The two-argument `update` ignores the pre-sync window length, so it is left
+# scale. The two-argument `update!` ignores the pre-sync window length, so it is left
 # at its default.
-function _nwpr(prompts, num_records, M, integration_time)
-    estimator = NWPRCN0Estimator(; num_records, num_narrowband_code_blocks = M)
+function _nwpr(prompts, num_integrations, M, integration_time)
+    estimator = NWPRCN0Estimator(; num_integrations, num_narrowband_code_periods = M)
     for prompt in prompts
-        estimator = update(estimator, prompt)
+        estimator = update!(estimator, prompt)
     end
     # λ = (C/N₀)·T. `estimate_cn0` returns dB-Hz, so undo the log and re-apply T.
     cn0_db = ustrip(uconvert(dBHz, estimate_cn0(estimator, integration_time)))

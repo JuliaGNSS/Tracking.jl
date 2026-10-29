@@ -23,20 +23,20 @@ satellites on one never affects the other. The copy is shallow, though, and
 these are shared with the input (treat it as a stale handle, or `deepcopy` it
 first):
 
-  - the per-satellite scratch vectors (`filtered_prompts`, `correlator_outputs`,
+  - the per-satellite scratch vectors (`beamformed_prompts`, `correlator_bank_outputs`,
     the soft bits, the C/N₀ estimator's buffer), overwritten by the next call on
     either state; a bare `downconvert_and_correlate` likewise appends to the
-    input's `correlator_outputs`;
+    input's `correlator_bank_outputs`;
   - each signal's noise estimator, which `track` advances in place: branched
     states divide by one noise reference, and advancing two concurrently races,
     so build one `TrackState` per thread (see `downconvert_and_correlate` for why
     the window is not copied);
   - the `doppler_estimator` itself, so results can be read off the instance you
-    passed in. One with state of its own (TrackingLoops' `VectorPLLAndDLL`) is
+    passed in. One with state of its own (TrackingLoops' `VectorTrackingLoop`) is
     advanced by `track` as by [`track!`](@ref), and two branches would mix their
     records in one navigation filter.
 
-For real-time loops, **construct the correlator once outside the loop**:
+For real-time loops, **construct the backend once outside the loop**:
 
 ```julia
 dc = CPUThreadedDownconvertAndCorrelator()
@@ -59,7 +59,7 @@ set_preferred_num_code_blocks_to_integrate!(track_state, :gps_l5, 1, GPSL5I, 10)
 
 The conventional estimator caps the carrier loop bandwidth at `0.09 / T_int` and
 the code loop's at `0.018 / T_int`, so longer integration stays stable (see
-[`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL)).
+[`ScalarTrackingLoop`](@extref TrackingLoops.ScalarTrackingLoop)).
 """
 function track(
     measurements::BandMeasurements,
@@ -114,7 +114,7 @@ with the buffer length), when running on more than one thread with more than one
 work item in the group (the noise despreads count, riding the first group); see
 [`CPUThreadedDownconvertAndCorrelator`](@ref) for why.
 
-For real-time loops, **construct the correlator once outside the loop**:
+For real-time loops, **construct the backend once outside the loop**:
 
 ```julia
 track_state = TrackState(signal, initial_sats)
@@ -162,7 +162,7 @@ function track!(
         estimate_dopplers_and_filter_prompt!(track_state, measurements)
         chunk_index += 1
     end
-    # Drain each satellite's trailing partial into its accumulator, carried into
+    # Drain each satellite's trailing partial into its correlator bank, carried into
     # the next call; a boundary exactly at the buffer end completes here, hence
     # the fold. Noise is measured here only if no chunk ran, or every sample
     # would enter the noise window twice.
@@ -233,7 +233,7 @@ end
 
 # Primary-code period (a time) of one signal.
 @inline _code_period(signal::AbstractGNSSSignal) =
-    get_code_length(signal) / get_code_frequency(signal)
+    get_code_length(signal) / get_chip_rate(signal)
 
 @inline _min_signal_code_period(::Tuple{}, m) = m
 @inline _min_signal_code_period(signals::Tuple, m) =

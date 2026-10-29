@@ -5,17 +5,18 @@ module SignalCoverageTest
 # `UNSUPPORTED` with a reason. The list comes from the type tree, so a new
 # GNSSSignals signal fails here rather than in user code.
 
-using Test: @test, @testset, @inferred
+using Test: @test, @testset, @inferred, @test_throws
 using Unitful: Hz, upreferred
 using InteractiveUtils: subtypes
 using GNSSSignals
 using GNSSSignals:
     AbstractGNSSSignal,
-    LOC,
+    BPSK,
     gen_code,
-    get_code_frequency,
+    get_code_periods_per_bit,
+    get_chip_rate,
     get_code_length,
-    get_data_frequency,
+    get_bit_rate,
     get_modulation,
     get_signal_name
 import Tracking
@@ -30,13 +31,13 @@ using Tracking:
     track
 import TrackingLoops
 using TrackingLoops:
-    NumAnts,
+    NumAntennas,
     default_narrow_carrier_loop_filter_bandwidth,
     effective_carrier_loop_filter_bandwidth,
     default_code_loop_filter_bandwidth,
-    default_num_code_blocks_to_integrate,
-    get_default_correlator,
-    max_num_code_blocks_to_integrate
+    default_num_code_periods_to_integrate,
+    get_default_correlator_bank,
+    max_num_code_periods_to_integrate
 
 # Signals deliberately not supported, by type name, with the reason. Empty
 # since #236.
@@ -61,8 +62,8 @@ end
 # 5 samples per chip, at least 25 MHz for BOC signals: a whole number of samples
 # per code period, so whole periods return to the seeded code phase.
 function _sampling_frequency(signal)
-    fs = 5 * get_code_frequency(signal)
-    get_modulation(signal) isa LOC ? fs : max(fs, 25.0e6Hz)
+    fs = 5 * get_chip_rate(signal)
+    get_modulation(signal) isa BPSK ? fs : max(fs, 25.0e6Hz)
 end
 
 _is_unsupported(T) = haskey(UNSUPPORTED, Symbol(string(nameof(T))))
@@ -78,8 +79,10 @@ const END_TO_END = [
 @testset "Every GNSSSignals signal type is accounted for" begin
     known = Set(Symbol(string(nameof(T))) for T in _signal_types())
     for T in _signal_types()
-        supported =
-            hasmethod(get_default_correlator, Tuple{Base.typename(T).wrapper,NumAnts})
+        supported = hasmethod(
+            get_default_correlator_bank,
+            Tuple{Base.typename(T).wrapper,NumAntennas},
+        )
         @test _is_unsupported(T) || supported
         # A supported signal must leave `UNSUPPORTED`, which exempts it.
         @test !(_is_unsupported(T) && supported)
@@ -97,8 +100,8 @@ end
 # signal in TrackingLoops (`test/signals.jl` there).
 @testset "Per-signal API — $(get_signal_name(signal))" for signal in SUPPORTED
     # The default must divide the ceiling, or it is clamped to one (#128).
-    default_blocks = @inferred default_num_code_blocks_to_integrate(signal)
-    max_blocks = @inferred max_num_code_blocks_to_integrate(signal)
+    default_blocks = @inferred default_num_code_periods_to_integrate(signal)
+    max_blocks = @inferred max_num_code_periods_to_integrate(signal)
     @test 1 <= default_blocks <= max_blocks
     @test max_blocks % default_blocks == 0
     @test get_preferred_num_code_blocks_to_integrate(TrackedSignal(signal)) ==
@@ -107,7 +110,7 @@ end
     # Sane at the default integration (E5a-QP: 31 blocks): carrier below
     # 100 Hz and inside its cap, updates below 2 kHz.
     integration_time =
-        upreferred(get_code_length(signal) * default_blocks / get_code_frequency(signal))
+        upreferred(get_code_length(signal) * default_blocks / get_chip_rate(signal))
     carrier_bandwidth = @inferred effective_carrier_loop_filter_bandwidth(
         default_narrow_carrier_loop_filter_bandwidth(signal),
         integration_time,
@@ -117,7 +120,7 @@ end
     @test carrier_bandwidth * integration_time <=
           TrackingLoops.MAX_CARRIER_LOOP_BANDWIDTH_TIME_PRODUCT + 1e-12
     @test 0.0Hz < code_bandwidth < 100.0Hz
-    @test get_code_frequency(signal) / (get_code_length(signal) * default_blocks) < 2000.0Hz
+    @test get_chip_rate(signal) / (get_code_length(signal) * default_blocks) < 2000.0Hz
 end
 
 # A smoke test of the whole chain over four default integrations (so E5a-QP
@@ -131,14 +134,14 @@ end
     start_code_phase = 100
     sampling_frequency = _sampling_frequency(signal)
     code_length = get_code_length(signal)
-    code_frequency = get_code_frequency(signal)
+    code_frequency = get_chip_rate(signal)
 
     # Zero Doppler, so the code phase returns to the seed.
     samples_per_period = code_length * sampling_frequency / code_frequency
     @test isinteger(upreferred(samples_per_period))
     num_samples =
         4 *
-        default_num_code_blocks_to_integrate(signal) *
+        default_num_code_periods_to_integrate(signal) *
         round(Int, upreferred(samples_per_period))
 
     code = gen_code(
@@ -159,16 +162,16 @@ end
     # A secondary-code lock may snap by whole primary periods.
     @test mod(get_code_phase(sat_state), code_length) ≈ start_code_phase atol = 0.1
 
-    # A dataless signal has 0 blocks per bit and never produces one.
-    if iszero(get_data_frequency(signal))
-        @test TrackingLoops._calc_num_code_blocks_that_form_a_bit(signal) == 0
+    # A dataless signal broadcasts no bits and produces none.
+    if iszero(get_bit_rate(signal))
+        @test get_code_periods_per_bit(signal) == 0
         @test get_num_bits(sat_state) == 0
     else
         # A bit must be a whole number of blocks.
-        blocks_per_bit = TrackingLoops._calc_num_code_blocks_that_form_a_bit(signal)
+        blocks_per_bit = get_code_periods_per_bit(signal)
         @test blocks_per_bit >= 1
         @test upreferred(
-            blocks_per_bit * code_length / code_frequency * get_data_frequency(signal),
+            blocks_per_bit * code_length / code_frequency * get_bit_rate(signal),
         ) ≈ 1
     end
 end
@@ -192,8 +195,8 @@ end
         name = Symbol(string(nameof(typeof(signal))))
         haskey(rows, name) || continue
         documented_default, documented_max = rows[name]
-        @test documented_default == default_num_code_blocks_to_integrate(signal)
-        @test documented_max == max_num_code_blocks_to_integrate(signal)
+        @test documented_default == default_num_code_periods_to_integrate(signal)
+        @test documented_max == max_num_code_periods_to_integrate(signal)
     end
 end
 

@@ -4,14 +4,11 @@ using Test: @test, @testset, @inferred
 using Random: Random, Xoshiro
 using Unitful: kHz, MHz, Hz, dBHz, ustrip, uconvert
 using GNSSSignals: GPSL1CA, get_code, gen_code
-using GNSSSignals: get_code_frequency
+using GNSSSignals: get_chip_rate
 import Tracking
 using Tracking: TrackedSat, TrackState, get_cn0_estimator, track
 using TrackingLoops:
-    MomentsCN0Estimator,
-    NWPRCN0Estimator,
-    estimate_cn0,
-    has_bit_or_secondary_code_been_found
+    MomentsCN0Estimator, NWPRCN0Estimator, estimate_cn0, is_bit_or_secondary_code_synced
 
 @testset "CN0 estimation integration test" begin
     Random.seed!(1234)
@@ -22,7 +19,7 @@ using TrackingLoops:
     prn = 1
     range = 0:3999
     start_carrier_phase = π / 2
-    cn0_estimator = MomentsCN0Estimator(100)
+    cn0_estimator = MomentsCN0Estimator(; num_integrations = 100)
     start_sample = 1
     gpsl1 = GPSL1CA()
 
@@ -64,7 +61,7 @@ end
     gpsl1 = GPSL1CA()
     sampling_frequency = 4e6Hz
     num_samples = 4000
-    code_frequency = get_code_frequency(gpsl1)
+    code_frequency = get_chip_rate(gpsl1)
 
     # `fade_to` continues at another C/N₀ for `fade_blocks` more records, to
     # reach post-sync at a C/N₀ where bit sync would never lock from cold.
@@ -104,10 +101,10 @@ end
 
     track_state = track_noisy(45.0, 900)
     estimator = get_cn0_estimator(track_state, 1)
-    @test has_bit_or_secondary_code_been_found(track_state, 1)
+    @test is_bit_or_secondary_code_synced(track_state, 1)
     # Synced: four windows tile the 20-block navigation bit at the default
     # five-block coherence cap, and they follow the bit grid.
-    @test estimator.num_records_per_ratio == 5
+    @test estimator.num_integrations_per_ratio == 5
     @test estimator.ratios_are_bit_aligned
     @test Base.length(estimator) > 0
     # Over 120 seeds: median 44.4, extremes 43.4 and 45.7, worst five-seed
@@ -121,7 +118,7 @@ end
     # than 20 dB-Hz because a short pre-sync window has a heavy upper tail.
     noise_state = track_noisy(nothing, 200)
     noise_cn0 = ustrip(uconvert(dBHz, estimate_cn0(noise_state, 1)))
-    @test !has_bit_or_secondary_code_been_found(noise_state, 1)
+    @test !is_bit_or_secondary_code_synced(noise_state, 1)
     @test noise_cn0 < 25
     # Medians over seeds: one noise run is one draw of a wide distribution, and
     # which draw a seed gives differs between Julia versions. Over 100 seeds
@@ -137,7 +134,7 @@ end
                         nothing,
                         200;
                         seed,
-                        cn0_estimator = MomentsCN0Estimator(100),
+                        cn0_estimator = MomentsCN0Estimator(; num_integrations = 100),
                     ),
                     1,
                 ),
@@ -162,13 +159,13 @@ end
             45.0,
             1500;
             seed,
-            cn0_estimator = NWPRCN0Estimator(; num_narrowband_code_blocks = 20),
+            cn0_estimator = NWPRCN0Estimator(; num_narrowband_code_periods = 20),
             fade...,
         ) for seed in seeds
     ]
-    @test all(state -> has_bit_or_secondary_code_been_found(state, 1), faded)
-    @test get_cn0_estimator(faded[1], 1).num_records_per_ratio == 5
-    @test get_cn0_estimator(full_bit[1], 1).num_records_per_ratio == 20
+    @test all(state -> is_bit_or_secondary_code_synced(state, 1), faded)
+    @test get_cn0_estimator(faded[1], 1).num_integrations_per_ratio == 5
+    @test get_cn0_estimator(full_bit[1], 1).num_integrations_per_ratio == 20
     capped_cn0 = [ustrip(uconvert(dBHz, estimate_cn0(state, 1))) for state in faded]
     full_bit_cn0 = [ustrip(uconvert(dBHz, estimate_cn0(state, 1))) for state in full_bit]
     # The staged loop holds phase over a whole bit at 25 dB-Hz, so the whole-bit

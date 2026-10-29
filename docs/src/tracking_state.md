@@ -5,13 +5,13 @@ The tracking state nests as **TrackState → SignalGroup → TrackedSat → Trac
 - [`TrackState`](@ref): a `NamedTuple` of [`SignalGroup`](@ref)s and the Doppler estimator.
 - [`SignalGroup`](@ref): satellites with the same signal tuple, and so one concrete `TrackedSat` type (the hot loop's type stability), on one RF band and antenna array.
 - [`TrackedSat`](@ref): the carrier/code Doppler and phase its signals share, a tuple of [`TrackedSignal`](@ref)s, and the Doppler-estimator state.
-- [`TrackedSignal`](@ref): correlator, post-correlation filter, C/N₀ estimator, bit buffer and integration progress.
+- [`TrackedSignal`](@ref): correlator bank, beamformer, C/N₀ estimator, bit buffer and integration progress.
 
 ### Estimator-driver signal
 
-The first signal of each group's tuple is the **estimator-driver signal**, the one the Doppler estimator updates the shared carrier and code Doppler from. The conventional estimators ([`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL), [`ConventionalAssistedPLLAndDLL`](@extref TrackingLoops.ConventionalAssistedPLLAndDLL)) run their discriminators on it and take its default loop bandwidths (a carrier loop pulling in at 50 Hz and narrowing to 18 Hz, 1 Hz code). A custom [`AbstractDopplerEstimator`](@extref TrackingLoops.AbstractDopplerEstimator) may use any signal.
+The first signal of each group's tuple is the **estimator-driver signal**, the one the Doppler estimator updates the shared carrier and code Doppler from. The scalar tracking loops ([`ScalarTrackingLoop`](@extref TrackingLoops.ScalarTrackingLoop), [`DelayCompensatedTrackingLoop`](@extref TrackingLoops.DelayCompensatedTrackingLoop)) run their discriminators on it and take its default loop bandwidths (a carrier loop pulling in at 50 Hz and narrowing to 18 Hz, 1 Hz code). A custom [`AbstractTrackingLoop`](@extref TrackingLoops.AbstractTrackingLoop) may use any signal.
 
-Bit sync, the post-correlation filter and the **C/N₀ estimator** run per signal, so a multi-signal satellite has one C/N₀ per signal; see [CN0 Estimator](cn0_estimator.md) and [`NoCN0Estimator`](@extref TrackingLoops.NoCN0Estimator), the per-signal opt-out.
+Bit sync, the beamformer and the **C/N₀ estimator** run per signal, so a multi-signal satellite has one C/N₀ per signal; see [CN0 Estimator](cn0_estimator.md) and [`NoCN0Estimator`](@extref TrackingLoops.NoCN0Estimator), the per-signal opt-out.
 
 ## Choosing a `TrackState` constructor
 
@@ -66,7 +66,7 @@ The `TrackState`'s concrete type stays fixed as satellites come and go. `signal 
 
 ### Power-user: pre-built `TrackedSat`s
 
-To change the correlator or post-correlation filter *type*, build the `TrackedSat`s yourself, pass them to `TrackState(signal, sats)`, and add more with `add_satellite!(track_state, group, sat)`. The single-signal constructor:
+To change the correlator bank or beamformer *type*, build the `TrackedSat`s yourself, pass them to `TrackState(signal, sats)`, and add more with `add_satellite!(track_state, group, sat)`. The single-signal constructor:
 
 ```julia
 TrackedSat(
@@ -75,14 +75,14 @@ TrackedSat(
     code_phase,
     carrier_doppler;
     # all kwargs below are optional and have signal-derived defaults
-    doppler_estimator     = ConventionalAssistedPLLAndDLL(...),
-    num_ants              = NumAnts(1),
-    correlator            = get_default_correlator(signal, num_ants),
-    carrier_phase         = 0.0,
-    code_doppler          = carrier_doppler * get_code_center_frequency_ratio(signal),
+    doppler_estimator              = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF),
+    num_antennas                   = NumAntennas(1),
+    correlator_bank                     = get_default_correlator_bank(signal, num_antennas),
+    carrier_phase                  = 0.0,
+    code_doppler                   = carrier_doppler * get_chip_rate_to_center_frequency_ratio(signal),
     num_prompts_for_cn0_estimation = 100,
-    cn0_estimator         = TrackingLoops.default_cn0_estimator(signal, num_prompts_for_cn0_estimation),
-    post_corr_filter      = DefaultPostCorrFilter(),
+    cn0_estimator                  = TrackingLoops.default_cn0_estimator(signal, num_prompts_for_cn0_estimation),
+    beamformer               = DefaultBeamformer(),
 )
 ```
 
@@ -90,9 +90,9 @@ TrackedSat(
 as a type parameter of [`TrackedSignal`](@ref), unlike the correlator and filter,
 it may change the satellite's type (see [CN0 Estimator](cn0_estimator.md)).
 
-An example with a narrower correlator, a trivial mean-of-antennas beamformer and
+An example with a narrower correlator bank, a trivial mean-of-antennas beamformer and
 a larger C/N₀ buffer. A filter declares its combining weights rather than
-combining the taps itself, so the C/N₀ path can reduce the measured noise
+combining the correlator outputs itself, so the C/N₀ path can reduce the measured noise
 covariance through the same weights:
 
 ```jldoctest power_user
@@ -100,34 +100,34 @@ julia> using Tracking, TrackingLoops, GNSSSignals, StaticArrays
 
 julia> using Tracking: Hz
 
-julia> using TrackingLoops: NumAnts, AbstractPostCorrFilter
+julia> using TrackingLoops: NumAntennas, AbstractBeamformer
 
 julia> # Trivial beamformer — averages across antenna elements
-       struct MyBeamformer <: AbstractPostCorrFilter end
+       struct MyBeamformer <: AbstractBeamformer end
 
-julia> TrackingLoops.update(f::MyBeamformer, prompt) = f;
+julia> TrackingLoops.update!(f::MyBeamformer, prompt) = f;
 
-julia> TrackingLoops.get_weights(::MyBeamformer, ::NumAnts{1}) = 1.0 + 0.0im;
+julia> TrackingLoops.get_beamforming_weights(::MyBeamformer, ::NumAntennas{1}) = 1.0 + 0.0im;
 
-julia> TrackingLoops.get_weights(::MyBeamformer, ::NumAnts{M}) where {M} =
+julia> TrackingLoops.get_beamforming_weights(::MyBeamformer, ::NumAntennas{M}) where {M} =
            SVector{M,ComplexF64}(ntuple(_ -> 1 / M + 0.0im, M));
 
 julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
-           num_ants                       = NumAnts(4),
-           correlator                     = EarlyPromptLateCorrelator(
-               num_ants = NumAnts(4),
-               preferred_early_late_to_prompt_code_shift = 0.1,
+           num_antennas                       = NumAntennas(4),
+           correlator_bank                     = EarlyPromptLateCorrelatorBank(
+               num_antennas = NumAntennas(4),
+               preferred_early_late_to_prompt_spacing = 0.1,
            ),
-           post_corr_filter               = MyBeamformer(),
+           beamformer               = MyBeamformer(),
            num_prompts_for_cn0_estimation = 200,
        );
 
 julia> track_state = TrackState(GPSL1CA(), sat);
 
-julia> get_num_ants(track_state, 1)
+julia> get_num_antennas(track_state, 1)
 4
 
-julia> get_correlator(track_state, 1).preferred_early_late_to_prompt_code_shift
+julia> get_correlator_bank(track_state, 1).preferred_early_late_to_prompt_spacing
 0.1
 ```
 
@@ -140,7 +140,7 @@ TrackState
 
 ## Adding satellites
 
-[`add_satellite!`](@ref) builds a [`TrackedSat`](@ref) with the default correlator and post-correlation filter from the acquisition handoff (`prn`, `code_phase`, `carrier_doppler`, optionally `code_doppler` and `carrier_phase`). Adding a PRN again overwrites it, as [`merge_sats`](@ref) does.
+[`add_satellite!`](@ref) builds a [`TrackedSat`](@ref) with the default correlator bank and beamformer from the acquisition handoff (`prn`, `code_phase`, `carrier_doppler`, optionally `code_doppler` and `carrier_phase`). Adding a PRN again overwrites it, as [`merge_sats`](@ref) does.
 
 ### Multi-satellite tracking
 
@@ -230,47 +230,47 @@ julia> using Tracking: Hz
 
 julia> track_state = TrackState(;
            signal = GPSL1CA(),
-           num_ants = NumAnts(4),
+           num_antennas = NumAntennas(4),
        );
 
 julia> track_state = add_satellite!(track_state; prn = 1, code_phase = 50.0, carrier_doppler = 1000.0Hz);
 
-julia> get_num_ants(track_state, 1)
+julia> get_num_antennas(track_state, 1)
 4
 ```
 
-By default the last antenna drives the discriminators. For a beamformer, build the [`TrackedSat`](@ref) with a custom `post_corr_filter`, whose [`get_weights`](@extref TrackingLoops.get_weights) are applied to the correlator and to the measured noise covariance alike, so the C/N₀ stays correct:
+By default the last antenna drives the discriminators. For a beamformer, build the [`TrackedSat`](@ref) with a custom `beamformer`, whose [`get_beamforming_weights`](@extref TrackingLoops.get_beamforming_weights) are applied to the correlator outputs and to the measured noise covariance alike, so the C/N₀ stays correct:
 
 ```jldoctest beamformer_array
 julia> using Tracking, TrackingLoops, GNSSSignals, StaticArrays
 
 julia> using Tracking: Hz
 
-julia> using TrackingLoops: NumAnts, AbstractPostCorrFilter
+julia> using TrackingLoops: NumAntennas, AbstractBeamformer
 
 julia> # Same trivial mean-of-antennas filter as the power-user example above
-       struct MyBeamformer <: AbstractPostCorrFilter end
+       struct MyBeamformer <: AbstractBeamformer end
 
-julia> TrackingLoops.update(f::MyBeamformer, prompt) = f;
+julia> TrackingLoops.update!(f::MyBeamformer, prompt) = f;
 
-julia> TrackingLoops.get_weights(::MyBeamformer, ::NumAnts{1}) = 1.0 + 0.0im;
+julia> TrackingLoops.get_beamforming_weights(::MyBeamformer, ::NumAntennas{1}) = 1.0 + 0.0im;
 
-julia> TrackingLoops.get_weights(::MyBeamformer, ::NumAnts{M}) where {M} =
+julia> TrackingLoops.get_beamforming_weights(::MyBeamformer, ::NumAntennas{M}) where {M} =
            SVector{M,ComplexF64}(ntuple(_ -> 1 / M + 0.0im, M));
 
 julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
-                        num_ants = NumAnts(4),
-                        post_corr_filter = MyBeamformer());
+                        num_antennas = NumAntennas(4),
+                        beamformer = MyBeamformer());
 
 julia> track_state = TrackState(GPSL1CA(), sat);
 
-julia> get_num_ants(track_state, 1)
+julia> get_num_antennas(track_state, 1)
 4
 ```
 
 ### Acquisition handoff
 
-With `using Acquisition`, [`add_satellite!`](@ref) / [`add_satellite`](@ref) accept `AcquisitionResults` (or a vector of them, each routed independently). Without `group =`, an acq goes to the group whose longest-primary-code signal matches `acq.system`.
+With `using Acquisition`, [`add_satellite!`](@ref) / [`add_satellite`](@ref) accept `AcquisitionResults` (or a vector of them, each routed independently). Without `group =`, an acq goes to the group whose longest-primary-code signal matches `acq.signal`.
 
 ```julia
 using Acquisition  # loads the extension
@@ -352,10 +352,10 @@ julia> using Tracking, GNSSSignals
 
 julia> using Tracking: Hz
 
-julia> using GNSSSignals: gen_code, get_code_frequency, get_code_center_frequency_ratio
+julia> using GNSSSignals: gen_code, get_chip_rate, get_chip_rate_to_center_frequency_ratio
 
 julia> function make_signal(sys, prn, carrier_doppler, num_samples, fs)
-           code_freq = carrier_doppler * get_code_center_frequency_ratio(sys) + get_code_frequency(sys)
+           code_freq = carrier_doppler * get_chip_rate_to_center_frequency_ratio(sys) + get_chip_rate(sys)
            range = 0:num_samples-1
            cis.(2π .* carrier_doppler .* range ./ fs) .*
                gen_code(num_samples, sys, prn, fs, code_freq, 0.0)
@@ -384,28 +384,28 @@ julia> get_carrier_doppler(track_state, :legacy_gps_l1, 1)
 
 ### Per-band antenna counts
 
-Pass [`SignalGroup`](@ref)s as the entries to give each group its own `num_ants`:
+Pass [`SignalGroup`](@ref)s as the entries to give each group its own `num_antennas`:
 
 ```jldoctest per_band_ants
 julia> using Tracking, TrackingLoops, GNSSSignals
 
-julia> using TrackingLoops: NumAnts
+julia> using TrackingLoops: NumAntennas
 
 julia> track_state = TrackState(;
            signals = (
-               legacy_gps_l1 = SignalGroup((GPSL1CA(),); num_ants = NumAnts(2)),
-               gps_l5        = SignalGroup((GPSL5I(),);  num_ants = NumAnts(1)),
+               legacy_gps_l1 = SignalGroup((GPSL1CA(),); num_antennas = NumAntennas(2)),
+               gps_l5        = SignalGroup((GPSL5I(),);  num_antennas = NumAntennas(1)),
            ),
        );
 
-julia> track_state.groups[:legacy_gps_l1].num_ants
-NumAnts{2}()
+julia> track_state.groups[:legacy_gps_l1].num_antennas
+NumAntennas{2}()
 
-julia> track_state.groups[:gps_l5].num_ants
-NumAnts{1}()
+julia> track_state.groups[:gps_l5].num_antennas
+NumAntennas{1}()
 ```
 
-Groups on one band share a front end and must declare the same `num_ants`; the
+Groups on one band share a front end and must declare the same `num_antennas`; the
 constructor throws otherwise.
 
 A single-band `TrackState` can still be tracked with a bare buffer, `track!(buf, state, fs; intermediate_frequency)`.
@@ -448,7 +448,7 @@ The trailing `sig` selector is either:
 | Accessor | Returns |
 |----------|---------|
 | `get_prn` | PRN number. |
-| `get_num_ants` | Number of antenna elements. |
+| `get_num_antennas` | Number of antenna elements. |
 | `get_code_phase` | Shared code phase (wraps at [`max_code_length`](@ref)). |
 | `get_code_doppler` | Shared code Doppler. |
 | `get_carrier_phase` | Shared carrier phase in radians. |
@@ -460,17 +460,17 @@ The trailing `sig` selector is either:
 
 | Accessor | Returns |
 |----------|---------|
-| `get_correlator` | The working correlator (in-flight accumulator). |
+| `get_correlator_bank` | The working correlator bank (in-flight correlator outputs). |
 | `get_last_fully_integrated_correlator` | Correlator value from the last completed integration. |
-| `get_last_fully_integrated_filtered_prompt` | Filtered prompt value from the last completed integration. |
+| `get_last_fully_integrated_beamformed_prompt` | Beamformed prompt value from the last completed integration. |
 | `get_last_fully_integrated_num_code_blocks` | Primary-code block count of the last completed integration. |
 | `get_last_fully_integrated_integration_time` | Integration time `T` of the last completed integration; the post-integration SNR is C/N₀ × `T`. |
-| `get_post_corr_filter` | The post-correlation filter. |
+| `get_beamformer` | The beamformer. |
 | `get_cn0_estimator` | The CN0 estimator. |
 | `estimate_cn0` | CN0 estimate in dB-Hz. |
 | `get_bit_buffer` / `get_soft_bits` / `get_num_bits` | Bit buffer, decoded soft bits (sign = the hard bit), bit count. |
 | `get_integrated_samples` | Number of samples accumulated into the current integration so far. |
-| `has_bit_or_secondary_code_been_found` | `true` once bit/secondary-code synchronization has been achieved. |
+| `is_bit_or_secondary_code_synced` | `true` once bit/secondary-code synchronization has been achieved. |
 
 The per-signal form always names the group, `:default` on a single-group `TrackState`: `estimate_cn0(track_state, :default, 11, GPSL1C_P)`.
 
@@ -532,23 +532,22 @@ TrackedSignal
 get_last_fully_integrated_integration_time(::TrackedSignal)
 ```
 
-The per-signal accessors also take a `TrackedSignal`, as do `get_signal(tsig)`, the signal instance, and `get_filtered_prompts(tsig)`, the filtered prompts of the most recent `track` call.
+The per-signal accessors also take a `TrackedSignal`, as do `get_signal(tsig)`, the signal instance, and `get_beamformed_prompts(tsig)`, the beamformed prompts of the most recent `track` call.
 
-Bit and secondary-code sync, and how it widens the code-phase wrap, have their own page: [Bit and Secondary-Code Sync](bit_sync.md). Most users only need `has_bit_or_secondary_code_been_found` to gate `get_soft_bits`.
+Bit and secondary-code sync, and how it widens the code-phase wrap, have their own page: [Bit and Secondary-Code Sync](bit_sync.md). Most users only need `is_bit_or_secondary_code_synced` to gate `get_soft_bits`.
 
 ## Handing over to PositionVelocityTime
 
 With the navigation data GNSSDecoder.jl decodes from their soft bits, tracked
-satellites become the measurements `PositionVelocityTime.calc_pvt` solves. Pass a
+satellites become the observations `PositionVelocityTime.calc_pvt` solves. Pass a
 `NamedTuple` of per-group PRN → `GNSSDecoderState` mappings:
 
 ```julia
-using PositionVelocityTime: PositionVelocityTime, calc_pvt
-pvt = calc_pvt(PositionVelocityTime.signal_groups(track_state, decoders))
+using PositionVelocityTime: calc_pvt
+pvt = calc_pvt(get_signal_observations(track_state, decoders))
 ```
 
 ```@docs
-Tracking.PositionVelocityTime.signal_groups(::TrackState, ::NamedTuple)
-Tracking.PositionVelocityTime.SignalGroup(::Tracking.SignalGroup, ::Any)
-Tracking.PositionVelocityTime.SatelliteState(::Tracking.GNSSDecoderState, ::Tracking.AbstractGNSSSignal, ::TrackedSat)
+get_signal_observations
+Tracking.PositionVelocityTime.SignalObservation(::Tracking.GNSSDecoderState, ::Tracking.AbstractGNSSSignal, ::TrackedSat)
 ```

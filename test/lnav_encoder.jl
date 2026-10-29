@@ -5,7 +5,7 @@
 # decodes them itself. Subframes 1–3 carry the clock and ephemeris; subframes 4 and 5
 # carry a page the decoder ignores. Every word has its parity, and words 2 and 10 the
 # two solved-for bits that zero their last parity bits.
-using GNSSDecoder: GPSL1CAData
+using GNSSDecoder: GPSLNAVData
 
 const LNAV_PREAMBLE = 0b10001011
 
@@ -104,7 +104,7 @@ end
 
 const PI_GPS = 3.1415926535898
 
-function lnav_subframe_words(data::GPSL1CAData, tow, subframe_id)
+function lnav_subframe_words(data::GPSLNAVData, tow, subframe_id)
     tlm, how = lnav_tlm_and_how(tow, subframe_id)
     if subframe_id == 1
         iodc = something(data.IODC)
@@ -122,7 +122,7 @@ function lnav_subframe_words(data::GPSL1CAData, tow, subframe_id)
             lnav_word(),
             lnav_word(),
             lnav_word((0, 16), (lnav_field(data.T_GD, 2.0^-31, 8; signed = true), 8)),
-            lnav_word((iodc & 0xff, 8), (lnav_field(data.t_0c, 16, 16), 16)),
+            lnav_word((iodc & 0xff, 8), (lnav_field(data.t_oc, 16, 16), 16)),
             lnav_word(
                 (lnav_field(data.a_f2, 2.0^-55, 8; signed = true), 8),
                 (lnav_field(data.a_f1, 2.0^-43, 16; signed = true), 16),
@@ -137,7 +137,7 @@ function lnav_subframe_words(data::GPSL1CAData, tow, subframe_id)
             tlm,
             how,
             lnav_word(
-                (data.IODE_Sub_2, 8),
+                (data.IODE_subframe2, 8),
                 (lnav_field(data.C_rs, 2.0^-5, 16; signed = true), 16),
             ),
             lnav_word(
@@ -156,7 +156,7 @@ function lnav_subframe_words(data::GPSL1CAData, tow, subframe_id)
             ),
             lnav_word((sqrt_A & 0xffffff, 24)),
             lnav_word(
-                (lnav_field(data.t_0e, 16, 16), 16),
+                (lnav_field(data.t_oe, 16, 16), 16),
                 (something(data.fit_interval, false), 1),
                 (div(something(data.AODO, 0), 900), 5),
             ),
@@ -182,8 +182,8 @@ function lnav_subframe_words(data::GPSL1CAData, tow, subframe_id)
             lnav_word((ω & 0xffffff, 24)),
             lnav_word((lnav_field(data.Ω_dot, PI_GPS * 2.0^-43, 24; signed = true), 24)),
             lnav_word(
-                (data.IODE_Sub_3, 8),
-                (lnav_field(data.i_dot, PI_GPS * 2.0^-43, 14; signed = true), 14),
+                (data.IODE_subframe3, 8),
+                (lnav_field(data.IDOT, PI_GPS * 2.0^-43, 14; signed = true), 14),
             ),
         )
     else
@@ -194,18 +194,18 @@ function lnav_subframe_words(data::GPSL1CAData, tow, subframe_id)
 end
 
 """
-    LNAVStream(data::GPSL1CAData)
+    LNAVStream(data::GPSLNAVData)
 
 The LNAV bit stream of a satellite broadcasting the clock and ephemeris `data`:
 `lnav_bit(stream, k)` is the bit transmitted over `[k, k + 1) / 50` seconds of GPS
 week, `true` for a one. Subframes are encoded on demand and cached.
 """
 struct LNAVStream
-    data::GPSL1CAData
+    data::GPSLNAVData
     subframes::Dict{Int,Vector{Bool}}
 end
 
-LNAVStream(data::GPSL1CAData) = LNAVStream(data, Dict{Int,Vector{Bool}}())
+LNAVStream(data::GPSLNAVData) = LNAVStream(data, Dict{Int,Vector{Bool}}())
 
 function lnav_bit(stream::LNAVStream, k::Integer)
     subframe = fld(k, 300)

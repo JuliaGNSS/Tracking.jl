@@ -4,13 +4,15 @@ module AddSatelliteTest
 # acquisition handoff.
 
 using Test: @test, @testset, @test_throws
+using GNSSSignals: CBOC, TMBOC
+using TrackingLoopFilters: ThirdOrderAssistedBilinearLF
 using Unitful: Hz
 using GNSSSignals:
     GPSL1CA,
     GPSL1C_D,
     GPSL1C_P,
     GalileoE1B,
-    get_code_center_frequency_ratio,
+    get_chip_rate_to_center_frequency_ratio,
     get_codes,
     get_signal_id
 using Acquisition: Acquisition, AcquisitionResults
@@ -25,8 +27,7 @@ using Tracking:
     get_prn,
     get_carrier_doppler,
     get_code_doppler
-using TrackingLoops:
-    NumAnts, ConventionalAssistedPLLAndDLL, ConventionalPLLAndDLL, SatConventionalPLLAndDLL
+using TrackingLoops: NumAntennas, ScalarTrackingLoop, ScalarLoopState
 
 @testset "TrackState(; signals = ...) — single-group shortcut" begin
     track_state = TrackState(; signal = GPSL1CA())
@@ -49,11 +50,11 @@ end
 
 @testset "TrackState rebuilds SignalGroup slot when estimator types differ" begin
     # An empty pre-built `SignalGroup` is rebuilt for another estimator.
-    custom = ConventionalPLLAndDLL(;
+    custom = ScalarTrackingLoop(;
         wide_carrier_loop_filter_bandwidth = 22.0Hz,
         code_loop_filter_bandwidth = 1.5Hz,
     )
-    sg = SignalGroup((GPSL1CA(),); num_ants = NumAnts(1))  # default estimator
+    sg = SignalGroup((GPSL1CA(),); num_antennas = NumAntennas(1))  # default estimator
     ts = TrackState(; signals = (legacy = sg,), doppler_estimator = custom)
     ts = add_satellite!(ts; prn = 1, group = :legacy, carrier_doppler = 0.0Hz)
     de_state = get_sat_state(ts, :legacy, 1).doppler_estimator_state
@@ -63,10 +64,13 @@ end
 @testset "TrackState passes through pre-populated SignalGroup unchanged" begin
     # A populated pre-built `SignalGroup` is taken as is.
     using Dictionaries: insert!
-    estimator = ConventionalAssistedPLLAndDLL()
+    estimator = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)
     sat = TrackedSat(GPSL1CA(), 1, 10.5, 10.0Hz; doppler_estimator = estimator)
-    sg_template =
-        SignalGroup((GPSL1CA(),); num_ants = NumAnts(1), doppler_estimator = estimator)
+    sg_template = SignalGroup(
+        (GPSL1CA(),);
+        num_antennas = NumAntennas(1),
+        doppler_estimator = estimator,
+    )
     insert!(sg_template.satellites, 1, sat)
     ts = TrackState(; signals = (legacy = sg_template,), doppler_estimator = estimator)
     @test length(get_sat_states(ts, :legacy)) == 1
@@ -74,7 +78,7 @@ end
 
 @testset "TrackState(; signals = ...) — multi-group NamedTuple" begin
     track_state =
-        TrackState(; signals = (legacy_gps = (GPSL1CA(),), galileo = (GalileoE1B(),)))
+        TrackState(; signals = (legacy_gps = (GPSL1CA(),), galileo = (GalileoE1B(CBOC),)))
     @test isempty(get_sat_states(track_state, :legacy_gps))
     @test isempty(get_sat_states(track_state, :galileo))
 end
@@ -87,11 +91,12 @@ end
     @test get_prn(track_state, :default, 11) == 11
     @test get_carrier_doppler(track_state, :default, 11) == 1234.0Hz
     @test get_code_doppler(track_state, :default, 11) ≈
-          1234.0Hz * get_code_center_frequency_ratio(GPSL1CA())
+          1234.0Hz * get_chip_rate_to_center_frequency_ratio(GPSL1CA())
 end
 
 @testset "add_satellite! — multi-group with explicit `group=`" begin
-    track_state = TrackState(; signals = (legacy = (GPSL1CA(),), galileo = (GalileoE1B(),)))
+    track_state =
+        TrackState(; signals = (legacy = (GPSL1CA(),), galileo = (GalileoE1B(CBOC),)))
     track_state =
         add_satellite!(track_state; prn = 5, group = :legacy, carrier_doppler = 500.0Hz)
     track_state =
@@ -111,7 +116,8 @@ end
 end
 
 @testset "add_satellite!/add_satellite — multi-group omitted `group=` errors" begin
-    track_state = TrackState(; signals = (legacy = (GPSL1CA(),), galileo = (GalileoE1B(),)))
+    track_state =
+        TrackState(; signals = (legacy = (GPSL1CA(),), galileo = (GalileoE1B(CBOC),)))
     @test_throws ArgumentError add_satellite!(track_state; prn = 5)
     @test_throws ArgumentError add_satellite(track_state; prn = 5)
 end
@@ -139,7 +145,7 @@ end
         9,
         5.0,
         300.0Hz;
-        doppler_estimator = ConventionalAssistedPLLAndDLL(),
+        doppler_estimator = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF),
     )
     track_state = add_satellite!(track_state, :default, sat)
     @test get_prn(track_state, :default, 9) == 9
@@ -148,24 +154,24 @@ end
 
 @testset "Escape-hatch add_satellite! rejects sat of wrong slot type" begin
     track_state = TrackState(; signal = GPSL1CA())
-    galileo_sat = TrackedSat(GalileoE1B(), 1, 10.5, 100.0Hz)
+    galileo_sat = TrackedSat(GalileoE1B(CBOC), 1, 10.5, 100.0Hz)
     @test_throws ArgumentError add_satellite!(track_state, :default, galileo_sat)
 end
 
 @testset "Custom doppler estimator config seeds per-sat state correctly" begin
-    custom = ConventionalPLLAndDLL(;
+    custom = ScalarTrackingLoop(;
         wide_carrier_loop_filter_bandwidth = 22.0Hz,
         code_loop_filter_bandwidth = 1.5Hz,
     )
     track_state = TrackState(; signal = GPSL1CA(), doppler_estimator = custom)
     track_state = add_satellite!(track_state; prn = 4, carrier_doppler = 0.0Hz)
     de_state = get_sat_state(track_state, :default, 4).doppler_estimator_state
-    @test de_state isa SatConventionalPLLAndDLL
+    @test de_state isa ScalarLoopState
     @test de_state.bandwidths.wide_carrier == 22.0Hz
     @test de_state.bandwidths.code == 1.5Hz
 end
 
-# `_make_acq`, an Acquisition-version shim.
+# `_make_acq` builds an `AcquisitionResults`.
 include("acquisition_test_helpers.jl")
 
 @testset "add_satellite!(ts, acq) — single-group shortcut" begin
@@ -216,9 +222,9 @@ end
 end
 
 @testset "add_satellite!(ts, acq; group) — multi-group with explicit `group=`" begin
-    ts = TrackState(; signals = (gps = (GPSL1CA(),), gal = (GalileoE1B(),)))
+    ts = TrackState(; signals = (gps = (GPSL1CA(),), gal = (GalileoE1B(CBOC),)))
     gps_acq = _make_acq(GPSL1CA(), 11, 1.5, 50.0Hz)
-    gal_acq = _make_acq(GalileoE1B(), 12, 2.5, 60.0Hz)
+    gal_acq = _make_acq(GalileoE1B(CBOC), 12, 2.5, 60.0Hz)
     ts = add_satellite!(ts, gps_acq; group = :gps)
     ts = add_satellite!(ts, gal_acq; group = :gal)
     @test get_prn(ts, :gps, 11) == 11
@@ -226,9 +232,9 @@ end
 end
 
 @testset "add_satellite!(ts, acq) — multi-group auto-routes by signal type" begin
-    ts = TrackState(; signals = (gps = (GPSL1CA(),), gal = (GalileoE1B(),)))
+    ts = TrackState(; signals = (gps = (GPSL1CA(),), gal = (GalileoE1B(CBOC),)))
     gps_acq = _make_acq(GPSL1CA(), 11, 1.5, 50.0Hz)
-    gal_acq = _make_acq(GalileoE1B(), 12, 2.5, 60.0Hz)
+    gal_acq = _make_acq(GalileoE1B(CBOC), 12, 2.5, 60.0Hz)
     ts = add_satellite!(ts, gps_acq)
     ts = add_satellite!(ts, gal_acq)
     @test get_prn(ts, :gps, 11) == 11
@@ -236,10 +242,10 @@ end
 end
 
 @testset "add_satellite!(ts, acqs::Vector) — mixed-system batch auto-routes" begin
-    ts = TrackState(; signals = (gps = (GPSL1CA(),), gal = (GalileoE1B(),)))
+    ts = TrackState(; signals = (gps = (GPSL1CA(),), gal = (GalileoE1B(CBOC),)))
     acqs = [
         _make_acq(GPSL1CA(), 11, 1.5, 50.0Hz),
-        _make_acq(GalileoE1B(), 12, 2.5, 60.0Hz),
+        _make_acq(GalileoE1B(CBOC), 12, 2.5, 60.0Hz),
         _make_acq(GPSL1CA(), 13, 3.5, 70.0Hz),
     ]
     ts = add_satellite!(ts, acqs)  # no group= — routes per-entry
@@ -250,23 +256,23 @@ end
 
 @testset "add_satellite!(ts, acq) — unknown signal type errors with auto-routing" begin
     ts = TrackState(; signals = (gps = (GPSL1CA(),),))
-    bad = _make_acq(GalileoE1B(), 5, 10.0, 100.0Hz)
+    bad = _make_acq(GalileoE1B(CBOC), 5, 10.0, 100.0Hz)
     @test_throws ArgumentError add_satellite!(ts, bad)
 end
 
 @testset "add_satellite!(ts, acq) rejects wrong-signal acq" begin
-    ts = TrackState(; signals = (gps = (GPSL1CA(),), gal = (GalileoE1B(),)))
-    bad = _make_acq(GalileoE1B(), 5, 10.0, 100.0Hz)
+    ts = TrackState(; signals = (gps = (GPSL1CA(),), gal = (GalileoE1B(CBOC),)))
+    bad = _make_acq(GalileoE1B(CBOC), 5, 10.0, 100.0Hz)
     @test_throws ArgumentError add_satellite!(ts, bad; group = :gps)
 end
 
 @testset "add_satellite!(ts, acq) requires longest-code signal in mixed group" begin
     # A 1023-chip L1CA code phase is ambiguous in L1C-P's 10230 chips.
-    ts = TrackState(; signal = GPSL1C_P())
-    ts = TrackState(; signals = (mix = (GPSL1C_P(), GPSL1CA()),))
+    ts = TrackState(; signal = GPSL1C_P(TMBOC))
+    ts = TrackState(; signals = (mix = (GPSL1C_P(TMBOC), GPSL1CA()),))
     short_acq = _make_acq(GPSL1CA(), 7, 100.0, 50.0Hz)
     @test_throws ArgumentError add_satellite!(ts, short_acq; group = :mix)
-    long_acq = _make_acq(GPSL1C_P(), 7, 100.0, 50.0Hz)
+    long_acq = _make_acq(GPSL1C_P(TMBOC), 7, 100.0, 50.0Hz)
     ts = add_satellite!(ts, long_acq; group = :mix)
     @test get_prn(ts, :mix, 7) == 7
 end
@@ -274,7 +280,7 @@ end
 @testset "add_satellite!(ts, acq) accepts code-length ties (issue #134)" begin
     # L1C-D and L1C-P share a 10230-chip code, so either is a valid handoff:
     # the match is by length, not by the signal `_longest_code_signal` picks.
-    ts = TrackState(; signals = (mix = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),))
+    ts = TrackState(; signals = (mix = (GPSL1C_P(TMBOC), GPSL1C_D(), GPSL1CA()),))
     d_acq = _make_acq(GPSL1C_D(), 8, 100.0, 50.0Hz)
     ts = add_satellite!(ts, d_acq; group = :mix)
     @test get_prn(ts, :mix, 8) == 8
@@ -292,7 +298,7 @@ end
     aliased = GPSL1CA(@view(get_codes(l1ca)[:, :]), l1ca.lut)
     @test typeof(aliased) !== typeof(l1ca)
     @test get_signal_id(aliased) === get_signal_id(l1ca)
-    ts = TrackState(; signals = (gps = (l1ca,), gal = (GalileoE1B(),)))
+    ts = TrackState(; signals = (gps = (l1ca,), gal = (GalileoE1B(CBOC),)))
     acq = _make_acq(aliased, 11, 1.5, 50.0Hz)
     ts = add_satellite!(ts, acq)
     @test get_prn(ts, :gps, 11) == 11
@@ -333,18 +339,20 @@ end
 end
 
 @testset "TrackState(mixed acq vector) without `signals=` errors" begin
-    acqs =
-        [_make_acq(GPSL1CA(), 1, 0.0, 100.0Hz), _make_acq(GalileoE1B(), 2, 10.0, 200.0Hz)]
+    acqs = [
+        _make_acq(GPSL1CA(), 1, 0.0, 100.0Hz),
+        _make_acq(GalileoE1B(CBOC), 2, 10.0, 200.0Hz),
+    ]
     @test_throws ArgumentError TrackState(acqs)
 end
 
 @testset "TrackState(acqs; signals = ...) — multi-group routing" begin
     acqs = [
         _make_acq(GPSL1CA(), 11, 1.5, 50.0Hz),
-        _make_acq(GalileoE1B(), 12, 2.5, 60.0Hz),
+        _make_acq(GalileoE1B(CBOC), 12, 2.5, 60.0Hz),
         _make_acq(GPSL1CA(), 13, 3.5, 70.0Hz),
     ]
-    ts = TrackState(acqs; signals = (gps = (GPSL1CA(),), gal = (GalileoE1B(),)))
+    ts = TrackState(acqs; signals = (gps = (GPSL1CA(),), gal = (GalileoE1B(CBOC),)))
     @test length(get_sat_states(ts, :gps)) == 2
     @test length(get_sat_states(ts, :gal)) == 1
     @test get_carrier_doppler(ts, :gps, 11) == 50.0Hz
@@ -352,19 +360,19 @@ end
 end
 
 @testset "TrackState(acqs; signals = ...) errors on unmatched system" begin
-    acqs = [_make_acq(GalileoE1B(), 5, 10.0, 100.0Hz)]
+    acqs = [_make_acq(GalileoE1B(CBOC), 5, 10.0, 100.0Hz)]
     @test_throws ArgumentError TrackState(acqs; signals = (gps = (GPSL1CA(),),))
 end
 
 @testset "TrackState(acq; doppler_estimator) forwards kwargs" begin
-    custom = ConventionalPLLAndDLL(;
+    custom = ScalarTrackingLoop(;
         wide_carrier_loop_filter_bandwidth = 22.0Hz,
         code_loop_filter_bandwidth = 1.5Hz,
     )
     acq = _make_acq(GPSL1CA(), 9, 5.0, 80.0Hz)
     ts = TrackState(acq; doppler_estimator = custom)
     de_state = get_sat_state(ts, :default, 9).doppler_estimator_state
-    @test de_state isa SatConventionalPLLAndDLL
+    @test de_state isa ScalarLoopState
     @test de_state.bandwidths.wide_carrier == 22.0Hz
 end
 

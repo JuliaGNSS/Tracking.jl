@@ -10,27 +10,27 @@ import Tracking
 using Tracking:
     TrackState,
     TrackedSat,
-    append_correlator_output!,
+    append_correlator_bank_output!,
     estimate_dopplers_and_filter_prompt!,
     get_cn0_estimator
 using TrackingLoops:
-    CorrelatorOutput,
-    EarlyPromptLateCorrelator,
+    CorrelatorBankOutput,
+    EarlyPromptLateCorrelatorBank,
     MomentsCN0Estimator,
     NWPRCN0Estimator,
     NoCN0Estimator,
-    NoiseRefCN0Estimator,
+    NoiseReferencedCN0Estimator,
     append_noise_observation!,
     estimate_cn0,
-    noise_observation_from_samples,
-    update_accumulator
+    calc_noise_observation_from_samples,
+    with_correlator_outputs
 
 # `ustrip` does not take a `Level` unit directly, so convert first — the idiom
 # the other CN0 tests use.
 _db(x) = ustrip(uconvert(dBHz, x))
 
 # A pure **correlator-ingest** state (the hardware path): records come through
-# `append_correlator_output!` with no samples, so the software noise measurement
+# `append_correlator_bank_output!` with no samples, so the software noise measurement
 # never runs — the only way to reach "configured but never fed".
 #
 # The records are noiseless: a raw accumulator `a = √power · N` normalises to a
@@ -39,7 +39,7 @@ function _ingested_state(
     cn0_estimator;
     fs = 4e6Hz,
     num_samples = 4000,
-    num_records = 20,
+    num_integrations = 20,
     prompt_power = 1.0,
     signals = nothing,
 )
@@ -49,17 +49,17 @@ function _ingested_state(
         TrackedSat(signals, 1, 0.0, 0.0Hz; cn0_estimator)
     ts = TrackState(gpsl1, [sat])
     a = sqrt(prompt_power) * num_samples
-    correlator = update_accumulator(
-        EarlyPromptLateCorrelator(),
+    correlator_bank = with_correlator_outputs(
+        EarlyPromptLateCorrelatorBank(),
         SVector(complex(0.5a, 0.0), complex(a, 0.0), complex(0.5a, 0.0)),
     )
     num_sigs = isnothing(signals) ? 1 : length(signals)
-    for k = 1:num_records, i = 1:num_sigs
-        output = CorrelatorOutput(correlator, num_samples, k * num_samples)
+    for k = 1:num_integrations, i = 1:num_sigs
+        output = CorrelatorBankOutput(correlator_bank, num_samples, k * num_samples)
         if num_sigs == 1
-            append_correlator_output!(ts, output, 1)
+            append_correlator_bank_output!(ts, output, 1)
         else
-            append_correlator_output!(ts, output, :default, 1, i)
+            append_correlator_bank_output!(ts, output, :default, 1, i)
         end
     end
     ts, fs
@@ -71,7 +71,7 @@ end
     # static check does not fire (a source exists), so without this the runtime
     # skip would repeat in silence forever, leaving every satellite at
     # `-Inf dB-Hz` with no clue why.
-    ts, fs = _ingested_state(NoiseRefCN0Estimator())
+    ts, fs = _ingested_state(NoiseReferencedCN0Estimator())
     @test keys(ts.noise_estimators) == (:GPSL1CA,)
     @test_logs (:warn,) estimate_dopplers_and_filter_prompt!(ts, (L1 = fs,))
     @test estimate_cn0(ts, 1) == -Inf * dBHz
@@ -87,10 +87,22 @@ end
     gpsl1, gpsl5 = GPSL1CA(), GPSL5I()
     multi = TrackState((
         l1 = dictionary((
-            1 => TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator()),
+            1 => TrackedSat(
+                gpsl1,
+                1,
+                0.0,
+                0.0Hz;
+                cn0_estimator = NoiseReferencedCN0Estimator(),
+            ),
         )),
         l5 = dictionary((
-            1 => TrackedSat(gpsl5, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator()),
+            1 => TrackedSat(
+                gpsl5,
+                1,
+                0.0,
+                0.0Hz;
+                cn0_estimator = NoiseReferencedCN0Estimator(),
+            ),
         )),
     ))
     @test Set(keys(multi.noise_estimators)) == Set((:GPSL1CA, :GPSL5I))
@@ -120,7 +132,7 @@ end
 
     # The mixed band: the noise-referenced signal is skipped throughout (nothing
     # ever fills its window), the NWPR one must not be.
-    mixed = run((NoiseRefCN0Estimator(), NWPRCN0Estimator()))
+    mixed = run((NoiseReferencedCN0Estimator(), NWPRCN0Estimator()))
     # The reference: the same NWPR signal on a satellite with no noise estimator
     # at all, so no skip can apply anywhere.
     reference = run((NoCN0Estimator(), NWPRCN0Estimator()))
@@ -129,7 +141,7 @@ end
 
     skipped = get_cn0_estimator(mixed, :default, 1, 2)
     unskipped = get_cn0_estimator(reference, :default, 1, 2)
-    @test skipped.num_records_per_ratio == unskipped.num_records_per_ratio
+    @test skipped.num_integrations_per_ratio == unskipped.num_integrations_per_ratio
     @test skipped.ratios_are_bit_aligned == unskipped.ratios_are_bit_aligned
     @test Base.length(skipped) == Base.length(unskipped)
     @test Base.length(skipped) > 0
@@ -145,11 +157,11 @@ end
     # C/N₀ out. The records are noiseless with a normalised prompt power of 1, so
     # a density of `1e-6 Hz⁻¹` puts the answer at exactly
     # `10log10(1/1e-6 − 1/1e-3)`.
-    ts, fs = _ingested_state(NoiseRefCN0Estimator())
+    ts, fs = _ingested_state(NoiseReferencedCN0Estimator())
     n = 4000
     append_noise_observation!(
         ts,
-        noise_observation_from_samples(n * 1e-6 * ustrip(Hz, fs), n, fs),
+        calc_noise_observation_from_samples(n * 1e-6 * ustrip(Hz, fs), n, fs),
         :GPSL1CA,
     )
     estimate_dopplers_and_filter_prompt!(ts, (L1 = fs,))
@@ -161,7 +173,11 @@ end
     gpsl1, gpsl5 = GPSL1CA(), GPSL5I()
     # Every shipped estimator but the noise-referenced one reads no density, so a
     # state that stays on one of them runs no despread at all.
-    for estimator in (NWPRCN0Estimator(), MomentsCN0Estimator(100), NoCN0Estimator())
+    for estimator in (
+        NWPRCN0Estimator(),
+        MomentsCN0Estimator(; num_integrations = 100),
+        NoCN0Estimator(),
+    )
         ts =
             TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = estimator)])
         @test ts.noise_estimators === NamedTuple()
@@ -174,7 +190,13 @@ end
     # Mixed: one signal requires a density, the other does not — exactly one entry.
     mixed = TrackState((
         l1 = dictionary((
-            1 => TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator()),
+            1 => TrackedSat(
+                gpsl1,
+                1,
+                0.0,
+                0.0Hz;
+                cn0_estimator = NoiseReferencedCN0Estimator(),
+            ),
         )),
         l5 = dictionary((
             1 => TrackedSat(gpsl5, 1, 0.0, 0.0Hz; cn0_estimator = NWPRCN0Estimator()),

@@ -1,6 +1,7 @@
 module MultiBandTest
 
 using Test: @test, @testset, @inferred, @test_throws
+using GNSSSignals: CBOC
 using Unitful: Hz
 using GNSSSignals:
     GPSL1CA,
@@ -10,8 +11,8 @@ using GNSSSignals:
     L5,
     gen_code,
     get_band_id,
-    get_code_frequency,
-    get_code_center_frequency_ratio
+    get_chip_rate,
+    get_chip_rate_to_center_frequency_ratio
 
 using Tracking:
     TrackState,
@@ -26,7 +27,7 @@ using Tracking:
     get_intermediate_frequency,
     get_carrier_doppler,
     _validate_equal_durations
-using TrackingLoops: NumAnts, get_num_ants
+using TrackingLoops: NumAntennas, get_num_antennas
 
 # Samples for one PRN at a Doppler and starting code phase.
 function _make_signal(
@@ -38,7 +39,8 @@ function _make_signal(
     sampling_frequency,
 ) where {S}
     s = S()
-    code_freq = carrier_doppler * get_code_center_frequency_ratio(s) + get_code_frequency(s)
+    code_freq =
+        carrier_doppler * get_chip_rate_to_center_frequency_ratio(s) + get_chip_rate(s)
     range = 0:(num_samples-1)
     cis.(2π .* carrier_doppler .* range ./ sampling_frequency) .*
     gen_code(num_samples, s, prn, sampling_frequency, code_freq, start_code_phase)
@@ -260,7 +262,7 @@ end
 end
 
 @testset "Antenna shape mismatch errors" begin
-    ts = TrackState(; signal = GPSL1CA(), num_ants = NumAnts(2))
+    ts = TrackState(; signal = GPSL1CA(), num_antennas = NumAntennas(2))
     ts = add_satellite!(ts; prn = 1, carrier_doppler = 0Hz)
     m = BandMeasurement(zeros(ComplexF64, 4000), 4e6Hz)
     @test_throws ArgumentError track!((L1 = m,), ts)
@@ -269,32 +271,32 @@ end
 @testset "Per-band antenna counts via SignalGroup entries" begin
     ts = TrackState(;
         signals = (
-            legacy_gps_l1 = SignalGroup((GPSL1CA(),); num_ants = NumAnts(2)),
-            gps_l5 = SignalGroup((GPSL5I(),); num_ants = NumAnts(1)),
+            legacy_gps_l1 = SignalGroup((GPSL1CA(),); num_antennas = NumAntennas(2)),
+            gps_l5 = SignalGroup((GPSL5I(),); num_antennas = NumAntennas(1)),
         ),
     )
     ts = add_satellite!(ts; prn = 1, group = :legacy_gps_l1, carrier_doppler = 0Hz)
     ts = add_satellite!(ts; prn = 1, group = :gps_l5, carrier_doppler = 0Hz)
 
-    @test get_num_ants(ts, :legacy_gps_l1, 1) == 2
-    @test get_num_ants(ts, :gps_l5, 1) == 1
+    @test get_num_antennas(ts, :legacy_gps_l1, 1) == 2
+    @test get_num_antennas(ts, :gps_l5, 1) == 1
 end
 
-@testset "Same band, mismatched NumAnts is rejected" begin
+@testset "Same band, mismatched NumAntennas is rejected" begin
     # Two groups on L1 with different antenna counts.
     @test_throws ArgumentError TrackState(;
         signals = (
-            gps = SignalGroup((GPSL1CA(),); num_ants = NumAnts(2)),
-            galileo = SignalGroup((GalileoE1B(),); num_ants = NumAnts(1)),
+            gps = SignalGroup((GPSL1CA(),); num_antennas = NumAntennas(2)),
+            galileo = SignalGroup((GalileoE1B(CBOC),); num_antennas = NumAntennas(1)),
         ),
     )
 end
 
-@testset "Two groups on the same band with matching NumAnts is fine" begin
+@testset "Two groups on the same band with matching NumAntennas is fine" begin
     ts = TrackState(;
         signals = (
-            gps = SignalGroup((GPSL1CA(),); num_ants = NumAnts(2)),
-            galileo = SignalGroup((GalileoE1B(),); num_ants = NumAnts(2)),
+            gps = SignalGroup((GPSL1CA(),); num_antennas = NumAntennas(2)),
+            galileo = SignalGroup((GalileoE1B(CBOC),); num_antennas = NumAntennas(2)),
         ),
     )
     @test band_keys(ts) == (:L1,)

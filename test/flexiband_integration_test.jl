@@ -35,6 +35,7 @@ module FlexibandIntegrationTest
 # (The XML's L5 translatedfreq, 2.903125e-1, is off by 10×.)
 
 using Test
+using GNSSSignals: CBOC
 using Downloads: Downloads
 using Scratch: get_scratch!
 using ZipFile: ZipFile
@@ -226,7 +227,7 @@ else
         )
         acq_e1 = detected(
             acquire(
-                GalileoE1B(),
+                GalileoE1B(CBOC),
                 (@view l1[1:n_acq_l1]),
                 FS_L1,
                 1:36;
@@ -265,7 +266,7 @@ else
         track_state = TrackState(;
             signals = (
                 gps_l1 = (GPSL1CA(),),
-                galileo = (GalileoE1B(),),
+                galileo = (GalileoE1B(CBOC),),
                 gps_l5 = (GPSL5I(),),
             ),
         )
@@ -344,7 +345,7 @@ else
         )
         acq_e1 = detected(
             acquire(
-                GalileoE1B(),
+                GalileoE1B(CBOC),
                 l1_acq,
                 FS_L1,
                 1:36;
@@ -371,7 +372,7 @@ else
         track_state = TrackState(;
             signals = (
                 gps_l1 = (GPSL1CA(),),
-                galileo = (GalileoE1B(),),
+                galileo = (GalileoE1B(CBOC),),
                 gps_l5 = (GPSL5I(),),
             ),
         )

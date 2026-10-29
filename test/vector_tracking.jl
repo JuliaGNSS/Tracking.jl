@@ -2,7 +2,7 @@ module VectorTrackingTest
 
 # Vector tracking end to end through `track!`: IF samples of GPS L1 C/A satellites
 # broadcasting their (fixture) ephemerides as real LNAV bits, tracked with
-# TrackingLoops' `VectorPLLAndDLL` and nothing vector-specific in between. The
+# TrackingLoops' `VectorTrackingLoop` and nothing vector-specific in between. The
 # estimator syncs to the bits, decodes them, solves the scalar PVT and takes the
 # satellites over by itself; this test only reads its solution.
 #
@@ -18,18 +18,22 @@ using Random: Xoshiro, randn
 using Unitful: Hz, ustrip
 using LinearAlgebra: norm
 using StaticArrays: SVector
-using GNSSSignals: GPSL1CA, gen_code, get_code_frequency, get_center_frequency
-using GNSSDecoder: GNSSDecoderState, get_time_of_week
+using GNSSSignals: GPSL1CA, gen_code, get_chip_rate, get_center_frequency
+using GNSSDecoder:
+    BroadcastEphemeris,
+    GNSSDecoderState,
+    get_broadcast_ephemeris,
+    get_broadcast_time_of_week
 using PositionVelocityTime:
     _precompile_states,
     _PRECOMPILE_GPS_L1CA_STATES,
-    SatelliteState,
-    SignalGroup,
+    SignalObservation,
     calc_pvt,
-    calc_corrected_time,
+    calc_transmit_time,
     calc_satellite_position_and_velocity,
-    calc_ρ_hat!,
-    BiasColumns
+    predict_pseudoranges!,
+    BiasColumns,
+    SPEED_OF_LIGHT
 using Tracking:
     TrackState,
     track!,
@@ -41,26 +45,27 @@ using Tracking:
     get_doppler_estimator_state,
     get_sat_state
 using TrackingLoops:
-    VectorPLLAndDLL,
-    navigation_solution,
-    navigation_status,
-    navigation_cycle,
-    navigation_epoch,
-    satellite_report,
-    carrier_phase_correction,
-    FixedNCOWord,
-    SPEED_OF_LIGHT
+    VectorTrackingLoop,
+    get_navigation_solution,
+    get_navigation_status,
+    get_navigation_cycle_index,
+    get_navigation_elapsed_time,
+    get_satellite_report,
+    get_decoder,
+    calc_carrier_phase_correction,
+    ConstantNCOCommand
 
 include("lnav_encoder.jl")
 
 const FS = 2.048e6
 const CHUNK = 8192 # 4 ms
 const SIGNAL = GPSL1CA()
-const CODE_FREQUENCY = ustrip(Hz, get_code_frequency(SIGNAL))
+const CODE_FREQUENCY = ustrip(Hz, get_chip_rate(SIGNAL))
 const CENTER_FREQUENCY = ustrip(Hz, get_center_frequency(SIGNAL))
 
 mutable struct TrueSat
     decoder::GNSSDecoderState
+    ephemeris::BroadcastEphemeris
     stream::LNAVStream
     clock_offset::Float64 # corrected − uncorrected transmit time
     transmit_time::Float64 # warm start of the range iteration
@@ -74,8 +79,8 @@ function transmit_time!(sat::TrueSat, position, t)
     ρ = [0.0]
     t_t = sat.transmit_time
     for _ = 1:4
-        orbit = calc_satellite_position_and_velocity(sat.decoder, t_t)
-        calc_ρ_hat!(ρ, [SVector{3,Float64}(orbit.position)], ξ, columns)
+        orbit = calc_satellite_position_and_velocity(sat.ephemeris, t_t)
+        predict_pseudoranges!(ρ, [SVector{3,Float64}(orbit.position)], ξ, columns)
         t_t = t - ρ[1] / SPEED_OF_LIGHT
     end
     sat.transmit_time = t_t
@@ -86,24 +91,28 @@ uncorrected_transmit_time(sat::TrueSat, position, t) =
     transmit_time!(sat, position, t) - sat.clock_offset
 
 function TrueSat(decoder, position, t)
-    sat = TrueSat(decoder, LNAVStream(decoder.data), 0.0, t - 0.075, 0.0)
+    sat = TrueSat(
+        decoder,
+        get_broadcast_ephemeris(decoder),
+        LNAVStream(decoder.data),
+        0.0,
+        t - 0.075,
+        0.0,
+    )
     t_t = transmit_time!(sat, position, t)
     # Invert the satellite clock correction around the transmit time.
-    tow = get_time_of_week(decoder)
+    tow = get_broadcast_time_of_week(decoder)
     u = t_t
     for _ = 1:3
         rate = 50.0
         num_bits = floor(Int, (u - tow) * rate)
-        state = SatelliteState(;
-            decoder = GNSSDecoderState(
-                decoder;
-                num_bits_after_valid_syncro_sequence = num_bits,
-            ),
-            system = SIGNAL,
+        state = SignalObservation(;
+            decoder = GNSSDecoderState(decoder; num_bits_since_time_reference = num_bits),
+            signal = SIGNAL,
             code_phase = (u - tow - num_bits / rate) * CODE_FREQUENCY,
             carrier_doppler = 0.0Hz,
         )
-        u += t_t - calc_corrected_time(state)
+        u += t_t - calc_transmit_time(state)
     end
     sat.clock_offset = t_t - u
     sat
@@ -148,13 +157,13 @@ end
         return
     end
     states = _precompile_states(SIGNAL, _PRECOMPILE_GPS_L1CA_STATES, identity, SIGNAL)
-    fix = calc_pvt(SignalGroup(SIGNAL, states); approximate_year = 2021)
+    fix = calc_pvt(states; approximate_year = 2021).solution
     position = SVector(fix.position.x, fix.position.y, fix.position.z)
-    t0 = next_subframe1_start(maximum(calc_corrected_time, states)) - 8.0
+    t0 = next_subframe1_start(maximum(calc_transmit_time, states)) - 8.0
     decoders = [state.decoder for state in states[1:6]]
     sats = [TrueSat(decoder, position, t0) for decoder in decoders]
 
-    estimator = VectorPLLAndDLL(
+    estimator = VectorTrackingLoop(
         SIGNAL;
         approximate_year = 2021,
         enable_ionospheric_correction = false,
@@ -192,10 +201,10 @@ end
             add_signal!(samples, sat, decoder.prn, position, t)
         end
         track!(samples, track_state, FS * Hz)
-        status = navigation_status(estimator)
-        if status.running
+        status = get_navigation_status(estimator)
+        if status.vector_tracking_active
             seeded_at = something(seeded_at, t - t0)
-            pvt = navigation_solution(estimator)
+            pvt = get_navigation_solution(estimator)
             push!(
                 errors,
                 norm(SVector(pvt.position.x, pvt.position.y, pvt.position.z) - position),
@@ -203,7 +212,7 @@ end
             # The replica's phase plus the correction against the true phase at the
             # next chunk's first sample, modulo one cycle (both phases wrap).
             for (sat, decoder, offsets) in zip(sats, decoders, phase_offsets)
-                satellite_report(track_state, SIGNAL, decoder.prn).in_vector_loop ||
+                get_satellite_report(track_state, SIGNAL, decoder.prn).vector_controlled ||
                     continue
                 estimate =
                     (
@@ -215,13 +224,13 @@ end
                 # sample the correction is read at, so pin it to the end of this chunk
                 # on the test's own count.
                 sat_state = get_sat_state(track_state, decoder.prn)
-                words = FixedNCOWord(
+                words = ConstantNCOCommand(
                     ustrip(Hz, get_carrier_doppler(sat_state)),
                     ustrip(Hz, get_code_doppler(sat_state)),
                 )
                 corrections_at_chunk_end &=
                     get_carrier_phase_correction(track_state, decoder.prn, FS * Hz) ==
-                    2π * carrier_phase_correction(
+                    2π * calc_carrier_phase_correction(
                         get_doppler_estimator_state(sat_state),
                         words,
                         (k + 1) * CHUNK,
@@ -230,7 +239,7 @@ end
             end
         end
     end
-    status = navigation_status(estimator)
+    status = get_navigation_status(estimator)
     # Off the truth by the Costas ambiguity the hand-over left, 0 or ½ cycle, and
     # by the same amount at every epoch: no cycle or half cycle slips.
     phase_drifts =
@@ -242,17 +251,20 @@ end
         maximum(rms, phase_drifts)
     # The first fix comes once every satellite has decoded subframe 3, 8 + 18 s in.
     @test seeded_at !== nothing && 26.0 < seeded_at < 28.0
-    @test status.running
-    @test status.num_members == length(sats)
-    @test length(navigation_solution(estimator).sats) == length(sats)
+    @test status.vector_tracking_active
+    @test status.num_vector_tracking_members == length(sats)
+    @test length(get_navigation_solution(estimator).observations) == length(sats)
     # The same, asked of the track state, as a receiver does.
-    @test navigation_solution(track_state) === navigation_solution(estimator)
-    @test navigation_cycle(track_state) == navigation_cycle(estimator) > 250
-    @test navigation_epoch(track_state) !== nothing
+    @test get_navigation_solution(track_state) === get_navigation_solution(estimator)
+    @test get_navigation_cycle_index(track_state) ==
+          get_navigation_cycle_index(estimator) >
+          250
+    @test get_navigation_elapsed_time(track_state) !== nothing
     for decoder in decoders
-        report = satellite_report(track_state, SIGNAL, decoder.prn)
-        @test report.pvt_ready && report.in_vector_loop
-        @test report.decoder.data.sqrt_A == decoder.data.sqrt_A
+        report = get_satellite_report(track_state, SIGNAL, decoder.prn)
+        @test report.positioning_ready && report.vector_controlled
+        @test get_decoder(track_state, SIGNAL, decoder.prn).data.sqrt_A ==
+              decoder.data.sqrt_A
     end
     @test maximum(errors[(end-250):end]) < 10.0
     @test all(offsets -> length(offsets) > 250, phase_offsets)

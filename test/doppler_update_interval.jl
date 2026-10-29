@@ -1,15 +1,16 @@
 module UpdateIntervalTest
 
 using Test: @test, @testset, @test_throws
+using GNSSSignals: CBOC
 using Unitful: Hz, s, uconvert, NoUnits
 import Tracking
 using GNSSSignals:
     GPSL1CA,
     GalileoE1B,
     gen_code,
-    get_code_frequency,
+    get_chip_rate,
     get_code_length,
-    get_code_center_frequency_ratio
+    get_chip_rate_to_center_frequency_ratio
 using Tracking:
     TrackedSat,
     TrackState,
@@ -18,19 +19,19 @@ using Tracking:
     track!,
     CPUDownconvertAndCorrelator,
     downconvert_and_correlate!,
-    get_correlator_outputs,
+    get_correlator_bank_outputs,
     get_sat_state,
     get_carrier_doppler
-using TrackingLoops: CorrelatorOutput
+using TrackingLoops: CorrelatorBankOutput
 
 @testset "smallest-code-period default resolution" begin
     # `nothing`: the shortest primary-code period of all signals.
     ts = TrackState(; signal = GPSL1CA())
     dt = Tracking._smallest_code_period(ts)
-    @test uconvert(NoUnits, dt * get_code_frequency(GPSL1CA())) ≈ get_code_length(GPSL1CA())
+    @test uconvert(NoUnits, dt * get_chip_rate(GPSL1CA())) ≈ get_code_length(GPSL1CA())
     @test dt ≈ 1e-3 * s
 
-    ts_mixed = TrackState(; signals = (l1ca = (GPSL1CA(),), e1b = (GalileoE1B(),)))
+    ts_mixed = TrackState(; signals = (l1ca = (GPSL1CA(),), e1b = (GalileoE1B(CBOC),)))
     @test Tracking._smallest_code_period(ts_mixed) ≈ 1e-3 * s
 end
 
@@ -76,7 +77,7 @@ end
     period = 5000                       # 1 ms at 5 MHz = one L1 C/A period
     num_samples = n_periods * period
     signal = ComplexF32.(
-        gen_code(num_samples, gpsl1, prn, fs, get_code_frequency(gpsl1), start_code_phase),
+        gen_code(num_samples, gpsl1, prn, fs, get_chip_rate(gpsl1), start_code_phase),
     )
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, prn, start_code_phase, 0.0Hz)])
     dc = CPUDownconvertAndCorrelator()
@@ -90,26 +91,25 @@ end
         chunk_index = 0,
         chunk_duration = n_periods * 1e-3 * s,
     )
-    outputs = get_correlator_outputs(only(get_sat_state(ts, prn).signals))
+    outputs = get_correlator_bank_outputs(only(get_sat_state(ts, prn).signals))
 
     @test length(outputs) == n_periods
-    @test all(o -> o isa CorrelatorOutput, outputs)
+    @test all(o -> o isa CorrelatorBankOutput, outputs)
     for (i, o) in enumerate(outputs)
         @test isapprox(o.sample_index, i * period; atol = 2)
-        @test isapprox(o.integrated_samples, period; atol = 2)
+        @test isapprox(o.num_integrated_samples, period; atol = 2)
     end
 end
 
-@testset "estimator empties correlator_outputs after each chunk" begin
+@testset "estimator empties correlator_bank_outputs after each chunk" begin
     gpsl1 = GPSL1CA()
     fs = 5e6Hz
     prn = 1
     num_samples = 15_000
-    signal =
-        ComplexF32.(gen_code(num_samples, gpsl1, prn, fs, get_code_frequency(gpsl1), 0.0))
+    signal = ComplexF32.(gen_code(num_samples, gpsl1, prn, fs, get_chip_rate(gpsl1), 0.0))
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, prn, 0.0, 0.0Hz)])
     track!(signal, ts, fs)
-    @test isempty(get_correlator_outputs(only(get_sat_state(ts, prn).signals)))
+    @test isempty(get_correlator_bank_outputs(only(get_sat_state(ts, prn).signals)))
 end
 
 @testset "enlarged doppler_update_interval still converges" begin
@@ -120,7 +120,7 @@ end
     true_doppler = 300.0Hz
     start_code_phase = 0.0
     code_frequency =
-        true_doppler * get_code_center_frequency_ratio(gpsl1) + get_code_frequency(gpsl1)
+        true_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1) + get_chip_rate(gpsl1)
     num_samples = 400_000                   # 100 ms
     range = 0:(num_samples-1)
     signal = ComplexF32.(

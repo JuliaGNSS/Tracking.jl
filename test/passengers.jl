@@ -1,42 +1,46 @@
 module PassengersTest
 
-# Every record of a satellite goes through the estimator's `step_loop`, the
+# Every record of a satellite goes through the estimator's `step_loop!`, the
 # passengers' (`signals[2:end]`) as well as the driver's, each built from its
 # signal's state: Tracking never asks which estimator it drives. With
-# TrackingLoops' `VectorPLLAndDLL(pilot => data)` that is what lets the vector
+# TrackingLoops' `VectorTrackingLoop(pilot => data)` that is what lets the vector
 # loop range on the pilot and decode the data component.
 
 using Test: @test, @testset
+using GNSSSignals: CBOC
+using TrackingLoopFilters: ThirdOrderAssistedBilinearLF
 using Logging: NullLogger, with_logger
 using Unitful: Hz
 using StaticArrays: SVector
-using GNSSSignals: GalileoE1B, GalileoE1C, get_carrier_phase_offset
+using GNSSSignals: GalileoE1B, GalileoE1C, get_carrier_phase_offset, get_signal_id
+using GNSSDecoder: GNSSDecoderState
 using Tracking:
     TrackState,
     add_satellite!,
-    append_correlator_output!,
+    append_correlator_bank_output!,
     estimate_dopplers_and_filter_prompt!,
     get_carrier_doppler,
     get_doppler_estimator_state,
     get_sat_state
 using TrackingLoops:
-    AbstractDopplerEstimator,
-    ConventionalAssistedPLLAndDLL,
-    CorrelatorOutput,
-    LoopRecord,
-    VectorPLLAndDLL,
-    get_default_correlator,
-    satellite_report,
-    update_accumulator
+    AbstractTrackingLoop,
+    ScalarTrackingLoop,
+    CorrelatorBankOutput,
+    PredetectionIntegration,
+    VectorTrackingLoop,
+    get_default_correlator_bank,
+    get_satellite_report,
+    get_decoder,
+    with_correlator_outputs
 import TrackingLoops
 
 const FS = 16.368e6Hz
 const N = 65472 # 4 ms, one Galileo E1 code period
 
 # An E1 record ending at `sample_index`, its prompt `p` on the VEML taps.
-_record(p, sample_index) = CorrelatorOutput(
-    update_accumulator(
-        get_default_correlator(GalileoE1B()),
+_record(p, sample_index) = CorrelatorBankOutput(
+    with_correlator_outputs(
+        get_default_correlator_bank(GalileoE1B(CBOC)),
         ComplexF64(p * N) .* SVector(0.2, 0.7, 1.0, 0.7, 0.2),
     ),
     N,
@@ -45,42 +49,54 @@ _record(p, sample_index) = CorrelatorOutput(
 
 # An estimator that remembers the signal and summary of every record it is
 # stepped with, then runs the conventional loop.
-struct RecordingEstimator{E} <: AbstractDopplerEstimator
+struct RecordingEstimator{E} <: AbstractTrackingLoop
     inner::E
     seen::Vector{Tuple{Symbol,Int,Bool,Int}}
 end
-RecordingEstimator() =
-    RecordingEstimator(ConventionalAssistedPLLAndDLL(), Tuple{Symbol,Int,Bool,Int}[])
-TrackingLoops.init_estimator_state(e::RecordingEstimator, signal, carrier, code) =
-    TrackingLoops.init_estimator_state(e.inner, signal, carrier, code)
-function TrackingLoops.step_loop(
+RecordingEstimator() = RecordingEstimator(
+    ScalarTrackingLoop(ThirdOrderAssistedBilinearLF),
+    Tuple{Symbol,Int,Bool,Int}[],
+)
+TrackingLoops.init_loop_state(e::RecordingEstimator, signal, carrier, code) =
+    TrackingLoops.init_loop_state(e.inner, signal, carrier, code)
+function TrackingLoops.step_loop!(
     e::RecordingEstimator,
     state,
-    record::LoopRecord,
-    words,
-    landing::Int64,
+    integration::PredetectionIntegration,
+    nco_history,
+    application_sample_index::Union{Nothing,Integer},
 )
     push!(
         e.seen,
         (
-            TrackingLoops.get_signal_id(record.signal),
-            record.sample_index,
-            record.bit_synced,
-            length(record.new_soft_bits),
+            get_signal_id(integration.signal),
+            integration.sample_index,
+            integration.bit_or_secondary_code_synced,
+            length(integration.new_soft_bits),
         ),
     )
-    TrackingLoops.step_loop(e.inner, state, record, words, landing)
+    TrackingLoops.step_loop!(
+        e.inner,
+        state,
+        integration,
+        nco_history,
+        application_sample_index,
+    )
 end
 
 # One chunk's records of satellite 11: E1B's (data, a sign per 4 ms symbol, in its
 # carrier-phase frame) and E1C's (pilot), in the given order.
 function feed!(track_state, k; data_first = true, carrier = 0.0)
     bit = isodd(hash(k) >> 3) ? 1.0 : -1.0
-    rotation =
-        cis(get_carrier_phase_offset(GalileoE1B()) - get_carrier_phase_offset(GalileoE1C()))
+    rotation = cispi(
+        2 * (
+            get_carrier_phase_offset(GalileoE1B(CBOC)) -
+            get_carrier_phase_offset(GalileoE1C(CBOC))
+        ),
+    )
     pilot_prompt = cis(carrier * k)
     data =
-        () -> append_correlator_output!(
+        () -> append_correlator_bank_output!(
             track_state,
             _record(rotation * bit * pilot_prompt, k * N),
             :e1,
@@ -88,7 +104,7 @@ function feed!(track_state, k; data_first = true, carrier = 0.0)
             GalileoE1B,
         )
     pilot =
-        () -> append_correlator_output!(
+        () -> append_correlator_bank_output!(
             track_state,
             _record(pilot_prompt, k * N),
             :e1,
@@ -105,7 +121,7 @@ end
 
 function e1_state(estimator)
     track_state = TrackState(;
-        signals = (e1 = (GalileoE1C(), GalileoE1B()),),
+        signals = (e1 = (GalileoE1C(CBOC), GalileoE1B(CBOC)),),
         doppler_estimator = estimator,
     )
     add_satellite!(
@@ -145,7 +161,7 @@ end
     dopplers(signals) = begin
         track_state = TrackState(;
             signals = (e1 = signals,),
-            doppler_estimator = ConventionalAssistedPLLAndDLL(),
+            doppler_estimator = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF),
         )
         add_satellite!(
             track_state;
@@ -157,7 +173,7 @@ end
         map(1:30) do k
             feed_pilot_only = length(signals) == 1
             if feed_pilot_only
-                append_correlator_output!(
+                append_correlator_bank_output!(
                     track_state,
                     _record(cis(0.05k), k * N),
                     :e1,
@@ -173,22 +189,26 @@ end
             get_carrier_doppler(get_sat_state(track_state, :e1, 11))
         end
     end
-    @test dopplers((GalileoE1C(),)) == dopplers((GalileoE1C(), GalileoE1B()))
+    @test dopplers((GalileoE1C(CBOC),)) == dopplers((GalileoE1C(CBOC), GalileoE1B(CBOC)))
 end
 
 @testset "A vector loop ranges on E1C and decodes E1B, in either record order" begin
     for data_first in (true, false)
-        estimator = VectorPLLAndDLL(GalileoE1C() => GalileoE1B(); approximate_year = 2021)
+        estimator = VectorTrackingLoop(
+            GalileoE1C(CBOC) => GalileoE1B(CBOC);
+            approximate_year = 2021,
+        )
         track_state = e1_state(estimator)
         for k = 1:60
             feed!(track_state, k; data_first)
         end
-        report = satellite_report(estimator, GalileoE1C(), 11)
-        @test report.tracked && report.bit_synced
-        @test report.decoder.prn == 11
-        @test report.decoder isa typeof(TrackingLoops.GNSSDecoderState(GalileoE1B(), 11))
-        @test isnothing(satellite_report(estimator, GalileoE1B(), 11))
-        @test estimator.navigation.registrations == 1
+        report = get_satellite_report(estimator, GalileoE1C(CBOC), 11)
+        @test report.tracked && report.bit_or_secondary_code_synced
+        decoder = get_decoder(estimator, GalileoE1C(CBOC), 11)
+        @test decoder.prn == 11
+        @test decoder isa typeof(GNSSDecoderState(GalileoE1B(CBOC), 11))
+        @test isnothing(get_satellite_report(estimator, GalileoE1B(CBOC), 11))
+        @test estimator.engine.next_slot_generation == 1
         state = get_doppler_estimator_state(get_sat_state(track_state, :e1, 11))
         @test state.slot_index == 1
     end

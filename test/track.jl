@@ -1,6 +1,8 @@
 module TrackTest
 
 using Test: @test, @testset, @inferred
+using GNSSSignals: CBOC, TMBOC
+using TrackingLoopFilters: ThirdOrderAssistedBilinearLF
 using Random: Random
 using Unitful: Hz, dBHz
 using Dictionaries: dictionary
@@ -11,8 +13,8 @@ using GNSSSignals:
     GPSL5I,
     GalileoE1B,
     gen_code,
-    get_code_center_frequency_ratio,
-    get_code_frequency,
+    get_chip_rate_to_center_frequency_ratio,
+    get_chip_rate,
     get_code,
     get_code_length,
     get_band,
@@ -30,9 +32,9 @@ using Tracking:
     get_code_doppler,
     get_carrier_doppler,
     get_signal_start_sample,
-    get_last_fully_integrated_filtered_prompt,
+    get_last_fully_integrated_beamformed_prompt,
     get_last_fully_integrated_correlator,
-    get_filtered_prompts,
+    get_beamformed_prompts,
     get_integrated_samples,
     get_sat_state,
     get_doppler_estimator_state,
@@ -41,19 +43,19 @@ import TrackingLoops
 using TrackingLoops:
     get_prompt,
     estimate_cn0,
-    has_bit_or_secondary_code_been_found,
-    NumAnts,
-    get_num_ants,
+    is_bit_or_secondary_code_synced,
+    NumAntennas,
+    get_num_antennas,
     get_noise_density,
-    AbstractPostCorrFilter,
-    DefaultPostCorrFilter,
-    ConventionalPLLAndDLL,
-    ConventionalAssistedPLLAndDLL,
-    NCOReferencedPLLAndDLL,
-    SatNCOReferencedPLLAndDLL,
-    VectorPLLAndDLL,
-    SatVectorPLLAndDLL,
-    LoopRecord
+    AbstractBeamformer,
+    DefaultBeamformer,
+    ScalarTrackingLoop,
+    ScalarTrackingLoop,
+    DelayCompensatedTrackingLoop,
+    ScalarLoopState,
+    VectorTrackingLoop,
+    VectorLoopState,
+    PredetectionIntegration
 import Tracking
 using StaticArrays: SVector
 using Unitful: ustrip, uconvert
@@ -69,7 +71,8 @@ _unit_code(c) = (m = maximum(abs, c); m == 0 ? float(c) : c ./ m)
     carrier_doppler = 200Hz
     start_code_phase = 100
     code_frequency =
-        carrier_doppler * get_code_center_frequency_ratio(gpsl1) + get_code_frequency(gpsl1)
+        carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1) +
+        get_chip_rate(gpsl1)
     sampling_frequency = 4e6Hz
     prn = 1
     range = 0:3999
@@ -135,7 +138,7 @@ _unit_code(c) = (m = maximum(abs, c); m == 0 ? float(c) : c ./ m)
         tracked_carrier_dopplers[i] = get_carrier_doppler(track_state) / Hz
         tracked_code_dopplers[i] = get_code_doppler(track_state) / Hz
         @test get_signal_start_sample(track_state) == 4001
-        tracked_prompts[i] = get_last_fully_integrated_filtered_prompt(track_state)
+        tracked_prompts[i] = get_last_fully_integrated_beamformed_prompt(track_state)
         code_phases[i] = comp_code_phase
         carrier_phases[i] = comp_carrier_phase
     end
@@ -149,10 +152,9 @@ function _noisy_gpsl1_chunks(num_chunks)
     fs = 4e6Hz
     num_samples = 4000 * num_chunks
     carrier_doppler = 1000.0Hz
-    code_doppler = carrier_doppler * get_code_center_frequency_ratio(gpsl1)
+    code_doppler = carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1)
     t = (0:(num_samples-1)) ./ ustrip(Hz, fs)
-    code =
-        gen_code(num_samples, gpsl1, 1, fs, get_code_frequency(gpsl1) + code_doppler, 100.0)
+    code = gen_code(num_samples, gpsl1, 1, fs, get_chip_rate(gpsl1) + code_doppler, 100.0)
     rng = Random.Xoshiro(1)
     signal =
         ComplexF32.(code .* cis.(2π .* ustrip(Hz, carrier_doppler) .* t .+ 0.3)) .+
@@ -189,42 +191,47 @@ end
         @test get_carrier_phase_correction(track_state, :default, 1, fs) == 0.0
         history, track_state
     end
-    conventional, _ = run(ConventionalAssistedPLLAndDLL())
-    narrow_conventional, _ =
-        run(ConventionalAssistedPLLAndDLL(; wide_carrier_loop_filter_bandwidth = 18.0Hz))
-    referenced, track_state = run(NCOReferencedPLLAndDLL())
+    conventional, _ = run(ScalarTrackingLoop(ThirdOrderAssistedBilinearLF))
+    narrow_conventional, _ = run(
+        ScalarTrackingLoop(
+            ThirdOrderAssistedBilinearLF;
+            wide_carrier_loop_filter_bandwidth = 18.0Hz,
+        ),
+    )
+    referenced, track_state = run(DelayCompensatedTrackingLoop())
     @test referenced == narrow_conventional
-    @test get_doppler_estimator_state(get_sat_state(track_state, 1)) isa
-          SatNCOReferencedPLLAndDLL
+    @test get_doppler_estimator_state(get_sat_state(track_state, 1)) isa ScalarLoopState
     @test abs(conventional[200][1] - carrier_doppler) < 5Hz
     for (estimator, scalar) in (
-        (VectorPLLAndDLL(gpsl1), conventional),
-        (VectorPLLAndDLL(gpsl1; inner = NCOReferencedPLLAndDLL()), narrow_conventional),
+        (VectorTrackingLoop(gpsl1), conventional),
+        (
+            VectorTrackingLoop(gpsl1; scalar_loop = DelayCompensatedTrackingLoop()),
+            narrow_conventional,
+        ),
     )
         vector, track_state = run(estimator)
         @test vector == scalar
-        @test get_doppler_estimator_state(get_sat_state(track_state, 1)) isa
-              SatVectorPLLAndDLL
+        @test get_doppler_estimator_state(get_sat_state(track_state, 1)) isa VectorLoopState
     end
 end
 
 # An estimator implementing only TrackingLoops' interface, counting the records
 # it hands to the loop it wraps.
-struct CountingEstimator{E<:TrackingLoops.AbstractDopplerEstimator} <:
-       TrackingLoops.AbstractDopplerEstimator
+struct CountingEstimator{E<:TrackingLoops.AbstractTrackingLoop} <:
+       TrackingLoops.AbstractTrackingLoop
     inner::E
 end
 struct SatCountingEstimator{S}
     inner::S
-    num_records::Int
+    num_integrations::Int
 end
-TrackingLoops.init_estimator_state(
+TrackingLoops.init_loop_state(
     estimator::CountingEstimator,
     driver_signal,
     carrier_doppler,
     code_doppler,
 ) = SatCountingEstimator(
-    TrackingLoops.init_estimator_state(
+    TrackingLoops.init_loop_state(
         estimator.inner,
         driver_signal,
         carrier_doppler,
@@ -232,16 +239,21 @@ TrackingLoops.init_estimator_state(
     ),
     0,
 )
-function TrackingLoops.step_loop(
+function TrackingLoops.step_loop!(
     estimator::CountingEstimator,
     state::SatCountingEstimator,
-    record,
-    words,
-    landing_sample::Int64,
+    integration,
+    nco_history,
+    application_sample_index::Union{Nothing,Integer},
 )
-    inner, carrier_doppler, code_doppler =
-        TrackingLoops.step_loop(estimator.inner, state.inner, record, words, landing_sample)
-    SatCountingEstimator(inner, state.num_records + 1), carrier_doppler, code_doppler
+    inner, carrier_doppler, code_doppler = TrackingLoops.step_loop!(
+        estimator.inner,
+        state.inner,
+        integration,
+        nco_history,
+        application_sample_index,
+    )
+    SatCountingEstimator(inner, state.num_integrations + 1), carrier_doppler, code_doppler
 end
 
 @testset "reset_loop_filters! keeps the stage the carrier loop has reached" begin
@@ -251,7 +263,7 @@ end
     track_state = TrackState(; signal = gpsl1)
     track_state =
         add_satellite!(track_state; prn = 1, code_phase = 100.2, carrier_doppler = 1005.0Hz)
-    stage(prn) = TrackingLoops.carrier_loop_stage(
+    stage(prn) = TrackingLoops.get_carrier_loop_stage(
         get_doppler_estimator_state(get_sat_state(track_state, prn)),
     )
     @test stage(1) == TrackingLoops.FLL_ASSISTED_PLL
@@ -265,7 +277,7 @@ end
     @test stage(2) == TrackingLoops.FLL_ASSISTED_PLL
 end
 
-@testset "Through track, an estimator implementing step_loop runs without adaptation" begin
+@testset "Through track, an estimator implementing step_loop! runs without adaptation" begin
     gpsl1, fs, carrier_doppler, chunks = _noisy_gpsl1_chunks(100)
     function run(estimator)
         track_state = TrackState(; signal = gpsl1, doppler_estimator = estimator)
@@ -278,66 +290,79 @@ end
         for chunk in chunks
             track!(chunk, track_state, fs)
         end
-        # No `reset_estimator_state` method: the reset re-initializes.
+        # No `reseed_loop_state` method: the reset re-initializes.
         reset_loop_filters!(track_state)
         get_sat_state(track_state, 1)
     end
-    reference = run(ConventionalAssistedPLLAndDLL())
-    counted = run(CountingEstimator(ConventionalAssistedPLLAndDLL()))
+    reference = run(ScalarTrackingLoop(ThirdOrderAssistedBilinearLF))
+    counted = run(CountingEstimator(ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)))
     @test get_carrier_doppler(counted) == get_carrier_doppler(reference)
     @test get_code_phase(counted) == get_code_phase(reference)
-    @test get_doppler_estimator_state(counted).num_records == 0
+    @test get_doppler_estimator_state(counted).num_integrations == 0
 end
 
 @testset "A scalar loop has no navigation solution to report" begin
     track_state = TrackState(; signal = GPSL1CA())
-    @test TrackingLoops.navigation_solution(track_state) === nothing
-    @test TrackingLoops.navigation_status(track_state) === nothing
-    @test TrackingLoops.navigation_cycle(track_state) === nothing
-    @test TrackingLoops.navigation_epoch(track_state) === nothing
-    @test TrackingLoops.satellite_report(track_state, GPSL1CA(), 1) === nothing
+    @test TrackingLoops.get_navigation_solution(track_state) === nothing
+    @test TrackingLoops.get_navigation_status(track_state) === nothing
+    @test TrackingLoops.get_navigation_cycle_index(track_state) === nothing
+    @test TrackingLoops.get_navigation_elapsed_time(track_state) === nothing
+    @test TrackingLoops.get_satellite_report(track_state, GPSL1CA(), 1) === nothing
     vector =
-        TrackState(; signal = GPSL1CA(), doppler_estimator = VectorPLLAndDLL(GPSL1CA()))
-    @test TrackingLoops.navigation_cycle(vector) == 0
+        TrackState(; signal = GPSL1CA(), doppler_estimator = VectorTrackingLoop(GPSL1CA()))
+    @test TrackingLoops.get_navigation_cycle_index(vector) == 0
 end
 
 # An estimator that keeps every record it is handed, around the loop it wraps.
-struct RecordingEstimator{E<:TrackingLoops.AbstractDopplerEstimator} <:
-       TrackingLoops.AbstractDopplerEstimator
+struct RecordingEstimator{E<:TrackingLoops.AbstractTrackingLoop} <:
+       TrackingLoops.AbstractTrackingLoop
     inner::E
     records::Vector{Tuple{Int,Int,Int,Float64}}
 end
-TrackingLoops.init_estimator_state(
+TrackingLoops.init_loop_state(
     estimator::RecordingEstimator,
     driver_signal,
     carrier_doppler,
     code_doppler,
-) = TrackingLoops.init_estimator_state(
+) = TrackingLoops.init_loop_state(
     estimator.inner,
     driver_signal,
     carrier_doppler,
     code_doppler,
 )
-function TrackingLoops.step_loop(
+function TrackingLoops.step_loop!(
     estimator::RecordingEstimator,
     state,
-    record::LoopRecord,
-    words,
-    landing_sample::Int64,
+    integration::PredetectionIntegration,
+    nco_history,
+    application_sample_index::Union{Nothing,Integer},
 )
     push!(
         estimator.records,
-        (record.prn, record.sample_index, record.fold_end, record.code_phase),
+        (
+            integration.prn,
+            integration.sample_index,
+            integration.batch_end_sample_index,
+            integration.code_phase,
+        ),
     )
-    TrackingLoops.step_loop(estimator.inner, state, record, words, landing_sample)
+    TrackingLoops.step_loop!(
+        estimator.inner,
+        state,
+        integration,
+        nco_history,
+        application_sample_index,
+    )
 end
 
 @testset "Through track, the records name their satellite and share one sample grid" begin
     # What the vector loop needs: the satellite, the replica's code phase at the
     # record's end, and a sample index that runs on across `track` calls.
     gpsl1, fs, carrier_doppler, chunks = _noisy_gpsl1_chunks(20)
-    estimator =
-        RecordingEstimator(ConventionalAssistedPLLAndDLL(), Tuple{Int,Int,Int,Float64}[])
+    estimator = RecordingEstimator(
+        ScalarTrackingLoop(ThirdOrderAssistedBilinearLF),
+        Tuple{Int,Int,Int,Float64}[],
+    )
     track_state = TrackState(; signal = gpsl1, doppler_estimator = estimator)
     track_state =
         add_satellite!(track_state; prn = 7, code_phase = 100.2, carrier_doppler = 1005.0Hz)
@@ -352,7 +377,7 @@ end
     @test last(sample_indices) > 4000 * 18
     @test all(r -> r[3] >= r[2], records)
     # One code period per record: each ends within a sample of a block boundary.
-    code_rate = ustrip(Hz, get_code_frequency(gpsl1)) / ustrip(Hz, fs)
+    code_rate = ustrip(Hz, get_chip_rate(gpsl1)) / ustrip(Hz, fs)
     @test all(r -> abs(rem(r[4], 1023, RoundNearest)) <= code_rate, records)
     @test track_state.sample_offsets[get_band_id(get_band(gpsl1))] == 4000 * 20
     # `track` leaves its input's sample grid where it was.
@@ -362,12 +387,12 @@ end
     track!(first(chunks), track_state, fs)
     @test track_state.sample_offsets[get_band_id(get_band(gpsl1))] == 4000 * 21
     # `track` shares the estimator with its input; a `deepcopy` branches it.
-    num_records = length(estimator.records)
+    num_integrations = length(estimator.records)
     branch = track(first(chunks), deepcopy(track_state), fs)
-    @test length(estimator.records) == num_records
-    @test length(branch.doppler_estimator.records) > num_records
+    @test length(estimator.records) == num_integrations
+    @test length(branch.doppler_estimator.records) > num_integrations
     track(first(chunks), track_state, fs)
-    @test length(estimator.records) > num_records
+    @test length(estimator.records) > num_integrations
 end
 
 @testset "Tracking with large initial Doppler offset" begin
@@ -375,7 +400,8 @@ end
     carrier_doppler = 200Hz
     start_code_phase = 100.0
     code_frequency =
-        carrier_doppler * get_code_center_frequency_ratio(gpsl1) + get_code_frequency(gpsl1)
+        carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1) +
+        get_chip_rate(gpsl1)
     sampling_frequency = 4e6Hz
     prn = 1
     range = 0:3999 # tracking 1 ms
@@ -387,7 +413,8 @@ end
 
     function test_convergence(carrier_error, use_assisted)
         doppler_estimator =
-            use_assisted ? ConventionalAssistedPLLAndDLL() : ConventionalPLLAndDLL()
+            use_assisted ? ScalarTrackingLoop(ThirdOrderAssistedBilinearLF) :
+            ScalarTrackingLoop()
         sat_states = [
             TrackedSat(
                 gpsl1,
@@ -443,23 +470,24 @@ end
 @testset "Track multiple systems of type $type" for type in
                                                     (Int16, Int32, Int64, Float32, Float64)
     gpsl1 = GPSL1CA()
-    galileo_e1b = GalileoE1B()
+    galileo_e1b = GalileoE1B(CBOC)
     carrier_doppler_gps = 200Hz
     carrier_doppler_gal = 1200Hz
     start_code_phase = 100
     code_frequency_gps =
-        carrier_doppler_gps * get_code_center_frequency_ratio(gpsl1) +
-        get_code_frequency(gpsl1)
+        carrier_doppler_gps * get_chip_rate_to_center_frequency_ratio(gpsl1) +
+        get_chip_rate(gpsl1)
     code_frequency_gal =
-        carrier_doppler_gal * get_code_center_frequency_ratio(galileo_e1b) +
-        get_code_frequency(galileo_e1b)
+        carrier_doppler_gal * get_chip_rate_to_center_frequency_ratio(galileo_e1b) +
+        get_chip_rate(galileo_e1b)
     sampling_frequency = 15e6Hz
     prn = 1
     range = 0:3999
     start_carrier_phase = π / 2
 
     # Pinned to the bandwidths this convergence test was calibrated for.
-    estimator = ConventionalAssistedPLLAndDLL(;
+    estimator = ScalarTrackingLoop(
+        ThirdOrderAssistedBilinearLF;
         wide_carrier_loop_filter_bandwidth = 18.0Hz,
         narrow_carrier_loop_filter_bandwidth = 18.0Hz,
         code_loop_filter_bandwidth = 1.0Hz,
@@ -622,7 +650,7 @@ end
     gpsl1 = GPSL1CA()
     carrier_doppler = 200Hz
     start_code_phase = 100
-    code_frequency = carrier_doppler / 1540 + get_code_frequency(gpsl1)
+    code_frequency = carrier_doppler / 1540 + get_chip_rate(gpsl1)
     sampling_frequency = 4e6Hz
     prn = 1
     range = 0:3999
@@ -691,7 +719,7 @@ end
         tracked_carrier_phases[i] = get_carrier_phase(track_state)
         tracked_carrier_dopplers[i] = get_carrier_doppler(track_state) / Hz
         tracked_code_dopplers[i] = get_code_doppler(track_state) / Hz
-        tracked_prompts[i] = get_last_fully_integrated_filtered_prompt(track_state)
+        tracked_prompts[i] = get_last_fully_integrated_beamformed_prompt(track_state)
         code_phases[i] = comp_code_phase
         carrier_phases[i] = comp_carrier_phase
     end
@@ -709,7 +737,7 @@ end
     gpsl1 = GPSL1CA()
     carrier_doppler = 200Hz
     start_code_phase = 100
-    code_frequency = carrier_doppler / 1540 + get_code_frequency(gpsl1)
+    code_frequency = carrier_doppler / 1540 + get_chip_rate(gpsl1)
     sampling_frequency = 4e6Hz
     prn = 1
     range = 0:3999
@@ -723,12 +751,12 @@ end
                 1,
                 start_code_phase,
                 carrier_doppler - 20Hz;
-                num_ants = NumAnts(3),
+                num_antennas = NumAntennas(3),
             ),
         ],
     )
 
-    @test get_num_ants(track_state) == 3
+    @test get_num_antennas(track_state) == 3
 
     signal =
         cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase) .*
@@ -789,7 +817,7 @@ end
         tracked_carrier_phases[i] = get_carrier_phase(track_state)
         tracked_carrier_dopplers[i] = get_carrier_doppler(track_state) / Hz
         tracked_code_dopplers[i] = get_code_doppler(track_state) / Hz
-        tracked_prompts[i] = get_last_fully_integrated_filtered_prompt(track_state)
+        tracked_prompts[i] = get_last_fully_integrated_beamformed_prompt(track_state)
         code_phases[i] = comp_code_phase
         carrier_phases[i] = comp_carrier_phase
     end
@@ -804,14 +832,15 @@ end
     sampling_frequency = 5e6Hz
     prn = 1
     samples_per_code = 5000
-    num_ants = 3
+    num_antennas = 3
     # Antenna m's floor is `scaleₘ²·σ²/f_s`.
     scales = (1.0, 1.5, 2.0)
 
     function make_array_signal(rng, code_idx)
         code = get_code.(
             gpsl1,
-            get_code_frequency(gpsl1) .* (0:(samples_per_code-1)) ./ sampling_frequency .+ code_idx * get_code_length(gpsl1),
+            get_chip_rate(gpsl1) .* (0:(samples_per_code-1)) ./ sampling_frequency .+
+            code_idx * get_code_length(gpsl1),
             prn,
         )
         clean = 30.0 .* ComplexF64.(code)
@@ -828,7 +857,7 @@ end
     # A single-antenna control is fed the array's last column.
     array_state = @inferred TrackState(
         gpsl1,
-        [TrackedSat(gpsl1, prn, 0.0, 0.0Hz; num_ants = NumAnts(num_ants))],
+        [TrackedSat(gpsl1, prn, 0.0, 0.0Hz; num_antennas = NumAntennas(num_antennas))],
     )
     single_state = @inferred TrackState(gpsl1, [TrackedSat(gpsl1, prn, 0.0, 0.0Hz)])
     rng_array = Random.MersenneTwister(2718)
@@ -840,15 +869,15 @@ end
             sampling_frequency,
         )
         single_state = @inferred track(
-            view(make_array_signal(rng_single, i), :, num_ants),
+            view(make_array_signal(rng_single, i), :, num_antennas),
             single_state,
             sampling_frequency,
         )
     end
 
     R = get_noise_density(array_state.noise_estimators.GPSL1CA)
-    @test size(R) == (num_ants, num_ants)
-    # `DefaultPostCorrFilter` picks the last antenna, so the covariance reduces
+    @test size(R) == (num_antennas, num_antennas)
+    # `DefaultBeamformer` picks the last antenna, so the covariance reduces
     # to its floor and the C/N₀ is identical, not merely close.
     @test estimate_cn0(array_state, 1) === estimate_cn0(single_state, 1)
     @test isfinite(ustrip(uconvert(dBHz, estimate_cn0(array_state, 1))))
@@ -861,25 +890,28 @@ end
     sampling_frequency = 5e6Hz
     prn = 1
     samples_per_code = 5000
-    num_ants = 3
+    num_antennas = 3
 
-    struct MeanBeamformer <: AbstractPostCorrFilter end
-    TrackingLoops.update(f::MeanBeamformer, prompt) = f
-    TrackingLoops.get_weights(::MeanBeamformer, ::NumAnts{1}) = 1.0 + 0.0im
-    TrackingLoops.get_weights(::MeanBeamformer, ::NumAnts{M}) where {M} =
+    struct MeanBeamformer <: AbstractBeamformer end
+    TrackingLoops.update!(f::MeanBeamformer, prompt) = f
+    TrackingLoops.get_beamforming_weights(::MeanBeamformer, ::NumAntennas{1}) = 1.0 + 0.0im
+    TrackingLoops.get_beamforming_weights(::MeanBeamformer, ::NumAntennas{M}) where {M} =
         SVector{M,ComplexF64}(ntuple(_ -> 1 / M + 0.0im, M))
 
     function make_array_signal(rng)
         code = get_code.(
             gpsl1,
-            get_code_frequency(gpsl1) .* (0:(samples_per_code-1)) ./ sampling_frequency,
+            get_chip_rate(gpsl1) .* (0:(samples_per_code-1)) ./ sampling_frequency,
             prn,
         )
         clean = 30.0 .* ComplexF64.(code)
         sigma = sqrt(ustrip(Hz, sampling_frequency))
         reduce(
             hcat,
-            (clean .+ sigma .* randn(rng, ComplexF64, samples_per_code) for _ = 1:num_ants),
+            (
+                clean .+ sigma .* randn(rng, ComplexF64, samples_per_code) for
+                _ = 1:num_antennas
+            ),
         )
     end
 
@@ -892,8 +924,8 @@ end
                     prn,
                     0.0,
                     0.0Hz;
-                    num_ants = NumAnts(num_ants),
-                    post_corr_filter = filter,
+                    num_antennas = NumAntennas(num_antennas),
+                    beamformer = filter,
                 ),
             ],
         )
@@ -905,17 +937,18 @@ end
     end
 
     beamformed = ustrip(uconvert(dBHz, estimate_cn0(run(MeanBeamformer()), 1)))
-    one_antenna = ustrip(uconvert(dBHz, estimate_cn0(run(DefaultPostCorrFilter()), 1)))
+    one_antenna = ustrip(uconvert(dBHz, estimate_cn0(run(DefaultBeamformer()), 1)))
     @test isfinite(beamformed)
-    @test beamformed - one_antenna ≈ 10 * log10(num_ants) atol = 1.0
+    @test beamformed - one_antenna ≈ 10 * log10(num_antennas) atol = 1.0
 end
 
-@testset "Collect filtered prompts per track call" begin
+@testset "Collect beamformed prompts per track call" begin
     gpsl1 = GPSL1CA()
     carrier_doppler = 200Hz
     start_code_phase = 100.0
     code_frequency =
-        carrier_doppler * get_code_center_frequency_ratio(gpsl1) + get_code_frequency(gpsl1)
+        carrier_doppler * get_chip_rate_to_center_frequency_ratio(gpsl1) +
+        get_chip_rate(gpsl1)
     sampling_frequency = 4e6Hz
     prn = 1
     samples_per_code = 4000  # one GPS L1 code period at 4 MHz
@@ -960,25 +993,25 @@ end
     signal1 = make_signal(10, π / 2, start_code_phase)
     track_state = track(signal1, track_state, sampling_frequency)
     sat = get_sat_state(track_state, prn)
-    prompts1 = get_filtered_prompts(sat)
+    prompts1 = get_beamformed_prompts(sat)
     @test prompts1 isa Vector{ComplexF64}
     @test length(prompts1) == 10
-    @test prompts1[end] == get_last_fully_integrated_filtered_prompt(track_state)
+    @test prompts1[end] == get_last_fully_integrated_beamformed_prompt(track_state)
     buffer_ref = prompts1
 
     # The buffer is reset per call (5, not 15) and reused, not reallocated.
     signal2 = make_signal(5, π / 2, start_code_phase)
     track_state = track(signal2, track_state, sampling_frequency)
     sat = get_sat_state(track_state, prn)
-    prompts2 = get_filtered_prompts(sat)
+    prompts2 = get_beamformed_prompts(sat)
     @test length(prompts2) == 5
-    @test prompts2[end] == get_last_fully_integrated_filtered_prompt(track_state)
+    @test prompts2[end] == get_last_fully_integrated_beamformed_prompt(track_state)
     @test prompts2 === buffer_ref
 
     # No completed integration: the buffer empties.
     signal3 = zeros(ComplexF64, samples_per_code ÷ 4)
     track_state = track(signal3, track_state, sampling_frequency)
-    prompts3 = get_filtered_prompts(get_sat_state(track_state, prn))
+    prompts3 = get_beamformed_prompts(get_sat_state(track_state, prn))
     @test isempty(prompts3)
     @test prompts3 === buffer_ref
 end
@@ -995,8 +1028,8 @@ end
     carrier_doppler = 200Hz
     start_code_phase = 100.0
     code_frequency =
-        carrier_doppler * get_code_center_frequency_ratio(signal) +
-        get_code_frequency(signal)
+        carrier_doppler * get_chip_rate_to_center_frequency_ratio(signal) +
+        get_chip_rate(signal)
     # L1C-P's TMBOC needs fs > ~12.28 MHz.
     sampling_frequency = 15e6Hz
     prn = 1
@@ -1066,13 +1099,14 @@ end
     sampling_frequency = 10e6Hz
     period = 100000  # 10 ms at 10 MHz — one L1C-D primary code period
     # Baseband (carrier_doppler = 0), so the code frequency is nominal.
-    code_frequency = get_code_frequency(signal)
+    code_frequency = get_chip_rate(signal)
     primary_len = get_code_length(signal)
     amplitude = 10^(45 / 20)            # 45 dB-Hz with noise_std below
     noise_std = sqrt(10e6)
     range = 0:(period-1)
 
-    estimator = ConventionalAssistedPLLAndDLL(;
+    estimator = ScalarTrackingLoop(
+        ThirdOrderAssistedBilinearLF;
         wide_carrier_loop_filter_bandwidth = 1.8Hz,
         narrow_carrier_loop_filter_bandwidth = 1.8Hz,
         code_loop_filter_bandwidth = 4.0Hz,
@@ -1105,7 +1139,7 @@ end
     init_offset = 5.0Hz
 
     track_state =
-        TrackState(; signals = (modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),))
+        TrackState(; signals = (modern_gps = (GPSL1C_P(TMBOC), GPSL1C_D(), GPSL1CA()),))
     track_state = add_satellite!(
         track_state;
         prn,
@@ -1119,19 +1153,22 @@ end
     function build_signal(code_phase, carrier_phase)
         carrier =
             cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ carrier_phase)
-        signal_cp = let s = GPSL1C_P()
+        signal_cp = let s = GPSL1C_P(TMBOC)
             cf =
-                carrier_doppler * get_code_center_frequency_ratio(s) + get_code_frequency(s)
+                carrier_doppler * get_chip_rate_to_center_frequency_ratio(s) +
+                get_chip_rate(s)
             carrier .* gen_code(n_samples, s, prn, sampling_frequency, cf, code_phase)
         end
         signal_cd = let s = GPSL1C_D()
             cf =
-                carrier_doppler * get_code_center_frequency_ratio(s) + get_code_frequency(s)
+                carrier_doppler * get_chip_rate_to_center_frequency_ratio(s) +
+                get_chip_rate(s)
             carrier .* gen_code(n_samples, s, prn, sampling_frequency, cf, code_phase)
         end
         signal_ca = let s = GPSL1CA()
             cf =
-                carrier_doppler * get_code_center_frequency_ratio(s) + get_code_frequency(s)
+                carrier_doppler * get_chip_rate_to_center_frequency_ratio(s) +
+                get_chip_rate(s)
             carrier .* gen_code(
                 n_samples,
                 s,
@@ -1147,21 +1184,21 @@ end
     track!(build_signal(0.0, 0.0), track_state, sampling_frequency)
 
     iterations = 200
-    cp_primary_len = get_code_length(GPSL1C_P())
+    cp_primary_len = get_code_length(GPSL1C_P(TMBOC))
     for i = 1:iterations
         carrier_phase =
             mod2pi(2π * carrier_doppler * n_samples * i / sampling_frequency + π) - π
         cf_cp =
-            carrier_doppler * get_code_center_frequency_ratio(GPSL1C_P()) +
-            get_code_frequency(GPSL1C_P())
+            carrier_doppler * get_chip_rate_to_center_frequency_ratio(GPSL1C_P(TMBOC)) +
+            get_chip_rate(GPSL1C_P(TMBOC))
         code_phase = mod(cf_cp * n_samples * i / sampling_frequency, cp_primary_len)
         track!(build_signal(code_phase, carrier_phase), track_state, sampling_frequency)
     end
 
     sat = get_sat_state(track_state, :modern_gps, prn)
-    @test length(get_filtered_prompts(sat.signals[1])) > 0  # L1C_P
-    @test length(get_filtered_prompts(sat.signals[2])) > 0  # L1C_D
-    @test length(get_filtered_prompts(sat.signals[3])) > 0  # L1CA
+    @test length(get_beamformed_prompts(sat.signals[1])) > 0  # L1C_P
+    @test length(get_beamformed_prompts(sat.signals[2])) > 0  # L1C_D
+    @test length(get_beamformed_prompts(sat.signals[3])) > 0  # L1CA
 
     final_doppler = get_carrier_doppler(track_state, :modern_gps, prn)
     @test abs(final_doppler - carrier_doppler) < 5.0Hz
@@ -1175,8 +1212,8 @@ end
     signal = GPSL5I()
     carrier_doppler = -200Hz                 # negative ⇒ negative code Doppler
     code_frequency =
-        carrier_doppler * get_code_center_frequency_ratio(signal) +
-        get_code_frequency(signal)
+        carrier_doppler * get_chip_rate_to_center_frequency_ratio(signal) +
+        get_chip_rate(signal)
     sampling_frequency = 20e6Hz
     prn = 1
     chunk = 20000                            # 1 ms = one L5I code period at 20 MHz
@@ -1206,7 +1243,7 @@ end
 
     sat = get_sat_state(track_state, prn)
 
-    @test has_bit_or_secondary_code_been_found(sat)
+    @test is_bit_or_secondary_code_synced(sat)
     # A wedged satellite grows `integrated_samples` without bound and freezes
     # its prompt.
     @test get_integrated_samples(track_state, prn) <= 2 * chunk

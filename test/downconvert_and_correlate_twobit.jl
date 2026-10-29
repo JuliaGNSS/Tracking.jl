@@ -1,6 +1,8 @@
 module DownconvertAndCorrelateTwoBitTest
 
 using Test: @test, @testset, @test_throws
+using GNSSSignals: CBOC
+using TrackingLoopFilters: ThirdOrderAssistedBilinearLF
 using Random: MersenneTwister, Random
 using Statistics: var
 using Unitful: Hz, ustrip
@@ -13,8 +15,8 @@ using GNSSSignals:
     gen_code,
     gen_code!,
     get_band_id,
-    get_code_center_frequency_ratio,
-    get_code_frequency
+    get_chip_rate_to_center_frequency_ratio,
+    get_chip_rate
 using Tracking:
     TrackedSat,
     TrackState,
@@ -35,27 +37,27 @@ using TrackingLoops:
     get_prompt,
     get_early,
     get_late,
-    get_accumulators,
-    get_correlator_sample_shifts,
-    AbstractCorrelator,
-    EarlyPromptLateCorrelator,
-    VeryEarlyPromptLateCorrelator,
-    NumAnts,
-    DefaultPostCorrFilter,
-    ConventionalAssistedPLLAndDLL
+    get_correlator_outputs,
+    calc_correlator_sample_offsets,
+    AbstractCorrelatorBank,
+    EarlyPromptLateCorrelatorBank,
+    VeryEarlyPromptLateCorrelatorBank,
+    NumAntennas,
+    DefaultBeamformer,
+    ScalarTrackingLoop
 import Tracking
 using StaticArrays: SVector
 
 # Dynamic-tap-count correlator (see the one-bit test file): runtime Vector shifts and
 # accumulators, exercising the AbstractVector-shifts fallback; parametric over M.
-struct DynShiftsCorrelator{M} <: AbstractCorrelator{M}
-    accumulators::Vector
+struct DynShiftsCorrelator{M} <: AbstractCorrelatorBank{M}
+    correlator_outputs::Vector
     shifts::Vector{Int}
 end
-TrackingLoops.get_accumulators(c::DynShiftsCorrelator) = c.accumulators
-TrackingLoops.update_accumulator(c::DynShiftsCorrelator{M}, acc) where {M} =
+TrackingLoops.get_correlator_outputs(c::DynShiftsCorrelator) = c.correlator_outputs
+TrackingLoops.with_correlator_outputs(c::DynShiftsCorrelator{M}, acc) where {M} =
     DynShiftsCorrelator{M}(collect(acc), c.shifts)
-TrackingLoops.get_correlator_sample_shifts(
+TrackingLoops.calc_correlator_sample_offsets(
     c::DynShiftsCorrelator,
     sampling_frequency,
     code_frequency,
@@ -63,7 +65,7 @@ TrackingLoops.get_correlator_sample_shifts(
 
 # 12-bit-ADC-style Complex{Int16} capture (carrier × unit-normalised code, scaled to `peak`).
 function make_capture(sig, prn, fs, nsamp, cdopp, cphase; peak = 2000)
-    fc = cdopp * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
+    fc = cdopp * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
     code = gen_code(nsamp, sig, prn, fs, fc, cphase)
     code = code ./ maximum(abs, code)
     s = cis.(2π .* cdopp .* (0:(nsamp-1)) ./ fs .+ 0.6) .* code
@@ -81,7 +83,7 @@ function correlate_once(
     nsamp,
     cdopp,
     cphase;
-    correlator = nothing,
+    correlator_bank = nothing,
     mat = false,
     M = 1,
 )
@@ -90,8 +92,8 @@ function correlate_once(
         make_capture(sig, 1, fs, nsamp, cdopp, cphase)
     meas = NamedTuple{(band_key_for(sig),)}((BandMeasurement(cap, fs, 0.0Hz),))
     sat =
-        correlator === nothing ? TrackedSat(sig, 1, cphase, cdopp) :
-        TrackedSat(sig, 1, cphase, cdopp; correlator)
+        correlator_bank === nothing ? TrackedSat(sig, 1, cphase, cdopp) :
+        TrackedSat(sig, 1, cphase, cdopp; correlator_bank)
     ts = TrackState(sig, [sat])
     ts2 = downconvert_and_correlate(dc, meas, ts)
     _completed_or_partial_correlator(first(get_sat_state(ts2, 1).signals))
@@ -100,8 +102,8 @@ end
 # First completed integration, or the live partial correlator if none completed
 # (see the same helper in downconvert_and_correlate_int16.jl).
 function _completed_or_partial_correlator(sig)
-    outs = sig.correlator_outputs
-    isempty(outs) ? sig.correlator : first(outs).correlator
+    outs = sig.correlator_bank_outputs
+    isempty(outs) ? sig.correlator_bank : first(outs).correlator_bank
 end
 
 # Per-sample reference of the two-bit correlation: `{±1,±3}` measurement and carrier
@@ -191,7 +193,7 @@ function _track_noisy(
     gpsl1 = GPSL1CA()
     nsamp = round(Int, (fs / 1Hz) * 1e-3)
     prn = 1
-    cfreq = cdopp * get_code_center_frequency_ratio(gpsl1) + get_code_frequency(gpsl1)
+    cfreq = cdopp * get_chip_rate_to_center_frequency_ratio(gpsl1) + get_chip_rate(gpsl1)
     range = 0:(nsamp-1)
     start_code_phase = 100.0
     amp = 10^(cn0_dbhz / 20)
@@ -206,7 +208,7 @@ function _track_noisy(
                 prn,
                 start_code_phase,
                 cdopp;
-                cn0_estimator = MomentsCN0Estimator(100),
+                cn0_estimator = MomentsCN0Estimator(; num_integrations = 100),
             ),
         ],
     )
@@ -246,16 +248,16 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         cdopp, cphase, prn = 250Hz, 100.0, 1
         cap = make_capture(sig, prn, fs, nsamp, cdopp, cphase)
-        fc = cdopp * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
+        fc = cdopp * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
         corr =
-            NC == 3 ? EarlyPromptLateCorrelator(; num_ants = NumAnts(1)) :
-            VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(1))
-        shifts = get_correlator_sample_shifts(corr, fs, fc)
+            NC == 3 ? EarlyPromptLateCorrelatorBank(; num_antennas = NumAntennas(1)) :
+            VeryEarlyPromptLateCorrelatorBank(; num_antennas = NumAntennas(1))
+        shifts = calc_correlator_sample_offsets(corr, fs, fc)
         dc = TwoBitDownconvertAndCorrelator(; threshold = thr)
         got = Tracking._twobit_hybrid_blocked!(
             dc,
             cap,
-            NumAnts(1),
+            NumAntennas(1),
             sig,
             prn,
             shifts,
@@ -274,7 +276,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         got_dyn = Tracking._twobit_hybrid_blocked!(
             dc,
             cap,
-            NumAnts(1),
+            NumAntennas(1),
             sig,
             prn,
             collect(shifts),
@@ -299,9 +301,9 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         cap[1] = complex(typemin(Int16), typemax(Int16))
         cap[2] = complex(typemax(Int16), typemin(Int16))
         cdopp, cphase, prn = 250Hz, 100.0, 1
-        fc = cdopp * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
-        shifts = get_correlator_sample_shifts(
-            EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
+        fc = cdopp * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
+        shifts = calc_correlator_sample_offsets(
+            EarlyPromptLateCorrelatorBank(; num_antennas = NumAntennas(1)),
             fs,
             fc,
         )
@@ -310,7 +312,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             got = Tracking._twobit_hybrid_blocked!(
                 dc,
                 cap,
-                NumAnts(1),
+                NumAntennas(1),
                 sig,
                 prn,
                 shifts,
@@ -389,9 +391,9 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         # 100 MHz through the full plumbing.
         sig, fs = GPSL1CA(), 100e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
-        fc = 200Hz * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
-        shifts = get_correlator_sample_shifts(
-            EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
+        fc = 200Hz * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
+        shifts = calc_correlator_sample_offsets(
+            EarlyPromptLateCorrelatorBank(; num_antennas = NumAntennas(1)),
             fs,
             fc,
         )
@@ -419,7 +421,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         @test abs(get_early(cb)) / abs(get_late(cb)) ≈ 1 atol = 5e-2
     end
 
-    @testset "VeryEarlyPromptLateCorrelator (NC=5)" begin
+    @testset "VeryEarlyPromptLateCorrelatorBank (NC=5)" begin
         sig, fs = GPSL5I(), 12e6Hz          # BPSK; the bit-wise backend is BPSK/BOC-only
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         c = correlate_once(
@@ -429,9 +431,11 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             nsamp,
             200Hz,
             100.0;
-            correlator = VeryEarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
+            correlator_bank = VeryEarlyPromptLateCorrelatorBank(;
+                num_antennas = NumAntennas(1),
+            ),
         )
-        a = get_accumulators(c)
+        a = get_correlator_outputs(c)
         @test length(a) == 5
         @test abs(a[3]) > abs(a[1]) && abs(a[3]) > abs(a[5])
         @test abs(a[3]) ≥ abs(a[2]) && abs(a[3]) ≥ abs(a[4])
@@ -448,7 +452,9 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             nsamp,
             200Hz,
             100.0;
-            correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(M)),
+            correlator_bank = EarlyPromptLateCorrelatorBank(;
+                num_antennas = NumAntennas(M),
+            ),
             mat = true,
             M,
         )
@@ -487,12 +493,14 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
         meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
         dc = TwoBitThreadedDownconvertAndCorrelator()
-        est = ConventionalAssistedPLLAndDLL()
+        est = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)
         mksig() = TrackedSignal(
             sig;
-            num_ants = NumAnts(1),
-            correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
-            post_corr_filter = DefaultPostCorrFilter(),
+            num_antennas = NumAntennas(1),
+            correlator_bank = EarlyPromptLateCorrelatorBank(;
+                num_antennas = NumAntennas(1),
+            ),
+            beamformer = DefaultBeamformer(),
         )
         cs = first(
             get_sat_state(
@@ -507,7 +515,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
                 ),
                 1,
             ).signals,
-        ).correlator
+        ).correlator_bank
         satN = TrackedSat(ntuple(_ -> mksig(), N), 1, 100.0, 200Hz; doppler_estimator = est)
         tsN = downconvert_and_correlate(
             dc,
@@ -515,9 +523,9 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             TrackState(sig, satN; doppler_estimator = est),
         )
         for s in get_sat_state(tsN, 1).signals
-            @test get_prompt(s.correlator) == get_prompt(cs)
-            @test get_early(s.correlator) == get_early(cs)
-            @test get_late(s.correlator) == get_late(cs)
+            @test get_prompt(s.correlator_bank) == get_prompt(cs)
+            @test get_early(s.correlator_bank) == get_early(cs)
+            @test get_late(s.correlator_bank) == get_late(cs)
         end
     end
 
@@ -535,18 +543,22 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             nsamp,
             200Hz,
             100.0;
-            correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(M)),
+            correlator_bank = EarlyPromptLateCorrelatorBank(;
+                num_antennas = NumAntennas(M),
+            ),
             mat = true,
             M,
         )
         cap = make_capture_mat(sig, fs, nsamp, 200Hz, 100.0, M)
         meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
-        est = ConventionalAssistedPLLAndDLL()
+        est = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)
         mksig() = TrackedSignal(
             sig;
-            num_ants = NumAnts(M),
-            correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(M)),
-            post_corr_filter = DefaultPostCorrFilter(),
+            num_antennas = NumAntennas(M),
+            correlator_bank = EarlyPromptLateCorrelatorBank(;
+                num_antennas = NumAntennas(M),
+            ),
+            beamformer = DefaultBeamformer(),
         )
         satN = TrackedSat(ntuple(_ -> mksig(), N), 1, 100.0, 200Hz; doppler_estimator = est)
         tsN = downconvert_and_correlate(
@@ -566,8 +578,9 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
     @testset "dynamic Vector-shifts correlator matches static EPL" begin
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
-        fc = 200Hz * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
-        shifts = collect(get_correlator_sample_shifts(EarlyPromptLateCorrelator(), fs, fc))
+        fc = 200Hz * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
+        shifts =
+            collect(calc_correlator_sample_offsets(EarlyPromptLateCorrelatorBank(), fs, fc))
         dc = TwoBitThreadedDownconvertAndCorrelator()
 
         # M=1: dynamic fallback == static @generated kernel, exactly.
@@ -579,10 +592,10 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             nsamp,
             200Hz,
             100.0;
-            correlator = DynShiftsCorrelator{1}(zeros(ComplexF64, 3), shifts),
+            correlator_bank = DynShiftsCorrelator{1}(zeros(ComplexF64, 3), shifts),
         )
-        @test length(get_accumulators(cd)) == 3
-        @test get_accumulators(cd) == get_accumulators(cs)
+        @test length(get_correlator_outputs(cd)) == 3
+        @test get_correlator_outputs(cd) == get_correlator_outputs(cs)
 
         # M=2: multi-antenna dynamic fallback matches the static EPL M=2 kernel.
         csm = correlate_once(
@@ -592,7 +605,9 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             nsamp,
             200Hz,
             100.0;
-            correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(2)),
+            correlator_bank = EarlyPromptLateCorrelatorBank(;
+                num_antennas = NumAntennas(2),
+            ),
             mat = true,
             M = 2,
         )
@@ -603,21 +618,22 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             nsamp,
             200Hz,
             100.0;
-            correlator = DynShiftsCorrelator{2}(
+            correlator_bank = DynShiftsCorrelator{2}(
                 fill(zero(SVector{2,ComplexF64}), 3),
                 shifts,
             ),
             mat = true,
             M = 2,
         )
-        @test get_accumulators(cdm) == get_accumulators(csm)
+        @test get_correlator_outputs(cdm) == get_correlator_outputs(csm)
     end
 
     @testset "dynamic Vector-shifts, band-shared (>1 sat) matches per-sat" begin
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
-        fc = 200Hz * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
-        shifts = collect(get_correlator_sample_shifts(EarlyPromptLateCorrelator(), fs, fc))
+        fc = 200Hz * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
+        shifts =
+            collect(calc_correlator_sample_offsets(EarlyPromptLateCorrelatorBank(), fs, fc))
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
         meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
         dc = TwoBitThreadedDownconvertAndCorrelator()
@@ -629,7 +645,10 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             meas,
             TrackState(
                 sig,
-                [TrackedSat(sig, prn, 100.0, 200Hz; correlator = mkcorr()) for prn in prns],
+                [
+                    TrackedSat(sig, prn, 100.0, 200Hz; correlator_bank = mkcorr()) for
+                    prn in prns
+                ],
             ),
         )
         for prn in prns
@@ -640,14 +659,22 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
                         meas,
                         TrackState(
                             sig,
-                            [TrackedSat(sig, prn, 100.0, 200Hz; correlator = mkcorr())],
+                            [
+                                TrackedSat(
+                                    sig,
+                                    prn,
+                                    100.0,
+                                    200Hz;
+                                    correlator_bank = mkcorr(),
+                                ),
+                            ],
                         ),
                     ),
                     prn,
                 ).signals,
-            ).correlator
-            shared = first(get_sat_state(tsN, prn).signals).correlator
-            @test get_accumulators(shared) == get_accumulators(alone)
+            ).correlator_bank
+            shared = first(get_sat_state(tsN, prn).signals).correlator_bank
+            @test get_correlator_outputs(shared) == get_correlator_outputs(alone)
         end
     end
 
@@ -681,8 +708,8 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
                     ),
                     prn,
                 ).signals,
-            ).correlator
-            shared = first(get_sat_state(tsN, prn).signals).correlator
+            ).correlator_bank
+            shared = first(get_sat_state(tsN, prn).signals).correlator_bank
             @test get_prompt(shared) == get_prompt(alone)
             @test get_early(shared) == get_early(alone)
             @test get_late(shared) == get_late(alone)
@@ -703,7 +730,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
 
     @testset "errors on CBOC (non-binary) code" begin
         # CBOC modulation gate, as in the one-bit test.
-        sig, fs = GalileoE1B(), 15e6Hz
+        sig, fs = GalileoE1B(CBOC), 15e6Hz
         cap = make_capture(sig, 1, fs, 5000, 200Hz, 100.0)
         meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
         ts = TrackState(sig, [TrackedSat(sig, 1, 100.0, 200Hz)])
@@ -720,7 +747,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         Random.seed!(3)
         sig, fs = GPSL1CA(), 5e6Hz
         cdopp, cphase, prn = 1000.0Hz, 0.0, 1
-        fc = cdopp * get_code_center_frequency_ratio(sig) + get_code_frequency(sig)
+        fc = cdopp * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
         N = 20000
         A, σ = 40.0, 200.0
         d1 = OneBitThreadedDownconvertAndCorrelator()
@@ -748,7 +775,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
                 round.(Int16, A .* imag.(s) .+ σ .* randn(N)),
             )
             meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
-            # Separate states: the output shares the input's `correlator_outputs`
+            # Separate states: the output shares the input's `correlator_bank_outputs`
             # buffer, so one shared `ts` would make `first(...)` return d1's for both.
             ts1 = TrackState(sig, [TrackedSat(sig, prn, cphase, cdopp)])
             ts2 = TrackState(sig, [TrackedSat(sig, prn, cphase, cdopp)])

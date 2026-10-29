@@ -7,11 +7,10 @@ using GNSSSignals: GPSL1CA, get_code
 import Tracking
 using TrackingLoops:
     MomentsCN0Estimator,
-    get_current_index,
-    update,
-    EarlyPromptLateCorrelator,
+    update!,
+    EarlyPromptLateCorrelatorBank,
     get_prompt,
-    get_correlator_sample_shifts,
+    calc_correlator_sample_offsets,
     estimate_cn0
 
 @testset "CN0 estimation" begin
@@ -23,7 +22,7 @@ using TrackingLoops:
     prn = 1
     range = 0:3999
     start_carrier_phase = π / 2
-    cn0_estimator = MomentsCN0Estimator(100)
+    cn0_estimator = MomentsCN0Estimator(; num_integrations = 100)
     start_sample = 1
     num_samples = 4000
     gpsl1 = GPSL1CA()
@@ -40,11 +39,14 @@ using TrackingLoops:
             code_frequency .* (-2:4001) ./ sampling_frequency .+ start_code_phase,
             prn,
         )
-        correlator = EarlyPromptLateCorrelator()
-        sample_shifts =
-            get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
-        correlator = Tracking.downconvert_and_correlate_fused!(
-            correlator,
+        correlator_bank = EarlyPromptLateCorrelatorBank()
+        sample_shifts = calc_correlator_sample_offsets(
+            correlator_bank,
+            sampling_frequency,
+            code_frequency,
+        )
+        correlator_bank = Tracking.downconvert_and_correlate_fused!(
+            correlator_bank,
             signal,
             code,
             sample_shifts,
@@ -54,9 +56,8 @@ using TrackingLoops:
             start_sample,
             num_samples,
         )
-        cn0_estimator = update(cn0_estimator, get_prompt(correlator))
+        cn0_estimator = update!(cn0_estimator, get_prompt(correlator_bank))
     end
-    @test @inferred(get_current_index(cn0_estimator)) == 100
     @test @inferred(Base.length(cn0_estimator)) == 100
     cn0_estimate = @inferred estimate_cn0(cn0_estimator, 1ms)
 

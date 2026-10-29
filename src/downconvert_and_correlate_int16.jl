@@ -12,8 +12,8 @@
 # With M > 1 antennas (a dense `Matrix`, one column per antenna) one code + carrier block
 # serves M antenna-outer correlate passes; a satellite's signals on one carrier also share
 # the wipe (tile-share, below). Results are `ComplexF64` (M=1) / `SVector{M,ComplexF64}`
-# (M>1) with the carrier amplitude divided out. The kernels are `@generated` over the tap
-# count NC and M, with a runtime-tap-count fallback.
+# (M>1) with the carrier amplitude divided out. The kernels are `@generated` over the correlator
+# count NC and M, with a runtime-correlator-count fallback.
 
 import SinCosLUT
 using SinCosLUT: SinCosTable, carrier_engine, carrier_state, carrier_lookup, carrier_advance
@@ -156,7 +156,7 @@ attributes #0 = { alwaysinline }""",
 end
 
 # Per-thread scratch, grown lazily and reused (allocation-free in steady state): the block
-# code `extb` (`blk + tap-span`) and carrier sin/cos `csb`/`ccb`, all Int8. `TI` is the
+# code `extb` (`blk + correlator-span`) and carrier sin/cos `csb`/`ccb`, all Int8. `TI` is the
 # wipe element type chosen by `_int16_choose_carrier`.
 struct Int16ScratchBuffers{TI}
     extb::Vector{Int8}
@@ -165,7 +165,7 @@ struct Int16ScratchBuffers{TI}
     # Shared DI/DQ tile (the carrier-wiped measurement) of the tile-share and dynamic paths.
     dib::Vector{TI}
     dqb::Vector{TI}
-    # Int64 tap totals (`M·NC`) of the runtime-tap-count fallback.
+    # Int64 correlator totals (`M·NC`) of the runtime-correlator-count fallback.
     tsumI::Vector{Int64}
     tsumQ::Vector{Int64}
 end
@@ -333,14 +333,14 @@ const _Int16DC = Union{Int16DownconvertAndCorrelator,Int16ThreadedDownconvertAnd
 end
 
 # ── The integer hybrid-blocked kernel ────────────────────────────────────────
-# Returns this integration's contribution per tap, `SVector{NC}` of `ComplexF64` (M=1) or
+# Returns this integration's contribution per correlator, `SVector{NC}` of `ComplexF64` (M=1) or
 # `SVector{M,ComplexF64}` (M>1). `@generated` over (NC, M): each of the M antenna passes
 # keeps only its own NC accumulators live; the accumulate (vpmaddwd / SMLAL / exact Int32)
 # is chosen at generation time.
 @generated function _int16_hybrid_blocked!(
     dc::_Int16DC,
     signal::AbstractVecOrMat{Complex{Int16}},
-    ::NumAnts{M},
+    ::NumAntennas{M},
     signal_type,
     prn::Integer,
     sample_shifts::SVector{NC},
@@ -504,7 +504,7 @@ end
 
         # Code is generated one-shot per block from its analytically advanced phase (a
         # continuing engine would allocate per sat per integration). The block starts at
-        # output sample `min_shift`, so tap k at output n reads `extb[n + shift_k - min_shift]`.
+        # output sample `min_shift`, so correlator k at output n reads `extb[n + shift_k - min_shift]`.
         cps = Float64(upreferred(code_frequency / Hz)) / sampling_freq
         code_phase0 = Float64(code_phase)
 
@@ -540,7 +540,7 @@ end
     end
 end
 
-# One block of the dynamic fallback: accumulate every antenna/tap from the DI/DQ tile into
+# One block of the dynamic fallback: accumulate every antenna/correlator from the DI/DQ tile into
 # the Int64 totals. A `Val{W}` function barrier so `W` and `TIw` are constants in the SIMD
 # types (a bare local `W` would box the accumulators and allocate per block).
 @inline function _int16_dyn_accumulate_block!(
@@ -551,7 +551,7 @@ end
     extb::Vector{Int8},
     sample_shifts::AbstractVector,
     min_shift::Integer,
-    ::NumAnts{M},
+    ::NumAntennas{M},
     len::Int,
     ::Val{W},
 ) where {TIw,M,W}
@@ -592,12 +592,12 @@ end
 
 # Dynamic fallback for runtime-sized `AbstractVector` sample shifts (#126); `SVector`
 # shifts dispatch to the `@generated` kernel. Per block it fills the DI/DQ tile once
-# (`_int16_fill_ditile!`) and accumulates each antenna/tap with the exact Int32 accumulate.
+# (`_int16_fill_ditile!`) and accumulates each antenna/correlator with the exact Int32 accumulate.
 # Returns a `Vector` of `ComplexF64` (M=1) or `SVector{M,ComplexF64}` (M>1).
 function _int16_hybrid_blocked!(
     dc::_Int16DC,
     signal::AbstractVecOrMat{Complex{Int16}},
-    ::NumAnts{M},
+    ::NumAntennas{M},
     signal_type,
     prn::Integer,
     sample_shifts::AbstractVector,
@@ -667,7 +667,7 @@ function _int16_hybrid_blocked!(
             dib,
             dqb,
             signal,
-            NumAnts{M}(),
+            NumAntennas{M}(),
             csb,
             ccb,
             base,
@@ -683,7 +683,7 @@ function _int16_hybrid_blocked!(
             extb,
             sample_shifts,
             min_shift,
-            NumAnts{M}(),
+            NumAntennas{M}(),
             len,
             Val(_INT16_W),
         )
@@ -722,7 +722,7 @@ end
     dib,
     dqb,
     signal,
-    ::NumAnts{M},
+    ::NumAntennas{M},
     csb,
     ccb,
     base,
@@ -776,7 +776,7 @@ end
 @generated function _int16_hybrid_blocked_multi!(
     dc::_Int16DC,
     signal::AbstractVecOrMat{Complex{Int16}},
-    ::NumAnts{M},
+    ::NumAntennas{M},
     signal_types::Tuple,
     prn::Integer,
     all_shifts::Tuple{Vararg{SVector}},
@@ -974,7 +974,7 @@ end
                 dib,
                 dqb,
                 signal,
-                NumAnts{$M}(),
+                NumAntennas{$M}(),
                 csb,
                 ccb,
                 base,
@@ -990,7 +990,7 @@ end
 end
 
 # Several signals per sat: one carrier downconvert shared through the tile-share kernel.
-# Returns the per-signal `(new_correlator, is_integration_completed)` tuples.
+# Returns the per-signal `(new_correlator_bank, is_integration_completed)` tuples.
 @inline function _correlate_signals(
     signals::Tuple{TrackedSignal,TrackedSignal,Vararg{TrackedSignal}},
     per_signal_completed::Tuple,
@@ -1015,7 +1015,7 @@ end
             num_samples_signal,
         )
     end
-    correlators = map(s -> s.correlator, signals)
+    correlator_banks = map(s -> s.correlator_bank, signals)
     signal_types = map(s -> s.signal, signals)
     all_shifts = map(p -> p.sample_shifts, params)
     code_phases = map(p -> p.signal_code_phase, params)
@@ -1023,7 +1023,7 @@ end
     new_accs = _int16_hybrid_blocked_multi!(
         dc,
         signal,
-        _num_ants_val(correlators[1]),
+        NumAntennas(correlator_banks[1]),
         signal_types,
         prn,
         all_shifts,
@@ -1035,8 +1035,8 @@ end
         signal_start_sample,
         samples_to_integrate,
     )
-    new_corrs = map(correlators, new_accs) do c, a
-        update_accumulator(c, get_accumulators(c) .+ a)
+    new_corrs = map(correlator_banks, new_accs) do c, a
+        with_correlator_outputs(c, get_correlator_outputs(c) .+ a)
     end
     map(tuple, new_corrs, per_signal_completed)
 end
@@ -1046,7 +1046,7 @@ end
 # the kernel generates its code block in its own scratch and has no band cache.
 @inline _despread_one_signal!(
     dc::_Int16DC,
-    correlator,
+    correlator_bank,
     samples,
     signal_type,
     prn,
@@ -1060,12 +1060,12 @@ end
     num_samples,
     ::Any,
     ::Bool = true,
-) = update_accumulator(
-    correlator,
-    get_accumulators(correlator) .+ _int16_hybrid_blocked!(
+) = with_correlator_outputs(
+    correlator_bank,
+    get_correlator_outputs(correlator_bank) .+ _int16_hybrid_blocked!(
         dc,
         samples,
-        _num_ants_val(correlator),
+        NumAntennas(correlator_bank),
         signal_type,
         prn,
         sample_shifts,
