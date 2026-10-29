@@ -158,7 +158,7 @@ end
 # `carrier_phase` is where the caller's carrier stands (`0.0` for the open-loop
 # reference). `code_replica_size` is the replica the backend needs if it generates
 # one (the CPU kernels do; the Int16 and bit-wise kernels ignore it): the whole sample
-# buffer plus the correlator spread, since `gen_code_replica!` writes *at* `start_sample`.
+# buffer plus the correlator spread, since `gen_code_replica!` writes *at* `first(sample_range)`.
 # The CPU method draws it from the backend's per-thread `ScratchBuffers`, shared by
 # satellites and noise reference: each loop iteration, serial or `@batch`-pinned to a
 # thread, uses the slot alone.
@@ -178,8 +178,7 @@ end
     code_frequency,
     carrier_frequency,
     sampling_frequency,
-    start_sample,
-    num_samples,
+    sample_range,
     code_replica_size,
     use_band_cache::Bool = true,
 )
@@ -192,8 +191,7 @@ end
             code_frequency,
             sampling_frequency,
             code_phase,
-            start_sample,
-            num_samples,
+            sample_range,
             sample_shifts,
             prn,
         )
@@ -206,8 +204,7 @@ end
             carrier_frequency,
             sampling_frequency,
             carrier_phase,
-            start_sample,
-            num_samples,
+            sample_range,
         )::typeof(correlator_bank)
     end
 end
@@ -223,8 +220,7 @@ end
     carrier_frequency,
     sampling_frequency,
     carrier_phase,
-    start_sample,
-    num_samples,
+    sample_range,
 ) where {M}
     downconvert_and_correlate_fused!(
         correlator_bank,
@@ -234,8 +230,7 @@ end
         carrier_frequency,
         sampling_frequency,
         carrier_phase,
-        start_sample,
-        num_samples,
+        sample_range,
     )::typeof(correlator_bank)
 end
 
@@ -248,9 +243,9 @@ end
     carrier_frequency,
     sampling_frequency,
     carrier_phase,
-    start_sample,
-    num_samples,
+    sample_range,
 ) where {M}
+    num_samples = length(sample_range)
     _with_tile_buffers(dc, num_samples, M) do tile_re, tile_im
         downconvert_and_correlate_fused!(
             correlator_bank,
@@ -260,8 +255,7 @@ end
             carrier_frequency,
             sampling_frequency,
             carrier_phase,
-            start_sample,
-            num_samples,
+            sample_range,
             tile_re,
             tile_im,
         )::typeof(correlator_bank)
@@ -278,8 +272,7 @@ end
     carrier_frequency,
     sampling_frequency,
     carrier_phase,
-    start_sample,
-    num_samples,
+    sample_range,
 ) where {M}
     downconvert_and_correlate_fused!(
         correlator_bank,
@@ -289,8 +282,7 @@ end
         carrier_frequency,
         sampling_frequency,
         carrier_phase,
-        start_sample,
-        num_samples,
+        sample_range,
     )::typeof(correlator_bank)
 end
 
@@ -302,9 +294,9 @@ end
     carrier_frequency,
     sampling_frequency,
     carrier_phase,
-    start_sample,
-    num_samples,
+    sample_range,
 ) where {M}
+    num_samples = length(sample_range)
     tile_re = Vector{Float32}(undef, num_samples * M)
     tile_im = Vector{Float32}(undef, num_samples * M)
     downconvert_and_correlate_fused!(
@@ -315,8 +307,7 @@ end
         carrier_frequency,
         sampling_frequency,
         carrier_phase,
-        start_sample,
-        num_samples,
+        sample_range,
         tile_re,
         tile_im,
     )::typeof(correlator_bank)
@@ -329,7 +320,7 @@ function _update_tracked_sat_correlator_bank(
     dc::AbstractDownconvertAndCorrelator,
     samples,
     num_buffer_samples,
-    chunk_last_sample,
+    chunk_sample_range,
     sampling_frequency,
     intermediate_frequency,
     stop_before_partial::Bool = false,
@@ -342,15 +333,14 @@ function _update_tracked_sat_correlator_bank(
     # pass, which then integrates boundary to boundary at the Doppler the estimator
     # wrote in between: every completed integration sees a single Doppler. A final
     # pass without the flag drains the buffer's trailing partial.
-    while sat.signal_start_sample <= chunk_last_sample
+    while sat.next_sample_index <= last(chunk_sample_range)
         samples_to_integrate, per_signal_completed = _calc_min_samples_and_completed(
             sat.signals,
-            sat.signal_start_sample,
+            sat.next_sample_index:last(chunk_sample_range),
             sampling_frequency,
             sat.code_doppler,
             sat.code_phase,
             num_buffer_samples,
-            chunk_last_sample,
         )
         samples_to_integrate == 0 && break
         # A sub-step that completes no signal is the chunk-clamped trailing partial.
@@ -366,8 +356,7 @@ function _update_tracked_sat_correlator_bank(
             carrier_frequency,
             sat.carrier_phase,
             sampling_frequency,
-            sat.signal_start_sample,
-            samples_to_integrate,
+            range(sat.next_sample_index; length = samples_to_integrate),
             sat.prn,
             num_buffer_samples,
         )
@@ -382,17 +371,16 @@ function _update_tracked_sat_correlator_bank(
     return sat
 end
 
-# The MIN over all signals' samples-to-next-boundary, clamped to the chunk end
-# (boundaries and replica sizing still see the whole buffer), and which signals
-# that completes.
+# The MIN over all signals' samples-to-next-boundary, clamped to `sample_range`,
+# the rest of the chunk (boundaries and replica sizing still see the whole buffer),
+# and which signals that completes.
 @inline function _calc_min_samples_and_completed(
     signals::Tuple,
-    signal_start_sample,
+    sample_range,
     sampling_frequency,
     code_doppler,
     code_phase,
     num_buffer_samples,
-    chunk_last_sample,
 )
     per_signal_to_boundary = _per_signal_samples_to_boundary(
         signals,
@@ -402,8 +390,7 @@ end
         num_buffer_samples,
     )
     samples_to_integrate = _min_of_tuple(per_signal_to_boundary)
-    samples_left = chunk_last_sample - signal_start_sample + 1
-    samples_to_integrate = min(samples_to_integrate, samples_left)
+    samples_to_integrate = min(samples_to_integrate, length(sample_range))
     per_signal_completed = _flag_completed(per_signal_to_boundary, samples_to_integrate)
     return samples_to_integrate, per_signal_completed
 end
@@ -506,8 +493,7 @@ end
     carrier_frequency,
     carrier_phase,
     sampling_frequency,
-    signal_start_sample,
-    samples_to_integrate,
+    sample_range,
     prn,
     num_buffer_samples,
 )
@@ -531,8 +517,7 @@ end
         p.code_frequency,
         carrier_frequency,
         sampling_frequency,
-        signal_start_sample,
-        samples_to_integrate,
+        sample_range,
         p.code_replica_size,
     )
     ((new_corr, per_signal_completed[1]),)
@@ -551,8 +536,7 @@ end
     carrier_frequency,
     carrier_phase,
     sampling_frequency,
-    signal_start_sample,
-    samples_to_integrate,
+    sample_range,
     prn,
     num_buffer_samples,
 )
@@ -564,8 +548,7 @@ end
             code_doppler,
             code_phase,
             sampling_frequency,
-            signal_start_sample,
-            samples_to_integrate,
+            sample_range,
             prn,
             num_buffer_samples,
         )
@@ -588,8 +571,7 @@ end
                 carrier_frequency,
                 sampling_frequency,
                 carrier_phase,
-                signal_start_sample,
-                samples_to_integrate,
+                sample_range,
                 tile_re,
                 tile_im,
             )
@@ -606,8 +588,7 @@ end
     code_doppler,
     code_phase,
     sampling_frequency,
-    signal_start_sample,
-    samples_to_integrate,
+    sample_range,
     prn,
     num_buffer_samples,
 )
@@ -634,8 +615,7 @@ end
             p.code_frequency,
             sampling_frequency,
             p.signal_code_phase,
-            signal_start_sample,
-            samples_to_integrate,
+            sample_range,
             p.sample_shifts,
             prn,
         )
@@ -961,13 +941,7 @@ end
     ((
         estimator,
         m,
-        _chunk_first_sample(
-            chunk_duration,
-            chunk_index,
-            m.sampling_frequency,
-            num_buffer_samples,
-        ),
-        _chunk_last_sample(
+        _chunk_sample_range(
             chunk_duration,
             chunk_index,
             m.sampling_frequency,
@@ -980,12 +954,7 @@ end
 
 # Builds the `NoiseUpdateContext` here, as the loop already captures the backend.
 @inline _apply_noise_item!(item::Tuple, dc) = (
-    update_noise!(
-        item[1],
-        item[2],
-        item[3]:item[4],
-        NoiseUpdateContext(item[5], item[6], dc),
-    );
+    update_noise!(item[1], item[2], item[3], NoiseUpdateContext(item[4], item[5], dc));
     nothing
 )
 
@@ -1028,11 +997,20 @@ end
     _first_signal_with_id(Base.tail(signals), Val(K))
 end
 
-# Last sample (inclusive) of the chunk on the per-band time grid, anchored to the
-# absolute `chunk_index` so rounding never drifts; `nothing` is the whole buffer.
-@inline _chunk_last_sample(::Nothing, chunk_index, sampling_frequency, num_samples) =
-    num_samples
-@inline function _chunk_last_sample(
+# The chunk's samples on the per-band time grid; `nothing` is the whole buffer.
+@inline _chunk_sample_range(::Nothing, chunk_index, sampling_frequency, num_samples) =
+    1:num_samples
+@inline _chunk_sample_range(chunk_duration, chunk_index, sampling_frequency, num_samples) =
+    (_chunk_end_index(
+        chunk_duration,
+        chunk_index-1,
+        sampling_frequency,
+        num_samples,
+    )+1):_chunk_end_index(chunk_duration, chunk_index, sampling_frequency, num_samples)
+
+# Last index of the chunk, anchored to the absolute `chunk_index` so rounding never
+# drifts.
+@inline function _chunk_end_index(
     chunk_duration,
     chunk_index,
     sampling_frequency,
@@ -1041,13 +1019,6 @@ end
     grid = uconvert(NoUnits, (chunk_index + 1) * chunk_duration * sampling_frequency)
     min(round(Int, grid), num_samples)
 end
-
-# First sample (inclusive) of the chunk, where the noise measurement starts. Not
-# derived from `_chunk_last_sample(…, chunk_index - 1, …) + 1` without chunking, which
-# would be `num_samples + 1` and measure nothing.
-@inline _chunk_first_sample(::Nothing, chunk_index, sampling_frequency, num_samples) = 1
-@inline _chunk_first_sample(chunk_duration, chunk_index, sampling_frequency, num_samples) =
-    _chunk_last_sample(chunk_duration, chunk_index - 1, sampling_frequency, num_samples) + 1
 
 # Per-backend sample-type check before any kernel runs; the integer backends reject
 # non-`Complex{Int16}` buffers with an `ArgumentError`.
@@ -1073,7 +1044,7 @@ end
     m = measurements[get_band_id(g.band)]
     _check_sample_type(dc, m)
     num_buffer_samples = get_num_samples(m)
-    chunk_last_sample = _chunk_last_sample(
+    chunk_sample_range = _chunk_sample_range(
         chunk_duration,
         chunk_index,
         m.sampling_frequency,
@@ -1086,7 +1057,7 @@ end
         n_noise,
         m.samples,
         num_buffer_samples,
-        chunk_last_sample,
+        chunk_sample_range,
         m.sampling_frequency,
         m.intermediate_frequency,
         stop_before_partial,
@@ -1164,8 +1135,7 @@ function downconvert_and_correlate!(
     code_frequency,
     carrier_frequency,
     sampling_frequency,
-    signal_start_sample,
-    num_samples_left,
+    sample_range,
     prn,
 ) where {M}
     sample_shifts =
@@ -1176,8 +1146,7 @@ function downconvert_and_correlate!(
         code_frequency,
         sampling_frequency,
         code_phase,
-        signal_start_sample,
-        num_samples_left,
+        sample_range,
         sample_shifts,
         prn,
     )
@@ -1189,7 +1158,6 @@ function downconvert_and_correlate!(
         carrier_frequency,
         sampling_frequency,
         carrier_phase,
-        signal_start_sample,
-        num_samples_left,
+        sample_range,
     )
 end

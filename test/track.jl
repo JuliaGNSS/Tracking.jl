@@ -31,7 +31,7 @@ using Tracking:
     get_carrier_phase_correction,
     get_code_doppler,
     get_carrier_doppler,
-    get_signal_start_sample,
+    get_next_sample_index,
     get_last_fully_integrated_beamformed_prompt,
     get_last_fully_integrated_correlator,
     get_beamformed_prompts,
@@ -137,7 +137,7 @@ _unit_code(c) = (m = maximum(abs, c); m == 0 ? float(c) : c ./ m)
         tracked_carrier_phases[i] = get_carrier_phase(track_state)
         tracked_carrier_dopplers[i] = get_carrier_doppler(track_state) / Hz
         tracked_code_dopplers[i] = get_code_doppler(track_state) / Hz
-        @test get_signal_start_sample(track_state) == 4001
+        @test get_next_sample_index(track_state) == 4001
         tracked_prompts[i] = get_last_fully_integrated_beamformed_prompt(track_state)
         code_phases[i] = comp_code_phase
         carrier_phases[i] = comp_carrier_phase / 2π

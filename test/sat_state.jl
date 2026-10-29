@@ -24,7 +24,7 @@ using Tracking:
     get_carrier_phase,
     get_carrier_doppler,
     get_integrated_samples,
-    get_signal_start_sample,
+    get_next_sample_index,
     get_correlator_bank,
     get_last_fully_integrated_correlator,
     get_last_fully_integrated_beamformed_prompt,
@@ -52,7 +52,7 @@ include("acquisition_test_helpers.jl")
     @test get_carrier_phase(sat_state) == 0.0
     @test get_carrier_doppler(sat_state) == 500.0Hz
     @test get_integrated_samples(sat_state) == 0
-    @test get_signal_start_sample(sat_state) == 1
+    @test get_next_sample_index(sat_state) == 1
     @test get_correlator_bank(sat_state).correlator_outputs == zeros(3)
     @test get_last_fully_integrated_correlator(sat_state).correlator_outputs == zeros(3)
     @test is_bit_or_secondary_code_synced(sat_state) == false
@@ -198,7 +198,7 @@ end
     # Code Doppler from the driver, `signals[1]`.
     @test get_code_doppler(sat) ==
           500.0Hz * get_chip_rate_to_center_frequency_ratio(GPSL1C_P(TMBOC))
-    @test get_signal_start_sample(sat) == 1
+    @test get_next_sample_index(sat) == 1
     sigs_on_sat = get_signals(sat)
     @test length(sigs_on_sat) == 3
     @test sigs_on_sat[1].signal isa GPSL1C_P

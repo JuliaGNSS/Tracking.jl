@@ -34,8 +34,8 @@ function TrackingLoops.despread_noise!(
         sampling_frequency,
         get_chip_rate(signal),
     )
-    # `gen_code_replica!` writes *at* `start_sample` while the kernel reads it
-    # offset by `start_sample - 1`, so the buffer spans the whole measurement.
+    # `gen_code_replica!` writes *at* `first(sample_range)` while the kernel reads it
+    # offset by `first(sample_range) - 1`, so the buffer spans the whole measurement.
     # Backends that pack the code plane in-kernel ignore it.
     replica_size =
         get_num_samples(measurement) + maximum(sample_shifts) - minimum(sample_shifts)
@@ -63,8 +63,7 @@ function TrackingLoops.despread_noise!(
                 probe.code_frequency,
                 probe.carrier_frequency,
                 despread.sampling_frequency,
-                first(despread.sample_range),
-                length(despread.sample_range),
+                despread.sample_range,
                 replica_size,
                 false,
             ),

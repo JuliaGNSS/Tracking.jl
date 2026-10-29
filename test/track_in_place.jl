@@ -18,7 +18,7 @@ using Tracking:
     BandMeasurement,
     track,
     track!,
-    reset_start_sample_and_bit_buffer!,
+    _prepare_for_new_buffer!,
     downconvert_and_correlate!,
     estimate_dopplers_and_filter_prompt!,
     get_code_phase,
@@ -96,9 +96,9 @@ end
 
 function measure_reset!(track_state)
     for _ = 1:8
-        reset_start_sample_and_bit_buffer!(track_state)
+        _prepare_for_new_buffer!(track_state)
     end
-    @allocated reset_start_sample_and_bit_buffer!(track_state)
+    @allocated _prepare_for_new_buffer!(track_state)
 end
 
 function measure_dc!(dc, samples, track_state, sampling_frequency)

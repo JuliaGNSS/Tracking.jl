@@ -401,9 +401,9 @@ end
 # well as the values (#123), so adding or removing satellites on the result
 # cannot corrupt the input; `track`'s later steps share these keys
 # (`_copy_groups_slot_vectors`).
-function reset_start_sample_and_bit_buffer(track_state::TrackState)
+function _prepare_for_new_buffer(track_state::TrackState)
     new_groups = _detach_groups_slot_vectors(track_state.groups)
-    reset_start_sample_and_bit_buffer!(new_groups)
+    _prepare_for_new_buffer!(new_groups)
     TrackState(
         track_state;
         groups = new_groups,
@@ -411,8 +411,8 @@ function reset_start_sample_and_bit_buffer(track_state::TrackState)
     )
 end
 
-function reset_start_sample_and_bit_buffer!(track_state::TrackState)
-    reset_start_sample_and_bit_buffer!(track_state.groups)
+function _prepare_for_new_buffer!(track_state::TrackState)
+    _prepare_for_new_buffer!(track_state.groups)
     return track_state
 end
 
@@ -829,8 +829,7 @@ get_code_phase(s::TrackState, id...) = get_code_phase(get_sat_state(s, id...))
 get_code_doppler(s::TrackState, id...) = get_code_doppler(get_sat_state(s, id...))
 get_carrier_phase(s::TrackState, id...) = get_carrier_phase(get_sat_state(s, id...))
 get_carrier_doppler(s::TrackState, id...) = get_carrier_doppler(get_sat_state(s, id...))
-get_signal_start_sample(s::TrackState, id...) =
-    get_signal_start_sample(get_sat_state(s, id...))
+get_next_sample_index(s::TrackState, id...) = get_next_sample_index(get_sat_state(s, id...))
 
 """
 $(SIGNATURES)
@@ -866,11 +865,11 @@ function get_carrier_phase_correction(
     sat = get_sat_state(group.satellites, prn)
     # `track!` leaves the replica at the end of the measurement, the band's sample
     # offset, having run on the satellite's Doppler since its latest record.
-    sample = get(track_state.sample_offsets, get_band_id(group.band), 0)
+    band_grid_index = get(track_state.sample_offsets, get_band_id(group.band), 0)
     calc_carrier_phase_correction(
         sat.doppler_estimator_state,
         _software_nco_command(sat),
-        sample,
+        band_grid_index,
         sampling_frequency,
     )
 end

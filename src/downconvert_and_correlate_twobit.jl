@@ -702,8 +702,7 @@ end
     code_frequency,
     carrier_frequency,
     sampling_frequency,
-    signal_start_sample::Integer,
-    num_samples::Integer,
+    sample_range::AbstractUnitRange{<:Integer},
     use_band_cache::Bool = true,
 ) where {M,NC}
     zc = :(zero(SIMD.Vec{_TB_VW,UInt64}))
@@ -806,6 +805,8 @@ end
     ret = :(SVector{$NC}(tuple($([tapval(k) for k = 1:NC]...))))
 
     quote
+        start_index = first(sample_range)
+        num_samples = length(sample_range)
         _tb_check_modulation(signal)
         N = Int(num_samples)
         min_shift = minimum(sample_shifts)
@@ -905,7 +906,7 @@ end
             _tb_zeropad!(hsinw, 0, nwb, nwv)
             _tb_zeropad!(hcosw, 0, nwb, nwv)
             # measurement planes per antenna: band realign (>1 sat) or direct pack (1 sat)
-            base = signal_start_sample + blk_off
+            base = start_index + blk_off
             if band_shared
                 $(Expr(
                     :block,
@@ -988,10 +989,11 @@ function _twobit_hybrid_blocked!(
     code_frequency,
     carrier_frequency,
     sampling_frequency,
-    signal_start_sample::Integer,
-    num_samples::Integer,
+    sample_range::AbstractUnitRange{<:Integer},
     use_band_cache::Bool = true,
 ) where {M}
+    start_index = first(sample_range)
+    num_samples = length(sample_range)
     _tb_check_modulation(signal)
     NC = length(sample_shifts)
     N = Int(num_samples)
@@ -1084,7 +1086,7 @@ function _twobit_hybrid_blocked!(
         _tb_zeropad!(cosw, 0, nwb, nwv)
         _tb_zeropad!(hsinw, 0, nwb, nwv)
         _tb_zeropad!(hcosw, 0, nwb, nwv)
-        base = signal_start_sample + blk_off
+        base = start_index + blk_off
         if band_shared
             for j = 1:M
                 _tb_realign_meas!(
@@ -1203,8 +1205,7 @@ end
     carrier_phase,
     carrier_frequency,
     sampling_frequency,
-    signal_start_sample::Integer,
-    num_samples::Integer,
+    sample_range::AbstractUnitRange{<:Integer},
 ) where {M}
     N = length(all_shifts.parameters)
     NCs = [length(all_shifts.parameters[i]) for i = 1:N]
@@ -1474,6 +1475,8 @@ end
     end
 
     quote
+        start_index = first(sample_range)
+        num_samples = length(sample_range)
         $gates
         N_samp = Int(num_samples)
         thr = dc.threshold
@@ -1538,7 +1541,7 @@ end
             _tb_zeropad!(hsinw, 0, nwb, nwv)
             _tb_zeropad!(hcosw, 0, nwb, nwv)
             # measurement planes — one pack per sat/block, shared across signals
-            base = signal_start_sample + blk_off
+            base = start_index + blk_off
             if band_shared
                 $realign
             else
@@ -1567,8 +1570,7 @@ end
     code_frequency,
     carrier_frequency,
     sampling_frequency,
-    start_sample,
-    num_samples,
+    sample_range,
     ::Any,
     use_band_cache::Bool = true,
 ) = with_correlator_outputs(
@@ -1585,8 +1587,7 @@ end
         code_frequency,
         carrier_frequency,
         sampling_frequency,
-        start_sample,
-        num_samples,
+        sample_range,
         use_band_cache,
     ),
 )
@@ -1603,8 +1604,7 @@ end
     carrier_frequency,
     carrier_phase,
     sampling_frequency,
-    signal_start_sample,
-    samples_to_integrate,
+    sample_range,
     prn,
     num_buffer_samples,
 )
@@ -1634,8 +1634,7 @@ end
         carrier_phase,
         carrier_frequency,
         sampling_frequency,
-        signal_start_sample,
-        samples_to_integrate,
+        sample_range,
     )
     new_corrs = map(correlator_banks, new_accs) do c, a
         with_correlator_outputs(c, get_correlator_outputs(c) .+ a)
@@ -1687,7 +1686,7 @@ end
         resize!(dc.band.gmiband, 0)
     end
     num_buffer_samples = get_num_samples(m)
-    chunk_last_sample = _chunk_last_sample(
+    chunk_sample_range = _chunk_sample_range(
         chunk_duration,
         chunk_index,
         m.sampling_frequency,
@@ -1700,7 +1699,7 @@ end
         n_noise,
         m.samples,
         num_buffer_samples,
-        chunk_last_sample,
+        chunk_sample_range,
         m.sampling_frequency,
         m.intermediate_frequency,
         stop_before_partial,

@@ -1,5 +1,5 @@
 # Advances a sat by one downconvert + correlate sub-step of `integrated_samples`
-# samples: the shared carrier and code phase, `signal_start_sample`, and each
+# samples: the shared carrier and code phase, `next_sample_index`, and each
 # signal's correlator bank. `new_signals_data` holds one `(new_correlator_bank, completed)`
 # pair per element of `sat.signals`; see `_build_new_signals` for completion.
 function _advance_sat(
@@ -27,13 +27,13 @@ function _advance_sat(
         code_frequency * integrated_samples / sampling_frequency + sat.code_phase,
         code_length,
     )
-    new_signal_start_sample = sat.signal_start_sample + integrated_samples
+    new_next_sample_index = sat.next_sample_index + integrated_samples
 
     new_signals = _build_new_signals(
         sat.signals,
         new_signals_data,
         integrated_samples,
-        new_signal_start_sample,
+        new_next_sample_index,
         Float64(code_phase),
     )
 
@@ -41,7 +41,7 @@ function _advance_sat(
         sat;
         code_phase,
         carrier_phase,
-        signal_start_sample = new_signal_start_sample,
+        next_sample_index = new_next_sample_index,
         signals = new_signals,
     )
 end
@@ -55,7 +55,7 @@ end
     signals::Tuple,
     new_data::Tuple,
     integrated_samples::Int,
-    signal_start_sample::Int,
+    next_sample_index::Int,
     code_phase::Float64,
 )
     s = first(signals)
@@ -64,12 +64,7 @@ end
     if completed
         push!(
             s.correlator_bank_outputs,
-            CorrelatorBankOutput(
-                corr,
-                total_integrated,
-                signal_start_sample - 1,
-                code_phase,
-            ),
+            CorrelatorBankOutput(corr, total_integrated, next_sample_index - 1, code_phase),
         )
         new_s = TrackedSignal(s; integrated_samples = 0, correlator_bank = zero(corr))
     else
@@ -82,7 +77,7 @@ end
             Base.tail(signals),
             Base.tail(new_data),
             integrated_samples,
-            signal_start_sample,
+            next_sample_index,
             code_phase,
         )...,
     )

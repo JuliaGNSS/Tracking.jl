@@ -136,7 +136,7 @@ function track!(
     doppler_update_interval = nothing,
 )
     _validate_measurements(track_state, measurements)
-    reset_start_sample_and_bit_buffer!(track_state)
+    _prepare_for_new_buffer!(track_state)
     chunk_duration = _resolve_doppler_update_interval(doppler_update_interval, track_state)
     _validate_doppler_update_interval(chunk_duration, measurements)
     # Per chunk, one correlate pass at fixed NCO Doppler, then one estimate that
@@ -218,8 +218,9 @@ end
 @inline function _chunks_left(chunk_duration, chunk_index::Int, measurements)
     for m in measurements
         n = get_num_samples(m)
-        _chunk_last_sample(chunk_duration, chunk_index - 1, m.sampling_frequency, n) < n &&
-            return true
+        last(
+            _chunk_sample_range(chunk_duration, chunk_index - 1, m.sampling_frequency, n),
+        ) < n && return true
     end
     false
 end
