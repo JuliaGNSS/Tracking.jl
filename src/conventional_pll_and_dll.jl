@@ -28,18 +28,16 @@ end
 # the estimator and returns the updated `TrackedSat`.
 #
 # `noise` is one `(density, ready)` pair per signal, in `sat.signals` order (see
-# `_signal_noise_densities`). `words` and `landing_sample` come from a hardware
-# correlator's link (the NCO words each record ran on and the device sample the
-# command lands at); the software receiver passes the satellite's own Doppler and
-# `NO_LANDING_SAMPLE`. `sample_offset` moves records onto the band's running
-# sample grid (`TrackState`'s `sample_offsets`).
+# `_signal_noise_densities`). Each record ran on the satellite's own Doppler and
+# its command acts at the record's end (`NO_LANDING_SAMPLE`): a hardware
+# correlator's loop, which needs other words and a landing sample, calls
+# TrackingLoops' `step_loop` itself. `sample_offset` moves records onto the band's
+# running sample grid (`TrackState`'s `sample_offsets`).
 function _update_tracked_sat_doppler(
     sat::TrackedSat,
     estimator::AbstractDopplerEstimator,
     sampling_frequency,
     noise::Tuple,
-    words = _software_words(sat),
-    landing_sample::Int64 = NO_LANDING_SAMPLE,
     sample_offset::Int = 0,
 )
     # Driver (`signals[1]`) first, then the passengers, all through the one
@@ -52,6 +50,7 @@ function _update_tracked_sat_doppler(
     # prompt is de-rotated by its phase offset from it, so a quadrature component
     # (e.g. GPS L5, Galileo E5a) decodes off the right axis.
     driver_carrier_phase = get_carrier_phase_offset(head.signal)
+    words = _software_words(sat)
 
     driver_noise_density, driver_noise_density_ready = first(noise)
     new_head, new_doppler_estimator_state, new_carrier_doppler, new_code_doppler =
@@ -65,7 +64,6 @@ function _update_tracked_sat_doppler(
             driver_noise_density_ready,
             driver_carrier_phase,
             words,
-            landing_sample,
             sample_offset,
         )
 
@@ -78,7 +76,6 @@ function _update_tracked_sat_doppler(
         estimator,
         new_doppler_estimator_state,
         words,
-        landing_sample,
         sample_offset,
     )
 
@@ -187,7 +184,6 @@ end
     noise_density_ready::Bool,
     driver_carrier_phase::Real,
     words,
-    landing_sample::Int64,
     sample_offset::Int = 0,
 )
     outputs = tracked_signal.correlator_outputs
@@ -228,7 +224,7 @@ end
             sample_offset,
         )
         state, carrier_doppler, code_doppler =
-            step_loop(estimator, state, record, words, landing_sample)
+            step_loop(estimator, state, record, words, NO_LANDING_SAMPLE)
     end
     empty!(outputs)
     return ts, state, carrier_doppler, code_doppler
@@ -246,7 +242,6 @@ end
     ::AbstractDopplerEstimator,
     state,
     words,
-    ::Int64,
     ::Int,
 ) = (), state
 @inline function _process_passenger_signals(
@@ -258,7 +253,6 @@ end
     estimator::AbstractDopplerEstimator,
     state,
     words,
-    landing_sample::Int64,
     sample_offset::Int,
 )
     noise_density, noise_density_ready = first(noise)
@@ -272,7 +266,6 @@ end
         estimator,
         state,
         words,
-        landing_sample,
         sample_offset,
     )
     new_tail, state = _process_passenger_signals(
@@ -284,7 +277,6 @@ end
         estimator,
         state,
         words,
-        landing_sample,
         sample_offset,
     )
     (new_head, new_tail...), state
@@ -300,7 +292,6 @@ end
     estimator::AbstractDopplerEstimator,
     state,
     words,
-    landing_sample::Int64,
     sample_offset::Int,
 )
     outputs = tracked_signal.correlator_outputs
@@ -331,7 +322,7 @@ end
             prn,
             sample_offset,
         )
-        state, _, _ = step_loop(estimator, state, record, words, landing_sample)
+        state, _, _ = step_loop(estimator, state, record, words, NO_LANDING_SAMPLE)
     end
     empty!(outputs)
     ts, state
@@ -407,8 +398,6 @@ end
             estimator,
             sampling_frequency,
             noise,
-            _software_words(sat),
-            NO_LANDING_SAMPLE,
             sample_offset,
         )
     end

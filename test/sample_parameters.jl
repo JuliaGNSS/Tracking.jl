@@ -3,10 +3,7 @@ module SampleParametersTest
 using Test: @test, @testset, @inferred
 using Unitful: MHz, Hz
 using GNSSSignals: GPSL1CA
-using Tracking:
-    calc_num_chips_to_integrate,
-    calc_num_samples_left_to_integrate,
-    calc_signal_samples_to_integrate
+using Tracking: calc_num_chips_to_integrate, calc_num_samples_left_to_integrate
 
 # `calc_num_code_blocks_to_integrate` is tested in TrackingLoops.
 @testset "Calculate number of chips to integrate" begin
@@ -19,13 +16,10 @@ end
 
 @testset "Calculate number of samples to integrate" begin
     gpsl1 = GPSL1CA()
-    signal_start_sample = 1
     sampling_frequency = 4MHz
     code_doppler = -0.00022901219179036268Hz
     code_phase = 0.0
     preferred_num_code_blocks_to_integrate = 1
-    secondary_code_or_bit_found = true
-    num_samples_signal = 4000
 
     num_samples_left_to_integrate = calc_num_samples_left_to_integrate(
         gpsl1,
@@ -35,20 +29,6 @@ end
         code_phase,
     )
     @test num_samples_left_to_integrate == 4001
-
-    samples_to_integrate, is_integration_completed = calc_signal_samples_to_integrate(
-        gpsl1,
-        signal_start_sample,
-        sampling_frequency,
-        code_doppler,
-        code_phase,
-        preferred_num_code_blocks_to_integrate,
-        secondary_code_or_bit_found,
-        num_samples_signal,
-    )
-
-    @test samples_to_integrate == num_samples_signal
-    @test is_integration_completed == false
 end
 
 end
