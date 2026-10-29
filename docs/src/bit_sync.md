@@ -28,12 +28,12 @@ signals' periods (#129), each of which depends on the signal's sync state:
 | L1C-P + L1C-D + L1CA | 10230 | 18.4 M (L1C-P dominates) |
 
 `mod(code_phase, primary)` is a signal's replica phase, `div(code_phase, primary)`
-its position within the symbol. [`max_code_phase_period`](@ref) is the post-sync bound,
-[`current_code_phase_period`](@ref) the runtime period.
+its position within the symbol. [`max_code_phase_period`](@ref Tracking.max_code_phase_period) is the post-sync bound,
+[`current_code_phase_period`](@ref Tracking.current_code_phase_period) the runtime period.
 
 ```@docs
-max_code_phase_period
-current_code_phase_period
+Tracking.max_code_phase_period
+Tracking.current_code_phase_period
 ```
 
 ## Sync detection

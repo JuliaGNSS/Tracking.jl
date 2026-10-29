@@ -330,7 +330,7 @@ TrackingLoops' `process_correlator_bank_output!` and the estimator's `step_loop!
 `AbstractTrackingLoop` implementing it works), giving the Dopplers for
 the next replicas and the beamformed prompts.
 
-The second argument is a [`BandMeasurements`](@ref) NamedTuple (the `track` path) or a
+The second argument is a [`BandMeasurements`](@ref Tracking.BandMeasurements) NamedTuple (the `track` path) or a
 `NamedTuple`/`Dict` mapping each `get_band_id` to its sampling frequency: the entry
 point for an **external correlator producer** (e.g. an FPGA), which needs no sample
 buffer. See [External correlator producers](@ref).

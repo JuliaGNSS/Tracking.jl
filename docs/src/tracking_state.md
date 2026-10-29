@@ -414,7 +414,7 @@ A single-band `TrackState` can still be tracked with a bare buffer, `track!(buf,
 
 ```@docs
 SignalGroup
-SignalGroups
+Tracking.SignalGroups
 ```
 
 ### Band routing
@@ -449,7 +449,7 @@ The trailing `sig` selector is either:
 |----------|---------|
 | `get_prn` | PRN number. |
 | `get_num_antennas` | Number of antenna elements. |
-| `get_code_phase` | Shared code phase (wraps at [`max_code_phase_period`](@ref)). |
+| `get_code_phase` | Shared code phase (wraps at [`max_code_phase_period`](@ref Tracking.max_code_phase_period)). |
 | `get_code_doppler` | Shared code Doppler. |
 | `get_carrier_phase` | Shared carrier phase in cycles. |
 | [`get_carrier_phase_correction`](@ref) | What the estimator adds to `get_carrier_phase` for the carrier-phase measurement (vector loop only; takes the band's sampling frequency). |
@@ -499,7 +499,7 @@ julia> get_num_bits(track_state, :modern_gps, 11, GPSL1CA)  # per-signal by type
 ### Group accessors
 
 ```@docs
-SatelliteDicts
+Tracking.SatelliteDicts
 get_sat_states
 get_sat_state
 get_signal
@@ -529,10 +529,19 @@ get_doppler_estimator_state(::TrackedSat)
 
 ```@docs
 TrackedSignal
+get_correlator_bank(::TrackedSignal)
+get_last_fully_integrated_correlator(::TrackedSignal)
+get_last_fully_integrated_beamformed_prompt(::TrackedSignal)
+get_last_fully_integrated_num_code_blocks(::TrackedSignal)
 get_last_fully_integrated_integration_time(::TrackedSignal)
+get_beamformed_prompts(::TrackedSignal)
+get_bit_buffer(::TrackedSignal)
+get_num_bits(::TrackedSignal)
+get_integrated_samples(::TrackedSignal)
+get_preferred_num_code_blocks_to_integrate(::TrackedSignal)
 ```
 
-The per-signal accessors also take a `TrackedSignal`, as do `get_signal(tsig)`, the signal instance, and `get_beamformed_prompts(tsig)`, the beamformed prompts of the most recent `track` call.
+The other per-signal accessors also take a `TrackedSignal`, as does `get_signal(tsig)`, the signal instance.
 
 Bit and secondary-code sync, and how it widens the code-phase wrap, have their own page: [Bit and Secondary-Code Sync](bit_sync.md). Most users only need `is_bit_or_secondary_code_synced` to gate `get_soft_bits`.
 
