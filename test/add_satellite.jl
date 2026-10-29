@@ -56,7 +56,7 @@ end
     )
     sg = SignalGroup((GPSL1CA(),); num_antennas = NumAntennas(1))  # default estimator
     ts = TrackState(; signals = (legacy = sg,), doppler_estimator = custom)
-    ts = add_satellite!(ts; prn = 1, group = :legacy, carrier_doppler = 0.0Hz)
+    ts = add_satellite!(ts; prn = 1, group_key = :legacy, carrier_doppler = 0.0Hz)
     de_state = get_sat_state(ts, :legacy, 1).doppler_estimator_state
     @test de_state.bandwidths.wide_carrier == 22.0Hz
 end
@@ -83,7 +83,7 @@ end
     @test isempty(get_sat_states(track_state, :galileo))
 end
 
-@testset "add_satellite! — single-group shortcut (no `group=`)" begin
+@testset "add_satellite! — single-group shortcut (no `group_key=`)" begin
     track_state = TrackState(; signal = GPSL1CA())
     track_state =
         add_satellite!(track_state; prn = 11, code_phase = 10.5, carrier_doppler = 1234.0Hz)
@@ -94,20 +94,24 @@ end
           1234.0Hz * get_chip_rate_to_center_frequency_ratio(GPSL1CA())
 end
 
-@testset "add_satellite! — multi-group with explicit `group=`" begin
+@testset "add_satellite! — multi-group with explicit `group_key=`" begin
     track_state =
         TrackState(; signals = (legacy = (GPSL1CA(),), galileo = (GalileoE1B(CBOC),)))
     track_state =
-        add_satellite!(track_state; prn = 5, group = :legacy, carrier_doppler = 500.0Hz)
-    track_state =
-        add_satellite!(track_state; prn = 11, group = :galileo, carrier_doppler = 2000.0Hz)
+        add_satellite!(track_state; prn = 5, group_key = :legacy, carrier_doppler = 500.0Hz)
+    track_state = add_satellite!(
+        track_state;
+        prn = 11,
+        group_key = :galileo,
+        carrier_doppler = 2000.0Hz,
+    )
     @test length(get_sat_states(track_state, :legacy)) == 1
     @test length(get_sat_states(track_state, :galileo)) == 1
     @test get_carrier_doppler(track_state, :legacy, 5) == 500.0Hz
     @test get_carrier_doppler(track_state, :galileo, 11) == 2000.0Hz
 end
 
-@testset "add_satellite! — single named group infers `group=` when omitted" begin
+@testset "add_satellite! — single named group infers `group_key=` when omitted" begin
     # A single group need not be named `:default`.
     track_state = TrackState(; signals = (gps = (GPSL1CA(),),))
     track_state = add_satellite!(track_state; prn = 7, carrier_doppler = 750.0Hz)
@@ -115,7 +119,7 @@ end
     @test get_carrier_doppler(track_state, :gps, 7) == 750.0Hz
 end
 
-@testset "add_satellite!/add_satellite — multi-group omitted `group=` errors" begin
+@testset "add_satellite!/add_satellite — multi-group omitted `group_key=` errors" begin
     track_state =
         TrackState(; signals = (legacy = (GPSL1CA(),), galileo = (GalileoE1B(CBOC),)))
     @test_throws ArgumentError add_satellite!(track_state; prn = 5)
@@ -221,12 +225,12 @@ end
     @test get_carrier_doppler(new_ts, :default, 2) == 200.0Hz
 end
 
-@testset "add_satellite!(ts, acq; group) — multi-group with explicit `group=`" begin
+@testset "add_satellite!(ts, acq; group_key) — multi-group with explicit `group_key=`" begin
     ts = TrackState(; signals = (gps = (GPSL1CA(),), gal = (GalileoE1B(CBOC),)))
     gps_acq = _make_acq(GPSL1CA(), 11, 1.5, 50.0Hz)
     gal_acq = _make_acq(GalileoE1B(CBOC), 12, 2.5, 60.0Hz)
-    ts = add_satellite!(ts, gps_acq; group = :gps)
-    ts = add_satellite!(ts, gal_acq; group = :gal)
+    ts = add_satellite!(ts, gps_acq; group_key = :gps)
+    ts = add_satellite!(ts, gal_acq; group_key = :gal)
     @test get_prn(ts, :gps, 11) == 11
     @test get_prn(ts, :gal, 12) == 12
 end
@@ -248,7 +252,7 @@ end
         _make_acq(GalileoE1B(CBOC), 12, 2.5, 60.0Hz),
         _make_acq(GPSL1CA(), 13, 3.5, 70.0Hz),
     ]
-    ts = add_satellite!(ts, acqs)  # no group= — routes per-entry
+    ts = add_satellite!(ts, acqs)  # no group_key= — routes per-entry
     @test get_prn(ts, :gps, 11) == 11
     @test get_prn(ts, :gps, 13) == 13
     @test get_prn(ts, :gal, 12) == 12
@@ -263,7 +267,7 @@ end
 @testset "add_satellite!(ts, acq) rejects wrong-signal acq" begin
     ts = TrackState(; signals = (gps = (GPSL1CA(),), gal = (GalileoE1B(CBOC),)))
     bad = _make_acq(GalileoE1B(CBOC), 5, 10.0, 100.0Hz)
-    @test_throws ArgumentError add_satellite!(ts, bad; group = :gps)
+    @test_throws ArgumentError add_satellite!(ts, bad; group_key = :gps)
 end
 
 @testset "add_satellite!(ts, acq) requires longest-code signal in mixed group" begin
@@ -271,9 +275,9 @@ end
     ts = TrackState(; signal = GPSL1C_P(TMBOC))
     ts = TrackState(; signals = (mix = (GPSL1C_P(TMBOC), GPSL1CA()),))
     short_acq = _make_acq(GPSL1CA(), 7, 100.0, 50.0Hz)
-    @test_throws ArgumentError add_satellite!(ts, short_acq; group = :mix)
+    @test_throws ArgumentError add_satellite!(ts, short_acq; group_key = :mix)
     long_acq = _make_acq(GPSL1C_P(TMBOC), 7, 100.0, 50.0Hz)
-    ts = add_satellite!(ts, long_acq; group = :mix)
+    ts = add_satellite!(ts, long_acq; group_key = :mix)
     @test get_prn(ts, :mix, 7) == 7
 end
 
@@ -282,13 +286,13 @@ end
     # the match is by length, not by the signal `_longest_code_signal` picks.
     ts = TrackState(; signals = (mix = (GPSL1C_P(TMBOC), GPSL1C_D(), GPSL1CA()),))
     d_acq = _make_acq(GPSL1C_D(), 8, 100.0, 50.0Hz)
-    ts = add_satellite!(ts, d_acq; group = :mix)
+    ts = add_satellite!(ts, d_acq; group_key = :mix)
     @test get_prn(ts, :mix, 8) == 8
     d_acq2 = _make_acq(GPSL1C_D(), 9, 100.0, 50.0Hz)
     ts = add_satellite!(ts, d_acq2)
     @test get_prn(ts, :mix, 9) == 9
     short_acq = _make_acq(GPSL1CA(), 10, 100.0, 50.0Hz)
-    @test_throws ArgumentError add_satellite!(ts, short_acq; group = :mix)
+    @test_throws ArgumentError add_satellite!(ts, short_acq; group_key = :mix)
 end
 
 @testset "add_satellite!(ts, acq) matches signals by id, not by code-matrix type" begin
@@ -302,16 +306,16 @@ end
     acq = _make_acq(aliased, 11, 1.5, 50.0Hz)
     ts = add_satellite!(ts, acq)
     @test get_prn(ts, :gps, 11) == 11
-    ts = add_satellite!(ts, _make_acq(aliased, 12, 1.5, 50.0Hz); group = :gps)
+    ts = add_satellite!(ts, _make_acq(aliased, 12, 1.5, 50.0Hz); group_key = :gps)
     @test get_prn(ts, :gps, 12) == 12
 end
 
 @testset "add_satellite!(ts, acq) errors on ambiguous group routing (issue #134)" begin
-    # Two groups with the same longest-code signal need an explicit `group`.
+    # Two groups with the same longest-code signal need an explicit `group_key`.
     ts = TrackState(; signals = (a = (GPSL1CA(),), b = (GPSL1CA(),)))
     acq = _make_acq(GPSL1CA(), 5, 10.0, 100.0Hz)
     @test_throws ArgumentError add_satellite!(ts, acq)
-    ts = add_satellite!(ts, acq; group = :b)
+    ts = add_satellite!(ts, acq; group_key = :b)
     @test get_prn(ts, :b, 5) == 5
 end
 

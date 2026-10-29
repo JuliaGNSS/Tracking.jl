@@ -126,7 +126,7 @@ function e1_state(estimator)
     )
     add_satellite!(
         track_state;
-        group = :e1,
+        group_key = :e1,
         prn = 11,
         code_phase = 0.0,
         carrier_doppler = 0.0Hz,
@@ -165,7 +165,7 @@ end
         )
         add_satellite!(
             track_state;
-            group = :e1,
+            group_key = :e1,
             prn = 11,
             code_phase = 0.0,
             carrier_doppler = 0.0Hz,
