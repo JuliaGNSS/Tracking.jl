@@ -26,7 +26,7 @@ using Tracking:
     TrackedSignal,
     get_code_phase,
     get_num_bits,
-    get_preferred_num_code_blocks_to_integrate,
+    get_preferred_num_code_periods_to_integrate,
     get_sat_state,
     track
 import TrackingLoops
@@ -44,9 +44,9 @@ using TrackingLoops:
 const UNSUPPORTED = Dict{Symbol,String}()
 
 # Signals excluded from the end-to-end `track` pass only (their per-signal API is
-# still checked), because one code block is too many samples for a unit test.
+# still checked), because one code period is too many samples for a unit test.
 const NO_END_TO_END =
-    Dict(:GPSL2CL => "1.5 s primary code period — one code block is millions of samples")
+    Dict(:GPSL2CL => "1.5 s primary code period — one code period is millions of samples")
 
 # The concrete signal types GNSSSignals defines; the module filter drops the
 # fake signals other test files define.
@@ -100,17 +100,17 @@ end
 # signal in TrackingLoops (`test/signals.jl` there).
 @testset "Per-signal API — $(get_signal_name(signal))" for signal in SUPPORTED
     # The default must divide the ceiling, or it is clamped to one (#128).
-    default_blocks = @inferred default_num_code_periods_to_integrate(signal)
-    max_blocks = @inferred max_num_code_periods_to_integrate(signal)
-    @test 1 <= default_blocks <= max_blocks
-    @test max_blocks % default_blocks == 0
-    @test get_preferred_num_code_blocks_to_integrate(TrackedSignal(signal)) ==
-          default_blocks
+    default_code_periods = @inferred default_num_code_periods_to_integrate(signal)
+    max_code_periods = @inferred max_num_code_periods_to_integrate(signal)
+    @test 1 <= default_code_periods <= max_code_periods
+    @test max_code_periods % default_code_periods == 0
+    @test get_preferred_num_code_periods_to_integrate(TrackedSignal(signal)) ==
+          default_code_periods
 
-    # Sane at the default integration (E5a-QP: 31 blocks): carrier below
+    # Sane at the default integration (E5a-QP: 31 code periods): carrier below
     # 100 Hz and inside its cap, updates below 2 kHz.
     integration_time =
-        upreferred(get_code_length(signal) * default_blocks / get_chip_rate(signal))
+        upreferred(get_code_length(signal) * default_code_periods / get_chip_rate(signal))
     carrier_bandwidth = @inferred effective_carrier_loop_filter_bandwidth(
         default_narrow_carrier_loop_filter_bandwidth(signal),
         integration_time,
@@ -120,11 +120,12 @@ end
     @test carrier_bandwidth * integration_time <=
           TrackingLoops.MAX_CARRIER_LOOP_BANDWIDTH_TIME_PRODUCT + 1e-12
     @test 0.0Hz < code_bandwidth < 100.0Hz
-    @test get_chip_rate(signal) / (get_code_length(signal) * default_blocks) < 2000.0Hz
+    @test get_chip_rate(signal) / (get_code_length(signal) * default_code_periods) <
+          2000.0Hz
 end
 
 # A smoke test of the whole chain over four default integrations (so E5a-QP
-# completes a 31-block cycle), stopping before sync wherever there is something to
+# completes a 31-code-period cycle), stopping before sync wherever there is something to
 # sync on; sync is tested per signal in TrackingLoops' `test/signals.jl`.
 @testset "Runs a clean signal through track — $(get_signal_name(signal))" for signal in
                                                                               END_TO_END
@@ -167,11 +168,11 @@ end
         @test get_code_periods_per_bit(signal) == 0
         @test get_num_bits(sat_state) == 0
     else
-        # A bit must be a whole number of blocks.
-        blocks_per_bit = get_code_periods_per_bit(signal)
-        @test blocks_per_bit >= 1
+        # A bit must be a whole number of code periods.
+        code_periods_per_bit = get_code_periods_per_bit(signal)
+        @test code_periods_per_bit >= 1
         @test upreferred(
-            blocks_per_bit * code_length / code_frequency * get_bit_rate(signal),
+            code_periods_per_bit * code_length / code_frequency * get_bit_rate(signal),
         ) ≈ 1
     end
 end

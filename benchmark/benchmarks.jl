@@ -48,10 +48,18 @@ const _calc_noise_observation_from_samples = getfield(
 )
 const _SyncHypothesisAccumulators =
     getfield(TrackingLoops, _TL7 ? :SyncHypothesisAccumulators : :PhaseAccumulators)
+const _get_bit_synchronizer =
+    getfield(Tracking, _TL7 ? :get_bit_synchronizer : :get_bit_buffer)
 # Keyword arguments, splatted: `f(...; _antennas(1)...)`.
 _antennas(n) = _TL7 ? (; num_antennas = _num_antennas(n)) : (; num_ants = _num_antennas(n))
 _num_antennas(n::Integer) = NumAntennas(n)
 _num_antennas(n) = n
+_with_tracking_loop(loop) = _TL7 ? (; tracking_loop = loop) : (; doppler_estimator = loop)
+_with_bit_synchronizer(b) = _TL7 ? (; bit_synchronizer = b) : (; bit_buffer = b)
+_with_correlator_bank(c) = _TL7 ? (; correlator_bank = c) : (; correlator = c)
+_with_beamformer() =
+    _TL7 ? (; beamformer = TrackingLoops.DefaultBeamformer()) :
+    (; post_corr_filter = Tracking.DefaultPostCorrFilter())
 _default_tracking_loop() =
     _TL7 ? TrackingLoops.ScalarTrackingLoop(TrackingLoops.ThirdOrderAssistedBilinearLF) :
     TrackingLoops.ConventionalAssistedPLLAndDLL()
@@ -83,7 +91,7 @@ function _make_initial_sat(
     prn,
     code_phase,
     carrier_doppler;
-    num_ants = NumAntennas(1),
+    num_antennas = NumAntennas(1),
     cn0_estimator = nothing,
 )
     cn0_kw = isnothing(cn0_estimator) ? (;) : (; cn0_estimator)
@@ -92,8 +100,8 @@ function _make_initial_sat(
         prn,
         code_phase,
         carrier_doppler;
-        doppler_estimator = _default_tracking_loop(),
-        _antennas(num_ants)...,
+        _with_tracking_loop(_default_tracking_loop())...,
+        _antennas(num_antennas)...,
         cn0_kw...,
     )
 end
@@ -107,7 +115,7 @@ function setup_benchmark(;
     num_samples = 2000,
     sampling_frequency = 5e6Hz,
     gnss_signal = GPSL1CA(),
-    num_ants = 1,
+    num_antennas = 1,
 )
     code_phase = 10.5
     carrier_doppler = 1000.0Hz
@@ -115,14 +123,14 @@ function setup_benchmark(;
         carrier_doppler * _chip_rate_to_center_frequency_ratio(gnss_signal)
     code_frequency = code_doppler + _chip_rate(gnss_signal)
 
-    correlator_bank = EarlyPromptLateCorrelatorBank(; _antennas(num_ants)...)
+    correlator_bank = EarlyPromptLateCorrelatorBank(; _antennas(num_antennas)...)
     static_shifts =
         _calc_correlator_sample_offsets(correlator_bank, sampling_frequency, code_frequency)
     dynamic_shifts = collect(static_shifts)
 
     samples =
-        num_ants == 1 ? rand(Complex{sample_type}, num_samples) :
-        rand(Complex{sample_type}, num_samples, num_ants)
+        num_antennas == 1 ? rand(Complex{sample_type}, num_samples) :
+        rand(Complex{sample_type}, num_samples, num_antennas)
 
     code_replica =
         Vector{Int8}(undef, num_samples + maximum(static_shifts) - minimum(static_shifts))
@@ -161,7 +169,7 @@ function bench_downconvert_and_correlate(;
     num_samples = 2000,
     sampling_frequency = 5e6Hz,
     gnss_signal = GPSL1CA(),
-    num_ants = 1,
+    num_antennas = 1,
 )
     downconvert_and_correlator = Tracking.CPUDownconvertAndCorrelator()
     track_state = TrackState(
@@ -172,14 +180,14 @@ function bench_downconvert_and_correlate(;
                 1,
                 10.5,
                 1000.0Hz;
-                num_ants = NumAntennas(num_ants),
+                num_antennas = NumAntennas(num_antennas),
                 cn0_estimator = _moments_cn0_estimator(100),
             ),
         ],
     )
     samples =
-        num_ants == 1 ? rand(Complex{sample_type}, num_samples) :
-        rand(Complex{sample_type}, num_samples, num_ants)
+        num_antennas == 1 ? rand(Complex{sample_type}, num_samples) :
+        rand(Complex{sample_type}, num_samples, num_antennas)
     measurements = NamedTuple{(get_band_id(get_band(gnss_signal)),)}((
         Tracking.BandMeasurement(samples, sampling_frequency, 0.0Hz),
     ))
@@ -195,14 +203,14 @@ end
 function bench_fused_kernel(;
     sample_type = Float32,
     num_samples = 2000,
-    num_ants = 1,
+    num_antennas = 1,
     shifts = :static,
 )
-    s = setup_benchmark(; sample_type, num_samples, num_ants)
+    s = setup_benchmark(; sample_type, num_samples, num_antennas)
     if shifts == :dynamic
         # Dynamic shifts take caller-supplied SoA tile buffers (11 args).
-        tile_re = Vector{Float32}(undef, num_samples * num_ants)
-        tile_im = Vector{Float32}(undef, num_samples * num_ants)
+        tile_re = Vector{Float32}(undef, num_samples * num_antennas)
+        tile_im = Vector{Float32}(undef, num_samples * num_antennas)
         return @benchmarkable Tracking.downconvert_and_correlate_fused!($(s.correlator_bank),
             $(s.samples),
             $(s.code_replica),
@@ -232,9 +240,9 @@ end
 
 # Full pipeline: multi-antenna
 SUITE["downconvert and correlate"]["CPU"]["Float32 4ant"] =
-    bench_downconvert_and_correlate(; num_ants = 4)
+    bench_downconvert_and_correlate(; num_antennas = 4)
 SUITE["downconvert and correlate"]["CPU"]["Int16 4ant"] =
-    bench_downconvert_and_correlate(; sample_type = Int16, num_ants = 4)
+    bench_downconvert_and_correlate(; sample_type = Int16, num_antennas = 4)
 
 # Full pipeline: track (out-of-place) and track! (in-place)
 function bench_track(
@@ -262,9 +270,9 @@ SUITE["track"]["GPS L1CA, 1 sat, 2K @ 5 MHz – in-place, Float32"] = bench_trac
 SUITE["fused kernel"]["1-ant static taps"] = bench_fused_kernel(; shifts = :static)
 SUITE["fused kernel"]["1-ant dynamic taps"] = bench_fused_kernel(; shifts = :dynamic)
 SUITE["fused kernel"]["4-ant static taps"] =
-    bench_fused_kernel(; num_ants = 4, shifts = :static)
+    bench_fused_kernel(; num_antennas = 4, shifts = :static)
 SUITE["fused kernel"]["4-ant dynamic taps"] =
-    bench_fused_kernel(; num_ants = 4, shifts = :dynamic)
+    bench_fused_kernel(; num_antennas = 4, shifts = :dynamic)
 
 # ── Tuple-kernel microbenchmark (multi-signal tile-share path) ─────────
 # `downconvert_and_correlate_fused_tuple!` directly, single- and multi-antenna.
@@ -273,7 +281,7 @@ function bench_fused_tuple_kernel(;
     num_samples = 2000,
     sampling_frequency = 5e6Hz,
     gnss_signal = GPSL1CA(),
-    num_ants = 1,
+    num_antennas = 1,
     n_signals = 2,
 )
     code_phase = 10.5
@@ -282,7 +290,7 @@ function bench_fused_tuple_kernel(;
         carrier_doppler * _chip_rate_to_center_frequency_ratio(gnss_signal)
     code_frequency = code_doppler + _chip_rate(gnss_signal)
 
-    correlator_template = EarlyPromptLateCorrelatorBank(; _antennas(num_ants)...)
+    correlator_template = EarlyPromptLateCorrelatorBank(; _antennas(num_antennas)...)
     sample_shifts = _calc_correlator_sample_offsets(
         correlator_template,
         sampling_frequency,
@@ -291,11 +299,11 @@ function bench_fused_tuple_kernel(;
     code_replica_size = num_samples + maximum(sample_shifts) - minimum(sample_shifts)
 
     samples =
-        num_ants == 1 ? rand(Complex{sample_type}, num_samples) :
-        rand(Complex{sample_type}, num_samples, num_ants)
+        num_antennas == 1 ? rand(Complex{sample_type}, num_samples) :
+        rand(Complex{sample_type}, num_samples, num_antennas)
 
     correlator_banks =
-        ntuple(_ -> EarlyPromptLateCorrelatorBank(; _antennas(num_ants)...), n_signals)
+        ntuple(_ -> EarlyPromptLateCorrelatorBank(; _antennas(num_antennas)...), n_signals)
     code_replicas = ntuple(n_signals) do _
         cr = Vector{Int8}(undef, code_replica_size)
         gen_code_replica!(cr,
@@ -308,8 +316,8 @@ function bench_fused_tuple_kernel(;
         cr
     end
     sample_shifts_tuple = ntuple(_ -> sample_shifts, n_signals)
-    tile_re = Vector{Float32}(undef, num_samples * num_ants)
-    tile_im = Vector{Float32}(undef, num_samples * num_ants)
+    tile_re = Vector{Float32}(undef, num_samples * num_antennas)
+    tile_im = Vector{Float32}(undef, num_samples * num_antennas)
 
     @benchmarkable Tracking.downconvert_and_correlate_fused_tuple!($correlator_banks,
         $samples,
@@ -324,35 +332,41 @@ end
 
 for n_signals = 2:3
     SUITE["fused tuple kernel"]["1-ant N=$n_signals"] =
-        bench_fused_tuple_kernel(; num_ants = 1, n_signals)
+        bench_fused_tuple_kernel(; num_antennas = 1, n_signals)
     SUITE["fused tuple kernel"]["2-ant N=$n_signals"] =
-        bench_fused_tuple_kernel(; num_ants = 2, n_signals)
+        bench_fused_tuple_kernel(; num_antennas = 2, n_signals)
     SUITE["fused tuple kernel"]["4-ant N=$n_signals"] =
-        bench_fused_tuple_kernel(; num_ants = 4, n_signals)
+        bench_fused_tuple_kernel(; num_antennas = 4, n_signals)
 end
 
 # ── Per-system multi-satellite track / track! benchmarks ─────────────────
 #
-# Full pipeline on realistic per-system workloads, with `bit_buffer.found = true`
+# Full pipeline on realistic per-system workloads, with every bit synchronizer synced
 # so the post-bit-edge path is hit. Variants: {out-of-place, in-place} ×
 # {single-threaded, threaded}.
 
-# A fresh sat's BitBuffer with `found = true` (and a full code-block count).
-function _with_found_bit_buffer(t)
+# A fresh sat's bit synchronizer, synced (and with a full prompt-sign count).
+function _with_synced_bit_synchronizer(t)
     sig = only(t.signals)
-    old_bb = Tracking.get_bit_buffer(sig)
-    new_bb = typeof(old_bb)(
-        zero(getfield(old_bb, 1)),         # code_block_buffer
-        20,                                # code_block_buffer_length
-        true,                              # found
-        0,                                 # secondary_phase
-        Int8(0),                           # polarity
-        complex(0.0, 0.0),                 # prompt_accumulator
-        0,                                 # prompt_accumulator_integrated_code_blocks
-        Float32[],                         # soft_bits
-        _SyncHypothesisAccumulators(),     # phase_acc
+    # Positional, in field order, which TrackingLoops 7 kept and renamed.
+    old_bit_synchronizer = _get_bit_synchronizer(sig)
+    new_bit_synchronizer = typeof(old_bit_synchronizer)(
+        zero(getfield(old_bit_synchronizer, 1)), # prompt_sign_history
+        20,                                      # num_prompt_signs
+        true,                                    # bit_or_secondary_code_synced
+        0,                                       # secondary_code_phase
+        Int8(0),                                 # bit_polarity
+        complex(0.0, 0.0),                       # bit_prompt_sum
+        0,                                       # num_code_periods_into_bit
+        Float32[],                               # soft_bits
+        _SyncHypothesisAccumulators(),           # phase_accumulators
     )
-    Tracking.TrackedSat(t; signals = (Tracking.TrackedSignal(sig; bit_buffer = new_bb),))
+    Tracking.TrackedSat(
+        t;
+        signals = (
+            Tracking.TrackedSignal(sig; _with_bit_synchronizer(new_bit_synchronizer)...),
+        ),
+    )
 end
 
 function _make_multi_sat_state(;
@@ -379,10 +393,10 @@ function _make_multi_sat_state(;
     TrackState(NamedTuple{names}(Tuple(all_sss))), rand(ComplexF32, nsamp), total_sats
 end
 
-# `TrackState` for the given system mix with `bit_buffer.found = true` on every sat.
+# `TrackState` for the given system mix with every sat's bit synchronizer synced.
 function _make_steady_state_track_state(; signals, nsats_list, nsamp, prn_max, code_dop)
     ts, samples, _ = _make_multi_sat_state(; signals, nsats_list, nsamp, prn_max, code_dop)
-    new_mss = map(sats -> map(_with_found_bit_buffer, sats), _get_group_sats(ts))
+    new_mss = map(sats -> map(_with_synced_bit_synchronizer, sats), _get_group_sats(ts))
     _track_state_with_group_sats(ts, new_mss), samples
 end
 
@@ -463,7 +477,7 @@ end
 # not realistic but isolate the per-signal cost of the tuple walk.
 function _make_multi_signal_track_state(; n_signals, nsamp)
     gpsl1 = GPSL1CA()
-    estimator = _default_tracking_loop()
+    tracking_loop = _default_tracking_loop()
     signals = ntuple(
         _ -> Tracking.TrackedSignal(
             gpsl1;
@@ -473,8 +487,8 @@ function _make_multi_signal_track_state(; n_signals, nsamp)
         ),
         n_signals,
     )
-    sat = Tracking.TrackedSat(signals, 1, 10.5, 1000.0Hz; doppler_estimator = estimator)
-    ts = TrackState(gpsl1, sat; doppler_estimator = estimator)
+    sat = Tracking.TrackedSat(signals, 1, 10.5, 1000.0Hz; _with_tracking_loop(tracking_loop)...)
+    ts = TrackState(gpsl1, sat; _with_tracking_loop(tracking_loop)...)
     ts, rand(Complex{Float32}, nsamp)
 end
 
@@ -491,9 +505,9 @@ end
 
 # ── Multi-code-period allocation guard (track!) ───────────────────────────────
 # A warm `track!` must be allocation-free per iteration, so `memory` must stay flat
-# as the block count grows; a per-iteration leak shows as a jump between lengths.
-# Pre-sync runs to 200 blocks because the CFAR detector only scores (and evaluates
-# its Student-t threshold) from `2 * blocks_per_bit` = 40 blocks; the hard
+# as the code-period count grows; a per-iteration leak shows as a jump between lengths.
+# Pre-sync runs to 200 code periods because the CFAR detector only scores (and evaluates
+# its Student-t threshold) from `2 * code_periods_per_bit` = 40 code periods; the hard
 # assertion is the pre-sync guard in test/track_in_place.jl. `setup` builds a fresh
 # state and warms it with one call, so the measured call is the second; with
 # `evals = 1` every measured call gets a fresh state, which keeps the loop filter
@@ -693,7 +707,7 @@ _int16_capture_mat(nsamp, M) = repeat(_int16_capture(nsamp); outer = (1, M))
 
 # A multi-signal sat: N GPS L1CA signals sharing one carrier + measurement.
 function _axes_multisignal_state(n_signals)
-    est = _default_tracking_loop()
+    tracking_loop = _default_tracking_loop()
     signals = ntuple(
         _ -> Tracking.TrackedSignal(
             _AXES_SIG;
@@ -703,14 +717,14 @@ function _axes_multisignal_state(n_signals)
         ),
         n_signals,
     )
-    sat = Tracking.TrackedSat(signals, 1, 10.5, 1000.0Hz; doppler_estimator = est)
-    TrackState(_AXES_SIG, sat; doppler_estimator = est)
+    sat = Tracking.TrackedSat(signals, 1, 10.5, 1000.0Hz; _with_tracking_loop(tracking_loop)...)
+    TrackState(_AXES_SIG, sat; _with_tracking_loop(tracking_loop)...)
 end
 
 # A single-signal sat with M antenna channels.
-_axes_multiantenna_state(num_ants) = TrackState(
+_axes_multiantenna_state(num_antennas) = TrackState(
     _AXES_SIG,
-    [_make_initial_sat(_AXES_SIG, 1, 10.5, 1000.0Hz; num_ants = NumAntennas(num_ants))],
+    [_make_initial_sat(_AXES_SIG, 1, 10.5, 1000.0Hz; num_antennas = NumAntennas(num_antennas))],
 )
 
 # Bands are keyed by `GNSSSignals.get_band_id` (`:L1`).
@@ -746,28 +760,28 @@ for n_signals in (3,)
         _axes_multisignal_state(n_signals),
     )
 end
-for num_ants in (4,)
-    cap = _int16_capture_mat(_AXES_NSAMP, num_ants)
-    g = SUITE["track! Int16 vs Float32"]["GPS L1CA, 1 sat, $num_ants antennas @ 5 MHz"]
+for num_antennas in (4,)
+    cap = _int16_capture_mat(_AXES_NSAMP, num_antennas)
+    g = SUITE["track! Int16 vs Float32"]["GPS L1CA, 1 sat, $num_antennas antennas @ 5 MHz"]
     g["Float32"] = _axes_dc(
         Tracking.CPUThreadedDownconvertAndCorrelator(),
         cap,
-        _axes_multiantenna_state(num_ants),
+        _axes_multiantenna_state(num_antennas),
     )
     g["Int16"] = _axes_dc(
         Tracking.Int16ThreadedDownconvertAndCorrelator(2^11),
         cap,
-        _axes_multiantenna_state(num_ants),
+        _axes_multiantenna_state(num_antennas),
     )
     g["OneBit"] = _axes_dc(
         Tracking.OneBitThreadedDownconvertAndCorrelator(),
         cap,
-        _axes_multiantenna_state(num_ants),
+        _axes_multiantenna_state(num_antennas),
     )
     g["TwoBit"] = _axes_dc(
         Tracking.TwoBitThreadedDownconvertAndCorrelator(),
         cap,
-        _axes_multiantenna_state(num_ants),
+        _axes_multiantenna_state(num_antennas),
     )
 end
 
@@ -968,12 +982,12 @@ SUITE["noise estimation"]["update_noise! – 1 ms @ 20 MHz"] =
 function bench_update_noise_array(;
     num_samples = 4000,
     sampling_frequency = 4e6Hz,
-    num_ants = 4,
+    num_antennas = 4,
 )
     gnss_signal = GPSL1CA()
-    estimator = Tracking.CorrelatorNoiseEstimator(; _antennas(num_ants)...)
+    estimator = Tracking.CorrelatorNoiseEstimator(; _antennas(num_antennas)...)
     measurement = Tracking.BandMeasurement(
-        rand(ComplexF32, num_samples, num_ants),
+        rand(ComplexF32, num_samples, num_antennas),
         sampling_frequency,
     )
     context =

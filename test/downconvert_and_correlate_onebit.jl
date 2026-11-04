@@ -315,7 +315,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
         meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
         dc = OneBitThreadedDownconvertAndCorrelator()
-        est = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)
+        loop = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)
         mksig() = TrackedSignal(
             sig;
             num_antennas = NumAntennas(1),
@@ -331,19 +331,16 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
                     meas,
                     TrackState(
                         sig,
-                        TrackedSat((mksig(),), 1, 100.0, 200Hz; doppler_estimator = est);
-                        doppler_estimator = est,
+                        TrackedSat((mksig(),), 1, 100.0, 200Hz; tracking_loop = loop);
+                        tracking_loop = loop,
                     ),
                 ),
                 1,
             ).signals,
         ).correlator_bank
-        satN = TrackedSat(ntuple(_ -> mksig(), N), 1, 100.0, 200Hz; doppler_estimator = est)
-        tsN = downconvert_and_correlate(
-            dc,
-            meas,
-            TrackState(sig, satN; doppler_estimator = est),
-        )
+        satN = TrackedSat(ntuple(_ -> mksig(), N), 1, 100.0, 200Hz; tracking_loop = loop)
+        tsN =
+            downconvert_and_correlate(dc, meas, TrackState(sig, satN; tracking_loop = loop))
         for s in get_sat_state(tsN, 1).signals
             @test get_prompt(s.correlator_bank) == get_prompt(cs)
             @test get_early(s.correlator_bank) == get_early(cs)
@@ -374,7 +371,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         )
         cap = make_capture_mat(sig, fs, nsamp, 200Hz, 100.0, M)
         meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
-        est = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)
+        loop = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)
         mksig() = TrackedSignal(
             sig;
             num_antennas = NumAntennas(M),
@@ -383,12 +380,9 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             ),
             beamformer = DefaultBeamformer(),
         )
-        satN = TrackedSat(ntuple(_ -> mksig(), N), 1, 100.0, 200Hz; doppler_estimator = est)
-        tsN = downconvert_and_correlate(
-            dc,
-            meas,
-            TrackState(sig, satN; doppler_estimator = est),
-        )
+        satN = TrackedSat(ntuple(_ -> mksig(), N), 1, 100.0, 200Hz; tracking_loop = loop)
+        tsN =
+            downconvert_and_correlate(dc, meas, TrackState(sig, satN; tracking_loop = loop))
         for s in get_sat_state(tsN, 1).signals
             c = _completed_or_partial_correlator(s)
             @test length(get_prompt(c)) == M

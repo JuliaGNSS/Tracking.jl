@@ -9,7 +9,7 @@ function Tracking.TrackedSat(acq::AcquisitionResults; args...)
 end
 
 """
-    TrackState(acq::AcquisitionResults; doppler_estimator, num_antennas)
+    TrackState(acq::AcquisitionResults; tracking_loop, num_antennas)
 
 Build a single-group `:default` [`TrackState`](@ref) on `acq.signal`, holding the
 satellite of `acq` (its `prn`, `code_phase` and `carrier_doppler`).
@@ -36,7 +36,7 @@ Build a [`TrackState`](@ref) holding the satellites of a batch of acquisition re
     signal (ties included) matches `acq.signal`; it errors if no group or more than
     one matches (then use `add_satellite!` with `group_key =`).
 
-Other `kwargs` (`doppler_estimator`, `num_antennas`, ...) go to the regular constructor.
+Other `kwargs` (`tracking_loop`, `num_antennas`, ...) go to the regular constructor.
 
 ```julia
 # Single-signal
@@ -200,7 +200,7 @@ end
 Batch variant: add each entry of `acqs`, validated as in the single form. With
 `group_key = nothing` each is routed to its group, so a mixed-constellation vector works;
 an explicit `group_key` applies to every entry. Returns the track state carrying the
-estimator after every [`Tracking.update_estimator_on_handoff`](@ref); keep using the
+tracking loop after every [`Tracking.update_tracking_loop_on_new_sats`](@ref); keep using the
 return value.
 """
 function Tracking.add_satellite!(

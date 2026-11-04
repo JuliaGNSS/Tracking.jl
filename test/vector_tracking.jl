@@ -3,7 +3,7 @@ module VectorTrackingTest
 # Vector tracking end to end through `track!`: IF samples of GPS L1 C/A satellites
 # broadcasting their (fixture) ephemerides as real LNAV bits, tracked with
 # TrackingLoops' `VectorTrackingLoop` and nothing vector-specific in between. The
-# estimator syncs to the bits, decodes them, solves the scalar PVT and takes the
+# tracking loop syncs to the bits, decodes them, solves the scalar PVT and takes the
 # satellites over by itself; this test only reads its solution.
 #
 # The true signal is synthesised from PositionVelocityTime's own models at a static
@@ -39,10 +39,10 @@ using Tracking:
     track!,
     add_satellite!,
     get_carrier_phase,
-    get_carrier_phase_correction,
+    calc_carrier_phase_correction,
     get_carrier_doppler,
     get_code_doppler,
-    get_doppler_estimator_state,
+    get_loop_state,
     get_sat_state
 using TrackingLoops:
     VectorTrackingLoop,
@@ -163,13 +163,13 @@ end
     decoders = [state.decoder for state in states[1:6]]
     sats = [TrueSat(decoder, position, t0) for decoder in decoders]
 
-    estimator = VectorTrackingLoop(
+    tracking_loop = VectorTrackingLoop(
         SIGNAL;
         approximate_year = 2021,
         enable_ionospheric_correction = false,
         enable_tropospheric_correction = false,
     )
-    track_state = TrackState(; signal = SIGNAL, doppler_estimator = estimator)
+    track_state = TrackState(; signal = SIGNAL, tracking_loop)
     # Acquired on the truth: the code phase and Doppler of the first sample.
     for (sat, decoder) in zip(sats, decoders)
         u0 = uncorrected_transmit_time(sat, position, t0)
@@ -201,10 +201,10 @@ end
             add_signal!(samples, sat, decoder.prn, position, t)
         end
         track!(samples, track_state, FS * Hz)
-        status = get_navigation_status(estimator)
+        status = get_navigation_status(tracking_loop)
         if status.vector_tracking_active
             seeded_at = something(seeded_at, t - t0)
-            pvt = get_navigation_solution(estimator)
+            pvt = get_navigation_solution(tracking_loop)
             push!(
                 errors,
                 norm(SVector(pvt.position.x, pvt.position.y, pvt.position.z) - position),
@@ -216,7 +216,7 @@ end
                     continue
                 estimate =
                     get_carrier_phase(track_state, decoder.prn) +
-                    get_carrier_phase_correction(track_state, decoder.prn, FS * Hz)
+                    calc_carrier_phase_correction(track_state, decoder.prn, FS * Hz)
                 push!(offsets, rem(estimate - sat.carrier_phase, 1.0, RoundNearest))
                 # The residual frequency here is too small for the truth to tell the
                 # sample the correction is read at, so pin it to the end of this chunk
@@ -227,9 +227,9 @@ end
                     ustrip(Hz, get_code_doppler(sat_state)),
                 )
                 corrections_at_chunk_end &=
-                    get_carrier_phase_correction(track_state, decoder.prn, FS * Hz) ==
+                    calc_carrier_phase_correction(track_state, decoder.prn, FS * Hz) ==
                     calc_carrier_phase_correction(
-                        get_doppler_estimator_state(sat_state),
+                        get_loop_state(sat_state),
                         words,
                         (k + 1) * CHUNK,
                         FS * Hz,
@@ -237,7 +237,7 @@ end
             end
         end
     end
-    status = get_navigation_status(estimator)
+    status = get_navigation_status(tracking_loop)
     # Off the truth by the Costas ambiguity the hand-over left, 0 or ½ cycle, and
     # by the same amount at every epoch: no cycle or half cycle slips.
     phase_drifts =
@@ -251,11 +251,11 @@ end
     @test seeded_at !== nothing && 26.0 < seeded_at < 28.0
     @test status.vector_tracking_active
     @test status.num_vector_tracking_members == length(sats)
-    @test length(get_navigation_solution(estimator).observations) == length(sats)
+    @test length(get_navigation_solution(tracking_loop).observations) == length(sats)
     # The same, asked of the track state, as a receiver does.
-    @test get_navigation_solution(track_state) === get_navigation_solution(estimator)
+    @test get_navigation_solution(track_state) === get_navigation_solution(tracking_loop)
     @test get_navigation_cycle_index(track_state) ==
-          get_navigation_cycle_index(estimator) >
+          get_navigation_cycle_index(tracking_loop) >
           250
     @test get_navigation_elapsed_time(track_state) !== nothing
     for decoder in decoders

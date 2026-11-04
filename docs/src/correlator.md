@@ -79,10 +79,10 @@ In the TrackingLoops manual:
 ## Correlator outputs
 
 Each completed integration within a processing chunk is recorded as a
-`CorrelatorBankOutput`, collected per signal and consumed by the Doppler estimator
+`CorrelatorBankOutput`, collected per signal and consumed by the tracking loop
 after the chunk (see [Chunked Doppler updates](track.md#Chunked-Doppler-updates)).
 An external correlator producer (e.g. an FPGA) can build these itself and feed
-them straight to the estimator — see
+them straight to the tracking loop — see
 [External correlator producers](track.md#External-correlator-producers).
 
 ```@docs
@@ -268,7 +268,7 @@ julia> TrackingLoops.get_num_correlators(get_correlator_bank(track_state, 1))
 ```
 
 The default DLL discriminator reads only the outermost early/late pair, so pair a
-multi-tap correlator with a [Custom Doppler Estimator](custom_doppler_estimator.md).
+multi-correlator bank with a [Custom Tracking Loop](custom_tracking_loop.md).
 TrackingLoops' `src/correlators/early_prompt_late.jl` and
 `very_early_prompt_late.jl` show the full pattern, including multi-antenna
 correlator outputs.

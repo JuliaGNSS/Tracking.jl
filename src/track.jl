@@ -31,10 +31,10 @@ first):
     states divide by one noise reference, and advancing two concurrently races,
     so build one `TrackState` per thread (see `downconvert_and_correlate` for why
     the window is not copied);
-  - the `doppler_estimator` itself, so results can be read off the instance you
+  - the `tracking_loop` itself, so results can be read off the instance you
     passed in. One with state of its own (TrackingLoops' `VectorTrackingLoop`) is
     advanced by `track` as by [`track!`](@ref), and two branches would mix their
-    records in one navigation filter.
+    integrations in one navigation filter.
 
 For real-time loops, **construct the backend once outside the loop**:
 
@@ -51,13 +51,13 @@ The default builds fresh per-thread scratch buffers on every call. See
 [`track!`](@ref) for the in-place variant.
 
 The coherent-integration length is set **per signal** with
-[`set_preferred_num_code_blocks_to_integrate!`](@ref), not passed to `track`:
+[`set_preferred_num_code_periods_to_integrate!`](@ref), not passed to `track`:
 
 ```julia
-set_preferred_num_code_blocks_to_integrate!(track_state, :gps_l5, 1, GPSL5I, 10)  # PRN 1 L5I: 10 ms
+set_preferred_num_code_periods_to_integrate!(track_state, :gps_l5, 1, GPSL5I, 10)  # PRN 1 L5I: 10 ms
 ```
 
-The conventional estimator caps the carrier loop bandwidth at `0.09 / T_int` and
+The scalar tracking loops cap the carrier loop bandwidth at `0.09 / T_int` and
 the code loop's at `0.018 / T_int`, so longer integration stays stable (see
 [`ScalarTrackingLoop`](@extref TrackingLoops.ScalarTrackingLoop)).
 """
@@ -70,7 +70,7 @@ function track(
     detached = TrackState(
         track_state;
         groups = _detach_groups_slot_vectors(track_state.groups),
-        sample_offsets = copy(track_state.sample_offsets),
+        sample_index_offsets = copy(track_state.sample_index_offsets),
     )
     track!(measurements, detached; kwargs...)::TS
 end
@@ -141,7 +141,7 @@ function track!(
     _validate_doppler_update_interval(chunk_duration, measurements)
     # Per chunk, one correlate pass at fixed NCO Doppler, then one estimate that
     # updates every satellite at a common epoch. The pass stops at each
-    # satellite's last completed code-block boundary (`stop_before_partial`), so
+    # satellite's last completed code-period boundary (`stop_before_partial`), so
     # the next pass covers boundary to boundary at the updated Doppler: every
     # integration sees one Doppler, and each correction takes effect at its
     # completing boundary.
@@ -159,12 +159,12 @@ function track!(
             stop_before_partial = true,
             samples_unchanged = chunk_index > 0,
         )
-        estimate_dopplers_and_filter_prompt!(track_state, measurements)
+        step_tracking_loops!(track_state, measurements)
         chunk_index += 1
     end
     # Drain each satellite's trailing partial into its correlator bank, carried into
     # the next call; a boundary exactly at the buffer end completes here, hence
-    # the fold. Noise is measured here only if no chunk ran, or every sample
+    # the loop update. Noise is measured here only if no chunk ran, or every sample
     # would enter the noise window twice.
     downconvert_and_correlate!(
         downconvert_and_correlator,
@@ -173,27 +173,38 @@ function track!(
         samples_unchanged = chunk_index > 0,
         measure_noise = chunk_index == 0,
     )
-    estimate_dopplers_and_filter_prompt!(track_state, measurements)
-    _advance_sample_offsets!(track_state.sample_offsets, measurements)
+    step_tracking_loops!(track_state, measurements)
+    _advance_sample_index_offsets!(track_state.sample_index_offsets, measurements)
     return track_state
 end
 
 # The next measurement of every band starts where this one ended.
-@inline _advance_sample_offsets!(
-    sample_offsets::Dict{Symbol,Int},
+@inline _advance_sample_index_offsets!(
+    sample_index_offsets::Dict{Symbol,Int},
     measurements::BandMeasurements,
-) = _advance_sample_offsets!(sample_offsets, keys(measurements), values(measurements))
-@inline _advance_sample_offsets!(sample_offsets::Dict{Symbol,Int}, ::Tuple{}, ::Tuple{}) =
-    sample_offsets
-@inline function _advance_sample_offsets!(
-    sample_offsets::Dict{Symbol,Int},
+) = _advance_sample_index_offsets!(
+    sample_index_offsets,
+    keys(measurements),
+    values(measurements),
+)
+@inline _advance_sample_index_offsets!(
+    sample_index_offsets::Dict{Symbol,Int},
+    ::Tuple{},
+    ::Tuple{},
+) = sample_index_offsets
+@inline function _advance_sample_index_offsets!(
+    sample_index_offsets::Dict{Symbol,Int},
     bands::Tuple,
     measurements::Tuple,
 )
     band = first(bands)
-    sample_offsets[band] =
-        get(sample_offsets, band, 0) + get_num_samples(first(measurements))
-    _advance_sample_offsets!(sample_offsets, Base.tail(bands), Base.tail(measurements))
+    sample_index_offsets[band] =
+        get(sample_index_offsets, band, 0) + get_num_samples(first(measurements))
+    _advance_sample_index_offsets!(
+        sample_index_offsets,
+        Base.tail(bands),
+        Base.tail(measurements),
+    )
 end
 
 # Bare-buffer convenience wrapper. Single-band TrackStates only.

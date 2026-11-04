@@ -11,7 +11,7 @@ using Tracking:
     TrackState,
     TrackedSat,
     append_correlator_bank_output!,
-    estimate_dopplers_and_filter_prompt!,
+    step_tracking_loops!,
     get_cn0_estimator
 using TrackingLoops:
     CorrelatorBankOutput,
@@ -29,11 +29,11 @@ using TrackingLoops:
 # the other CN0 tests use.
 _db(x) = ustrip(uconvert(dBHz, x))
 
-# A pure **correlator-ingest** state (the hardware path): records come through
+# A pure **correlator-ingest** state (the hardware path): integrations come through
 # `append_correlator_bank_output!` with no samples, so the software noise measurement
 # never runs — the only way to reach "configured but never fed".
 #
-# The records are noiseless: a raw accumulator `a = √power · N` normalises to a
+# The integrations are noiseless: a raw accumulator `a = √power · N` normalises to a
 # prompt of `√power`, so the reported C/N₀ follows exactly from the appended density.
 function _ingested_state(
     cn0_estimator;
@@ -73,7 +73,7 @@ end
     # `-Inf dB-Hz` with no clue why.
     ts, fs = _ingested_state(NoiseReferencedCN0Estimator())
     @test keys(ts.noise_estimators) == (:GPSL1CA,)
-    @test_logs (:warn,) estimate_dopplers_and_filter_prompt!(ts, (L1 = fs,))
+    @test_logs (:warn,) step_tracking_loops!(ts, (L1 = fs,))
     @test estimate_cn0(ts, 1) == -Inf * dBHz
     @test Base.length(get_cn0_estimator(ts, 1)) == 0
 end
@@ -107,7 +107,7 @@ end
     ))
     @test Set(keys(multi.noise_estimators)) == Set((:GPSL1CA, :GPSL5I))
     logs, _ = collect_test_logs() do
-        estimate_dopplers_and_filter_prompt!(multi, (L1 = 4e6Hz, L5 = 4e6Hz))
+        step_tracking_loops!(multi, (L1 = 4e6Hz, L5 = 4e6Hz))
     end
     warnings = filter(r -> r.level == Warn, logs)
     @test length(warnings) == 2
@@ -119,14 +119,14 @@ end
 @testset "the warm-up skip is per estimator, not per satellite" begin
     # See "the warm-up skip" in `requires_noise_density`. Two L1 C/A signals on
     # one satellite (synthetic, but the shortest setup with two different
-    # estimators side by side); records are ingested, so the density stays
+    # estimators side by side); integrations are ingested, so the density stays
     # unavailable for the whole run.
     gpsl1 = GPSL1CA()
     signals = (gpsl1, gpsl1)
 
     function run(cn0_estimator)
         ts, fs = _ingested_state(cn0_estimator; signals)
-        estimate_dopplers_and_filter_prompt!(ts, (L1 = fs,))
+        step_tracking_loops!(ts, (L1 = fs,))
         ts
     end
 
@@ -154,7 +154,7 @@ end
 @testset "the externally fed path reports a real C/N₀" begin
     # End to end on the hardware ingest path, with no sample buffer anywhere: a
     # producer that appends correlator outputs *and* its noise observations gets a
-    # C/N₀ out. The records are noiseless with a normalised prompt power of 1, so
+    # C/N₀ out. The integrations are noiseless with a normalised prompt power of 1, so
     # a density of `1e-6 Hz⁻¹` puts the answer at exactly
     # `10log10(1/1e-6 − 1/1e-3)`.
     ts, fs = _ingested_state(NoiseReferencedCN0Estimator())
@@ -164,7 +164,7 @@ end
         calc_noise_observation_from_samples(n * 1e-6 * ustrip(Hz, fs), n, fs),
         :GPSL1CA,
     )
-    estimate_dopplers_and_filter_prompt!(ts, (L1 = fs,))
+    step_tracking_loops!(ts, (L1 = fs,))
     @test Base.length(get_cn0_estimator(ts, 1)) == 20
     @test _db(estimate_cn0(ts, 1)) ≈ 10log10(1 / 1e-6 - 1 / 1e-3) atol = 1e-6
 end

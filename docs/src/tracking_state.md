@@ -2,14 +2,14 @@
 
 The tracking state nests as **TrackState → SignalGroup → TrackedSat → TrackedSignal**:
 
-- [`TrackState`](@ref): a `NamedTuple` of [`SignalGroup`](@ref)s and the Doppler estimator.
+- [`TrackState`](@ref): a `NamedTuple` of [`SignalGroup`](@ref)s and the tracking loop.
 - [`SignalGroup`](@ref): satellites with the same signal tuple, and so one concrete `TrackedSat` type (the hot loop's type stability), on one RF band and antenna array.
-- [`TrackedSat`](@ref): the carrier/code Doppler and phase its signals share, a tuple of [`TrackedSignal`](@ref)s, and the Doppler-estimator state.
-- [`TrackedSignal`](@ref): correlator bank, beamformer, C/N₀ estimator, bit buffer and integration progress.
+- [`TrackedSat`](@ref): the carrier/code Doppler and phase its signals share, a tuple of [`TrackedSignal`](@ref)s, and the tracking loop's per-satellite state (`loop_state`).
+- [`TrackedSignal`](@ref): correlator bank, beamformer, C/N₀ estimator, bit synchronizer and integration progress.
 
-### Estimator-driver signal
+### Driver signal
 
-The first signal of each group's tuple is the **estimator-driver signal**, the one the Doppler estimator updates the shared carrier and code Doppler from. The scalar tracking loops ([`ScalarTrackingLoop`](@extref TrackingLoops.ScalarTrackingLoop), [`DelayCompensatedTrackingLoop`](@extref TrackingLoops.DelayCompensatedTrackingLoop)) run their discriminators on it and take its default loop bandwidths (a carrier loop pulling in at 50 Hz and narrowing to 18 Hz, 1 Hz code). A custom [`AbstractTrackingLoop`](@extref TrackingLoops.AbstractTrackingLoop) may use any signal.
+The first signal of each group's tuple is the **driver signal**, the one whose predetection integrations close the tracking loop that updates the shared carrier and code Doppler. The scalar tracking loops ([`ScalarTrackingLoop`](@extref TrackingLoops.ScalarTrackingLoop), [`DelayCompensatedTrackingLoop`](@extref TrackingLoops.DelayCompensatedTrackingLoop)) run their discriminators on it and take its default loop bandwidths (a carrier loop pulling in at 50 Hz and narrowing to 18 Hz, 1 Hz code). A custom [`AbstractTrackingLoop`](@extref TrackingLoops.AbstractTrackingLoop) may use any signal.
 
 Bit sync, the beamformer and the **C/N₀ estimator** run per signal, so a multi-signal satellite has one C/N₀ per signal; see [CN0 Estimator](cn0_estimator.md) and [`NoCN0Estimator`](@extref TrackingLoops.NoCN0Estimator), the per-signal opt-out.
 
@@ -75,14 +75,14 @@ TrackedSat(
     code_phase,
     carrier_doppler;
     # all kwargs below are optional and have signal-derived defaults
-    doppler_estimator              = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF),
-    num_antennas                   = NumAntennas(1),
-    correlator_bank                     = get_default_correlator_bank(signal, num_antennas),
-    carrier_phase                  = 0.0,
-    code_doppler                   = carrier_doppler * get_chip_rate_to_center_frequency_ratio(signal),
-    num_prompts_for_cn0_estimation = 100,
-    cn0_estimator                  = TrackingLoops.default_cn0_estimator(signal, num_prompts_for_cn0_estimation),
-    beamformer               = DefaultBeamformer(),
+    tracking_loop                       = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF),
+    num_antennas                        = NumAntennas(1),
+    correlator_bank                          = get_default_correlator_bank(signal, num_antennas),
+    carrier_phase                       = 0.0,
+    code_doppler                        = carrier_doppler * get_chip_rate_to_center_frequency_ratio(signal),
+    num_integrations_for_cn0_estimation = 100,
+    cn0_estimator                       = TrackingLoops.default_cn0_estimator(signal, num_integrations_for_cn0_estimation),
+    beamformer                    = DefaultBeamformer(),
 )
 ```
 
@@ -119,7 +119,7 @@ julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
                preferred_early_late_to_prompt_spacing = 0.1,
            ),
            beamformer               = MyBeamformer(),
-           num_prompts_for_cn0_estimation = 200,
+           num_integrations_for_cn0_estimation = 200,
        );
 
 julia> track_state = TrackState(GPSL1CA(), sat);
@@ -215,9 +215,9 @@ julia> get_carrier_doppler(track_state, :modern_gps, 11)
 1234.0 Hz
 ```
 
-Put a pilot first where there is one: without data bits the PLL can integrate longer. The data signals still decode their bits, each with its own `bit_buffer`.
+Put a pilot first where there is one: without data bits the PLL can integrate longer. The data signals still decode their bits, each with its own `bit_synchronizer`.
 
-Signals with different code periods (L1 C/A 1 ms, L1C-P 10 ms) each complete records on their own boundaries; the conventional estimators update the Doppler from the driver's records (see [Chunked Doppler updates](track.md#Chunked-Doppler-updates)).
+Signals with different code periods (L1 C/A 1 ms, L1C-P 10 ms) each complete predetection integrations on their own boundaries; the scalar tracking loops update the Doppler from the driver's integrations (see [Chunked Doppler updates](track.md#Chunked-Doppler-updates)).
 
 ### Phased-array tracking
 
@@ -319,7 +319,7 @@ merge_sats
 
 Satellites broadcast on several RF bands (GPS L1 and L5, Galileo E1 and E5a), which arrive from separate front ends, generally at different sample rates. Each group of a multi-band `TrackState` sits on one band. Two bands give near-independent observations of one path: for ionosphere-free combinations, wider code bandwidth, and cross-band aiding, as the L1/L5 Doppler ratio is that of the carrier frequencies.
 
-Tracking.jl provides per-band groups, measurement routing and an estimate phase that sees every band's records at once; joint cross-band estimation is up to the Doppler estimator, which receives them (see [Custom Doppler Estimator](custom_doppler_estimator.md)).
+Tracking.jl provides per-band groups, measurement routing and a loop update that sees every band's integrations at once; joint cross-band estimation is up to the tracking loop, which receives them (see [Custom Tracking Loop](custom_tracking_loop.md)).
 
 ### Declaring bands
 
@@ -438,7 +438,7 @@ get_band_ids
 
 The trailing `sig` selector is either:
 
-- an **`Integer`** index into `signals` (`1` is the [estimator-driver signal](#Estimator-driver-signal)), or
+- an **`Integer`** index into `signals` (`1` is the [driver signal](#Driver-signal)), or
 - a **signal type** like `GPSL1CA` (not `GPSL1CA()`), which must match exactly one signal.
 
 ### What you can read
@@ -452,7 +452,7 @@ The trailing `sig` selector is either:
 | `get_code_phase` | Shared code phase (wraps at [`max_code_phase_period`](@ref Tracking.max_code_phase_period)). |
 | `get_code_doppler` | Shared code Doppler. |
 | `get_carrier_phase` | Shared carrier phase in cycles. |
-| [`get_carrier_phase_correction`](@ref) | What the estimator adds to `get_carrier_phase` for the carrier-phase measurement (vector loop only; takes the band's sampling frequency). |
+| [`calc_carrier_phase_correction`](@ref TrackingLoops.calc_carrier_phase_correction-Tuple{TrackState, Any, Any, Any}) | What the tracking loop adds to `get_carrier_phase` for the carrier-phase measurement (vector loop only; takes the band's sampling frequency). |
 | `get_carrier_doppler` | Shared carrier Doppler. |
 | `get_next_sample_index` | Index of the next sample to process in the current samples. |
 
@@ -463,13 +463,13 @@ The trailing `sig` selector is either:
 | `get_correlator_bank` | The working correlator bank (in-flight correlator outputs). |
 | `get_last_fully_integrated_correlator` | Correlator value from the last completed integration. |
 | `get_last_fully_integrated_beamformed_prompt` | Beamformed prompt value from the last completed integration. |
-| `get_last_fully_integrated_num_code_blocks` | Primary-code block count of the last completed integration. |
+| `get_last_fully_integrated_num_code_blocks` | Primary code periods of the last completed integration. |
 | `get_last_fully_integrated_integration_time` | Integration time `T` of the last completed integration; the post-integration SNR is C/N₀ × `T`. |
 | `get_beamformer` | The beamformer. |
 | `get_cn0_estimator` | The CN0 estimator. |
 | `estimate_cn0` | CN0 estimate in dB-Hz. |
-| `get_bit_buffer` / `get_soft_bits` / `get_num_bits` | Bit buffer, decoded soft bits (sign = the hard bit), bit count. |
-| `get_integrated_samples` | Number of samples accumulated into the current integration so far. |
+| `get_bit_synchronizer` / `get_soft_bits` / `get_num_bits` | Bit synchronizer, demodulated soft bits (sign = the hard bit), bit count. |
+| `get_num_integrated_samples` | Number of samples accumulated into the current integration so far. |
 | `is_bit_or_secondary_code_synced` | `true` once bit/secondary-code synchronization has been achieved. |
 
 The per-signal form always names the group, `:default` on a single-group `TrackState`: `estimate_cn0(track_state, :default, 11, GPSL1C_P)`.
@@ -489,7 +489,7 @@ julia> track_state = add_satellite!(track_state; prn = 11, group_key = :modern_g
 julia> get_carrier_doppler(track_state, :modern_gps, 11)  # sat-level: same for all signals
 1234.0 Hz
 
-julia> get_num_bits(track_state, :modern_gps, 11, 1)  # per-signal by index (estimator-driver signal)
+julia> get_num_bits(track_state, :modern_gps, 11, 1)  # per-signal by index (driver signal)
 0
 
 julia> get_num_bits(track_state, :modern_gps, 11, GPSL1CA)  # per-signal by type
@@ -503,7 +503,7 @@ Tracking.SatelliteDicts
 get_sat_states
 get_sat_state
 get_signal
-get_carrier_phase_correction
+TrackingLoops.calc_carrier_phase_correction(::TrackState, ::Any, ::Any, ::Any)
 ```
 
 ## TrackedSat
@@ -522,7 +522,7 @@ get_carrier_phase(::TrackedSat)
 get_carrier_doppler(::TrackedSat)
 get_next_sample_index(::TrackedSat)
 get_signals(::TrackedSat)
-get_doppler_estimator_state(::TrackedSat)
+get_loop_state(::TrackedSat)
 ```
 
 ## TrackedSignal
@@ -535,10 +535,10 @@ get_last_fully_integrated_beamformed_prompt(::TrackedSignal)
 get_last_fully_integrated_num_code_blocks(::TrackedSignal)
 get_last_fully_integrated_integration_time(::TrackedSignal)
 get_beamformed_prompts(::TrackedSignal)
-get_bit_buffer(::TrackedSignal)
+get_bit_synchronizer(::TrackedSignal)
 get_num_bits(::TrackedSignal)
-get_integrated_samples(::TrackedSignal)
-get_preferred_num_code_blocks_to_integrate(::TrackedSignal)
+get_num_integrated_samples(::TrackedSignal)
+get_preferred_num_code_periods_to_integrate(::TrackedSignal)
 ```
 
 The other per-signal accessors also take a `TrackedSignal`, as does `get_signal(tsig)`, the signal instance.

@@ -18,7 +18,7 @@ signals' periods (#129), each of which depends on the signal's sync state:
 - **Before sync**: its primary code length, since the bit or secondary chip of
   the current period is unknown.
 - **After sync**: one *symbol period*, `primary × secondary_code_length` for a
-  pilot and `primary × blocks_per_data_bit` for a data signal.
+  pilot and `primary × code_periods_per_bit` for a data signal.
 
 | Sat tracks         | Before sync | After full sync                          |
 |--------------------|-------------|------------------------------------------|
@@ -51,35 +51,35 @@ families:
   alignment and reports the recovered chip `phase`.
 - **Trivial**: one symbol per primary period (Galileo E1B, E6-B, GPS L1C-D, L2CM,
   BeiDou B2b-I, B1C-D), and Galileo E5a-QP (no data, no overlay), sync on the first
-  block. GPS L2CL, a pilot without secondary code, never syncs and stays pre-sync.
+  code period. GPS L2CL, a pilot without secondary code, never syncs and stays pre-sync.
 
-*Min-to-fire* is the number of blocks before a detector can lock.
+*Min-to-fire* is the number of code periods before a detector can lock.
 
-| Signal | Detector | Min-to-fire | Accept rule | Phase | Blocks per symbol |
+| Signal | Detector | Min-to-fire | Accept rule | Phase | Code periods per symbol |
 |--------|----------|-------------|-------------|-------|---------------------|
-| GPS L1 C/A | soft bit-edge CFAR | 40 blocks (2 × 20) | confidence 0.999 | 0 | 20 |
+| GPS L1 C/A | soft bit-edge CFAR | 40 code periods (2 × 20) | confidence 0.999 | 0 | 20 |
 | Galileo E1B | trivial | n/a | always | 0 | 1 |
-| GPS L5I | soft secondary CFAR | 20 blocks (2 × NH10) | confidence 0.999 | 0 | 10 |
-| GPS L5Q | soft secondary CFAR | 40 blocks (2 × NH20) | confidence 0.999 | 0 | 20 (pilot) |
+| GPS L5I | soft secondary CFAR | 20 code periods (2 × NH10) | confidence 0.999 | 0 | 10 |
+| GPS L5Q | soft secondary CFAR | 40 code periods (2 × NH20) | confidence 0.999 | 0 | 20 (pilot) |
 | GPS L1C-D | trivial | n/a | always | 0 | 1 |
-| GPS L1C-P | **hard** rotation sweep | 1800 blocks | 45 errors (2.5 %) | `0..1799` | n/a (pilot) |
+| GPS L1C-P | **hard** rotation sweep | 1800 code periods | 45 errors (2.5 %) | `0..1799` | n/a (pilot) |
 | GPS L2CM | trivial | n/a | always | 0 | 1 |
 | GPS L2CL | none (dataless pilot) | n/a | n/a | 0 | n/a (pilot) |
-| Galileo E1C | soft secondary CFAR | 50 blocks (2 × CS25) | confidence 0.999 | 0 | 25 (pilot) |
-| Galileo E5a-I | soft secondary CFAR | 40 blocks (2 × CS20) | confidence 0.999 | 0 | 20 |
-| Galileo E5a-Q | soft secondary CFAR | 200 blocks (2 × CS100) | confidence 0.999 | 0 | 100 (pilot) |
-| Galileo E5b-I | soft secondary CFAR | 8 blocks (2 × CS4) | confidence 0.999 | 0 | 4 |
-| Galileo E5b-Q | soft secondary CFAR | 200 blocks (2 × CS100) | confidence 0.999 | 0 | 100 (pilot) |
+| Galileo E1C | soft secondary CFAR | 50 code periods (2 × CS25) | confidence 0.999 | 0 | 25 (pilot) |
+| Galileo E5a-I | soft secondary CFAR | 40 code periods (2 × CS20) | confidence 0.999 | 0 | 20 |
+| Galileo E5a-Q | soft secondary CFAR | 200 code periods (2 × CS100) | confidence 0.999 | 0 | 100 (pilot) |
+| Galileo E5b-I | soft secondary CFAR | 8 code periods (2 × CS4) | confidence 0.999 | 0 | 4 |
+| Galileo E5b-Q | soft secondary CFAR | 200 code periods (2 × CS100) | confidence 0.999 | 0 | 100 (pilot) |
 | Galileo E5a-QP | trivial | n/a | always | 0 | n/a (pilot) |
 | Galileo E6-B | trivial | n/a | always | 0 | 1 |
-| Galileo E6-C | soft secondary CFAR | 200 blocks (2 × CS100) | confidence 0.999 | 0 | 100 (pilot) |
-| BeiDou B1I | soft secondary CFAR | 40 blocks (2 × NH20) | confidence 0.999 | 0 | 20 |
-| BeiDou B3I | soft secondary CFAR | 40 blocks (2 × NH20) | confidence 0.999 | 0 | 20 |
+| Galileo E6-C | soft secondary CFAR | 200 code periods (2 × CS100) | confidence 0.999 | 0 | 100 (pilot) |
+| BeiDou B1I | soft secondary CFAR | 40 code periods (2 × NH20) | confidence 0.999 | 0 | 20 |
+| BeiDou B3I | soft secondary CFAR | 40 code periods (2 × NH20) | confidence 0.999 | 0 | 20 |
 | BeiDou B2b-I | trivial | n/a | always | 0 | 1 |
-| BeiDou B2a data | soft secondary CFAR | 10 blocks (2 × 5) | confidence 0.999 | 0 | 5 |
-| BeiDou B2a pilot | soft secondary CFAR | 200 blocks (2 × 100) | confidence 0.999 | 0 | 100 (pilot) |
+| BeiDou B2a data | soft secondary CFAR | 10 code periods (2 × 5) | confidence 0.999 | 0 | 5 |
+| BeiDou B2a pilot | soft secondary CFAR | 200 code periods (2 × 100) | confidence 0.999 | 0 | 100 (pilot) |
 | BeiDou B1C data | trivial | n/a | always | 0 | 1 |
-| BeiDou B1C pilot | **hard** rotation sweep | 1800 blocks | 45 errors (2.5 %) | `0..1799` | n/a (pilot) |
+| BeiDou B1C pilot | **hard** rotation sweep | 1800 code periods | 45 errors (2.5 %) | `0..1799` | n/a (pilot) |
 
 BeiDou B1I/B3I GEO satellites (PRN 1-5, 59-63) carry no NH20 overlay and
 broadcast D2, so the detector never locks on them: they track and range but stay
@@ -95,7 +95,7 @@ julia> using Tracking, TrackingLoops, GNSSSignals
 julia> TrackingLoops.get_secondary_code_error_tolerance(GPSL1C_P())  # default
 0.025
 
-julia> # Loosen the L1C-P ceiling to 5 % (= 90 errors over 1800 blocks) for low-C/N₀ work.
+julia> # Loosen the L1C-P ceiling to 5 % (= 90 errors over 1800 code periods) for low-C/N₀ work.
        TrackingLoops.get_secondary_code_error_tolerance(::GPSL1C_P) = 0.05;
 
 julia> TrackingLoops.get_secondary_code_error_tolerance(GPSL1C_P())  # after override

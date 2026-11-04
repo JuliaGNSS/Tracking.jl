@@ -21,7 +21,7 @@ using Tracking:
     get_beamformed_prompts,
     get_last_fully_integrated_beamformed_prompt,
     get_last_fully_integrated_num_code_blocks,
-    set_preferred_num_code_blocks_to_integrate!
+    set_preferred_num_code_periods_to_integrate!
 using TrackingLoops:
     get_soft_bits, is_bit_or_secondary_code_synced, EarlyPromptLateCorrelatorBank
 
@@ -32,7 +32,7 @@ using TrackingLoops:
     code_frequency = get_chip_rate(gpsl1)
     carrier_doppler = 0.0Hz
 
-    # Both lock polarities. This near-noiseless signal locks at block 60, the
+    # Both lock polarities. This near-noiseless signal locks at code period 60, the
     # third bit boundary: the floating-point residual keeps the z-score finite,
     # so the Student-t threshold clears only with a third bin. It still fires on
     # a true boundary (#124). Pre-sync and post-sync bits must match the
@@ -40,10 +40,10 @@ using TrackingLoops:
     for data_bits in ([1, 0, 1, 1, 0, 0, 1], [0, 1, 0, 0, 1, 1, 0])
         track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0, carrier_doppler)];)
 
-        block_bits = repeat(data_bits, inner = 20)  # 20 code blocks per bit
+        code_period_bits = repeat(data_bits, inner = 20)  # 20 code periods per bit
         decoded_bits = Bool[]
         decoded_soft_bits = Float32[]
-        foreach(enumerate(block_bits)) do (index, bit)
+        foreach(enumerate(code_period_bits)) do (index, bit)
             code_phase = (index - 1) * num_samples * code_frequency / sampling_frequency
             carrier_phase =
                 2π * (index - 1) * num_samples * carrier_doppler / sampling_frequency
@@ -61,8 +61,8 @@ using TrackingLoops:
                 )
             track_state = track(samples, track_state, sampling_frequency)
             @test is_bit_or_secondary_code_synced(track_state) == (index >= 60)
-            # Sync at block 60 recovers the 3 buffered bits (the UInt64 sign
-            # window holds all 60), then one bit per 20 blocks.
+            # Sync at code period 60 recovers the 3 buffered bits (the UInt64 sign
+            # window holds all 60), then one bit per 20 code periods.
             expected_num_bits = index == 60 ? 3 : (index > 60 && index % 20 == 0 ? 1 : 0)
             num_bits = get_num_bits(track_state)
             @test num_bits == expected_num_bits
@@ -80,19 +80,19 @@ using TrackingLoops:
     end
 end
 
-# Multi-block coherent integration: bits keep flowing with `preferred > 1`.
+# Multi-code-period coherent integration: bits keep flowing with `preferred > 1`.
 #
-# The integration is one block until sync (block 60), then 4 blocks, five per
+# The integration is one code period until sync (code period 60), then 4 code periods, five per
 # bit; a length that does not divide the bit, like 3, is rejected (#128). The
-# multi-block tracker must decode the same bits as a single-block reference.
-@testset "Bit detection with multi-block coherent integration" begin
+# multi-code-period tracker must decode the same bits as a single-code-period reference.
+@testset "Bit detection with multi-code-period coherent integration" begin
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     num_samples = 5000
     code_frequency = get_chip_rate(gpsl1)
 
     multi_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0, 0.0Hz)])
-    set_preferred_num_code_blocks_to_integrate!(multi_state, 1, 4)
+    set_preferred_num_code_periods_to_integrate!(multi_state, 1, 4)
     single_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0, 0.0Hz)])
 
     # The bit buffer is flushed on every `track` call.
@@ -134,29 +134,29 @@ end
     @test multi_bits[3] != multi_bits[4]
     @test multi_bits[4] != multi_bits[5]
 
-    # Post-sync a bit sums five 4-block prompts (~5) instead of twenty
-    # single-block ones (~20).
+    # Post-sync a bit sums five 4-code-period prompts (~5) instead of twenty
+    # single-code-period ones (~20).
     @test sign.(multi_soft) == sign.(single_soft)
     @test all(x -> abs(x) ≈ 5, multi_soft[4:end])
     @test all(x -> abs(x) ≈ 20, single_soft[4:end])
 end
 
-# Mid-fold bit sync: the accumulation window must stay on the bit grid.
+# Mid-update bit sync: the accumulation window must stay on the bit grid.
 #
-# With a fold of several records, sync usually lands on a record that is not
-# the last of its fold. The `k` records behind it still cover real code blocks;
-# leaving them out of the block count shifts every later bit window `k` blocks
+# With a loop update over several integrations, sync usually lands on an integration
+# that is not the last of its update. The `k` integrations behind it still cover real code periods;
+# leaving them out of the code-period count shifts every later bit window `k` code periods
 # off the grid (#219), which reads as a soft-bit magnitude of 20 − 2k, not 20.
-@testset "mid-fold bit sync keeps the accumulation on the bit grid" begin
+@testset "mid-update bit sync keeps the accumulation on the bit grid" begin
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     num_samples = 5000
     code_frequency = get_chip_rate(gpsl1)
-    num_blocks = 140
+    num_code_periods = 140
 
     samples = ComplexF32[]
-    for index = 1:num_blocks
-        # ±1 data bit, flipping every 20 code blocks.
+    for index = 1:num_code_periods
+        # ±1 data bit, flipping every 20 code periods.
         data_bit_sign = iseven(div(index - 1, 20)) ? 1.0 : -1.0
         code_phase = (index - 1) * num_samples * code_frequency / sampling_frequency
         append!(
@@ -174,16 +174,16 @@ end
         )
     end
 
-    # 1 ms is the baseline (one record per fold). The lock at block 60 is the
-    # 4th of the 57..63 fold at 7 ms and the 8th of the 53..65 fold at 13 ms, so
-    # 3 and 5 records trail it.
+    # 1 ms is the baseline (one integration per loop update). The lock at code period 60 is the
+    # 4th of the 57..63 update at 7 ms and the 8th of the 53..65 update at 13 ms, so
+    # 3 and 5 integrations trail it.
     for doppler_update_interval in (1e-3s, 3e-3s, 7e-3s, 13e-3s)
         track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0, 0.0Hz)])
         track_state =
             track(samples, track_state, sampling_frequency; doppler_update_interval)
         soft_bits = get_soft_bits(track_state, 1)
-        # 3 replayed at the block-60 lock, then one per 20 blocks.
-        @test length(soft_bits) == 3 + div(num_blocks - 60, 20)
+        # 3 replayed at the lock at code period 60, then one per 20 code periods.
+        @test length(soft_bits) == 3 + div(num_code_periods - 60, 20)
         @test all(x -> abs(x) ≈ 20, soft_bits)
     end
 end
@@ -200,14 +200,14 @@ end
     code_frequency = get_chip_rate(gpsl5)
     primary_code_length = get_code_length(gpsl5)            # 10230 chips
     secondary_code_length = get_secondary_code_length(gpsl5)  # 10 (NH10)
-    num_samples = round(Int, 25e6 / 1000)                  # 1 ms = one primary-code block
+    num_samples = round(Int, 25e6 / 1000)                  # 1 ms = one primary code period
 
     for start_secondary_chip = 0:(secondary_code_length-1)
         track_state = TrackState(gpsl5, [TrackedSat(gpsl5, prn, 0.0, 0.0Hz)])
-        synced_at_block = -1
+        synced_at_code_period = -1
         synced_code_phase = NaN
         for index = 1:40
-            # Block `index` carries NH10 chip `(start_secondary_chip + index - 1) % 10`.
+            # Code period `index` carries NH10 chip `(start_secondary_chip + index - 1) % 10`.
             gen_code_phase = (start_secondary_chip + (index - 1)) * primary_code_length
             samples = ComplexF32.(
                 gen_code(
@@ -220,18 +220,18 @@ end
                 ),
             )
             track_state = track(samples, track_state, sampling_frequency)
-            if is_bit_or_secondary_code_synced(track_state) && synced_at_block < 0
-                synced_at_block = index
+            if is_bit_or_secondary_code_synced(track_state) && synced_at_code_period < 0
+                synced_at_code_period = index
                 synced_code_phase = get_code_phase(track_state)
             end
         end
 
         # A runner-up, and so a decision, needs two completed periods.
-        @test synced_at_block >= 2 * secondary_code_length
+        @test synced_at_code_period >= 2 * secondary_code_length
 
-        # The just-completed block is absolute chip 9: the true secondary-code
+        # The just-completed code period is absolute chip 9: the true secondary-code
         # phase was recovered, not merely some lock.
-        @test (start_secondary_chip + synced_at_block - 1) % secondary_code_length ==
+        @test (start_secondary_chip + synced_at_code_period - 1) % secondary_code_length ==
               secondary_code_length - 1
 
         # The generator's fixed-point DDA (~2^-30 chip) leaves the phase within
@@ -244,14 +244,14 @@ end
     end
 
     # Start half a primary period into a secondary chip. The phase snap at sync
-    # must keep the within-block phase (#117), so a 60-block buffer ends at
-    # chip `k mod 10` plus the half block still in flight.
+    # must keep the phase within the code period (#117), so a 60-code-period buffer ends at
+    # chip `k mod 10` plus the half code period still in flight.
     for k in (0, 1, 5, 9, 13)
         start_phase = (k + 0.5) * primary_code_length
-        num_blocks = 60
+        num_code_periods = 60
         samples = ComplexF32.(
             gen_code(
-                num_blocks * num_samples,
+                num_code_periods * num_samples,
                 gpsl5,
                 prn,
                 sampling_frequency,
@@ -271,7 +271,7 @@ end
 
 # GPS L5I post-sync data-bit decoding (#125).
 #
-# The decoder must wipe the NH chip from each prompt (else a 10-block bit sums to
+# The decoder must wipe the NH chip from each prompt (else a 10-code-period bit sums to
 # `data x Σ(NH signs)`, ≈2 instead of ≈10) and start its bit grid on the NH10 =
 # data-bit boundary. Secondary-code lock leaves a ±1 polarity ambiguity (resolved
 # downstream by the preamble), so bits are checked up to a global inversion.
@@ -282,21 +282,25 @@ end
     code_frequency = get_chip_rate(gpsl5)
     primary_code_length = get_code_length(gpsl5)              # 10230 chips
     secondary_code_length = get_secondary_code_length(gpsl5)  # 10 (NH10)
-    num_samples = round(Int, 25e6 / 1000)                     # 1 ms = one primary block
+    num_samples = round(Int, 25e6 / 1000)                     # 1 ms = one primary code period
 
     # One bit per NH10 period; the first two are equal so a lock window
     # straddling their boundary stays clean.
     data_bits = [1, 1, 0, 1, 0, 0, 1, 1, 0, 1]
 
-    @testset "preferred = $preferred_blocks, start chip $start_secondary_chip" for preferred_blocks in
-                                                                                   (1, 10),
+    @testset "preferred = $preferred_code_periods, start chip $start_secondary_chip" for preferred_code_periods in
+                                                                                         (
+            1,
+            10,
+        ),
         start_secondary_chip in (0, 3, 9)
         # One `track` call: fixed per-call chunks would drift against the loop's
         # sub-sample code Doppler and drop bits.
-        total_blocks = secondary_code_length * length(data_bits) - start_secondary_chip
+        total_code_periods =
+            secondary_code_length * length(data_bits) - start_secondary_chip
         samples = ComplexF32.(
             gen_code(
-                total_blocks * num_samples,
+                total_code_periods * num_samples,
                 gpsl5,
                 prn,
                 sampling_frequency,
@@ -304,9 +308,9 @@ end
                 start_secondary_chip * primary_code_length,
             ),
         )
-        for b = 0:(total_blocks-1)
-            abs_block = start_secondary_chip + b
-            data_bit = data_bits[div(abs_block, secondary_code_length)+1]
+        for b = 0:(total_code_periods-1)
+            abs_code_period = start_secondary_chip + b
+            data_bit = data_bits[div(abs_code_period, secondary_code_length)+1]
             block_range = (b*num_samples+1):((b+1)*num_samples)
             @views samples[block_range] .*= ComplexF32(2 * data_bit - 1)
         end
@@ -315,24 +319,28 @@ end
             gpsl5,
             [TrackedSat(gpsl5, prn, start_secondary_chip * primary_code_length, 0.0Hz)],
         )
-        set_preferred_num_code_blocks_to_integrate!(track_state, prn, preferred_blocks)
+        set_preferred_num_code_periods_to_integrate!(
+            track_state,
+            prn,
+            preferred_code_periods,
+        )
         track_state = track(samples, track_state, sampling_frequency)
 
         @test is_bit_or_secondary_code_synced(track_state)
 
         # Deterministic on this noiseless signal: the winning rotation is
-        # `d* = mod(N − start, N)`, so the lock lands at the first block count
+        # `d* = mod(N − start, N)`, so the lock lands at the first code-period count
         # `≥ 2N` with `count % N == d*`, and decoding starts at data bit
         # `div(start + lock, N)`.
         N = secondary_code_length
         d_star = mod(N - start_secondary_chip, N)
-        lock_block = let m = 2N
+        lock_code_period = let m = 2N
             while m % N != d_star
                 m += 1
             end
             m
         end
-        first_bit = div(start_secondary_chip + lock_block, N) + 1  # 1-based data-bit index
+        first_bit = div(start_secondary_chip + lock_code_period, N) + 1  # 1-based data-bit index
         expected_from_lock = data_bits[first_bit:end]              # decoded run, in order
 
         soft_bits = get_soft_bits(track_state)
@@ -346,32 +354,33 @@ end
         @test all((soft_bits .> 0) .== (decoded_bits .== 1))
         # NH wiped: every bit, the first included, sums one unit prompt per
         # integration.
-        full_bit_magnitude = secondary_code_length / preferred_blocks
+        full_bit_magnitude = secondary_code_length / preferred_code_periods
         @test all(>(0.9 * full_bit_magnitude), abs.(soft_bits))
     end
 end
 
-# Mid-fold secondary-code sync: the overlay anchor must travel with the fold.
+# Mid-update secondary-code sync: the overlay anchor must travel with the loop update.
 #
-# The secondary-code side of #219: the records trailing the syncing one in its
-# fold also advance the secondary-chip anchor, since the code-phase snap runs
-# after the fold. A stale anchor wipes the wrong NH chip from every block and the
+# The secondary-code side of #219: the integrations trailing the syncing one in its
+# loop update also advance the secondary-chip anchor, since the code-phase snap runs
+# after the update. A stale anchor wipes the wrong NH chip from every code period and the
 # NH10 sum collapses from ~10 to ~0–2.
-@testset "mid-fold secondary-code sync keeps the overlay anchor aligned" begin
+@testset "mid-update secondary-code sync keeps the overlay anchor aligned" begin
     gpsl5 = GPSL5I()
     prn = 1
     sampling_frequency = 25e6Hz
     code_frequency = get_chip_rate(gpsl5)
     primary_code_length = get_code_length(gpsl5)               # 10230 chips
     secondary_code_length = get_secondary_code_length(gpsl5)   # 10 (NH10)
-    num_samples = round(Int, 25e6 / 1000)                      # 1 ms = one primary block
+    num_samples = round(Int, 25e6 / 1000)                      # 1 ms = one primary code period
     data_bits = [1, 1, 0, 1, 0, 0, 1, 1, 0, 1]
 
     function decode(doppler_update_interval, start_secondary_chip)
-        total_blocks = secondary_code_length * length(data_bits) - start_secondary_chip
+        total_code_periods =
+            secondary_code_length * length(data_bits) - start_secondary_chip
         samples = ComplexF32.(
             gen_code(
-                total_blocks * num_samples,
+                total_code_periods * num_samples,
                 gpsl5,
                 prn,
                 sampling_frequency,
@@ -379,7 +388,7 @@ end
                 start_secondary_chip * primary_code_length,
             ),
         )
-        for b = 0:(total_blocks-1)
+        for b = 0:(total_code_periods-1)
             data_bit = data_bits[div(start_secondary_chip+b, secondary_code_length)+1]
             @views samples[(b*num_samples+1):((b+1)*num_samples)] .*=
                 ComplexF32(2 * data_bit - 1)
@@ -394,7 +403,7 @@ end
     end
 
     @testset "start chip $start_secondary_chip" for start_secondary_chip in (0, 3)
-        # Reference: one record per fold. The code-amplitude normalisation puts
+        # Reference: one integration per loop update. The code-amplitude normalisation puts
         # magnitudes a few 1e-4 below nominal, hence the 0.99 floors.
         full_bit = 0.99 * secondary_code_length
         reference = copy(decode(1e-3s, start_secondary_chip))
@@ -411,24 +420,24 @@ end
     end
 end
 
-# Mid-fold secondary-code sync on a *pilot* (GPS L5Q, NH20).
+# Mid-update secondary-code sync on a *pilot* (GPS L5Q, NH20).
 #
 # A pilot has no bit accumulator, but the stale overlay anchor of #219 hits it
-# harder: the 20-block coherent sum cancels toward zero, the discriminators see
+# harder: the 20-code-period coherent sum cancels toward zero, the discriminators see
 # 0/0 and the Doppler goes NaN, so this testset *errors* (an `InexactError` in
 # the correlator) rather than fails when the anchor is wrong.
-@testset "mid-fold pilot overlay anchor keeps coherent integration intact" begin
+@testset "mid-update pilot overlay anchor keeps coherent integration intact" begin
     gpsl5q = GPSL5Q()
     prn = 1
     sampling_frequency = 25e6Hz
     code_frequency = get_chip_rate(gpsl5q)
     secondary_code_length = get_secondary_code_length(gpsl5q)   # 20 (NH20)
-    num_samples = round(Int, 25e6 / 1000)                       # 1 ms = one primary block
+    num_samples = round(Int, 25e6 / 1000)                       # 1 ms = one primary code period
     # Sync needs ≥ 2 NH20 periods; the rest are full-period integrations.
-    num_blocks = 240
+    num_code_periods = 240
     samples = ComplexF32.(
         gen_code(
-            num_blocks * num_samples,
+            num_code_periods * num_samples,
             gpsl5q,
             prn,
             sampling_frequency,
@@ -439,14 +448,18 @@ end
 
     for doppler_update_interval in (1e-3s, 3e-3s, 7e-3s)
         track_state = TrackState(gpsl5q, [TrackedSat(gpsl5q, prn, 0.0, 0.0Hz)])
-        set_preferred_num_code_blocks_to_integrate!(track_state, prn, secondary_code_length)
+        set_preferred_num_code_periods_to_integrate!(
+            track_state,
+            prn,
+            secondary_code_length,
+        )
         track_state =
             track(samples, track_state, sampling_frequency; doppler_update_interval)
 
         @test is_bit_or_secondary_code_synced(track_state)
         @test get_last_fully_integrated_num_code_blocks(track_state, prn) ==
               secondary_code_length
-        # The overlay is wiped across all 20 blocks, so the normalised prompt
+        # The overlay is wiped across all 20 code periods, so the normalised prompt
         # keeps its full magnitude.
         @test abs(get_last_fully_integrated_beamformed_prompt(track_state, prn)) > 0.99
         # The last five prompts all postdate sync.
@@ -458,7 +471,7 @@ end
 # GPS L1C-P 1800-chip overlay sync — full 18 s end-to-end run.
 #
 # The rotation search over the per-PRN 1800-chip overlay must lock at the 1800th
-# block, one full 18 s cycle, anchored to overlay chip 0.
+# code period, one full 18 s cycle, anchored to overlay chip 0.
 @testset "GPS L1C-P overlay sync (18 s end-to-end)" begin
     gpsl1c_p = GPSL1C_P(TMBOC)
     prn = 1
@@ -483,7 +496,7 @@ end
             ),
         ],
     )
-    synced_at_block = -1
+    synced_at_code_period = -1
     synced_code_phase = NaN
     for index = 1:(secondary_code_length+5)
         gen_code_phase = (index - 1) * primary_code_length
@@ -498,15 +511,15 @@ end
             ),
         )
         track_state = track(samples, track_state, sampling_frequency)
-        if is_bit_or_secondary_code_synced(track_state) && synced_at_block < 0
-            synced_at_block = index
+        if is_bit_or_secondary_code_synced(track_state) && synced_at_code_period < 0
+            synced_at_code_period = index
             synced_code_phase = get_code_phase(track_state)
         end
     end
 
-    @test synced_at_block == secondary_code_length
+    @test synced_at_code_period == secondary_code_length
     # Chip 0 again, up to the residual of 1800 code-phase updates (~1e-7 chip);
-    # the snap keeps the within-block phase (#117), it does not zero it.
+    # the snap keeps the phase within the code period (#117), it does not zero it.
     @test synced_code_phase ≈ 0.0 atol = 1e-4
 end
 

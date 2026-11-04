@@ -60,7 +60,7 @@ Multi-threaded CPU downconvert and correlate, parallelized over the satellites
 lazily and reused thereafter.
 
 With more than one thread and more than one work item, each `@batch` launch (one per
-`downconvert_and_correlate!` call, so one per code block inside `track!`) keeps a
+`downconvert_and_correlate!` call, so one per code period inside `track!`) keeps a
 Polyester allocation of ~96 B. It is bounded per launch and does not scale with the
 input buffer. Measuring a noise density keeps it at ~96 B (the noise despreads ride
 the loop as extra items behind one pointer, see `_park_noise_items!`), but a
@@ -325,12 +325,12 @@ function _update_tracked_sat_correlator_bank(
     intermediate_frequency,
     stop_before_partial::Bool = false,
 )
-    # Each sub-step runs to the nearest code-block boundary of any signal (or the
+    # Each sub-step runs to the nearest code-period boundary of any signal (or the
     # chunk end), so a chunk yields 0, 1 or several outputs per signal; a partial at
     # the chunk end carries in the correlator bank. The NCO Doppler is untouched here.
     #
     # `stop_before_partial = true` leaves the trailing partial to the next chunk's
-    # pass, which then integrates boundary to boundary at the Doppler the estimator
+    # pass, which then integrates boundary to boundary at the Doppler the tracking loop
     # wrote in between: every completed integration sees a single Doppler. A final
     # pass without the flag drains the buffer's trailing partial.
     while sat.next_sample_index <= last(chunk_sample_range)
@@ -406,7 +406,7 @@ end
 )
     head = first(signals)
     # Measured against the secondary-aware period (`_replica_code_phase_period`), so a
-    # multi-block window past sync ends on a bit boundary instead of
+    # multi-code-period window past sync ends on a bit boundary instead of
     # straddling one.
     p = _signal_replica_params(
         head,
@@ -417,7 +417,7 @@ end
     )
     n = calc_num_samples_left_to_integrate(
         head.signal,
-        p.n_blocks,
+        p.num_code_periods,
         sampling_frequency,
         code_doppler,
         p.signal_code_phase,
@@ -447,11 +447,11 @@ end
 
 # Code-phase period for a signal's replica and integration window. Past sync it is
 # the secondary-/bit-period length, so `gen_code!` bakes the secondary chip of the
-# current block into the replica and wipes the overlay at every integration length
-# (#125); before sync only the primary phase is known. At one block the boundary is
-# unchanged, as `calc_num_chips_to_integrate` re-mods by the primary length.
-# `num_blocks` is unused.
-@inline _replica_code_phase_period(tsig::TrackedSignal, num_blocks::Integer) =
+# current code period into the replica and wipes the overlay at every integration
+# length (#125); before sync only the primary phase is known. At one code period the
+# boundary is unchanged, as `calc_num_chips_to_integrate` re-mods by the primary
+# length. `num_code_periods` is unused.
+@inline _replica_code_phase_period(tsig::TrackedSignal, num_code_periods::Integer) =
     is_bit_or_secondary_code_synced(tsig) ? _post_sync_code_phase_period(tsig) :
     get_code_length(tsig.signal)
 
@@ -472,13 +472,19 @@ end
         code_frequency,
     )
     code_replica_size = num_buffer_samples + maximum(sample_shifts) - minimum(sample_shifts)
-    n_blocks = calc_num_code_periods_to_integrate(
+    num_code_periods = calc_num_code_periods_to_integrate(
         s,
-        tsig.preferred_num_code_blocks_to_integrate,
+        tsig.preferred_num_code_periods_to_integrate,
         is_bit_or_secondary_code_synced(tsig),
     )
-    signal_code_phase = mod(code_phase, _replica_code_phase_period(tsig, n_blocks))
-    (; code_frequency, sample_shifts, code_replica_size, n_blocks, signal_code_phase)
+    signal_code_phase = mod(code_phase, _replica_code_phase_period(tsig, num_code_periods))
+    (;
+        code_frequency,
+        sample_shifts,
+        code_replica_size,
+        num_code_periods,
+        signal_code_phase,
+    )
 end
 
 # Single-signal path for every backend (the per-backend part is
@@ -694,9 +700,9 @@ aligned. `chunk_duration = nothing` (the default) consumes the whole buffer. Eve
 completed integration is snapshotted into its signal's `correlator_bank_outputs`; only the
 trailing partial stays in the live correlator.
 
-`stop_before_partial = true` stops each satellite at its last code-block boundary
+`stop_before_partial = true` stops each satellite at its last code-period boundary
 inside the chunk, leaving the trailing partial to the next chunk's pass at the
-Doppler the estimator writes in between (as `track!` does). Default `false`.
+Doppler the tracking loop writes in between (as `track!` does). Default `false`.
 
 `samples_unchanged = true` promises every band's buffer holds the same content as on
 the previous call with this `dc`, so backends may reuse sample-derived caches (the

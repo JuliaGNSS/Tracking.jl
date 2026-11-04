@@ -12,8 +12,8 @@ using Tracking:
     BandMeasurement,
     CPUDownconvertAndCorrelator,
     downconvert_and_correlate!,
-    estimate_dopplers_and_filter_prompt!,
-    estimate_dopplers_and_filter_prompt,
+    step_tracking_loops!,
+    step_tracking_loops,
     get_correlator_bank_outputs,
     append_correlator_bank_output!,
     get_sat_state,
@@ -60,8 +60,8 @@ end
         get_correlator_bank_outputs(only(get_signals(get_sat_state(ts_meas, 1)))),
     ) == length(get_correlator_bank_outputs(only(get_signals(get_sat_state(ts_fs, 1)))))
 
-    estimate_dopplers_and_filter_prompt!(ts_meas, measurements)          # BandMeasurements
-    estimate_dopplers_and_filter_prompt!(ts_fs, (L1 = fs,))              # per-band NamedTuple
+    step_tracking_loops!(ts_meas, measurements)          # BandMeasurements
+    step_tracking_loops!(ts_fs, (L1 = fs,))              # per-band NamedTuple
 
     @test get_carrier_doppler(ts_fs, 1) == get_carrier_doppler(ts_meas, 1)
     @test get_code_doppler(ts_fs, 1) == get_code_doppler(ts_meas, 1)
@@ -75,8 +75,8 @@ end
     fs = 4e6Hz
     ts_nt, _ = correlated_state(; fs)
     ts_dict, _ = correlated_state(; fs)
-    estimate_dopplers_and_filter_prompt!(ts_nt, (L1 = fs,))
-    estimate_dopplers_and_filter_prompt!(ts_dict, Dict(:L1 => fs))
+    step_tracking_loops!(ts_nt, (L1 = fs,))
+    step_tracking_loops!(ts_dict, Dict(:L1 => fs))
     @test get_carrier_doppler(ts_dict, 1) == get_carrier_doppler(ts_nt, 1)
     @test get_code_doppler(ts_dict, 1) == get_code_doppler(ts_nt, 1)
 end
@@ -85,8 +85,8 @@ end
     fs = 4e6Hz
     ts_inplace, _ = correlated_state(; fs)
     ts_src, _ = correlated_state(; fs)
-    ts_imm = estimate_dopplers_and_filter_prompt(ts_src, (L1 = fs,))
-    estimate_dopplers_and_filter_prompt!(ts_inplace, (L1 = fs,))
+    ts_imm = step_tracking_loops(ts_src, (L1 = fs,))
+    step_tracking_loops!(ts_inplace, (L1 = fs,))
     @test get_carrier_doppler(ts_imm, 1) == get_carrier_doppler(ts_inplace, 1)
     @test get_code_doppler(ts_imm, 1) == get_code_doppler(ts_inplace, 1)
 end
@@ -116,12 +116,12 @@ end
     @test append_correlator_bank_output!(sig, out) === sig
     @test length(get_correlator_bank_outputs(sig)) == 5
 
-    estimate_dopplers_and_filter_prompt!(ts, (L1 = 4e6Hz,))
+    step_tracking_loops!(ts, (L1 = 4e6Hz,))
     @test isempty(get_correlator_bank_outputs(ts))
 end
 
 @testset "external-producer standalone estimate (no downconvert_and_correlate!)" begin
-    # As an FPGA would: hand-built outputs in `sample_index` order, folded with
+    # As an FPGA would: hand-built outputs in `sample_index` order, stepped with
     # only a per-band rate.
     fs = 4e6Hz
     corr = get_default_correlator_bank(GPSL1CA(), NumAntennas(1))
@@ -143,14 +143,14 @@ end
         )
     end
     @test length(get_correlator_bank_outputs(ts, 3)) == 3
-    ts = estimate_dopplers_and_filter_prompt!(ts, (L1 = fs,))
+    ts = step_tracking_loops!(ts, (L1 = fs,))
     @test isempty(get_correlator_bank_outputs(ts, 3))
     @test isfinite(get_carrier_doppler(ts, 3) / Hz)
     @test isfinite(get_code_doppler(ts, 3) / Hz)
 end
 
-# One producer and one buffer of hand-built outputs, folded once.
-function _ingest_and_fold!(ts; fs = 4e6Hz, prn = 3, num_integrations = 3, period = 4000)
+# One producer and one buffer of hand-built outputs, stepped once.
+function _ingest_and_step!(ts; fs = 4e6Hz, prn = 3, num_integrations = 3, period = 4000)
     corr = get_default_correlator_bank(GPSL1CA(), NumAntennas(1))
     shift = corr.preferred_early_late_to_prompt_spacing
     for k = 1:num_integrations
@@ -164,7 +164,7 @@ function _ingest_and_fold!(ts; fs = 4e6Hz, prn = 3, num_integrations = 3, period
             prn,
         )
     end
-    estimate_dopplers_and_filter_prompt!(ts, (L1 = fs,))
+    step_tracking_loops!(ts, (L1 = fs,))
 end
 
 @testset "the ingest path's C/N₀ needs a noise observation under the default" begin
@@ -180,7 +180,7 @@ end
         carrier_doppler = 50.0Hz,
     )
     @test keys(starved.noise_estimators) == (:GPSL1CA,)
-    _ingest_and_fold!(starved; fs)
+    _ingest_and_step!(starved; fs)
     @test TrackingLoops.estimate_cn0(starved, 3) == -Inf * dBHz
     @test Base.length(Tracking.get_cn0_estimator(starved, 3)) == 0
 
@@ -198,15 +198,15 @@ end
         calc_noise_observation_from_samples(n * 1e-6 * ustrip(Hz, fs), n, fs),
         :GPSL1CA,
     )
-    _ingest_and_fold!(fed; fs)
+    _ingest_and_step!(fed; fs)
     @test Base.length(Tracking.get_cn0_estimator(fed, 3)) == 3
     @test ustrip(uconvert(dBHz, TrackingLoops.estimate_cn0(fed, 3))) ≈
           10log10((3000 / 4000)^2 / 1e-6 - 1 / 1e-3) atol = 1e-6
 end
 
-@testset "a producer record straddling a bit boundary warns and drops sync" begin
-    # The bit buffer reports the overshoot and this package logs it: 18 blocks
-    # into a bit, a three-block record from a producer off the bit grid.
+@testset "a producer's integration straddling a bit boundary warns and drops sync" begin
+    # The bit buffer reports the overshoot and this package logs it: 18 code periods
+    # into a bit, a three-code-period integration from a producer off the bit grid.
     fs = 4e6Hz
     ts = Tracking.add_satellite!(
         TrackState(; signal = GPSL1CA());
@@ -219,14 +219,14 @@ end
     synced = BitSynchronizer(UInt64(0xff), 8, true, complex(9.0, 1.0), 18, Float32[1.0])
     satellites[1] = TrackedSat(
         sat;
-        signals = (TrackedSignal(only(get_signals(sat)); bit_buffer = synced),),
+        signals = (TrackedSignal(only(get_signals(sat)); bit_synchronizer = synced),),
     )
     shift =
         get_default_correlator_bank(GPSL1CA(), NumAntennas(1)).preferred_early_late_to_prompt_spacing
     prompt = complex(12000.0)
     raw = EarlyPromptLateCorrelatorBank(SVector(prompt / 6, prompt, prompt / 6), shift)
     append_correlator_bank_output!(ts, CorrelatorBankOutput(raw, 12_000, 11_999))
-    @test_logs (:warn, r"past the navigation-bit boundary") match_mode = :any estimate_dopplers_and_filter_prompt!(
+    @test_logs (:warn, r"past the navigation-bit boundary") match_mode = :any step_tracking_loops!(
         ts,
         (L1 = fs,),
     )

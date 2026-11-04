@@ -83,11 +83,10 @@ export get_prn,
     get_code_phase,
     get_code_doppler,
     get_carrier_phase,
-    get_carrier_phase_correction,
     get_carrier_doppler,
-    get_integrated_samples,
-    get_preferred_num_code_blocks_to_integrate,
-    set_preferred_num_code_blocks_to_integrate!,
+    get_num_integrated_samples,
+    get_preferred_num_code_periods_to_integrate,
+    set_preferred_num_code_periods_to_integrate!,
     reset_loop_filters!,
     get_next_sample_index,
     get_correlator_bank,
@@ -98,7 +97,7 @@ export get_prn,
     get_beamformed_prompts,
     get_correlator_bank_outputs,
     append_correlator_bank_output!,
-    get_bit_buffer,
+    get_bit_synchronizer,
     get_num_bits,
     track,
     track!,
@@ -106,7 +105,7 @@ export get_prn,
     TrackedSat,
     get_signal,
     get_signals,
-    get_doppler_estimator_state,
+    get_loop_state,
     CPUDownconvertAndCorrelator,
     CPUThreadedDownconvertAndCorrelator,
     Int16DownconvertAndCorrelator,
@@ -131,6 +130,7 @@ export get_prn,
 # TrackingLoops functions that read this package's results, re-exported so
 # reading them needs no second package.
 export estimate_cn0,
+    calc_carrier_phase_correction,
     get_soft_bits,
     is_bit_or_secondary_code_synced,
     get_num_antennas,
@@ -185,8 +185,7 @@ include("sat_state.jl")
 """
 $(SIGNATURES)
 
-The tracking state: the satellites of every signal group and the Doppler
-estimator.
+The tracking state: the satellites of every signal group and the tracking loop.
 
 `groups` is a NamedTuple of [`SignalGroup`](@ref)s.
 
@@ -202,52 +201,52 @@ get one, so the others pay nothing. They average **in place**.
 parks the chunk's noise descriptors, so a threaded backend reaches them through
 one pointer (see `_park_noise_items!`). Shared by every derived `TrackState`.
 
-`sample_offsets` counts, per band (keyed by `get_band_id`), the samples earlier
+`sample_index_offsets` counts, per band (keyed by `get_band_id`), the samples earlier
 [`track!`](@ref) calls consumed: the origin of the current measurement on a
-sample grid that runs on across calls. The estimate phase adds it to a record's
-index, so an estimator with per-satellite state of its own (TrackingLoops'
+sample grid that runs on across calls. [`step_tracking_loops!`](@ref) adds it to
+an integration's sample index, so a tracking loop with shared state of its own (TrackingLoops'
 `VectorTrackingLoop`) sees every satellite on one time grid. The in-place mutators
 share it; [`track`](@ref), [`merge_sats`](@ref), [`add_satellite`](@ref) and
 [`remove_satellite`](@ref) give their result a copy.
 
-A fresh `TrackState` starts every band at `0`. To carry such an estimator over
+A fresh `TrackState` starts every band at `0`. To carry such a tracking loop over
 into a rebuilt `TrackState` (e.g. to add a band), pass the old state's offsets
-as the `sample_offsets` keyword, or the estimator receives records from its
-past. A band the old state did not track starts at
+as the `sample_index_offsets` keyword, or the tracking loop receives integrations
+from its past. A band the old state did not track starts at
 `elapsed_time * sampling_frequency` samples of the new band.
 """
-struct TrackState{G<:SignalGroups,DE<:AbstractTrackingLoop,NE<:NoiseEstimators}
+struct TrackState{G<:SignalGroups,TL<:AbstractTrackingLoop,NE<:NoiseEstimators}
     groups::G
-    doppler_estimator::DE
+    tracking_loop::TL
     noise_estimators::NE
     noise_descriptor::Base.RefValue{Any}
-    sample_offsets::Dict{Symbol,Int}
+    sample_index_offsets::Dict{Symbol,Int}
 end
 
 # A fresh state gets an empty descriptor cell; derived states pass theirs on,
 # which keeps the steady state allocation-free.
 TrackState(
     groups::SignalGroups,
-    doppler_estimator::AbstractTrackingLoop,
+    tracking_loop::AbstractTrackingLoop,
     noise_estimators::NoiseEstimators;
-    sample_offsets = nothing,
+    sample_index_offsets = nothing,
 ) = TrackState(
     groups,
-    doppler_estimator,
+    tracking_loop,
     noise_estimators,
     Base.RefValue{Any}(nothing),
-    _initial_sample_offsets(groups, sample_offsets),
+    _initial_sample_index_offsets(groups, sample_index_offsets),
 )
 
-# Every band at `0`, overridden by the caller's `sample_offsets`, in a fresh `Dict`.
-function _initial_sample_offsets(groups::SignalGroups, sample_offsets)
+# Every band at `0`, overridden by the caller's `sample_index_offsets`, in a fresh `Dict`.
+function _initial_sample_index_offsets(groups::SignalGroups, sample_index_offsets)
     offsets = Dict{Symbol,Int}(get_band_id(group.band) => 0 for group in groups)
-    isnothing(sample_offsets) && return offsets
-    for (band, offset) in pairs(sample_offsets)
+    isnothing(sample_index_offsets) && return offsets
+    for (band, offset) in pairs(sample_index_offsets)
         haskey(offsets, band) || throw(
             ArgumentError(
                 string(
-                    "`sample_offsets` names band `",
+                    "`sample_index_offsets` names band `",
                     band,
                     "`, which no group of this TrackState tracks (bands: ",
                     join(keys(offsets), ", "),
@@ -256,7 +255,9 @@ function _initial_sample_offsets(groups::SignalGroups, sample_offsets)
             ),
         )
         offset >= 0 || throw(
-            ArgumentError("`sample_offsets` must be non-negative, got $band => $offset."),
+            ArgumentError(
+                "`sample_index_offsets` must be non-negative, got $band => $offset.",
+            ),
         )
         offsets[band] = offset
     end
@@ -270,7 +271,7 @@ include("downconvert_and_correlate_cpu.jl")
 include("downconvert_and_correlate_int16.jl")
 include("downconvert_and_correlate_onebit.jl")
 include("downconvert_and_correlate_twobit.jl")
-include("conventional_pll_and_dll.jl")
+include("tracking_loops.jl")
 include("tracking_state.jl")
 include("track.jl")
 include("position_velocity_time.jl")

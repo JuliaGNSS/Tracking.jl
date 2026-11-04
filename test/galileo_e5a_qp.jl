@@ -3,7 +3,7 @@ module GalileoE5aQPTest
 # Galileo E5a-QP — the E5a quick-acquisition aid (OS SIS ICD v2.2 §2.3.1.4).
 #
 # Dataless BPSK(5) at 5.115 Mcps, a 330-chip code repeated 31 times in 2 ms with
-# no overlay. One block is 64.5 µs, so it integrates whole 31-block cycles, or
+# no overlay. One code period is 64.5 µs, so it integrates whole 31-code-period cycles, or
 # the loop would run at 15.5 kHz (#236).
 
 using Test: @test, @testset, @inferred, @test_throws
@@ -30,7 +30,7 @@ using Tracking:
     get_code_phase,
     get_last_fully_integrated_num_code_blocks,
     get_num_bits,
-    get_preferred_num_code_blocks_to_integrate,
+    get_preferred_num_code_periods_to_integrate,
     get_sat_state,
     track
 import TrackingLoops
@@ -43,8 +43,8 @@ using TrackingLoops:
     max_num_code_periods_to_integrate,
     is_bit_or_secondary_code_synced
 
-# 31 blocks = 10230 chips = 2 ms, the ICD's "repeated 31 times within 2 ms".
-const BLOCKS_PER_CYCLE = 31
+# 31 code periods = 10230 chips = 2 ms, the ICD's "repeated 31 times within 2 ms".
+const CODE_PERIODS_PER_CYCLE = 31
 
 @testset "Galileo E5a-QP" begin
     e5a_qp = GalileoE5aQP()
@@ -58,9 +58,9 @@ const BLOCKS_PER_CYCLE = 31
         @test get_chip_rate(e5a_qp) == 5_115_000Hz
         @test get_bit_rate(e5a_qp) == 0Hz
         @test get_secondary_code_length(e5a_qp) == 1
-        @test BLOCKS_PER_CYCLE * get_code_length(e5a_qp) == 10230
+        @test CODE_PERIODS_PER_CYCLE * get_code_length(e5a_qp) == 10230
         @test upreferred(
-            BLOCKS_PER_CYCLE * get_code_length(e5a_qp) / get_chip_rate(e5a_qp),
+            CODE_PERIODS_PER_CYCLE * get_code_length(e5a_qp) / get_chip_rate(e5a_qp),
         ) ≈ upreferred(2ms)
         @test get_band_id(e5a_qp) === :L5
         @test get_band_id(GalileoE5aI()) === :L5
@@ -69,10 +69,11 @@ const BLOCKS_PER_CYCLE = 31
     @testset "Short-period integration policy" begin
         # One 2 ms cycle is ceiling and default; longer is a coherence
         # question for the caller.
-        @test @inferred(max_num_code_periods_to_integrate(e5a_qp)) == BLOCKS_PER_CYCLE
-        @test @inferred(default_num_code_periods_to_integrate(e5a_qp)) == BLOCKS_PER_CYCLE
-        @test get_preferred_num_code_blocks_to_integrate(TrackedSignal(e5a_qp)) ==
-              BLOCKS_PER_CYCLE
+        @test @inferred(max_num_code_periods_to_integrate(e5a_qp)) == CODE_PERIODS_PER_CYCLE
+        @test @inferred(default_num_code_periods_to_integrate(e5a_qp)) ==
+              CODE_PERIODS_PER_CYCLE
+        @test get_preferred_num_code_periods_to_integrate(TrackedSignal(e5a_qp)) ==
+              CODE_PERIODS_PER_CYCLE
 
         for signal in (GalileoE5aI(), GalileoE5aQ(), GPSL5I())
             @test @inferred(default_num_code_periods_to_integrate(signal)) == 1
@@ -83,8 +84,9 @@ const BLOCKS_PER_CYCLE = 31
         # The flat 18 Hz carrier default, uncapped at the 2 ms cycle.
         BL = @inferred default_narrow_carrier_loop_filter_bandwidth(e5a_qp)
         @test BL ≈ 18.0Hz
-        cycle_time =
-            upreferred(BLOCKS_PER_CYCLE * get_code_length(e5a_qp) / get_chip_rate(e5a_qp))
+        cycle_time = upreferred(
+            CODE_PERIODS_PER_CYCLE * get_code_length(e5a_qp) / get_chip_rate(e5a_qp),
+        )
         @test effective_carrier_loop_filter_bandwidth(BL, cycle_time) ≈ 18.0Hz
         @test @inferred(default_code_loop_filter_bandwidth(e5a_qp)) ≈ 1.0Hz
     end
@@ -98,12 +100,12 @@ const BLOCKS_PER_CYCLE = 31
 
     @testset "Tracks a clean replica in whole 2 ms cycles" begin
         start_code_phase = 100
-        # 5 samples per chip, so one primary block is exactly 1650 samples.
+        # 5 samples per chip, so one primary code period is exactly 1650 samples.
         sampling_frequency = 5 * get_chip_rate(e5a_qp)
-        samples_per_block = round(Int, upreferred(get_code_length(e5a_qp) * 5))
-        # One pre-sync block, then three whole 31-block cycles.
-        num_blocks = 1 + 3 * BLOCKS_PER_CYCLE
-        num_samples = num_blocks * samples_per_block
+        samples_per_code_period = round(Int, upreferred(get_code_length(e5a_qp) * 5))
+        # One pre-sync code period, then three whole 31-code-period cycles.
+        num_code_periods = 1 + 3 * CODE_PERIODS_PER_CYCLE
+        num_samples = num_code_periods * samples_per_code_period
 
         code = gen_code(
             num_samples,
@@ -121,7 +123,7 @@ const BLOCKS_PER_CYCLE = 31
 
         @test get_code_phase(sat_state) ≈ start_code_phase atol = 0.1
         @test is_bit_or_secondary_code_synced(sat_state) == true
-        @test get_last_fully_integrated_num_code_blocks(sat_state) == BLOCKS_PER_CYCLE
+        @test get_last_fully_integrated_num_code_blocks(sat_state) == CODE_PERIODS_PER_CYCLE
 
         @test get_num_bits(sat_state) == 0
     end
@@ -135,7 +137,8 @@ const BLOCKS_PER_CYCLE = 31
             get_chip_rate(e5a_qp) +
             doppler * get_chip_rate_to_center_frequency_ratio(e5a_qp)
         num_cycles = 120
-        samples_per_cycle = BLOCKS_PER_CYCLE * samples_per_chip * get_code_length(e5a_qp)
+        samples_per_cycle =
+            CODE_PERIODS_PER_CYCLE * samples_per_chip * get_code_length(e5a_qp)
         num_samples = num_cycles * samples_per_cycle
 
         code = gen_code(num_samples, e5a_qp, prn, sampling_frequency, code_frequency, 0.0)
@@ -161,7 +164,7 @@ const BLOCKS_PER_CYCLE = 31
         prompt = Tracking.get_last_fully_integrated_beamformed_prompt(sat_state)
         @test real(prompt) / abs(prompt) > 0.9
         @test abs(prompt) > 0.9
-        @test get_last_fully_integrated_num_code_blocks(sat_state) == BLOCKS_PER_CYCLE
+        @test get_last_fully_integrated_num_code_blocks(sat_state) == CODE_PERIODS_PER_CYCLE
         @test get_num_bits(sat_state) == 0
         @test estimate_cn0(track_state, prn) > 40.0dBHz
     end

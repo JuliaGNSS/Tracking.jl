@@ -16,7 +16,7 @@ using Statistics: mean, std
 using Unitful: ms, s, dBHz, ustrip, uconvert
 using TrackingLoops: NWPRCN0Estimator, update!, estimate_cn0
 
-# Post-correlation prompts: `λ = (C/N₀)·T` is the per-record SNR; noise is CN(0,1),
+# Post-correlation prompts: `λ = (C/N₀)·T` is the per-integration SNR; noise is CN(0,1),
 # so λ is also the signal power. Perfect phase, signal on the real axis.
 _prompts(λ, num_integrations, rng) =
     sqrt(λ) .+
@@ -26,7 +26,7 @@ _prompts(λ, num_integrations, rng) =
 _noise_ref_noncoherent(prompts) = mean(abs2, prompts) - 1
 
 # Coherent noise reference: sum `M` prompts, subtract the sum's known noise power.
-# Equivalent to `M`-times-longer records — NWPR's narrowband window is a longer
+# Equivalent to `M`-times-longer integrations — NWPR's narrowband window is a longer
 # coherent integration, not extra information.
 function _noise_ref_coherent(prompts, M)
     # A remainder would shorten this column's observation and make it incomparable.
@@ -55,7 +55,7 @@ end
 
 # NWPR's pooled ratio outside `1 < µ̂ < M` gives `±Inf dB-Hz` (see `estimate_cn0`
 # for `NWPRCN0Estimator`), i.e. λ̂ of exactly zero or Inf; so `degenerate` counts
-# whole 100-record estimates, not discarded windows. A negative noise-reference λ̂
+# whole 100-integration estimates, not discarded windows. A negative noise-reference λ̂
 # is legitimate (that is what keeps it unbiased), so only zero and non-finite count.
 _is_degenerate(λ̂) = !isfinite(λ̂) || iszero(λ̂)
 
@@ -70,7 +70,7 @@ function _stats(estimates, λ)
     (; σ_db, bias_db, degenerate)
 end
 
-const NUM_RECORDS = 100          # 100 ms of observation at 1 ms records
+const NUM_INTEGRATIONS = 100          # 100 ms of observation at 1 ms integrations
 const M = 5                      # NWPR default window for a 1 ms code
 const INTEGRATION_TIME = 1ms
 const NUM_TRIALS = 4_000         # σ good to ~1 % per seed
@@ -84,8 +84,8 @@ function _sweep_once(cn0_dbhz, seed)
     noncoh = Vector{Float64}(undef, NUM_TRIALS)
     coh = Vector{Float64}(undef, NUM_TRIALS)
     for t = 1:NUM_TRIALS
-        prompts = _prompts(λ, NUM_RECORDS, rng)
-        nwpr[t] = _nwpr(prompts, NUM_RECORDS, M, INTEGRATION_TIME)
+        prompts = _prompts(λ, NUM_INTEGRATIONS, rng)
+        nwpr[t] = _nwpr(prompts, NUM_INTEGRATIONS, M, INTEGRATION_TIME)
         noncoh[t] = _noise_ref_noncoherent(prompts)
         coh[t] = _noise_ref_coherent(prompts, M)
     end
@@ -161,9 +161,9 @@ end
 end
 
 @testset "Non-coherent squaring loss is real below ~28 dB-Hz" begin
-    # At 1 ms records, dropping NWPR's coherent window costs variance at low C/N₀
+    # At 1 ms integrations, dropping NWPR's coherent window costs variance at low C/N₀
     # (ratio √(M−1) = 2) and pays off only above the crossover — why a longer
-    # `preferred_num_code_blocks_to_integrate` is the remedy instead.
+    # `preferred_num_code_periods_to_integrate` is the remedy instead.
     @test SWEEP[20].noncoh.σ_db > SWEEP[20].nwpr.σ_db
     @test SWEEP[40].noncoh.σ_db < SWEEP[40].nwpr.σ_db
 end
@@ -171,7 +171,7 @@ end
 # Printed so a regression shows what moved and the numbers stay reproducible.
 @testset "baseline table" begin
     println(
-        "\nC/N₀ vs estimator, $(NUM_RECORDS) records of $(INTEGRATION_TIME), ",
+        "\nC/N₀ vs estimator, $(NUM_INTEGRATIONS) integrations of $(INTEGRATION_TIME), ",
         "NWPR M=$M, $(NUM_TRIALS) trials × $(NUM_SEEDS) seeds (median)",
     )
     println(

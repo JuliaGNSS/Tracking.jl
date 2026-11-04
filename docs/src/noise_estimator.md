@@ -1,7 +1,7 @@
 # Noise Estimator
 
 [`NoiseReferencedCN0Estimator`](@extref TrackingLoops.NoiseReferencedCN0Estimator), the default C/N₀
-estimator, divides each record's prompt power by a **measured noise floor**. This page
+estimator, divides each integration's prompt power by a **measured noise floor**. This page
 is about where that floor comes from.
 
 The floor is estimated **once per signal**, shared by every satellite on it, which
@@ -20,7 +20,7 @@ In the TrackingLoops manual:
 
 ## Why per signal and not per RF band
 
-What a record divides by is the **post-correlation** floor, weighted by the
+What an integration divides by is the **post-correlation** floor, weighted by the
 despreading modulation's own spectrum, so two signals on one front end see different
 floors as soon as the interference is not white (see
 [`AbstractNoiseDensityEstimator`](@extref TrackingLoops.AbstractNoiseDensityEstimator)). Measured
@@ -46,9 +46,9 @@ the despread, and so the floor, is per signal.
 With Tracking's normalisation, white noise gives `E|P|² = N₀/T`, so `N₀ = σ²/f_s` is
 **independent of the integration time** (see
 [`AbstractNoiseDensityEstimator`](@extref TrackingLoops.AbstractNoiseDensityEstimator)). One
-per-signal figure therefore serves a satellite on 1-block pre-sync records and one on
-20-block post-sync records alike, and the reference needs no alignment to correlator
-records: it runs on any grid and averages over a much longer window than any prompt
+per-signal figure therefore serves a satellite on 1-code-period pre-sync integrations and one on
+20-code-period post-sync integrations alike, and the reference needs no alignment to correlator
+integrations: it runs on any grid and averages over a much longer window than any prompt
 buffer. `N₀` carries Unitful dimensions of `1/Hz`, so the arithmetic is
 dimension-checked.
 
@@ -153,7 +153,7 @@ relative variance of `1/M`, so one 1 ms despread and 64 16-chip despreads cover 
 same samples at very different precision. Weighting by `M` makes observations from
 different producers combinable.
 
-A worked ingest, per fold:
+A worked ingest, per loop update:
 
 ```julia
 # correlator bank outputs, per signal, exactly as before
@@ -175,10 +175,10 @@ append_noise_observation!(
     :GPSL1CA,
 )
 
-estimate_dopplers_and_filter_prompt!(track_state, (L1 = sampling_frequency,))
+step_tracking_loops!(track_state, (L1 = sampling_frequency,))
 ```
 
-If a signal's noise estimator is never filled, the fold **warns once per signal**
+If a signal's noise estimator is never filled, the loop update **warns once per signal**
 and every C/N₀ on it reads `-Inf dB-Hz`.
 
 ### How `append_noise_observation!` differs from `append_correlator_bank_output!`
@@ -189,7 +189,7 @@ and every C/N₀ on it reads `-Inf dB-Hz`.
 | payload    | the whole correlator bank: every correlator output kept **separate**, complex, per antenna | the correlator outputs **pooled** — into one power sum, or into one spatial covariance for an array — plus `M`, the span and the PRN |
 | drives     | discriminators, both loop filters, bit sync, the NCO update, the C/N₀ prompt | the noise floor only                              |
 | timing     | `sample_index` is load-bearing — vector tracking needs a common grid    | none: `N₀` is slowly varying, so only "recent" matters |
-| lifetime   | **drained** by the fold each chunk, buffer reused                      | **sliding window** bounded in time, never drained      |
+| lifetime   | **drained** by the loop update each chunk, buffer reused               | **sliding window** bounded in time, never drained      |
 | count      | one per completed coherent integration per signal                      | any granularity; `M` carries the weight                |
 
 The prompt path keeps the correlator outputs apart because their *differences* are the
@@ -226,8 +226,8 @@ TrackState(; signal = GPSL1CA(), noise_estimators = (GPSL1CA = MyPowerMonitor(..
 Two contracts: mutate the window **in place** and return the struct (`TrackState` is
 never rebuilt for a noise update), and have
 [`TrackingLoops.noise_density_type`](@extref TrackingLoops.noise_density_type-Tuple{TrackingLoops.AbstractNoiseDensityEstimator}) name the
-concrete type `get_noise_density` returns (default `typeof(1.0/1.0Hz)`), so the fold
-stays monomorphic.
+concrete type `get_noise_density` returns (default `typeof(1.0/1.0Hz)`), so the loop
+update stays monomorphic.
 
 In the TrackingLoops manual:
 

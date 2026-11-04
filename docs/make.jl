@@ -26,7 +26,7 @@ makedocs(
         "tracking_state.md",
         "bit_sync.md",
         "loop_filter.md",
-        "custom_doppler_estimator.md",
+        "custom_tracking_loop.md",
         "correlator.md",
         "cn0_estimator.md",
         "noise_estimator.md",

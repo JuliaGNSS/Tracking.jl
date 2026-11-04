@@ -20,7 +20,7 @@ using Tracking:
     track!,
     _prepare_for_new_buffer!,
     downconvert_and_correlate!,
-    estimate_dopplers_and_filter_prompt!,
+    step_tracking_loops!,
     get_code_phase,
     get_carrier_phase,
     get_code_doppler,
@@ -113,9 +113,9 @@ function measure_est!(track_state, sampling_frequency)
     # Only `sampling_frequency` is read.
     measurements = (L1 = BandMeasurement(ComplexF64[], sampling_frequency),)
     for _ = 1:8
-        estimate_dopplers_and_filter_prompt!(track_state, measurements)
+        step_tracking_loops!(track_state, measurements)
     end
-    @allocated estimate_dopplers_and_filter_prompt!(track_state, measurements)
+    @allocated step_tracking_loops!(track_state, measurements)
 end
 
 @testset "track! per-stage is allocation-free in steady state ($DC)" for DC in (
@@ -273,28 +273,31 @@ end
 end
 
 # Pre-sync allocation guard (#198). The per-stage test above measures its
-# estimate step with no records to fold, so never TrackingLoops' pre-sync bit-edge
-# search. Noise never locks, so the search runs on every block, and a warm call
-# must allocate nothing at any length: a per-block leak grows with the chunk.
+# loop update with no integrations to process, so never TrackingLoops' pre-sync bit-edge
+# search. Noise never locks, so the search runs on every code period, and a warm call
+# must allocate nothing at any length: a per-code-period leak grows with the chunk.
 #
-# The soft bit-edge detector scores nothing below `2 * blocks_per_bit` (40 blocks),
-# so 2 and 20 blocks cannot see a leak in the Student-t threshold. Its
-# incomplete-beta inverse once allocated ~600 B per block, at `dof` around 11 and
-# from ~42 up. The measured second call sweeps `dof ≈ n/20 … n/10`, so 200 blocks
-# covers `dof ≈ 9…19` and 900 blocks `dof ≈ 44…89`.
+# The soft bit-edge detector scores nothing below `2 * code_periods_per_bit` (40 code periods),
+# so 2 and 20 code periods cannot see a leak in the Student-t threshold. Its
+# incomplete-beta inverse once allocated ~600 B per code period, at `dof` around 11 and
+# from ~42 up. The measured second call sweeps `dof ≈ n/20 … n/10`, so 200 code periods
+# covers `dof ≈ 9…19` and 900 code periods `dof ≈ 44…89`.
 #
-# Gated to Julia ≥ 1.11: 1.10 leaves ~770 B per block in the pre-sync soft-bit
+# Gated to Julia ≥ 1.11: 1.10 leaves ~770 B per code period in the pre-sync soft-bit
 # path.
 if VERSION >= v"1.11"
     @testset "track! is allocation-free during acquisition (pre-sync bit search)" begin
         sampling_frequency = 5e6Hz
-        samples_per_block = 5000               # 1 ms GPS L1CA code period @ 5 MHz
-        function measure_track_alloc(nblocks)
+        samples_per_code_period = 5000               # 1 ms GPS L1CA code period @ 5 MHz
+        function measure_track_alloc(num_code_periods)
             gpsl1 = GPSL1CA()
             track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 10.5, 1000.0Hz)])
             dc = CPUDownconvertAndCorrelator()
-            samples =
-                rand(MersenneTwister(nblocks), ComplexF32, samples_per_block * nblocks)
+            samples = rand(
+                MersenneTwister(num_code_periods),
+                ComplexF32,
+                samples_per_code_period * num_code_periods,
+            )
             call() = track!(
                 samples,
                 track_state,
@@ -306,23 +309,26 @@ if VERSION >= v"1.11"
         end
         @test measure_track_alloc(2) == 0
         @test measure_track_alloc(20) == 0
-        # Past `2 * blocks_per_bit`: the threshold is scored.
+        # Past `2 * code_periods_per_bit`: the threshold is scored.
         @test measure_track_alloc(200) == 0
         @test measure_track_alloc(900) == 0
     end
 
     # The same for the secondary-code detector (GPS L5I, NH10), which shares the
     # threshold but has its own per-rotation accumulators. Both lengths score
-    # every block and sweep the same `dof` stretches as above.
+    # every code period and sweep the same `dof` stretches as above.
     @testset "track! is allocation-free during acquisition (pre-sync secondary-code search)" begin
         sampling_frequency = 25e6Hz
-        samples_per_block = 25000              # 1 ms GPS L5I code period @ 25 MHz
-        function measure_track_alloc_l5i(nblocks)
+        samples_per_code_period = 25000              # 1 ms GPS L5I code period @ 25 MHz
+        function measure_track_alloc_l5i(num_code_periods)
             gpsl5i = GPSL5I()
             track_state = TrackState(gpsl5i, [TrackedSat(gpsl5i, 1, 10.5, 1000.0Hz)])
             dc = CPUDownconvertAndCorrelator()
-            samples =
-                rand(MersenneTwister(nblocks), ComplexF32, samples_per_block * nblocks)
+            samples = rand(
+                MersenneTwister(num_code_periods),
+                ComplexF32,
+                samples_per_code_period * num_code_periods,
+            )
             call() = track!(
                 samples,
                 track_state,
@@ -338,16 +344,19 @@ if VERSION >= v"1.11"
 
     # And for a pilot whose secondary code starts with a negative chip (Galileo
     # E1C, CS25): its pre-sync prompts are multiplied by that chip before the
-    # fold. Both lengths are past `2 × 25` blocks.
+    # loop update. Both lengths are past `2 × 25` code periods.
     @testset "track! is allocation-free during acquisition (pre-sync pilot)" begin
         sampling_frequency = 16.368e6Hz
-        samples_per_block = 65472              # 4 ms Galileo E1C code period
-        function measure_track_alloc_e1c(nblocks)
+        samples_per_code_period = 65472              # 4 ms Galileo E1C code period
+        function measure_track_alloc_e1c(num_code_periods)
             e1c = GalileoE1C(CBOC)
             track_state = TrackState(e1c, [TrackedSat(e1c, 1, 10.5, 1000.0Hz)])
             dc = CPUDownconvertAndCorrelator()
-            samples =
-                rand(MersenneTwister(nblocks), ComplexF32, samples_per_block * nblocks)
+            samples = rand(
+                MersenneTwister(num_code_periods),
+                ComplexF32,
+                samples_per_code_period * num_code_periods,
+            )
             call() = track!(
                 samples,
                 track_state,

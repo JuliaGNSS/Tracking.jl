@@ -28,16 +28,16 @@ using Tracking:
     add_satellite!,
     get_code_phase,
     get_carrier_phase,
-    get_carrier_phase_correction,
+    calc_carrier_phase_correction,
     get_code_doppler,
     get_carrier_doppler,
     get_next_sample_index,
     get_last_fully_integrated_beamformed_prompt,
     get_last_fully_integrated_correlator,
     get_beamformed_prompts,
-    get_integrated_samples,
+    get_num_integrated_samples,
     get_sat_state,
-    get_doppler_estimator_state,
+    get_loop_state,
     reset_loop_filters!
 import TrackingLoops
 using TrackingLoops:
@@ -49,7 +49,6 @@ using TrackingLoops:
     get_noise_density,
     AbstractBeamformer,
     DefaultBeamformer,
-    ScalarTrackingLoop,
     ScalarTrackingLoop,
     DelayCompensatedTrackingLoop,
     ScalarLoopState,
@@ -162,14 +161,14 @@ function _noisy_gpsl1_chunks(num_chunks)
     gpsl1, fs, carrier_doppler, [samples[((k-1)*4000+1):(k*4000)] for k = 1:num_chunks]
 end
 
-@testset "Through track, the NCO-referenced and the vector loops are the conventional assisted loop" begin
-    # `track` hands over the chunk's own replica word and no landing sample, so
-    # the delay-aware estimator must equal the conventional one at the same
+@testset "Through track, the delay-compensated and the vector loops are the FLL-assisted scalar loop" begin
+    # `track` hands over the chunk's own NCO command and no application sample, so
+    # the delay-compensated loop must equal the FLL-assisted scalar one at the same
     # bandwidths (it pulls in at 18 Hz by default), also after a reset. Outside
-    # a vector loop the vector estimator is the scalar loop it wraps, bit for bit.
+    # a vector loop the vector tracking loop is the scalar loop it wraps, bit for bit.
     gpsl1, fs, carrier_doppler, chunks = _noisy_gpsl1_chunks(200)
-    function run(estimator)
-        track_state = TrackState(; signal = gpsl1, doppler_estimator = estimator)
+    function run(tracking_loop)
+        track_state = TrackState(; signal = gpsl1, tracking_loop)
         track_state = add_satellite!(
             track_state;
             prn = 1,
@@ -187,8 +186,8 @@ end
         push!(history, (get_carrier_doppler(sat_state), get_code_phase(sat_state)))
         # A scalar loop's replica is its carrier estimate; so is a satellite's
         # out of the vector loop.
-        @test get_carrier_phase_correction(track_state, 1, fs) == 0.0
-        @test get_carrier_phase_correction(track_state, :default, 1, fs) == 0.0
+        @test calc_carrier_phase_correction(track_state, 1, fs) == 0.0
+        @test calc_carrier_phase_correction(track_state, :default, 1, fs) == 0.0
         history, track_state
     end
     conventional, _ = run(ScalarTrackingLoop(ThirdOrderAssistedBilinearLF))
@@ -200,39 +199,39 @@ end
     )
     referenced, track_state = run(DelayCompensatedTrackingLoop())
     @test referenced == narrow_conventional
-    @test get_doppler_estimator_state(get_sat_state(track_state, 1)) isa ScalarLoopState
+    @test get_loop_state(get_sat_state(track_state, 1)) isa ScalarLoopState
     @test abs(conventional[200][1] - carrier_doppler) < 5Hz
-    for (estimator, scalar) in (
+    for (tracking_loop, scalar) in (
         (VectorTrackingLoop(gpsl1), conventional),
         (
             VectorTrackingLoop(gpsl1; scalar_loop = DelayCompensatedTrackingLoop()),
             narrow_conventional,
         ),
     )
-        vector, track_state = run(estimator)
+        vector, track_state = run(tracking_loop)
         @test vector == scalar
-        @test get_doppler_estimator_state(get_sat_state(track_state, 1)) isa VectorLoopState
+        @test get_loop_state(get_sat_state(track_state, 1)) isa VectorLoopState
     end
 end
 
-# An estimator implementing only TrackingLoops' interface, counting the records
+# A tracking loop implementing only TrackingLoops' interface, counting the integrations
 # it hands to the loop it wraps.
-struct CountingEstimator{E<:TrackingLoops.AbstractTrackingLoop} <:
+struct CountingTrackingLoop{E<:TrackingLoops.AbstractTrackingLoop} <:
        TrackingLoops.AbstractTrackingLoop
     inner::E
 end
-struct SatCountingEstimator{S}
+struct CountingLoopState{S}
     inner::S
     num_integrations::Int
 end
 TrackingLoops.init_loop_state(
-    estimator::CountingEstimator,
+    tracking_loop::CountingTrackingLoop,
     driver_signal,
     carrier_doppler,
     code_doppler,
-) = SatCountingEstimator(
+) = CountingLoopState(
     TrackingLoops.init_loop_state(
-        estimator.inner,
+        tracking_loop.inner,
         driver_signal,
         carrier_doppler,
         code_doppler,
@@ -240,20 +239,20 @@ TrackingLoops.init_loop_state(
     0,
 )
 function TrackingLoops.step_loop!(
-    estimator::CountingEstimator,
-    state::SatCountingEstimator,
+    tracking_loop::CountingTrackingLoop,
+    state::CountingLoopState,
     integration,
     nco_history,
     application_sample_index::Union{Nothing,Integer},
 )
     inner, carrier_doppler, code_doppler = TrackingLoops.step_loop!(
-        estimator.inner,
+        tracking_loop.inner,
         state.inner,
         integration,
         nco_history,
         application_sample_index,
     )
-    SatCountingEstimator(inner, state.num_integrations + 1), carrier_doppler, code_doppler
+    CountingLoopState(inner, state.num_integrations + 1), carrier_doppler, code_doppler
 end
 
 @testset "reset_loop_filters! keeps the stage the carrier loop has reached" begin
@@ -264,7 +263,7 @@ end
     track_state =
         add_satellite!(track_state; prn = 1, code_phase = 100.2, carrier_doppler = 1005.0Hz)
     stage(prn) = TrackingLoops.get_carrier_loop_stage(
-        get_doppler_estimator_state(get_sat_state(track_state, prn)),
+        get_loop_state(get_sat_state(track_state, prn)),
     )
     @test stage(1) == TrackingLoops.FLL_ASSISTED_PLL
     for chunk in chunks
@@ -277,10 +276,10 @@ end
     @test stage(2) == TrackingLoops.FLL_ASSISTED_PLL
 end
 
-@testset "Through track, an estimator implementing step_loop! runs without adaptation" begin
+@testset "Through track, a tracking loop implementing step_loop! runs without adaptation" begin
     gpsl1, fs, carrier_doppler, chunks = _noisy_gpsl1_chunks(100)
-    function run(estimator)
-        track_state = TrackState(; signal = gpsl1, doppler_estimator = estimator)
+    function run(tracking_loop)
+        track_state = TrackState(; signal = gpsl1, tracking_loop)
         track_state = add_satellite!(
             track_state;
             prn = 1,
@@ -295,10 +294,10 @@ end
         get_sat_state(track_state, 1)
     end
     reference = run(ScalarTrackingLoop(ThirdOrderAssistedBilinearLF))
-    counted = run(CountingEstimator(ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)))
+    counted = run(CountingTrackingLoop(ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)))
     @test get_carrier_doppler(counted) == get_carrier_doppler(reference)
     @test get_code_phase(counted) == get_code_phase(reference)
-    @test get_doppler_estimator_state(counted).num_integrations == 0
+    @test get_loop_state(counted).num_integrations == 0
 end
 
 @testset "A scalar loop has no navigation solution to report" begin
@@ -308,37 +307,36 @@ end
     @test TrackingLoops.get_navigation_cycle_index(track_state) === nothing
     @test TrackingLoops.get_navigation_elapsed_time(track_state) === nothing
     @test TrackingLoops.get_satellite_report(track_state, GPSL1CA(), 1) === nothing
-    vector =
-        TrackState(; signal = GPSL1CA(), doppler_estimator = VectorTrackingLoop(GPSL1CA()))
+    vector = TrackState(; signal = GPSL1CA(), tracking_loop = VectorTrackingLoop(GPSL1CA()))
     @test TrackingLoops.get_navigation_cycle_index(vector) == 0
 end
 
-# An estimator that keeps every record it is handed, around the loop it wraps.
-struct RecordingEstimator{E<:TrackingLoops.AbstractTrackingLoop} <:
+# A tracking loop that keeps every integration it is handed, around the loop it wraps.
+struct RecordingTrackingLoop{E<:TrackingLoops.AbstractTrackingLoop} <:
        TrackingLoops.AbstractTrackingLoop
     inner::E
-    records::Vector{Tuple{Int,Int,Int,Float64}}
+    integrations::Vector{Tuple{Int,Int,Int,Float64}}
 end
 TrackingLoops.init_loop_state(
-    estimator::RecordingEstimator,
+    tracking_loop::RecordingTrackingLoop,
     driver_signal,
     carrier_doppler,
     code_doppler,
 ) = TrackingLoops.init_loop_state(
-    estimator.inner,
+    tracking_loop.inner,
     driver_signal,
     carrier_doppler,
     code_doppler,
 )
 function TrackingLoops.step_loop!(
-    estimator::RecordingEstimator,
+    tracking_loop::RecordingTrackingLoop,
     state,
     integration::PredetectionIntegration,
     nco_history,
     application_sample_index::Union{Nothing,Integer},
 )
     push!(
-        estimator.records,
+        tracking_loop.integrations,
         (
             integration.prn,
             integration.sample_index,
@@ -347,7 +345,7 @@ function TrackingLoops.step_loop!(
         ),
     )
     TrackingLoops.step_loop!(
-        estimator.inner,
+        tracking_loop.inner,
         state,
         integration,
         nco_history,
@@ -355,44 +353,44 @@ function TrackingLoops.step_loop!(
     )
 end
 
-@testset "Through track, the records name their satellite and share one sample grid" begin
+@testset "Through track, the integrations name their satellite and share one sample grid" begin
     # What the vector loop needs: the satellite, the replica's code phase at the
-    # record's end, and a sample index that runs on across `track` calls.
+    # integration's end, and a sample index that runs on across `track` calls.
     gpsl1, fs, carrier_doppler, chunks = _noisy_gpsl1_chunks(20)
-    estimator = RecordingEstimator(
+    tracking_loop = RecordingTrackingLoop(
         ScalarTrackingLoop(ThirdOrderAssistedBilinearLF),
         Tuple{Int,Int,Int,Float64}[],
     )
-    track_state = TrackState(; signal = gpsl1, doppler_estimator = estimator)
+    track_state = TrackState(; signal = gpsl1, tracking_loop)
     track_state =
         add_satellite!(track_state; prn = 7, code_phase = 100.2, carrier_doppler = 1005.0Hz)
     for chunk in chunks
         track_state = track(chunk, track_state, fs)
     end
-    records = estimator.records
-    @test length(records) >= 18
-    @test all(r -> r[1] == 7, records)
-    sample_indices = [r[2] for r in records]
+    integrations = tracking_loop.integrations
+    @test length(integrations) >= 18
+    @test all(r -> r[1] == 7, integrations)
+    sample_indices = [r[2] for r in integrations]
     @test issorted(sample_indices) && allunique(sample_indices)
     @test last(sample_indices) > 4000 * 18
-    @test all(r -> r[3] >= r[2], records)
-    # One code period per record: each ends within a sample of a block boundary.
+    @test all(r -> r[3] >= r[2], integrations)
+    # One code period per integration: each ends within a sample of a code-period boundary.
     code_rate = ustrip(Hz, get_chip_rate(gpsl1)) / ustrip(Hz, fs)
-    @test all(r -> abs(rem(r[4], 1023, RoundNearest)) <= code_rate, records)
-    @test track_state.sample_offsets[get_band_id(get_band(gpsl1))] == 4000 * 20
+    @test all(r -> abs(rem(r[4], 1023, RoundNearest)) <= code_rate, integrations)
+    @test track_state.sample_index_offsets[get_band_id(get_band(gpsl1))] == 4000 * 20
     # `track` leaves its input's sample grid where it was.
-    before = copy(track_state.sample_offsets)
+    before = copy(track_state.sample_index_offsets)
     track(first(chunks), track_state, fs)
-    @test track_state.sample_offsets == before
+    @test track_state.sample_index_offsets == before
     track!(first(chunks), track_state, fs)
-    @test track_state.sample_offsets[get_band_id(get_band(gpsl1))] == 4000 * 21
-    # `track` shares the estimator with its input; a `deepcopy` branches it.
-    num_integrations = length(estimator.records)
+    @test track_state.sample_index_offsets[get_band_id(get_band(gpsl1))] == 4000 * 21
+    # `track` shares the tracking loop with its input; a `deepcopy` branches it.
+    num_integrations = length(tracking_loop.integrations)
     branch = track(first(chunks), deepcopy(track_state), fs)
-    @test length(estimator.records) == num_integrations
-    @test length(branch.doppler_estimator.records) > num_integrations
+    @test length(tracking_loop.integrations) == num_integrations
+    @test length(branch.tracking_loop.integrations) > num_integrations
     track(first(chunks), track_state, fs)
-    @test length(estimator.records) > num_integrations
+    @test length(tracking_loop.integrations) > num_integrations
 end
 
 @testset "Tracking with large initial Doppler offset" begin
@@ -412,7 +410,7 @@ end
     tolerance = 1.0  # Hz, tight tolerance since no noise
 
     function test_convergence(carrier_error, use_assisted)
-        doppler_estimator =
+        tracking_loop =
             use_assisted ? ScalarTrackingLoop(ThirdOrderAssistedBilinearLF) :
             ScalarTrackingLoop()
         sat_states = [
@@ -421,10 +419,10 @@ end
                 1,
                 start_code_phase,
                 carrier_doppler + carrier_error;
-                doppler_estimator,
+                tracking_loop,
             ),
         ]
-        track_state = TrackState(gpsl1, sat_states; doppler_estimator)
+        track_state = TrackState(gpsl1, sat_states; tracking_loop)
 
         samples =
             cis.(
@@ -491,29 +489,18 @@ end
     start_carrier_phase = π / 2
 
     # Pinned to the bandwidths this convergence test was calibrated for.
-    estimator = ScalarTrackingLoop(
+    tracking_loop = ScalarTrackingLoop(
         ThirdOrderAssistedBilinearLF;
         wide_carrier_loop_filter_bandwidth = 18.0Hz,
         narrow_carrier_loop_filter_bandwidth = 18.0Hz,
         code_loop_filter_bandwidth = 1.0Hz,
     )
-    gps_sat = TrackedSat(
-        gpsl1,
-        prn,
-        start_code_phase,
-        carrier_doppler_gps;
-        doppler_estimator = estimator,
-    )
-    gal_sat = TrackedSat(
-        galileo_e1b,
-        prn,
-        start_code_phase,
-        carrier_doppler_gal;
-        doppler_estimator = estimator,
-    )
+    gps_sat = TrackedSat(gpsl1, prn, start_code_phase, carrier_doppler_gps; tracking_loop)
+    gal_sat =
+        TrackedSat(galileo_e1b, prn, start_code_phase, carrier_doppler_gal; tracking_loop)
     track_state = @inferred TrackState(
         (gps = dictionary([prn => gps_sat]), gal = dictionary([prn => gal_sat]));
-        doppler_estimator = estimator,
+        tracking_loop,
     )
 
     samples_temp =
@@ -1114,13 +1101,13 @@ end
     noise_std = sqrt(10e6)
     range = 0:(period-1)
 
-    estimator = ScalarTrackingLoop(
+    tracking_loop = ScalarTrackingLoop(
         ThirdOrderAssistedBilinearLF;
         wide_carrier_loop_filter_bandwidth = 1.8Hz,
         narrow_carrier_loop_filter_bandwidth = 1.8Hz,
         code_loop_filter_bandwidth = 4.0Hz,
     )
-    track_state = TrackState(; signal, doppler_estimator = estimator)
+    track_state = TrackState(; signal, tracking_loop)
     # A realistic handoff error, on the group's default correlator.
     track_state =
         add_satellite!(track_state; prn, code_phase = 0.2, carrier_doppler = 0.0Hz)
@@ -1214,9 +1201,9 @@ end
 end
 
 # A continuous signal in one-code-period chunks with a negative code Doppler: a
-# block spans 20001 > 20000 samples, so it always carries into the next chunk.
+# code period spans 20001 > 20000 samples, so it always carries into the next chunk.
 # A code-phase snap on every call after the NH10 sync would discard that partial
-# block and wedge the satellite (#117).
+# code period and wedge the satellite (#117).
 @testset "Does not deadlock on one-code-period chunks (issue #117)" begin
     signal = GPSL5I()
     carrier_doppler = -200Hz                 # negative ⇒ negative code Doppler
@@ -1226,7 +1213,7 @@ end
     sampling_frequency = 20e6Hz
     prn = 1
     chunk = 20000                            # 1 ms = one L5I code period at 20 MHz
-    num_calls = 60                           # well past the 10-block NH10 sync
+    num_calls = 60                           # well past the 10-code-period NH10 sync
 
     total_samples = chunk * (num_calls + 1)
     t = 0:(total_samples-1)
@@ -1253,9 +1240,9 @@ end
     sat = get_sat_state(track_state, prn)
 
     @test is_bit_or_secondary_code_synced(sat)
-    # A wedged satellite grows `integrated_samples` without bound and freezes
+    # A wedged satellite grows `num_integrated_samples` without bound and freezes
     # its prompt.
-    @test get_integrated_samples(track_state, prn) <= 2 * chunk
+    @test get_num_integrated_samples(track_state, prn) <= 2 * chunk
     @test length(unique(prompts[(end-9):end])) > 1
     @test abs(get_carrier_doppler(track_state, prn) - carrier_doppler) < 5.0Hz
 end

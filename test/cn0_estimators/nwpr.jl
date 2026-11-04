@@ -63,28 +63,28 @@ end
     num_samples = 4000
     code_frequency = get_chip_rate(gpsl1)
 
-    # `fade_to` continues at another C/N₀ for `fade_blocks` more records, to
+    # `fade_to` continues at another C/N₀ for `fade_code_periods` more integrations, to
     # reach post-sync at a C/N₀ where bit sync would never lock from cold.
     function track_noisy(
         cn0_db,
-        num_blocks;
+        num_code_periods;
         seed = 1,
         cn0_estimator = NWPRCN0Estimator(gpsl1),
         fade_to = nothing,
-        fade_blocks = 0,
+        fade_code_periods = 0,
     )
         rng = Xoshiro(seed)
         amplitude(cn0) = isnothing(cn0) ? 0.0 : 10^(cn0 / 20)
         sat = TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator)
         track_state = TrackState(gpsl1, [sat])
-        total_blocks = num_blocks + fade_blocks
-        data_bits = rand(rng, (-1.0, 1.0), div(total_blocks, 20) + 2)
-        for block_index = 1:total_blocks
+        total_code_periods = num_code_periods + fade_code_periods
+        data_bits = rand(rng, (-1.0, 1.0), div(total_code_periods, 20) + 2)
+        for code_period_index = 1:total_code_periods
             code_phase =
-                (block_index - 1) * num_samples * code_frequency / sampling_frequency
+                (code_period_index - 1) * num_samples * code_frequency / sampling_frequency
             clean =
-                amplitude(block_index > num_blocks ? fade_to : cn0_db) .*
-                data_bits[div(block_index-1, 20)+1] .* gen_code(
+                amplitude(code_period_index > num_code_periods ? fade_to : cn0_db) .*
+                data_bits[div(code_period_index-1, 20)+1] .* gen_code(
                     num_samples,
                     gpsl1,
                     1,
@@ -102,8 +102,8 @@ end
     track_state = track_noisy(45.0, 900)
     estimator = get_cn0_estimator(track_state, 1)
     @test is_bit_or_secondary_code_synced(track_state, 1)
-    # Synced: four windows tile the 20-block navigation bit at the default
-    # five-block coherence cap, and they follow the bit grid.
+    # Synced: four windows tile the 20-code-period navigation bit at the default
+    # five-code-period coherence cap, and they follow the bit grid.
     @test estimator.num_integrations_per_ratio == 5
     @test estimator.ratios_are_bit_aligned
     @test Base.length(estimator) > 0
@@ -151,7 +151,7 @@ end
     # Faded after bit sync: the case the coherence cap exists for (see
     # `NWPRCN0Estimator`). Locked in at 45 dB-Hz, faded to 25 dB-Hz; a median over
     # seeds, since one low-C/N₀ run says little.
-    fade = (; fade_to = 25.0, fade_blocks = 400)
+    fade = (; fade_to = 25.0, fade_code_periods = 400)
     seeds = 1:16
     faded = [track_noisy(45.0, 1500; seed, fade...) for seed in seeds]
     full_bit = [
