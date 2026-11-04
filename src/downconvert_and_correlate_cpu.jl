@@ -692,11 +692,11 @@ In-place version: writes the new `TrackedSat` values into each group's existing
 storage (threaded `@batch` iterations write disjoint slots) and returns
 `track_state`. Allocation-free in steady state, see [`track!`](@ref).
 
-`chunk_duration` and `chunk_index` restrict the pass to one chunk of a fixed per-band
+`nco_update_interval` and `chunk_index` restrict the pass to one chunk of a fixed per-band
 time grid: each satellite integrates up to sample
-`min(round((chunk_index + 1) * chunk_duration * sampling_frequency), num_samples)`,
+`min(round((chunk_index + 1) * nco_update_interval * sampling_frequency), num_samples)`,
 re-anchored to the absolute `chunk_index` so rounding never drifts and bands stay
-aligned. `chunk_duration = nothing` (the default) consumes the whole buffer. Every
+aligned. `nco_update_interval = nothing` (the default) consumes the whole buffer. Every
 completed integration is snapshotted into its signal's `correlator_bank_outputs`; only the
 trailing partial stays in the live correlator.
 
@@ -727,7 +727,7 @@ function downconvert_and_correlate!(
     measurements::BandMeasurements,
     track_state::TrackState;
     chunk_index::Int = 0,
-    chunk_duration = nothing,
+    nco_update_interval = nothing,
     stop_before_partial::Bool = false,
     samples_unchanged::Bool = false,
     measure_noise::Bool = true,
@@ -738,7 +738,7 @@ function downconvert_and_correlate!(
     groups = Tuple(track_state.groups)
     if measure_noise
         noise_items =
-            _noise_items(dc, track_state, measurements, chunk_index, chunk_duration)
+            _noise_items(dc, track_state, measurements, chunk_index, nco_update_interval)
         _dc_groups!(
             groups,
             noise_items,
@@ -746,7 +746,7 @@ function downconvert_and_correlate!(
             dc,
             measurements,
             chunk_index,
-            chunk_duration,
+            nco_update_interval,
             stop_before_partial,
             samples_unchanged,
         )
@@ -758,7 +758,7 @@ function downconvert_and_correlate!(
             dc,
             measurements,
             chunk_index,
-            chunk_duration,
+            nco_update_interval,
             stop_before_partial,
             samples_unchanged,
         )
@@ -779,7 +779,7 @@ end
     dc,
     measurements,
     chunk_index,
-    chunk_duration,
+    nco_update_interval,
     stop_before_partial,
     samples_unchanged,
 )
@@ -788,7 +788,7 @@ end
         dc,
         measurements,
         chunk_index,
-        chunk_duration,
+        nco_update_interval,
         stop_before_partial,
         samples_unchanged,
         noise_items,
@@ -801,7 +801,7 @@ end
         dc,
         measurements,
         chunk_index,
-        chunk_duration,
+        nco_update_interval,
         stop_before_partial,
         samples_unchanged,
     )
@@ -822,7 +822,7 @@ end
     track_state::TrackState,
     measurements::BandMeasurements,
     chunk_index::Int,
-    chunk_duration,
+    nco_update_interval,
 )
     noise_estimators = track_state.noise_estimators
     _park_noise_items!(
@@ -834,7 +834,7 @@ end
             track_state.groups,
             measurements,
             chunk_index,
-            chunk_duration,
+            nco_update_interval,
         ),
     )
 end
@@ -894,7 +894,7 @@ const _NoiseWork = Union{Tuple{},Base.RefValue{<:Tuple}}
     groups::SignalGroups,
     measurements::BandMeasurements,
     chunk_index::Int,
-    chunk_duration,
+    nco_update_interval,
 ) where {K}
     (
         _noise_item(
@@ -904,7 +904,7 @@ const _NoiseWork = Union{Tuple{},Base.RefValue{<:Tuple}}
             groups,
             measurements,
             chunk_index,
-            chunk_duration,
+            nco_update_interval,
         )...,
         _noise_items_walk(
             Val(Base.tail(K)),
@@ -913,7 +913,7 @@ const _NoiseWork = Union{Tuple{},Base.RefValue{<:Tuple}}
             groups,
             measurements,
             chunk_index,
-            chunk_duration,
+            nco_update_interval,
         )...,
     )
 end
@@ -927,7 +927,7 @@ end
     groups::SignalGroups,
     measurements::BandMeasurements,
     chunk_index::Int,
-    chunk_duration,
+    nco_update_interval,
 ) where {K}
     # A signal no group tracks measures nothing: the correlator-ingest case, whose
     # window `append_noise_observation!` fills.
@@ -948,7 +948,7 @@ end
         estimator,
         m,
         _chunk_sample_range(
-            chunk_duration,
+            nco_update_interval,
             chunk_index,
             m.sampling_frequency,
             num_buffer_samples,
@@ -1006,23 +1006,28 @@ end
 # The chunk's samples on the per-band time grid; `nothing` is the whole buffer.
 @inline _chunk_sample_range(::Nothing, chunk_index, sampling_frequency, num_samples) =
     1:num_samples
-@inline _chunk_sample_range(chunk_duration, chunk_index, sampling_frequency, num_samples) =
+@inline _chunk_sample_range(
+    nco_update_interval,
+    chunk_index,
+    sampling_frequency,
+    num_samples,
+) =
     (_chunk_end_index(
-        chunk_duration,
+        nco_update_interval,
         chunk_index-1,
         sampling_frequency,
         num_samples,
-    )+1):_chunk_end_index(chunk_duration, chunk_index, sampling_frequency, num_samples)
+    )+1):_chunk_end_index(nco_update_interval, chunk_index, sampling_frequency, num_samples)
 
 # Last index of the chunk, anchored to the absolute `chunk_index` so rounding never
 # drifts.
 @inline function _chunk_end_index(
-    chunk_duration,
+    nco_update_interval,
     chunk_index,
     sampling_frequency,
     num_samples,
 )
-    grid = uconvert(NoUnits, (chunk_index + 1) * chunk_duration * sampling_frequency)
+    grid = uconvert(NoUnits, (chunk_index + 1) * nco_update_interval * sampling_frequency)
     min(round(Int, grid), num_samples)
 end
 
@@ -1038,7 +1043,7 @@ end
     dc::AbstractDownconvertAndCorrelator,
     measurements::BandMeasurements,
     chunk_index::Int,
-    chunk_duration,
+    nco_update_interval,
     stop_before_partial::Bool,
     # Only the bit-wise backends act on it.
     samples_unchanged::Bool,
@@ -1051,7 +1056,7 @@ end
     _check_sample_type(dc, m)
     num_buffer_samples = get_num_samples(m)
     chunk_sample_range = _chunk_sample_range(
-        chunk_duration,
+        nco_update_interval,
         chunk_index,
         m.sampling_frequency,
         num_buffer_samples,

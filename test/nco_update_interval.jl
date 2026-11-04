@@ -48,20 +48,20 @@ end
     @test last(Tracking._chunk_sample_range(nothing, 0, 5e6Hz, 12_345)) == 12_345
 end
 
-@testset "doppler_update_interval shorter than a sample throws" begin
+@testset "nco_update_interval shorter than a sample throws" begin
     gpsl1 = GPSL1CA()
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 100.0Hz)])
     samples = zeros(ComplexF32, 4000)
-    @test_throws ArgumentError track(samples, ts, 4e6Hz; doppler_update_interval = 1e-9 * s)
+    @test_throws ArgumentError track(samples, ts, 4e6Hz; nco_update_interval = 1e-9 * s)
 end
 
-@testset "doppler_update_interval without time units throws a clear error" begin
+@testset "nco_update_interval without time units throws a clear error" begin
     gpsl1 = GPSL1CA()
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 100.0Hz)])
     samples = zeros(ComplexF32, 4000)
-    @test_throws ArgumentError track(samples, ts, 4e6Hz; doppler_update_interval = 1e-3)
+    @test_throws ArgumentError track(samples, ts, 4e6Hz; nco_update_interval = 1e-3)
     err = try
-        track(samples, ts, 4e6Hz; doppler_update_interval = 1e-3)
+        track(samples, ts, 4e6Hz; nco_update_interval = 1e-3)
     catch e
         e
     end
@@ -89,7 +89,7 @@ end
         measurements,
         ts;
         chunk_index = 0,
-        chunk_duration = n_periods * 1e-3 * s,
+        nco_update_interval = n_periods * 1e-3 * s,
     )
     outputs = get_correlator_bank_outputs(only(get_tracked_sat(ts, prn).signals))
 
@@ -101,7 +101,7 @@ end
     end
 end
 
-@testset "estimator empties correlator_bank_outputs after each chunk" begin
+@testset "tracking loop empties correlator_bank_outputs after each chunk" begin
     gpsl1 = GPSL1CA()
     fs = 5e6Hz
     prn = 1
@@ -112,7 +112,7 @@ end
     @test isempty(get_correlator_bank_outputs(only(get_tracked_sat(ts, prn).signals)))
 end
 
-@testset "enlarged doppler_update_interval still converges" begin
+@testset "enlarged nco_update_interval still converges" begin
     # Both the per-period default and a 4 ms interval pull the Doppler in.
     gpsl1 = GPSL1CA()
     fs = 4e6Hz
@@ -128,9 +128,9 @@ end
         gen_code(num_samples, gpsl1, prn, fs, code_frequency, start_code_phase),
     )
 
-    converged(doppler_update_interval) = begin
+    converged(nco_update_interval) = begin
         ts = TrackState(gpsl1, [TrackedSat(gpsl1, prn, start_code_phase, true_doppler - 30Hz)])
-        ts = track(samples, ts, fs; doppler_update_interval)
+        ts = track(samples, ts, fs; nco_update_interval)
         abs(get_carrier_doppler(ts) / Hz - true_doppler / Hz)
     end
 

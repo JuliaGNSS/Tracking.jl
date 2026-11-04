@@ -1650,7 +1650,7 @@ end
     dc::_TwoBitDC,
     measurements::BandMeasurements,
     chunk_index::Int,
-    chunk_duration,
+    nco_update_interval,
     stop_before_partial::Bool,
     samples_unchanged::Bool,
     noise_items::_NoiseWork,
@@ -1687,7 +1687,7 @@ end
     end
     num_buffer_samples = get_num_samples(m)
     chunk_sample_range = _chunk_sample_range(
-        chunk_duration,
+        nco_update_interval,
         chunk_index,
         m.sampling_frequency,
         num_buffer_samples,

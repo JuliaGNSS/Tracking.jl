@@ -104,7 +104,7 @@ function TrackedSignal(
         preferred_num_code_periods_to_integrate,
     )
     # A default chunk yields at most one integration; the hint covers a moderately
-    # enlarged `doppler_update_interval` without regrowing.
+    # enlarged `nco_update_interval` without regrowing.
     correlator_bank_outputs = CorrelatorBankOutput{typeof(correlator_bank)}[]
     sizehint!(correlator_bank_outputs, 4)
     TrackedSignal(
@@ -237,7 +237,7 @@ $(SIGNATURES)
 The [`CorrelatorBankOutput`](@extref TrackingLoops.CorrelatorBankOutput)s this signal
 completed in the current chunk, in order. [`step_tracking_loops!`](@ref) consumes
 and clears them, so read them inside a custom tracking loop or right after a bare
-`downconvert_and_correlate!`. See [Chunked Doppler updates](@ref).
+`downconvert_and_correlate!`. See [Chunked NCO updates](@ref).
 """
 get_correlator_bank_outputs(t::TrackedSignal) = t.correlator_bank_outputs
 

@@ -80,7 +80,7 @@ In the TrackingLoops manual:
 
 Each completed integration within a processing chunk is recorded as a
 `CorrelatorBankOutput`, collected per signal and consumed by the tracking loop
-after the chunk (see [Chunked Doppler updates](track.md#Chunked-Doppler-updates)).
+after the chunk (see [Chunked NCO updates](track.md#Chunked-NCO-updates)).
 An external correlator producer (e.g. an FPGA) can build these itself and feed
 them straight to the tracking loop — see
 [External correlator producers](track.md#External-correlator-producers).

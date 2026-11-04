@@ -78,7 +78,7 @@ satellites. The signal path (downconvert, correlate) is loop-agnostic and passes
    `TrackState{<:Any, <:MyTrackingLoop}` instead replaces the whole loop update, for
    a tracking loop that does not fit a per-integration step (e.g. one stepping all satellites
    jointly). It runs once per **chunk** (see
-   [Chunked Doppler updates](track.md#Chunked-Doppler-updates)), walks
+   [Chunked NCO updates](track.md#Chunked-NCO-updates)), walks
    `track_state.groups`, reads each band's `BandMeasurement` via
    `get_band_id(group.band)`, and produces `TrackedSat`s with new
    `carrier_doppler`/`code_doppler` and per-sat state.

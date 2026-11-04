@@ -126,7 +126,7 @@ end
 end
 
 @testset "observation cadence follows the chunk, not the buffer" begin
-    # `num_sub = max(1, round(chunk_duration / code_period))` per chunk, and none
+    # `num_sub = max(1, round(nco_update_interval / code_period))` per chunk, and none
     # from the drain pass — gating on `samples_unchanged` would freeze the window
     # after chunk 0.
     samples = _sky(-Inf; seed = 11)
@@ -146,7 +146,7 @@ end
         # 40 ms of buffer: 40 / 20 / 2 chunks at the three intervals.
         long = repeat(samples, 4)
         num_chunks = ceil(Int, 40 / ustrip(ms, interval))
-        track!((L1 = BandMeasurement(long, FS),), ts; doppler_update_interval = interval)
+        track!((L1 = BandMeasurement(long, FS),), ts; nco_update_interval = interval)
         @test Base.length(ts.noise_estimators.GPSL1CA) == num_chunks * expected_num_sub
     end
 
@@ -156,7 +156,7 @@ end
         [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator())],
     )
     fast = _sky(-Inf; seed = 12, num_samples = 100_000, fs = 10e6Hz)
-    track!((L1 = BandMeasurement(fast, 10e6Hz),), ts; doppler_update_interval = 4ms)
+    track!((L1 = BandMeasurement(fast, 10e6Hz),), ts; nco_update_interval = 4ms)
     # 10 ms at a 4 ms chunk: 4 + 4, then a 2 ms trailing chunk measured at its
     # true length.
     @test Base.length(ts.noise_estimators.GPSL1CA) == 4 + 4 + 2
@@ -164,7 +164,7 @@ end
 
 @testset "a code period longer than the chunk still yields one observation" begin
     # The `max(1, …)`: GPS L1C-P (10 ms code) at 1 ms chunks, reachable when
-    # another signal forces a shorter `doppler_update_interval`.
+    # another signal forces a shorter `nco_update_interval`.
     fs = 20e6Hz
     l1cp = GPSL1C_P(TMBOC)
     num_samples = 200_000                       # 10 ms — one L1C-P code period
@@ -174,7 +174,7 @@ end
         l1cp,
         [TrackedSat(l1cp, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator())],
     )
-    track!((L1 = BandMeasurement(samples, fs),), ts; doppler_update_interval = 1ms)
+    track!((L1 = BandMeasurement(samples, fs),), ts; nco_update_interval = 1ms)
     # Ten 1 ms chunks, each a tenth of a code period — one slice apiece, not zero.
     @test Base.length(ts.noise_estimators.GPSL1C_P) == 10
     # 30 looks ⇒ σ ≈ 18 %: a sanity check, not a precision claim.
@@ -511,7 +511,7 @@ end
             noise_estimators = (GPSL1CA = CorrelatorNoiseEstimator(),),
         )
         add_satellite!(ts; prn = 1, carrier_doppler = 0.0Hz)
-        track!((L1 = BandMeasurement(samples, fs),), ts; doppler_update_interval = interval)
+        track!((L1 = BandMeasurement(samples, fs),), ts; nco_update_interval = interval)
         ustrip(Hz^-1, get_noise_density(ts.noise_estimators.GPSL1CA))
     end
 

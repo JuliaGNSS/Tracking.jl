@@ -217,7 +217,7 @@ julia> get_carrier_doppler(track_state, :modern_gps, 11)
 
 Put a pilot first where there is one: without data bits the PLL can integrate longer. The data signals still decode their bits, each with its own `bit_synchronizer`.
 
-Signals with different code periods (L1 C/A 1 ms, L1C-P 10 ms) each complete predetection integrations on their own boundaries; the scalar tracking loops update the Doppler from the driver's integrations (see [Chunked Doppler updates](track.md#Chunked-Doppler-updates)).
+Signals with different code periods (L1 C/A 1 ms, L1C-P 10 ms) each complete predetection integrations on their own boundaries; the scalar tracking loops update the Doppler from the driver's integrations (see [Chunked NCO updates](track.md#Chunked-NCO-updates)).
 
 ### Phased-array tracking
 
