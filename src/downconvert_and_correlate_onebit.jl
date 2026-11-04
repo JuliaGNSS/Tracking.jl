@@ -6,7 +6,7 @@
 #   Iₓ = Σ codeₓ·DI = (N − 2·pc(codeₓ⊻mᵣ⊻cos)) + (N − 2·pc(codeₓ⊻mᵢ⊻sin))
 #   Qₓ = Σ codeₓ·DQ = (N − 2·pc(codeₓ⊻mᵢ⊻cos)) − (N − 2·pc(codeₓ⊻mᵣ⊻sin))
 #
-# Per `blk`-sample block (L1-resident scratch, as in the Int16 backend): pack the
+# Per `block_length`-sample block (L1-resident scratch, as in the Int16 backend): pack the
 # sample sign planes per antenna, take the carrier sign planes off SinCosLUT's NCO,
 # pack the code sign plane once and funnel-shift it per correlator, then XOR + `count_ones`.
 # This file also holds the rationale for the machinery the two-bit backend shares.
@@ -19,7 +19,7 @@ import SinCosLUT
 using SinCosLUT: generate_carrier_signs!
 
 # Default strip-mine block length (samples), a multiple of 64 (whole UInt64 words).
-const _ONEBIT_BLK = 8192
+const _ONEBIT_BLOCK_LENGTH = 8192
 
 # UInt64 lanes per SIMD popcount step. Block planes are padded to a multiple of VW words
 # with zeros, so the correlate loop runs whole VW chunks with no scalar tail.
@@ -134,7 +134,7 @@ end
 end
 
 # Derive a correlator plane from the prompt-extended plane by a funnel bit-shift, so one movemask
-# of the code block feeds all correlators: `dst[w] = pe[w+off]` in bit terms, for any `off ≥ 0`
+# of the replica block feeds all correlators: `dst[w] = pe[w+off]` in bit terms, for any `off ≥ 0`
 # (`off ÷ 64` whole words + `off mod 64` bits). The caller zero-pads `pe` so
 # `pe[nwb+wsh+1]` is valid (`pepad` in the kernels).
 @inline function _ob_shift_plane!(
@@ -213,8 +213,8 @@ end
     nothing
 end
 
-# Per-thread scratch, grown lazily and reused (allocation-free in steady state): code block
-# `extb`, prompt-extended code plane `peb`, carrier sign planes, per-correlator code planes
+# Per-thread scratch, grown lazily and reused (allocation-free in steady state): replica
+# block `extb`, prompt-extended code plane `peb`, carrier sign planes, per-correlator code planes
 # (`codeb`, NC·wpbv) and per-antenna sample planes (`mrb`/`mib`, M·wpbv). Plane
 # strides `wpbv` are padded to a multiple of `_OB_VW`.
 struct OneBitScratchBuffers
@@ -326,7 +326,7 @@ keyword for an allocation-free steady state.
 struct OneBitDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator
     buffers::OneBitScratchBuffers
     band::OneBitBandBuffers
-    blk::Int
+    block_length::Int
 end
 
 """
@@ -338,17 +338,21 @@ thread.
 struct OneBitThreadedDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator
     buffers::Vector{OneBitScratchBuffers}
     band::OneBitBandBuffers
-    blk::Int
+    block_length::Int
 end
 
-OneBitDownconvertAndCorrelator(; blk::Integer = _ONEBIT_BLK) =
-    OneBitDownconvertAndCorrelator(OneBitScratchBuffers(), OneBitBandBuffers(), Int(blk))
+OneBitDownconvertAndCorrelator(; block_length::Integer = _ONEBIT_BLOCK_LENGTH) =
+    OneBitDownconvertAndCorrelator(
+        OneBitScratchBuffers(),
+        OneBitBandBuffers(),
+        Int(block_length),
+    )
 
-OneBitThreadedDownconvertAndCorrelator(; blk::Integer = _ONEBIT_BLK) =
+OneBitThreadedDownconvertAndCorrelator(; block_length::Integer = _ONEBIT_BLOCK_LENGTH) =
     OneBitThreadedDownconvertAndCorrelator(
         [OneBitScratchBuffers() for _ = 1:Threads.maxthreadid()],
         OneBitBandBuffers(),
-        Int(blk),
+        Int(block_length),
     )
 
 const _OneBitDC =
@@ -470,12 +474,14 @@ const _OneBitDC =
         bandstride = cld(num_rows, 64) + 2          # per-antenna plane stride in `band` (see _ob_pack_band!)
 
         bufs = _ob_scratch(dc)
-        blk = dc.blk
-        wpb = cld(blk, 64)                          # words per block plane
+        block_length = dc.block_length
+        wpb = cld(block_length, 64)                          # words per block plane
         wpbv = cld(wpb, _OB_VW) * _OB_VW            # …padded to a whole number of VW chunks
         pepad = (span >> 6) + 1                     # zero pad words the funnel shift reads past nwe
-        pewords = cld(blk + span, 64) + pepad + _OB_VW   # extended prompt plane + funnel pad
-        length(bufs.extb) < blk + span + 64 && resize!(bufs.extb, blk + span + 64)
+        # Extended prompt plane + funnel pad.
+        pewords = cld(block_length + span, 64) + pepad + _OB_VW
+        length(bufs.extb) < block_length + span + 64 &&
+            resize!(bufs.extb, block_length + span + 64)
         length(bufs.peb) < pewords && resize!(bufs.peb, pewords)
         length(bufs.sinw) < wpbv && resize!(bufs.sinw, wpbv)
         length(bufs.cosw) < wpbv && resize!(bufs.cosw, wpbv)
@@ -490,9 +496,9 @@ const _OneBitDC =
         mrb = bufs.mrb;
         mib = bufs.mib
 
-        blk_off = 0
-        @inbounds while blk_off < N
-            len = min(blk, N - blk_off)
+        block_offset = 0
+        @inbounds while block_offset < N
+            len = min(block_length, N - block_offset)
             nwb = cld(len, 64)
             nwv = cld(nwb, _OB_VW) * _OB_VW
             r = len & 63
@@ -503,7 +509,7 @@ const _OneBitDC =
                 prn,
                 sampling_frequency,
                 code_frequency,
-                code_phase0 + cps_code * blk_off,
+                code_phase0 + cps_code * block_offset,
                 min_shift,
             )
             nwe = cld(len + span, 64)
@@ -532,13 +538,13 @@ const _OneBitDC =
                 cosw,
                 len,
                 cps_car;
-                phase = carphase + cps_car * blk_off,
+                phase = carphase + cps_car * block_offset,
             )
             _ob_zeropad!(sinw, 0, nwb, nwv)
             _ob_zeropad!(cosw, 0, nwb, nwv)
             # sample sign planes per antenna: realigned from the band planes (>1 sat)
             # or packed directly (1 sat)
-            base = start_index + blk_off
+            base = start_index + block_offset
             if band_shared
                 $(Expr(
                     :block,
@@ -590,7 +596,7 @@ const _OneBitDC =
                 $body
                 i += _OB_VW
             end
-            blk_off += len
+            block_offset += len
         end
         $ret
     end
@@ -649,12 +655,13 @@ function _onebit_hybrid_blocked!(
     bandstride = cld(num_rows, 64) + 2
 
     bufs = _ob_scratch(dc)
-    blk = dc.blk
-    wpb = cld(blk, 64)
+    block_length = dc.block_length
+    wpb = cld(block_length, 64)
     wpbv = cld(wpb, _OB_VW) * _OB_VW
     pepad = (span >> 6) + 1                     # zero pad words the funnel shift reads past nwe
-    pewords = cld(blk + span, 64) + pepad + _OB_VW
-    length(bufs.extb) < blk + span + 64 && resize!(bufs.extb, blk + span + 64)
+    pewords = cld(block_length + span, 64) + pepad + _OB_VW
+    length(bufs.extb) < block_length + span + 64 &&
+        resize!(bufs.extb, block_length + span + 64)
     length(bufs.peb) < pewords && resize!(bufs.peb, pewords)
     length(bufs.sinw) < wpbv && resize!(bufs.sinw, wpbv)
     length(bufs.cosw) < wpbv && resize!(bufs.cosw, wpbv)
@@ -674,9 +681,9 @@ function _onebit_hybrid_blocked!(
     C = zeros(Int64, M, NC)
     E = zeros(Int64, M, NC)
 
-    blk_off = 0
-    @inbounds while blk_off < N
-        len = min(blk, N - blk_off)
+    block_offset = 0
+    @inbounds while block_offset < N
+        len = min(block_length, N - block_offset)
         nwb = cld(len, 64)
         nwv = cld(nwb, _OB_VW) * _OB_VW
         r = len & 63
@@ -686,7 +693,7 @@ function _onebit_hybrid_blocked!(
             prn,
             sampling_frequency,
             code_frequency,
-            code_phase0 + cps_code * blk_off,
+            code_phase0 + cps_code * block_offset,
             min_shift,
         )
         nwe = cld(len + span, 64)
@@ -703,11 +710,11 @@ function _onebit_hybrid_blocked!(
             cosw,
             len,
             cps_car;
-            phase = carphase + cps_car * blk_off,
+            phase = carphase + cps_car * block_offset,
         )
         _ob_zeropad!(sinw, 0, nwb, nwv)
         _ob_zeropad!(cosw, 0, nwb, nwv)
-        base = start_index + blk_off
+        base = start_index + block_offset
         if band_shared
             for j = 1:M
                 _ob_realign_meas!(
@@ -762,7 +769,7 @@ function _onebit_hybrid_blocked!(
             end
             ci += _OB_VW
         end
-        blk_off += len
+        block_offset += len
     end
 
     if M == 1
@@ -930,7 +937,7 @@ end
                 prn,
                 sampling_frequency,
                 code_freqs[$i],
-                $(Symbol("cph0_$i")) + $(Symbol("cpsc_$i")) * blk_off,
+                $(Symbol("cph0_$i")) + $(Symbol("cpsc_$i")) * block_offset,
                 $(Symbol("mins_$i")),
             )),
         )
@@ -1039,11 +1046,13 @@ end
         maxspan_v = $maxspan
 
         bufs = _ob_scratch(dc)
-        blk = dc.blk
-        wpb = cld(blk, 64)
+        block_length = dc.block_length
+        wpb = cld(block_length, 64)
         wpbv = cld(wpb, _OB_VW) * _OB_VW
-        pewords = cld(blk + maxspan_v, 64) + (maxspan_v >> 6) + 1 + _OB_VW   # + funnel-shift pad
-        length(bufs.extb) < blk + maxspan_v + 64 && resize!(bufs.extb, blk + maxspan_v + 64)
+        # + funnel-shift pad
+        pewords = cld(block_length + maxspan_v, 64) + (maxspan_v >> 6) + 1 + _OB_VW
+        length(bufs.extb) < block_length + maxspan_v + 64 &&
+            resize!(bufs.extb, block_length + maxspan_v + 64)
         length(bufs.peb) < pewords && resize!(bufs.peb, pewords)
         length(bufs.sinw) < wpbv && resize!(bufs.sinw, wpbv)
         length(bufs.cosw) < wpbv && resize!(bufs.cosw, wpbv)
@@ -1058,9 +1067,9 @@ end
         mrb = bufs.mrb;
         mib = bufs.mib
 
-        blk_off = 0
-        @inbounds while blk_off < N_samp
-            len = min(blk, N_samp - blk_off)
+        block_offset = 0
+        @inbounds while block_offset < N_samp
+            len = min(block_length, N_samp - block_offset)
             nwb = cld(len, 64)
             nwv = cld(nwb, _OB_VW) * _OB_VW
             r = len & 63
@@ -1070,12 +1079,12 @@ end
                 cosw,
                 len,
                 cps_car;
-                phase = carphase + cps_car * blk_off,
+                phase = carphase + cps_car * block_offset,
             )
             _ob_zeropad!(sinw, 0, nwb, nwv)
             _ob_zeropad!(cosw, 0, nwb, nwv)
             # sample sign planes — one pack per sat/block, shared across signals
-            base = start_index + blk_off
+            base = start_index + block_offset
             if band_shared
                 $realign
             else
@@ -1083,7 +1092,7 @@ end
             end
             # each signal: its own code, correlated against the shared planes
             $sigs
-            blk_off += len
+            block_offset += len
         end
         $finals
     end

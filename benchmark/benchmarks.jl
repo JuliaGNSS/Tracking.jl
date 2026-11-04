@@ -623,7 +623,7 @@ for (name, signals, nsats_list, sfreq, nsamp, prn_max, capture) in (
 )
     sig16 = capture(nsamp)
     dc_f = Tracking.CPUThreadedDownconvertAndCorrelator()
-    # max_meas = 2^11 matches the ±2048 full-scale of `_int16_capture` above.
+    # 2^11 is the ±2048 full scale of `_int16_capture` above.
     dc_i = Tracking.Int16ThreadedDownconvertAndCorrelator(2^11)
     g = SUITE["track! Int16 vs Float32"][name]
     # Tracking random samples drifts the loop filter to a NaN Doppler
@@ -903,7 +903,7 @@ for (key, signals, nsats_list, sfreq, nsamp, prn_max, onebit, twobit, capture) i
     ),
 )
     sig16 = capture(nsamp)
-    dc_i = Tracking.Int16DownconvertAndCorrelator(2^11)   # max_meas = 2^11 matches _int16_capture's ±2048
+    dc_i = Tracking.Int16DownconvertAndCorrelator(2^11)   # _int16_capture's full scale
     SUITE["track"]["$key – in-place, Int16"] = @benchmarkable(
         Tracking.track!($sig16, ts, $sfreq; downconvert_and_correlator = $dc_i),
         setup = (

@@ -1,6 +1,7 @@
 # Integer (`Complex{Int16}`, 12-bit ADC) hybrid-blocked downconvert + correlate backend,
 # the integer counterpart of the Float32 fused path. The integration is strip-mined into
-# `blk`-sample blocks whose code and carrier are regenerated into L1-resident scratch:
+# `block_length`-sample blocks whose code and carrier are regenerated into L1-resident
+# scratch:
 #
 #   * code — Int8 ±1 (CBOC ±13/±25) replica, one-shot `gen_code!` per block (exact
 #     across block seams, non-baked secondaries such as GPS L5I NH10 applied).
@@ -18,8 +19,13 @@
 import SinCosLUT
 using SinCosLUT: SinCosTable, carrier_engine, carrier_state, carrier_lookup, carrier_advance
 
+# Carrier phase steps per cycle of the Int8 sin/cos table: 64 lose ≈0.0035 dB to phase
+# quantisation and are the one size every SinCosLUT SIMD backend takes, so the table's
+# SIMD width is `_INT16_W`.
+const _INT16_CARRIER_STEPS = 64
+
 # SIMD width of the Int8 carrier and code LUTs on this host.
-const _INT16_W = let be = SinCosLUT.default_backend(Int8, 64)
+const _INT16_W = let be = SinCosLUT.default_backend(Int8, _INT16_CARRIER_STEPS)
     be isa SinCosLUT.AVX512 ? 64 : be isa SinCosLUT.AVX2 ? 32 : be isa SinCosLUT.Neon ? 16 : 1
 end
 
@@ -32,21 +38,21 @@ const _INT16_HAS_MADDWD = Sys.ARCH in (:x86_64, :i686) && _INT16_W in (32, 64)
 # Elsewhere there is no widening MAC to gain, so the wipe stays Int32.
 const _INT16_WIDE_WIPE = _INT16_HAS_MADDWD || Sys.ARCH === :aarch64
 
-# Choose the Int8 carrier amplitude and wipe type from `max_meas`, the declared largest
+# Choose the Int8 carrier amplitude and wipe type from `full_scale`, the declared largest
 # `|real|`/`|imag|` of a sample (e.g. 2^11 for a 12-bit ADC): the largest `amp` with
-# `2·max_meas·amp ≤ typemax(Int16)`, capped at `typemax(Int8)`. The factor 2 is because
+# `2·full_scale·amp ≤ typemax(Int16)`, capped at `typemax(Int8)`. The factor 2 is because
 # the complex wipe sums two products, `|DI| ≤ |mᵣ·cos| + |mᵢ·sin|`. The amplitude is the
 # same on every backend, only the wipe type differs (see `_INT16_WIDE_WIPE`): a larger
 # Int32-only amplitude overflowed the CBOC accumulate on the scalar path.
 #
 # Three guards keep the per-block Σ codeₓ·DI from wrapping:
 #   * the cross-lane flush reduce is widened to Int64 (`_wide64`, #165);
-#   * for `max_meas ≥ 2^14` no `amp ≥ 1` is Int16-safe, so the wipe falls back to amp 127
-#     in Int32 and `_int16_safe_blk` shrinks the block (#167);
+#   * for `full_scale ≥ 2^14` no `amp ≥ 1` is Int16-safe, so the wipe falls back to amp 127
+#     in Int32 and `_int16_safe_block_length` shrinks the block (#167);
 #   * on the SinCosLUT `Portable` backend (`_INT16_W == 1`) one lane sums a whole block,
 #     so `_int16_flush_len` shrinks it (#166).
-function _int16_choose_carrier(max_meas::Integer)
-    a = Int(typemax(Int16)) ÷ (2 * Int(max_meas))
+function _int16_choose_carrier(full_scale::Integer)
+    a = Int(typemax(Int16)) ÷ (2 * Int(full_scale))
     a >= 1 || return (Int(typemax(Int8)), Int32)
     (min(a, Int(typemax(Int8))), _INT16_WIDE_WIPE ? Int16 : Int32)
 end
@@ -54,40 +60,47 @@ end
 # Largest code magnitude (Galileo E1B CBOC ±25), bounding the Int32 lane sums.
 const _INT16_MAX_CODE = 25
 
-# Block length keeping a lane's per-block Σ codeₓ·DI within Int32 on the `max_meas ≥ 2^14`
-# fallback (amp 127, Int32 wipe, #167); `blk` unchanged on the Int16-safe path.
-function _int16_safe_blk(blk::Integer, max_meas::Integer, amp::Integer)
-    di_max = 2 * Int(max_meas) * Int(amp)                     # |DI| = |mᵣ·cos + mᵢ·sin|
-    di_max <= Int(typemax(Int16)) && return Int(blk)          # Int16-safe path: unchanged
+# Block length keeping a lane's per-block Σ codeₓ·DI within Int32 on the
+# `full_scale ≥ 2^14` fallback (amp 127, Int32 wipe, #167); unchanged on the Int16-safe
+# path.
+function _int16_safe_block_length(block_length::Integer, full_scale::Integer, amp::Integer)
+    di_max = 2 * Int(full_scale) * Int(amp)                     # |DI| = |mᵣ·cos + mᵢ·sin|
+    di_max <= Int(typemax(Int16)) && return Int(block_length)   # Int16-safe path: unchanged
     safe = Int(typemax(Int32)) ÷ (_INT16_MAX_CODE * di_max)   # samples/block keeping Σ within Int32
-    min(Int(blk), max(1, safe))
+    min(Int(block_length), max(1, safe))
 end
 
 # Default strip-mine block length (samples): a multiple of every backend `W`, small enough
 # for the code + sin + cos scratch to stay in L1.
-const _INT16_BLK = 8192
+const _INT16_BLOCK_LENGTH = 8192
 
 # Block length keeping an Int32 lane from wrapping before its per-block Int64 flush. A lane
 # sums `fld(L, W)` products (twice that with `vpmaddwd`'s pair pre-sum) of at most
 # `_INT16_MAX_CODE·max_wipe`. For `W ≥ 16` the cap exceeds the default block; on the
 # SinCosLUT `Portable` fallback (`W == 1`) it shrinks it (#166). Composed by `min` with
-# `_int16_safe_blk` (#167).
-function _int16_flush_len(W::Integer, max_wipe::Integer, blk::Integer)
+# `_int16_safe_block_length` (#167).
+function _int16_flush_len(W::Integer, max_wipe::Integer, block_length::Integer)
     max_product = _INT16_MAX_CODE * Int(max_wipe)
     products_per_lane = Int(typemax(Int32)) ÷ (2 * max_product)   # 2× covers the vpmaddwd path
-    min(Int(blk), max(Int(W), products_per_lane * Int(W)))
+    min(Int(block_length), max(Int(W), products_per_lane * Int(W)))
 end
 
-# `blk ≤ 0` would never advance the strip-mine loop and hang `track!` (#169), so reject it;
-# an oversized `blk` is safe, as `_int16_flush_len` and `_int16_safe_blk` clamp it.
-function _int16_validate_blk(blk::Integer, max_meas::Integer, amp::Integer)
-    blk >= 1 || throw(
+# `block_length ≤ 0` would never advance the strip-mine loop and hang `track!` (#169), so
+# reject it; an oversized one is safe, as `_int16_flush_len` and `_int16_safe_block_length`
+# clamp it.
+function _int16_validate_block_length(
+    block_length::Integer,
+    full_scale::Integer,
+    amp::Integer,
+)
+    block_length >= 1 || throw(
         ArgumentError(
-            "Int16 backend: blk must be ≥ 1 (got $blk); blk ≤ 0 makes the " *
-            "strip-mine loop never advance and hangs track! forever.",
+            "Int16 backend: block_length must be ≥ 1 (got $block_length); a smaller " *
+            "one makes the strip-mine loop never advance and hangs track! forever.",
         ),
     )
-    _int16_safe_blk(blk, max_meas, amp)   # clamp on the amp = 127 fallback (#167)
+    # Clamp on the amp = 127 fallback (#167).
+    _int16_safe_block_length(block_length, full_scale, amp)
 end
 
 # ── Widening / vpmaddwd helpers ───────────────────────────────────────────────
@@ -155,9 +168,9 @@ attributes #0 = { alwaysinline }""",
     end
 end
 
-# Per-thread scratch, grown lazily and reused (allocation-free in steady state): the block
-# code `extb` (`blk + correlator-span`) and carrier sin/cos `csb`/`ccb`, all Int8. `TI` is the
-# wipe element type chosen by `_int16_choose_carrier`.
+# Per-thread scratch, grown lazily and reused (allocation-free in steady state): the
+# replica block `extb` (`block_length + correlator-span`) and carrier sin/cos `csb`/`ccb`, all
+# Int8. `TI` is the wipe element type chosen by `_int16_choose_carrier`.
 struct Int16ScratchBuffers{TI}
     extb::Vector{Int8}
     csb::Vector{Int8}
@@ -185,27 +198,28 @@ sample shifts (EPL/VEPL); runtime `AbstractVector` shifts allocate only the retu
 
 # Arguments
 
-`max_meas` (required, no default) is the largest `|real|`/`|imag|` any sample will
-take, i.e. the front end's full-scale (e.g. `2^11` for a 12-bit ADC). The carrier
-amplitude is the largest with `2·max_meas·amplitude ≤ typemax(Int16)`, since the complex
-wipe `DI = mᵣ·cos + mᵢ·sin` sums two products. **Under-declaring `max_meas` silently
+`full_scale` (required, no default) is the largest `|real|`/`|imag|` any sample will
+take, i.e. the front end's full scale (e.g. `2^11` for a 12-bit ADC). The carrier
+amplitude is the largest with `2·full_scale·amplitude ≤ typemax(Int16)`, since the complex
+wipe `DI = mᵣ·cos + mᵢ·sin` sums two products. **Under-declaring `full_scale` silently
 overflows the `Int16` wipe and corrupts the correlation**; over-declaring is safe and
 only coarsens the carrier quantisation.
 
-!!! note "Performance: keep `max_meas < 2^14`"
+!!! note "Performance: keep `full_scale < 2^14`"
 
-    For `max_meas ≥ 2^14` no `Int16`-safe amplitude `≥ 1` exists: the backend falls
+    For `full_scale ≥ 2^14` no `Int16`-safe amplitude `≥ 1` exists: the backend falls
     back to an exact `Int32` wipe (off the `vpmaddwd` fast path) and a shorter
     strip-mine block. Correct, but measurably slower.
 
-`blk` is the strip-mine block length in samples. It must be `≥ 1` (`blk ≤ 0` would
-hang `track!`, #169); a larger-than-safe `blk` is clamped so the accumulators never wrap.
+`block_length` is the strip-mine block length in samples. It must be `≥ 1` (a smaller
+one would hang `track!`, #169); a larger-than-safe one is clamped so the accumulators
+never wrap.
 """
 struct Int16DownconvertAndCorrelator{TBL<:SinCosTable,TI} <:
        AbstractDownconvertAndCorrelator
     buffers::Int16ScratchBuffers{TI}
     table::TBL
-    blk::Int
+    block_length::Int
     # Peak of the Int8 carrier replica, divided out at finalize so the magnitudes match
     # the unit-carrier Float32 backend.
     carrier_amplitude::Int
@@ -221,62 +235,35 @@ struct Int16ThreadedDownconvertAndCorrelator{TBL<:SinCosTable,TI} <:
        AbstractDownconvertAndCorrelator
     buffers::Vector{Int16ScratchBuffers{TI}}
     table::TBL
-    blk::Int
+    block_length::Int
     # Peak of the Int8 carrier replica, divided out at finalize.
     carrier_amplitude::Int
 end
 
-# The kernels stride by the compile-time `_INT16_W`, but the carrier engine's width follows
-# the backend SinCosLUT picks from `steps`; a mismatch silently corrupts the carrier (#168).
-# `steps` values keeping the same width are allowed.
-function _int16_assert_engine_width(table::SinCosTable)
-    W = SinCosLUT.carrier_width(carrier_engine(table, 0))
-    W == _INT16_W || throw(
-        ArgumentError(
-            string(
-                "Int16DownconvertAndCorrelator: the carrier table's SIMD engine ",
-                "width (",
-                W,
-                ") does not match the kernel stride `_INT16_W` (",
-                _INT16_W,
-                "). This happens when `steps` selects a different ",
-                "SinCosLUT backend than the default `steps = 64` on this host; a ",
-                "mismatched width would silently corrupt the carrier replica. ",
-                "Use `steps = 64`.",
-            ),
-        ),
-    )
-    return nothing
-end
-
 function Int16DownconvertAndCorrelator(
-    max_meas::Integer;
-    steps::Integer = 64,
-    blk::Integer = _INT16_BLK,
+    full_scale::Integer;
+    block_length::Integer = _INT16_BLOCK_LENGTH,
 )
-    amplitude, TI = _int16_choose_carrier(max_meas)
-    table = SinCosTable(Int8; steps, amplitude)
-    _int16_assert_engine_width(table)
+    amplitude, TI = _int16_choose_carrier(full_scale)
+    table = SinCosTable(Int8; steps = _INT16_CARRIER_STEPS, amplitude)
     Int16DownconvertAndCorrelator{typeof(table),TI}(
         Int16ScratchBuffers{TI}(),
         table,
-        _int16_validate_blk(blk, max_meas, amplitude),
+        _int16_validate_block_length(block_length, full_scale, amplitude),
         amplitude,
     )
 end
 
 function Int16ThreadedDownconvertAndCorrelator(
-    max_meas::Integer;
-    steps::Integer = 64,
-    blk::Integer = _INT16_BLK,
+    full_scale::Integer;
+    block_length::Integer = _INT16_BLOCK_LENGTH,
 )
-    amplitude, TI = _int16_choose_carrier(max_meas)
-    table = SinCosTable(Int8; steps, amplitude)
-    _int16_assert_engine_width(table)
+    amplitude, TI = _int16_choose_carrier(full_scale)
+    table = SinCosTable(Int8; steps = _INT16_CARRIER_STEPS, amplitude)
     Int16ThreadedDownconvertAndCorrelator{typeof(table),TI}(
         [Int16ScratchBuffers{TI}() for _ = 1:Threads.maxthreadid()],
         table,
-        _int16_validate_blk(blk, max_meas, amplitude),
+        _int16_validate_block_length(block_length, full_scale, amplitude),
         amplitude,
     )
 end
@@ -376,7 +363,7 @@ end
 
     # One antenna pass over the current block.
     function antenna_pass(j)
-        blk_init = Expr(:block);
+        block_init = Expr(:block);
         flush = Expr(:block);
         chunk = Expr(:block);
         scalar = Expr(:block)
@@ -386,8 +373,8 @@ end
             tI = Symbol("tI_$(j)_$k");
             tQ = Symbol("tQ_$(j)_$k")
             offk = Symbol("off_$k")
-            push!(blk_init.args, :($aI = zero(SIMD.Vec{$AW,Int32})))
-            push!(blk_init.args, :($aQ = zero(SIMD.Vec{$AW,Int32})))
+            push!(block_init.args, :($aI = zero(SIMD.Vec{$AW,Int32})))
+            push!(block_init.args, :($aQ = zero(SIMD.Vec{$AW,Int32})))
             push!(flush.args, :($tI += sum(_wide64($aI))))
             push!(flush.args, :($tQ += sum(_wide64($aQ))))
             if use_madd
@@ -425,7 +412,7 @@ end
             end)
         end
         quote
-            $blk_init
+            $block_init
             colbase = $(j - 1) * num_rows         # 0-based column (antenna) offset, in samples
             n = 1
             while n + W - 1 <= len
@@ -489,9 +476,9 @@ end
 
         bufs = _scratch_buffers(dc)
         # Lane-overflow cap for the `W == 1` Portable path (#166).
-        blk = _int16_flush_len(W, typemax(Int16), dc.blk)
-        ncar = (cld(blk, W) + 4) * W            # room for the 4-way carrier fill tail
-        length(bufs.extb) < blk + span && resize!(bufs.extb, blk + span)
+        block_length = _int16_flush_len(W, typemax(Int16), dc.block_length)
+        ncar = (cld(block_length, W) + 4) * W   # room for the 4-way carrier fill tail
+        length(bufs.extb) < block_length + span && resize!(bufs.extb, block_length + span)
         length(bufs.csb) < ncar && resize!(bufs.csb, ncar)
         length(bufs.ccb) < ncar && resize!(bufs.ccb, ncar)
         extb = bufs.extb
@@ -512,9 +499,9 @@ end
         $init
         p_sig = Ptr{Int16}(pointer(samples))
 
-        blk_off = 0
-        @inbounds while blk_off < num_samples
-            len = min(blk, num_samples - blk_off)
+        block_offset = 0
+        @inbounds while block_offset < num_samples
+            len = min(block_length, num_samples - block_offset)
 
             # 1. This block's code into extb[1 .. len+span].
             gen_code!(
@@ -523,18 +510,18 @@ end
                 prn,
                 sampling_frequency,
                 code_frequency,
-                code_phase0 + cps * blk_off,
+                code_phase0 + cps * block_offset,
                 min_shift,
             )
 
             # 2. This block's carrier sin/cos, shared across antennas.
-            _int16_fill_carrier!(csb, ccb, reng, blk_off, len, phase0, Val(W))
+            _int16_fill_carrier!(csb, ccb, reng, block_offset, len, phase0, Val(W))
 
             # 3. M antenna passes, flushed per block; `base` = signal row of local n=0.
-            base = start_index + blk_off
+            base = start_index + block_offset
             $correlate_passes
 
-            blk_off += len
+            block_offset += len
         end
 
         $result
@@ -619,10 +606,10 @@ function _int16_hybrid_blocked!(
     num_rows = size(samples, 1)
 
     bufs = _scratch_buffers(dc)
-    blk = dc.blk
-    ncar = (cld(blk, W) + 4) * W
-    ntile = blk * M
-    length(bufs.extb) < blk + span && resize!(bufs.extb, blk + span)
+    block_length = dc.block_length
+    ncar = (cld(block_length, W) + 4) * W
+    ntile = block_length * M
+    length(bufs.extb) < block_length + span && resize!(bufs.extb, block_length + span)
     length(bufs.csb) < ncar && resize!(bufs.csb, ncar)
     length(bufs.ccb) < ncar && resize!(bufs.ccb, ncar)
     length(bufs.dib) < ntile && resize!(bufs.dib, ntile)
@@ -651,20 +638,20 @@ function _int16_hybrid_blocked!(
 
     p_sig = Ptr{Int16}(pointer(samples))
 
-    blk_off = 0
-    @inbounds while blk_off < num_samples
-        len = min(blk, num_samples - blk_off)
+    block_offset = 0
+    @inbounds while block_offset < num_samples
+        len = min(block_length, num_samples - block_offset)
         gen_code!(
             view(extb, 1:(len+span)),
             signal,
             prn,
             sampling_frequency,
             code_frequency,
-            code_phase0 + cps * blk_off,
+            code_phase0 + cps * block_offset,
             min_shift,
         )
-        _int16_fill_carrier!(csb, ccb, reng, blk_off, len, phase0, Val(W))
-        base = start_index + blk_off
+        _int16_fill_carrier!(csb, ccb, reng, block_offset, len, phase0, Val(W))
+        base = start_index + block_offset
         _int16_fill_ditile!(
             dib,
             dqb,
@@ -689,7 +676,7 @@ function _int16_hybrid_blocked!(
             len,
             Val(_INT16_W),
         )
-        blk_off += len
+        block_offset += len
     end
 
     # Divide out the carrier amplitude.
@@ -829,7 +816,7 @@ end
     # Per signal: fill its code, then M antenna passes over the shared DI/DQ tile.
     function signal_corr(i)
         b = Expr(:block)
-        push!(b.args, :(blk_phase = code_phases[$i] + $(Symbol("cps_$i")) * blk_off))
+        push!(b.args, :(block_phase = code_phases[$i] + $(Symbol("cps_$i")) * block_offset))
         push!(
             b.args,
             :(gen_code!(
@@ -838,12 +825,12 @@ end
                 prn,
                 sampling_frequency,
                 code_freqs[$i],
-                blk_phase,
+                block_phase,
                 $(Symbol("mins_$i")),
             )),
         )
         for j = 1:M
-            blk_init = Expr(:block);
+            block_init = Expr(:block);
             flush = Expr(:block);
             chunk = Expr(:block);
             scalar = Expr(:block)
@@ -853,8 +840,8 @@ end
                 tI = Symbol("tI_$(i)_$(j)_$k");
                 tQ = Symbol("tQ_$(i)_$(j)_$k")
                 offk = Symbol("off_$(i)_$k")
-                push!(blk_init.args, :($aI = zero(SIMD.Vec{$AW,Int32})))
-                push!(blk_init.args, :($aQ = zero(SIMD.Vec{$AW,Int32})))
+                push!(block_init.args, :($aI = zero(SIMD.Vec{$AW,Int32})))
+                push!(block_init.args, :($aQ = zero(SIMD.Vec{$AW,Int32})))
                 push!(flush.args, :($tI += sum(_wide64($aI))))
                 push!(flush.args, :($tQ += sum(_wide64($aQ))))
                 if use_madd
@@ -892,7 +879,7 @@ end
                 end)
             end
             push!(b.args, quote
-                $blk_init
+                $block_init
                 toff = $(j - 1) * len
                 n = 1
                 while n + $W - 1 <= len
@@ -953,12 +940,13 @@ end
 
         bufs = _scratch_buffers(dc)
         # Lane-overflow cap for the `W == 1` Portable path (#166).
-        blk = _int16_flush_len(W, typemax(Int16), dc.blk)
-        ncar = (cld(blk, W) + 4) * W
-        length(bufs.extb) < blk + maxspan_v && resize!(bufs.extb, blk + maxspan_v)
+        block_length = _int16_flush_len(W, typemax(Int16), dc.block_length)
+        ncar = (cld(block_length, W) + 4) * W
+        length(bufs.extb) < block_length + maxspan_v &&
+            resize!(bufs.extb, block_length + maxspan_v)
         length(bufs.csb) < ncar && resize!(bufs.csb, ncar)
         length(bufs.ccb) < ncar && resize!(bufs.ccb, ncar)
-        ntile = blk * $M
+        ntile = block_length * $M
         length(bufs.dib) < ntile && resize!(bufs.dib, ntile)
         length(bufs.dqb) < ntile && resize!(bufs.dqb, ntile)
         extb = bufs.extb;
@@ -968,11 +956,11 @@ end
         dqb = bufs.dqb
 
         p_sig = Ptr{Int16}(pointer(samples))
-        blk_off = 0
-        @inbounds while blk_off < num_samples
-            len = min(blk, num_samples - blk_off)
-            _int16_fill_carrier!(csb, ccb, reng, blk_off, len, phase0, Val(W))
-            base = start_index + blk_off
+        block_offset = 0
+        @inbounds while block_offset < num_samples
+            len = min(block_length, num_samples - block_offset)
+            _int16_fill_carrier!(csb, ccb, reng, block_offset, len, phase0, Val(W))
+            base = start_index + block_offset
             _int16_fill_ditile!(
                 dib,
                 dqb,
@@ -986,7 +974,7 @@ end
                 p_sig,
             )
             $sigs
-            blk_off += len
+            block_offset += len
         end
         $finals
     end
@@ -1044,7 +1032,7 @@ end
 
 # The despread primitive on this backend's kernel; see `_despread_one_signal!` in
 # downconvert_and_correlate_cpu.jl. `code_replica_size` and `use_band_cache` are ignored:
-# the kernel generates its code block in its own scratch and has no band cache.
+# the kernel generates its replica block in its own scratch and has no band cache.
 @inline _despread_one_signal!(
     dc::_Int16DC,
     correlator_bank,

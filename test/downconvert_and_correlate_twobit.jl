@@ -110,7 +110,7 @@ end
 
 # Per-sample reference of the two-bit correlation: `{±1,±3}` measurement and carrier
 # (from the same SinCosLUT bit planes) times the code sign, summed with the kernel's
-# `blk` blocking so inputs are identical. The popcount expansion (see the header of
+# `block_length` blocking so inputs are identical. The popcount expansion (see the header of
 # src/downconvert_and_correlate_twobit.jl) must match exactly (small integers).
 function ref_twobit(
     cap,
@@ -125,7 +125,7 @@ function ref_twobit(
     start_index,
     nsamp,
     thr;
-    blk = 8192,
+    block_length = 8192,
 )
     NC = length(shifts)
     min_shift = Int(minimum(shifts))
@@ -134,9 +134,9 @@ function ref_twobit(
     cps_code = Float64(ustrip(code_freq / Hz)) / Float64(ustrip(fs / Hz))
     acc = zeros(ComplexF64, NC)
     bit(v, n) = (v[(n>>6)+1] >> (n & 63)) & 1
-    blk_off = 0
-    while blk_off < nsamp
-        len = min(blk, nsamp - blk_off)
+    block_offset = 0
+    while block_offset < nsamp
+        len = min(block_length, nsamp - block_offset)
         extb = zeros(Int8, len + span + 64)
         gen_code!(
             view(extb, 1:(len+span)),
@@ -144,7 +144,7 @@ function ref_twobit(
             prn,
             fs,
             code_freq,
-            code_phase + cps_code * blk_off,
+            code_phase + cps_code * block_offset,
             min_shift,
         )
         nwb = cld(len, 64)
@@ -159,12 +159,12 @@ function ref_twobit(
             cm,
             len,
             cps_car;
-            phase = carrier_phase + cps_car * blk_off,
+            phase = carrier_phase + cps_car * block_offset,
         )
         for n = 0:(len-1)
             sv = (1 - 2 * Int(bit(ss, n))) * (1 + 2 * Int(bit(sm, n)))
             cv = (1 - 2 * Int(bit(cs, n))) * (1 + 2 * Int(bit(cm, n)))
-            z = cap[start_index+blk_off+n]
+            z = cap[start_index+block_offset+n]
             re = real(z)
             im = imag(z)
             mr = (re < 0 ? -1 : 1) * (1 + 2 * (abs(Int(re)) >= thr))
@@ -176,7 +176,7 @@ function ref_twobit(
                 acc[k] += complex(code * DI, code * DQ)
             end
         end
-        blk_off += len
+        block_offset += len
     end
     acc
 end

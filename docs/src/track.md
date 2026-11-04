@@ -134,7 +134,7 @@ the `downconvert_and_correlator` keyword:
 
 - [`Int16ThreadedDownconvertAndCorrelator`](@ref) /
   [`Int16DownconvertAndCorrelator`](@ref): integer arithmetic, typically
-  ~1.3–2.9× faster. Its **required** `max_meas` is the front end's full scale
+  ~1.3–2.9× faster. Its **required** `full_scale` is the front end's full scale
   (the largest `|real|`/`|imag|`, e.g. `2^11` for a 12-bit ADC), which sizes the
   carrier replica against overflow; see [`Int16DownconvertAndCorrelator`](@ref)
   for why under-declaring it is catastrophic.
