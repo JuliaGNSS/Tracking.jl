@@ -20,7 +20,7 @@ using Tracking:
     track,
     downconvert_and_correlate,
     BandMeasurement,
-    get_sat_state,
+    get_tracked_sat,
     get_carrier_doppler,
     TrackedSignal,
     CPUThreadedDownconvertAndCorrelator,
@@ -92,7 +92,7 @@ function correlate_once(
         TrackedSat(sig, 1, cphase, cdopp; correlator_bank)
     ts = TrackState(sig, [sat])
     ts2 = downconvert_and_correlate(dc, meas, ts)
-    _completed_or_partial_correlator(first(get_sat_state(ts2, 1).signals))
+    _completed_or_partial_correlator(first(get_tracked_sat(ts2, 1).signals))
 end
 
 # First completed integration, or the live partial correlator if none completed
@@ -325,7 +325,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             beamformer = DefaultBeamformer(),
         )
         cs = first(
-            get_sat_state(
+            get_tracked_sat(
                 downconvert_and_correlate(
                     dc,
                     meas,
@@ -341,7 +341,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         satN = TrackedSat(ntuple(_ -> mksig(), N), 1, 100.0, 200Hz; tracking_loop = loop)
         tsN =
             downconvert_and_correlate(dc, meas, TrackState(sig, satN; tracking_loop = loop))
-        for s in get_sat_state(tsN, 1).signals
+        for s in get_tracked_sat(tsN, 1).signals
             @test get_prompt(s.correlator_bank) == get_prompt(cs)
             @test get_early(s.correlator_bank) == get_early(cs)
             @test get_late(s.correlator_bank) == get_late(cs)
@@ -383,7 +383,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         satN = TrackedSat(ntuple(_ -> mksig(), N), 1, 100.0, 200Hz; tracking_loop = loop)
         tsN =
             downconvert_and_correlate(dc, meas, TrackState(sig, satN; tracking_loop = loop))
-        for s in get_sat_state(tsN, 1).signals
+        for s in get_tracked_sat(tsN, 1).signals
             c = _completed_or_partial_correlator(s)
             @test length(get_prompt(c)) == M
             @test get_prompt(c) == get_prompt(cs)
@@ -474,7 +474,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         )
         for prn in prns
             alone = first(
-                get_sat_state(
+                get_tracked_sat(
                     downconvert_and_correlate(
                         dc,
                         meas,
@@ -494,7 +494,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
                     prn,
                 ).signals,
             ).correlator_bank
-            shared = first(get_sat_state(tsN, prn).signals).correlator_bank
+            shared = first(get_tracked_sat(tsN, prn).signals).correlator_bank
             @test get_correlator_outputs(shared) == get_correlator_outputs(alone)
         end
     end
@@ -516,7 +516,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         )
         for prn in prns
             alone = first(
-                get_sat_state(
+                get_tracked_sat(
                     downconvert_and_correlate(
                         dc,
                         meas,
@@ -525,7 +525,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
                     prn,
                 ).signals,
             ).correlator_bank
-            shared = first(get_sat_state(tsN, prn).signals).correlator_bank
+            shared = first(get_tracked_sat(tsN, prn).signals).correlator_bank
             @test get_prompt(shared) == get_prompt(alone)
             @test get_early(shared) == get_early(alone)
             @test get_late(shared) == get_late(alone)
@@ -598,7 +598,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             downconvert_and_correlator = OneBitThreadedDownconvertAndCorrelator(),
         )
         # Noisier than the integer/float paths, hence the wider tolerance.
-        @test get_carrier_doppler(get_sat_state(ts, 1)) ≈ cdopp atol = 15Hz
+        @test get_carrier_doppler(get_tracked_sat(ts, 1)) ≈ cdopp atol = 15Hz
     end
 end
 

@@ -52,7 +52,7 @@ while got_signal_chunk(rx)
     chunk = read_chunk!(rx)
     track!(chunk, track_state, sampling_frequency;
            downconvert_and_correlator = dc)
-    # ... read per-sat state e.g. via get_sat_state(track_state, group_key, prn) ...
+    # ... read per-sat state e.g. via get_tracked_sat(track_state, group_key, prn) ...
 end
 ```
 

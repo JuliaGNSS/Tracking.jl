@@ -1,7 +1,7 @@
 include("aqua.jl")
 include("api.jl")
 include("tracking_loops.jl")
-include("sat_state.jl")
+include("tracked_sat.jl")
 include("sample_parameters.jl")
 include("downconvert_and_correlate.jl")
 include("downconvert_and_correlate_int16.jl")

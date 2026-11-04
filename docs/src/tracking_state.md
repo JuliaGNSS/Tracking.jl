@@ -300,10 +300,10 @@ julia> track_state = add_satellite!(track_state; prn = 23, code_phase = 500.0, c
 
 julia> track_state = remove_satellite!(track_state; prn = 1);
 
-julia> haskey(get_sat_states(track_state, :default), 23)
+julia> haskey(get_tracked_sats(track_state, :default), 23)
 true
 
-julia> haskey(get_sat_states(track_state, :default), 1)
+julia> haskey(get_tracked_sats(track_state, :default), 1)
 false
 ```
 
@@ -499,9 +499,9 @@ julia> get_num_bits(track_state, :modern_gps, 11, GPSL1CA)  # per-signal by type
 ### Group accessors
 
 ```@docs
-Tracking.SatelliteDicts
-get_sat_states
-get_sat_state
+Tracking.TrackedSatDicts
+get_tracked_sats
+get_tracked_sat
 get_signal
 TrackingLoops.calc_carrier_phase_correction(::TrackState, ::Any, ::Any, ::Any)
 ```

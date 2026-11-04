@@ -21,7 +21,7 @@ using Tracking:
     step_tracking_loops!,
     get_carrier_doppler,
     get_loop_state,
-    get_sat_state
+    get_tracked_sat
 using TrackingLoops:
     AbstractTrackingLoop,
     ScalarTrackingLoop,
@@ -184,7 +184,7 @@ end
             else
                 feed!(track_state, k; carrier = 0.05)
             end
-            get_carrier_doppler(get_sat_state(track_state, :e1, 11))
+            get_carrier_doppler(get_tracked_sat(track_state, :e1, 11))
         end
     end
     @test dopplers((GalileoE1C(CBOC),)) == dopplers((GalileoE1C(CBOC), GalileoE1B(CBOC)))
@@ -207,7 +207,7 @@ end
         @test decoder isa typeof(GNSSDecoderState(GalileoE1B(CBOC), 11))
         @test isnothing(get_satellite_report(tracking_loop, GalileoE1B(CBOC), 11))
         @test tracking_loop.engine.next_slot_generation == 1
-        state = get_loop_state(get_sat_state(track_state, :e1, 11))
+        state = get_loop_state(get_tracked_sat(track_state, :e1, 11))
         @test state.slot_index == 1
     end
 end

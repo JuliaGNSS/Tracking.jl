@@ -14,15 +14,15 @@ using Tracking:
 @testset "PositionVelocityTime: SignalObservation from a tracked satellite" begin
     gpsl1 = GPSL1CA()
     decoder = GNSSDecoderState(gpsl1, 1)
-    sat_state = TrackedSat(gpsl1, 1, 123.0, 1234.0Hz)
+    tracked_sat = TrackedSat(gpsl1, 1, 123.0, 1234.0Hz)
 
-    observation = PositionVelocityTime.SignalObservation(decoder, gpsl1, sat_state)
+    observation = PositionVelocityTime.SignalObservation(decoder, gpsl1, tracked_sat)
 
     @test observation isa PositionVelocityTime.SignalObservation
     @test observation.decoder === decoder
     @test observation.signal === gpsl1
-    @test observation.code_phase == get_code_phase(sat_state)
-    @test observation.carrier_doppler == get_carrier_doppler(sat_state)
+    @test observation.code_phase == get_code_phase(tracked_sat)
+    @test observation.carrier_doppler == get_carrier_doppler(tracked_sat)
 end
 
 @testset "get_signal_observations from a TrackState" begin
@@ -51,7 +51,7 @@ end
     # The ranging signal defaults to the group's first.
     @test observations.gps[7].signal === first(track_state.groups.gps.signals)
     @test observations.gps[7].decoder === decoders.gps[7]
-    tracked = Tracking.get_sat_state(track_state, :gps, 7)
+    tracked = Tracking.get_tracked_sat(track_state, :gps, 7)
     @test observations.gps[7].code_phase == get_code_phase(tracked)
     @test observations.gps[7].carrier_doppler == get_carrier_doppler(tracked)
 

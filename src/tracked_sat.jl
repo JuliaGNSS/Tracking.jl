@@ -804,10 +804,11 @@ update_tracking_loop_on_new_sats(tracking_loop::AbstractTrackingLoop, _new_sats)
     tracking_loop
 
 """
-A tuple or named tuple of per-group satellite dictionaries, each a
-`Dictionary{I, <:TrackedSat}` keyed by PRN.
+A tuple or named tuple of per-group [`TrackedSat`](@ref) dictionaries, each a
+`Dictionary{I, <:TrackedSat}` keyed by PRN: what `TrackState(tracked_sats)` builds
+groups from and [`get_tracked_sats`](@ref) reads one group of.
 """
-const SatelliteDicts{N} = TupleLike{<:NTuple{N,Dictionary{<:Any,<:TrackedSat}}}
+const TrackedSatDicts{N} = TupleLike{<:NTuple{N,Dictionary{<:Any,<:TrackedSat}}}
 
 """
 $(SIGNATURES)
@@ -1001,10 +1002,10 @@ end
 """
 $(SIGNATURES)
 
-Get the satellite state for a specific satellite identifier.
+Get the [`TrackedSat`](@ref) of `prn` from a group's dictionary, or its only one.
 """
-get_sat_state(sats::Dictionary{<:Any,<:TrackedSat}, prn) = sats[prn]
-get_sat_state(sats::Dictionary{<:Any,<:TrackedSat}) = only(sats)
+get_tracked_sat(sats::Dictionary{<:Any,<:TrackedSat}, prn) = sats[prn]
+get_tracked_sat(sats::Dictionary{<:Any,<:TrackedSat}) = only(sats)
 
 function estimate_cn0(tsig::TrackedSignal)
     # The buffered prompts' SNR is a whole integration's, so divide by its time.

@@ -345,13 +345,13 @@ end
 end
 
 function TrackState(
-    satellites::SatelliteDicts;
+    tracked_sats::TrackedSatDicts;
     tracking_loop::AbstractTrackingLoop = _default_tracking_loop(),
     noise_estimators::Maybe{NamedTuple} = nothing,
     sample_index_offsets = nothing,
 )
-    foreach(d -> _assert_tracking_loop_types_match(d, tracking_loop), Tuple(satellites))
-    groups = map(_signal_group_from_dict, satellites)
+    foreach(d -> _assert_tracking_loop_types_match(d, tracking_loop), Tuple(tracked_sats))
+    groups = map(_signal_group_from_dict, tracked_sats)
     TrackState(
         groups,
         tracking_loop,
@@ -417,13 +417,13 @@ end
 """
 $(SIGNATURES)
 
-Get the per-group satellite dictionary for the given `group_key`.
+Get the group `group_key`'s dictionary of [`TrackedSat`](@ref)s, keyed by PRN.
 """
-function get_sat_states(
-    satellites::SatelliteDicts{N},
+function get_tracked_sats(
+    tracked_sats::TrackedSatDicts{N},
     group_key::Union{Symbol,Integer,Val},
 ) where {N}
-    _index_group(satellites, group_key)
+    _index_group(tracked_sats, group_key)
 end
 
 # Works for any group-shaped (named) tuple — per-group satellite dicts
@@ -431,19 +431,19 @@ end
 @inline _index_group(t, i::Union{Symbol,Integer}) = t[i]
 @inline _index_group(t, ::Val{M}) where {M} = t[M]
 
-function get_sat_states(satellites::SatelliteDicts{1})
-    get_sat_states(satellites, 1)
+function get_tracked_sats(tracked_sats::TrackedSatDicts{1})
+    get_tracked_sats(tracked_sats, 1)
 end
 
-function get_sat_states(
+function get_tracked_sats(
     track_state::TrackState{<:SignalGroups{N}},
     group_key::Union{Symbol,Integer,Val},
 ) where {N}
-    get_sat_states(map(g -> g.satellites, track_state.groups), group_key)
+    get_tracked_sats(map(g -> g.satellites, track_state.groups), group_key)
 end
 
-function get_sat_states(track_state::TrackState{<:SignalGroups{1}})
-    get_sat_states(map(g -> g.satellites, track_state.groups))
+function get_tracked_sats(track_state::TrackState{<:SignalGroups{1}})
+    get_tracked_sats(map(g -> g.satellites, track_state.groups))
 end
 
 """
@@ -465,20 +465,20 @@ function get_signal(track_state::TrackState{<:SignalGroups{1}})
     get_signal(track_state, 1)
 end
 
-function get_sat_state(
+function get_tracked_sat(
     track_state::TrackState{<:SignalGroups{N}},
     group_key::Union{Symbol,Integer,Val},
     prn,
 ) where {N}
-    get_sat_state(get_sat_states(track_state, group_key), prn)
+    get_tracked_sat(get_tracked_sats(track_state, group_key), prn)
 end
 
-function get_sat_state(track_state::TrackState{<:SignalGroups{1}}, prn)
-    get_sat_state(track_state, 1, prn)
+function get_tracked_sat(track_state::TrackState{<:SignalGroups{1}}, prn)
+    get_tracked_sat(track_state, 1, prn)
 end
 
-function get_sat_state(track_state::TrackState{<:SignalGroups{1}})
-    only(get_sat_states(track_state, 1))
+function get_tracked_sat(track_state::TrackState{<:SignalGroups{1}})
+    only(get_tracked_sats(track_state, 1))
 end
 
 """
@@ -821,19 +821,19 @@ function _make_default_tracked_sat_for_group(
 end
 
 # Sat-level accessors: shared by all signals on a sat.
-get_prn(track_state::TrackState, id...) = get_prn(get_sat_state(track_state, id...))
+get_prn(track_state::TrackState, id...) = get_prn(get_tracked_sat(track_state, id...))
 get_num_antennas(track_state::TrackState, id...) =
-    get_num_antennas(get_sat_state(track_state, id...))
+    get_num_antennas(get_tracked_sat(track_state, id...))
 get_code_phase(track_state::TrackState, id...) =
-    get_code_phase(get_sat_state(track_state, id...))
+    get_code_phase(get_tracked_sat(track_state, id...))
 get_code_doppler(track_state::TrackState, id...) =
-    get_code_doppler(get_sat_state(track_state, id...))
+    get_code_doppler(get_tracked_sat(track_state, id...))
 get_carrier_phase(track_state::TrackState, id...) =
-    get_carrier_phase(get_sat_state(track_state, id...))
+    get_carrier_phase(get_tracked_sat(track_state, id...))
 get_carrier_doppler(track_state::TrackState, id...) =
-    get_carrier_doppler(get_sat_state(track_state, id...))
+    get_carrier_doppler(get_tracked_sat(track_state, id...))
 get_next_sample_index(track_state::TrackState, id...) =
-    get_next_sample_index(get_sat_state(track_state, id...))
+    get_next_sample_index(get_tracked_sat(track_state, id...))
 
 """
 $(SIGNATURES)
@@ -866,7 +866,7 @@ function calc_carrier_phase_correction(
     sampling_frequency,
 ) where {N}
     group = _index_group(track_state.groups, group_key)
-    sat = get_sat_state(group.satellites, prn)
+    sat = get_tracked_sat(group.satellites, prn)
     # `track!` leaves the replica at the end of the measurement, the band's sample
     # offset, having run on the satellite's Doppler since its latest integration.
     band_grid_index = get(track_state.sample_index_offsets, get_band_id(group.band), 0)
@@ -912,13 +912,13 @@ for fn in (
     :get_preferred_num_code_periods_to_integrate,
 )
     @eval begin
-        $fn(track_state::TrackState, id...) = $fn(get_sat_state(track_state, id...))
+        $fn(track_state::TrackState, id...) = $fn(get_tracked_sat(track_state, id...))
         $fn(
             track_state::TrackState{<:SignalGroups},
             group_key::Union{Symbol,Integer,Val},
             prn,
             sig::_SignalSelector,
-        ) = $fn(get_sat_state(track_state, group_key, prn), sig)
+        ) = $fn(get_tracked_sat(track_state, group_key, prn), sig)
     end
 end
 
@@ -942,7 +942,10 @@ append_correlator_bank_output!(
     track_state::TrackState,
     output::CorrelatorBankOutput,
     id...,
-) = (append_correlator_bank_output!(get_sat_state(track_state, id...), output); track_state)
+) = (
+    append_correlator_bank_output!(get_tracked_sat(track_state, id...), output);
+    track_state
+)
 append_correlator_bank_output!(
     track_state::TrackState{<:SignalGroups},
     output::CorrelatorBankOutput,
@@ -950,7 +953,11 @@ append_correlator_bank_output!(
     prn,
     sig::_SignalSelector,
 ) = (
-    append_correlator_bank_output!(get_sat_state(track_state, group_key, prn), output, sig);
+    append_correlator_bank_output!(
+        get_tracked_sat(track_state, group_key, prn),
+        output,
+        sig,
+    );
     track_state
 )
 
@@ -1099,7 +1106,7 @@ function set_preferred_num_code_periods_to_integrate!(
 )
     _set_preferred_code_periods!(
         track_state,
-        get_sat_states(track_state, group_key),
+        get_tracked_sats(track_state, group_key),
         prn,
         num_code_periods,
         sig,
@@ -1114,7 +1121,7 @@ function set_preferred_num_code_periods_to_integrate!(
 )
     _set_preferred_code_periods!(
         track_state,
-        get_sat_states(track_state, group_key),
+        get_tracked_sats(track_state, group_key),
         prn,
         num_code_periods,
     )
@@ -1127,7 +1134,7 @@ function set_preferred_num_code_periods_to_integrate!(
 )
     _set_preferred_code_periods!(
         track_state,
-        get_sat_states(track_state),
+        get_tracked_sats(track_state),
         prn,
         num_code_periods,
     )
@@ -1150,7 +1157,7 @@ function set_preferred_num_code_periods_to_integrate!(
     track_state::TrackState{<:SignalGroups{1}},
     num_code_periods::Integer,
 )
-    sats = get_sat_states(track_state)
+    sats = get_tracked_sats(track_state)
     prn = only(keys(sats))
     sats[prn] = _set_sat_signal_preferred_code_periods(sats[prn], Int(num_code_periods))
     track_state
@@ -1212,7 +1219,7 @@ function reset_loop_filters!(
     group_key::Union{Symbol,Integer,Val},
     prn,
 )
-    sats = get_sat_states(track_state, group_key)
+    sats = get_tracked_sats(track_state, group_key)
     sats[prn] = _reset_sat_loop_filters(track_state, sats[prn])
     track_state
 end

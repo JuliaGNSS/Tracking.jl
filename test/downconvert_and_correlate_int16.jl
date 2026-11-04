@@ -19,7 +19,7 @@ using Tracking:
     track,
     downconvert_and_correlate,
     BandMeasurement,
-    get_sat_state,
+    get_tracked_sat,
     get_carrier_doppler,
     TrackedSignal,
     CPUThreadedDownconvertAndCorrelator,
@@ -83,7 +83,7 @@ function correlate_once(dc, sig, fs, nsamp, cdopp, cphase; correlator_bank = not
         TrackedSat(sig, 1, cphase, cdopp; correlator_bank)
     ts = TrackState(sig, [sat])
     ts2 = downconvert_and_correlate(dc, meas, ts)
-    _completed_or_partial_correlator(first(get_sat_state(ts2, 1).signals))
+    _completed_or_partial_correlator(first(get_tracked_sat(ts2, 1).signals))
 end
 
 # First completed integration from `correlator_bank_outputs`, or the live (partial)
@@ -183,7 +183,7 @@ end
             [TrackedSat(sig, 1, 100.0, 200Hz; num_antennas = NumAntennas(M))],
         )
         run(dc) = _completed_or_partial_correlator(
-            first(get_sat_state(downconvert_and_correlate(dc, meas, mk()), 1).signals),
+            first(get_tracked_sat(downconvert_and_correlate(dc, meas, mk()), 1).signals),
         )
         cf = run(CPUThreadedDownconvertAndCorrelator())
         ci = run(Int16ThreadedDownconvertAndCorrelator(TEST_MAX_MEAS))
@@ -229,7 +229,7 @@ end
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0; peak = mm)
         meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
         corr(dc) = first(
-            get_sat_state(
+            get_tracked_sat(
                 downconvert_and_correlate(
                     dc,
                     meas,
@@ -277,7 +277,7 @@ end
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0; peak = 2^15 - 1)
         meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
         corr(dc) = first(
-            get_sat_state(
+            get_tracked_sat(
                 downconvert_and_correlate(
                     dc,
                     meas,
@@ -379,7 +379,7 @@ end
         )
         # single-signal reference
         cs = first(
-            get_sat_state(
+            get_tracked_sat(
                 downconvert_and_correlate(
                     dc,
                     meas,
@@ -396,7 +396,7 @@ end
         satN = TrackedSat(ntuple(_ -> mksig(), N), 1, 100.0, 200Hz; tracking_loop = loop)
         tsN =
             downconvert_and_correlate(dc, meas, TrackState(sig, satN; tracking_loop = loop))
-        for s in get_sat_state(tsN, 1).signals
+        for s in get_tracked_sat(tsN, 1).signals
             @test get_prompt(s.correlator_bank) ≈ get_prompt(cs)
             @test get_early(s.correlator_bank) ≈ get_early(cs)
             @test get_late(s.correlator_bank) ≈ get_late(cs)
@@ -459,7 +459,7 @@ end
         cap = complex.(round.(Int16, 2048 .* sign.(real.(code))), zero(Int16))
         meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
         corr(dc) = first(
-            get_sat_state(
+            get_tracked_sat(
                 downconvert_and_correlate(
                     dc,
                     meas,
@@ -565,7 +565,7 @@ end
             ),
         )
         # Converges back toward the true Doppler from the 20 Hz initial offset.
-        @test get_carrier_doppler(get_sat_state(ts, 1)) ≈ cdopp atol = 10Hz
+        @test get_carrier_doppler(get_tracked_sat(ts, 1)) ≈ cdopp atol = 10Hz
     end
 end
 

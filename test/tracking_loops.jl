@@ -32,8 +32,8 @@ using Tracking:
     get_code_doppler,
     get_last_fully_integrated_beamformed_prompt,
     get_beamformed_prompts,
-    get_sat_state,
-    get_sat_states,
+    get_tracked_sat,
+    get_tracked_sats,
     merge_sats
 import TrackingLoops
 using TrackingLoops:
@@ -69,24 +69,24 @@ _completed_signal(sig, correlator_bank, num_samples) = TrackedSignal(
     @test pll_and_dll.bandwidths == LoopBandwidths()
 
     gpsl1 = GPSL1CA()
-    sat_state = TrackedSat(gpsl1, 1, 0.5, 100.0Hz)
-    from_sat_state = @inferred init_loop_state(
+    tracked_sat = TrackedSat(gpsl1, 1, 0.5, 100.0Hz)
+    from_tracked_sat = @inferred init_loop_state(
         ScalarTrackingLoop(
             ThirdOrderBilinearLF,
             SecondOrderBilinearLF;
             wide_carrier_loop_filter_bandwidth = 25.0Hz,
             code_loop_filter_bandwidth = 2.0Hz,
         ),
-        sat_state,
+        tracked_sat,
     )
-    @test from_sat_state.bandwidths.wide_carrier == 25.0Hz
-    @test from_sat_state.bandwidths.code == 2.0Hz
+    @test from_tracked_sat.bandwidths.wide_carrier == 25.0Hz
+    @test from_tracked_sat.bandwidths.code == 2.0Hz
 
-    preserved = @inferred ScalarLoopState(from_sat_state)
-    @test preserved.bandwidths == from_sat_state.bandwidths
+    preserved = @inferred ScalarLoopState(from_tracked_sat)
+    @test preserved.bandwidths == from_tracked_sat.bandwidths
 
     overridden = @inferred ScalarLoopState(
-        from_sat_state;
+        from_tracked_sat;
         bandwidths = LoopBandwidths(; wide_carrier = 30.0Hz, code = 2.0Hz),
     )
     @test overridden.bandwidths.wide_carrier == 30.0Hz
@@ -104,7 +104,7 @@ end
 
     tracking_loop = ScalarTrackingLoop()
 
-    sat_state = TrackedSat(gpsl1, prn, code_phase, carrier_doppler; tracking_loop)
+    tracked_sat = TrackedSat(gpsl1, prn, code_phase, carrier_doppler; tracking_loop)
 
     # No completed integration: nothing changes.
     num_samples = 2000
@@ -113,10 +113,10 @@ end
         SVector(1000.0 + 10im, 2000.0 + 20im, 750.0 + 10im),
     )
     sat_state_after_small_integration = TrackedSat(
-        sat_state;
+        tracked_sat;
         signals = (
             TrackedSignal(
-                only(sat_state.signals);
+                only(tracked_sat.signals);
                 num_integrated_samples = num_samples,
                 correlator_bank,
             ),
@@ -132,14 +132,14 @@ end
     @test get_code_doppler(new_track_state) ==
           get_chip_rate_to_center_frequency_ratio(gpsl1) * carrier_doppler
     @test get_last_fully_integrated_beamformed_prompt(new_track_state) == 0.0
-    @test isempty(get_beamformed_prompts(get_sat_state(new_track_state, prn)))
+    @test isempty(get_beamformed_prompts(get_tracked_sat(new_track_state, prn)))
 
     # One completed integration.
     num_samples = 5000
     sat_state_after_full_integration = TrackedSat(
-        sat_state;
+        tracked_sat;
         signals = (
-            _completed_signal(only(sat_state.signals), correlator_bank, num_samples),
+            _completed_signal(only(tracked_sat.signals), correlator_bank, num_samples),
         ),
     )
     track_state = TrackState(gpsl1, sat_state_after_full_integration; tracking_loop)
@@ -154,7 +154,7 @@ end
         new_track_state_after_full_integration,
     ) == 0.4 + 0.004im
     let prompts = get_beamformed_prompts(
-            get_sat_state(new_track_state_after_full_integration, prn),
+            get_tracked_sat(new_track_state_after_full_integration, prn),
         )
         @test length(prompts) == 1
         @test prompts[1] == 0.4 + 0.004im
@@ -334,20 +334,20 @@ end
 
 @testset "Bandwidths propagate through ScalarTrackingLoop constructor" begin
     gpsl1 = GPSL1CA()
-    sat_state = TrackedSat(gpsl1, 1, 0.5, 100.0Hz)
+    tracked_sat = TrackedSat(gpsl1, 1, 0.5, 100.0Hz)
     tracking_loop = ScalarTrackingLoop(;
         wide_carrier_loop_filter_bandwidth = 22.0Hz,
         code_loop_filter_bandwidth = 1.5Hz,
     )
-    de_state = init_loop_state(tracking_loop, sat_state)
+    de_state = init_loop_state(tracking_loop, tracked_sat)
     @test de_state.bandwidths.wide_carrier == 22.0Hz
     @test de_state.bandwidths.code == 1.5Hz
 
     bumped = ScalarTrackingLoop(tracking_loop; wide_carrier_loop_filter_bandwidth = 30.0Hz)
-    @test init_loop_state(bumped, sat_state).bandwidths.wide_carrier == 30.0Hz
-    @test init_loop_state(bumped, sat_state).bandwidths.code == 1.5Hz  # unchanged
+    @test init_loop_state(bumped, tracked_sat).bandwidths.wide_carrier == 30.0Hz
+    @test init_loop_state(bumped, tracked_sat).bandwidths.code == 1.5Hz  # unchanged
     preserved = ScalarTrackingLoop(tracking_loop)
-    @test init_loop_state(preserved, sat_state).bandwidths == de_state.bandwidths
+    @test init_loop_state(preserved, tracked_sat).bandwidths == de_state.bandwidths
 end
 
 @testset "merge_sats with matching tracking loop carries through bandwidths" begin
@@ -363,7 +363,7 @@ end
     sat2 = TrackedSat(gpsl1, 2, 0.25, 200.0Hz; tracking_loop)
     merged = merge_sats(track_state, sat2)
 
-    de_state = get_sat_states(merged)[2].loop_state
+    de_state = get_tracked_sats(merged)[2].loop_state
     @test de_state.bandwidths.wide_carrier == 22.0Hz
     @test de_state.bandwidths.code == 1.5Hz
 end
@@ -423,7 +423,7 @@ end
         )
         track_state = TrackState(; signal, tracking_loop)
         track_state = add_satellite!(track_state; prn = 1, carrier_doppler = 100.0Hz)
-        sats = get_sat_states(track_state)
+        sats = get_tracked_sats(track_state)
         sat = sats[1]
         sats[1] = TrackedSat(
             sat;
@@ -441,7 +441,7 @@ end
             Int(sampling_frequency * get_code_length(signal) / get_chip_rate(signal))
         prompts = ComplexF64[]
         for num_code_periods in code_periods_per_integration
-            sat = get_sat_states(track_state)[1]
+            sat = get_tracked_sats(track_state)[1]
             samples = num_code_periods * one_code_period
             append_correlator_bank_output!(
                 only(sat.signals),
@@ -450,7 +450,9 @@ end
             step_tracking_loops!(track_state, _meas_l1(sampling_frequency))
             push!(
                 prompts,
-                get_last_fully_integrated_beamformed_prompt(get_sat_states(track_state)[1]),
+                get_last_fully_integrated_beamformed_prompt(
+                    get_tracked_sats(track_state)[1],
+                ),
             )
         end
         tracking_loop.integrations, prompts
@@ -550,7 +552,7 @@ end
         noisy(prompt) = prompt + 0.05 * randn(rng, ComplexF64)
         step!(prompt, k) = begin
             append_correlator_bank_output!(
-                get_sat_state(track_state, prn),
+                get_tracked_sat(track_state, prn),
                 correlator_output(prompt, k),
             )
             with_logger(NullLogger()) do
@@ -558,10 +560,10 @@ end
             end
         end
         k = 0
-        while !is_bit_or_secondary_code_synced(get_sat_state(track_state, prn)) && k < 200
+        while !is_bit_or_secondary_code_synced(get_tracked_sat(track_state, prn)) && k < 200
             step!(noisy(sign * chip(k) * chip(0)), (k += 1) * num_samples)
         end
-        @test is_bit_or_secondary_code_synced(get_sat_state(track_state, prn))
+        @test is_bit_or_secondary_code_synced(get_tracked_sat(track_state, prn))
         num_pre_sync = length(tracking_loop.integrations)
         @test all(r -> r[1] == 0, tracking_loop.integrations)
         for _ = 1:10

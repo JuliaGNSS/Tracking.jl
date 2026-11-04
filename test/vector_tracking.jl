@@ -43,7 +43,7 @@ using Tracking:
     get_carrier_doppler,
     get_code_doppler,
     get_loop_state,
-    get_sat_state
+    get_tracked_sat
 using TrackingLoops:
     VectorTrackingLoop,
     get_navigation_solution,
@@ -221,15 +221,15 @@ end
                 # The residual frequency here is too small for the truth to tell the
                 # sample the correction is read at, so pin it to the end of this chunk
                 # on the test's own count.
-                sat_state = get_sat_state(track_state, decoder.prn)
+                tracked_sat = get_tracked_sat(track_state, decoder.prn)
                 words = ConstantNCOCommand(
-                    ustrip(Hz, get_carrier_doppler(sat_state)),
-                    ustrip(Hz, get_code_doppler(sat_state)),
+                    ustrip(Hz, get_carrier_doppler(tracked_sat)),
+                    ustrip(Hz, get_code_doppler(tracked_sat)),
                 )
                 corrections_at_chunk_end &=
                     calc_carrier_phase_correction(track_state, decoder.prn, FS * Hz) ==
                     calc_carrier_phase_correction(
-                        get_loop_state(sat_state),
+                        get_loop_state(tracked_sat),
                         words,
                         (k + 1) * CHUNK,
                         FS * Hz,

@@ -36,7 +36,7 @@ using Tracking:
     get_last_fully_integrated_correlator,
     get_beamformed_prompts,
     get_num_integrated_samples,
-    get_sat_state,
+    get_tracked_sat,
     get_loop_state,
     reset_loop_filters!
 import TrackingLoops
@@ -178,12 +178,12 @@ end
         history = Tuple{typeof(1.0Hz),Float64}[]
         for chunk in chunks
             track_state = track(chunk, track_state, fs)
-            sat_state = get_sat_state(track_state, 1)
-            push!(history, (get_carrier_doppler(sat_state), get_code_phase(sat_state)))
+            tracked_sat = get_tracked_sat(track_state, 1)
+            push!(history, (get_carrier_doppler(tracked_sat), get_code_phase(tracked_sat)))
         end
         track_state = track(first(chunks), reset_loop_filters!(track_state), fs)
-        sat_state = get_sat_state(track_state, 1)
-        push!(history, (get_carrier_doppler(sat_state), get_code_phase(sat_state)))
+        tracked_sat = get_tracked_sat(track_state, 1)
+        push!(history, (get_carrier_doppler(tracked_sat), get_code_phase(tracked_sat)))
         # A scalar loop's replica is its carrier estimate; so is a satellite's
         # out of the vector loop.
         @test calc_carrier_phase_correction(track_state, 1, fs) == 0.0
@@ -199,7 +199,7 @@ end
     )
     referenced, track_state = run(DelayCompensatedTrackingLoop())
     @test referenced == narrow_conventional
-    @test get_loop_state(get_sat_state(track_state, 1)) isa ScalarLoopState
+    @test get_loop_state(get_tracked_sat(track_state, 1)) isa ScalarLoopState
     @test abs(conventional[200][1] - carrier_doppler) < 5Hz
     for (tracking_loop, scalar) in (
         (VectorTrackingLoop(gpsl1), conventional),
@@ -210,7 +210,7 @@ end
     )
         vector, track_state = run(tracking_loop)
         @test vector == scalar
-        @test get_loop_state(get_sat_state(track_state, 1)) isa VectorLoopState
+        @test get_loop_state(get_tracked_sat(track_state, 1)) isa VectorLoopState
     end
 end
 
@@ -263,7 +263,7 @@ end
     track_state =
         add_satellite!(track_state; prn = 1, code_phase = 100.2, carrier_doppler = 1005.0Hz)
     stage(prn) = TrackingLoops.get_carrier_loop_stage(
-        get_loop_state(get_sat_state(track_state, prn)),
+        get_loop_state(get_tracked_sat(track_state, prn)),
     )
     @test stage(1) == TrackingLoops.FLL_ASSISTED_PLL
     for chunk in chunks
@@ -291,7 +291,7 @@ end
         end
         # No `reseed_loop_state` method: the reset re-initializes.
         reset_loop_filters!(track_state)
-        get_sat_state(track_state, 1)
+        get_tracked_sat(track_state, 1)
     end
     reference = run(ScalarTrackingLoop(ThirdOrderAssistedBilinearLF))
     counted = run(CountingTrackingLoop(ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)))
@@ -413,7 +413,7 @@ end
         tracking_loop =
             use_assisted ? ScalarTrackingLoop(ThirdOrderAssistedBilinearLF) :
             ScalarTrackingLoop()
-        sat_states = [
+        tracked_sats = [
             TrackedSat(
                 gpsl1,
                 1,
@@ -422,7 +422,7 @@ end
                 tracking_loop,
             ),
         ]
-        track_state = TrackState(gpsl1, sat_states; tracking_loop)
+        track_state = TrackState(gpsl1, tracked_sats; tracking_loop)
 
         samples =
             cis.(
@@ -988,7 +988,7 @@ end
 
     signal1 = make_signal(10, π / 2, start_code_phase)
     track_state = track(signal1, track_state, sampling_frequency)
-    sat = get_sat_state(track_state, prn)
+    sat = get_tracked_sat(track_state, prn)
     prompts1 = get_beamformed_prompts(sat)
     @test prompts1 isa Vector{ComplexF64}
     @test length(prompts1) == 10
@@ -998,7 +998,7 @@ end
     # The buffer is reset per call (5, not 15) and reused, not reallocated.
     signal2 = make_signal(5, π / 2, start_code_phase)
     track_state = track(signal2, track_state, sampling_frequency)
-    sat = get_sat_state(track_state, prn)
+    sat = get_tracked_sat(track_state, prn)
     prompts2 = get_beamformed_prompts(sat)
     @test length(prompts2) == 5
     @test prompts2[end] == get_last_fully_integrated_beamformed_prompt(track_state)
@@ -1007,7 +1007,7 @@ end
     # No completed integration: the buffer empties.
     signal3 = zeros(ComplexF64, samples_per_code ÷ 4)
     track_state = track(signal3, track_state, sampling_frequency)
-    prompts3 = get_beamformed_prompts(get_sat_state(track_state, prn))
+    prompts3 = get_beamformed_prompts(get_tracked_sat(track_state, prn))
     @test isempty(prompts3)
     @test prompts3 === buffer_ref
 end
@@ -1191,7 +1191,7 @@ end
         track!(build_signal(code_phase, carrier_phase), track_state, sampling_frequency)
     end
 
-    sat = get_sat_state(track_state, :modern_gps, prn)
+    sat = get_tracked_sat(track_state, :modern_gps, prn)
     @test length(get_beamformed_prompts(sat.signals[1])) > 0  # L1C_P
     @test length(get_beamformed_prompts(sat.signals[2])) > 0  # L1C_D
     @test length(get_beamformed_prompts(sat.signals[3])) > 0  # L1CA
@@ -1237,7 +1237,7 @@ end
         push!(prompts, get_prompt(get_last_fully_integrated_correlator(track_state, prn)))
     end
 
-    sat = get_sat_state(track_state, prn)
+    sat = get_tracked_sat(track_state, prn)
 
     @test is_bit_or_secondary_code_synced(sat)
     # A wedged satellite grows `num_integrated_samples` without bound and freezes

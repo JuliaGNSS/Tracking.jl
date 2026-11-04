@@ -364,7 +364,7 @@ end
         noise_estimators = (GPSL1CA = CorrelatorNoiseEstimator(),),
     )
     add_satellite!(ts; prn = 1, group_key = :with_sats, carrier_doppler = 0.0Hz)
-    @test isempty(Tracking.get_sat_states(ts, :empty_first))
+    @test isempty(Tracking.get_tracked_sats(ts, :empty_first))
     track!((L1 = BandMeasurement(_sky(-Inf; seed = 11), FS),), ts)
     @test Base.length(ts.noise_estimators.GPSL1CA) == 10
     @test ustrip(Hz^-1, get_noise_density(ts.noise_estimators.GPSL1CA)) ≈ 1.0 rtol = 0.3

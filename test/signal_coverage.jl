@@ -27,7 +27,7 @@ using Tracking:
     get_code_phase,
     get_num_bits,
     get_preferred_num_code_periods_to_integrate,
-    get_sat_state,
+    get_tracked_sat,
     track
 import TrackingLoops
 using TrackingLoops:
@@ -158,15 +158,15 @@ end
 
     track_state = TrackState(signal, [TrackedSat(signal, prn, start_code_phase, 0.0Hz)])
     track_state = track(samples, track_state, sampling_frequency)
-    sat_state = get_sat_state(track_state, prn)
+    tracked_sat = get_tracked_sat(track_state, prn)
 
     # A secondary-code lock may snap by whole primary periods.
-    @test mod(get_code_phase(sat_state), code_length) ≈ start_code_phase atol = 0.1
+    @test mod(get_code_phase(tracked_sat), code_length) ≈ start_code_phase atol = 0.1
 
     # A dataless signal broadcasts no bits and produces none.
     if iszero(get_bit_rate(signal))
         @test get_code_periods_per_bit(signal) == 0
-        @test get_num_bits(sat_state) == 0
+        @test get_num_bits(tracked_sat) == 0
     else
         # A bit must be a whole number of code periods.
         code_periods_per_bit = get_code_periods_per_bit(signal)

@@ -31,7 +31,7 @@ using Tracking:
     get_last_fully_integrated_num_code_blocks,
     get_num_bits,
     get_preferred_num_code_periods_to_integrate,
-    get_sat_state,
+    get_tracked_sat,
     track
 import TrackingLoops
 using TrackingLoops:
@@ -119,13 +119,14 @@ const CODE_PERIODS_PER_CYCLE = 31
 
         track_state = TrackState(e5a_qp, [TrackedSat(e5a_qp, prn, start_code_phase, 0.0Hz)])
         track_state = track(samples, track_state, sampling_frequency)
-        sat_state = get_sat_state(track_state, prn)
+        tracked_sat = get_tracked_sat(track_state, prn)
 
-        @test get_code_phase(sat_state) ≈ start_code_phase atol = 0.1
-        @test is_bit_or_secondary_code_synced(sat_state) == true
-        @test get_last_fully_integrated_num_code_blocks(sat_state) == CODE_PERIODS_PER_CYCLE
+        @test get_code_phase(tracked_sat) ≈ start_code_phase atol = 0.1
+        @test is_bit_or_secondary_code_synced(tracked_sat) == true
+        @test get_last_fully_integrated_num_code_blocks(tracked_sat) ==
+              CODE_PERIODS_PER_CYCLE
 
-        @test get_num_bits(sat_state) == 0
+        @test get_num_bits(tracked_sat) == 0
     end
 
     @testset "Pulls a Doppler offset in over 2 ms integrations" begin
@@ -157,15 +158,16 @@ const CODE_PERIODS_PER_CYCLE = 31
                 sampling_frequency,
             )
         end
-        sat_state = get_sat_state(track_state, prn)
+        tracked_sat = get_tracked_sat(track_state, prn)
 
-        @test get_carrier_doppler(sat_state) ≈ doppler atol = 2.0Hz
+        @test get_carrier_doppler(tracked_sat) ≈ doppler atol = 2.0Hz
         # On the real axis, with no energy lost to the 2 ms integration.
-        prompt = Tracking.get_last_fully_integrated_beamformed_prompt(sat_state)
+        prompt = Tracking.get_last_fully_integrated_beamformed_prompt(tracked_sat)
         @test real(prompt) / abs(prompt) > 0.9
         @test abs(prompt) > 0.9
-        @test get_last_fully_integrated_num_code_blocks(sat_state) == CODE_PERIODS_PER_CYCLE
-        @test get_num_bits(sat_state) == 0
+        @test get_last_fully_integrated_num_code_blocks(tracked_sat) ==
+              CODE_PERIODS_PER_CYCLE
+        @test get_num_bits(tracked_sat) == 0
         @test estimate_cn0(track_state, prn) > 40.0dBHz
     end
 end

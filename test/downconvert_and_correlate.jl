@@ -13,7 +13,7 @@ using Tracking:
     downconvert_and_correlate,
     get_correlator_bank,
     get_correlator_bank_outputs,
-    get_sat_state
+    get_tracked_sat
 import TrackingLoops
 using TrackingLoops:
     AbstractCorrelatorBank,
@@ -45,7 +45,7 @@ end
     # src/downconvert_and_correlate.jl). Each check uses its own TrackState so the
     # reused `correlator_bank_outputs` buffer is not carried between calls.
     only_output(track_state, prn) =
-        only(get_correlator_bank_outputs(only(get_sat_state(track_state, prn).signals)))
+        only(get_correlator_bank_outputs(only(get_tracked_sat(track_state, prn).signals)))
 
     samples =
         gen_code(

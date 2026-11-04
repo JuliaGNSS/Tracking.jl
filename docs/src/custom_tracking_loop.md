@@ -160,7 +160,7 @@ julia> track_state = add_satellite!(track_state; prn = 1, code_phase = 0.0, carr
 
 julia> track_state = track(zeros(ComplexF64, 4000), track_state, 4e6Hz);
 
-julia> get_loop_state(get_sat_state(track_state, 1))
+julia> get_loop_state(get_tracked_sat(track_state, 1))
 MyLoopState()
 ```
 

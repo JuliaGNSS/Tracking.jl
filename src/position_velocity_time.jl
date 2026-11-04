@@ -4,21 +4,21 @@
 # it (through TrackingLoops), so that would close a dependency cycle.
 
 """
-    PositionVelocityTime.SignalObservation(decoder::GNSSDecoderState, signal, sat_state::TrackedSat)
+    PositionVelocityTime.SignalObservation(decoder::GNSSDecoderState, signal, tracked_sat::TrackedSat)
 
-One tracked satellite's code phase and carrier Doppler (from [`get_sat_state`](@ref))
+One tracked satellite's code phase and carrier Doppler (from [`get_tracked_sat`](@ref))
 paired with its decoded navigation data, ranging on `signal`.
 """
 function PositionVelocityTime.SignalObservation(
     decoder::GNSSDecoderState,
     signal::AbstractGNSSSignal,
-    sat_state::TrackedSat,
+    tracked_sat::TrackedSat,
 )
     PositionVelocityTime.SignalObservation(
         decoder,
         signal,
-        get_code_phase(sat_state),
-        get_carrier_doppler(sat_state),
+        get_code_phase(tracked_sat),
+        get_carrier_doppler(tracked_sat),
     )
 end
 

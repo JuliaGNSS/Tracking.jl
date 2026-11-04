@@ -22,8 +22,8 @@ using Tracking:
     SignalGroup,
     add_satellite!,
     add_satellite,
-    get_sat_state,
-    get_sat_states,
+    get_tracked_sat,
+    get_tracked_sats,
     get_prn,
     get_carrier_doppler,
     get_code_doppler
@@ -31,7 +31,7 @@ using TrackingLoops: NumAntennas, ScalarTrackingLoop, ScalarLoopState
 
 @testset "TrackState(; signals = ...) — single-group shortcut" begin
     track_state = TrackState(; signal = GPSL1CA())
-    @test isempty(get_sat_states(track_state, :default))
+    @test isempty(get_tracked_sats(track_state, :default))
 end
 
 @testset "TrackState constructor argument errors" begin
@@ -45,7 +45,7 @@ end
 @testset "TrackState(; signals = (bare tuple,)) wraps to :default group" begin
     # A bare tuple becomes `(default = signals,)`.
     ts = TrackState(; signals = (GPSL1CA(),))
-    @test isempty(get_sat_states(ts, :default))
+    @test isempty(get_tracked_sats(ts, :default))
 end
 
 @testset "TrackState rebuilds SignalGroup slot when tracking loop types differ" begin
@@ -57,7 +57,7 @@ end
     sg = SignalGroup((GPSL1CA(),); num_antennas = NumAntennas(1))  # default tracking loop
     ts = TrackState(; signals = (legacy = sg,), tracking_loop = custom)
     ts = add_satellite!(ts; prn = 1, group_key = :legacy, carrier_doppler = 0.0Hz)
-    de_state = get_sat_state(ts, :legacy, 1).loop_state
+    de_state = get_tracked_sat(ts, :legacy, 1).loop_state
     @test de_state.bandwidths.wide_carrier == 22.0Hz
 end
 
@@ -69,21 +69,21 @@ end
     sg_template = SignalGroup((GPSL1CA(),); num_antennas = NumAntennas(1), tracking_loop)
     insert!(sg_template.satellites, 1, sat)
     ts = TrackState(; signals = (legacy = sg_template,), tracking_loop)
-    @test length(get_sat_states(ts, :legacy)) == 1
+    @test length(get_tracked_sats(ts, :legacy)) == 1
 end
 
 @testset "TrackState(; signals = ...) — multi-group NamedTuple" begin
     track_state =
         TrackState(; signals = (legacy_gps = (GPSL1CA(),), galileo = (GalileoE1B(CBOC),)))
-    @test isempty(get_sat_states(track_state, :legacy_gps))
-    @test isempty(get_sat_states(track_state, :galileo))
+    @test isempty(get_tracked_sats(track_state, :legacy_gps))
+    @test isempty(get_tracked_sats(track_state, :galileo))
 end
 
 @testset "add_satellite! — single-group shortcut (no `group_key=`)" begin
     track_state = TrackState(; signal = GPSL1CA())
     track_state =
         add_satellite!(track_state; prn = 11, code_phase = 10.5, carrier_doppler = 1234.0Hz)
-    @test length(get_sat_states(track_state, :default)) == 1
+    @test length(get_tracked_sats(track_state, :default)) == 1
     @test get_prn(track_state, :default, 11) == 11
     @test get_carrier_doppler(track_state, :default, 11) == 1234.0Hz
     @test get_code_doppler(track_state, :default, 11) ≈
@@ -101,8 +101,8 @@ end
         group_key = :galileo,
         carrier_doppler = 2000.0Hz,
     )
-    @test length(get_sat_states(track_state, :legacy)) == 1
-    @test length(get_sat_states(track_state, :galileo)) == 1
+    @test length(get_tracked_sats(track_state, :legacy)) == 1
+    @test length(get_tracked_sats(track_state, :galileo)) == 1
     @test get_carrier_doppler(track_state, :legacy, 5) == 500.0Hz
     @test get_carrier_doppler(track_state, :galileo, 11) == 2000.0Hz
 end
@@ -126,15 +126,15 @@ end
     track_state = TrackState(; signal = GPSL1CA())
     track_state = add_satellite!(track_state; prn = 7, carrier_doppler = 100.0Hz)
     track_state = add_satellite!(track_state; prn = 7, carrier_doppler = 200.0Hz)
-    @test length(get_sat_states(track_state, :default)) == 1
+    @test length(get_tracked_sats(track_state, :default)) == 1
     @test get_carrier_doppler(track_state, :default, 7) == 200.0Hz
 end
 
 @testset "add_satellite — immutable variant" begin
     track_state = TrackState(; signal = GPSL1CA())
     new_track_state = add_satellite(track_state; prn = 3, carrier_doppler = 50.0Hz)
-    @test isempty(get_sat_states(track_state, :default))
-    @test length(get_sat_states(new_track_state, :default)) == 1
+    @test isempty(get_tracked_sats(track_state, :default))
+    @test length(get_tracked_sats(new_track_state, :default)) == 1
     @test get_carrier_doppler(new_track_state, :default, 3) == 50.0Hz
 end
 
@@ -165,7 +165,7 @@ end
     )
     track_state = TrackState(; signal = GPSL1CA(), tracking_loop = custom)
     track_state = add_satellite!(track_state; prn = 4, carrier_doppler = 0.0Hz)
-    de_state = get_sat_state(track_state, :default, 4).loop_state
+    de_state = get_tracked_sat(track_state, :default, 4).loop_state
     @test de_state isa ScalarLoopState
     @test de_state.bandwidths.wide_carrier == 22.0Hz
     @test de_state.bandwidths.code == 1.5Hz
@@ -181,7 +181,7 @@ include("acquisition_test_helpers.jl")
     @test ret === ts
     @test get_prn(ts, :default, 7) == 7
     @test get_carrier_doppler(ts, :default, 7) == 100.0Hz
-    sat = get_sat_state(ts, :default, 7)
+    sat = get_tracked_sat(ts, :default, 7)
     @test sat.code_phase == 524.6
 end
 
@@ -190,7 +190,7 @@ end
     acq = _make_acq(GPSL1CA(), 9, 12.5, -250.0Hz)
     new_ts = add_satellite(ts, acq)
     @test new_ts !== ts
-    @test isempty(get_sat_states(ts, :default))
+    @test isempty(get_tracked_sats(ts, :default))
     @test get_prn(new_ts, :default, 9) == 9
     @test get_carrier_doppler(new_ts, :default, 9) == -250.0Hz
 end
@@ -203,7 +203,7 @@ end
         _make_acq(GPSL1CA(), 3, 20.0, 300.0Hz),
     ]
     ts = add_satellite!(ts, acqs)
-    @test length(get_sat_states(ts, :default)) == 3
+    @test length(get_tracked_sats(ts, :default)) == 3
     @test get_carrier_doppler(ts, :default, 2) == 200.0Hz
 end
 
@@ -216,8 +216,8 @@ end
     ]
     new_ts = add_satellite(ts, acqs)
     @test new_ts !== ts
-    @test isempty(get_sat_states(ts, :default))            # input untouched
-    @test length(get_sat_states(new_ts, :default)) == 3
+    @test isempty(get_tracked_sats(ts, :default))            # input untouched
+    @test length(get_tracked_sats(new_ts, :default)) == 3
     @test get_carrier_doppler(new_ts, :default, 2) == 200.0Hz
 end
 
@@ -318,7 +318,7 @@ end
 @testset "TrackState(acq) — single-acq convenience" begin
     acq = _make_acq(GPSL1CA(), 7, 524.6, 100.0Hz)
     ts = TrackState(acq)
-    @test length(get_sat_states(ts, :default)) == 1
+    @test length(get_tracked_sats(ts, :default)) == 1
     @test get_prn(ts, :default, 7) == 7
     @test get_carrier_doppler(ts, :default, 7) == 100.0Hz
 end
@@ -330,7 +330,7 @@ end
         _make_acq(GPSL1CA(), 3, 20.0, 300.0Hz),
     ]
     ts = TrackState(acqs)
-    @test length(get_sat_states(ts, :default)) == 3
+    @test length(get_tracked_sats(ts, :default)) == 3
     @test get_carrier_doppler(ts, :default, 2) == 200.0Hz
 end
 
@@ -353,8 +353,8 @@ end
         _make_acq(GPSL1CA(), 13, 3.5, 70.0Hz),
     ]
     ts = TrackState(acqs; signals = (gps = (GPSL1CA(),), gal = (GalileoE1B(CBOC),)))
-    @test length(get_sat_states(ts, :gps)) == 2
-    @test length(get_sat_states(ts, :gal)) == 1
+    @test length(get_tracked_sats(ts, :gps)) == 2
+    @test length(get_tracked_sats(ts, :gal)) == 1
     @test get_carrier_doppler(ts, :gps, 11) == 50.0Hz
     @test get_carrier_doppler(ts, :gal, 12) == 60.0Hz
 end
@@ -371,7 +371,7 @@ end
     )
     acq = _make_acq(GPSL1CA(), 9, 5.0, 80.0Hz)
     ts = TrackState(acq; tracking_loop = custom)
-    de_state = get_sat_state(ts, :default, 9).loop_state
+    de_state = get_tracked_sat(ts, :default, 9).loop_state
     @test de_state isa ScalarLoopState
     @test de_state.bandwidths.wide_carrier == 22.0Hz
 end

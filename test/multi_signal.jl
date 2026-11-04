@@ -15,7 +15,7 @@ using Tracking:
     add_satellite!,
     track,
     get_beamformed_prompts,
-    get_sat_state,
+    get_tracked_sat,
     get_signal,
     get_correlator_bank,
     get_last_fully_integrated_correlator,
@@ -84,7 +84,7 @@ using GNSSSignals: GPSL1C_P, GPSL1C_D, GalileoE1B
 
     new_track_state = track(signal_buf, track_state, sampling_frequency)
 
-    new_sat = get_sat_state(new_track_state, prn)
+    new_sat = get_tracked_sat(new_track_state, prn)
     @test length(get_beamformed_prompts(new_sat.signals[1])) == 1
     @test length(get_beamformed_prompts(new_sat.signals[2])) == 1
 
@@ -132,13 +132,13 @@ end
     ref_state =
         add_satellite!(ref_state; prn, code_phase = start_code_phase, carrier_doppler)
     ref_state = track(signal_buf, ref_state, sampling_frequency)
-    ref_sat = get_sat_state(ref_state, prn)
+    ref_sat = get_tracked_sat(ref_state, prn)
 
     multi_state = TrackState(; signals = (default = (gpsl1, gpsl1),))
     multi_state =
         add_satellite!(multi_state; prn, code_phase = start_code_phase, carrier_doppler)
     multi_state = track(signal_buf, multi_state, sampling_frequency)
-    multi_sat = get_sat_state(multi_state, prn)
+    multi_sat = get_tracked_sat(multi_state, prn)
 
     @test length(get_beamformed_prompts(multi_sat.signals[1])) == 10
 
@@ -166,7 +166,7 @@ end
         code_phase = 0.0,
         carrier_doppler = 1234.0Hz,
     )
-    sat = get_sat_state(track_state, :modern_gps, 11)
+    sat = get_tracked_sat(track_state, :modern_gps, 11)
 
     @testset "TrackedSat: integer index" begin
         @test get_signal(sat, 1) isa GPSL1C_P

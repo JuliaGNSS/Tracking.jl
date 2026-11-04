@@ -120,8 +120,8 @@ export get_prn,
     remove_satellite!,
     remove_satellite,
     merge_sats,
-    get_sat_states,
-    get_sat_state,
+    get_tracked_sats,
+    get_tracked_sat,
     SignalGroup,
     BandMeasurement,
     get_band_ids,
@@ -180,7 +180,7 @@ include("carrier_replica.jl")
 include("downconvert.jl")
 # Software fill path of the noise reference: despreading an untracked PRN.
 include("noise_estimators/correlator.jl")
-include("sat_state.jl")
+include("tracked_sat.jl")
 
 """
 $(SIGNATURES)

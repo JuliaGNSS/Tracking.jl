@@ -1,4 +1,4 @@
-module SatStateTest
+module TrackedSatTest
 
 using Test: @test, @testset, @inferred
 using GNSSSignals: CBOC, TMBOC
@@ -32,7 +32,7 @@ using Tracking:
     get_last_fully_integrated_integration_time,
     TrackState,
     get_signals,
-    get_sat_state,
+    get_tracked_sat,
     get_bit_synchronizer,
     to_dictionary,
     max_code_phase_period
@@ -44,34 +44,34 @@ include("acquisition_test_helpers.jl")
 
 @testset "Satellite state" begin
     gpsl1 = GPSL1CA()
-    sat_state = @inferred TrackedSat(gpsl1, 1, 10.0, 500.0Hz)
-    @test get_prn(sat_state) == 1
-    @test get_code_phase(sat_state) == 10.0
-    @test get_code_doppler(sat_state) ==
+    tracked_sat = @inferred TrackedSat(gpsl1, 1, 10.0, 500.0Hz)
+    @test get_prn(tracked_sat) == 1
+    @test get_code_phase(tracked_sat) == 10.0
+    @test get_code_doppler(tracked_sat) ==
           500.0Hz * get_chip_rate_to_center_frequency_ratio(gpsl1)
-    @test get_carrier_phase(sat_state) == 0.0
-    @test get_carrier_doppler(sat_state) == 500.0Hz
-    @test get_num_integrated_samples(sat_state) == 0
-    @test get_next_sample_index(sat_state) == 1
-    @test get_correlator_bank(sat_state).correlator_outputs == zeros(3)
-    @test get_last_fully_integrated_correlator(sat_state).correlator_outputs == zeros(3)
-    @test is_bit_or_secondary_code_synced(sat_state) == false
-    @test length(get_bit_synchronizer(sat_state)) == 0
+    @test get_carrier_phase(tracked_sat) == 0.0
+    @test get_carrier_doppler(tracked_sat) == 500.0Hz
+    @test get_num_integrated_samples(tracked_sat) == 0
+    @test get_next_sample_index(tracked_sat) == 1
+    @test get_correlator_bank(tracked_sat).correlator_outputs == zeros(3)
+    @test get_last_fully_integrated_correlator(tracked_sat).correlator_outputs == zeros(3)
+    @test is_bit_or_secondary_code_synced(tracked_sat) == false
+    @test length(get_bit_synchronizer(tracked_sat)) == 0
 
     acq = _make_acq(gpsl1, 5, 524.6, 100.0Hz)
-    sat_state = @inferred TrackedSat(acq)
-    @test get_prn(sat_state) == 5
-    @test get_code_phase(sat_state) == 524.6
-    @test get_code_doppler(sat_state) ==
+    tracked_sat = @inferred TrackedSat(acq)
+    @test get_prn(tracked_sat) == 5
+    @test get_code_phase(tracked_sat) == 524.6
+    @test get_code_doppler(tracked_sat) ==
           100.0Hz * get_chip_rate_to_center_frequency_ratio(gpsl1)
-    @test get_carrier_phase(sat_state) == 0.0
-    @test get_carrier_doppler(sat_state) == 100.0Hz
-    @test get_num_integrated_samples(sat_state) == 0.0
-    @test get_correlator_bank(sat_state).correlator_outputs == zeros(3)
-    @test get_last_fully_integrated_correlator(sat_state).correlator_outputs == zeros(3)
-    @test get_last_fully_integrated_beamformed_prompt(sat_state) == complex(0.0, 0.0)
-    @test is_bit_or_secondary_code_synced(sat_state) == false
-    @test length(get_bit_synchronizer(sat_state)) == 0
+    @test get_carrier_phase(tracked_sat) == 0.0
+    @test get_carrier_doppler(tracked_sat) == 100.0Hz
+    @test get_num_integrated_samples(tracked_sat) == 0.0
+    @test get_correlator_bank(tracked_sat).correlator_outputs == zeros(3)
+    @test get_last_fully_integrated_correlator(tracked_sat).correlator_outputs == zeros(3)
+    @test get_last_fully_integrated_beamformed_prompt(tracked_sat) == complex(0.0, 0.0)
+    @test is_bit_or_secondary_code_synced(tracked_sat) == false
+    @test length(get_bit_synchronizer(tracked_sat)) == 0
 end
 
 @testset "TrackedSat signal/dict helpers" begin
@@ -85,7 +85,7 @@ end
     d = dictionary([11 => sat])
     @test to_dictionary(d) === d
 
-    @test get_sat_state(d).prn == 11
+    @test get_tracked_sat(d).prn == 11
 
     # The upper bound, 1023 chips × 20 code periods per bit; the runtime wrap is
     # 1023 until sync, then 20460.
@@ -211,7 +211,7 @@ end
     @test typeof(sat_tuple) === typeof(sat_scalar)
 
     # The auto-bandwidth tracking loop sizes the loop from the driver, GPS L1C-P.
-    estimator = TrackingLoops.ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)
+    tracking_loop = TrackingLoops.ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)
     sat_kw = TrackedSat(
         sigs,
         7,
@@ -219,7 +219,7 @@ end
         -250.0Hz;
         carrier_phase = 0.5,
         code_doppler = -0.3Hz,
-        tracking_loop = estimator,
+        tracking_loop,
     )
     # Stored and reported in cycles, as given.
     @test sat_kw.carrier_phase == 0.5
