@@ -14,8 +14,7 @@ A [`TrackedSat`](@ref) carries everything per satellite: the shared carrier/code
 Doppler and phase, one [`TrackedSignal`](@ref) per signal, and the tracking loop's
 per-satellite state in `loop_state`. The tracking loop object
 (`<: AbstractTrackingLoop`) holds configuration plus any state *shared* across
-satellites. The signal path (downconvert, correlate) is loop-agnostic and passes
-`loop_state` through unchanged.
+satellites.
 
 ## What you implement
 
@@ -33,7 +32,7 @@ satellites. The signal path (downconvert, correlate) is loop-agnostic and passes
    TrackingLoops.init_loop_state(::MyTrackingLoop, sat::TrackedSat) = MyLoopState(...)
    ```
 
-   It must be **pure**: it is also called on the PRN-0 template sat that fixes a
+   It must be pure: it is also called on the PRN-0 template sat that fixes a
    group's slot type, as a type probe when validating pre-built sats, and by
    [`reset_loop_filters!`](@ref). Register sats into shared state in
    `update_tracking_loop_on_new_sats`, never here.
@@ -49,13 +48,12 @@ satellites. The signal path (downconvert, correlate) is loop-agnostic and passes
    the dictionary of incoming sats, *after* per-sat seeding. The default returns
    `loop` unchanged.
 
-   The returned tracking loop must keep the input's **concrete type**
+   The returned tracking loop must keep the input's concrete type
    ([`TrackState`](@ref) is parameterized on it): grow shared state in place in
-   resizable containers, or rebuild scalar fields with `Setfield.@set` or a copying
-   constructor. Since `TrackState` is immutable, a rebuilt tracking loop only reaches
-   you through the return value: write `track_state = add_satellite!(track_state; ...)`.
-   For tracking loops that update in place the returned `TrackState` is the input
-   itself.
+   resizable containers, or rebuild scalar fields with `Accessors.@set` or a copying
+   constructor. A rebuilt tracking loop only reaches you through the return value
+   (`track_state = add_satellite!(track_state; ...)`); a loop that updates in place
+   returns the input `TrackState` itself.
 
 5. **The per-integration step**, in one of two ways.
 
@@ -67,8 +65,8 @@ satellites. The signal path (downconvert, correlate) is loop-agnostic and passes
    It returns the new loop state and carrier and code Dopplers; the satellite takes
    the driver's, as another signal's integration returns the command in force. See
    [`PredetectionIntegration`](@extref TrackingLoops.PredetectionIntegration) for what an integration carries.
-   Tracking does the rest: the post-correlation processing (bit synchronization,
-   the C/N₀ estimators), the phase snap at sync. A
+   Tracking does the rest: post-correlation processing (bit synchronization,
+   C/N₀ estimators) and the phase snap at sync. A
    `TrackingLoops.reseed_loop_state(tracking_loop, loop_state, carrier_doppler, code_doppler)`
    method chooses what [`reset_loop_filters!`](@ref) keeps; without one, the loop
    state is re-initialized. Such a tracking loop also runs unchanged in a hardware
@@ -167,12 +165,12 @@ MyLoopState()
 The generic loop update in `src/tracking_loops.jl` shows the full
 pattern: the immutable form delegates to the in-place one, and the walk steps the
 [driver signal](tracking_state.md#Driver-signal) (`signals[1]`,
-whose integrations close the loops) before the passengers. That split is a
+whose integrations close the loops) before the passengers; that split is a
 convention of the per-integration path only.
 
 ## What stays generic
 
-You do *not* override the downconvert/correlate path; it passes
+You do not override the downconvert/correlate path, which passes
 `loop_state` through unchanged. [`add_satellite!`](@ref) and
 [`merge_sats`](@ref) call [`init_loop_state`](@ref) with the `TrackState`'s
 tracking loop.
@@ -251,8 +249,8 @@ default), which any `track!` on a shorter chunk does.
 
 The engine and the offsets belong together: a `TrackState` built afresh around a
 tracking loop that has run starts every band at `0`, so pass it the old state's
-`sample_index_offsets` (see [`TrackState`](@ref)). To branch a state, `deepcopy` it; [`track`](@ref) shares the
-tracking loop with its input.
+`sample_index_offsets` (see [`TrackState`](@ref)). To branch a state, `deepcopy` it;
+[`track`](@ref) shares the tracking loop with its input.
 
 In the vector loop the navigation filter alone sets a satellite's carrier NCO; a
 residual PLL follows the carrier on the prompts without steering it, and

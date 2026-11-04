@@ -12,8 +12,8 @@ The loop filters are provided by
 ## Default Configuration
 
 The default tracking loop is `ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)`, a
-scalar PLL/DLL which uses:
-- `ThirdOrderAssistedBilinearLF` for the carrier loop (FLL-assisted PLL for improved dynamics)
+scalar PLL/DLL with
+- `ThirdOrderAssistedBilinearLF` for the carrier loop (FLL-assisted PLL)
 - `SecondOrderBilinearLF` for the code loop
 
 When [`TrackState`](@ref) builds the default tracking loop from a signal-tuple
@@ -30,8 +30,8 @@ over. Read a satellite's stage with
 Where the replica wipes every sign modulation off the prompt (a dataless signal
 synced to its secondary code) the carrier discriminators turn four-quadrant.
 
-The defaults are not scaled with the integration time; each is capped at filter time
-by its stability product `BL · T_int`: the PLL by `0.09`, the FLL path by `0.02`, the
+The defaults are not scaled with the integration time; each is capped by its
+stability product `BL · T_int` at filter time: the PLL by `0.09`, the FLL path by `0.02`, the
 code loop by `0.018`
 ([`effective_carrier_loop_filter_bandwidth`](@extref TrackingLoops.effective_carrier_loop_filter_bandwidth-Tuple{Any, Any})
 and siblings). The bandwidths that end up in the loop are:
@@ -54,12 +54,11 @@ approximately that loop back, set both `wide_carrier_loop_filter_bandwidth` and
 ran FLL-assisted at one carrier bandwidth throughout; pass equal wide and narrow
 bandwidths for one PLL bandwidth.
 
-Override per signal by defining methods of
+Override per signal with methods of
 [`default_wide_carrier_loop_filter_bandwidth`](@extref TrackingLoops.default_wide_carrier_loop_filter_bandwidth-Tuple{AbstractGNSSSignal}),
 [`default_narrow_carrier_loop_filter_bandwidth`](@extref TrackingLoops.default_narrow_carrier_loop_filter_bandwidth-Tuple{AbstractGNSSSignal}),
 [`default_fll_assist_loop_filter_bandwidth`](@extref TrackingLoops.default_fll_assist_loop_filter_bandwidth-Tuple{AbstractGNSSSignal}) /
-[`default_code_loop_filter_bandwidth`](@extref TrackingLoops.default_code_loop_filter_bandwidth-Tuple{AbstractGNSSSignal}), or override at construction
-time by passing your own `tracking_loop =` to `TrackState`.
+[`default_code_loop_filter_bandwidth`](@extref TrackingLoops.default_code_loop_filter_bandwidth-Tuple{AbstractGNSSSignal}), or per `TrackState` by passing your own `tracking_loop =`.
 
 ## Tracking Loops
 

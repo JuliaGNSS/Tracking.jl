@@ -1,7 +1,6 @@
-# The TrackState-level walk of the tracking loops over groups, satellites and
-# signals. The tracking loops themselves are TrackingLoops'; any
-# `AbstractTrackingLoop` implementing `init_loop_state`, `reseed_loop_state` and
-# `step_loop!` is driven by `track!` as it is.
+# The TrackState-level walk over groups, satellites and signals; the tracking loops
+# are TrackingLoops'. `track!` drives any `AbstractTrackingLoop` implementing
+# `init_loop_state`, `reseed_loop_state` and `step_loop!`.
 
 # Re-seed hook for `reset_loop_filters!`: the tracking loop's `reseed_loop_state`
 # (which keeps what it chooses, e.g. bandwidths and carrier-loop stage), else a
@@ -30,7 +29,7 @@ end
 # `noise` is one `(density, ready)` pair per signal, in `sat.signals` order (see
 # `_signal_noise_densities`). Each integration ran on the satellite's own Doppler
 # and its command takes effect at the integration's end (application sample
-# `nothing`): a hardware correlator's loop, which needs another NCO history and an
+# `nothing`); a hardware correlator's loop, which needs another NCO history and an
 # application sample, calls TrackingLoops' `step_loop!` itself.
 # `sample_index_offset` moves the integrations onto the band's running sample grid
 # (`TrackState`'s `sample_index_offsets`).
@@ -79,11 +78,11 @@ function _step_sat_tracking_loop(
         sample_index_offset,
     )
 
-    # On the batch a signal first syncs, anchor `sat.code_phase` to the secondary
-    # chip of the synced signal with the longest full code, keeping the
-    # within-primary phase. Only then (#117); afterwards the replica's wrap keeps it.
-    # Sync is found after the chunk was correlated, so the in-flight partial
-    # integrations, accumulated at the old phase, are dropped too.
+    # On the batch a signal first syncs (and only then, #117), anchor `sat.code_phase`
+    # to the secondary chip of the synced signal with the longest full code, keeping
+    # the within-primary phase; the replica's period keeps it afterwards. Sync is found
+    # after the chunk was correlated, so the in-flight partial integrations,
+    # accumulated at the old phase, are dropped too.
     new_signals = (new_head, new_tail...)
     just_synced = _any_signal_just_synced(sat.signals, new_signals)
     snapped_code_phase =
@@ -110,11 +109,10 @@ end
 )
 
 # Process one completed correlator output of a signal into its predetection
-# integration, shared by the driver and the passengers (#133): TrackingLoops'
-# `process_correlator_bank_output!` on the signal's `post_correlation_state`, plus
-# pushing the beamformed prompt and keeping the output as
-# `last_integration_correlator_bank`. The live correlator bank is left alone; the
-# correlate phase already reset it.
+# integration, for driver and passengers alike (#133): TrackingLoops'
+# `process_correlator_bank_output!` on the signal's `post_correlation_state`, plus pushing
+# the beamformed prompt and keeping the output as `last_integration_correlator_bank`. The
+# live correlator bank is left alone; the correlate phase already reset it.
 #
 # Without `secondary_code_wiped` the output came from the pre-sync replica, which
 # GNSSSignals overlays with secondary chip 0 on every code period. TrackingLoops
@@ -327,13 +325,13 @@ $(SIGNATURES)
 
 Step the tracking loop with every completed predetection integration of every
 satellite, through TrackingLoops' `process_correlator_bank_output!` and the tracking
-loop's `step_loop!` (any `AbstractTrackingLoop` implementing it works), giving the
-Dopplers for the next replicas and the beamformed prompts.
+loop's `step_loop!`, giving the Dopplers for the next replicas and the
+beamformed prompts.
 
-The second argument is a [`MultiBandSamples`](@ref Tracking.MultiBandSamples) NamedTuple (the `track` path) or a
-`NamedTuple`/`Dict` mapping each `get_band_id` to its sampling frequency: the entry
-point for an **external correlator producer** (e.g. an FPGA), which needs no sample
-buffer. See [External correlator producers](@ref).
+The second argument is a [`MultiBandSamples`](@ref Tracking.MultiBandSamples)
+NamedTuple (the `track` path) or a `NamedTuple`/`Dict` mapping each `get_band_id` to
+its sampling frequency: the entry point for an **external correlator producer**
+(e.g. an FPGA), which needs no sample buffer. See [External correlator producers](@ref).
 """
 function step_tracking_loops(
     track_state::TrackState{<:Any,<:AbstractTrackingLoop},
@@ -442,13 +440,13 @@ end
 """
 $(SIGNATURES)
 
-In-place version of [`step_tracking_loops`](@ref), taking the same
-second argument: overwrites each group's `TrackedSat` slots and returns `track_state`,
-allocation-free in steady state under [`track!`](@ref)'s preconditions.
+In-place version of [`step_tracking_loops`](@ref), taking the same second argument:
+overwrites each group's `TrackedSat` slots and returns `track_state`, allocation-free
+in steady state under [`track!`](@ref)'s preconditions.
 
-It reads only the per-band sampling frequency (turning `num_integrated_samples` into an
-integration time), and consumes and **clears** each
-signal's `correlator_bank_outputs`, whether from the software correlate phase or from
+It reads only the per-band sampling frequency (turning `num_integrated_samples` into
+an integration time), and consumes and **clears** each signal's `correlator_bank_outputs`,
+whether from the software correlate phase or from
 [`append_correlator_bank_output!`](@ref).
 """
 function step_tracking_loops!(
@@ -466,9 +464,10 @@ function step_tracking_loops!(
     return track_state
 end
 
-# TrackingLoops' `process_correlator_bank_output!` detects the overshoot; the logging lives here. The
-# `_id` is per signal and PRN so `maxlog` shows how many satellites a producer's
-# integration-sizing bug hits. Warn, not throw: it costs a bit sync, not the receiver.
+# TrackingLoops' `process_correlator_bank_output!` detects the overshoot; the logging lives
+# here. The `_id` is per signal and PRN so `maxlog` shows how many satellites a
+# producer's integration-sizing bug hits. Warn, not throw: it costs a bit sync, not
+# the receiver.
 @noinline function _warn_bit_boundary_overshoot(
     signal_id::Symbol,
     prn::Integer,

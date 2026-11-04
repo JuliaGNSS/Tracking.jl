@@ -2,8 +2,7 @@
 $(SIGNATURES)
 
 Track the samples of one or more bands: downconvert, correlate and step the
-tracking loops of every satellite, and return the updated `TrackState` with new
-phase/Doppler estimates and decoded bits.
+tracking loops of every satellite. Returns the updated `TrackState`.
 
 The first argument is one of:
 
@@ -93,7 +92,7 @@ function track(
     track(_as_multi_band_samples(band_samples, track_state), track_state; kwargs...)
 end
 
-# Single-BandSamples convenience: still a single-band path.
+# Single-band convenience.
 function track(band_samples::BandSamples, track_state::TrackState; kwargs...)
     track(_as_multi_band_samples(band_samples, track_state), track_state; kwargs...)
 end
@@ -123,8 +122,8 @@ while got_chunk(rx)
 end
 ```
 
-Its per-thread scratch buffers grow on first use; the default would regrow them
-every call.
+The per-thread scratch buffers grow on first use; the default regrows them every
+call.
 """
 function track!(
     multi_band_samples::MultiBandSamples,
@@ -137,12 +136,10 @@ function track!(
     nco_update_interval = _resolve_nco_update_interval(nco_update_interval, track_state)
     _validate_nco_update_interval(nco_update_interval, multi_band_samples)
     # Per chunk, one correlate pass at fixed NCO Doppler, then one estimate that
-    # updates every satellite at a common epoch. The pass stops at each
-    # satellite's last completed code-period boundary (`stop_before_partial`), so
-    # the next pass covers boundary to boundary at the updated Doppler: every
-    # integration sees one Doppler, and each correction takes effect at its
-    # completing boundary.
-    #
+    # updates every satellite at a common epoch. The pass stops at each satellite's
+    # last completed integration boundary (`stop_before_partial`), so the next pass
+    # covers boundary to boundary at the updated Doppler: every integration sees
+    # one Doppler, and each correction takes effect at its completing boundary.
     # The buffers are fixed for the call, so sample-derived caches (the bit
     # backends' band pack) are built on the first pass only.
     chunk_index = 0
@@ -216,7 +213,7 @@ function track!(
     track!(_as_multi_band_samples(band_samples, track_state), track_state; kwargs...)
 end
 
-# Single-BandSamples convenience: still a single-band path.
+# Single-band convenience.
 function track!(band_samples::BandSamples, track_state::TrackState; kwargs...)
     track!(_as_multi_band_samples(band_samples, track_state), track_state; kwargs...)
 end

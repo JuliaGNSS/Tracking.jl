@@ -238,8 +238,8 @@ end
         end
     end
     status = get_navigation_status(tracking_loop)
-    # Off the truth by the Costas ambiguity the hand-over left, 0 or ½ cycle, and
-    # by the same amount at every epoch: no cycle or half cycle slips.
+    # Off the truth by the Costas ambiguity the vector loop's takeover left, 0 or
+    # ½ cycle, and by the same amount at every epoch: no cycle or half cycle slips.
     phase_drifts =
         [rem.(offsets .- first(offsets), 1.0, RoundNearest) for offsets in phase_offsets]
     costas_errors = [rem.(offsets, 0.5, RoundNearest) for offsets in phase_offsets]

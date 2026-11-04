@@ -25,13 +25,13 @@ const _chip_rate_to_center_frequency_ratio =
     getfield(GNSSSignals, :get_code_center_frequency_ratio)
 
 # Tracking 12 passes a sample span to the kernels as one range, earlier versions as
-# a start index and a count; splat `_span(first, count)...` into the call.
+# (first, count); splat `_span(first, count)...`.
 const _RANGE_SPANS = isdefined(Tracking, :get_next_sample_index)
 _span(first, count) = _RANGE_SPANS ? (first:(first+count-1),) : (first, count)
 
-# Tracking 12 builds on TrackingLoops 7, which names its API after the tracking-loop
-# vocabulary: a Doppler estimator is a tracking loop, `NumAnts` is `NumAntennas`, a
-# bit buffer is a bit synchronizer, and so on.
+# TrackingLoops 7 (Tracking 12) renamed its API: Doppler estimator -> tracking loop,
+# `NumAnts` -> `NumAntennas`, bit buffer -> bit synchronizer, correlator ->
+# correlator bank, etc.
 const _TL7 = isdefined(TrackingLoops, :ScalarTrackingLoop)
 const NumAntennas = getfield(TrackingLoops, _TL7 ? :NumAntennas : :NumAnts)
 const EarlyPromptLateCorrelatorBank = getfield(
@@ -69,8 +69,7 @@ _moments_cn0_estimator(n) =
 # TrackingLoops 7 takes a noise despread's samples as one range.
 _noise_span(first, last) = _TL7 ? (first:last,) : (first, last)
 
-# Tracking 12 calls a band's samples `BandSamples` and takes the intermediate
-# frequency as a keyword.
+# Tracking 12: `BandSamples`, with the intermediate frequency as a keyword.
 _band_samples(samples, sampling_frequency, intermediate_frequency = 0.0Hz) =
     isdefined(Tracking, :BandSamples) ?
     getfield(Tracking, :BandSamples)(samples, sampling_frequency; intermediate_frequency) :
@@ -355,7 +354,7 @@ end
 # A fresh sat's bit synchronizer, synced (and with a full prompt-sign count).
 function _with_synced_bit_synchronizer(t)
     sig = only(t.signals)
-    # Positional, in field order, which TrackingLoops 7 kept and renamed.
+    # Positional, in field order (kept by TrackingLoops 7).
     old_bit_synchronizer = _get_bit_synchronizer(sig)
     new_bit_synchronizer = typeof(old_bit_synchronizer)(
         zero(getfield(old_bit_synchronizer, 1)), # prompt_sign_history

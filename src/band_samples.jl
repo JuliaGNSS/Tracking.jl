@@ -2,8 +2,8 @@
     BandSamples(samples, sampling_frequency; intermediate_frequency = 0Hz)
 
 One band's digitized samples with the `sampling_frequency` and
-`intermediate_frequency` they were captured at: complex baseband samples at the
-default intermediate frequency of zero, low-IF samples otherwise.
+`intermediate_frequency` they were captured at: complex baseband at the default
+intermediate frequency of zero, low-IF otherwise.
 
 Fields:
 
@@ -83,8 +83,8 @@ end
 """
 $(SIGNATURES)
 
-A NamedTuple of [`BandSamples`](@ref), one per band, the multi-band input of
-`track` / `track!`,
-keyed by `GNSSSignals.get_band_id` (e.g. `:L1`, `:L5`), a compile-time constant.
+A NamedTuple of [`BandSamples`](@ref), one per band, keyed by
+`GNSSSignals.get_band_id` (e.g. `:L1`, `:L5`), a compile-time constant: the multi-band
+input of `track` / `track!`.
 """
 const MultiBandSamples = NamedTuple{<:Any,<:Tuple{Vararg{BandSamples}}}

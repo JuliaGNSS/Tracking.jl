@@ -38,13 +38,12 @@ Tracking.current_code_phase_period
 
 ## Sync detection
 
-Each signal's detector (`detect_sync`) comes in one of three
-families:
+Each signal's detector (`detect_sync`) is one of three kinds:
 
 - **Soft, maximum-energy CFAR**: GPS L1 C/A's bit edge and every short secondary
   code (`1 < N ≤ 100`). It locks when the peak hypothesis beats its runner-up at
   the confidence `get_sync_detection_confidence` (default `0.999`), needs
-  two periods first, and fires on a period boundary, so it reports **`phase = 0`**.
+  two periods first, and fires on a period boundary, so it reports `phase = 0`.
 - **Hard rotation sweep**: the 1800-chip overlay pilots GPS L1C-P and BeiDou
   B1C-P. It matches the prompt signs against the overlay at every rotation within
   `get_secondary_code_error_tolerance`, locks after one period at any
@@ -111,6 +110,6 @@ signals, the one with the longest `primary × secondary` length wins.
 
 A signal without secondary code (e.g. GPS L1 C/A) needs no snap: its detector
 locks at a true bit boundary, so the widened period starts at the bit's first
-period, and the bit synchronizer's code-period counter
-(`num_code_periods_into_bit`), which draining the soft bits between `track!` calls
-preserves, keeps the bit cadence across them.
+period. The bit synchronizer's code-period counter (`num_code_periods_into_bit`),
+which draining the soft bits between `track!` calls preserves, keeps the bit
+cadence.

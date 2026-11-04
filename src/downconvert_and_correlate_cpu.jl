@@ -42,8 +42,8 @@ grow lazily on first use and are reused thereafter, so a hoisted instance is
 allocation-free per `track!` call in steady state.
 
 For real-time loops, construct the backend **once outside** the `track!` loop and
-pass it via the `downconvert_and_correlator` keyword argument; the default value
-rebuilds the buffers on every call.
+pass it via the `downconvert_and_correlator` keyword; the default rebuilds the
+buffers on every call.
 """
 struct CPUDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator
     buffers::ScratchBuffers
@@ -57,12 +57,12 @@ $(SIGNATURES)
 Multi-threaded CPU downconvert and correlate, parallelized over the satellites
 (PRNs) of each group. Holds one set of scratch buffers per thread, indexed by
 `Threads.threadid()` inside `@batch` (which pins each iteration to a thread), grown
-lazily and reused thereafter.
+lazily.
 
 With more than one thread and more than one work item, each `@batch` launch (one per
 `downconvert_and_correlate!` call, so one per code period inside `track!`) keeps a
-Polyester allocation of ~96 B. It is bounded per launch and does not scale with the
-input buffer. Measuring a noise density keeps it at ~96 B (the noise despreads ride
+Polyester allocation of ~96 B, bounded per launch and independent of the input
+buffer size. Measuring a noise density keeps it at ~96 B (the noise despreads ride
 the loop as extra items behind one pointer, see `_park_noise_items!`), but a
 single-satellite state then pays it too, as its loop has two items; in exchange the
 despread usually costs a fraction of its ~1.75 µs serial time.
@@ -78,8 +78,8 @@ a GNSSSignals API that does not re-wrap them in a struct; a serial code-gen pre-
 also reaches 0 but serializes ~30 % of the work. Neither is worth ~96 B per launch.
 
 For real-time loops, construct the backend **once outside** the `track!` loop and
-pass it via the `downconvert_and_correlator` keyword argument; the default value
-rebuilds the per-thread buffers on every call.
+pass it via the `downconvert_and_correlator` keyword; the default rebuilds the
+per-thread buffers on every call.
 """
 struct CPUThreadedDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator
     buffers::Vector{ScratchBuffers}
@@ -148,12 +148,12 @@ end
 
 # THE per-backend correlation primitive: one despread of one signal over one range
 # of samples, accumulating into (and returning) `correlator_bank`. Every despread goes
-# through it, the per-satellite single-signal path (`_correlate_signals`) and the
-# open-loop noise reference (`update_noise!`) alike. That makes the noise measurement
-# model-free by construction: the reference runs the prompt's own quantise →
-# downconvert → despread path, so its `N₀` carries the quantisation loss and code
-# amplitude, and is on the same scale even where the one- and two-bit accumulators
-# are popcount counts rather than sample sums.
+# through it, the per-satellite path (`_correlate_signals`) and the open-loop noise
+# reference (`update_noise!`) alike. That makes the noise measurement model-free by
+# construction: the reference runs the prompt's own quantise → downconvert → despread
+# path, so its `N₀` carries the quantisation loss and code amplitude, and is on the
+# same scale even where the one- and two-bit accumulators are popcount counts rather
+# than sample sums.
 #
 # `carrier_phase` is where the caller's carrier stands (`0.0` for the open-loop
 # reference). `code_replica_size` is the replica the backend needs if it generates
@@ -325,14 +325,12 @@ function _update_tracked_sat_correlator_bank(
     intermediate_frequency,
     stop_before_partial::Bool = false,
 )
-    # Each sub-step runs to the nearest code-period boundary of any signal (or the
+    # Each sub-step runs to the nearest integration boundary of any signal (or the
     # chunk end), so a chunk yields 0, 1 or several outputs per signal; a partial at
     # the chunk end carries in the correlator bank. The NCO Doppler is untouched here.
-    #
     # `stop_before_partial = true` leaves the trailing partial to the next chunk's
-    # pass, which then integrates boundary to boundary at the Doppler the tracking loop
-    # wrote in between: every completed integration sees a single Doppler. A final
-    # pass without the flag drains the buffer's trailing partial.
+    # pass, so every completed integration sees a single Doppler; a final pass
+    # without the flag drains the buffer's trailing partial.
     while sat.next_sample_index <= last(chunk_sample_range)
         samples_to_integrate, per_signal_completed = _calc_min_samples_and_completed(
             sat.signals,
@@ -406,8 +404,7 @@ end
 )
     head = first(signals)
     # Measured against the secondary-aware period (`_replica_code_phase_period`), so a
-    # multi-code-period window past sync ends on a bit boundary instead of
-    # straddling one.
+    # multi-code-period window past sync ends on a bit boundary instead of straddling one.
     p = _signal_replica_params(
         head,
         code_doppler,
@@ -446,8 +443,8 @@ end
     (first(t) == chosen, _flag_completed(Base.tail(t), chosen)...)
 
 # Code-phase period for a signal's replica and integration window. Past sync it is
-# the secondary-/bit-period length, so `gen_code!` bakes the secondary chip of the
-# current code period into the replica and wipes the overlay at every integration
+# the secondary-/bit-period length, so `gen_code!` bakes the current code period's
+# secondary chip into the replica and wipes the overlay at every integration
 # length (#125); before sync only the primary phase is known. At one code period the
 # boundary is unchanged, as `calc_num_chips_to_integrate` re-mods by the primary
 # length. `num_code_periods` is unused.
@@ -700,15 +697,14 @@ aligned. `nco_update_interval = nothing` (the default) consumes the whole buffer
 completed integration is snapshotted into its signal's `correlator_bank_outputs`; only the
 trailing partial stays in the live correlator.
 
-`stop_before_partial = true` stops each satellite at its last code-period boundary
+`stop_before_partial = true` stops each satellite at its last integration boundary
 inside the chunk, leaving the trailing partial to the next chunk's pass at the
 Doppler the tracking loop writes in between (as `track!` does). Default `false`.
 
 `samples_unchanged = true` promises every band's buffer holds the same content as on
 the previous call with this `dc`, so backends may reuse sample-derived caches (the
 bit-wise backends skip re-packing their band sign planes). `track!` passes it on every
-chunk after the first; keep the default `false` whenever a buffer may have been
-refilled.
+chunk after the first; keep `false` whenever a buffer may have been refilled.
 
 `measure_noise = false` (default `true`) leaves every
 [`CorrelatorNoiseEstimator`](@extref TrackingLoops.CorrelatorNoiseEstimator)'s window
@@ -719,7 +715,7 @@ A band **absent** from `multi_band_samples` is not correlated and does not throw
 multi-band `TrackState` may be advanced one band at a time; groups with satellites on
 that band still require its samples.
 
-The noise estimators are mutable state shared with the input on the out-of-place
+The noise estimators are shared with the input on the out-of-place
 `downconvert_and_correlate` and [`track`](@ref), see there.
 """
 function downconvert_and_correlate!(
@@ -852,8 +848,8 @@ end
 # The box is reused across launches. Its type names the caller's `BandSamples`,
 # unknown until the first call, so the cell is a `Base.RefValue{Any}` holding a
 # concretely typed box, replaced only when the sample type changes. The box roots
-# the descriptors, and so keeps the last chunk's sample buffer reachable until the
-# next call. Nothing to measure stays `()`, adding nothing to the launch.
+# the descriptors, hence keeps the last chunk's sample buffer reachable until the
+# next call. Nothing to measure stays `()` and adds nothing to the launch.
 @inline _park_noise_items!(::Base.RefValue{Any}, ::Tuple{}) = ()
 @inline function _park_noise_items!(
     cell::Base.RefValue{Any},
@@ -940,8 +936,8 @@ end
     isempty(found) && return ()
     signal = first(found)
     # The samples are per band; only the despreading code is per signal. A band
-    # this call brings no samples for measures nothing, as a multi-band state may be
-    # advanced one band at a time; a group with satellites there still throws in
+    # without samples in this call measures nothing (a multi-band state may be
+    # advanced one band at a time); a group with satellites there still throws in
     # `_dc_one_group!`.
     found_band_samples =
         _band_samples_if_present(multi_band_samples, Val(_signal_band_id(typeof(signal))))

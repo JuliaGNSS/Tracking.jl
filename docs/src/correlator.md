@@ -7,10 +7,9 @@ carries one per signal.
 
 ## Why early/late spacing matters
 
-The PLL discriminator and C/N₀ estimator consume the prompt; the early and late
-accumulators give the DLL the slope of the code-correlation triangle. Early minus
-late crosses zero when the replica is aligned, and its sign tells the DLL which way
-to push.
+The PLL discriminator and C/N₀ estimator consume the prompt; early minus late
+gives the DLL the slope of the code-correlation triangle: it crosses zero when the
+replica is aligned, and its sign tells the DLL which way to push.
 
 Notation: `d` is the early-to-late spacing in chips (`d = 0.5`: E and L ½ chip
 apart), `ε` the code-phase error in chips, `B_fe` the front-end (analog + ADC)
@@ -81,9 +80,8 @@ In the TrackingLoops manual:
 Each completed integration within a processing chunk is recorded as a
 `CorrelatorBankOutput`, collected per signal and consumed by the tracking loop
 after the chunk (see [Chunked NCO updates](track.md#Chunked-NCO-updates)).
-An external correlator producer (e.g. an FPGA) can build these itself and feed
-them straight to the tracking loop — see
-[External correlator producers](track.md#External-correlator-producers).
+An external correlator producer (e.g. an FPGA) can feed its own to the tracking
+loop; see [External correlator producers](track.md#External-correlator-producers).
 
 ```@docs
 get_correlator_bank_outputs
@@ -119,7 +117,7 @@ In the TrackingLoops manual:
 A beamformer reduces the per-antenna correlator outputs to the single channel the
 Doppler and C/N₀ estimators see. It declares its combining weights through
 [`get_beamforming_weights`](@extref TrackingLoops.get_beamforming_weights) and Tracking applies them, so the
-measured noise covariance is reduced through the *same* weights and the C/N₀'s
+measured noise covariance is reduced through the same weights and the C/N₀'s
 numerator and denominator describe one channel (see [CN0 Estimator](cn0_estimator.md)).
 
 [`DefaultBeamformer`](@extref TrackingLoops.DefaultBeamformer) is the identity
@@ -163,7 +161,7 @@ subject to the sample-rate floor above.
 
 ### Changing the spacing of a satellite that's already tracking
 
-The sat, signal and correlator are immutable, so build a replacement sat with
+The sat, signal and correlator are immutable: build a replacement sat with
 `Accessors.@set` and write it into the slot with `Dictionaries.set!`:
 
 ```jldoctest narrow_corr
@@ -180,7 +178,7 @@ julia> get_correlator_bank(track_state, :default, 1, 1).preferred_early_late_to_
 ```
 
 `@set` keeps everything else, including the in-flight correlator outputs, and the
-`TrackState`'s concrete type does not change.
+`TrackState`'s concrete type.
 
 ## Custom Correlator Banks
 

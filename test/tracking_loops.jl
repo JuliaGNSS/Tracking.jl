@@ -161,10 +161,9 @@ end
 end
 
 @testset "loop bandwidth follows the actual integration length" begin
-    # The carrier cap pairs with the time the integration covered (from its sample
-    # count), not the intended length: a single-code-period integration after sync (a
-    # mid-update sync, or the truncated first post-sync integration) gets the full
-    # single-period bandwidth.
+    # The carrier cap uses the time the integration covered (from its sample count), not
+    # the intended length: a single-code-period integration after sync (mid-update sync, or the
+    # truncated first post-sync integration) gets the full single-period bandwidth.
     sampling_frequency = 5e6Hz
     gpsl1 = GPSL1CA()
     carrier_doppler = 100.0Hz
@@ -218,10 +217,8 @@ end
           doppler_after(1, true, 20 * one_code_period)
 end
 
-# The DLL bandwidth is absolute: nothing that sets it scales with the
-# integration length, so only its `BL·Δt` stability cap may narrow it. A `1/N`
-# scaling would take a 20 ms L1 C/A integration to 0.05 Hz where 0.9 Hz is
-# stable.
+# The DLL bandwidth is absolute: only its `BL·Δt` stability cap may narrow it. A `1/N`
+# scaling would take a 20 ms L1 C/A integration to 0.05 Hz where 0.9 Hz is stable.
 @testset "code loop bandwidth is not narrowed by the integration length" begin
     bw = 1.0Hz
     l1ca_period = 1ms  # 1023 chips at 1.023 Mcps
