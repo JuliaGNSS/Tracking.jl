@@ -26,10 +26,10 @@ using Tracking:
     get_num_integrated_samples,
     get_next_sample_index,
     get_correlator_bank,
-    get_last_fully_integrated_correlator,
-    get_last_fully_integrated_beamformed_prompt,
-    get_last_fully_integrated_num_code_blocks,
-    get_last_fully_integrated_integration_time,
+    get_last_integration_correlator_bank,
+    get_last_integration_beamformed_prompt,
+    get_last_integration_num_code_periods,
+    get_last_integration_time,
     TrackState,
     get_signals,
     get_tracked_sat,
@@ -54,7 +54,7 @@ include("acquisition_test_helpers.jl")
     @test get_num_integrated_samples(tracked_sat) == 0
     @test get_next_sample_index(tracked_sat) == 1
     @test get_correlator_bank(tracked_sat).correlator_outputs == zeros(3)
-    @test get_last_fully_integrated_correlator(tracked_sat).correlator_outputs == zeros(3)
+    @test get_last_integration_correlator_bank(tracked_sat).correlator_outputs == zeros(3)
     @test is_bit_or_secondary_code_synced(tracked_sat) == false
     @test length(get_bit_synchronizer(tracked_sat)) == 0
 
@@ -68,8 +68,8 @@ include("acquisition_test_helpers.jl")
     @test get_carrier_doppler(tracked_sat) == 100.0Hz
     @test get_num_integrated_samples(tracked_sat) == 0.0
     @test get_correlator_bank(tracked_sat).correlator_outputs == zeros(3)
-    @test get_last_fully_integrated_correlator(tracked_sat).correlator_outputs == zeros(3)
-    @test get_last_fully_integrated_beamformed_prompt(tracked_sat) == complex(0.0, 0.0)
+    @test get_last_integration_correlator_bank(tracked_sat).correlator_outputs == zeros(3)
+    @test get_last_integration_beamformed_prompt(tracked_sat) == complex(0.0, 0.0)
     @test is_bit_or_secondary_code_synced(tracked_sat) == false
     @test length(get_bit_synchronizer(tracked_sat)) == 0
 end
@@ -164,7 +164,7 @@ GNSSSignals.get_bit_rate(::Type{FakeWrapSignal}) = 0Hz
         FakeWrapSignal(code_length, secondary_length),
         base.num_integrated_samples,
         base.correlator_bank,
-        base.last_fully_integrated_correlator,
+        base.last_integration_correlator_bank,
         Tracking.TrackedSignal(
             base;
             bit_synchronizer = found ?
@@ -229,7 +229,7 @@ end
           TrackingLoops.default_wide_carrier_loop_filter_bandwidth(GPSL1C_P(TMBOC))
 end
 
-@testset "Last fully integrated integration time" begin
+@testset "Last integration time" begin
     # Post-integration SNR is C/N₀ · T, so judging the last integration needs its
     # own integration time.
     gpsl1 = GPSL1CA()
@@ -238,33 +238,33 @@ end
 
     tsig = Tracking.TrackedSignal(gpsl1)
     # Nothing completed yet: one code period.
-    @test get_last_fully_integrated_num_code_blocks(tsig) == 1
-    @test get_last_fully_integrated_integration_time(tsig) ≈ code_period
+    @test get_last_integration_num_code_periods(tsig) == 1
+    @test get_last_integration_time(tsig) ≈ code_period
 
     for num_code_periods in (1, 2, 20)
         t = Tracking.TrackedSignal(
             tsig;
-            last_fully_integrated_num_code_blocks = num_code_periods,
+            last_integration_num_code_periods = num_code_periods,
         )
-        @test get_last_fully_integrated_num_code_blocks(t) == num_code_periods
-        @test get_last_fully_integrated_integration_time(t) ≈ num_code_periods * code_period
+        @test get_last_integration_num_code_periods(t) == num_code_periods
+        @test get_last_integration_time(t) ≈ num_code_periods * code_period
     end
 
-    twenty = Tracking.TrackedSignal(tsig; last_fully_integrated_num_code_blocks = 20)
-    @test upreferred(get_last_fully_integrated_integration_time(twenty)) ≈ 20ms
+    twenty = Tracking.TrackedSignal(tsig; last_integration_num_code_periods = 20)
+    @test upreferred(get_last_integration_time(twenty)) ≈ 20ms
 
     # Not `get_num_integrated_samples`, which counts the integration in progress.
     @test get_num_integrated_samples(twenty) == 0
 
     sat = TrackedSat(gpsl1, 1, 10.0, 500.0Hz)
-    @test get_last_fully_integrated_num_code_blocks(sat) == 1
-    @test get_last_fully_integrated_integration_time(sat) ≈ code_period
-    @test get_last_fully_integrated_num_code_blocks(sat, 1) == 1
-    @test get_last_fully_integrated_integration_time(sat, 1) ≈ code_period
+    @test get_last_integration_num_code_periods(sat) == 1
+    @test get_last_integration_time(sat) ≈ code_period
+    @test get_last_integration_num_code_periods(sat, 1) == 1
+    @test get_last_integration_time(sat, 1) ≈ code_period
 
     track_state = TrackState(gpsl1, [sat])
-    @test get_last_fully_integrated_num_code_blocks(track_state, 1) == 1
-    @test get_last_fully_integrated_integration_time(track_state, 1) ≈ code_period
+    @test get_last_integration_num_code_periods(track_state, 1) == 1
+    @test get_last_integration_time(track_state, 1) ≈ code_period
 end
 
 end

@@ -13,7 +13,7 @@ using Tracking:
     TrackState,
     add_satellite!,
     get_cn0_estimator,
-    get_last_fully_integrated_integration_time,
+    get_last_integration_time,
     track
 import TrackingLoops
 using TrackingLoops:
@@ -140,7 +140,7 @@ end
         tsig = Tracking.TrackedSignal(
             tsig;
             cn0_estimator = estimator,
-            last_fully_integrated_num_code_blocks = num_code_periods,
+            last_integration_num_code_periods = num_code_periods,
         )
         estimate_cn0(tsig)
     end
@@ -167,7 +167,7 @@ end
     same_prompts_20 = linear_cn0(cn0_at(20, one_period_prompts))
     @test 10 * log10(same_prompts_1 / same_prompts_20) ≈ 10 * log10(20) atol = 0.01
 
-    # C/N₀ × `get_last_fully_integrated_integration_time` is the
+    # C/N₀ × `get_last_integration_time` is the
     # post-integration SNR, so it must not depend on the code-period count.
     function snr_at(num_code_periods, prompts)
         tsig = Tracking.TrackedSignal(
@@ -181,10 +181,10 @@ end
         tsig = Tracking.TrackedSignal(
             tsig;
             cn0_estimator = estimator,
-            last_fully_integrated_num_code_blocks = num_code_periods,
+            last_integration_num_code_periods = num_code_periods,
         )
         cn0 = ustrip(Hz, Unitful.linear(estimate_cn0(tsig)))
-        cn0 * ustrip(Unitful.s, get_last_fully_integrated_integration_time(tsig))
+        cn0 * ustrip(Unitful.s, get_last_integration_time(tsig))
     end
     @test snr_at(20, one_period_prompts) ≈ snr_at(1, one_period_prompts) rtol = 1e-9
 end

@@ -32,8 +32,8 @@ using Tracking:
     get_code_doppler,
     get_carrier_doppler,
     get_next_sample_index,
-    get_last_fully_integrated_beamformed_prompt,
-    get_last_fully_integrated_correlator,
+    get_last_integration_beamformed_prompt,
+    get_last_integration_correlator_bank,
     get_beamformed_prompts,
     get_num_integrated_samples,
     get_tracked_sat,
@@ -137,7 +137,7 @@ _unit_code(c) = (m = maximum(abs, c); m == 0 ? float(c) : c ./ m)
         tracked_carrier_dopplers[i] = get_carrier_doppler(track_state) / Hz
         tracked_code_dopplers[i] = get_code_doppler(track_state) / Hz
         @test get_next_sample_index(track_state) == 4001
-        tracked_prompts[i] = get_last_fully_integrated_beamformed_prompt(track_state)
+        tracked_prompts[i] = get_last_integration_beamformed_prompt(track_state)
         code_phases[i] = comp_code_phase
         carrier_phases[i] = comp_carrier_phase / 2π
     end
@@ -715,7 +715,7 @@ end
         tracked_carrier_phases[i] = get_carrier_phase(track_state)
         tracked_carrier_dopplers[i] = get_carrier_doppler(track_state) / Hz
         tracked_code_dopplers[i] = get_code_doppler(track_state) / Hz
-        tracked_prompts[i] = get_last_fully_integrated_beamformed_prompt(track_state)
+        tracked_prompts[i] = get_last_integration_beamformed_prompt(track_state)
         code_phases[i] = comp_code_phase
         carrier_phases[i] = comp_carrier_phase / 2π
     end
@@ -813,7 +813,7 @@ end
         tracked_carrier_phases[i] = get_carrier_phase(track_state)
         tracked_carrier_dopplers[i] = get_carrier_doppler(track_state) / Hz
         tracked_code_dopplers[i] = get_code_doppler(track_state) / Hz
-        tracked_prompts[i] = get_last_fully_integrated_beamformed_prompt(track_state)
+        tracked_prompts[i] = get_last_integration_beamformed_prompt(track_state)
         code_phases[i] = comp_code_phase
         carrier_phases[i] = comp_carrier_phase / 2π
     end
@@ -992,7 +992,7 @@ end
     prompts1 = get_beamformed_prompts(sat)
     @test prompts1 isa Vector{ComplexF64}
     @test length(prompts1) == 10
-    @test prompts1[end] == get_last_fully_integrated_beamformed_prompt(track_state)
+    @test prompts1[end] == get_last_integration_beamformed_prompt(track_state)
     buffer_ref = prompts1
 
     # The buffer is reset per call (5, not 15) and reused, not reallocated.
@@ -1001,7 +1001,7 @@ end
     sat = get_tracked_sat(track_state, prn)
     prompts2 = get_beamformed_prompts(sat)
     @test length(prompts2) == 5
-    @test prompts2[end] == get_last_fully_integrated_beamformed_prompt(track_state)
+    @test prompts2[end] == get_last_integration_beamformed_prompt(track_state)
     @test prompts2 === buffer_ref
 
     # No completed integration: the buffer empties.
@@ -1234,7 +1234,7 @@ end
     for i = 1:num_calls
         chunk_signal = @view long_signal[(i*chunk+1):((i+1)*chunk)]
         track!(chunk_signal, track_state, sampling_frequency)
-        push!(prompts, get_prompt(get_last_fully_integrated_correlator(track_state, prn)))
+        push!(prompts, get_prompt(get_last_integration_correlator_bank(track_state, prn)))
     end
 
     sat = get_tracked_sat(track_state, prn)

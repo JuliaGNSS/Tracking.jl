@@ -17,7 +17,7 @@ struct TrackedSignal{
     signal::Sig
     num_integrated_samples::Int
     correlator_bank::C
-    last_fully_integrated_correlator::C
+    last_integration_correlator_bank::C
     # Advanced per integration by TrackingLoops' `process_correlator_bank_output!`. Its
     # `last_num_code_periods` is what the integration actually spanned, which the
     # C/N₀ estimate divides by.
@@ -120,8 +120,8 @@ function TrackedSignal(
 end
 
 # Kwarg-update constructor keeping `t`'s correlator bank and beamformer types. The
-# post-correlation state's parts can be replaced one by one; `last_fully_integrated_*` map to its
-# `previous_prompt` / `last_num_code_periods`. `cn0_estimator` may change type,
+# post-correlation state's parts can be replaced one by one; `last_integration_*` map
+# to its `last_beamformed_prompt` / `last_num_code_periods`. `cn0_estimator` may change type,
 # so a custom estimator can be swapped in; call sites pass `nothing` or a concrete
 # estimator, so the result infers and the per-integration rebuild stays allocation-free.
 function TrackedSignal(
@@ -129,16 +129,16 @@ function TrackedSignal(
     signal = nothing,
     num_integrated_samples = nothing,
     correlator_bank::Maybe{C} = nothing,
-    last_fully_integrated_correlator::Maybe{C} = nothing,
+    last_integration_correlator_bank::Maybe{C} = nothing,
     post_correlation_state::Maybe{PostCorrelationState{B,BF}} = nothing,
-    last_fully_integrated_beamformed_prompt = nothing,
+    last_integration_beamformed_prompt = nothing,
     cn0_estimator::Maybe{AbstractCN0Estimator} = nothing,
     bit_synchronizer::Maybe{BitSynchronizer{B}} = nothing,
     beamformer::Maybe{BF} = nothing,
     beamformed_prompts::Maybe{Vector{ComplexF64}} = nothing,
     correlator_bank_outputs::Maybe{Vector{CorrelatorBankOutput{C}}} = nothing,
     preferred_num_code_periods_to_integrate = nothing,
-    last_fully_integrated_num_code_blocks = nothing,
+    last_integration_num_code_periods = nothing,
 ) where {
     Sig<:AbstractGNSSSignal,
     B<:Unsigned,
@@ -156,16 +156,16 @@ function TrackedSignal(
         bit_synchronizer,
         cn0_estimator,
         beamformer,
-        last_beamformed_prompt = last_fully_integrated_beamformed_prompt,
-        last_num_code_periods = last_fully_integrated_num_code_blocks,
+        last_beamformed_prompt = last_integration_beamformed_prompt,
+        last_num_code_periods = last_integration_num_code_periods,
     )
     TrackedSignal{Sig,B,C,BF,typeof(new_post_correlation_state.cn0_estimator)}(
         isnothing(signal) ? t.signal : signal,
         isnothing(num_integrated_samples) ? t.num_integrated_samples :
         num_integrated_samples,
         isnothing(correlator_bank) ? t.correlator_bank : correlator_bank,
-        isnothing(last_fully_integrated_correlator) ? t.last_fully_integrated_correlator :
-        last_fully_integrated_correlator,
+        isnothing(last_integration_correlator_bank) ? t.last_integration_correlator_bank :
+        last_integration_correlator_bank,
         new_post_correlation_state,
         isnothing(beamformed_prompts) ? t.beamformed_prompts : beamformed_prompts,
         isnothing(correlator_bank_outputs) ? t.correlator_bank_outputs :
@@ -189,7 +189,7 @@ $(SIGNATURES)
 
 The correlator bank of the most recently completed predetection integration.
 """
-get_last_fully_integrated_correlator(t::TrackedSignal) = t.last_fully_integrated_correlator
+get_last_integration_correlator_bank(t::TrackedSignal) = t.last_integration_correlator_bank
 
 """
 $(SIGNATURES)
@@ -197,7 +197,7 @@ $(SIGNATURES)
 The beamformed prompt of the most recently completed predetection
 integration.
 """
-get_last_fully_integrated_beamformed_prompt(t::TrackedSignal) =
+get_last_integration_beamformed_prompt(t::TrackedSignal) =
     t.post_correlation_state.last_beamformed_prompt
 
 """
@@ -206,7 +206,7 @@ $(SIGNATURES)
 The number of primary code periods the most recently completed predetection
 integration spanned.
 """
-get_last_fully_integrated_num_code_blocks(t::TrackedSignal) =
+get_last_integration_num_code_periods(t::TrackedSignal) =
     t.post_correlation_state.last_num_code_periods
 
 """
@@ -219,8 +219,8 @@ divides by. The integration's post-integration SNR is `C/N₀ · T`.
 
 Not to be confused with `get_num_integrated_samples`, the integration in progress.
 """
-get_last_fully_integrated_integration_time(t::TrackedSignal) =
-    get_last_fully_integrated_num_code_blocks(t) * get_code_length(get_signal(t)) /
+get_last_integration_time(t::TrackedSignal) =
+    get_last_integration_num_code_periods(t) * get_code_length(get_signal(t)) /
     get_chip_rate(get_signal(t))
 
 """
@@ -722,14 +722,14 @@ end
 get_signal(sat::TrackedSat, sel...) = get_signal(_find_signal(sat.signals, sel...))
 get_correlator_bank(sat::TrackedSat, sel...) =
     get_correlator_bank(_find_signal(sat.signals, sel...))
-get_last_fully_integrated_correlator(sat::TrackedSat, sel...) =
-    get_last_fully_integrated_correlator(_find_signal(sat.signals, sel...))
-get_last_fully_integrated_beamformed_prompt(sat::TrackedSat, sel...) =
-    get_last_fully_integrated_beamformed_prompt(_find_signal(sat.signals, sel...))
-get_last_fully_integrated_num_code_blocks(sat::TrackedSat, sel...) =
-    get_last_fully_integrated_num_code_blocks(_find_signal(sat.signals, sel...))
-get_last_fully_integrated_integration_time(sat::TrackedSat, sel...) =
-    get_last_fully_integrated_integration_time(_find_signal(sat.signals, sel...))
+get_last_integration_correlator_bank(sat::TrackedSat, sel...) =
+    get_last_integration_correlator_bank(_find_signal(sat.signals, sel...))
+get_last_integration_beamformed_prompt(sat::TrackedSat, sel...) =
+    get_last_integration_beamformed_prompt(_find_signal(sat.signals, sel...))
+get_last_integration_num_code_periods(sat::TrackedSat, sel...) =
+    get_last_integration_num_code_periods(_find_signal(sat.signals, sel...))
+get_last_integration_time(sat::TrackedSat, sel...) =
+    get_last_integration_time(_find_signal(sat.signals, sel...))
 get_beamformed_prompts(sat::TrackedSat, sel...) =
     get_beamformed_prompts(_find_signal(sat.signals, sel...))
 get_beamformer(sat::TrackedSat, sel...) = get_beamformer(_find_signal(sat.signals, sel...))
@@ -1009,7 +1009,7 @@ get_tracked_sat(sats::Dictionary{<:Any,<:TrackedSat}) = only(sats)
 
 function estimate_cn0(tsig::TrackedSignal)
     # The buffered prompts' SNR is a whole integration's, so divide by its time.
-    estimate_cn0(get_cn0_estimator(tsig), get_last_fully_integrated_integration_time(tsig))
+    estimate_cn0(get_cn0_estimator(tsig), get_last_integration_time(tsig))
 end
 
 estimate_cn0(sat::TrackedSat, sel...) = estimate_cn0(_find_signal(sat.signals, sel...))

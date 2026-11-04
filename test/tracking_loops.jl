@@ -30,7 +30,7 @@ using Tracking:
     append_correlator_bank_output!,
     get_carrier_doppler,
     get_code_doppler,
-    get_last_fully_integrated_beamformed_prompt,
+    get_last_integration_beamformed_prompt,
     get_beamformed_prompts,
     get_tracked_sat,
     get_tracked_sats,
@@ -131,7 +131,7 @@ end
     @test get_carrier_doppler(new_track_state) == carrier_doppler
     @test get_code_doppler(new_track_state) ==
           get_chip_rate_to_center_frequency_ratio(gpsl1) * carrier_doppler
-    @test get_last_fully_integrated_beamformed_prompt(new_track_state) == 0.0
+    @test get_last_integration_beamformed_prompt(new_track_state) == 0.0
     @test isempty(get_beamformed_prompts(get_tracked_sat(new_track_state, prn)))
 
     # One completed integration.
@@ -150,9 +150,8 @@ end
     @test get_carrier_doppler(new_track_state_after_full_integration) ==
           100.23888678999913Hz
     @test get_code_doppler(new_track_state_after_full_integration) == -0.1609215874910254Hz
-    @test get_last_fully_integrated_beamformed_prompt(
-        new_track_state_after_full_integration,
-    ) == 0.4 + 0.004im
+    @test get_last_integration_beamformed_prompt(new_track_state_after_full_integration) ==
+          0.4 + 0.004im
     let prompts = get_beamformed_prompts(
             get_tracked_sat(new_track_state_after_full_integration, prn),
         )
@@ -450,9 +449,7 @@ end
             step_tracking_loops!(track_state, _meas_l1(sampling_frequency))
             push!(
                 prompts,
-                get_last_fully_integrated_beamformed_prompt(
-                    get_tracked_sats(track_state)[1],
-                ),
+                get_last_integration_beamformed_prompt(get_tracked_sats(track_state)[1]),
             )
         end
         tracking_loop.integrations, prompts

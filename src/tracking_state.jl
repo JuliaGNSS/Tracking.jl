@@ -897,10 +897,10 @@ for fn in (
     :get_num_integrated_samples,
     :get_correlator_bank,
     :get_correlator_bank_outputs,
-    :get_last_fully_integrated_correlator,
-    :get_last_fully_integrated_beamformed_prompt,
-    :get_last_fully_integrated_num_code_blocks,
-    :get_last_fully_integrated_integration_time,
+    :get_last_integration_correlator_bank,
+    :get_last_integration_beamformed_prompt,
+    :get_last_integration_num_code_periods,
+    :get_last_integration_time,
     :get_beamformed_prompts,
     :get_beamformer,
     :get_cn0_estimator,
@@ -1168,7 +1168,7 @@ end
 # `reset_loop_filters!`).
 @inline function _reset_sat_loop_filters(track_state::TrackState, sat::TrackedSat)
     new_signals = map(
-        s -> TrackedSignal(s; last_fully_integrated_beamformed_prompt = complex(0.0, 0.0)),
+        s -> TrackedSignal(s; last_integration_beamformed_prompt = complex(0.0, 0.0)),
         sat.signals,
     )
     TrackedSat(
@@ -1185,7 +1185,7 @@ Re-seed the tracking loop's state of every satellite (or one addressed
 satellite) from its current Doppler. For the scalar tracking loops this zeroes the
 loop-filter integrators and keeps `carrier_doppler`, `code_doppler`, any
 per-satellite bandwidth override and the carrier-loop stage. Each signal's
-`last_fully_integrated_beamformed_prompt` is cleared, so the first FLL update does
+`last_integration_beamformed_prompt` is cleared, so the first FLL update does
 not measure a rotation spanning the old integration interval.
 
 Use it when a signal's integration length changes mid-track, e.g. GPS L5I from

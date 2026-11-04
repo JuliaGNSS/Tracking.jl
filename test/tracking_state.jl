@@ -21,8 +21,8 @@ using Tracking:
     get_num_integrated_samples,
     get_next_sample_index,
     get_correlator_bank,
-    get_last_fully_integrated_correlator,
-    get_last_fully_integrated_beamformed_prompt,
+    get_last_integration_correlator_bank,
+    get_last_integration_beamformed_prompt,
     get_beamformed_prompts,
     get_beamformer,
     get_cn0_estimator,
@@ -92,7 +92,7 @@ end
     @test get_num_integrated_samples(track_state, 1) == 0
     @test get_next_sample_index(track_state, 1) == 1
     @test get_correlator_bank(track_state, 1).correlator_outputs == zeros(3)
-    @test get_last_fully_integrated_correlator(track_state, 1).correlator_outputs ==
+    @test get_last_integration_correlator_bank(track_state, 1).correlator_outputs ==
           zeros(3)
     @test get_beamformer(track_state, 1) isa DefaultBeamformer
     @test get_cn0_estimator(track_state, 1) isa NoiseReferencedCN0Estimator
@@ -540,8 +540,8 @@ end
     @inferred get_next_sample_index(track_state, 1)
     @inferred get_num_integrated_samples(track_state, 1)
     @inferred get_correlator_bank(track_state, 1)
-    @inferred get_last_fully_integrated_correlator(track_state, 1)
-    @inferred get_last_fully_integrated_beamformed_prompt(track_state, 1)
+    @inferred get_last_integration_correlator_bank(track_state, 1)
+    @inferred get_last_integration_beamformed_prompt(track_state, 1)
     @inferred get_beamformer(track_state, 1)
     @inferred get_cn0_estimator(track_state, 1)
     @inferred get_bit_synchronizer(track_state, 1)
@@ -694,10 +694,8 @@ end
         ),
     )
     fake_prompt_signals = map(
-        s -> Tracking.TrackedSignal(
-            s;
-            last_fully_integrated_beamformed_prompt = 1.0 + 2.0im,
-        ),
+        s ->
+            Tracking.TrackedSignal(s; last_integration_beamformed_prompt = 1.0 + 2.0im),
         old.signals,
     )
     sats[1] = TrackedSat(old; signals = fake_prompt_signals, loop_state = overridden_state)
@@ -709,7 +707,7 @@ end
     @test state.bandwidths.code == 0.25Hz
     # The FLL's previous prompt is cleared, so the first discriminator after
     # the reset does not span the old integration.
-    @test get_last_fully_integrated_beamformed_prompt(ts, 1) == 0.0 + 0.0im
+    @test get_last_integration_beamformed_prompt(ts, 1) == 0.0 + 0.0im
 end
 
 @testset "per-signal preferred_num_code_periods_to_integrate + reset_loop_filters!" begin

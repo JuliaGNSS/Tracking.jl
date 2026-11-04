@@ -451,7 +451,7 @@ implement:
     estimator with the prompt added;
   - `estimate_cn0(cn0_estimator::MyCN0Estimator, integration_time)`, returning
     `dB-Hz`; `integration_time` is the last integration's, i.e.
-    [`get_last_fully_integrated_integration_time`](@ref).
+    [`get_last_integration_time`](@ref).
 
 To use the navigation-bit grid (boundaries, sync, soft bits), implement
 `TrackingLoops.update!(cn0_estimator::MyCN0Estimator, prompt, context::CN0UpdateContext)`

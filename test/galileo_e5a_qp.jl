@@ -28,7 +28,7 @@ using Tracking:
     TrackedSignal,
     get_carrier_doppler,
     get_code_phase,
-    get_last_fully_integrated_num_code_blocks,
+    get_last_integration_num_code_periods,
     get_num_bits,
     get_preferred_num_code_periods_to_integrate,
     get_tracked_sat,
@@ -123,8 +123,7 @@ const CODE_PERIODS_PER_CYCLE = 31
 
         @test get_code_phase(tracked_sat) ≈ start_code_phase atol = 0.1
         @test is_bit_or_secondary_code_synced(tracked_sat) == true
-        @test get_last_fully_integrated_num_code_blocks(tracked_sat) ==
-              CODE_PERIODS_PER_CYCLE
+        @test get_last_integration_num_code_periods(tracked_sat) == CODE_PERIODS_PER_CYCLE
 
         @test get_num_bits(tracked_sat) == 0
     end
@@ -162,11 +161,10 @@ const CODE_PERIODS_PER_CYCLE = 31
 
         @test get_carrier_doppler(tracked_sat) ≈ doppler atol = 2.0Hz
         # On the real axis, with no energy lost to the 2 ms integration.
-        prompt = Tracking.get_last_fully_integrated_beamformed_prompt(tracked_sat)
+        prompt = Tracking.get_last_integration_beamformed_prompt(tracked_sat)
         @test real(prompt) / abs(prompt) > 0.9
         @test abs(prompt) > 0.9
-        @test get_last_fully_integrated_num_code_blocks(tracked_sat) ==
-              CODE_PERIODS_PER_CYCLE
+        @test get_last_integration_num_code_periods(tracked_sat) == CODE_PERIODS_PER_CYCLE
         @test get_num_bits(tracked_sat) == 0
         @test estimate_cn0(track_state, prn) > 40.0dBHz
     end

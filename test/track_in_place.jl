@@ -25,7 +25,7 @@ using Tracking:
     get_carrier_phase,
     get_code_doppler,
     get_carrier_doppler,
-    get_last_fully_integrated_beamformed_prompt,
+    get_last_integration_beamformed_prompt,
     get_beamformed_prompts,
     get_tracked_sat,
     CPUDownconvertAndCorrelator,
@@ -75,8 +75,8 @@ end
     @test get_carrier_phase(ts_immutable) == get_carrier_phase(ts_mutable)
     @test get_code_doppler(ts_immutable) == get_code_doppler(ts_mutable)
     @test get_carrier_doppler(ts_immutable) == get_carrier_doppler(ts_mutable)
-    @test get_last_fully_integrated_beamformed_prompt(ts_immutable) ==
-          get_last_fully_integrated_beamformed_prompt(ts_mutable)
+    @test get_last_integration_beamformed_prompt(ts_immutable) ==
+          get_last_integration_beamformed_prompt(ts_mutable)
     @test get_beamformed_prompts(get_tracked_sat(ts_immutable)) ==
           get_beamformed_prompts(get_tracked_sat(ts_mutable))
 end

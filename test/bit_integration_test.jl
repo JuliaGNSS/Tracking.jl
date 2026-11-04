@@ -19,8 +19,8 @@ using Tracking:
     get_code_phase,
     get_num_bits,
     get_beamformed_prompts,
-    get_last_fully_integrated_beamformed_prompt,
-    get_last_fully_integrated_num_code_blocks,
+    get_last_integration_beamformed_prompt,
+    get_last_integration_num_code_periods,
     set_preferred_num_code_periods_to_integrate!
 using TrackingLoops:
     get_soft_bits, is_bit_or_secondary_code_synced, EarlyPromptLateCorrelatorBank
@@ -453,11 +453,11 @@ end
         track_state = track(samples, track_state, sampling_frequency; nco_update_interval)
 
         @test is_bit_or_secondary_code_synced(track_state)
-        @test get_last_fully_integrated_num_code_blocks(track_state, prn) ==
+        @test get_last_integration_num_code_periods(track_state, prn) ==
               secondary_code_length
         # The overlay is wiped across all 20 code periods, so the normalised prompt
         # keeps its full magnitude.
-        @test abs(get_last_fully_integrated_beamformed_prompt(track_state, prn)) > 0.99
+        @test abs(get_last_integration_beamformed_prompt(track_state, prn)) > 0.99
         # The last five prompts all postdate sync.
         prompts = get_beamformed_prompts(track_state, prn)
         @test all(>(0.99), abs.(prompts[(end-4):end]))

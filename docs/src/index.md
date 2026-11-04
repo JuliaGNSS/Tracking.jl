@@ -108,6 +108,6 @@ Multiple satellites, constellations, signals and bands, antenna arrays, acquisit
 
 - Why are the correlator outputs zero?
 
-`get_last_fully_integrated_correlator` returns the last *completed* integration,
+`get_last_integration_correlator_bank` returns the last *completed* integration,
 one that reached the end of its code periods. Before the first one completes it
 is zero.
