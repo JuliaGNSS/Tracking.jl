@@ -37,29 +37,18 @@ Base.elsize(::Type{ScratchView{T}}) where {T} = sizeof(T)
 """
 $(SIGNATURES)
 
-CPU-based implementation of downconversion and correlation. Its scratch buffers
-grow lazily on first use and are reused thereafter, so a hoisted instance is
+CPU-based implementation of downconversion and correlation, single-threaded or, with
+`threaded = true`, multi-threaded over the satellites (PRNs) of each group. Its scratch
+buffers grow lazily on first use and are reused thereafter, so a hoisted instance is
 allocation-free per `track!` call in steady state.
 
 For real-time loops, construct the backend **once outside** the `track!` loop and
 pass it via the `downconvert_and_correlator` keyword; the default rebuilds the
 buffers on every call.
-"""
-struct CPUDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator
-    buffers::ScratchBuffers
-end
 
-CPUDownconvertAndCorrelator() = CPUDownconvertAndCorrelator(ScratchBuffers())
-
-"""
-$(SIGNATURES)
-
-Multi-threaded CPU downconvert and correlate, parallelized over the satellites
-(PRNs) of each group. Holds one set of scratch buffers per thread, indexed by
-`Threads.threadid()` inside `@batch` (which pins each iteration to a thread), grown
-lazily.
-
-With more than one thread and more than one work item, each `@batch` launch (one per
+The threaded variant holds one set of scratch buffers per thread, indexed by
+`Threads.threadid()` inside `@batch` (which pins each iteration to a thread). With more
+than one thread and more than one work item, each `@batch` launch (one per
 `downconvert_and_correlate!` call, so one per code period inside `track!`) keeps a
 Polyester allocation of ~96 B, bounded per launch and independent of the input
 buffer size. Measuring a noise density keeps it at ~96 B (the noise despreads ride
@@ -76,24 +65,26 @@ which code-replica generation needs. A prototype that generates from the LUT's b
 arrays passed as separate arguments measures 0 B/launch at full throughput, but needs
 a GNSSSignals API that does not re-wrap them in a struct; a serial code-gen pre-pass
 also reaches 0 but serializes ~30 % of the work. Neither is worth ~96 B per launch.
-
-For real-time loops, construct the backend **once outside** the `track!` loop and
-pass it via the `downconvert_and_correlator` keyword; the default rebuilds the
-per-thread buffers on every call.
 """
-struct CPUThreadedDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator
-    buffers::Vector{ScratchBuffers}
+struct CPUDownconvertAndCorrelator{B<:Union{ScratchBuffers,Vector{ScratchBuffers}}} <:
+       AbstractDownconvertAndCorrelator
+    buffers::B
 end
 
-CPUThreadedDownconvertAndCorrelator() =
-    CPUThreadedDownconvertAndCorrelator([ScratchBuffers() for _ = 1:Threads.maxthreadid()],)
+CPUDownconvertAndCorrelator(; threaded::Bool = false) =
+    CPUDownconvertAndCorrelator(_scratch_sets(ScratchBuffers, threaded))
 
-# This thread's `ScratchBuffers`. Bounds-checked: threads adopted after
-# construction (`jl_adopt_thread`) can exceed the `Threads.maxthreadid()` it was
-# sized for, and must fail loudly.
-@inline _scratch_buffers(dc::CPUDownconvertAndCorrelator) = dc.buffers
-@inline _scratch_buffers(dc::CPUThreadedDownconvertAndCorrelator) =
-    dc.buffers[Threads.threadid()]
+# A backend's scratch: one set, or one per thread for a threaded backend.
+_scratch_sets(make, threaded::Bool) =
+    threaded ? [make() for _ = 1:Threads.maxthreadid()] : make()
+
+# This thread's scratch set. Bounds-checked: threads adopted after construction
+# (`jl_adopt_thread`) can exceed the `Threads.maxthreadid()` it was sized for, and must
+# fail loudly.
+@inline _this_thread(scratch_sets::Vector) = scratch_sets[Threads.threadid()]
+@inline _this_thread(scratch) = scratch
+
+@inline _scratch_buffers(dc::CPUDownconvertAndCorrelator) = _this_thread(dc.buffers)
 
 # Grow `buf` to fit `n` elements of `T` and hand `f` a `ScratchView` of exactly
 # that size, keeping `buf` rooted while `f` runs (the view holds a raw `Ptr`).
@@ -107,7 +98,7 @@ end
 
 @inline function _with_code_replica_buffer(
     f,
-    dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
+    dc::CPUDownconvertAndCorrelator,
     ::Type{T},
     n::Int,
 ) where {T}
@@ -133,7 +124,7 @@ end
 # Float32s each (antennas back-to-back).
 @inline function _with_tile_buffers(
     f,
-    dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
+    dc::CPUDownconvertAndCorrelator,
     num_samples::Int,
     num_antennas::Int = 1,
 )
@@ -167,7 +158,7 @@ end
 # packed once per group: the noise reference passes it, as the planes belong to the
 # group whose loop it rides, possibly on another band. Other backends ignore it.
 @inline function _despread_one_signal!(
-    dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
+    dc::CPUDownconvertAndCorrelator,
     correlator_bank,
     samples,
     signal,
@@ -212,7 +203,7 @@ end
 # Fused kernel call with SoA tile buffers from the backend's `ScratchBuffers`, which
 # only the `AbstractVector`-shifts fallback needs; `SVector` shifts need none.
 @inline function _fused_with_tile_scratch!(
-    dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
+    dc::CPUDownconvertAndCorrelator,
     correlator_bank::AbstractCorrelatorBank{M},
     samples,
     code_replica,
@@ -235,7 +226,7 @@ end
 end
 
 @inline function _fused_with_tile_scratch!(
-    dc::Union{CPUDownconvertAndCorrelator,CPUThreadedDownconvertAndCorrelator},
+    dc::CPUDownconvertAndCorrelator,
     correlator_bank::AbstractCorrelatorBank{M},
     samples,
     code_replica,
@@ -1080,9 +1071,11 @@ end
 struct _SerialLoop end
 struct _BatchLoop end
 
-# Serial by default; only the multi-threaded backends opt into `@batch`.
+# Serial by default; a backend holding one scratch set per thread opts into `@batch`.
 @inline _threading(::AbstractDownconvertAndCorrelator) = _SerialLoop()
-@inline _threading(::CPUThreadedDownconvertAndCorrelator) = _BatchLoop()
+@inline _threading(dc::CPUDownconvertAndCorrelator) = _threading_of(dc.buffers)
+@inline _threading_of(::Vector) = _BatchLoop()
+@inline _threading_of(_) = _SerialLoop()
 
 @inline _dc_group_loop!(
     dc::AbstractDownconvertAndCorrelator,

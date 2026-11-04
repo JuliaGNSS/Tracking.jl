@@ -13,7 +13,7 @@ track!
 
 ## Optional parameters
 
-- `downconvert_and_correlator`: the backend, by default `CPUThreadedDownconvertAndCorrelator()`. **Hoist it outside real-time loops** (see below).
+- `downconvert_and_correlator`: the backend, by default `CPUDownconvertAndCorrelator(; threaded = true)`. **Hoist it outside real-time loops** (see below).
 - `intermediate_frequency`: the intermediate frequency, by default `0.0Hz` (complex baseband). Bare-buffer form only; otherwise it is a keyword of each [`BandSamples`](@ref).
 - `nco_update_interval`: the NCO-update interval, a time (e.g. `1u"ms"`). `nothing` means the smallest primary-code period of the tracked signals (1 ms for GPS L1 C/A); see [Chunked NCO updates](#Chunked-NCO-updates). Longer intervals mean fewer loop updates at a lower update rate.
 
@@ -46,7 +46,7 @@ track_state = TrackState(; signal = GPSL1CA())
 track_state = add_satellite!(track_state; prn = 1, code_phase = 0.0, carrier_doppler = 1000.0Hz)
 # ... more sats ...
 
-dc = CPUThreadedDownconvertAndCorrelator()  # hoist outside the loop
+dc = CPUDownconvertAndCorrelator(; threaded = true)  # hoist outside the loop
 
 while got_signal_chunk(rx)
     chunk = read_chunk!(rx)
@@ -127,25 +127,23 @@ Tracking.MultiBandSamples
 
 ## Downconversion and correlation
 
-The default [`CPUThreadedDownconvertAndCorrelator`](@ref) runs in Float32 and
-accepts any complex sample type. For `Complex{Int16}` samples there are three
-opt-in backends, each with a threaded and a single-threaded variant, selected via
-the `downconvert_and_correlator` keyword:
+The default [`CPUDownconvertAndCorrelator`](@ref) runs in Float32 and accepts any
+complex sample type. For `Complex{Int16}` samples there are three opt-in backends,
+selected via the `downconvert_and_correlator` keyword. Every backend runs
+single-threaded unless constructed with `threaded = true`, which parallelizes over the
+satellites of a group, as `track`'s default does:
 
-- [`Int16ThreadedDownconvertAndCorrelator`](@ref) /
-  [`Int16DownconvertAndCorrelator`](@ref): integer arithmetic, typically
+- [`Int16DownconvertAndCorrelator`](@ref): integer arithmetic, typically
   ~1.3–2.9× faster. Its **required** `full_scale` is the front end's full scale
   (the largest `|real|`/`|imag|`, e.g. `2^11` for a 12-bit ADC), which sizes the
   carrier replica against overflow; see [`Int16DownconvertAndCorrelator`](@ref)
   for why under-declaring it is catastrophic.
-- [`OneBitThreadedDownconvertAndCorrelator`](@ref) /
-  [`OneBitDownconvertAndCorrelator`](@ref): samples, carrier and code
+- [`OneBitDownconvertAndCorrelator`](@ref): samples, carrier and code
   hard-limited to a sign bit, so downconversion is XOR and accumulation popcount;
   ~1.5–5.6× faster than Float32 (more at higher rates) for ≈2–3 dB of SNR. The
   ratio-normalised discriminators, C/N₀ and bit synchronizer do not mind the coarse
   amplitude. BPSK only.
-- [`TwoBitThreadedDownconvertAndCorrelator`](@ref) /
-  [`TwoBitDownconvertAndCorrelator`](@ref): adds a **magnitude** bit to
+- [`TwoBitDownconvertAndCorrelator`](@ref): adds a **magnitude** bit to
   samples and carrier (`{±1, ±3}`), recovering ≈2 dB of the one-bit loss
   (≈0.8 dB short of Float32) at about Int16 speed. `threshold` is the magnitude
   split in ADC counts (≈1σ of the input is near-optimal; the default 512 suits an
@@ -153,13 +151,9 @@ the `downconvert_and_correlator` keyword:
 
 ```@docs
 CPUDownconvertAndCorrelator
-CPUThreadedDownconvertAndCorrelator
 Int16DownconvertAndCorrelator
-Int16ThreadedDownconvertAndCorrelator
 OneBitDownconvertAndCorrelator
-OneBitThreadedDownconvertAndCorrelator
 TwoBitDownconvertAndCorrelator
-TwoBitThreadedDownconvertAndCorrelator
 Tracking.AbstractDownconvertAndCorrelator
 Tracking.downconvert_and_correlate
 Tracking.downconvert_and_correlate!

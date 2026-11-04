@@ -316,51 +316,32 @@ end
 """
 $(SIGNATURES)
 
-One-bit (hard-limited) bit-wise CPU downconvert + correlate backend
-(single-threaded). Opt-in alternative to [`CPUDownconvertAndCorrelator`] for
-`Complex{Int16}` sample buffers: it 1-bit-quantises samples, carrier and code and
-correlates with XOR + popcount, trading ≈2–3 dB of SNR for bit-wise speed. Construct it
+One-bit (hard-limited) bit-wise CPU downconvert + correlate backend. Opt-in alternative
+to [`CPUDownconvertAndCorrelator`] for `Complex{Int16}` sample buffers: it
+1-bit-quantises samples, carrier and code and correlates with XOR + popcount, trading
+≈2–3 dB of SNR for bit-wise speed. `threaded = true` runs it multi-threaded as
+[`CPUDownconvertAndCorrelator`](@ref). Construct it
 **once outside** the `track!` loop and pass it via the `downconvert_and_correlator`
 keyword for an allocation-free steady state.
 """
-struct OneBitDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator
-    buffers::OneBitScratchBuffers
+struct OneBitDownconvertAndCorrelator{
+    B<:Union{OneBitScratchBuffers,Vector{OneBitScratchBuffers}},
+} <: AbstractDownconvertAndCorrelator
+    buffers::B
     band::OneBitBandBuffers
     block_length::Int
 end
 
-"""
-$(SIGNATURES)
+OneBitDownconvertAndCorrelator(;
+    block_length::Integer = _ONEBIT_BLOCK_LENGTH,
+    threaded::Bool = false,
+) = OneBitDownconvertAndCorrelator(
+    _scratch_sets(OneBitScratchBuffers, threaded),
+    OneBitBandBuffers(),
+    Int(block_length),
+)
 
-Multi-threaded [`OneBitDownconvertAndCorrelator`](@ref), one `OneBitScratchBuffers` per
-thread.
-"""
-struct OneBitThreadedDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator
-    buffers::Vector{OneBitScratchBuffers}
-    band::OneBitBandBuffers
-    block_length::Int
-end
-
-OneBitDownconvertAndCorrelator(; block_length::Integer = _ONEBIT_BLOCK_LENGTH) =
-    OneBitDownconvertAndCorrelator(
-        OneBitScratchBuffers(),
-        OneBitBandBuffers(),
-        Int(block_length),
-    )
-
-OneBitThreadedDownconvertAndCorrelator(; block_length::Integer = _ONEBIT_BLOCK_LENGTH) =
-    OneBitThreadedDownconvertAndCorrelator(
-        [OneBitScratchBuffers() for _ = 1:Threads.maxthreadid()],
-        OneBitBandBuffers(),
-        Int(block_length),
-    )
-
-const _OneBitDC =
-    Union{OneBitDownconvertAndCorrelator,OneBitThreadedDownconvertAndCorrelator}
-
-@inline _ob_scratch(dc::OneBitDownconvertAndCorrelator) = dc.buffers
-@inline _ob_scratch(dc::OneBitThreadedDownconvertAndCorrelator) =
-    dc.buffers[Threads.threadid()]
+@inline _ob_scratch(dc::OneBitDownconvertAndCorrelator) = _this_thread(dc.buffers)
 
 # ── The one-bit hybrid-blocked kernel ─────────────────────────────────────────
 # Returns this integration's contribution per correlator, `SVector{NC}` of `ComplexF64` (M=1) or
@@ -368,7 +349,7 @@ const _OneBitDC =
 # accumulators in named locals. An `SVector`, not a `Vector`: the compiler does not elide a
 # `Vector` at the noise reference's call site (112 B per despread).
 @generated function _onebit_hybrid_blocked!(
-    dc::_OneBitDC,
+    dc::OneBitDownconvertAndCorrelator,
     samples::AbstractVecOrMat{Complex{Int16}},
     ::NumAntennas{M},
     signal,
@@ -607,7 +588,7 @@ end
 # looped at runtime into Int64 totals; bit-identical to the `@generated` kernel. Returns a
 # `Vector` of `ComplexF64` (M=1) or `SVector{M,ComplexF64}` (M>1).
 function _onebit_hybrid_blocked!(
-    dc::_OneBitDC,
+    dc::OneBitDownconvertAndCorrelator,
     samples::AbstractVecOrMat{Complex{Int16}},
     ::NumAntennas{M},
     signal,
@@ -800,7 +781,7 @@ end
 # code against them; bit-identical to correlating each signal alone. `@generated` over
 # (M, the signals tuple); `SVector` shifts only, like the other tile-shares.
 @generated function _onebit_hybrid_blocked_multi!(
-    dc::_OneBitDC,
+    dc::OneBitDownconvertAndCorrelator,
     samples::AbstractVecOrMat{Complex{Int16}},
     ::NumAntennas{M},
     gnss_signals::Tuple,
@@ -1106,7 +1087,7 @@ end
 # noise reference passes `false`, as the planes belong to the group whose loop it rides,
 # possibly another band.
 @inline _despread_one_signal!(
-    dc::_OneBitDC,
+    dc::OneBitDownconvertAndCorrelator,
     correlator_bank,
     samples,
     signal,
@@ -1145,7 +1126,7 @@ end
 @inline function _correlate_signals(
     signals::Tuple{TrackedSignal,TrackedSignal,Vararg{TrackedSignal}},
     per_signal_completed::Tuple,
-    dc::_OneBitDC,
+    dc::OneBitDownconvertAndCorrelator,
     samples,
     code_doppler,
     code_phase,
@@ -1195,7 +1176,7 @@ end
 
 @inline function _dc_one_group!(
     g::SignalGroup,
-    dc::_OneBitDC,
+    dc::OneBitDownconvertAndCorrelator,
     multi_band_samples::MultiBandSamples,
     chunk_index::Int,
     nco_update_interval,
@@ -1251,7 +1232,7 @@ end
     )
 end
 
-@inline _threading(::OneBitThreadedDownconvertAndCorrelator) = _BatchLoop()
+@inline _threading(dc::OneBitDownconvertAndCorrelator) = _threading_of(dc.buffers)
 
 # The public `downconvert_and_correlate(!)` entry points are the backend-agnostic ones of
 # downconvert_and_correlate_cpu.jl.
@@ -1259,14 +1240,14 @@ end
 # Reject non-`Complex{Int16}` sample buffers up front (12-bit ADC contract). A hook rather
 # than inline in `_dc_one_group!`, so the noise work, resolved before the group loop,
 # throws the same error.
-@inline _check_sample_type(::_OneBitDC, band_samples) =
+@inline _check_sample_type(::OneBitDownconvertAndCorrelator, band_samples) =
     eltype(band_samples.samples) === Complex{Int16} || throw(
         ArgumentError(
             string(
                 "OneBitDownconvertAndCorrelator requires `Complex{Int16}` ",
                 "samples (12-bit ADC); got element type ",
                 eltype(band_samples.samples),
-                ". Use a CPU(Threaded)DownconvertAndCorrelator for floating-point samples.",
+                ". Use a CPUDownconvertAndCorrelator for floating-point samples.",
             ),
         ),
     )

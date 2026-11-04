@@ -6,7 +6,6 @@ using GNSSSignals: GPSL1CA, gen_code, get_chip_rate, get_chip_rate_to_center_fre
 import Tracking
 using Tracking:
     CPUDownconvertAndCorrelator,
-    CPUThreadedDownconvertAndCorrelator,
     TrackedSat,
     TrackState,
     BandSamples,
@@ -24,21 +23,19 @@ using TrackingLoops:
 
 @testset "Downconvert and Correlator" begin
     # Scratch grows lazily, so default construction needs no setup.
-    @test CPUDownconvertAndCorrelator() isa CPUDownconvertAndCorrelator
-    @test CPUThreadedDownconvertAndCorrelator() isa CPUThreadedDownconvertAndCorrelator
+    @test Tracking._threading(CPUDownconvertAndCorrelator()) isa Tracking._SerialLoop
+    @test Tracking._threading(CPUDownconvertAndCorrelator(; threaded = true)) isa
+          Tracking._BatchLoop
 end
 
-@testset "Downconvert and correlate with $DC" for DC in [
-    CPUDownconvertAndCorrelator,
-    CPUThreadedDownconvertAndCorrelator,
-]
+@testset "Downconvert and correlate (threaded = $threaded)" for threaded in (false, true)
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     code_phase = 10.5
     num_samples = 5000
     intermediate_frequency = 0.0Hz
 
-    downconvert_and_correlator = DC()
+    downconvert_and_correlator = CPUDownconvertAndCorrelator(; threaded)
 
     # One code period (~4949 samples) completes in the 5000-sample buffer, so the
     # result is read from `correlator_bank_outputs` (see `_advance_sat` in
@@ -92,10 +89,11 @@ end
           [2919, 4947, 2915] rtol = 1e-3
 end
 
-@testset "Early return when next_sample_index past end with $DC" for DC in [
-    CPUDownconvertAndCorrelator,
-    CPUThreadedDownconvertAndCorrelator,
-]
+@testset "Early return when next_sample_index past end (threaded = $threaded)" for threaded in
+                                                                                   (
+    false,
+    true,
+)
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     code_phase = 10.5
@@ -108,7 +106,7 @@ end
         next_sample_index = num_samples + 1,
     )
     ts_skip = TrackState(gpsl1, [sat_past_end])
-    downconvert_and_correlator = DC()
+    downconvert_and_correlator = CPUDownconvertAndCorrelator(; threaded)
 
     multi_band_samples =
         (L1 = BandSamples(samples, sampling_frequency; intermediate_frequency),)
@@ -634,7 +632,8 @@ TrackingLoops.calc_correlator_sample_offsets(
     @test get_correlator_outputs(public_result) ≈ ref_accumulators rtol = 1e-4
 
     # Both backends' despread primitive `_despread_one_signal!`.
-    for dc in (CPUDownconvertAndCorrelator(), CPUThreadedDownconvertAndCorrelator())
+    for dc in
+        (CPUDownconvertAndCorrelator(), CPUDownconvertAndCorrelator(; threaded = true))
         backend_result = Tracking._despread_one_signal!(
             dc,
             correlator_bank,

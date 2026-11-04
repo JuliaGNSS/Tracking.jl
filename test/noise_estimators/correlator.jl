@@ -11,7 +11,6 @@ import Tracking
 using Tracking:
     BandSamples,
     CPUDownconvertAndCorrelator,
-    CPUThreadedDownconvertAndCorrelator,
     Int16DownconvertAndCorrelator,
     OneBitDownconvertAndCorrelator,
     TrackState,
@@ -101,8 +100,8 @@ end
 ) in (
     (CPUDownconvertAndCorrelator, () -> CPUDownconvertAndCorrelator(), false),
     (
-        CPUThreadedDownconvertAndCorrelator,
-        () -> CPUThreadedDownconvertAndCorrelator(),
+        CPUDownconvertAndCorrelator,
+        () -> CPUDownconvertAndCorrelator(; threaded = true),
         false,
     ),
     (Int16DownconvertAndCorrelator, () -> Int16DownconvertAndCorrelator(NUM_SAMPLES), true),
@@ -374,14 +373,16 @@ end
     # One work item is the sole writer of its window and RNG, so the seeded draws
     # match and the windows agree bit for bit; catches shared state in `@batch`.
     samples = ComplexF32.(_sky(45.0; seed = 12))
-    densities =
-        map((CPUDownconvertAndCorrelator(), CPUThreadedDownconvertAndCorrelator()),) do dc
-            ts = _tracked(samples, dc)
-            (
-                Base.length(ts.noise_estimators.GPSL1CA),
-                get_noise_density(ts.noise_estimators.GPSL1CA),
-            )
-        end
+    densities = map((
+        CPUDownconvertAndCorrelator(),
+        CPUDownconvertAndCorrelator(; threaded = true),
+    ),) do dc
+        ts = _tracked(samples, dc)
+        (
+            Base.length(ts.noise_estimators.GPSL1CA),
+            get_noise_density(ts.noise_estimators.GPSL1CA),
+        )
+    end
     @test densities[1][1] == densities[2][1]
     @test densities[1][2] === densities[2][2]
 end

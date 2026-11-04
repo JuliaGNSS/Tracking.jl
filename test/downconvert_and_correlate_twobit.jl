@@ -26,10 +26,9 @@ using Tracking:
     get_tracked_sat,
     get_carrier_doppler,
     TrackedSignal,
-    CPUThreadedDownconvertAndCorrelator,
-    OneBitThreadedDownconvertAndCorrelator,
-    TwoBitDownconvertAndCorrelator,
-    TwoBitThreadedDownconvertAndCorrelator
+    CPUDownconvertAndCorrelator,
+    OneBitDownconvertAndCorrelator,
+    TwoBitDownconvertAndCorrelator
 import TrackingLoops
 using TrackingLoops:
     estimate_cn0,
@@ -344,7 +343,10 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
     @testset "rejects invalid threshold" begin
         @test_throws ArgumentError TwoBitDownconvertAndCorrelator(; threshold = 0)
         @test_throws ArgumentError TwoBitDownconvertAndCorrelator(; threshold = 32768)
-        @test_throws ArgumentError TwoBitThreadedDownconvertAndCorrelator(; threshold = -5)
+        @test_throws ArgumentError TwoBitDownconvertAndCorrelator(;
+            threshold = -5,
+            threaded = true,
+        )
     end
 
     # E/P and L/P ratios survive two-bit quantisation at high SNR.
@@ -358,7 +360,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
     )
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         cf = correlate_once(
-            CPUThreadedDownconvertAndCorrelator(),
+            CPUDownconvertAndCorrelator(; threaded = true),
             sig,
             fs,
             nsamp,
@@ -366,7 +368,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             100.0,
         )
         cb = correlate_once(
-            TwoBitThreadedDownconvertAndCorrelator(; threshold = 700),
+            TwoBitDownconvertAndCorrelator(; threshold = 700, threaded = true),
             sig,
             fs,
             nsamp,
@@ -398,7 +400,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         )
         @test maximum(shifts) - minimum(shifts) ≥ 64
         cf = correlate_once(
-            CPUThreadedDownconvertAndCorrelator(),
+            CPUDownconvertAndCorrelator(; threaded = true),
             sig,
             fs,
             nsamp,
@@ -406,7 +408,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             100.0,
         )
         cb = correlate_once(
-            TwoBitThreadedDownconvertAndCorrelator(),
+            TwoBitDownconvertAndCorrelator(; threaded = true),
             sig,
             fs,
             nsamp,
@@ -424,7 +426,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         sig, fs = GPSL5I(), 12e6Hz          # BPSK; the bit-wise backend is BPSK/BOC-only
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         c = correlate_once(
-            TwoBitThreadedDownconvertAndCorrelator(),
+            TwoBitDownconvertAndCorrelator(; threaded = true),
             sig,
             fs,
             nsamp,
@@ -443,7 +445,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
     @testset "multiple antennas (M=$M)" for M in (2, 4)
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
-        dc = TwoBitThreadedDownconvertAndCorrelator()
+        dc = TwoBitDownconvertAndCorrelator(; threaded = true)
         cm = correlate_once(
             dc,
             sig,
@@ -473,7 +475,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         c1 = correlate_once(TwoBitDownconvertAndCorrelator(), sig, fs, nsamp, 200Hz, 100.0)
         ct = correlate_once(
-            TwoBitThreadedDownconvertAndCorrelator(),
+            TwoBitDownconvertAndCorrelator(; threaded = true),
             sig,
             fs,
             nsamp,
@@ -491,7 +493,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
         meas = (L1 = BandSamples(cap, fs; intermediate_frequency = 0.0Hz),)
-        dc = TwoBitThreadedDownconvertAndCorrelator()
+        dc = TwoBitDownconvertAndCorrelator(; threaded = true)
         loop = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)
         mksig() = TrackedSignal(
             sig;
@@ -531,7 +533,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
 
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
-        dc = TwoBitThreadedDownconvertAndCorrelator()
+        dc = TwoBitDownconvertAndCorrelator(; threaded = true)
         cs = correlate_once(
             dc,
             sig,
@@ -574,7 +576,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         fc = 200Hz * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
         shifts =
             collect(calc_correlator_sample_offsets(EarlyPromptLateCorrelatorBank(), fs, fc))
-        dc = TwoBitThreadedDownconvertAndCorrelator()
+        dc = TwoBitDownconvertAndCorrelator(; threaded = true)
 
         # M=1: dynamic fallback == static @generated kernel, exactly.
         cs = correlate_once(dc, sig, fs, nsamp, 200Hz, 100.0)
@@ -629,7 +631,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             collect(calc_correlator_sample_offsets(EarlyPromptLateCorrelatorBank(), fs, fc))
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
         meas = (L1 = BandSamples(cap, fs; intermediate_frequency = 0.0Hz),)
-        dc = TwoBitThreadedDownconvertAndCorrelator()
+        dc = TwoBitDownconvertAndCorrelator(; threaded = true)
         mkcorr() = DynShiftsCorrelator{1}(zeros(ComplexF64, 3), shifts)
 
         prns = (1, 5, 12)
@@ -683,7 +685,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
         meas = (L1 = BandSamples(cap, fs; intermediate_frequency = 0.0Hz),)
-        dc = TwoBitThreadedDownconvertAndCorrelator()
+        dc = TwoBitDownconvertAndCorrelator(; threaded = true)
 
         prns = (1, 5, 12)
         tsN = downconvert_and_correlate(
@@ -715,7 +717,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         ts = TrackState(sig, [TrackedSat(sig, 1, 100.0, 200Hz)])
         meas = (L1 = BandSamples(capf, fs; intermediate_frequency = 0.0Hz),)
         @test_throws ArgumentError downconvert_and_correlate(
-            TwoBitThreadedDownconvertAndCorrelator(),
+            TwoBitDownconvertAndCorrelator(; threaded = true),
             meas,
             ts,
         )
@@ -728,7 +730,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         meas = (L1 = BandSamples(cap, fs; intermediate_frequency = 0.0Hz),)
         ts = TrackState(sig, [TrackedSat(sig, 1, 100.0, 200Hz)])
         @test_throws ArgumentError downconvert_and_correlate(
-            TwoBitThreadedDownconvertAndCorrelator(),
+            TwoBitDownconvertAndCorrelator(; threaded = true),
             meas,
             ts,
         )
@@ -743,12 +745,13 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         fc = cdopp * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
         N = 20000
         A, σ = 40.0, 200.0
-        d1 = OneBitThreadedDownconvertAndCorrelator()
-        d2 = TwoBitThreadedDownconvertAndCorrelator(; threshold = round(Int, 0.98σ))
+        d1 = OneBitDownconvertAndCorrelator(; threaded = true)
+        d2 =
+            TwoBitDownconvertAndCorrelator(; threshold = round(Int, 0.98σ), threaded = true)
         ref = angle(
             get_prompt(
                 correlate_once(
-                    CPUThreadedDownconvertAndCorrelator(),
+                    CPUDownconvertAndCorrelator(; threaded = true),
                     sig,
                     fs,
                     N,
@@ -789,10 +792,11 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         # header of src/downconvert_and_correlate_twobit.jl), not exact numbers. This
         # seed measures: two-bit loss 0.74 dB, one-bit 2.76 dB, jitter ratio 1.15×.
         cn0_in = 45.0
-        f = _track_noisy(CPUThreadedDownconvertAndCorrelator(), cn0_in, 1234)
-        b1 = _track_noisy(OneBitThreadedDownconvertAndCorrelator(), cn0_in, 1234)
+        f = _track_noisy(CPUDownconvertAndCorrelator(; threaded = true), cn0_in, 1234)
+        b1 = _track_noisy(OneBitDownconvertAndCorrelator(; threaded = true), cn0_in, 1234)
         b2 = _track_noisy(
-            TwoBitThreadedDownconvertAndCorrelator(; threshold = 2214),  # ≈1σ of √fs noise
+            # threshold ≈1σ of √fs noise
+            TwoBitDownconvertAndCorrelator(; threshold = 2214, threaded = true),
             cn0_in,
             1234,
         )
@@ -821,7 +825,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             cap,
             ts,
             fs;
-            downconvert_and_correlator = TwoBitThreadedDownconvertAndCorrelator(),
+            downconvert_and_correlator = TwoBitDownconvertAndCorrelator(; threaded = true),
         )
         @test get_carrier_doppler(get_tracked_sat(ts, 1)) ≈ cdopp atol = 15Hz
     end

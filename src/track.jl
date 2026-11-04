@@ -38,7 +38,7 @@ first):
 For real-time loops, **construct the backend once outside the loop**:
 
 ```julia
-dc = CPUThreadedDownconvertAndCorrelator()
+dc = CPUDownconvertAndCorrelator(; threaded = true)
 while got_chunk(rx)
     chunk = read_chunk!(rx)
     track_state =
@@ -103,18 +103,18 @@ $(SIGNATURES)
 In-place version of [`track`](@ref): overwrites the satellite slots of
 `track_state` and returns it.
 
-After one warmup call the single-threaded path is allocation-free. The threaded
-path (`CPUThreadedDownconvertAndCorrelator`) keeps a residual of about 96 B per
-group per correlate pass (one per `nco_update_interval` chunk, so it scales
-with the buffer length), when running on more than one thread with more than one
-work item in the group (the noise despreads count, riding the first group); see
-[`CPUThreadedDownconvertAndCorrelator`](@ref) for why.
+After one warmup call the single-threaded path is allocation-free. The threaded one
+(`threaded = true`, the default here) keeps a residual of about 96 B per group per
+correlate pass (one per `nco_update_interval` chunk, so it scales with the buffer
+length), when running on more than one thread with more than one work item in the
+group (the noise despreads count, riding the first group); see
+[`CPUDownconvertAndCorrelator`](@ref) for why.
 
 For real-time loops, **construct the backend once outside the loop**:
 
 ```julia
 track_state = TrackState(signal, initial_sats)
-dc = CPUThreadedDownconvertAndCorrelator()      # hoist!
+dc = CPUDownconvertAndCorrelator(; threaded = true)   # hoist!
 
 while got_chunk(rx)
     chunk = read_chunk!(rx)
@@ -128,7 +128,9 @@ call.
 function track!(
     multi_band_samples::MultiBandSamples,
     track_state::TrackState;
-    downconvert_and_correlator::AbstractDownconvertAndCorrelator = CPUThreadedDownconvertAndCorrelator(),
+    downconvert_and_correlator::AbstractDownconvertAndCorrelator = CPUDownconvertAndCorrelator(;
+        threaded = true,
+    ),
     nco_update_interval = nothing,
 )
     _validate_multi_band_samples(track_state, multi_band_samples)

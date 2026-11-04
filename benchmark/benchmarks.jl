@@ -75,6 +75,13 @@ _band_samples(samples, sampling_frequency, intermediate_frequency = 0.0Hz) =
     getfield(Tracking, :BandSamples)(samples, sampling_frequency; intermediate_frequency) :
     getfield(Tracking, :BandMeasurement)(samples, sampling_frequency, intermediate_frequency)
 
+# Tracking 12: a backend runs multi-threaded with `threaded = true`, not as a
+# `<Kind>ThreadedDownconvertAndCorrelator`.
+_threaded(kind, args...) =
+    isdefined(Tracking, :CPUThreadedDownconvertAndCorrelator) ?
+    getfield(Tracking, Symbol(kind, :ThreadedDownconvertAndCorrelator))(args...) :
+    getfield(Tracking, Symbol(kind, :DownconvertAndCorrelator))(args...; threaded = true)
+
 # GNSSSignals 5 replicates Galileo E1B as BOC(1,1) unless asked for CBOC.
 const _GALILEO_E1B_CBOC =
     isdefined(GNSSSignals, :GalileoE1B_BOC11) ? GalileoE1B() :
@@ -419,7 +426,7 @@ function bench_track_steady_state(
     ts, samples =
         _make_steady_state_track_state(; signals, nsats_list, nsamp, prn_max, code_dop)
     dc =
-        threaded ? Tracking.CPUThreadedDownconvertAndCorrelator() :
+        threaded ? _threaded(:CPU) :
         Tracking.CPUDownconvertAndCorrelator()
     f = inplace ? Tracking.track! : Tracking.track
     @benchmarkable $f($samples, $ts, $sfreq; downconvert_and_correlator = $dc)
@@ -622,9 +629,9 @@ for (name, signals, nsats_list, sfreq, nsamp, prn_max, capture) in (
     ),
 )
     sig16 = capture(nsamp)
-    dc_f = Tracking.CPUThreadedDownconvertAndCorrelator()
+    dc_f = _threaded(:CPU)
     # 2^11 is the ±2048 full scale of `_int16_capture` above.
-    dc_i = Tracking.Int16ThreadedDownconvertAndCorrelator(2^11)
+    dc_i = _threaded(:Int16, 2^11)
     g = SUITE["track! Int16 vs Float32"][name]
     # Tracking random samples drifts the loop filter to a NaN Doppler
     # (`InexactError`) over many evals, so `setup` rebuilds a fresh synced state
@@ -662,7 +669,7 @@ for (name, signals, nsats_list, sfreq, nsamp, prn_max, capture) in (
     # One-bit (bit-wise) backend, same capture. BPSK-only (it errors on CBOC), so
     # register it only for the non-Galileo cases.
     if !(first(signals) isa GalileoE1B)
-        dc_b = Tracking.OneBitThreadedDownconvertAndCorrelator()
+        dc_b = _threaded(:OneBit)
         g["OneBit"] = @benchmarkable(
             Tracking.track!($sig16, ts, $sfreq; downconvert_and_correlator = $dc_b),
             setup = (
@@ -681,7 +688,7 @@ for (name, signals, nsats_list, sfreq, nsamp, prn_max, capture) in (
     end
     # Two-bit (sign+magnitude bit-wise) backend, same capture and BPSK-only gate.
     if !(first(signals) isa GalileoE1B)
-        dc_t = Tracking.TwoBitThreadedDownconvertAndCorrelator()
+        dc_t = _threaded(:TwoBit)
         g["TwoBit"] = @benchmarkable(
             Tracking.track!($sig16, ts, $sfreq; downconvert_and_correlator = $dc_t),
             setup = (
@@ -746,22 +753,22 @@ for n_signals in (3,)
     cap = _int16_capture(_AXES_NSAMP)
     g = SUITE["track! Int16 vs Float32"]["GPS L1CA, 1 sat, $n_signals signals @ 5 MHz"]
     g["Float32"] = _axes_dc(
-        Tracking.CPUThreadedDownconvertAndCorrelator(),
+        _threaded(:CPU),
         cap,
         _axes_multisignal_state(n_signals),
     )
     g["Int16"] = _axes_dc(
-        Tracking.Int16ThreadedDownconvertAndCorrelator(2^11),
+        _threaded(:Int16, 2^11),
         cap,
         _axes_multisignal_state(n_signals),
     )
     g["OneBit"] = _axes_dc(
-        Tracking.OneBitThreadedDownconvertAndCorrelator(),
+        _threaded(:OneBit),
         cap,
         _axes_multisignal_state(n_signals),
     )
     g["TwoBit"] = _axes_dc(
-        Tracking.TwoBitThreadedDownconvertAndCorrelator(),
+        _threaded(:TwoBit),
         cap,
         _axes_multisignal_state(n_signals),
     )
@@ -770,22 +777,22 @@ for num_antennas in (4,)
     cap = _int16_capture_mat(_AXES_NSAMP, num_antennas)
     g = SUITE["track! Int16 vs Float32"]["GPS L1CA, 1 sat, $num_antennas antennas @ 5 MHz"]
     g["Float32"] = _axes_dc(
-        Tracking.CPUThreadedDownconvertAndCorrelator(),
+        _threaded(:CPU),
         cap,
         _axes_multiantenna_state(num_antennas),
     )
     g["Int16"] = _axes_dc(
-        Tracking.Int16ThreadedDownconvertAndCorrelator(2^11),
+        _threaded(:Int16, 2^11),
         cap,
         _axes_multiantenna_state(num_antennas),
     )
     g["OneBit"] = _axes_dc(
-        Tracking.OneBitThreadedDownconvertAndCorrelator(),
+        _threaded(:OneBit),
         cap,
         _axes_multiantenna_state(num_antennas),
     )
     g["TwoBit"] = _axes_dc(
-        Tracking.TwoBitThreadedDownconvertAndCorrelator(),
+        _threaded(:TwoBit),
         cap,
         _axes_multiantenna_state(num_antennas),
     )

@@ -602,33 +602,23 @@ TwoBitScratchBuffers() = TwoBitScratchBuffers(
 """
 $(SIGNATURES)
 
-Two-bit (sign + magnitude) bit-wise CPU downconvert + correlate backend
-(single-threaded). Opt-in alternative to [`CPUDownconvertAndCorrelator`] for
-`Complex{Int16}` sample buffers, between [`OneBitDownconvertAndCorrelator`](@ref) and
+Two-bit (sign + magnitude) bit-wise CPU downconvert + correlate backend. Opt-in
+alternative to [`CPUDownconvertAndCorrelator`] for `Complex{Int16}` sample buffers,
+between [`OneBitDownconvertAndCorrelator`](@ref) and
 [`Int16DownconvertAndCorrelator`](@ref): samples and carrier are 4-level `{±1, ±3}`,
 the code 1-bit, correlated with XOR + masked popcount. Recovers ≈2 dB of correlation SNR
 over the one-bit backend (≈0.8 dB total quantisation loss vs Float32) at bit-wise speed.
+`threaded = true` runs it multi-threaded as [`CPUDownconvertAndCorrelator`](@ref).
 Construct it **once outside** the `track!` loop and pass it via the
 `downconvert_and_correlator` keyword for an allocation-free steady state.
 
 `threshold` is the sample magnitude split in ADC counts (`|component| ≥ threshold`
 ⇒ `±3`); near 1σ of the front end's input is the near-optimal 4-level quantiser.
 """
-struct TwoBitDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator
-    buffers::TwoBitScratchBuffers
-    band::TwoBitBandBuffers
-    block_length::Int
-    threshold::Int16
-end
-
-"""
-$(SIGNATURES)
-
-Multi-threaded [`TwoBitDownconvertAndCorrelator`](@ref), one `TwoBitScratchBuffers` per
-thread.
-"""
-struct TwoBitThreadedDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator
-    buffers::Vector{TwoBitScratchBuffers}
+struct TwoBitDownconvertAndCorrelator{
+    B<:Union{TwoBitScratchBuffers,Vector{TwoBitScratchBuffers}},
+} <: AbstractDownconvertAndCorrelator
+    buffers::B
     band::TwoBitBandBuffers
     block_length::Int
     threshold::Int16
@@ -646,29 +636,15 @@ end
 TwoBitDownconvertAndCorrelator(;
     threshold::Integer = 512,
     block_length::Integer = _TWOBIT_BLOCK_LENGTH,
+    threaded::Bool = false,
 ) = TwoBitDownconvertAndCorrelator(
-    TwoBitScratchBuffers(),
+    _scratch_sets(TwoBitScratchBuffers, threaded),
     TwoBitBandBuffers(),
     Int(block_length),
     _tb_check_threshold(threshold),
 )
 
-TwoBitThreadedDownconvertAndCorrelator(;
-    threshold::Integer = 512,
-    block_length::Integer = _TWOBIT_BLOCK_LENGTH,
-) = TwoBitThreadedDownconvertAndCorrelator(
-    [TwoBitScratchBuffers() for _ = 1:Threads.maxthreadid()],
-    TwoBitBandBuffers(),
-    Int(block_length),
-    _tb_check_threshold(threshold),
-)
-
-const _TwoBitDC =
-    Union{TwoBitDownconvertAndCorrelator,TwoBitThreadedDownconvertAndCorrelator}
-
-@inline _tb_scratch(dc::TwoBitDownconvertAndCorrelator) = dc.buffers
-@inline _tb_scratch(dc::TwoBitThreadedDownconvertAndCorrelator) =
-    dc.buffers[Threads.threadid()]
+@inline _tb_scratch(dc::TwoBitDownconvertAndCorrelator) = _this_thread(dc.buffers)
 
 # The bit-wise CBOC gate (see the one-bit kernel).
 @inline function _tb_check_modulation(signal)
@@ -693,7 +669,7 @@ end
 # `Vector`). `@generated` over (NC, M): the per-(antenna, correlator) IS/IF/QS/QF and per-antenna
 # GXA accumulators are named locals.
 @generated function _twobit_hybrid_blocked!(
-    dc::_TwoBitDC,
+    dc::TwoBitDownconvertAndCorrelator,
     samples::AbstractVecOrMat{Complex{Int16}},
     ::NumAntennas{M},
     signal,
@@ -982,7 +958,7 @@ end
 # Dynamic fallback for runtime-sized `AbstractVector` sample shifts, as the one-bit one:
 # bit-identical to the `@generated` kernel, returns a `Vector`.
 function _twobit_hybrid_blocked!(
-    dc::_TwoBitDC,
+    dc::TwoBitDownconvertAndCorrelator,
     samples::AbstractVecOrMat{Complex{Int16}},
     ::NumAntennas{M},
     signal,
@@ -1199,7 +1175,7 @@ end
 # As the one-bit tile-share; the GXA mask totals involve no code, so they are sat-shared
 # too and accumulate during the first signal's pass only.
 @generated function _twobit_hybrid_blocked_multi!(
-    dc::_TwoBitDC,
+    dc::TwoBitDownconvertAndCorrelator,
     samples::AbstractVecOrMat{Complex{Int16}},
     ::NumAntennas{M},
     gnss_signals::Tuple,
@@ -1566,7 +1542,7 @@ end
 # The despread primitive on this backend's kernel; see `_despread_one_signal!` in
 # downconvert_and_correlate_cpu.jl.
 @inline _despread_one_signal!(
-    dc::_TwoBitDC,
+    dc::TwoBitDownconvertAndCorrelator,
     correlator_bank,
     samples,
     signal,
@@ -1604,7 +1580,7 @@ end
 @inline function _correlate_signals(
     signals::Tuple{TrackedSignal,TrackedSignal,Vararg{TrackedSignal}},
     per_signal_completed::Tuple,
-    dc::_TwoBitDC,
+    dc::TwoBitDownconvertAndCorrelator,
     samples,
     code_doppler,
     code_phase,
@@ -1654,7 +1630,7 @@ end
 
 @inline function _dc_one_group!(
     g::SignalGroup,
-    dc::_TwoBitDC,
+    dc::TwoBitDownconvertAndCorrelator,
     multi_band_samples::MultiBandSamples,
     chunk_index::Int,
     nco_update_interval,
@@ -1684,7 +1660,7 @@ end
             Ptr{Int16}(pointer(samples)),
             num_rows,
             dc.threshold,
-            dc isa TwoBitThreadedDownconvertAndCorrelator,
+            _threading(dc) isa _BatchLoop,
         )
     else
         resize!(dc.band.mrband, 0)
@@ -1713,20 +1689,20 @@ end
     )
 end
 
-@inline _threading(::TwoBitThreadedDownconvertAndCorrelator) = _BatchLoop()
+@inline _threading(dc::TwoBitDownconvertAndCorrelator) = _threading_of(dc.buffers)
 
 # The public `downconvert_and_correlate(!)` entry points are the backend-agnostic ones of
 # downconvert_and_correlate_cpu.jl.
 
 # Reject non-`Complex{Int16}` sample buffers up front (see the one-bit backend).
-@inline _check_sample_type(::_TwoBitDC, band_samples) =
+@inline _check_sample_type(::TwoBitDownconvertAndCorrelator, band_samples) =
     eltype(band_samples.samples) === Complex{Int16} || throw(
         ArgumentError(
             string(
                 "TwoBitDownconvertAndCorrelator requires `Complex{Int16}` ",
                 "samples (12-bit ADC); got element type ",
                 eltype(band_samples.samples),
-                ". Use a CPU(Threaded)DownconvertAndCorrelator for floating-point samples.",
+                ". Use a CPUDownconvertAndCorrelator for floating-point samples.",
             ),
         ),
     )

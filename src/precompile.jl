@@ -78,7 +78,7 @@ end
 
 @setup_workload begin
     samples = map(_precompile_samples, _PRECOMPILE_SIGNALS)
-    backend16 = Int16ThreadedDownconvertAndCorrelator(2^12)
+    backend16 = Int16DownconvertAndCorrelator(2^12; threaded = true)
     @compile_workload begin
         # `map` over tuples unrolls, so each call below is a static dispatch.
         map(

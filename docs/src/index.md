@@ -100,9 +100,8 @@ julia> get_code_phase(track_state, 1)
 [Tracking State](tracking_state.md) covers multiple satellites, constellations, signals and bands, antenna arrays, acquisition handoff and the accessors; [Track](track.md) covers real-time loops.
 
 !!! tip "Real-time loops: hoist the backend"
-    Construct [`CPUThreadedDownconvertAndCorrelator`](@ref) (or
-    [`CPUDownconvertAndCorrelator`](@ref)) **once outside** the loop and pass it
-    via `downconvert_and_correlator =`. See [Track](track.md#Real-time-loops).
+    Construct [`CPUDownconvertAndCorrelator`](@ref) **once outside** the loop and
+    pass it via `downconvert_and_correlator =`. See [Track](track.md#Real-time-loops).
 
 ## Q/A
 

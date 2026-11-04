@@ -28,8 +28,7 @@ using Tracking:
     get_last_integration_beamformed_prompt,
     get_beamformed_prompts,
     get_tracked_sat,
-    CPUDownconvertAndCorrelator,
-    CPUThreadedDownconvertAndCorrelator
+    CPUDownconvertAndCorrelator
 using TrackingLoops:
     NoiseReferencedCN0Estimator,
     NWPRCN0Estimator,
@@ -52,10 +51,8 @@ function gen_samples(sampling_frequency)
     ComplexF32.(samples_template), gpsl1, carrier_doppler, start_code_phase
 end
 
-@testset "track! produces same result as track for $DC" for DC in (
-    CPUDownconvertAndCorrelator,
-    CPUThreadedDownconvertAndCorrelator,
-)
+@testset "track! produces same result as track (threaded = $threaded)" for threaded in
+                                                                           (false, true)
     sampling_frequency = 4e6Hz
     samples, gpsl1, carrier_doppler, start_code_phase = gen_samples(sampling_frequency)
 
@@ -65,7 +62,7 @@ end
     ts_immutable = TrackState(gpsl1, [sat_immutable])
     ts_mutable = TrackState(gpsl1, [sat_mutable])
 
-    dc = DC()
+    dc = CPUDownconvertAndCorrelator(; threaded)
 
     ts_immutable =
         track(samples, ts_immutable, sampling_frequency; downconvert_and_correlator = dc)
@@ -118,9 +115,10 @@ function measure_est!(track_state, sampling_frequency)
     @allocated step_tracking_loops!(track_state, multi_band_samples)
 end
 
-@testset "track! per-stage is allocation-free in steady state ($DC)" for DC in (
-    CPUDownconvertAndCorrelator,
-    CPUThreadedDownconvertAndCorrelator,
+@testset "track! per-stage is allocation-free in steady state (threaded = $threaded)" for threaded in
+                                                                                          (
+    false,
+    true,
 )
     sampling_frequency = 4e6Hz
     samples, gpsl1, carrier_doppler, start_code_phase = gen_samples(sampling_frequency)
@@ -139,7 +137,7 @@ end
             ),
         ],
     )
-    dc = DC()
+    dc = CPUDownconvertAndCorrelator(; threaded)
 
     # Warm up: compile, and settle the bit buffer and `beamformed_prompts`.
     for _ = 1:8
@@ -151,7 +149,7 @@ end
     # ManualMemory.Reference and Bumper checkpoints inside Polyester's closure),
     # capped loosely enough to still catch per-satellite allocations.
     @test measure_est!(track_state, sampling_frequency) == 0
-    if DC === CPUDownconvertAndCorrelator
+    if !threaded
         @test measure_dc!(dc, samples, track_state, sampling_frequency) == 0
     else
         @test measure_dc!(dc, samples, track_state, sampling_frequency) <= 1024
@@ -163,9 +161,10 @@ end
 # Julia 1.10 the despread leaves a few hundred bytes per sub-integration that
 # 1.11 elides.
 @static if VERSION >= v"1.11"
-    @testset "a noise-referenced signal adds no allocation ($DC)" for DC in (
-        CPUDownconvertAndCorrelator,
-        CPUThreadedDownconvertAndCorrelator,
+    @testset "a noise-referenced signal adds no allocation (threaded = $threaded)" for threaded in
+                                                                                       (
+        false,
+        true,
     )
         sampling_frequency = 4e6Hz
         samples, gpsl1, carrier_doppler, start_code_phase = gen_samples(sampling_frequency)
@@ -181,7 +180,7 @@ end
                 ),
             ],
         )
-        dc = DC()
+        dc = CPUDownconvertAndCorrelator(; threaded)
         @test keys(track_state.noise_estimators) == (:GPSL1CA,)
         observation = calc_noise_observation_from_samples(4000.0, 4000, sampling_frequency)
         for _ = 1:8
@@ -195,7 +194,7 @@ end
         end
 
         @test measure_est!(track_state, sampling_frequency) == 0
-        if DC === CPUDownconvertAndCorrelator
+        if !threaded
             @test measure_dc!(dc, samples, track_state, sampling_frequency) == 0
         else
             @test measure_dc!(dc, samples, track_state, sampling_frequency) <= 1024
@@ -229,8 +228,8 @@ end
         @test keys(plain_state.noise_estimators) == ()
         @test keys(noise_state.noise_estimators) == (:GPSL1CA,)
 
-        plain_dc = CPUThreadedDownconvertAndCorrelator()
-        noise_dc = CPUThreadedDownconvertAndCorrelator()
+        plain_dc = CPUDownconvertAndCorrelator(; threaded = true)
+        noise_dc = CPUDownconvertAndCorrelator(; threaded = true)
         for _ = 1:8
             track!(
                 samples,
