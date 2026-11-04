@@ -69,24 +69,25 @@ _completed_signal(sig, correlator_bank, num_samples) = TrackedSignal(
     @test pll_and_dll.bandwidths == LoopBandwidths()
 
     gpsl1 = GPSL1CA()
-    tracked_sat = TrackedSat(gpsl1, 1, 0.5, 100.0Hz)
-    from_tracked_sat = @inferred init_loop_state(
+    loop_state = @inferred init_loop_state(
         ScalarTrackingLoop(
             ThirdOrderBilinearLF,
             SecondOrderBilinearLF;
             wide_carrier_loop_filter_bandwidth = 25.0Hz,
             code_loop_filter_bandwidth = 2.0Hz,
         ),
-        tracked_sat,
+        gpsl1,
+        100.0Hz,
+        0.0Hz,
     )
-    @test from_tracked_sat.bandwidths.wide_carrier == 25.0Hz
-    @test from_tracked_sat.bandwidths.code == 2.0Hz
+    @test loop_state.bandwidths.wide_carrier == 25.0Hz
+    @test loop_state.bandwidths.code == 2.0Hz
 
-    preserved = @inferred ScalarLoopState(from_tracked_sat)
-    @test preserved.bandwidths == from_tracked_sat.bandwidths
+    preserved = @inferred ScalarLoopState(loop_state)
+    @test preserved.bandwidths == loop_state.bandwidths
 
     overridden = @inferred ScalarLoopState(
-        from_tracked_sat;
+        loop_state;
         bandwidths = LoopBandwidths(; wide_carrier = 30.0Hz, code = 2.0Hz),
     )
     @test overridden.bandwidths.wide_carrier == 30.0Hz
@@ -329,21 +330,20 @@ end
 end
 
 @testset "Bandwidths propagate through ScalarTrackingLoop constructor" begin
-    gpsl1 = GPSL1CA()
-    tracked_sat = TrackedSat(gpsl1, 1, 0.5, 100.0Hz)
+    seed(loop) = init_loop_state(loop, GPSL1CA(), 100.0Hz, 0.0Hz)
     tracking_loop = ScalarTrackingLoop(;
         wide_carrier_loop_filter_bandwidth = 22.0Hz,
         code_loop_filter_bandwidth = 1.5Hz,
     )
-    de_state = init_loop_state(tracking_loop, tracked_sat)
+    de_state = seed(tracking_loop)
     @test de_state.bandwidths.wide_carrier == 22.0Hz
     @test de_state.bandwidths.code == 1.5Hz
 
     bumped = ScalarTrackingLoop(tracking_loop; wide_carrier_loop_filter_bandwidth = 30.0Hz)
-    @test init_loop_state(bumped, tracked_sat).bandwidths.wide_carrier == 30.0Hz
-    @test init_loop_state(bumped, tracked_sat).bandwidths.code == 1.5Hz  # unchanged
+    @test seed(bumped).bandwidths.wide_carrier == 30.0Hz
+    @test seed(bumped).bandwidths.code == 1.5Hz  # unchanged
     preserved = ScalarTrackingLoop(tracking_loop)
-    @test init_loop_state(preserved, tracked_sat).bandwidths == de_state.bandwidths
+    @test seed(preserved).bandwidths == de_state.bandwidths
 end
 
 @testset "merge_sats with matching tracking loop carries through bandwidths" begin

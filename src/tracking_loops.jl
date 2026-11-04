@@ -13,7 +13,7 @@ function _reseed_loop_state(tracking_loop::AbstractTrackingLoop, sat::TrackedSat
         loop_state,
         sat.carrier_doppler,
         sat.code_doppler,
-    ) || return init_loop_state(tracking_loop, sat)
+    ) || return _init_loop_state(tracking_loop, sat)
     reseed_loop_state(tracking_loop, loop_state, sat.carrier_doppler, sat.code_doppler)
 end
 

@@ -324,7 +324,7 @@ end
 )
     isempty(dict) && return nothing
     sat = first(dict.values)
-    expected_state_type = typeof(init_loop_state(tracking_loop, sat))
+    expected_state_type = typeof(_init_loop_state(tracking_loop, sat))
     actual_state_type = typeof(sat.loop_state)
     expected_state_type === actual_state_type && return nothing
     throw(
@@ -529,8 +529,8 @@ $(SIGNATURES)
 
 Add (or replace, by `prn`) a satellite in `track_state` in place. Builds a
 [`TrackedSat`](@ref) for the group with the default correlator bank and beamformer from the acquisition handoff (`prn`, `code_phase`, `code_doppler`,
-`carrier_phase` in cycles, `carrier_doppler`), its loop state from
-[`init_loop_state`](@ref).
+`carrier_phase` in cycles, `carrier_doppler`), its loop state from TrackingLoops'
+`init_loop_state`.
 
 `group_key` may be omitted on a single-group `TrackState`; otherwise an
 `ArgumentError` names the available groups.
@@ -1191,7 +1191,7 @@ transient can drag the loop out of lock.
 No satellite id resets every satellite; `(group_key, prn)` or (single-group) `prn`
 resets one. Mutates `track_state` and returns it. Works for any
 [`AbstractTrackingLoop`](@extref TrackingLoops.AbstractTrackingLoop)
-through its [`init_loop_state`](@ref) hook.
+through its `init_loop_state` hook.
 
 ```julia
 set_preferred_num_code_periods_to_integrate!(track_state, 1, GPSL5I, 10)

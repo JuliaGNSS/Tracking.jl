@@ -25,11 +25,12 @@ satellites.
 2. **A per-satellite state struct**, e.g. `ScalarLoopState` (loop filters and
    seed Dopplers) or a Kalman state vector.
 
-3. **An [`init_loop_state`](@ref) method** seeding a satellite entering the
-   track set:
+3. **A TrackingLoops `init_loop_state` method** seeding a satellite entering the
+   track set from its driver signal (`signals[1]`) and handoff Dopplers:
 
    ```julia
-   TrackingLoops.init_loop_state(::MyTrackingLoop, sat::TrackedSat) = MyLoopState(...)
+   TrackingLoops.init_loop_state(::MyTrackingLoop, driver_signal, carrier_doppler, code_doppler) =
+       MyLoopState(...)
    ```
 
    It must be pure: it is also called on the PRN-0 template sat that fixes a
@@ -124,7 +125,7 @@ julia> # 2. Per-sat loop state struct
        struct MyLoopState end
 
 julia> # 3. Seed each sat
-       TrackingLoops.init_loop_state(::MyTrackingLoop, ::TrackedSat) = MyLoopState();
+       TrackingLoops.init_loop_state(::MyTrackingLoop, _signal, _carrier, _code) = MyLoopState();
 
 julia> # 4. (Optional) shared-state update for new sats
        Tracking.update_tracking_loop_on_new_sats(loop::MyTrackingLoop, new_sats) = loop;
@@ -172,13 +173,12 @@ convention of the per-integration path only.
 
 You do not override the downconvert/correlate path, which passes
 `loop_state` through unchanged. [`add_satellite!`](@ref) and
-[`merge_sats`](@ref) call [`init_loop_state`](@ref) with the `TrackState`'s
-tracking loop.
+[`merge_sats`](@ref) call `init_loop_state` with the `TrackState`'s
+tracking loop and the satellite's driver signal and handoff Dopplers.
 
 ## API reference
 
 ```@docs
-TrackingLoops.init_loop_state(::AbstractTrackingLoop, ::TrackedSat)
 Tracking.update_tracking_loop_on_new_sats
 Tracking.step_tracking_loops
 Tracking.step_tracking_loops!

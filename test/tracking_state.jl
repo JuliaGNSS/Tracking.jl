@@ -427,7 +427,7 @@ end
 
     struct CountingLoopState end
 
-    TrackingLoops.init_loop_state(::CountingTrackingLoop, ::TrackedSat) =
+    TrackingLoops.init_loop_state(::CountingTrackingLoop, _signal, _carrier, _code) =
         CountingLoopState()
 
     function Tracking.update_tracking_loop_on_new_sats(loop::CountingTrackingLoop, new_sats)
@@ -491,7 +491,7 @@ end
 
     struct SatRebuildingState end
 
-    TrackingLoops.init_loop_state(::RebuildingTrackingLoop, ::TrackedSat) =
+    TrackingLoops.init_loop_state(::RebuildingTrackingLoop, _signal, _carrier, _code) =
         SatRebuildingState()
 
     Tracking.update_tracking_loop_on_new_sats(loop::RebuildingTrackingLoop, new_sats) =
