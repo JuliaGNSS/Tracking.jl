@@ -1,8 +1,9 @@
 """
-$(SIGNATURES)
+    BandSamples(samples, sampling_frequency; intermediate_frequency = 0Hz)
 
-One band's sample buffer with the `sampling_frequency` and
-`intermediate_frequency` it was captured at.
+One band's digitized samples with the `sampling_frequency` and
+`intermediate_frequency` they were captured at: complex baseband samples at the
+default intermediate frequency of zero, low-IF samples otherwise.
 
 Fields:
 
@@ -12,23 +13,24 @@ Fields:
     kernels read it through raw pointers; anything else is an `ArgumentError`.
     Contiguous `view`s (e.g. `view(buf, 1:4000)`) are fine.
   - `sampling_frequency::F`: the buffer's sample rate (e.g. `4e6Hz`)
-  - `intermediate_frequency::F`: the band's IF (defaults to `0.0Hz`)
+  - `intermediate_frequency::F`: the band's intermediate frequency (`0.0Hz` by
+    default)
 
-A multi-band `track` takes a NamedTuple of them keyed by band; a single band
-may also pass a plain buffer and sample rate.
+A multi-band `track` takes a NamedTuple of them keyed by band
+([`MultiBandSamples`](@ref Tracking.MultiBandSamples)); a single band may also
+pass a plain buffer and sample rate.
 
 ```julia
-BandMeasurement(buf, 4e6Hz)                              # IF defaults to 0.0Hz
-BandMeasurement(buf, 4e6Hz, 1.575e6Hz)                   # explicit IF
-BandMeasurement(buf; sampling_frequency = 4e6Hz)         # kwarg form
+BandSamples(buf, 4e6Hz)                                     # baseband, IF 0.0Hz
+BandSamples(buf, 4e6Hz; intermediate_frequency = 1.25e6Hz)  # low IF
 ```
 """
-struct BandMeasurement{S<:AbstractVecOrMat,F}
+struct BandSamples{S<:AbstractVecOrMat,F}
     samples::S
     sampling_frequency::F
     intermediate_frequency::F
 
-    function BandMeasurement(
+    function BandSamples{S,F}(
         samples::S,
         sampling_frequency::F,
         intermediate_frequency::F,
@@ -51,7 +53,7 @@ function _assert_dense_layout(samples::AbstractVecOrMat)
     throw(
         ArgumentError(
             string(
-                "BandMeasurement `samples` must be densely laid out in memory ",
+                "BandSamples `samples` must be densely laid out in memory ",
                 "(unit row stride; for a matrix, columns packed back-to-back): ",
                 "the SIMD kernels read it through raw pointers. Got ",
                 typeof(samples),
@@ -61,34 +63,28 @@ function _assert_dense_layout(samples::AbstractVecOrMat)
     )
 end
 
-# Promote both frequencies to one type `F`.
-function BandMeasurement(
+# Both frequencies promoted to one type `F`.
+function BandSamples(
     samples::AbstractVecOrMat,
-    sampling_frequency,
-    intermediate_frequency,
-)
-    BandMeasurement(samples, promote(sampling_frequency, intermediate_frequency)...)
-end
-
-function BandMeasurement(samples::AbstractVecOrMat, sampling_frequency)
-    intermediate_frequency = zero(sampling_frequency)
-    BandMeasurement(samples, sampling_frequency, intermediate_frequency)
-end
-
-function BandMeasurement(
-    samples::AbstractVecOrMat;
-    sampling_frequency,
+    sampling_frequency;
     intermediate_frequency = zero(sampling_frequency),
 )
-    BandMeasurement(samples, sampling_frequency, intermediate_frequency)
+    sampling_frequency, intermediate_frequency =
+        promote(sampling_frequency, intermediate_frequency)
+    BandSamples{typeof(samples),typeof(sampling_frequency)}(
+        samples,
+        sampling_frequency,
+        intermediate_frequency,
+    )
 end
 
-@inline get_num_samples(m::BandMeasurement) = get_num_samples(m.samples)
+@inline get_num_samples(band_samples::BandSamples) = get_num_samples(band_samples.samples)
 
 """
 $(SIGNATURES)
 
-A NamedTuple of `BandMeasurement`s, the multi-band input of `track` / `track!`,
+A NamedTuple of [`BandSamples`](@ref), one per band, the multi-band input of
+`track` / `track!`,
 keyed by `GNSSSignals.get_band_id` (e.g. `:L1`, `:L5`), a compile-time constant.
 """
-const BandMeasurements = NamedTuple{<:Any,<:Tuple{Vararg{BandMeasurement}}}
+const MultiBandSamples = NamedTuple{<:Any,<:Tuple{Vararg{BandSamples}}}

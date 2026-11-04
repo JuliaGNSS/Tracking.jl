@@ -15,7 +15,7 @@ using GNSSSignals:
 using Tracking:
     TrackedSat,
     TrackState,
-    BandMeasurement,
+    BandSamples,
     track,
     track!,
     _prepare_for_new_buffer!,
@@ -102,20 +102,20 @@ function measure_reset!(track_state)
 end
 
 function measure_dc!(dc, samples, track_state, sampling_frequency)
-    measurements = (L1 = BandMeasurement(samples, sampling_frequency),)
+    multi_band_samples = (L1 = BandSamples(samples, sampling_frequency),)
     for _ = 1:8
-        downconvert_and_correlate!(dc, measurements, track_state)
+        downconvert_and_correlate!(dc, multi_band_samples, track_state)
     end
-    @allocated downconvert_and_correlate!(dc, measurements, track_state)
+    @allocated downconvert_and_correlate!(dc, multi_band_samples, track_state)
 end
 
 function measure_est!(track_state, sampling_frequency)
     # Only `sampling_frequency` is read.
-    measurements = (L1 = BandMeasurement(ComplexF64[], sampling_frequency),)
+    multi_band_samples = (L1 = BandSamples(ComplexF64[], sampling_frequency),)
     for _ = 1:8
-        step_tracking_loops!(track_state, measurements)
+        step_tracking_loops!(track_state, multi_band_samples)
     end
-    @allocated step_tracking_loops!(track_state, measurements)
+    @allocated step_tracking_loops!(track_state, multi_band_samples)
 end
 
 @testset "track! per-stage is allocation-free in steady state ($DC)" for DC in (

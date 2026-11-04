@@ -21,7 +21,7 @@ estimator or a beamformer (`using Tracking, TrackingLoops, GNSSSignals`).
 ## Features
 
 * Every concrete signal GNSSSignals.jl defines (GPS L1 C/A, L1C, L2C, L5; Galileo E1, E5a incl. E5a-QP, E5b, E6; BeiDou B1I, B3I, B1C, B2a, B2b); see the [signal support matrix](https://JuliaGNSS.github.io/Tracking.jl/stable/signals.html)
-* Multi-band tracking: one `track` call processes `BandMeasurement`s from several RF bands (e.g. L1 + L5) in lockstep
+* Multi-band tracking: one `track` call processes the samples of several RF bands (e.g. L1 + L5) in lockstep
 * Multi-signal tracking on one satellite (e.g. L1 C/A + L1C-D + L1C-P) with one shared downconvert
 * Coherent integration over `N` code periods once the bit or secondary code is found
 * CN0 estimation

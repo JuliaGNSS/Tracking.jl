@@ -6,7 +6,7 @@
 $(SIGNATURES)
 
 Measure this signal's noise over samples `sample_range` of
-`measurement` and append the resulting observations, returning `estimator`.
+`band_samples` and append the resulting observations, returning `estimator`.
 
 Runs each of the slice's
 [`noise_despreads`](@extref TrackingLoops.noise_despreads-Tuple{CorrelatorNoiseEstimator, AbstractGNSSSignal, AbstractUnitRange{<:Integer}, Any, Any}) (their split into
@@ -21,12 +21,12 @@ covariance. The reference is **open-loop** and reads no satellite state.
 function TrackingLoops.despread_noise!(
     backend::AbstractDownconvertAndCorrelator,
     estimator::CorrelatorNoiseEstimator,
-    measurement::BandMeasurement,
+    band_samples::BandSamples,
     sample_range::AbstractUnitRange{<:Integer},
     context::NoiseUpdateContext,
 )
     signal = context.signal
-    sampling_frequency = measurement.sampling_frequency
+    sampling_frequency = band_samples.sampling_frequency
     correlator_bank = noise_correlator_bank(estimator)
     # The reference runs at the nominal chip rate, which every despread shares.
     sample_shifts = calc_correlator_sample_offsets(
@@ -35,16 +35,16 @@ function TrackingLoops.despread_noise!(
         get_chip_rate(signal),
     )
     # `gen_code_replica!` writes *at* `first(sample_range)` while the kernel reads it
-    # offset by `first(sample_range) - 1`, so the buffer spans the whole measurement.
+    # offset by `first(sample_range) - 1`, so the buffer spans all of the band's samples.
     # Backends that pack the code plane in-kernel ignore it.
     replica_size =
-        get_num_samples(measurement) + maximum(sample_shifts) - minimum(sample_shifts)
+        get_num_samples(band_samples) + maximum(sample_shifts) - minimum(sample_shifts)
     for despread in noise_despreads(
         estimator,
         signal,
         sample_range,
         sampling_frequency,
-        measurement.intermediate_frequency,
+        band_samples.intermediate_frequency,
     )
         probe = despread.probe
         # The per-satellite despread: `carrier_phase = 0.0` (open-loop, no NCO),
@@ -54,7 +54,7 @@ function TrackingLoops.despread_noise!(
             _despread_one_signal!(
                 backend,
                 zero(correlator_bank),
-                measurement.samples,
+                band_samples.samples,
                 probe.signal,
                 probe.prn,
                 sample_shifts,

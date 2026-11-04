@@ -79,25 +79,25 @@ satellites. The signal path (downconvert, correlate) is loop-agnostic and passes
    a tracking loop that does not fit a per-integration step (e.g. one stepping all satellites
    jointly). It runs once per **chunk** (see
    [Chunked NCO updates](track.md#Chunked-NCO-updates)), walks
-   `track_state.groups`, reads each band's `BandMeasurement` via
+   `track_state.groups`, reads each band's `BandSamples` via
    `get_band_id(group.band)`, and produces `TrackedSat`s with new
    `carrier_doppler`/`code_doppler` and per-sat state.
 
    Each signal's predetection integrations of the chunk are in its
    `correlator_bank_outputs::Vector{`[`CorrelatorBankOutput`](@extref TrackingLoops.CorrelatorBankOutput)`}`
    (zero, one or several), each with the raw correlator bank, its sample count, its end
-   sample index (from the current measurement's first sample) and the replica's code
+   sample index (from the current samples' first sample) and the replica's code
    phase there. Step through them in order, write the NCO Doppler once (typically from
    the last), and empty `correlator_bank_outputs`. The NCO Doppler is fixed across the
    chunk, so a discriminator needing the replica's Doppler reads the satellite's
    `code_doppler`/`carrier_doppler`.
 
    [`track!`](@ref) calls the mutating
-   `step_tracking_loops!(track_state, measurements)`, which
+   `step_tracking_loops!(track_state, multi_band_samples)`, which
    reassigns each group's `satellites.values` slots in place; define both.
 
    The generic loop update also accepts a `NamedTuple`/`Dict` of per-band
-   sampling frequencies (keyed by `get_band_id`) in place of `measurements`, so an
+   sampling frequencies (keyed by `get_band_id`) in place of `multi_band_samples`, so an
    external correlator producer needs no sample buffer (see
    [External correlator producers](track.md#External-correlator-producers)). A
    custom tracking loop that reads only the rate should offer the same overload.
@@ -114,7 +114,7 @@ julia> using Tracking:
            TrackedSat,
            TrackState,
            SignalGroup,
-           BandMeasurements,
+           MultiBandSamples,
            get_band_id
 
 julia> using TrackingLoops: AbstractTrackingLoop
@@ -135,7 +135,7 @@ julia> # 5a. Immutable form: a real one steps through each signal's `correlator_
        # into new Dopplers and returns a fresh `TrackState`.
        function Tracking.step_tracking_loops(
            track_state::TrackState{<:Any, <:MyTrackingLoop},
-           measurements::BandMeasurements,
+           multi_band_samples::MultiBandSamples,
        )
            return track_state
        end;
@@ -143,7 +143,7 @@ julia> # 5a. Immutable form: a real one steps through each signal's `correlator_
 julia> # 5b. In-place form, what `track!` calls: writes `g.satellites.values[i]`.
        function Tracking.step_tracking_loops!(
            track_state::TrackState{<:Any, <:MyTrackingLoop},
-           measurements::BandMeasurements,
+           multi_band_samples::MultiBandSamples,
        )
            return track_state
        end;

@@ -69,7 +69,7 @@ bit, overlay period or code cycle. Until sync, one code period is integrated reg
 it, and other PRNs give an all-zero or out-of-bounds code. BeiDou B2b-I's table
 has 63 columns, but the ICD defines codes for PRN 6-58 only.
 
-Signals sharing a band can be tracked in one [`BandMeasurement`](@ref)
+Signals sharing a band can be tracked on one [`BandSamples`](@ref)
 regardless of constellation: Galileo E5b and BeiDou B2b share the 1207.14 MHz
 carrier (`E5b` for both), BeiDou B2a shares `L5` with GPS L5 and Galileo E5a,
 and BeiDou B1C shares `L1` with GPS L1 C/A, GPS L1C and Galileo E1.

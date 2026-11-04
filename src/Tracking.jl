@@ -123,7 +123,7 @@ export get_prn,
     get_tracked_sats,
     get_tracked_sat,
     SignalGroup,
-    BandMeasurement,
+    BandSamples,
     get_band_ids,
     get_signal_observations
 
@@ -174,7 +174,7 @@ end
     size(samples, 1)
 end
 
-include("band_measurement.jl")
+include("band_samples.jl")
 include("code_replica.jl")
 include("carrier_replica.jl")
 include("downconvert.jl")
@@ -202,7 +202,7 @@ parks the chunk's noise descriptors, so a threaded backend reaches them through
 one pointer (see `_park_noise_items!`). Shared by every derived `TrackState`.
 
 `sample_index_offsets` counts, per band (keyed by `get_band_id`), the samples earlier
-[`track!`](@ref) calls consumed: the origin of the current measurement on a
+[`track!`](@ref) calls consumed: the origin of the current samples on a
 sample grid that runs on across calls. [`step_tracking_loops!`](@ref) adds it to
 an integration's sample index, so a tracking loop with shared state of its own (TrackingLoops'
 `VectorTrackingLoop`) sees every satellite on one time grid. The in-place mutators

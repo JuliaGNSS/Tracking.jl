@@ -816,7 +816,7 @@ $(SIGNATURES)
 A group of satellites tracking the same tuple of signals, on one RF band and
 antenna array: the unit of type stability (one concrete `TrackedSat` type).
 Groups may share a band (e.g. `(GPSL1CA(),)` and `(GalileoE1B(),)` on `L1()`);
-the band routes the right measurement to the group.
+the band routes the right samples to the group.
 
 Fields:
 
@@ -858,7 +858,7 @@ function SignalGroup(
     )
 end
 
-# A group's signals must (#129) be on its band, whose measurement the whole group
+# A group's signals must (#129) be on its band, whose samples the whole group
 # correlates against, and share one chip rate, since the shared `code_phase`
 # advances at the driver's (`_advance_sat` in downconvert_and_correlate.jl). Bands
 # compare by id, so a user-defined alias of a band validates.

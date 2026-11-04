@@ -22,7 +22,7 @@ using Tracking:
     TrackedSignal,
     TrackedSat,
     TrackState,
-    BandMeasurement,
+    BandSamples,
     step_tracking_loops,
     step_tracking_loops!,
     is_bit_or_secondary_code_synced,
@@ -46,7 +46,7 @@ using TrackingLoops:
     CorrelatorBankOutput
 
 # The estimate step only reads `sampling_frequency`.
-_meas_l1(fs) = (L1 = BandMeasurement(ComplexF64[], fs),)
+_meas_l1(fs) = (L1 = BandSamples(ComplexF64[], fs),)
 
 # A signal carrying one completed integration as a `CorrelatorBankOutput`.
 _completed_signal(sig, correlator_bank, num_samples) = TrackedSignal(

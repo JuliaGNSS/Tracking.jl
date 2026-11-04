@@ -1,11 +1,11 @@
 # Two-bit (sign + magnitude) bit-wise downconvert + correlate backend, between the one-bit
-# and Int16 backends: bit planes and XOR + popcount as in one-bit, but measurement and
+# and Int16 backends: bit planes and XOR + popcount as in one-bit, but samples and
 # carrier carry a magnitude bit, so both are 4-level; the code stays 1-bit (±1, exact for
 # BPSK/BOC/TMBOC).
 #
 #   value = s·(1 + 2·b)     s = sign bit;  b = magnitude bit    ∈ {±1, ±3}
 #
-#   measurement:  b ⇔ |component| ≥ `threshold` (ADC counts; ≈1σ is the near-optimal
+#   samples:      b ⇔ |component| ≥ `threshold` (ADC counts; ≈1σ is the near-optimal
 #                 4-level quantiser, ≈0.55 dB loss vs float against ≈1.96 dB for 1-bit)
 #   carrier:      SinCosLUT's `generate_carrier_signs_mags!`, sign + magnitude planes off
 #                 the NCO with the magnitude split at |sin| ≥ √2/2. There ±1/±3 and ±1/±2
@@ -22,7 +22,7 @@
 #
 #   Σ codeₓ·m·c = (N − 2·pc S) + 2·(pc X − 2·pc(S & X)) + 8·(pc A − 2·pc(S & A))
 #
-# `pc X + 4·pc A` depends only on the (measurement mag {Gr, Gi}, carrier mag {Hc, Hs}) combo,
+# `pc X + 4·pc A` depends only on the (sample mag {Gr, Gi}, carrier mag {Hc, Hs}) combo,
 # so it is accumulated once per antenna and chunk (GXA) and shared across correlators. Merging
 # I = (mr·cos)+(mi·sin) and Q = (mi·cos)−(mr·sin) keeps four lane accumulators per
 # (antenna, correlator), as in one-bit:
@@ -37,7 +37,7 @@
 #   Qₓ =    − 2·QS + 2·(GXA_cc − GXA_es) − 4·QF        plane's (meas, carrier) combo
 #
 # With all magnitude bits zero this is exactly the one-bit result. The block machinery
-# (code plane funnel shifts, band-shared measurement packing, tile-share, dynamic
+# (code plane funnel shifts, band-shared sample packing, tile-share, dynamic
 # fallback) mirrors downconvert_and_correlate_onebit.jl, which explains it. Against the
 # one-bit backend this recovers ≈2 dB of correlation SNR (≈0.8 dB total loss vs Float32,
 # against ≈2.9 dB) for ≈3 popcounts per plane instead of 1.
@@ -204,7 +204,7 @@ end
 @inline _tb_mag_lim(thr::Int16) = unsafe_trunc(Int16, 2 * Int32(thr) - Int32(1))
 @inline _tb_masklast(w::UInt64, r::Int) = r == 0 ? w : w & ((UInt64(1) << r) - UInt64(1))
 
-# ── x86 fast measurement pack (BMI2) ──────────────────────────────────────────
+# ── x86 fast sample pack (BMI2) ──────────────────────────────────────────
 # Instead of deinterleaving 64 complex lanes with port-limited shuffles, take the sign /
 # magnitude masks of the interleaved data and deinterleave the bits with scalar `pext`
 # (two per plane word, off the vector ports).
@@ -337,7 +337,7 @@ end
     nothing
 end
 
-# ── measurement packing (sign + magnitude planes) ─────────────────────────────
+# ── sample packing (sign + magnitude planes) ─────────────────────────────
 # Direct pack for a single-sat group: sign(real)→mrb, |real| ≥ thr→gmrb, likewise imag →
 # mib/gmib.
 @inline function _tb_pack_meas!(
@@ -570,7 +570,7 @@ end
     nothing
 end
 
-# Per-thread scratch: the one-bit planes plus measurement (`gmrb`/`gmib`) and carrier
+# Per-thread scratch: the one-bit planes plus sample (`gmrb`/`gmib`) and carrier
 # (`hsinw`/`hcosw`) magnitude planes; grown lazily, strides padded to `_TB_VW`.
 struct TwoBitScratchBuffers
     extb::Vector{Int8}
@@ -605,13 +605,13 @@ $(SIGNATURES)
 Two-bit (sign + magnitude) bit-wise CPU downconvert + correlate backend
 (single-threaded). Opt-in alternative to [`CPUDownconvertAndCorrelator`] for
 `Complex{Int16}` sample buffers, between [`OneBitDownconvertAndCorrelator`](@ref) and
-[`Int16DownconvertAndCorrelator`](@ref): measurement and carrier are 4-level `{±1, ±3}`,
+[`Int16DownconvertAndCorrelator`](@ref): samples and carrier are 4-level `{±1, ±3}`,
 the code 1-bit, correlated with XOR + masked popcount. Recovers ≈2 dB of correlation SNR
 over the one-bit backend (≈0.8 dB total quantisation loss vs Float32) at bit-wise speed.
 Construct it **once outside** the `track!` loop and pass it via the
 `downconvert_and_correlator` keyword for an allocation-free steady state.
 
-`threshold` is the measurement magnitude split in ADC counts (`|component| ≥ threshold`
+`threshold` is the sample magnitude split in ADC counts (`|component| ≥ threshold`
 ⇒ `±3`); near 1σ of the front end's input is the near-optimal 4-level quantiser.
 """
 struct TwoBitDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator
@@ -822,7 +822,7 @@ end
         code_phase0 = Float64(code_phase)
         num_rows = size(samples, 1)
         p_sig = Ptr{Int16}(pointer(samples))
-        band = dc.band                              # band-shared measurement planes (>1 sat)
+        band = dc.band                              # band-shared sample planes (>1 sat)
         band_shared = use_band_cache && !isempty(band.mrband)  # pre-packed per group when it pays off
         bandstride = cld(num_rows, 64) + 2          # per-antenna plane stride in `band`
 
@@ -905,7 +905,7 @@ end
             _tb_zeropad!(cosw, 0, nwb, nwv)
             _tb_zeropad!(hsinw, 0, nwb, nwv)
             _tb_zeropad!(hcosw, 0, nwb, nwv)
-            # measurement planes per antenna: band realign (>1 sat) or direct pack (1 sat)
+            # sample planes per antenna: band realign (>1 sat) or direct pack (1 sat)
             base = start_index + blk_off
             if band_shared
                 $(Expr(
@@ -1257,7 +1257,7 @@ end
         push!(gates.args, :(_tb_check_modulation(gnss_signals[$i])))
     end
 
-    # Measurement planes per antenna (band realign or direct pack), once per block.
+    # Sample planes per antenna (band realign or direct pack), once per block.
     realign = Expr(:block)
     directpack = Expr(:block)
     for j = 1:M
@@ -1486,7 +1486,7 @@ end
         carphase = Float64(carrier_phase)
         num_rows = size(samples, 1)
         p_sig = Ptr{Int16}(pointer(samples))
-        band = dc.band                              # band-shared measurement planes (>1 sat)
+        band = dc.band                              # band-shared sample planes (>1 sat)
         band_shared = !isempty(band.mrband)
         bandstride = cld(num_rows, 64) + 2
         $setup
@@ -1540,7 +1540,7 @@ end
             _tb_zeropad!(cosw, 0, nwb, nwv)
             _tb_zeropad!(hsinw, 0, nwb, nwv)
             _tb_zeropad!(hcosw, 0, nwb, nwv)
-            # measurement planes — one pack per sat/block, shared across signals
+            # sample planes — one pack per sat/block, shared across signals
             base = start_index + blk_off
             if band_shared
                 $realign
@@ -1592,7 +1592,7 @@ end
     ),
 )
 
-# Several signals per sat: one carrier + measurement downconvert shared through the
+# Several signals per sat: one carrier + sample downconvert shared through the
 # tile-share kernel.
 @inline function _correlate_signals(
     signals::Tuple{TrackedSignal,TrackedSignal,Vararg{TrackedSignal}},
@@ -1648,7 +1648,7 @@ end
 @inline function _dc_one_group!(
     g::SignalGroup,
     dc::_TwoBitDC,
-    measurements::BandMeasurements,
+    multi_band_samples::MultiBandSamples,
     chunk_index::Int,
     nco_update_interval,
     stop_before_partial::Bool,
@@ -1658,15 +1658,15 @@ end
 )
     vals = g.satellites.values
     isempty(vals) && n_noise == 0 && return nothing
-    m = measurements[get_band_id(g.band)]
-    _check_sample_type(dc, m)
+    band_samples = multi_band_samples[get_band_id(g.band)]
+    _check_sample_type(dc, band_samples)
     # Band pack for >1 sat only, sized by the satellite count (see the one-bit
     # `_dc_one_group!`).
-    samples = m.samples
+    samples = band_samples.samples
     if samples_unchanged
         # Same buffer as the previous call with this dc: the band state is still valid.
     elseif length(vals) > 1
-        nsamp = get_num_samples(m)
+        nsamp = get_num_samples(band_samples)
         M = samples isa AbstractMatrix ? size(samples, 2) : 1
         num_rows = samples isa AbstractMatrix ? size(samples, 1) : length(samples)
         GC.@preserve samples _tb_pack_band!(
@@ -1685,11 +1685,11 @@ end
         resize!(dc.band.gmrband, 0)
         resize!(dc.band.gmiband, 0)
     end
-    num_buffer_samples = get_num_samples(m)
+    num_buffer_samples = get_num_samples(band_samples)
     chunk_sample_range = _chunk_sample_range(
         nco_update_interval,
         chunk_index,
-        m.sampling_frequency,
+        band_samples.sampling_frequency,
         num_buffer_samples,
     )
     _dc_group_loop!(
@@ -1697,11 +1697,11 @@ end
         vals,
         noise_items,
         n_noise,
-        m.samples,
+        band_samples.samples,
         num_buffer_samples,
         chunk_sample_range,
-        m.sampling_frequency,
-        m.intermediate_frequency,
+        band_samples.sampling_frequency,
+        band_samples.intermediate_frequency,
         stop_before_partial,
     )
 end
@@ -1712,13 +1712,13 @@ end
 # downconvert_and_correlate_cpu.jl.
 
 # Reject non-`Complex{Int16}` sample buffers up front (see the one-bit backend).
-@inline _check_sample_type(::_TwoBitDC, m) =
-    eltype(m.samples) === Complex{Int16} || throw(
+@inline _check_sample_type(::_TwoBitDC, band_samples) =
+    eltype(band_samples.samples) === Complex{Int16} || throw(
         ArgumentError(
             string(
-                "TwoBitDownconvertAndCorrelator requires `Complex{Int16}` measurement ",
+                "TwoBitDownconvertAndCorrelator requires `Complex{Int16}` ",
                 "samples (12-bit ADC); got element type ",
-                eltype(m.samples),
+                eltype(band_samples.samples),
                 ". Use a CPU(Threaded)DownconvertAndCorrelator for floating-point samples.",
             ),
         ),

@@ -38,7 +38,7 @@ the **reversal** in the last row makes this a spectral effect, not a scale facto
 The real CBOC E1B shows the same reversal about four times larger. Despreading with
 the consumer's own code measures this weighting rather than modelling it.
 
-The *samples* remain a band property (`BandMeasurements` is keyed by band id); only
+The *samples* remain a band property (`MultiBandSamples` is keyed by band id); only
 the despread, and so the floor, is per signal.
 
 ## Why a density and not a power

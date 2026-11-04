@@ -43,7 +43,7 @@ using Unitful: Hz, ustrip
 using GNSSSignals: GPSL1CA, GPSL5I, GalileoE1B
 using Acquisition: acquire, is_detected
 using Tracking:
-    Tracking, TrackState, BandMeasurement, add_satellite!, track!, get_carrier_doppler
+    Tracking, TrackState, BandSamples, add_satellite!, track!, get_carrier_doppler
 using TrackingLoops: estimate_cn0
 
 # ── Download / cache ───────────────────────────────────────────────────────
@@ -293,8 +293,8 @@ else
             l5c = @view l5[((c-1)*nl5+1):(c*nl5)]
             track_state = track!(
                 (
-                    L1 = BandMeasurement(l1c, FS_L1, IF_L1),
-                    L5 = BandMeasurement(l5c, FS_L5, IF_L5),
+                    L1 = BandSamples(l1c, FS_L1; intermediate_frequency = IF_L1),
+                    L5 = BandSamples(l5c, FS_L5; intermediate_frequency = IF_L5),
                 ),
                 track_state,
             )
@@ -403,8 +403,8 @@ else
             l5c = demux_l5(window)
             track_state = track!(
                 (
-                    L1 = BandMeasurement(l1c, FS_L1, IF_L1),
-                    L5 = BandMeasurement(l5c, FS_L5, IF_L5),
+                    L1 = BandSamples(l1c, FS_L1; intermediate_frequency = IF_L1),
+                    L5 = BandSamples(l5c, FS_L5; intermediate_frequency = IF_L5),
                 ),
                 track_state,
             )

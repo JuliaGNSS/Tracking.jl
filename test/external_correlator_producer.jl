@@ -9,7 +9,7 @@ using Tracking:
     TrackedSat,
     TrackedSignal,
     TrackState,
-    BandMeasurement,
+    BandSamples,
     CPUDownconvertAndCorrelator,
     downconvert_and_correlate!,
     step_tracking_loops!,
@@ -40,27 +40,27 @@ function correlated_state(; fs = 4e6Hz, prn = 1, num_samples = 12_000)
     samples = ComplexF32.(gen_code(num_samples, gpsl1, prn, fs, code_frequency, 0.0))
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, prn, 0.0, 100.0Hz)])
     dc = CPUDownconvertAndCorrelator()
-    measurements = (L1 = BandMeasurement(samples, fs),)
+    multi_band_samples = (L1 = BandSamples(samples, fs),)
     # Correlate only, so the outputs survive for the estimate calls below.
     downconvert_and_correlate!(
         dc,
-        measurements,
+        multi_band_samples,
         ts;
         chunk_index = 0,
         nco_update_interval = (num_samples / (fs / Hz)) * s,
     )
-    return ts, measurements
+    return ts, multi_band_samples
 end
 
-@testset "fs source matches the BandMeasurements path exactly (in-place)" begin
+@testset "fs source matches the MultiBandSamples path exactly (in-place)" begin
     fs = 4e6Hz
-    ts_meas, measurements = correlated_state(; fs)
+    ts_meas, multi_band_samples = correlated_state(; fs)
     ts_fs, _ = correlated_state(; fs)
     @test length(
         get_correlator_bank_outputs(only(get_signals(get_tracked_sat(ts_meas, 1)))),
     ) == length(get_correlator_bank_outputs(only(get_signals(get_tracked_sat(ts_fs, 1)))))
 
-    step_tracking_loops!(ts_meas, measurements)          # BandMeasurements
+    step_tracking_loops!(ts_meas, multi_band_samples)          # MultiBandSamples
     step_tracking_loops!(ts_fs, (L1 = fs,))              # per-band NamedTuple
 
     @test get_carrier_doppler(ts_fs, 1) == get_carrier_doppler(ts_meas, 1)

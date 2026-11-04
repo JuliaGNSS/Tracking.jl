@@ -9,7 +9,7 @@ using Unitful: Hz, s, ms, dBHz, ustrip, uconvert
 using GNSSSignals: GPSL1CA, GPSL1C_P, GPSL5I, GalileoE1B, gen_code, get_chip_rate
 import Tracking
 using Tracking:
-    BandMeasurement,
+    BandSamples,
     CPUDownconvertAndCorrelator,
     CPUThreadedDownconvertAndCorrelator,
     Int16DownconvertAndCorrelator,
@@ -65,7 +65,7 @@ function _tracked(samples, dc; fs = FS, num_calls = 20, kwargs...)
         kwargs...,
     )
     for _ = 1:num_calls
-        track!((L1 = BandMeasurement(samples, fs),), ts; downconvert_and_correlator = dc)
+        track!((L1 = BandSamples(samples, fs),), ts; downconvert_and_correlator = dc)
     end
     ts
 end
@@ -87,7 +87,7 @@ end
     )
     samples = _sky(45.0)
     logs, _ = collect_test_logs() do
-        track!((L1 = BandMeasurement(samples, FS),), ts)
+        track!((L1 = BandSamples(samples, FS),), ts)
     end
     @test isempty(filter(r -> r.level == Warn, logs))
     @test Base.length(ts.noise_estimators.GPSL1CA) > 0
@@ -146,7 +146,7 @@ end
         # 40 ms of buffer: 40 / 20 / 2 chunks at the three intervals.
         long = repeat(samples, 4)
         num_chunks = ceil(Int, 40 / ustrip(ms, interval))
-        track!((L1 = BandMeasurement(long, FS),), ts; nco_update_interval = interval)
+        track!((L1 = BandSamples(long, FS),), ts; nco_update_interval = interval)
         @test Base.length(ts.noise_estimators.GPSL1CA) == num_chunks * expected_num_sub
     end
 
@@ -156,7 +156,7 @@ end
         [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator())],
     )
     fast = _sky(-Inf; seed = 12, num_samples = 100_000, fs = 10e6Hz)
-    track!((L1 = BandMeasurement(fast, 10e6Hz),), ts; nco_update_interval = 4ms)
+    track!((L1 = BandSamples(fast, 10e6Hz),), ts; nco_update_interval = 4ms)
     # 10 ms at a 4 ms chunk: 4 + 4, then a 2 ms trailing chunk measured at its
     # true length.
     @test Base.length(ts.noise_estimators.GPSL1CA) == 4 + 4 + 2
@@ -174,7 +174,7 @@ end
         l1cp,
         [TrackedSat(l1cp, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator())],
     )
-    track!((L1 = BandMeasurement(samples, fs),), ts; nco_update_interval = 1ms)
+    track!((L1 = BandSamples(samples, fs),), ts; nco_update_interval = 1ms)
     # Ten 1 ms chunks, each a tenth of a code period — one slice apiece, not zero.
     @test Base.length(ts.noise_estimators.GPSL1C_P) == 10
     # 30 looks ⇒ σ ≈ 18 %: a sanity check, not a precision claim.
@@ -191,7 +191,7 @@ end
     )
     add_satellite!(ts; prn = 3, carrier_doppler = 0.0Hz)
     add_satellite!(ts; prn = 4, carrier_doppler = 0.0Hz)
-    track!((L1 = BandMeasurement(_sky(-Inf; seed = 2), FS),), ts)
+    track!((L1 = BandSamples(_sky(-Inf; seed = 2), FS),), ts)
     prns = [obs.prn for obs in ts.noise_estimators.GPSL1CA.observations]
     @test length(prns) == 10
     @test allunique(prns)                       # it really does advance
@@ -201,7 +201,7 @@ end
 @testset "the code phase and carrier are drawn per sub-integration" begin
     # The draws must reach the kernel and be reproducible from a supplied `rng`
     # (`cn0_estimators/noise_ref_in_the_loop.jl` depends on the latter).
-    m = BandMeasurement(_sky(-Inf; seed = 4), FS)
+    m = BandSamples(_sky(-Inf; seed = 4), FS)
     dc = CPUDownconvertAndCorrelator()
     function densities(seed)
         estimator =
@@ -222,7 +222,7 @@ end
     # Why the phase is randomised (see `CorrelatorNoiseEstimator`): `_sky` puts an
     # untracked PRN 7 at code phase 0 and zero Doppler, where a fixed-phase
     # reference would hit it on every PRN-7 observation (≈10.5·N₀ at 45 dB-Hz).
-    m = BandMeasurement(_sky(45.0; seed = 3, prn = 7), FS)
+    m = BandSamples(_sky(45.0; seed = 3, prn = 7), FS)
     dc = CPUDownconvertAndCorrelator()
     # `carrier_dither = 0` isolates the code-phase draw.
     estimator = CorrelatorNoiseEstimator(;
@@ -275,11 +275,11 @@ end
     rng = Xoshiro(21)
     l1_samples = ComplexF32.(sqrt(ustrip(Hz, fs_l1)) .* randn(rng, ComplexF64, 40_000))
     l5_samples = ComplexF32.(2 * sqrt(ustrip(Hz, fs_l5)) .* randn(rng, ComplexF64, 200_000))
-    measurements =
-        (L1 = BandMeasurement(l1_samples, fs_l1), L5 = BandMeasurement(l5_samples, fs_l5))
+    multi_band_samples =
+        (L1 = BandSamples(l1_samples, fs_l1), L5 = BandSamples(l5_samples, fs_l5))
     # 20 calls, see `_tracked`.
     for _ = 1:20
-        track!(measurements, ts)
+        track!(multi_band_samples, ts)
     end
     d_l1 = ustrip(Hz^-1, get_noise_density(ts.noise_estimators.GPSL1CA))
     d_l5 = ustrip(Hz^-1, get_noise_density(ts.noise_estimators.GPSL5I))
@@ -309,7 +309,7 @@ end
         add_satellite!(ts; prn = 1, group_key = :gps, carrier_doppler = 0.0Hz)
         add_satellite!(ts; prn = 1, group_key = :galileo, carrier_doppler = 0.0Hz)
         for _ = 1:5
-            track!((L1 = BandMeasurement(ComplexF32.(samples), fs),), ts)
+            track!((L1 = BandSamples(ComplexF32.(samples), fs),), ts)
         end
         (
             l1ca = ustrip(Hz^-1, get_noise_density(ts.noise_estimators.GPSL1CA)),
@@ -350,7 +350,7 @@ end
     add_satellite!(two_groups; prn = 2, group_key = :also_l1, carrier_doppler = 0.0Hz)
     samples = _sky(-Inf; seed = 4)
     for ts in (one_group, two_groups)
-        track!((L1 = BandMeasurement(samples, FS),), ts)
+        track!((L1 = BandSamples(samples, FS),), ts)
     end
     @test Base.length(one_group.noise_estimators.GPSL1CA) ==
           Base.length(two_groups.noise_estimators.GPSL1CA)
@@ -365,7 +365,7 @@ end
     )
     add_satellite!(ts; prn = 1, group_key = :with_sats, carrier_doppler = 0.0Hz)
     @test isempty(Tracking.get_tracked_sats(ts, :empty_first))
-    track!((L1 = BandMeasurement(_sky(-Inf; seed = 11), FS),), ts)
+    track!((L1 = BandSamples(_sky(-Inf; seed = 11), FS),), ts)
     @test Base.length(ts.noise_estimators.GPSL1CA) == 10
     @test ustrip(Hz^-1, get_noise_density(ts.noise_estimators.GPSL1CA)) ≈ 1.0 rtol = 0.3
 end
@@ -389,20 +389,20 @@ end
 @testset "an unchunked call measures once, and a re-pass says so" begin
     # `measure_noise` decides; `samples_unchanged` (a cache-reuse hint) must not.
     samples = _sky(-Inf; seed = 6)
-    measurements = (L1 = BandMeasurement(samples, FS),)
+    multi_band_samples = (L1 = BandSamples(samples, FS),)
     ts = TrackState(
         GPSL1,
         [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator())],
     )
     dc = CPUDownconvertAndCorrelator()
     # Unchunked: 10 ms in 1 ms code-period slices.
-    downconvert_and_correlate!(dc, measurements, ts)
+    downconvert_and_correlate!(dc, multi_band_samples, ts)
     @test Base.length(ts.noise_estimators.GPSL1CA) == 10
     # A declared re-pass must not re-measure what has already been covered.
-    downconvert_and_correlate!(dc, measurements, ts; measure_noise = false)
+    downconvert_and_correlate!(dc, multi_band_samples, ts; measure_noise = false)
     @test Base.length(ts.noise_estimators.GPSL1CA) == 10
     # `samples_unchanged` alone suppresses nothing.
-    downconvert_and_correlate!(dc, measurements, ts; samples_unchanged = true)
+    downconvert_and_correlate!(dc, multi_band_samples, ts; samples_unchanged = true)
     @test Base.length(ts.noise_estimators.GPSL1CA) == 20
 end
 
@@ -415,7 +415,7 @@ end
         @test keys(ts.noise_estimators) == (:GPSL1CA, :GPSL5I)
         downconvert_and_correlate!(
             CPUDownconvertAndCorrelator(),
-            (L1 = BandMeasurement(_sky(-Inf; seed = 21), FS),),
+            (L1 = BandSamples(_sky(-Inf; seed = 21), FS),),
             ts;
             measure_noise,
         )
@@ -429,17 +429,17 @@ end
     ts = TrackState(; signals = (gps_l1 = (GPSL1CA(),), gps_l5 = (GPSL5I(),)))
     add_satellite!(ts; prn = 1, group_key = :gps_l1, carrier_doppler = 0.0Hz)
     dc = CPUDownconvertAndCorrelator()
-    measurements = (L1 = BandMeasurement(_sky(-Inf; seed = 22), FS),)
-    items = Tracking._noise_items(dc, ts, measurements, 0, nothing)
+    multi_band_samples = (L1 = BandSamples(_sky(-Inf; seed = 22), FS),)
+    items = Tracking._noise_items(dc, ts, multi_band_samples, 0, nothing)
     # One descriptor, for L1 alone — its length is a property of the types.
     @test items isa Base.RefValue{<:Tuple{Any}}
     @test Base.return_types(
         Tracking._noise_items,
-        (typeof(dc), typeof(ts), typeof(measurements), Int, Nothing),
+        (typeof(dc), typeof(ts), typeof(multi_band_samples), Int, Nothing),
     ) == [typeof(items)]
     resolve(dc, ts, m) = Tracking._noise_items(dc, ts, m, 0, nothing)
-    resolve(dc, ts, measurements)
-    @test @allocated(resolve(dc, ts, measurements)) == 0
+    resolve(dc, ts, multi_band_samples)
+    @test @allocated(resolve(dc, ts, multi_band_samples)) == 0
 end
 
 @testset "a signal without a consumer is never despread" begin
@@ -449,7 +449,7 @@ end
         [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NWPRCN0Estimator())],
     )
     @test ts.noise_estimators === NamedTuple()
-    track!((L1 = BandMeasurement(_sky(45.0), FS),), ts)
+    track!((L1 = BandSamples(_sky(45.0), FS),), ts)
     @test ts.noise_estimators === NamedTuple()
 end
 
@@ -472,15 +472,20 @@ if VERSION >= v"1.11"
         (OneBitDownconvertAndCorrelator, () -> OneBitDownconvertAndCorrelator(), true),
         (TwoBitDownconvertAndCorrelator, () -> TwoBitDownconvertAndCorrelator(), true),
     )
-        function measure(dc, measurements, ts)
+        function measure(dc, multi_band_samples, ts)
             for _ = 1:8
-                downconvert_and_correlate!(dc, measurements, ts; chunk_index = 0)
+                downconvert_and_correlate!(dc, multi_band_samples, ts; chunk_index = 0)
             end
-            @allocated downconvert_and_correlate!(dc, measurements, ts; chunk_index = 0)
+            @allocated downconvert_and_correlate!(
+                dc,
+                multi_band_samples,
+                ts;
+                chunk_index = 0,
+            )
         end
         raw = _sky(45.0; seed = 8)
         samples = quantise ? _to_int16(raw) : ComplexF32.(raw)
-        measurements = (L1 = BandMeasurement(samples, FS),)
+        multi_band_samples = (L1 = BandSamples(samples, FS),)
         # Paired with a reference-free state, isolating the measurement.
         state(cn0) =
             TrackState(GPSL1, [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = cn0())])
@@ -488,10 +493,10 @@ if VERSION >= v"1.11"
         plain_ts = state(() -> NWPRCN0Estimator(GPSL1))
         dc = build()
         plain_dc = build()
-        track!(measurements, ts; downconvert_and_correlator = dc)
-        track!(measurements, plain_ts; downconvert_and_correlator = plain_dc)
-        @test measure(dc, measurements, ts) == 0
-        @test measure(plain_dc, measurements, plain_ts) == 0
+        track!(multi_band_samples, ts; downconvert_and_correlator = dc)
+        track!(multi_band_samples, plain_ts; downconvert_and_correlator = plain_dc)
+        @test measure(dc, multi_band_samples, ts) == 0
+        @test measure(plain_dc, multi_band_samples, plain_ts) == 0
     end
 end
 
@@ -511,7 +516,7 @@ end
             noise_estimators = (GPSL1CA = CorrelatorNoiseEstimator(),),
         )
         add_satellite!(ts; prn = 1, carrier_doppler = 0.0Hz)
-        track!((L1 = BandMeasurement(samples, fs),), ts; nco_update_interval = interval)
+        track!((L1 = BandSamples(samples, fs),), ts; nco_update_interval = interval)
         ustrip(Hz^-1, get_noise_density(ts.noise_estimators.GPSL1CA))
     end
 
@@ -644,7 +649,7 @@ function _tracked_array(samples, num_antennas; fs = FS, num_calls = 20, kwargs..
         kwargs...,
     )
     for _ = 1:num_calls
-        track!((L1 = BandMeasurement(samples, fs),), ts)
+        track!((L1 = BandSamples(samples, fs),), ts)
     end
     ts
 end
@@ -745,7 +750,7 @@ end
         ts = array_state(M)
         ready_at = 0
         for call = 1:4
-            track!((L1 = BandMeasurement(one_ms(M, call), FS),), ts)
+            track!((L1 = BandSamples(one_ms(M, call), FS),), ts)
             _, ready = TrackingLoops.noise_density_and_ready(ts.noise_estimators.GPSL1CA)
             if ready && ready_at == 0
                 ready_at = call
@@ -756,7 +761,7 @@ end
 
     # The look count is the window's own running total, three per observation.
     ts = array_state(4)
-    track!((L1 = BandMeasurement(one_ms(4, 1), FS),), ts)
+    track!((L1 = BandSamples(one_ms(4, 1), FS),), ts)
     est = ts.noise_estimators.GPSL1CA
     @test get_num_squared_magnitudes(est) == 3
     # Only the loop update defers; the public reader reports what the window holds.
@@ -767,14 +772,14 @@ end
     # A filling window is a normal transient: no warning.
     quiet = array_state(4)
     logs, _ = collect_test_logs() do
-        track!((L1 = BandMeasurement(one_ms(4, 5), FS),), quiet)
+        track!((L1 = BandSamples(one_ms(4, 5), FS),), quiet)
     end
     @test isempty(filter(r -> r.level == Warn, logs))
 
     # A dead input (zero floor) is not filling and must still warn.
     dead = array_state(4)
     dead_logs, _ = collect_test_logs() do
-        track!((L1 = BandMeasurement(zeros(ComplexF32, 4000, 4), FS),), dead)
+        track!((L1 = BandSamples(zeros(ComplexF32, 4000, 4), FS),), dead)
     end
     @test !TrackingLoops.noise_window_filling(dead.noise_estimators.GPSL1CA)
     @test !isempty(filter(r -> r.level == Warn, dead_logs))
@@ -799,14 +804,19 @@ end
 # an `SMatrix` (isbits `NoiseWindowTotals`); a `Matrix` would pass every other test.
 if VERSION >= v"1.11"
     @testset "an array's software measurement is allocation-free in steady state" begin
-        function measure(dc, measurements, ts)
+        function measure(dc, multi_band_samples, ts)
             for _ = 1:8
-                downconvert_and_correlate!(dc, measurements, ts; chunk_index = 0)
+                downconvert_and_correlate!(dc, multi_band_samples, ts; chunk_index = 0)
             end
-            @allocated downconvert_and_correlate!(dc, measurements, ts; chunk_index = 0)
+            @allocated downconvert_and_correlate!(
+                dc,
+                multi_band_samples,
+                ts;
+                chunk_index = 0,
+            )
         end
         samples = ComplexF32.(_sky_array(45.0, (1.0, 1.5, 2.0); seed = 13))
-        measurements = (L1 = BandMeasurement(samples, FS),)
+        multi_band_samples = (L1 = BandSamples(samples, FS),)
         state(cn0) = TrackState(
             GPSL1,
             [
@@ -825,10 +835,10 @@ if VERSION >= v"1.11"
         @test keys(ts.noise_estimators) == (:GPSL1CA,)
         dc = CPUDownconvertAndCorrelator()
         plain_dc = CPUDownconvertAndCorrelator()
-        track!(measurements, ts; downconvert_and_correlator = dc)
-        track!(measurements, plain_ts; downconvert_and_correlator = plain_dc)
-        @test measure(dc, measurements, ts) == 0
-        @test measure(plain_dc, measurements, plain_ts) == 0
+        track!(multi_band_samples, ts; downconvert_and_correlator = dc)
+        track!(multi_band_samples, plain_ts; downconvert_and_correlator = plain_dc)
+        @test measure(dc, multi_band_samples, ts) == 0
+        @test measure(plain_dc, multi_band_samples, plain_ts) == 0
     end
 end
 

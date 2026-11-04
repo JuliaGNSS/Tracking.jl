@@ -16,7 +16,7 @@ using GNSSSignals:
 
 using Tracking:
     TrackState,
-    BandMeasurement,
+    BandSamples,
     SignalGroup,
     track,
     track!,
@@ -43,27 +43,25 @@ function _make_signal(
     gen_code(num_samples, s, prn, sampling_frequency, code_freq, start_code_phase)
 end
 
-@testset "BandMeasurement kwarg constructor" begin
+@testset "BandSamples takes the intermediate frequency as a keyword" begin
     buf = zeros(ComplexF64, 100)
-    m_kw =
-        BandMeasurement(buf; sampling_frequency = 4e6Hz, intermediate_frequency = 1.5e6Hz)
-    @test m_kw.samples === buf
-    @test m_kw.sampling_frequency == 4e6Hz
-    @test m_kw.intermediate_frequency == 1.5e6Hz
+    low_if = BandSamples(buf, 4e6Hz; intermediate_frequency = 1.5e6Hz)
+    @test low_if.samples === buf
+    @test low_if.sampling_frequency == 4e6Hz
+    @test low_if.intermediate_frequency == 1.5e6Hz
 
-    m_kw_default = BandMeasurement(buf; sampling_frequency = 4e6Hz)
-    @test m_kw_default.intermediate_frequency == 0.0Hz
+    baseband = BandSamples(buf, 4e6Hz)
+    @test baseband.intermediate_frequency == 0.0Hz
+    # Positionally, an intermediate frequency would read as a second rate.
+    @test_throws MethodError BandSamples(buf, 4e6Hz, 1.5e6Hz)
 end
 
-@testset "BandMeasurement promotes mixed frequency types" begin
+@testset "BandSamples promotes mixed frequency types" begin
     buf = zeros(ComplexF64, 100)
     # An integer IF with a Float64 sampling frequency promotes.
-    m = @inferred BandMeasurement(buf, 4e6Hz, 100Hz)
-    @test m.sampling_frequency === 4e6Hz
-    @test m.intermediate_frequency === 100.0Hz
-
-    m_kw = BandMeasurement(buf; sampling_frequency = 4e6Hz, intermediate_frequency = 100Hz)
-    @test m_kw.intermediate_frequency === 100.0Hz
+    band_samples = @inferred BandSamples(buf, 4e6Hz; intermediate_frequency = 100Hz)
+    @test band_samples.sampling_frequency === 4e6Hz
+    @test band_samples.intermediate_frequency === 100.0Hz
 end
 
 @testset "track with integer-typed intermediate_frequency" begin
@@ -75,21 +73,21 @@ end
     @test new_ts isa TrackState
 end
 
-@testset "BandMeasurement rejects non-dense sample buffers (issue #134)" begin
+@testset "BandSamples rejects non-dense sample buffers (issue #134)" begin
     # The kernels assume dense columns, so a strided view would silently
     # correlate the wrong data.
     buf = zeros(ComplexF64, 100, 4)
     vec_buf = zeros(ComplexF64, 100)
 
-    @test BandMeasurement(vec_buf, 4e6Hz) isa BandMeasurement
-    @test BandMeasurement(buf, 4e6Hz) isa BandMeasurement
-    @test BandMeasurement(view(vec_buf, 1:50), 4e6Hz) isa BandMeasurement
-    @test BandMeasurement(view(buf, :, 2), 4e6Hz) isa BandMeasurement
-    @test BandMeasurement(view(buf, :, 2:3), 4e6Hz) isa BandMeasurement
+    @test BandSamples(vec_buf, 4e6Hz) isa BandSamples
+    @test BandSamples(buf, 4e6Hz) isa BandSamples
+    @test BandSamples(view(vec_buf, 1:50), 4e6Hz) isa BandSamples
+    @test BandSamples(view(buf, :, 2), 4e6Hz) isa BandSamples
+    @test BandSamples(view(buf, :, 2:3), 4e6Hz) isa BandSamples
 
-    @test_throws ArgumentError BandMeasurement(view(vec_buf, 1:2:99), 4e6Hz)
-    @test_throws ArgumentError BandMeasurement(view(buf, 1:50, 2:3), 4e6Hz)
-    @test_throws ArgumentError BandMeasurement(transpose(buf), 4e6Hz)
+    @test_throws ArgumentError BandSamples(view(vec_buf, 1:2:99), 4e6Hz)
+    @test_throws ArgumentError BandSamples(view(buf, 1:50, 2:3), 4e6Hz)
+    @test_throws ArgumentError BandSamples(transpose(buf), 4e6Hz)
 end
 
 @testset "get_band_id for L1 and L5" begin
@@ -97,14 +95,14 @@ end
     @test @inferred(get_band_id(L5())) === :L5
 end
 
-@testset "Single-BandMeasurement track/track! shortcut on single-band TrackState" begin
+@testset "Single-BandSamples track/track! shortcut on single-band TrackState" begin
     fs = 4e6Hz
     num_samples = 4000
     prn = 1
     carrier_doppler = 200Hz
     start_code_phase = 100.0
     buf = _make_signal(GPSL1CA, prn, carrier_doppler, start_code_phase, num_samples, fs)
-    measurement = BandMeasurement(buf, fs)
+    band_samples = BandSamples(buf, fs)
 
     ts_imm = TrackState(; signal = GPSL1CA())
     ts_imm = add_satellite!(
@@ -113,7 +111,7 @@ end
         code_phase = start_code_phase,
         carrier_doppler = carrier_doppler - 20Hz,
     )
-    new_ts = track(measurement, ts_imm)
+    new_ts = track(band_samples, ts_imm)
     @test abs(get_carrier_doppler(new_ts, :default, prn) - carrier_doppler) < 50Hz
 
     ts_inp = TrackState(; signal = GPSL1CA())
@@ -123,7 +121,7 @@ end
         code_phase = start_code_phase,
         carrier_doppler = carrier_doppler - 20Hz,
     )
-    track!(measurement, ts_inp)
+    track!(band_samples, ts_inp)
     @test abs(get_carrier_doppler(ts_inp, :default, prn) - carrier_doppler) < 50Hz
 end
 
@@ -211,10 +209,10 @@ end
         carrier_doppler = cd_l5 - 20.0Hz,
     )
 
-    measurements =
-        (L1 = BandMeasurement(signal_l1, fs_l1), L5 = BandMeasurement(signal_l5, fs_l5))
+    multi_band_samples =
+        (L1 = BandSamples(signal_l1, fs_l1), L5 = BandSamples(signal_l5, fs_l5))
 
-    track!(measurements, track_state)
+    track!(multi_band_samples, track_state)
 
     cd_l1_tracked = get_carrier_doppler(track_state, :legacy_gps_l1, prn_l1)
     cd_l5_tracked = get_carrier_doppler(track_state, :gps_l5, prn_l5)
@@ -222,9 +220,9 @@ end
     @test abs(cd_l5_tracked - cd_l5) < 50.0Hz
 end
 
-@testset "BandMeasurement keys mismatch errors" begin
+@testset "BandSamples keys mismatch errors" begin
     ts = TrackState(; signal = GPSL1CA())
-    m = BandMeasurement(zeros(ComplexF64, 4000), 4e6Hz)
+    m = BandSamples(zeros(ComplexF64, 4000), 4e6Hz)
     @test_throws ArgumentError track!((L5 = m,), ts)
 end
 
@@ -234,20 +232,20 @@ end
     ts = add_satellite!(ts; prn = 1, group_key = :gps_l5, carrier_doppler = 0Hz)
 
     # One L5 sample too many.
-    m_l1 = BandMeasurement(zeros(ComplexF64, 4000), 4e6Hz)
-    m_l5 = BandMeasurement(zeros(ComplexF64, 25001), 25e6Hz)
+    m_l1 = BandSamples(zeros(ComplexF64, 4000), 4e6Hz)
+    m_l5 = BandSamples(zeros(ComplexF64, 25001), 25e6Hz)
     @test_throws ArgumentError track!((L1 = m_l1, L5 = m_l5), ts)
 end
 
 @testset "Equal durations across mixed Float32/Float64 sampling rates" begin
     # Equal durations pass with a Float32 rate, though `4000 / 4e6Hz` and
     # `25000 / 25f6Hz` are not `==`.
-    m_l1 = BandMeasurement(zeros(ComplexF64, 4000), 4e6Hz)
-    m_l5 = BandMeasurement(zeros(ComplexF64, 25000), 25.0f6Hz)
+    m_l1 = BandSamples(zeros(ComplexF64, 4000), 4e6Hz)
+    m_l5 = BandSamples(zeros(ComplexF64, 25000), 25.0f6Hz)
     @test _validate_equal_durations((L1 = m_l1, L5 = m_l5)) === nothing
 
     # A real mismatch still throws, in seconds rather than Hz^-1.
-    m_bad = BandMeasurement(zeros(ComplexF64, 25001), 25.0f6Hz)
+    m_bad = BandSamples(zeros(ComplexF64, 25001), 25.0f6Hz)
     err = try
         _validate_equal_durations((L1 = m_l1, L5 = m_bad))
         nothing
@@ -261,7 +259,7 @@ end
 @testset "Antenna shape mismatch errors" begin
     ts = TrackState(; signal = GPSL1CA(), num_antennas = NumAntennas(2))
     ts = add_satellite!(ts; prn = 1, carrier_doppler = 0Hz)
-    m = BandMeasurement(zeros(ComplexF64, 4000), 4e6Hz)
+    m = BandSamples(zeros(ComplexF64, 4000), 4e6Hz)
     @test_throws ArgumentError track!((L1 = m,), ts)
 end
 

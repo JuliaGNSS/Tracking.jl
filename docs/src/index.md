@@ -62,7 +62,7 @@ pkg> add Tracking
 
 ## Quick start
 
-The minimum to track a single GPS L1 C/A satellite: build a [`TrackState`](@ref), seed it from an acquisition handoff via [`add_satellite!`](@ref), then call [`track`](@ref) on each measurement.
+The minimum to track a single GPS L1 C/A satellite: build a [`TrackState`](@ref), seed it from an acquisition handoff via [`add_satellite!`](@ref), then call [`track`](@ref) on each buffer of samples.
 
 ```jldoctest quickstart; filter = r"[0-9]+\.[0-9]+" => "***"
 julia> using Tracking, GNSSSignals
@@ -83,10 +83,10 @@ julia> signal = GPSL1CA();
 
 julia> code_frequency = 1000.0Hz * get_chip_rate_to_center_frequency_ratio(signal) + get_chip_rate(signal);
 
-julia> measurement = cis.(2π .* 1000.0Hz .* (0:num_samples-1) ./ sampling_frequency) .*
+julia> samples = cis.(2π .* 1000.0Hz .* (0:num_samples-1) ./ sampling_frequency) .*
            gen_code(num_samples, signal, 1, sampling_frequency, code_frequency, 50.0);
 
-julia> track_state = track(measurement, track_state, sampling_frequency);
+julia> track_state = track(samples, track_state, sampling_frequency);
 
 julia> get_carrier_doppler(track_state, 1)
 999.9999883655299 Hz

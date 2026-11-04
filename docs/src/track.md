@@ -4,7 +4,7 @@
 CurrentModule = Tracking
 ```
 
-[`track`](@ref) takes a measurement and a [`TrackState`](@ref), downconverts and correlates every tracked satellite, steps the tracking loop, and returns the updated `TrackState`. [`track!`](@ref) is the in-place counterpart for real-time loops; after one warmup call its single-threaded path is **allocation-free** (see [`track!`](@ref) for the threaded path's residual).
+[`track`](@ref) takes a band's samples (or several bands') and a [`TrackState`](@ref), downconverts and correlates every tracked satellite, steps the tracking loop, and returns the updated `TrackState`. [`track!`](@ref) is the in-place counterpart for real-time loops; after one warmup call its single-threaded path is **allocation-free** (see [`track!`](@ref) for the threaded path's residual).
 
 ```@docs
 track
@@ -14,7 +14,7 @@ track!
 ## Optional parameters
 
 - `downconvert_and_correlator`: the backend, by default `CPUThreadedDownconvertAndCorrelator()`. **Hoist it outside real-time loops** (see below).
-- `intermediate_frequency`: the IF, by default `0.0Hz`. Bare-buffer form only; otherwise it lives on each [`BandMeasurement`](@ref).
+- `intermediate_frequency`: the intermediate frequency, by default `0.0Hz` (complex baseband). Bare-buffer form only; otherwise it is a keyword of each [`BandSamples`](@ref).
 - `nco_update_interval`: the NCO-update interval, a time (e.g. `1u"ms"`). `nothing` means the smallest primary-code period of the tracked signals (1 ms for GPS L1 C/A); see [Chunked NCO updates](#Chunked-NCO-updates). Longer intervals cost fewer loop updates at a lower update rate.
 
 The **coherent-integration length** is set per signal with [`set_preferred_num_code_periods_to_integrate!`](@ref). It starts at [`default_num_code_periods_to_integrate`](@extref TrackingLoops.default_num_code_periods_to_integrate-Tuple{AbstractGNSSSignal}) (`1`, except a 31-period, 2 ms code cycle for Galileo E5a-QP, whose 64.5 µs code period is too short to run a loop on), is capped by [`max_num_code_periods_to_integrate`](@extref TrackingLoops.max_num_code_periods_to_integrate-Tuple{AbstractGNSSSignal}) (one bit or secondary-code period), and takes effect only after bit or secondary-code sync.
@@ -30,7 +30,7 @@ In the TrackingLoops manual:
 
 ## Chunked NCO updates
 
-`track` / `track!` walk each measurement in chunks of `nco_update_interval`, each with one correlate pass and one loop update:
+`track` / `track!` walk each band's samples in chunks of `nco_update_interval`, each with one correlate pass and one loop update:
 
 1. **Correlate** each satellite up to its last completed integration boundary in the chunk, collecting every completed integration into the signal's `correlator_bank_outputs` as a [`CorrelatorBankOutput`](@extref TrackingLoops.CorrelatorBankOutput) tagged with its end sample. A 1 ms code in a 1 ms chunk yields 0, 1 or 2 outputs.
 2. **Loop update**: [`step_tracking_loops!`](@ref Tracking.step_tracking_loops!) steps the tracking loop with the outputs' predetection integrations in order and writes every satellite's NCO **once per chunk**, at a common epoch.
@@ -77,7 +77,7 @@ Per chunk:
    # or: step_tracking_loops!(track_state, Dict(:L1 => 25e6Hz))
    ```
 
-   [`BandMeasurements`](@ref Tracking.BandMeasurements) work too. The call **consumes and clears** each signal's `correlator_bank_outputs`.
+   [`MultiBandSamples`](@ref Tracking.MultiBandSamples) work too. The call **consumes and clears** each signal's `correlator_bank_outputs`.
 
 3. **Marshal** the updated [`get_code_doppler`](@ref) / [`get_carrier_doppler`](@ref) back to the hardware NCOs.
 
@@ -85,15 +85,15 @@ Per chunk:
 
 - `CorrelatorBankOutput.correlator_bank`: the **raw** correlator bank (sum of products over `num_integrated_samples`, as `normalize` expects), e.g. built with [`EarlyPromptLateCorrelatorBank`](@extref TrackingLoops.EarlyPromptLateCorrelatorBank) / `with_correlator_outputs`.
 - `CorrelatorBankOutput.num_integrated_samples`: the producer's true sample count.
-- `CorrelatorBankOutput.sample_index`: the end sample relative to the start of the current measurement, as the software path writes it (`next_sample_index` returns to 1 each `track!`). A producer with a free-running **global** counter subtracts the measurement's origin; the loop update adds the band's [`TrackState`](@ref) `sample_index_offsets` before handing the integration to the tracking loop.
+- `CorrelatorBankOutput.sample_index`: the end sample relative to the start of the current samples, as the software path writes it (`next_sample_index` returns to 1 each `track!`). A producer with a free-running **global** counter subtracts the measurement's origin; the loop update adds the band's [`TrackState`](@ref) `sample_index_offsets` before handing the integration to the tracking loop.
 
 ### Transport delay
 
 The DLL discriminator takes the **pre-update** `code_doppler` as the one in effect during the integration, right for a one-chunk feedback pipeline. With a deeper delay, tag outputs with their epoch and schedule each NCO update for a known future epoch.
 
-## BandMeasurement
+## BandSamples
 
-One band's samples with their `sampling_frequency` and `intermediate_frequency`. A single band may pass a bare buffer, `track!(buf, state, fs)`, or one `BandMeasurement`; several bands pass a NamedTuple keyed by `GNSSSignals.get_band_id`:
+One band's samples with their `sampling_frequency` and `intermediate_frequency`. A single band may pass a bare buffer, `track!(buf, state, fs)`, or one `BandSamples`; several bands pass a NamedTuple keyed by `GNSSSignals.get_band_id`:
 
 ```jldoctest multi_band_call
 julia> using Tracking, GNSSSignals
@@ -114,15 +114,15 @@ julia> samples_l1 = randn(Xoshiro(1), ComplexF64, 4000);   # 1 ms at  4 MHz
 
 julia> samples_l5 = randn(Xoshiro(2), ComplexF64, 25000);  # 1 ms at 25 MHz
 
-julia> track!((L1 = BandMeasurement(samples_l1, 4e6Hz),
-               L5 = BandMeasurement(samples_l5, 25e6Hz)), track_state);
+julia> track!((L1 = BandSamples(samples_l1, 4e6Hz),
+               L5 = BandSamples(samples_l5, 25e6Hz)), track_state);
 ```
 
 Noise, not `zeros`: the default C/N₀ estimator measures the noise floor from the samples, and `track!` warns, once per signal, about an all-zero buffer (see [`AbstractNoiseDensityEstimator`](@extref TrackingLoops.AbstractNoiseDensityEstimator)). See [Multi-band tracking](tracking_state.md#Multi-band-tracking) for the full setup.
 
 ```@docs
-BandMeasurement
-Tracking.BandMeasurements
+BandSamples
+Tracking.MultiBandSamples
 ```
 
 ## Downconversion and correlation
@@ -139,14 +139,14 @@ the `downconvert_and_correlator` keyword:
   carrier replica against overflow; see [`Int16DownconvertAndCorrelator`](@ref)
   for why under-declaring it is catastrophic.
 - [`OneBitThreadedDownconvertAndCorrelator`](@ref) /
-  [`OneBitDownconvertAndCorrelator`](@ref): measurement, carrier and code
+  [`OneBitDownconvertAndCorrelator`](@ref): samples, carrier and code
   hard-limited to a sign bit, so downconversion is XOR and accumulation popcount;
   ~1.5–5.6× faster than Float32 (more at higher rates) for ≈2–3 dB of SNR. The
   ratio-normalised discriminators, C/N₀ and bit synchronizer do not mind the coarse
   amplitude. BPSK only.
 - [`TwoBitThreadedDownconvertAndCorrelator`](@ref) /
   [`TwoBitDownconvertAndCorrelator`](@ref): adds a **magnitude** bit to
-  measurement and carrier (`{±1, ±3}`), recovering ≈2 dB of the one-bit loss
+  samples and carrier (`{±1, ±3}`), recovering ≈2 dB of the one-bit loss
   (≈0.8 dB short of Float32) at about Int16 speed. `threshold` is the magnitude
   split in ADC counts (≈1σ of the input is near-optimal; the default 512 suits an
   AGC'd 12-bit capture). BPSK only.

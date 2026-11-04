@@ -1,5 +1,5 @@
 # One-bit (hard-limited) bit-wise downconvert + correlate backend for `Complex{Int16}`
-# sample buffers. Measurement, carrier and code keep only their SIGN (+1 → bit 0, −1 →
+# sample buffers. Samples, carrier and code keep only their SIGN (+1 → bit 0, −1 →
 # bit 1), so a ±1 product is an XOR and Σ over N samples is N − 2·popcount:
 #
 #   DI = mᵣ·cos + mᵢ·sin,  DQ = mᵢ·cos − mᵣ·sin      (all ±1) ⇒
@@ -7,7 +7,7 @@
 #   Qₓ = Σ codeₓ·DQ = (N − 2·pc(codeₓ⊻mᵢ⊻cos)) − (N − 2·pc(codeₓ⊻mᵣ⊻sin))
 #
 # Per `blk`-sample block (L1-resident scratch, as in the Int16 backend): pack the
-# measurement sign planes per antenna, take the carrier sign planes off SinCosLUT's NCO,
+# sample sign planes per antenna, take the carrier sign planes off SinCosLUT's NCO,
 # pack the code sign plane once and funnel-shift it per correlator, then XOR + `count_ones`.
 # This file also holds the rationale for the machinery the two-bit backend shares.
 #
@@ -177,7 +177,7 @@ end
     nothing
 end
 
-# Direct measurement sign pack for a single-sat group (cheaper than the band pack plus
+# Direct sample sign pack for a single-sat group (cheaper than the band pack plus
 # realign): sign(real)→mrb, sign(imag)→mib.
 @inline function _ob_pack_meas!(
     mrb::Vector{UInt64},
@@ -215,7 +215,7 @@ end
 
 # Per-thread scratch, grown lazily and reused (allocation-free in steady state): code block
 # `extb`, prompt-extended code plane `peb`, carrier sign planes, per-correlator code planes
-# (`codeb`, NC·wpbv) and per-antenna measurement planes (`mrb`/`mib`, M·wpbv). Plane
+# (`codeb`, NC·wpbv) and per-antenna sample planes (`mrb`/`mib`, M·wpbv). Plane
 # strides `wpbv` are padded to a multiple of `_OB_VW`.
 struct OneBitScratchBuffers
     extb::Vector{Int8}
@@ -229,7 +229,7 @@ end
 OneBitScratchBuffers() =
     OneBitScratchBuffers(Int8[], UInt64[], UInt64[], UInt64[], UInt64[], UInt64[], UInt64[])
 
-# The measurement sign planes are the same for every satellite on a band, so with more than
+# The sample sign planes are the same for every satellite on a band, so with more than
 # one satellite `_dc_one_group!` packs them once per group (aligned to sample 1, with funnel
 # pad words), before the per-sat loop; each sat funnel-realigns its block from them.
 struct OneBitBandBuffers
@@ -238,7 +238,7 @@ struct OneBitBandBuffers
 end
 OneBitBandBuffers() = OneBitBandBuffers(UInt64[], UInt64[])
 
-# Pack the band's `M` measurement sign planes; plane `j` occupies `stride` words at
+# Pack the band's `M` sample sign planes; plane `j` occupies `stride` words at
 # `(j-1)*stride`, ending in zero funnel pad words.
 function _ob_pack_band!(
     band::OneBitBandBuffers,
@@ -318,7 +318,7 @@ $(SIGNATURES)
 
 One-bit (hard-limited) bit-wise CPU downconvert + correlate backend
 (single-threaded). Opt-in alternative to [`CPUDownconvertAndCorrelator`] for
-`Complex{Int16}` sample buffers: it 1-bit-quantises measurement, carrier and code and
+`Complex{Int16}` sample buffers: it 1-bit-quantises samples, carrier and code and
 correlates with XOR + popcount, trading ≈2–3 dB of SNR for bit-wise speed. Construct it
 **once outside** the `track!` loop and pass it via the `downconvert_and_correlator`
 keyword for an allocation-free steady state.
@@ -465,7 +465,7 @@ const _OneBitDC =
         code_phase0 = Float64(code_phase)
         num_rows = size(samples, 1)
         p_sig = Ptr{Int16}(pointer(samples))
-        band = dc.band                              # band-shared measurement sign planes (>1 sat)
+        band = dc.band                              # band-shared sample sign planes (>1 sat)
         band_shared = use_band_cache && !isempty(band.mrband)  # pre-packed per group when it pays off
         bandstride = cld(num_rows, 64) + 2          # per-antenna plane stride in `band` (see _ob_pack_band!)
 
@@ -536,7 +536,7 @@ const _OneBitDC =
             )
             _ob_zeropad!(sinw, 0, nwb, nwv)
             _ob_zeropad!(cosw, 0, nwb, nwv)
-            # measurement sign planes per antenna: realigned from the band planes (>1 sat)
+            # sample sign planes per antenna: realigned from the band planes (>1 sat)
             # or packed directly (1 sat)
             base = start_index + blk_off
             if band_shared
@@ -644,7 +644,7 @@ function _onebit_hybrid_blocked!(
     code_phase0 = Float64(code_phase)
     num_rows = size(samples, 1)
     p_sig = Ptr{Int16}(pointer(samples))
-    band = dc.band                              # band-shared measurement sign planes (>1 sat)
+    band = dc.band                              # band-shared sample sign planes (>1 sat)
     band_shared = use_band_cache && !isempty(band.mrband)
     bandstride = cld(num_rows, 64) + 2
 
@@ -789,7 +789,7 @@ end
 
 # ── Multi-signal-per-sat tile-share ───────────────────────────────────────────
 # Signals on one carrier (e.g. GPS L1 C/A + L1C-D + L1C-P) share the carrier and
-# measurement planes, so per block those are built once and each signal correlates its own
+# sample planes, so per block those are built once and each signal correlates its own
 # code against them; bit-identical to correlating each signal alone. `@generated` over
 # (M, the signals tuple); `SVector` shifts only, like the other tile-shares.
 @generated function _onebit_hybrid_blocked_multi!(
@@ -876,7 +876,7 @@ end
         )
     end
 
-    # Measurement planes per antenna (band realign or direct pack), once per block.
+    # Sample planes per antenna (band realign or direct pack), once per block.
     realign = Expr(:block)
     directpack = Expr(:block)
     for j = 1:M
@@ -1032,7 +1032,7 @@ end
         carphase = Float64(carrier_phase)
         num_rows = size(samples, 1)
         p_sig = Ptr{Int16}(pointer(samples))
-        band = dc.band                              # band-shared measurement sign planes (>1 sat)
+        band = dc.band                              # band-shared sample sign planes (>1 sat)
         band_shared = !isempty(band.mrband)
         bandstride = cld(num_rows, 64) + 2
         $setup
@@ -1074,7 +1074,7 @@ end
             )
             _ob_zeropad!(sinw, 0, nwb, nwv)
             _ob_zeropad!(cosw, 0, nwb, nwv)
-            # measurement sign planes — one pack per sat/block, shared across signals
+            # sample sign planes — one pack per sat/block, shared across signals
             base = start_index + blk_off
             if band_shared
                 $realign
@@ -1093,7 +1093,7 @@ end
 # The despread primitive on this backend's kernel; see `_despread_one_signal!` in
 # downconvert_and_correlate_cpu.jl (the noise reference must use it: popcount counts and
 # float sums are on different scales). `code_replica_size` is ignored, the kernel packs
-# its own code plane. `use_band_cache` selects the band-packed measurement planes; the
+# its own code plane. `use_band_cache` selects the band-packed sample planes; the
 # noise reference passes `false`, as the planes belong to the group whose loop it rides,
 # possibly another band.
 @inline _despread_one_signal!(
@@ -1130,7 +1130,7 @@ end
     ),
 )
 
-# Several signals per sat: one carrier + measurement downconvert shared through the
+# Several signals per sat: one carrier + sample downconvert shared through the
 # tile-share kernel. Returns the per-signal `(new_correlator_bank, is_integration_completed)`
 # tuples.
 @inline function _correlate_signals(
@@ -1187,7 +1187,7 @@ end
 @inline function _dc_one_group!(
     g::SignalGroup,
     dc::_OneBitDC,
-    measurements::BandMeasurements,
+    multi_band_samples::MultiBandSamples,
     chunk_index::Int,
     nco_update_interval,
     stop_before_partial::Bool,
@@ -1197,16 +1197,16 @@ end
 )
     vals = g.satellites.values
     isempty(vals) && n_noise == 0 && return nothing
-    m = measurements[get_band_id(g.band)]
-    _check_sample_type(dc, m)
-    # Pack the band's measurement planes once for >1 sat (see `OneBitBandBuffers`); for one
+    band_samples = multi_band_samples[get_band_id(g.band)]
+    _check_sample_type(dc, band_samples)
+    # Pack the band's sample planes once for >1 sat (see `OneBitBandBuffers`); for one
     # sat the direct pack is cheaper, so empty the band buffer to select it. Noise items
     # never read the planes, so only the satellite count decides.
-    samples = m.samples
+    samples = band_samples.samples
     if samples_unchanged
         # Same buffer as the previous call with this dc: the band state is still valid.
     elseif length(vals) > 1
-        nsamp = get_num_samples(m)
+        nsamp = get_num_samples(band_samples)
         M = samples isa AbstractMatrix ? size(samples, 2) : 1
         num_rows = samples isa AbstractMatrix ? size(samples, 1) : length(samples)
         GC.@preserve samples _ob_pack_band!(
@@ -1221,11 +1221,11 @@ end
         resize!(dc.band.mrband, 0)
         resize!(dc.band.miband, 0)
     end
-    num_buffer_samples = get_num_samples(m)
+    num_buffer_samples = get_num_samples(band_samples)
     chunk_sample_range = _chunk_sample_range(
         nco_update_interval,
         chunk_index,
-        m.sampling_frequency,
+        band_samples.sampling_frequency,
         num_buffer_samples,
     )
     _dc_group_loop!(
@@ -1233,11 +1233,11 @@ end
         vals,
         noise_items,
         n_noise,
-        m.samples,
+        band_samples.samples,
         num_buffer_samples,
         chunk_sample_range,
-        m.sampling_frequency,
-        m.intermediate_frequency,
+        band_samples.sampling_frequency,
+        band_samples.intermediate_frequency,
         stop_before_partial,
     )
 end
@@ -1250,13 +1250,13 @@ end
 # Reject non-`Complex{Int16}` sample buffers up front (12-bit ADC contract). A hook rather
 # than inline in `_dc_one_group!`, so the noise work, resolved before the group loop,
 # throws the same error.
-@inline _check_sample_type(::_OneBitDC, m) =
-    eltype(m.samples) === Complex{Int16} || throw(
+@inline _check_sample_type(::_OneBitDC, band_samples) =
+    eltype(band_samples.samples) === Complex{Int16} || throw(
         ArgumentError(
             string(
-                "OneBitDownconvertAndCorrelator requires `Complex{Int16}` measurement ",
+                "OneBitDownconvertAndCorrelator requires `Complex{Int16}` ",
                 "samples (12-bit ADC); got element type ",
-                eltype(m.samples),
+                eltype(band_samples.samples),
                 ". Use a CPU(Threaded)DownconvertAndCorrelator for floating-point samples.",
             ),
         ),

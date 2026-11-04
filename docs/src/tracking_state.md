@@ -221,7 +221,7 @@ Signals with different code periods (L1 C/A 1 ms, L1C-P 10 ms) each complete pre
 
 ### Phased-array tracking
 
-Pass a `Matrix` measurement (rows = samples, columns = antennas) and declare the antenna count:
+Pass a `Matrix` of samples (rows = samples, columns = antennas) and declare the antenna count:
 
 ```jldoctest phased_array
 julia> using Tracking, TrackingLoops, GNSSSignals
@@ -319,7 +319,7 @@ merge_sats
 
 Satellites broadcast on several RF bands (GPS L1 and L5, Galileo E1 and E5a), which arrive from separate front ends, generally at different sample rates. Each group of a multi-band `TrackState` sits on one band. Two bands give near-independent observations of one path: for ionosphere-free combinations, wider code bandwidth, and cross-band aiding, as the L1/L5 Doppler ratio is that of the carrier frequencies.
 
-Tracking.jl provides per-band groups, measurement routing and a loop update that sees every band's integrations at once; joint cross-band estimation is up to the tracking loop, which receives them (see [Custom Tracking Loop](custom_tracking_loop.md)).
+Tracking.jl provides per-band groups, routing of each band's samples and a loop update that sees every band's integrations at once; joint cross-band estimation is up to the tracking loop, which receives them (see [Custom Tracking Loop](custom_tracking_loop.md)).
 
 ### Declaring bands
 
@@ -343,9 +343,9 @@ julia> keys(track_state.groups)
 
 Three groups on L1 (GPS L1 and Galileo E1 share the carrier), one on L5.
 
-### Tracking against multiple measurements
+### Tracking the samples of several bands
 
-Pass one [`BandMeasurement`](@ref) per band, in a NamedTuple keyed by `GNSSSignals.get_band_id`:
+Pass one [`BandSamples`](@ref) per band, in a NamedTuple keyed by `GNSSSignals.get_band_id`:
 
 ```jldoctest multi_band_track; filter = r"[0-9]+\.[0-9]+" => "***"
 julia> using Tracking, GNSSSignals
@@ -373,14 +373,14 @@ julia> samples_l1 = gen_samples(GPSL1CA(),  1, 200Hz,  4000,  4e6Hz);  # 1 ms at
 
 julia> samples_l5 = gen_samples(GPSL5I(),   1, -150Hz, 25000, 25e6Hz); # 1 ms at 25 MHz
 
-julia> track!((L1 = BandMeasurement(samples_l1, 4e6Hz),
-               L5 = BandMeasurement(samples_l5, 25e6Hz)), track_state);
+julia> track!((L1 = BandSamples(samples_l1, 4e6Hz),
+               L5 = BandSamples(samples_l5, 25e6Hz)), track_state);
 
 julia> get_carrier_doppler(track_state, :legacy_gps_l1, 1)
 200.00000359633913 Hz
 ```
 
-`get_band_id` is `nameof` the band type, so user-defined bands have keys too. All measurements must cover **exactly the same duration**: 4000 samples at 4 MHz and 25000 at 25 MHz are both 1 ms; 25001 at 25 MHz is rejected.
+`get_band_id` is `nameof` the band type, so user-defined bands have keys too. All bands' samples must cover **exactly the same duration**: 4000 samples at 4 MHz and 25000 at 25 MHz are both 1 ms; 25001 at 25 MHz is rejected.
 
 ### Per-band antenna counts
 
@@ -419,7 +419,7 @@ Tracking.SignalGroups
 
 ### Band routing
 
-[`get_band_ids`](@ref) lists the band ids a `TrackState` expects as measurement keys.
+[`get_band_ids`](@ref) lists the band ids a `TrackState` expects as the keys of its [`MultiBandSamples`](@ref Tracking.MultiBandSamples).
 
 ```@docs
 get_band_ids

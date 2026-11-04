@@ -1,21 +1,21 @@
 """
 $(SIGNATURES)
 
-Track one or more `BandMeasurement`s: downconvert, correlate and estimate the
-Dopplers of every satellite, and return the updated `TrackState` with new
+Track the samples of one or more bands: downconvert, correlate and step the
+tracking loops of every satellite, and return the updated `TrackState` with new
 phase/Doppler estimates and decoded bits.
 
 The first argument is one of:
 
-| Argument                                | Meaning                                                                        |
-|:--------------------------------------- |:------------------------------------------------------------------------------ |
-| `AbstractVecOrMat`                      | Bare sample buffer. Single-band TrackState only.                               |
-| `BandMeasurement`                       | One band's bundled buffer + sample rate. Single-band TrackState.               |
-| `NamedTuple{...}` of `BandMeasurement`s | Multi-band: one `BandMeasurement` per band id (see `GNSSSignals.get_band_id`). |
+| Argument                                             | Meaning                                                                                    |
+|:---------------------------------------------------- |:------------------------------------------------------------------------------------------ |
+| `AbstractVecOrMat`                                   | Bare sample buffer. Single-band TrackState only.                                           |
+| [`BandSamples`](@ref)                                | One band's samples with their sample rate. Single-band TrackState.                         |
+| [`MultiBandSamples`](@ref Tracking.MultiBandSamples) | Multi-band: a NamedTuple of one `BandSamples` per band id (see `GNSSSignals.get_band_id`). |
 
 The bare buffer takes `sampling_frequency` as the next positional argument and
 an `intermediate_frequency` keyword (default `0`). Every form runs the same
-per-chunk loop: downconvert and correlate all groups, then estimate.
+per-chunk loop: downconvert and correlate all groups, then step the tracking loops.
 
 The returned `TrackState` is *structurally* detached from the input: each
 group's key set and slot vector are copied, so adding, removing or tracking
@@ -62,7 +62,7 @@ the code loop's at `0.018 / T_int`, so longer integration stays stable (see
 [`ScalarTrackingLoop`](@extref TrackingLoops.ScalarTrackingLoop)).
 """
 function track(
-    measurements::BandMeasurements,
+    multi_band_samples::MultiBandSamples,
     track_state::TS;
     kwargs...,
 ) where {TS<:TrackState}
@@ -72,16 +72,13 @@ function track(
         groups = _detach_groups_slot_vectors(track_state.groups),
         sample_index_offsets = copy(track_state.sample_index_offsets),
     )
-    track!(measurements, detached; kwargs...)::TS
+    track!(multi_band_samples, detached; kwargs...)::TS
 end
 
-# Key a single measurement by the state's only band (errors if multi-band).
-@inline function _single_band_measurements(
-    measurement::BandMeasurement,
-    track_state::TrackState,
-)
+# Key a single band's samples by the state's only band (errors if multi-band).
+@inline function _as_multi_band_samples(band_samples::BandSamples, track_state::TrackState)
     key = get_band_id(_single_band(track_state))
-    NamedTuple{(key,)}((measurement,))
+    NamedTuple{(key,)}((band_samples,))
 end
 
 # Bare-buffer convenience wrapper. Single-band TrackStates only.
@@ -92,13 +89,13 @@ function track(
     intermediate_frequency = zero(sampling_frequency),
     kwargs...,
 )
-    m = BandMeasurement(samples, sampling_frequency, intermediate_frequency)
-    track(_single_band_measurements(m, track_state), track_state; kwargs...)
+    band_samples = BandSamples(samples, sampling_frequency; intermediate_frequency)
+    track(_as_multi_band_samples(band_samples, track_state), track_state; kwargs...)
 end
 
-# Single-BandMeasurement convenience: still a single-band path.
-function track(measurement::BandMeasurement, track_state::TrackState; kwargs...)
-    track(_single_band_measurements(measurement, track_state), track_state; kwargs...)
+# Single-BandSamples convenience: still a single-band path.
+function track(band_samples::BandSamples, track_state::TrackState; kwargs...)
+    track(_as_multi_band_samples(band_samples, track_state), track_state; kwargs...)
 end
 
 """
@@ -130,15 +127,15 @@ Its per-thread scratch buffers grow on first use; the default would regrow them
 every call.
 """
 function track!(
-    measurements::BandMeasurements,
+    multi_band_samples::MultiBandSamples,
     track_state::TrackState;
     downconvert_and_correlator::AbstractDownconvertAndCorrelator = CPUThreadedDownconvertAndCorrelator(),
     nco_update_interval = nothing,
 )
-    _validate_measurements(track_state, measurements)
+    _validate_multi_band_samples(track_state, multi_band_samples)
     _prepare_for_new_buffer!(track_state)
     nco_update_interval = _resolve_nco_update_interval(nco_update_interval, track_state)
-    _validate_nco_update_interval(nco_update_interval, measurements)
+    _validate_nco_update_interval(nco_update_interval, multi_band_samples)
     # Per chunk, one correlate pass at fixed NCO Doppler, then one estimate that
     # updates every satellite at a common epoch. The pass stops at each
     # satellite's last completed code-period boundary (`stop_before_partial`), so
@@ -149,17 +146,17 @@ function track!(
     # The buffers are fixed for the call, so sample-derived caches (the bit
     # backends' band pack) are built on the first pass only.
     chunk_index = 0
-    while _chunks_left(nco_update_interval, chunk_index, measurements)
+    while _chunks_left(nco_update_interval, chunk_index, multi_band_samples)
         downconvert_and_correlate!(
             downconvert_and_correlator,
-            measurements,
+            multi_band_samples,
             track_state;
             chunk_index,
             nco_update_interval,
             stop_before_partial = true,
             samples_unchanged = chunk_index > 0,
         )
-        step_tracking_loops!(track_state, measurements)
+        step_tracking_loops!(track_state, multi_band_samples)
         chunk_index += 1
     end
     # Drain each satellite's trailing partial into its correlator bank, carried into
@@ -168,24 +165,24 @@ function track!(
     # would enter the noise window twice.
     downconvert_and_correlate!(
         downconvert_and_correlator,
-        measurements,
+        multi_band_samples,
         track_state;
         samples_unchanged = chunk_index > 0,
         measure_noise = chunk_index == 0,
     )
-    step_tracking_loops!(track_state, measurements)
-    _advance_sample_index_offsets!(track_state.sample_index_offsets, measurements)
+    step_tracking_loops!(track_state, multi_band_samples)
+    _advance_sample_index_offsets!(track_state.sample_index_offsets, multi_band_samples)
     return track_state
 end
 
-# The next measurement of every band starts where this one ended.
+# The next samples of every band start where these ended.
 @inline _advance_sample_index_offsets!(
     sample_index_offsets::Dict{Symbol,Int},
-    measurements::BandMeasurements,
+    multi_band_samples::MultiBandSamples,
 ) = _advance_sample_index_offsets!(
     sample_index_offsets,
-    keys(measurements),
-    values(measurements),
+    keys(multi_band_samples),
+    values(multi_band_samples),
 )
 @inline _advance_sample_index_offsets!(
     sample_index_offsets::Dict{Symbol,Int},
@@ -195,15 +192,15 @@ end
 @inline function _advance_sample_index_offsets!(
     sample_index_offsets::Dict{Symbol,Int},
     bands::Tuple,
-    measurements::Tuple,
+    multi_band_samples::Tuple,
 )
     band = first(bands)
     sample_index_offsets[band] =
-        get(sample_index_offsets, band, 0) + get_num_samples(first(measurements))
+        get(sample_index_offsets, band, 0) + get_num_samples(first(multi_band_samples))
     _advance_sample_index_offsets!(
         sample_index_offsets,
         Base.tail(bands),
-        Base.tail(measurements),
+        Base.tail(multi_band_samples),
     )
 end
 
@@ -215,25 +212,25 @@ function track!(
     intermediate_frequency = zero(sampling_frequency),
     kwargs...,
 )
-    m = BandMeasurement(samples, sampling_frequency, intermediate_frequency)
-    track!(_single_band_measurements(m, track_state), track_state; kwargs...)
+    band_samples = BandSamples(samples, sampling_frequency; intermediate_frequency)
+    track!(_as_multi_band_samples(band_samples, track_state), track_state; kwargs...)
 end
 
-# Single-BandMeasurement convenience: still a single-band path.
-function track!(measurement::BandMeasurement, track_state::TrackState; kwargs...)
-    track!(_single_band_measurements(measurement, track_state), track_state; kwargs...)
+# Single-BandSamples convenience: still a single-band path.
+function track!(band_samples::BandSamples, track_state::TrackState; kwargs...)
+    track!(_as_multi_band_samples(band_samples, track_state), track_state; kwargs...)
 end
 
 # True until the previous chunk reached the buffer end on every band, independent
 # of per-satellite progress. For `chunk_index == 0`: is any buffer non-empty.
-@inline function _chunks_left(nco_update_interval, chunk_index::Int, measurements)
-    for m in measurements
-        n = get_num_samples(m)
+@inline function _chunks_left(nco_update_interval, chunk_index::Int, multi_band_samples)
+    for band_samples in multi_band_samples
+        n = get_num_samples(band_samples)
         last(
             _chunk_sample_range(
                 nco_update_interval,
                 chunk_index - 1,
-                m.sampling_frequency,
+                band_samples.sampling_frequency,
                 n,
             ),
         ) < n && return true
@@ -271,19 +268,23 @@ end
 
 # A chunk must cover a sample on every band, or `track!` would not terminate. A
 # plain number gets a clear error rather than a Unitful one.
-function _validate_nco_update_interval(nco_update_interval, measurements::BandMeasurements)
+function _validate_nco_update_interval(
+    nco_update_interval,
+    multi_band_samples::MultiBandSamples,
+)
     dimension(nco_update_interval) == dimension(1.0s) || throw(
         ArgumentError(
             "nco_update_interval must be a time quantity, e.g. `1u\"ms\"` or `1e-3u\"s\"` " *
             "(with `using Unitful`); got $nco_update_interval.",
         ),
     )
-    for m in measurements
-        samples_per_chunk = uconvert(NoUnits, nco_update_interval * m.sampling_frequency)
+    for band_samples in multi_band_samples
+        samples_per_chunk =
+            uconvert(NoUnits, nco_update_interval * band_samples.sampling_frequency)
         samples_per_chunk >= 1 || throw(
             ArgumentError(
                 "nco_update_interval $nco_update_interval is shorter than one sample period " *
-                "at sampling frequency $(m.sampling_frequency); pick a longer interval.",
+                "at sampling frequency $(band_samples.sampling_frequency); pick a longer interval.",
             ),
         )
     end

@@ -9,7 +9,7 @@ using Tracking:
     CPUThreadedDownconvertAndCorrelator,
     TrackedSat,
     TrackState,
-    BandMeasurement,
+    BandSamples,
     downconvert_and_correlate,
     get_correlator_bank,
     get_correlator_bank_outputs,
@@ -58,11 +58,11 @@ end
         ) .* cis.(2π * (0:(num_samples-1)) * 1000.0Hz / sampling_frequency)
 
     track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, code_phase, 1000.0Hz)])
-    measurements =
-        (L1 = BandMeasurement(samples, sampling_frequency, intermediate_frequency),)
+    multi_band_samples =
+        (L1 = BandSamples(samples, sampling_frequency; intermediate_frequency),)
     next_track_state = @inferred downconvert_and_correlate(
         downconvert_and_correlator,
-        measurements,
+        multi_band_samples,
         track_state,
     )
 
@@ -80,11 +80,11 @@ end
         ) .* cis.(2π * (0:(num_samples-1)) * 500.0Hz / sampling_frequency)
 
     track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 2, 11.0, 500.0Hz)])
-    measurements =
-        (L1 = BandMeasurement(samples, sampling_frequency, intermediate_frequency),)
+    multi_band_samples =
+        (L1 = BandSamples(samples, sampling_frequency; intermediate_frequency),)
     next_track_state = @inferred downconvert_and_correlate(
         downconvert_and_correlator,
-        measurements,
+        multi_band_samples,
         track_state,
     )
 
@@ -110,17 +110,21 @@ end
     ts_skip = TrackState(gpsl1, [sat_past_end])
     downconvert_and_correlator = DC()
 
-    measurements =
-        (L1 = BandMeasurement(samples, sampling_frequency, intermediate_frequency),)
+    multi_band_samples =
+        (L1 = BandSamples(samples, sampling_frequency; intermediate_frequency),)
 
     # Immutable form
     result_skip =
-        downconvert_and_correlate(downconvert_and_correlator, measurements, ts_skip)
+        downconvert_and_correlate(downconvert_and_correlator, multi_band_samples, ts_skip)
     @test get_correlator_bank(result_skip, 1).correlator_outputs ==
           get_correlator_bank(sat_past_end).correlator_outputs
 
     # In-place form takes the same early return; the sat stays unchanged.
-    Tracking.downconvert_and_correlate!(downconvert_and_correlator, measurements, ts_skip)
+    Tracking.downconvert_and_correlate!(
+        downconvert_and_correlator,
+        multi_band_samples,
+        ts_skip,
+    )
     @test get_correlator_bank(ts_skip, 1).correlator_outputs ==
           get_correlator_bank(sat_past_end).correlator_outputs
 end

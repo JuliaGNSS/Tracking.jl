@@ -18,7 +18,7 @@ using Tracking:
     TrackState,
     track,
     downconvert_and_correlate,
-    BandMeasurement,
+    BandSamples,
     get_tracked_sat,
     get_carrier_doppler,
     TrackedSignal,
@@ -77,7 +77,9 @@ make_capture_mat(sig, fs, nsamp, cdopp, cphase, M; peak = 2000) =
 # One downconvert+correlate step with the given backend; returns the correlator.
 function correlate_once(dc, sig, fs, nsamp, cdopp, cphase; correlator_bank = nothing)
     cap = make_capture(sig, 1, fs, nsamp, cdopp, cphase)
-    meas = NamedTuple{(band_key_for(sig),)}((BandMeasurement(cap, fs, 0.0Hz),))
+    meas = NamedTuple{(band_key_for(sig),)}((
+        BandSamples(cap, fs; intermediate_frequency = 0.0Hz),
+    ))
     sat =
         correlator_bank === nothing ? TrackedSat(sig, 1, cphase, cdopp) :
         TrackedSat(sig, 1, cphase, cdopp; correlator_bank)
@@ -177,7 +179,7 @@ end
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         cap = make_capture_mat(sig, fs, nsamp, 200Hz, 100.0, M)
-        meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
+        meas = (L1 = BandSamples(cap, fs; intermediate_frequency = 0.0Hz),)
         mk() = TrackState(
             sig,
             [TrackedSat(sig, 1, 100.0, 200Hz; num_antennas = NumAntennas(M))],
@@ -227,7 +229,7 @@ end
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0; peak = mm)
-        meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
+        meas = (L1 = BandSamples(cap, fs; intermediate_frequency = 0.0Hz),)
         corr(dc) = first(
             get_tracked_sat(
                 downconvert_and_correlate(
@@ -275,7 +277,7 @@ end
         sig, fs = GalileoE1B(CBOC), 15e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0; peak = 2^15 - 1)
-        meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
+        meas = (L1 = BandSamples(cap, fs; intermediate_frequency = 0.0Hz),)
         corr(dc) = first(
             get_tracked_sat(
                 downconvert_and_correlate(
@@ -366,7 +368,7 @@ end
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
-        meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
+        meas = (L1 = BandSamples(cap, fs; intermediate_frequency = 0.0Hz),)
         dc = Int16ThreadedDownconvertAndCorrelator(TEST_MAX_MEAS)
         loop = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)
         mksig() = TrackedSignal(
@@ -407,7 +409,7 @@ end
         sig, fs = GPSL1CA(), 5e6Hz
         capf = Complex{Float32}.(make_capture(sig, 1, fs, 5000, 200Hz, 100.0))
         ts = TrackState(sig, [TrackedSat(sig, 1, 100.0, 200Hz)])
-        meas = (L1 = BandMeasurement(capf, fs, 0.0Hz),)
+        meas = (L1 = BandSamples(capf, fs; intermediate_frequency = 0.0Hz),)
         # Both backends share the `_check_sample_type` hook.
         @test_throws ArgumentError downconvert_and_correlate(
             Int16DownconvertAndCorrelator(TEST_MAX_MEAS),
@@ -457,7 +459,7 @@ end
         cphase = 0.0
         code = gen_code(nsamp, sig, 1, fs, get_chip_rate(sig), cphase)
         cap = complex.(round.(Int16, 2048 .* sign.(real.(code))), zero(Int16))
-        meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
+        meas = (L1 = BandSamples(cap, fs; intermediate_frequency = 0.0Hz),)
         corr(dc) = first(
             get_tracked_sat(
                 downconvert_and_correlate(
