@@ -323,7 +323,7 @@ function _update_tracked_sat_correlator_bank(
     # pass, so every completed integration sees a single Doppler; a final pass
     # without the flag drains the buffer's trailing partial.
     while sat.next_sample_index <= last(chunk_sample_range)
-        samples_to_integrate, per_signal_completed = _calc_min_samples_and_completed(
+        num_samples_to_integrate, per_signal_completed = _calc_min_samples_and_completed(
             sat.signals,
             sat.next_sample_index:last(chunk_sample_range),
             sampling_frequency,
@@ -331,7 +331,7 @@ function _update_tracked_sat_correlator_bank(
             sat.code_phase,
             num_buffer_samples,
         )
-        samples_to_integrate == 0 && break
+        num_samples_to_integrate == 0 && break
         # A sub-step that completes no signal is the chunk-clamped trailing partial.
         stop_before_partial && !_any_of_tuple(per_signal_completed) && break
         carrier_frequency = sat.carrier_doppler + intermediate_frequency
@@ -345,13 +345,13 @@ function _update_tracked_sat_correlator_bank(
             carrier_frequency,
             sat.carrier_phase,
             sampling_frequency,
-            range(sat.next_sample_index; length = samples_to_integrate),
+            range(sat.next_sample_index; length = num_samples_to_integrate),
             sat.prn,
             num_buffer_samples,
         )
         sat = _advance_sat(
             sat,
-            samples_to_integrate,
+            num_samples_to_integrate,
             intermediate_frequency,
             sampling_frequency,
             new_signals_data,
@@ -371,22 +371,23 @@ end
     code_phase,
     num_buffer_samples,
 )
-    per_signal_to_boundary = _per_signal_samples_to_boundary(
+    per_signal_num_samples_to_boundary = _per_signal_num_samples_to_boundary(
         signals,
         sampling_frequency,
         code_doppler,
         code_phase,
         num_buffer_samples,
     )
-    samples_to_integrate = _min_of_tuple(per_signal_to_boundary)
-    samples_to_integrate = min(samples_to_integrate, length(sample_range))
-    per_signal_completed = _flag_completed(per_signal_to_boundary, samples_to_integrate)
-    return samples_to_integrate, per_signal_completed
+    num_samples_to_integrate = _min_of_tuple(per_signal_num_samples_to_boundary)
+    num_samples_to_integrate = min(num_samples_to_integrate, length(sample_range))
+    per_signal_completed =
+        _flag_completed(per_signal_num_samples_to_boundary, num_samples_to_integrate)
+    return num_samples_to_integrate, per_signal_completed
 end
 
 # Each signal's samples to the end of its integration window.
-@inline _per_signal_samples_to_boundary(::Tuple{}, _, _, _, _) = ()
-@inline function _per_signal_samples_to_boundary(
+@inline _per_signal_num_samples_to_boundary(::Tuple{}, _, _, _, _) = ()
+@inline function _per_signal_num_samples_to_boundary(
     signals::Tuple,
     sampling_frequency,
     code_doppler,
@@ -412,7 +413,7 @@ end
     )
     (
         n,
-        _per_signal_samples_to_boundary(
+        _per_signal_num_samples_to_boundary(
             Base.tail(signals),
             sampling_frequency,
             code_doppler,
@@ -428,7 +429,7 @@ end
 @inline _any_of_tuple(::Tuple{}) = false
 @inline _any_of_tuple(t::Tuple) = first(t) || _any_of_tuple(Base.tail(t))
 
-# For each signal, `is_completed = (chosen_samples == samples_to_boundary)`.
+# For each signal, `is_completed = (chosen_samples == num_samples_to_boundary)`.
 @inline _flag_completed(::Tuple{}, _) = ()
 @inline _flag_completed(t::Tuple, chosen) =
     (first(t) == chosen, _flag_completed(Base.tail(t), chosen)...)
@@ -437,7 +438,7 @@ end
 # the secondary-/bit-period length, so `gen_code!` bakes the current code period's
 # secondary chip into the replica and wipes the overlay at every integration
 # length (#125); before sync only the primary phase is known. At one code period the
-# boundary is unchanged, as `calc_num_chips_to_integrate` re-mods by the primary
+# boundary is unchanged, as `calc_num_chips_left_to_integrate` re-mods by the primary
 # length. `num_code_periods` is unused.
 @inline _replica_code_phase_period(tsig::TrackedSignal, num_code_periods::Integer) =
     is_bit_or_secondary_code_synced(tsig) ? _post_sync_code_phase_period(tsig) :
