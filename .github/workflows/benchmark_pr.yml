@@ -8,7 +8,7 @@ name: Benchmark this PR
 # backends into one Int16-vs-Float32 speedup row — the integer backend is new on the PR and
 # has no base counterpart, so a plain base-vs-head diff can't show its speedup.
 #
-# Runs on both x86 (Ubuntu) and ARM (Apple Silicon, macos-14) so the NEON code path gets
+# Runs on both x86 (Ubuntu) and ARM (Apple Silicon, macos-15) so the NEON code path gets
 # benchmarked on real Apple-Silicon hardware, not just the x86 AVX2/AVX-512 paths.
 #
 # `--exeflags="-t auto"` is load-bearing, not a tuning knob. `benchpkg` spawns the benchmark
@@ -17,7 +17,7 @@ name: Benchmark this PR
 # every `– threaded` entry in the suite silently measures the serial path: the Polyester
 # `@batch` in `_dc_group_loop!` runs its loop inline on the calling thread, so the threaded
 # backends and their vs-Float32 speedup rows compare two serial runs. `auto` rather than a
-# fixed count because the two runners differ (ubuntu-latest 4 vCPU, macos-14 3 cores) while
+# fixed count because the two runners differ (ubuntu-latest 4 vCPU, macos-15 3 cores) while
 # the base and head revisions of one PR always run on the same runner, so the comparison
 # stays fair. If a threading change ever shows no effect here, check this flag first.
 #
@@ -45,12 +45,13 @@ permissions:
 
 jobs:
   benchmark:
-    # Run on both x86 (Ubuntu) and ARM (Apple Silicon: macos-14 is M-series).
+    # Run on both x86 (Ubuntu) and ARM (Apple Silicon: macos-15 is M-series; the macos-14
+    # image is retired and its jobs are rejected before they start).
     # fail-fast: false so a flake on one platform doesn't cancel the other's results.
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-latest, macos-14]
+        runner: [ubuntu-latest, macos-15]
     runs-on: ${{ matrix.runner }}
     steps:
       # Base (trusted) checkout — provides .github/scripts/bench_table.jl. The PR's own
