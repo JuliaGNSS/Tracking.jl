@@ -22,9 +22,8 @@ using Tracking:
     get_tracked_sat,
     get_carrier_doppler,
     TrackedSignal,
-    CPUThreadedDownconvertAndCorrelator,
-    Int16DownconvertAndCorrelator,
-    Int16ThreadedDownconvertAndCorrelator
+    CPUDownconvertAndCorrelator,
+    Int16DownconvertAndCorrelator
 import TrackingLoops
 using TrackingLoops:
     get_prompt,
@@ -111,7 +110,7 @@ end
     )
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         cf = correlate_once(
-            CPUThreadedDownconvertAndCorrelator(),
+            CPUDownconvertAndCorrelator(; threaded = true),
             sig,
             fs,
             nsamp,
@@ -119,8 +118,9 @@ end
             100.0,
         )
         ci = correlate_once(
-            Int16ThreadedDownconvertAndCorrelator(;
+            Int16DownconvertAndCorrelator(;
                 max_sample_amplitude = TEST_MAX_SAMPLE_AMPLITUDE,
+                threaded = true,
             ),
             sig,
             fs,
@@ -147,7 +147,7 @@ end
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         mk() = VeryEarlyPromptLateCorrelatorBank(; num_ants = NumAnts(1))
         cf = correlate_once(
-            CPUThreadedDownconvertAndCorrelator(),
+            CPUDownconvertAndCorrelator(; threaded = true),
             sig,
             fs,
             nsamp,
@@ -156,8 +156,9 @@ end
             correlator_bank = mk(),
         )
         ci = correlate_once(
-            Int16ThreadedDownconvertAndCorrelator(;
+            Int16DownconvertAndCorrelator(;
                 max_sample_amplitude = TEST_MAX_SAMPLE_AMPLITUDE,
+                threaded = true,
             ),
             sig,
             fs,
@@ -188,10 +189,11 @@ end
         run(dc) = _completed_or_partial_correlator(
             first(get_tracked_sat(downconvert_and_correlate(dc, meas, mk()), 1).signals),
         )
-        cf = run(CPUThreadedDownconvertAndCorrelator())
+        cf = run(CPUDownconvertAndCorrelator(; threaded = true))
         ci = run(
-            Int16ThreadedDownconvertAndCorrelator(;
+            Int16DownconvertAndCorrelator(;
                 max_sample_amplitude = TEST_MAX_SAMPLE_AMPLITUDE,
+                threaded = true,
             ),
         )
         ef, pf, lf = get_early(cf), get_prompt(cf), get_late(cf)   # SVector{M,Complex}
@@ -218,8 +220,9 @@ end
             100.0,
         )
         ct = correlate_once(
-            Int16ThreadedDownconvertAndCorrelator(;
+            Int16DownconvertAndCorrelator(;
                 max_sample_amplitude = TEST_MAX_SAMPLE_AMPLITUDE,
+                threaded = true,
             ),
             sig,
             fs,
@@ -249,8 +252,10 @@ end
                 1,
             ).signals,
         ).correlator_bank
-        cf = corr(CPUThreadedDownconvertAndCorrelator())
-        ci = corr(Int16ThreadedDownconvertAndCorrelator(; max_sample_amplitude = mm))
+        cf = corr(CPUDownconvertAndCorrelator(; threaded = true))
+        ci = corr(
+            Int16DownconvertAndCorrelator(; max_sample_amplitude = mm, threaded = true),
+        )
         @test abs(get_early(ci)) / abs(get_prompt(ci)) ≈
               abs(get_early(cf)) / abs(get_prompt(cf)) atol = 1e-2
         @test abs(get_late(ci)) / abs(get_prompt(ci)) ≈
@@ -262,10 +267,10 @@ end
     @testset "Int32 wipe fallback (forced via large max_sample_amplitude)" begin
         sig, fs = GPSL1CA(), 5e6Hz
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
-        dc32 = Int16ThreadedDownconvertAndCorrelator(; max_sample_amplitude = 2^15)
-        @test dc32 isa Int16ThreadedDownconvertAndCorrelator{<:Any,Int32}   # Int32 wipe selected
+        dc32 = Int16DownconvertAndCorrelator(; max_sample_amplitude = 2^15, threaded = true)
+        @test dc32 isa Int16DownconvertAndCorrelator{<:Any,Int32}   # Int32 wipe selected
         cf = correlate_once(
-            CPUThreadedDownconvertAndCorrelator(),
+            CPUDownconvertAndCorrelator(; threaded = true),
             sig,
             fs,
             nsamp,
@@ -297,8 +302,10 @@ end
                 1,
             ).signals,
         ).correlator_bank
-        cf = corr(CPUThreadedDownconvertAndCorrelator())
-        ci = corr(Int16ThreadedDownconvertAndCorrelator(; max_sample_amplitude = 2^15))
+        cf = corr(CPUDownconvertAndCorrelator(; threaded = true))
+        ci = corr(
+            Int16DownconvertAndCorrelator(; max_sample_amplitude = 2^15, threaded = true),
+        )
         @test abs(get_early(ci)) / abs(get_prompt(ci)) ≈
               abs(get_early(cf)) / abs(get_prompt(cf)) atol = 1e-2
         @test abs(get_late(ci)) / abs(get_prompt(ci)) ≈
@@ -312,8 +319,9 @@ end
         fc = 200Hz * get_chip_rate_to_center_frequency_ratio(sig) + get_chip_rate(sig)
         shifts =
             collect(calc_correlator_sample_offsets(EarlyPromptLateCorrelatorBank(), fs, fc))
-        dc = Int16ThreadedDownconvertAndCorrelator(;
+        dc = Int16DownconvertAndCorrelator(;
             max_sample_amplitude = TEST_MAX_SAMPLE_AMPLITUDE,
+            threaded = true,
         )
         cs = correlate_once(dc, sig, fs, nsamp, 200Hz, 100.0)                       # static EPL
         cd = correlate_once(
@@ -383,8 +391,9 @@ end
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
         meas = (L1 = BandSamples(cap, fs; intermediate_frequency = 0.0Hz),)
-        dc = Int16ThreadedDownconvertAndCorrelator(;
+        dc = Int16DownconvertAndCorrelator(;
             max_sample_amplitude = TEST_MAX_SAMPLE_AMPLITUDE,
+            threaded = true,
         )
         loop = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)
         mksig(sig) = TrackedSignal(
@@ -443,8 +452,9 @@ end
             ts,
         )
         @test_throws ArgumentError downconvert_and_correlate(
-            Int16ThreadedDownconvertAndCorrelator(;
+            Int16DownconvertAndCorrelator(;
                 max_sample_amplitude = TEST_MAX_SAMPLE_AMPLITUDE,
+                threaded = true,
             ),
             meas,
             ts,
@@ -455,7 +465,6 @@ end
         # No default, so under-declaring can't happen silently (see
         # `_int16_choose_carrier`).
         @test_throws UndefKeywordError Int16DownconvertAndCorrelator()
-        @test_throws UndefKeywordError Int16ThreadedDownconvertAndCorrelator()
     end
 
     # #165: the cross-lane block-flush sum must not wrap Int32 (see `_wide64`).
@@ -478,10 +487,11 @@ end
                 1,
             ).signals,
         ).correlator_bank
-        ci_dc = Int16ThreadedDownconvertAndCorrelator(;
+        ci_dc = Int16DownconvertAndCorrelator(;
             max_sample_amplitude = TEST_MAX_SAMPLE_AMPLITUDE,
+            threaded = true,
         )
-        cf = corr(CPUThreadedDownconvertAndCorrelator())
+        cf = corr(CPUDownconvertAndCorrelator(; threaded = true))
         ci = corr(ci_dc)
         # Precondition: the raw block total (finalize divided out the carrier
         # amplitude) really exceeds typemax(Int32).
@@ -520,9 +530,10 @@ end
                 max_sample_amplitude = TEST_MAX_SAMPLE_AMPLITUDE,
                 block_length = bad,
             )
-            @test_throws ArgumentError Int16ThreadedDownconvertAndCorrelator(;
+            @test_throws ArgumentError Int16DownconvertAndCorrelator(;
                 max_sample_amplitude = TEST_MAX_SAMPLE_AMPLITUDE,
                 block_length = bad,
+                threaded = true,
             )
         end
 
@@ -530,8 +541,9 @@ end
         @test Int16DownconvertAndCorrelator(;
             max_sample_amplitude = TEST_MAX_SAMPLE_AMPLITUDE,
         ).block_length == 8192
-        @test Int16ThreadedDownconvertAndCorrelator(;
+        @test Int16DownconvertAndCorrelator(;
             max_sample_amplitude = TEST_MAX_SAMPLE_AMPLITUDE,
+            threaded = true,
         ).block_length == 8192
         dc = Int16DownconvertAndCorrelator(;
             max_sample_amplitude = TEST_MAX_SAMPLE_AMPLITUDE,
@@ -546,9 +558,10 @@ end
             block_length = 200_000,
         )
         @test dc.block_length == 200_000
-        @test Int16ThreadedDownconvertAndCorrelator(;
+        @test Int16DownconvertAndCorrelator(;
             max_sample_amplitude = TEST_MAX_SAMPLE_AMPLITUDE,
             block_length = 200_000,
+            threaded = true,
         ).block_length == 200_000
         let sig = GalileoE1B(CBOC), fs = 15e6Hz
             nsamp = round(Int, (fs / 1Hz) * 1e-3)
@@ -591,8 +604,9 @@ end
             cap,
             ts,
             fs;
-            downconvert_and_correlator = Int16ThreadedDownconvertAndCorrelator(;
+            downconvert_and_correlator = Int16DownconvertAndCorrelator(;
                 max_sample_amplitude = TEST_MAX_SAMPLE_AMPLITUDE,
+                threaded = true,
             ),
         )
         # Converges back toward the true Doppler from the 20 Hz initial offset.

@@ -192,9 +192,10 @@ Int16ScratchBuffers{TI}() where {TI} =
 """
 $(SIGNATURES)
 
-Integer (`Complex{Int16}`) hybrid-blocked CPU downconvert + correlate backend
-(single-threaded). Opt-in alternative to [`CPUDownconvertAndCorrelator`] for
-`Complex{Int16}` sample buffers; errors on any other sample element type.
+Integer (`Complex{Int16}`) hybrid-blocked CPU downconvert + correlate backend. Opt-in
+alternative to [`CPUDownconvertAndCorrelator`] for `Complex{Int16}` sample buffers;
+errors on any other sample element type. `threaded = true` runs it multi-threaded as
+[`CPUDownconvertAndCorrelator`](@ref), the threads sharing the immutable carrier table.
 Construct it **once outside** the `track!` loop and pass it via the
 `downconvert_and_correlator` keyword: allocation-free in steady state for `SVector`
 sample shifts (EPL/VEPL); runtime `AbstractVector` shifts allocate only the returned
@@ -219,9 +220,12 @@ only coarsens the carrier quantisation.
 one would hang `track!`, #169); a larger-than-safe one is clamped so the accumulators
 never wrap.
 """
-struct Int16DownconvertAndCorrelator{TBL<:SinCosTable,TI} <:
-       AbstractDownconvertAndCorrelator
-    buffers::Int16ScratchBuffers{TI}
+struct Int16DownconvertAndCorrelator{
+    TBL<:SinCosTable,
+    TI,
+    B<:Union{Int16ScratchBuffers{TI},Vector{Int16ScratchBuffers{TI}}},
+} <: AbstractDownconvertAndCorrelator
+    buffers::B
     table::TBL
     block_length::Int
     # Peak of the Int8 carrier replica, divided out at finalize so the magnitudes match
@@ -229,54 +233,21 @@ struct Int16DownconvertAndCorrelator{TBL<:SinCosTable,TI} <:
     carrier_amplitude::Int
 end
 
-"""
-$(SIGNATURES)
-
-Multi-threaded [`Int16DownconvertAndCorrelator`](@ref): one `Int16ScratchBuffers` per
-thread, the immutable carrier `table` shared.
-"""
-struct Int16ThreadedDownconvertAndCorrelator{TBL<:SinCosTable,TI} <:
-       AbstractDownconvertAndCorrelator
-    buffers::Vector{Int16ScratchBuffers{TI}}
-    table::TBL
-    block_length::Int
-    # Peak of the Int8 carrier replica, divided out at finalize.
-    carrier_amplitude::Int
-end
-
 function Int16DownconvertAndCorrelator(;
     max_sample_amplitude::Integer,
     block_length::Integer = _INT16_BLOCK_LENGTH,
+    threaded::Bool = false,
 )
     amplitude, TI = _int16_choose_carrier(max_sample_amplitude)
     table = SinCosTable(Int8; steps = _INT16_CARRIER_STEPS, amplitude)
-    Int16DownconvertAndCorrelator{typeof(table),TI}(
-        Int16ScratchBuffers{TI}(),
+    buffers = _scratch_sets(Int16ScratchBuffers{TI}, threaded)
+    Int16DownconvertAndCorrelator{typeof(table),TI,typeof(buffers)}(
+        buffers,
         table,
         _int16_validate_block_length(block_length, max_sample_amplitude, amplitude),
         amplitude,
     )
 end
-
-function Int16ThreadedDownconvertAndCorrelator(;
-    max_sample_amplitude::Integer,
-    block_length::Integer = _INT16_BLOCK_LENGTH,
-)
-    amplitude, TI = _int16_choose_carrier(max_sample_amplitude)
-    table = SinCosTable(Int8; steps = _INT16_CARRIER_STEPS, amplitude)
-    Int16ThreadedDownconvertAndCorrelator{typeof(table),TI}(
-        [Int16ScratchBuffers{TI}() for _ = 1:Threads.maxthreadid()],
-        table,
-        _int16_validate_block_length(block_length, max_sample_amplitude, amplitude),
-        amplitude,
-    )
-end
-
-const _Int16DC = Union{Int16DownconvertAndCorrelator,Int16ThreadedDownconvertAndCorrelator}
-
-@inline _scratch_buffers(dc::Int16DownconvertAndCorrelator) = dc.buffers
-@inline _scratch_buffers(dc::Int16ThreadedDownconvertAndCorrelator) =
-    dc.buffers[Threads.threadid()]
 
 # Fill `len` carrier samples (sin→csb, cos→ccb) from absolute sample `start`, 4-way
 # unrolled so the latency-bound lookups pipeline.
@@ -329,7 +300,7 @@ end
 # keeps only its own NC accumulators live; the accumulate (vpmaddwd / SMLAL / exact Int32)
 # is chosen at generation time.
 @generated function _int16_hybrid_blocked!(
-    dc::_Int16DC,
+    dc::Int16DownconvertAndCorrelator,
     samples::AbstractVecOrMat{Complex{Int16}},
     ::NumAnts{M},
     signal,
@@ -587,7 +558,7 @@ end
 # (`_int16_fill_ditile!`) and accumulates each antenna/correlator with the exact Int32 accumulate.
 # Returns a `Vector` of `ComplexF64` (M=1) or `SVector{M,ComplexF64}` (M>1).
 function _int16_hybrid_blocked!(
-    dc::_Int16DC,
+    dc::Int16DownconvertAndCorrelator,
     samples::AbstractVecOrMat{Complex{Int16}},
     ::NumAnts{M},
     signal,
@@ -767,7 +738,7 @@ end
 # Tile-share kernel for the signals of one satellite. Returns a tuple of per-signal
 # `SVector{NCᵢ}`s, `@generated` over (M, the signals tuple).
 @generated function _int16_hybrid_blocked_multi!(
-    dc::_Int16DC,
+    dc::Int16DownconvertAndCorrelator,
     samples::AbstractVecOrMat{Complex{Int16}},
     ::NumAnts{M},
     gnss_signals::Tuple,
@@ -989,7 +960,7 @@ end
 @inline function _correlate_signals(
     signals::Tuple{TrackedSignal,TrackedSignal,Vararg{TrackedSignal}},
     per_signal_completed::Tuple,
-    dc::_Int16DC,
+    dc::Int16DownconvertAndCorrelator,
     samples,
     code_doppler,
     code_phase,
@@ -1038,7 +1009,7 @@ end
 # downconvert_and_correlate_cpu.jl. `code_replica_size` and `use_band_cache` are ignored:
 # the kernel generates its replica block in its own scratch and has no band cache.
 @inline _despread_one_signal!(
-    dc::_Int16DC,
+    dc::Int16DownconvertAndCorrelator,
     correlator_bank,
     samples,
     signal,
@@ -1076,16 +1047,14 @@ end
 # this backend adds only the sample-type check and the threading trait.
 
 # Reject non-`Complex{Int16}` sample buffers up front (12-bit ADC contract).
-@inline _check_sample_type(::_Int16DC, band_samples) =
+@inline _check_sample_type(::Int16DownconvertAndCorrelator, band_samples) =
     eltype(band_samples.samples) === Complex{Int16} || throw(
         ArgumentError(
             string(
                 "Int16DownconvertAndCorrelator requires `Complex{Int16}` ",
                 "samples (12-bit ADC); got element type ",
                 eltype(band_samples.samples),
-                ". Use a CPU(Threaded)DownconvertAndCorrelator for floating-point samples.",
+                ". Use a CPUDownconvertAndCorrelator for floating-point samples.",
             ),
         ),
     )
-
-@inline _threading(::Int16ThreadedDownconvertAndCorrelator) = _BatchLoop()

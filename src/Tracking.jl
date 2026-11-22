@@ -106,13 +106,9 @@ export get_prn,
     get_signals,
     get_loop_state,
     CPUDownconvertAndCorrelator,
-    CPUThreadedDownconvertAndCorrelator,
     Int16DownconvertAndCorrelator,
-    Int16ThreadedDownconvertAndCorrelator,
     OneBitDownconvertAndCorrelator,
-    OneBitThreadedDownconvertAndCorrelator,
     TwoBitDownconvertAndCorrelator,
-    TwoBitThreadedDownconvertAndCorrelator,
     TrackState,
     add_satellite!,
     add_satellite,
@@ -155,7 +151,7 @@ The `downconvert_and_correlate(!)` loops are defined once on this type (see
 `_despread_one_signal!` (the correlation primitive, for satellites and the noise
 reference alike; alone it gives a working single-signal backend),
 `_correlate_signals` (multi-signal kernel), `_scratch_buffers` (default this thread's
-set of the backend's `buffers`), `_threading` (default serial) and
+set of the backend's `buffers`), `_threading` (default from the backend's `buffers`: threaded for one set per thread) and
 `_check_sample_type` (default no-op).
 """
 abstract type AbstractDownconvertAndCorrelator end
