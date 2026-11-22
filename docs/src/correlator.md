@@ -92,7 +92,7 @@ In the TrackingLoops manual:
 
 - [`CorrelatorBankOutput`](@extref TrackingLoops.CorrelatorBankOutput)
 
-## Sample shifts
+## Correlator sample offsets
 
 `calc_correlator_sample_offsets` places each correlator relative to the prompt, in
 samples; `calc_early_late_sample_spacing`, the spacing of the outermost pair, scales

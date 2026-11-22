@@ -351,7 +351,7 @@ OneBitDownconvertAndCorrelator(;
     ::NumAnts{M},
     signal,
     prn::Integer,
-    sample_shifts::SVector{NC},
+    correlator_sample_offsets::SVector{NC},
     code_phase,
     carrier_phase,
     code_frequency,
@@ -363,7 +363,10 @@ OneBitDownconvertAndCorrelator(;
     # Accumulator declarations: A/B (→ I) and C/E (→ Q) popcounts per (antenna j, correlator k).
     init = Expr(:block)
     for k = 1:NC
-        push!(init.args, :($(Symbol("off_$k")) = Int(sample_shifts[$k]) - min_shift))
+        push!(
+            init.args,
+            :($(Symbol("off_$k")) = Int(correlator_sample_offsets[$k]) - min_shift),
+        )
     end
     for j = 1:M, k = 1:NC
         for s in ("A", "B", "C", "E")
@@ -435,8 +438,8 @@ OneBitDownconvertAndCorrelator(;
             ),
         )
         N = Int(num_samples)
-        min_shift = minimum(sample_shifts)
-        span = maximum(sample_shifts) - min_shift
+        min_shift = minimum(correlator_sample_offsets)
+        span = maximum(correlator_sample_offsets) - min_shift
         $init
 
         sampling_freq = Float64(upreferred(sampling_frequency / Hz))
@@ -579,8 +582,8 @@ OneBitDownconvertAndCorrelator(;
     end
 end
 
-# Dynamic fallback for runtime-sized `AbstractVector` sample shifts (#126); `SVector`
-# shifts dispatch to the `@generated` kernel. Same block pipeline, with correlators and antennas
+# Dynamic fallback for runtime-sized `AbstractVector` correlator sample offsets (#126); `SVector`
+# offsets dispatch to the `@generated` kernel. Same block pipeline, with correlators and antennas
 # looped at runtime into Int64 totals; bit-identical to the `@generated` kernel. Returns a
 # `Vector` of `ComplexF64` (M=1) or `SVector{M,ComplexF64}` (M>1).
 function _onebit_hybrid_blocked!(
@@ -589,7 +592,7 @@ function _onebit_hybrid_blocked!(
     ::NumAnts{M},
     signal,
     prn::Integer,
-    sample_shifts::AbstractVector,
+    correlator_sample_offsets::AbstractVector,
     code_phase,
     carrier_phase,
     code_frequency,
@@ -613,11 +616,11 @@ function _onebit_hybrid_blocked!(
             ),
         ),
     )
-    NC = length(sample_shifts)
+    NC = length(correlator_sample_offsets)
     N = Int(num_samples)
-    min_shift = Int(minimum(sample_shifts))
-    span = Int(maximum(sample_shifts)) - min_shift
-    offs = [Int(sample_shifts[k]) - min_shift for k = 1:NC]
+    min_shift = Int(minimum(correlator_sample_offsets))
+    span = Int(maximum(correlator_sample_offsets)) - min_shift
+    offs = [Int(correlator_sample_offsets[k]) - min_shift for k = 1:NC]
 
     sampling_freq = Float64(upreferred(sampling_frequency / Hz))
     carrier_freq = Float64(upreferred(carrier_frequency / Hz))
@@ -774,7 +777,7 @@ end
 # Signals on one carrier (e.g. GPS L1 C/A + L1C-D + L1C-P) share the carrier and
 # sample planes, so per block those are built once and each signal correlates its own
 # code against them; bit-identical to correlating each signal alone. `@generated` over
-# (M, the signals tuple); `SVector` shifts only, like the other tile-shares.
+# (M, the signals tuple); `SVector` offsets only, like the other tile-shares.
 @generated function _onebit_hybrid_blocked_multi!(
     dc::OneBitDownconvertAndCorrelator,
     samples::AbstractVecOrMat{Complex{Int16}},
@@ -1086,7 +1089,7 @@ end
     samples,
     signal,
     prn,
-    sample_shifts,
+    correlator_sample_offsets,
     code_phase,
     carrier_phase,
     code_frequency,
@@ -1103,7 +1106,7 @@ end
         NumAnts(correlator_bank),
         signal,
         prn,
-        sample_shifts,
+        correlator_sample_offsets,
         code_phase,
         carrier_phase,
         code_frequency,
@@ -1142,7 +1145,7 @@ end
     end
     correlator_banks = map(s -> s.correlator_bank, signals)
     gnss_signals = map(s -> get_signal(s), signals)
-    all_shifts = map(p -> p.sample_shifts, params)
+    all_shifts = map(p -> p.correlator_sample_offsets, params)
     code_phases = map(p -> p.signal_code_phase, params)
     code_freqs = map(p -> p.code_frequency, params)
     new_accs = _onebit_hybrid_blocked_multi!(

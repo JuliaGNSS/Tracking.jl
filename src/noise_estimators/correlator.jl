@@ -29,7 +29,7 @@ function TrackingLoops.despread_noise!(
     sampling_frequency = band_samples.sampling_frequency
     correlator_bank = get_noise_correlator_bank(estimator)
     # The reference runs at the nominal chip rate, which every despread shares.
-    sample_shifts = calc_correlator_sample_offsets(
+    correlator_sample_offsets = calc_correlator_sample_offsets(
         correlator_bank,
         sampling_frequency,
         get_chip_rate(signal),
@@ -38,7 +38,8 @@ function TrackingLoops.despread_noise!(
     # offset by `first(sample_range) - 1`, so the buffer spans all of the band's samples.
     # Backends that pack the code plane in-kernel ignore it.
     replica_size =
-        get_num_samples(band_samples) + maximum(sample_shifts) - minimum(sample_shifts)
+        get_num_samples(band_samples) + maximum(correlator_sample_offsets) -
+        minimum(correlator_sample_offsets)
     for despread in noise_despreads(
         estimator,
         signal,
@@ -57,7 +58,7 @@ function TrackingLoops.despread_noise!(
                 band_samples.samples,
                 probe.signal,
                 probe.prn,
-                sample_shifts,
+                correlator_sample_offsets,
                 probe.code_phase,
                 0.0,
                 probe.code_frequency,

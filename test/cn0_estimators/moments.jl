@@ -39,7 +39,7 @@ using TrackingLoops:
             prn,
         )
         correlator_bank = EarlyPromptLateCorrelatorBank()
-        sample_shifts = calc_correlator_sample_offsets(
+        correlator_sample_offsets = calc_correlator_sample_offsets(
             correlator_bank,
             sampling_frequency,
             code_frequency,
@@ -48,7 +48,7 @@ using TrackingLoops:
             correlator_bank,
             samples,
             code,
-            sample_shifts,
+            correlator_sample_offsets,
             0.0Hz,
             sampling_frequency,
             0.0,

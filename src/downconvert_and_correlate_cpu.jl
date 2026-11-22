@@ -1,6 +1,6 @@
 # Scratch byte buffers, one per role: `code_replica` for a sat's first signal,
 # `extra_code_replicas` (grown lazily) for signals 2..N, and `tile_re` / `tile_im`
-# for the `AbstractVector`-shifts fused kernel and the multi-signal tile-share
+# for the `AbstractVector`-offsets fused kernel and the multi-signal tile-share
 # kernel. The single-threaded backend holds one, the threaded one one per thread.
 # The buffers are only resized in place, so the struct can be immutable.
 struct ScratchBuffers
@@ -165,7 +165,7 @@ end
     samples,
     signal,
     prn,
-    sample_shifts,
+    correlator_sample_offsets,
     code_phase,
     carrier_phase,
     code_frequency,
@@ -185,7 +185,7 @@ end
             sampling_frequency,
             code_phase,
             sample_range,
-            sample_shifts,
+            correlator_sample_offsets,
             prn,
         )
         _fused_with_tile_scratch!(
@@ -193,7 +193,7 @@ end
             correlator_bank,
             samples,
             code_replica,
-            sample_shifts,
+            correlator_sample_offsets,
             carrier_frequency,
             sampling_frequency,
             carrier_phase,
@@ -203,13 +203,13 @@ end
 end
 
 # Fused kernel call with SoA tile buffers from the backend's `ScratchBuffers`, which
-# only the `AbstractVector`-shifts fallback needs; `SVector` shifts need none.
+# only the `AbstractVector`-offsets fallback needs; `SVector` offsets need none.
 @inline function _fused_with_tile_scratch!(
     dc::CPUDownconvertAndCorrelator,
     correlator_bank::AbstractCorrelatorBank{M},
     samples,
     code_replica,
-    sample_shifts::SVector,
+    correlator_sample_offsets::SVector,
     carrier_frequency,
     sampling_frequency,
     carrier_phase,
@@ -219,7 +219,7 @@ end
         correlator_bank,
         samples,
         code_replica,
-        sample_shifts,
+        correlator_sample_offsets,
         carrier_frequency,
         sampling_frequency,
         carrier_phase,
@@ -232,7 +232,7 @@ end
     correlator_bank::AbstractCorrelatorBank{M},
     samples,
     code_replica,
-    sample_shifts::AbstractVector,
+    correlator_sample_offsets::AbstractVector,
     carrier_frequency,
     sampling_frequency,
     carrier_phase,
@@ -244,7 +244,7 @@ end
             correlator_bank,
             samples,
             code_replica,
-            sample_shifts,
+            correlator_sample_offsets,
             carrier_frequency,
             sampling_frequency,
             carrier_phase,
@@ -256,12 +256,12 @@ end
 end
 
 # The same for the public single-satellite `downconvert_and_correlate!`, which has no
-# `ScratchBuffers`: `AbstractVector` shifts allocate their tile buffers per call.
+# `ScratchBuffers`: `AbstractVector` offsets allocate their tile buffers per call.
 @inline function _fused_standalone!(
     correlator_bank::AbstractCorrelatorBank{M},
     samples,
     code_replica,
-    sample_shifts::SVector,
+    correlator_sample_offsets::SVector,
     carrier_frequency,
     sampling_frequency,
     carrier_phase,
@@ -271,7 +271,7 @@ end
         correlator_bank,
         samples,
         code_replica,
-        sample_shifts,
+        correlator_sample_offsets,
         carrier_frequency,
         sampling_frequency,
         carrier_phase,
@@ -283,7 +283,7 @@ end
     correlator_bank::AbstractCorrelatorBank{M},
     samples,
     code_replica,
-    sample_shifts::AbstractVector,
+    correlator_sample_offsets::AbstractVector,
     carrier_frequency,
     sampling_frequency,
     carrier_phase,
@@ -296,7 +296,7 @@ end
         correlator_bank,
         samples,
         code_replica,
-        sample_shifts,
+        correlator_sample_offsets,
         carrier_frequency,
         sampling_frequency,
         carrier_phase,
@@ -451,12 +451,14 @@ end
 )
     s = get_signal(tsig)
     code_frequency = code_doppler + get_chip_rate(s)
-    sample_shifts = calc_correlator_sample_offsets(
+    correlator_sample_offsets = calc_correlator_sample_offsets(
         tsig.correlator_bank,
         sampling_frequency,
         code_frequency,
     )
-    code_replica_size = num_buffer_samples + maximum(sample_shifts) - minimum(sample_shifts)
+    code_replica_size =
+        num_buffer_samples + maximum(correlator_sample_offsets) -
+        minimum(correlator_sample_offsets)
     num_code_periods = calc_num_code_periods_to_integrate(
         s,
         tsig.preferred_num_code_periods_to_integrate,
@@ -465,7 +467,7 @@ end
     signal_code_phase = mod(code_phase, _replica_code_phase_period(tsig))
     (;
         code_frequency,
-        sample_shifts,
+        correlator_sample_offsets,
         code_replica_size,
         num_code_periods,
         signal_code_phase,
@@ -502,7 +504,7 @@ end
         samples,
         get_signal(head),
         prn,
-        p.sample_shifts,
+        p.correlator_sample_offsets,
         p.signal_code_phase,
         carrier_phase,
         p.code_frequency,
@@ -544,7 +546,7 @@ end
             num_buffer_samples,
         )
         correlator_banks = map(s -> s.correlator_bank, signals)
-        sample_shifts_tuple = _signal_sample_shifts(
+        correlator_sample_offsets_tuple = _signal_correlator_sample_offsets(
             signals,
             code_doppler,
             code_phase,
@@ -558,7 +560,7 @@ end
                 correlator_banks,
                 samples,
                 code_replicas,
-                sample_shifts_tuple,
+                correlator_sample_offsets_tuple,
                 carrier_frequency,
                 sampling_frequency,
                 carrier_phase,
@@ -607,14 +609,14 @@ end
             sampling_frequency,
             p.signal_code_phase,
             sample_range,
-            p.sample_shifts,
+            p.correlator_sample_offsets,
             prn,
         )
         view
     end
 end
 
-@inline _signal_sample_shifts(
+@inline _signal_correlator_sample_offsets(
     signals::Tuple,
     code_doppler,
     code_phase,
@@ -627,7 +629,7 @@ end
         code_phase,
         sampling_frequency,
         num_buffer_samples,
-    ).sample_shifts
+    ).correlator_sample_offsets
 end
 
 """
@@ -1144,7 +1146,7 @@ function downconvert_and_correlate!(
     sample_range,
     prn,
 ) where {M}
-    sample_shifts =
+    correlator_sample_offsets =
         calc_correlator_sample_offsets(correlator_bank, sampling_frequency, code_frequency)
     gen_code_replica!(
         code_replica,
@@ -1153,14 +1155,14 @@ function downconvert_and_correlate!(
         sampling_frequency,
         code_phase,
         sample_range,
-        sample_shifts,
+        correlator_sample_offsets,
         prn,
     )
     _fused_standalone!(
         correlator_bank,
         samples,
         code_replica,
-        sample_shifts,
+        correlator_sample_offsets,
         carrier_frequency,
         sampling_frequency,
         carrier_phase,

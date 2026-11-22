@@ -142,4 +142,4 @@ Tracking.downconvert_and_correlate
 Tracking.downconvert_and_correlate!
 ```
 
-Correlator sample shifts and the early/late spacing are documented in [Correlator](correlator.md#Sample-shifts).
+Correlator sample offsets and the early/late spacing are documented in [Correlator](correlator.md#Correlator-sample-offsets).

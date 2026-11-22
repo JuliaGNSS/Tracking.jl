@@ -31,7 +31,7 @@ end
 
 """
     downconvert_and_correlate_fused!(
-        correlator, samples, code_replica, sample_shifts,
+        correlator, samples, code_replica, correlator_sample_offsets,
         carrier_frequency, sampling_frequency, carrier_phase,
         sample_range,
     )
@@ -47,7 +47,7 @@ Both antennas (M) and correlators (NC) are fully unrolled at compile time via
     correlator_bank::AbstractCorrelatorBank{M},
     samples::AbstractArray{Complex{ST}},
     code_replica,
-    sample_shifts::SVector{NC},
+    correlator_sample_offsets::SVector{NC},
     carrier_frequency,
     sampling_frequency,
     carrier_phase,
@@ -94,7 +94,7 @@ Both antennas (M) and correlators (NC) are fully unrolled at compile time via
             shift_init.args,
             :(
                 $(Symbol("p_code_$(k)")) =
-                    p_code + (sample_shifts[$k] - min_shift) * sizeof_CT
+                    p_code + (correlator_sample_offsets[$k] - min_shift) * sizeof_CT
             ),
         )
     end
@@ -249,7 +249,7 @@ Both antennas (M) and correlators (NC) are fully unrolled at compile time via
         sizeof_CT = sizeof(CT)
         sizeof_ST = sizeof(ST)
         W = $W
-        min_shift = minimum(sample_shifts)
+        min_shift = minimum(correlator_sample_offsets)
 
         carrier_freq = T(upreferred(carrier_frequency / Hz))
         sampling_freq = T(upreferred(sampling_frequency / Hz))
@@ -328,7 +328,7 @@ end
 
 # ── Shared downconvert-into-tile phase ────────────────────────────────
 # Downconverts `samples` into the SoA tile, one `num_samples` slice per antenna
-# (`tile_re/tile_im[(j-1)*num_samples + idx]`). Shared by the dynamic-shifts and the
+# (`tile_re/tile_im[(j-1)*num_samples + idx]`). Shared by the dynamic-offsets and the
 # tuple tile-share kernels so they cannot drift (#133).
 @generated function _downconvert_into_tile!(
     tile_re,
@@ -401,15 +401,15 @@ end
     end
 end
 
-# ── Overload for dynamic-length sample_shifts (AbstractVector) ────────
-# The EPL/VEPL correlators' `SVector` shifts use the overload above. This one takes
+# ── Overload for dynamic-length correlator_sample_offsets (AbstractVector) ────────
+# The EPL/VEPL correlators' `SVector` offsets use the overload above. This one takes
 # caller-supplied Float32 SoA tiles of length `num_samples * M` (any
 # `AbstractVector{Float32}` with `pointer`, e.g. a `ScratchView`).
 function downconvert_and_correlate_fused!(
     correlator_bank::AbstractCorrelatorBank{M},
     samples::AbstractArray{Complex{ST}},
     code_replica,
-    sample_shifts::AbstractVector,
+    correlator_sample_offsets::AbstractVector,
     carrier_frequency,
     sampling_frequency,
     carrier_phase,
@@ -420,8 +420,8 @@ function downconvert_and_correlate_fused!(
     start_index = first(sample_range)
     num_samples = length(sample_range)
     T = Float32
-    num_taps = length(sample_shifts)
-    min_shift = minimum(sample_shifts)
+    num_taps = length(correlator_sample_offsets)
+    min_shift = minimum(correlator_sample_offsets)
     CHUNK = 512  # block-accumulation length; see issue #152
 
     _downconvert_into_tile!(
@@ -440,7 +440,7 @@ function downconvert_and_correlate_fused!(
     prev = get_correlator_outputs(correlator_bank)
     new_acc = _mutable_copy(prev)
     @inbounds for k = 1:num_taps
-        shift_offset = start_index - 1 + sample_shifts[k] - min_shift
+        shift_offset = start_index - 1 + correlator_sample_offsets[k] - min_shift
         for j = 1:M
             # Float32 blocks of CHUNK samples flushed into Float64 (#152).
             acc_r = zero(Float64)
@@ -471,7 +471,7 @@ end
 # ── Tuple-of-correlators tile-share fused kernel ──────────────────────
 # Multiple signals per satellite: one downconvert into the SoA tile, then M
 # antenna-outer correlate passes into N correlators (each with its own code replica
-# and `sample_shifts`, all with the same M). Beats N fused calls by ~37% at N=2 and
+# and `correlator_sample_offsets`, all with the same M). Beats N fused calls by ~37% at N=2 and
 # ~51% at N=3; N=1 keeps the in-register kernel above, ~24% faster there.
 @generated function downconvert_and_correlate_fused_tuple!(
     correlator_banks::Tuple{
@@ -480,7 +480,7 @@ end
     },
     samples::AbstractArray{Complex{ST}},
     code_replicas::Tuple{Any,Vararg{Any,NM1}},
-    all_sample_shifts::Tuple{SVector,Vararg{SVector,NM1}},
+    all_correlator_sample_offsets::Tuple{SVector,Vararg{SVector,NM1}},
     carrier_frequency,
     sampling_frequency,
     carrier_phase,
@@ -489,7 +489,7 @@ end
     tile_im,
 ) where {M,ST,NM1}
     N = NM1 + 1
-    NC_per_signal = Int[length(all_sample_shifts.parameters[i]) for i = 1:N]
+    NC_per_signal = Int[length(all_correlator_sample_offsets.parameters[i]) for i = 1:N]
 
     # Float32 block length before flushing into Float64 (#152, see the kernel above).
     CHUNK = 512
@@ -522,14 +522,14 @@ end
             push!(pass_locals.args, :($(Symbol("cr_$(i)")) = code_replicas[$i]))
             push!(
                 pass_locals.args,
-                :($(Symbol("ms_$(i)")) = minimum(all_sample_shifts[$i])),
+                :($(Symbol("ms_$(i)")) = minimum(all_correlator_sample_offsets[$i])),
             )
             for k = 1:NC_per_signal[i]
                 push!(
                     pass_locals.args,
                     :(
                         $(Symbol("sh_$(i)_$(k)")) =
-                            all_sample_shifts[$i][$k] - $(Symbol("ms_$(i)"))
+                            all_correlator_sample_offsets[$i][$k] - $(Symbol("ms_$(i)"))
                     ),
                 )
             end

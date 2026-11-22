@@ -140,14 +140,16 @@ end
     code_frequency = code_doppler + get_chip_rate(gpsl1)
 
     correlator_bank = EarlyPromptLateCorrelatorBank()
-    sample_shifts =
+    correlator_sample_offsets =
         calc_correlator_sample_offsets(correlator_bank, sampling_frequency, code_frequency)
 
     samples =
         gen_code(num_samples, gpsl1, prn, sampling_frequency, code_frequency, code_phase) .*
         cis.(2π * (0:(num_samples-1)) * carrier_doppler / sampling_frequency)
 
-    code_replica_length = num_samples + maximum(sample_shifts) - minimum(sample_shifts)
+    code_replica_length =
+        num_samples + maximum(correlator_sample_offsets) -
+        minimum(correlator_sample_offsets)
     code_replica = Vector{Int8}(undef, code_replica_length)
     Tracking.gen_code_replica!(
         code_replica,
@@ -156,20 +158,20 @@ end
         sampling_frequency,
         code_phase,
         1:num_samples,
-        sample_shifts,
+        correlator_sample_offsets,
         prn,
     )
 
     # Scalar reference: plain Julia loop, no SIMD, no tricks
-    NC = length(sample_shifts)
-    min_shift = minimum(sample_shifts)
+    NC = length(correlator_sample_offsets)
+    min_shift = minimum(correlator_sample_offsets)
     ref_accumulators = zeros(ComplexF64, NC)
     carrier_step = 2π * Float64(carrier_frequency / sampling_frequency)
     for i = 1:num_samples
         carrier = cis(-carrier_step * (i - 1))
         dc_sample = samples[i] * carrier
         for tap = 1:NC
-            code_idx = i + sample_shifts[tap] - min_shift
+            code_idx = i + correlator_sample_offsets[tap] - min_shift
             ref_accumulators[tap] += dc_sample * code_replica[code_idx]
         end
     end
@@ -179,7 +181,7 @@ end
         correlator_bank,
         samples,
         code_replica,
-        sample_shifts,
+        correlator_sample_offsets,
         carrier_frequency,
         sampling_frequency,
         0.0,
@@ -189,7 +191,7 @@ end
     @test get_correlator_outputs(fused_static) ≈ ref_accumulators rtol = 1e-4
 
     # Dynamic (AbstractVector) path
-    dynamic_shifts = collect(sample_shifts)
+    dynamic_shifts = collect(correlator_sample_offsets)
     tile_re = Vector{Float32}(undef, num_samples)
     tile_im = Vector{Float32}(undef, num_samples)
     fused_dynamic = Tracking.downconvert_and_correlate_fused!(
@@ -226,7 +228,7 @@ end
     code_frequency = code_doppler + get_chip_rate(gpsl1)
 
     correlator_bank = EarlyPromptLateCorrelatorBank(; num_ants = NumAnts(num_ants))
-    sample_shifts =
+    correlator_sample_offsets =
         calc_correlator_sample_offsets(correlator_bank, sampling_frequency, code_frequency)
 
     # Multi-antenna signal: each antenna gets slightly different data
@@ -236,7 +238,9 @@ end
     samples_ant2 = samples_ant1 .* cis(0.3)  # phase-shifted copy
     samples = hcat(samples_ant1, samples_ant2)
 
-    code_replica_length = num_samples + maximum(sample_shifts) - minimum(sample_shifts)
+    code_replica_length =
+        num_samples + maximum(correlator_sample_offsets) -
+        minimum(correlator_sample_offsets)
     code_replica = Vector{Int8}(undef, code_replica_length)
     Tracking.gen_code_replica!(
         code_replica,
@@ -245,13 +249,13 @@ end
         sampling_frequency,
         code_phase,
         1:num_samples,
-        sample_shifts,
+        correlator_sample_offsets,
         prn,
     )
 
     # Scalar reference for multi-antenna
-    NC = length(sample_shifts)
-    min_shift = minimum(sample_shifts)
+    NC = length(correlator_sample_offsets)
+    min_shift = minimum(correlator_sample_offsets)
     ref_accumulators = [zeros(ComplexF64, num_ants) for _ = 1:NC]
     carrier_step = 2π * Float64(carrier_frequency / sampling_frequency)
     for i = 1:num_samples
@@ -259,7 +263,7 @@ end
         for j = 1:num_ants
             dc_sample = samples[i, j] * carrier
             for tap = 1:NC
-                code_idx = i + sample_shifts[tap] - min_shift
+                code_idx = i + correlator_sample_offsets[tap] - min_shift
                 ref_accumulators[tap][j] += dc_sample * code_replica[code_idx]
             end
         end
@@ -270,7 +274,7 @@ end
         correlator_bank,
         samples,
         code_replica,
-        sample_shifts,
+        correlator_sample_offsets,
         carrier_frequency,
         sampling_frequency,
         0.0,
@@ -282,7 +286,7 @@ end
     end
 
     # Dynamic (AbstractVector) path
-    dynamic_shifts = collect(sample_shifts)
+    dynamic_shifts = collect(correlator_sample_offsets)
     tile_re = Vector{Float32}(undef, num_samples * num_ants)
     tile_im = Vector{Float32}(undef, num_samples * num_ants)
     fused_dynamic = Tracking.downconvert_and_correlate_fused!(
@@ -322,7 +326,8 @@ end
     signal_odd = hcat(signal_odd_ant1, signal_odd_ant1 .* cis(0.3))
     code_replica_odd = Vector{Int8}(
         undef,
-        num_samples_odd + maximum(sample_shifts) - minimum(sample_shifts),
+        num_samples_odd + maximum(correlator_sample_offsets) -
+        minimum(correlator_sample_offsets),
     )
     Tracking.gen_code_replica!(
         code_replica_odd,
@@ -331,7 +336,7 @@ end
         sampling_frequency,
         code_phase,
         1:num_samples_odd,
-        sample_shifts,
+        correlator_sample_offsets,
         prn,
     )
     ref_odd = [zeros(ComplexF64, num_ants) for _ = 1:NC]
@@ -341,7 +346,7 @@ end
             dc_sample = signal_odd[i, j] * carrier
             for tap = 1:NC
                 ref_odd[tap][j] +=
-                    dc_sample * code_replica_odd[i+sample_shifts[tap]-min_shift]
+                    dc_sample * code_replica_odd[i+correlator_sample_offsets[tap]-min_shift]
             end
         end
     end
@@ -459,7 +464,7 @@ end
     code_frequency = code_doppler + get_chip_rate(gpsl1)
 
     correlator_bank = EarlyPromptLateCorrelatorBank()
-    sample_shifts =
+    correlator_sample_offsets =
         calc_correlator_sample_offsets(correlator_bank, sampling_frequency, code_frequency)
 
     samples =
@@ -476,7 +481,8 @@ end
     window_code_phase =
         code_phase + (start_index - 1) * Float64(code_frequency / sampling_frequency)
     code_replica_length =
-        start_index - 1 + num_samples + maximum(sample_shifts) - minimum(sample_shifts)
+        start_index - 1 + num_samples + maximum(correlator_sample_offsets) -
+        minimum(correlator_sample_offsets)
     code_replica = zeros(Int8, code_replica_length)
     Tracking.gen_code_replica!(
         code_replica,
@@ -485,26 +491,26 @@ end
         sampling_frequency,
         window_code_phase,
         range(start_index; length = num_samples),
-        sample_shifts,
+        correlator_sample_offsets,
         prn,
     )
 
     # Scalar reference over the window only
-    NC = length(sample_shifts)
-    min_shift = minimum(sample_shifts)
+    NC = length(correlator_sample_offsets)
+    min_shift = minimum(correlator_sample_offsets)
     ref_accumulators = zeros(ComplexF64, NC)
     carrier_step = 2π * Float64(carrier_frequency / sampling_frequency)
     for i = 1:num_samples
         carrier = cis(-carrier_step * (i - 1))
         dc_sample = samples[start_index-1+i] * carrier
         for tap = 1:NC
-            code_idx = start_index - 1 + i + sample_shifts[tap] - min_shift
+            code_idx = start_index - 1 + i + correlator_sample_offsets[tap] - min_shift
             ref_accumulators[tap] += dc_sample * code_replica[code_idx]
         end
     end
 
     # Dynamic (AbstractVector) path
-    dynamic_shifts = collect(sample_shifts)
+    dynamic_shifts = collect(correlator_sample_offsets)
     tile_re = Vector{Float32}(undef, num_samples)
     tile_im = Vector{Float32}(undef, num_samples)
     fused_dynamic = Tracking.downconvert_and_correlate_fused!(
@@ -526,7 +532,7 @@ end
         correlator_bank,
         samples,
         code_replica,
-        sample_shifts,
+        correlator_sample_offsets,
         carrier_frequency,
         sampling_frequency,
         0.0,
@@ -684,12 +690,12 @@ end
 
     @testset "Single-antenna, N=$N signals" for N = 2:3
         correlator_banks = ntuple(_ -> EarlyPromptLateCorrelatorBank(), N)
-        sample_shifts_each = calc_correlator_sample_offsets(
+        correlator_sample_offsets_each = calc_correlator_sample_offsets(
             correlator_banks[1],
             sampling_frequency,
             code_frequency,
         )
-        all_sample_shifts = ntuple(_ -> sample_shifts_each, N)
+        all_correlator_sample_offsets = ntuple(_ -> correlator_sample_offsets_each, N)
 
         samples =
             gen_code(
@@ -703,7 +709,8 @@ end
 
         # Per-signal code replicas (same code in this scenario; just reuse).
         code_replica_length =
-            num_samples + maximum(sample_shifts_each) - minimum(sample_shifts_each)
+            num_samples + maximum(correlator_sample_offsets_each) -
+            minimum(correlator_sample_offsets_each)
         code_replicas = ntuple(N) do _
             cr = Vector{Int8}(undef, code_replica_length)
             Tracking.gen_code_replica!(
@@ -713,22 +720,22 @@ end
                 sampling_frequency,
                 code_phase,
                 1:num_samples,
-                sample_shifts_each,
+                correlator_sample_offsets_each,
                 prn,
             )
             cr
         end
 
         # Scalar reference (same for every signal, since they share code+replica).
-        NC = length(sample_shifts_each)
-        min_shift = minimum(sample_shifts_each)
+        NC = length(correlator_sample_offsets_each)
+        min_shift = minimum(correlator_sample_offsets_each)
         ref_accumulators = zeros(ComplexF64, NC)
         carrier_step = 2π * Float64(carrier_frequency / sampling_frequency)
         for i = 1:num_samples
             carrier = cis(-carrier_step * (i - 1))
             dc_sample = samples[i] * carrier
             for tap = 1:NC
-                code_idx = i + sample_shifts_each[tap] - min_shift
+                code_idx = i + correlator_sample_offsets_each[tap] - min_shift
                 ref_accumulators[tap] += dc_sample * code_replicas[1][code_idx]
             end
         end
@@ -739,7 +746,7 @@ end
             correlator_banks,
             samples,
             code_replicas,
-            all_sample_shifts,
+            all_correlator_sample_offsets,
             carrier_frequency,
             sampling_frequency,
             0.0,
@@ -758,12 +765,12 @@ end
     @testset "Multi-antenna ($num_ants ants), N=$N signals" for num_ants in (2, 4), N = 2:3
         correlator_banks =
             ntuple(_ -> EarlyPromptLateCorrelatorBank(; num_ants = NumAnts(num_ants)), N)
-        sample_shifts_each = calc_correlator_sample_offsets(
+        correlator_sample_offsets_each = calc_correlator_sample_offsets(
             correlator_banks[1],
             sampling_frequency,
             code_frequency,
         )
-        all_sample_shifts = ntuple(_ -> sample_shifts_each, N)
+        all_correlator_sample_offsets = ntuple(_ -> correlator_sample_offsets_each, N)
 
         # Multi-antenna signal: each antenna gets a phase-shifted copy of the
         # base signal so accumulator values per antenna differ in a known way.
@@ -780,7 +787,8 @@ end
         samples = hcat([samples_ant1 .* cis(ϕ) for ϕ in ant_phase_offsets]...)
 
         code_replica_length =
-            num_samples + maximum(sample_shifts_each) - minimum(sample_shifts_each)
+            num_samples + maximum(correlator_sample_offsets_each) -
+            minimum(correlator_sample_offsets_each)
         code_replicas = ntuple(N) do _
             cr = Vector{Int8}(undef, code_replica_length)
             Tracking.gen_code_replica!(
@@ -790,15 +798,15 @@ end
                 sampling_frequency,
                 code_phase,
                 1:num_samples,
-                sample_shifts_each,
+                correlator_sample_offsets_each,
                 prn,
             )
             cr
         end
 
         # Scalar reference per antenna.
-        NC = length(sample_shifts_each)
-        min_shift = minimum(sample_shifts_each)
+        NC = length(correlator_sample_offsets_each)
+        min_shift = minimum(correlator_sample_offsets_each)
         ref_accumulators = [zeros(ComplexF64, num_ants) for _ = 1:NC]
         carrier_step = 2π * Float64(carrier_frequency / sampling_frequency)
         for i = 1:num_samples
@@ -806,7 +814,7 @@ end
             for j = 1:num_ants
                 dc_sample = samples[i, j] * carrier
                 for tap = 1:NC
-                    code_idx = i + sample_shifts_each[tap] - min_shift
+                    code_idx = i + correlator_sample_offsets_each[tap] - min_shift
                     ref_accumulators[tap][j] += dc_sample * code_replicas[1][code_idx]
                 end
             end
@@ -818,7 +826,7 @@ end
             correlator_banks,
             samples,
             code_replicas,
-            all_sample_shifts,
+            all_correlator_sample_offsets,
             carrier_frequency,
             sampling_frequency,
             0.0,

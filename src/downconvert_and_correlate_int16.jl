@@ -198,7 +198,7 @@ errors on any other sample element type. `threaded = true` runs it multi-threade
 [`CPUDownconvertAndCorrelator`](@ref), the threads sharing the immutable carrier table.
 Construct it **once outside** the `track!` loop and pass it via the
 `downconvert_and_correlator` keyword: allocation-free in steady state for `SVector`
-sample shifts (EPL/VEPL); runtime `AbstractVector` shifts allocate only the returned
+correlator sample offsets (EPL/VEPL); runtime `AbstractVector` offsets allocate only the returned
 `Vector`.
 
 # Arguments
@@ -305,7 +305,7 @@ end
     ::NumAnts{M},
     signal,
     prn::Integer,
-    sample_shifts::SVector{NC},
+    correlator_sample_offsets::SVector{NC},
     code_phase,
     carrier_phase,
     code_frequency,
@@ -329,7 +329,7 @@ end
 
     init = Expr(:block)
     for k = 1:NC
-        push!(init.args, :($(Symbol("off_$k")) = sample_shifts[$k] - min_shift))
+        push!(init.args, :($(Symbol("off_$k")) = correlator_sample_offsets[$k] - min_shift))
     end
     for j = 1:M, k = 1:NC
         push!(init.args, :($(Symbol("tI_$(j)_$k")) = zero(Int64)))
@@ -444,8 +444,8 @@ end
         num_samples = length(sample_range)
         W = $W
         carrier_amp = Float64(dc.carrier_amplitude)
-        min_shift = minimum(sample_shifts)
-        max_shift = maximum(sample_shifts)
+        min_shift = minimum(correlator_sample_offsets)
+        max_shift = maximum(correlator_sample_offsets)
         span = max_shift - min_shift
         num_rows = size(samples, 1)
 
@@ -512,17 +512,17 @@ end
     dib::Vector{TIw},
     dqb::Vector{TIw},
     extb::Vector{Int8},
-    sample_shifts::AbstractVector,
+    correlator_sample_offsets::AbstractVector,
     min_shift::Integer,
     ::NumAnts{M},
     len::Int,
     ::Val{W},
 ) where {TIw,M,W}
-    NC = length(sample_shifts)
+    NC = length(correlator_sample_offsets)
     @inbounds for j = 1:M
         toff = (j - 1) * len
         for k = 1:NC
-            offk = Int(sample_shifts[k]) - min_shift
+            offk = Int(correlator_sample_offsets[k]) - min_shift
             idx = (j - 1) * NC + k
             aI = zero(SIMD.Vec{W,Int32})
             aQ = zero(SIMD.Vec{W,Int32})
@@ -553,8 +553,8 @@ end
     nothing
 end
 
-# Dynamic fallback for runtime-sized `AbstractVector` sample shifts (#126); `SVector`
-# shifts dispatch to the `@generated` kernel. Per block it fills the DI/DQ tile once
+# Dynamic fallback for runtime-sized `AbstractVector` correlator sample offsets (#126); `SVector`
+# offsets dispatch to the `@generated` kernel. Per block it fills the DI/DQ tile once
 # (`_int16_fill_ditile!`) and accumulates each antenna/correlator with the exact Int32 accumulate.
 # Returns a `Vector` of `ComplexF64` (M=1) or `SVector{M,ComplexF64}` (M>1).
 function _int16_hybrid_blocked!(
@@ -563,7 +563,7 @@ function _int16_hybrid_blocked!(
     ::NumAnts{M},
     signal,
     prn::Integer,
-    sample_shifts::AbstractVector,
+    correlator_sample_offsets::AbstractVector,
     code_phase,
     carrier_phase,
     code_frequency,
@@ -574,9 +574,9 @@ function _int16_hybrid_blocked!(
     start_index = first(sample_range)
     num_samples = length(sample_range)
     W = _INT16_W
-    NC = length(sample_shifts)
-    min_shift = minimum(sample_shifts)
-    max_shift = maximum(sample_shifts)
+    NC = length(correlator_sample_offsets)
+    min_shift = minimum(correlator_sample_offsets)
+    max_shift = maximum(correlator_sample_offsets)
     span = max_shift - min_shift
     num_rows = size(samples, 1)
 
@@ -645,7 +645,7 @@ function _int16_hybrid_blocked!(
             dib,
             dqb,
             extb,
-            sample_shifts,
+            correlator_sample_offsets,
             min_shift,
             NumAnts{M}(),
             len,
@@ -982,7 +982,7 @@ end
     end
     correlator_banks = map(s -> s.correlator_bank, signals)
     gnss_signals = map(s -> get_signal(s), signals)
-    all_shifts = map(p -> p.sample_shifts, params)
+    all_shifts = map(p -> p.correlator_sample_offsets, params)
     code_phases = map(p -> p.signal_code_phase, params)
     code_freqs = map(p -> p.code_frequency, params)
     new_accs = _int16_hybrid_blocked_multi!(
@@ -1014,7 +1014,7 @@ end
     samples,
     signal,
     prn,
-    sample_shifts,
+    correlator_sample_offsets,
     code_phase,
     carrier_phase,
     code_frequency,
@@ -1031,7 +1031,7 @@ end
         NumAnts(correlator_bank),
         signal,
         prn,
-        sample_shifts,
+        correlator_sample_offsets,
         code_phase,
         carrier_phase,
         code_frequency,
