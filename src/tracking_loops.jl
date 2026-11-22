@@ -81,7 +81,7 @@ end
 # integration, shared by the driver and the passengers (#133): TrackingLoops'
 # `process_correlator_bank_output!` on the signal's `post_correlation_state`, plus
 # pushing the filtered prompt and keeping the output as
-# `last_fully_integrated_correlator`. The live correlator bank is left alone; the
+# `last_correlator_bank`. The live correlator bank is left alone; the
 # correlate phase already reset it.
 #
 # Without `secondary_code_wiped` the output came from the pre-sync replica, which
@@ -123,7 +123,7 @@ end
     TrackedSignal(
         tracked_signal;
         post_correlation_state = state,
-        last_fully_integrated_correlator = output.correlator_bank,
+        last_correlator_bank = output.correlator_bank,
     )
 end
 

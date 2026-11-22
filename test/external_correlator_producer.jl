@@ -20,7 +20,7 @@ using Tracking:
     get_signals,
     get_carrier_doppler,
     get_code_doppler,
-    get_last_fully_integrated_filtered_prompt
+    get_last_filtered_prompt
 import TrackingLoops
 using TrackingLoops:
     BitSynchronizer,
@@ -66,8 +66,7 @@ end
 
     @test get_carrier_doppler(ts_fs, 1) == get_carrier_doppler(ts_meas, 1)
     @test get_code_doppler(ts_fs, 1) == get_code_doppler(ts_meas, 1)
-    @test get_last_fully_integrated_filtered_prompt(ts_fs, 1) ==
-          get_last_fully_integrated_filtered_prompt(ts_meas, 1)
+    @test get_last_filtered_prompt(ts_fs, 1) == get_last_filtered_prompt(ts_meas, 1)
     @test isempty(get_correlator_bank_outputs(only(get_signals(get_tracked_sat(ts_fs, 1)))))
     @test isempty(
         get_correlator_bank_outputs(only(get_signals(get_tracked_sat(ts_meas, 1)))),

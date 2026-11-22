@@ -18,7 +18,7 @@ using Tracking:
     get_tracked_sat,
     get_signal,
     get_correlator_bank,
-    get_last_fully_integrated_correlator,
+    get_last_correlator_bank,
     get_post_corr_filter,
     get_cn0_estimator,
     get_bit_synchronizer,
@@ -98,8 +98,8 @@ using GNSSSignals: GPSL1C_P, GPSL1C_D, GalileoE1B
     @test length(get_filtered_prompts(new_sat.signals[1])) == 4
     @test length(get_filtered_prompts(new_sat.signals[2])) == 1
 
-    corr_1 = get_last_fully_integrated_correlator(new_sat.signals[1])
-    corr_2 = get_last_fully_integrated_correlator(new_sat.signals[2])
+    corr_1 = get_last_correlator_bank(new_sat.signals[1])
+    corr_2 = get_last_correlator_bank(new_sat.signals[2])
     @test corr_1.correlator_outputs != zero(corr_1.correlator_outputs)
     @test corr_2.correlator_outputs != zero(corr_2.correlator_outputs)
 
@@ -164,9 +164,8 @@ end
 
     @test length(get_filtered_prompts(multi_sat.signals[1])) == 10
 
-    ref_corr = get_last_fully_integrated_correlator(ref_sat).correlator_outputs
-    multi_corr =
-        get_last_fully_integrated_correlator(multi_sat.signals[1]).correlator_outputs
+    ref_corr = get_last_correlator_bank(ref_sat).correlator_outputs
+    multi_corr = get_last_correlator_bank(multi_sat.signals[1]).correlator_outputs
     @test multi_corr ≈ ref_corr rtol = 1e-4
     @test get_carrier_doppler(multi_sat) ≈ get_carrier_doppler(ref_sat) rtol = 1e-6
     @test get_code_doppler(multi_sat) ≈ get_code_doppler(ref_sat) rtol = 1e-6
@@ -174,10 +173,8 @@ end
         1e-4
 
     # The passenger reads the same samples: its 4 ms integrations correlate aligned.
-    @test maximum(
-        abs,
-        get_last_fully_integrated_correlator(multi_sat.signals[2]).correlator_outputs,
-    ) > num_samples / 5
+    @test maximum(abs, get_last_correlator_bank(multi_sat.signals[2]).correlator_outputs) >
+          num_samples / 5
 end
 
 @testset "Per-signal accessors on multi-signal TrackedSat / TrackState" begin

@@ -14,7 +14,7 @@ struct TrackedSignal{
 }
     num_integrated_samples::Int
     correlator_bank::C
-    last_fully_integrated_correlator::C
+    last_correlator_bank::C
     # Advanced per integration by TrackingLoops' `process_correlator_bank_output!`.
     post_correlation_state::P
     filtered_prompts::Vector{ComplexF64}
@@ -119,7 +119,7 @@ function TrackedSignal(
     t::TrackedSignal{S,C};
     num_integrated_samples = nothing,
     correlator_bank::Maybe{C} = nothing,
-    last_fully_integrated_correlator::Maybe{C} = nothing,
+    last_correlator_bank::Maybe{C} = nothing,
     post_correlation_state::Maybe{PostCorrelationState{S}} = nothing,
     cn0_estimator::Maybe{AbstractCN0Estimator} = nothing,
     preferred_num_code_periods_to_integrate = nothing,
@@ -136,7 +136,7 @@ function TrackedSignal(
     TrackedSignal{S,C,typeof(new_post_correlation_state)}(
         something(num_integrated_samples, t.num_integrated_samples),
         something(correlator_bank, t.correlator_bank),
-        something(last_fully_integrated_correlator, t.last_fully_integrated_correlator),
+        something(last_correlator_bank, t.last_correlator_bank),
         new_post_correlation_state,
         t.filtered_prompts,
         t.correlator_bank_outputs,
@@ -161,7 +161,7 @@ $(SIGNATURES)
 
 The correlator bank of the most recently completed predetection integration.
 """
-get_last_fully_integrated_correlator(t::TrackedSignal) = t.last_fully_integrated_correlator
+get_last_correlator_bank(t::TrackedSignal) = t.last_correlator_bank
 
 """
 $(SIGNATURES)
@@ -169,7 +169,7 @@ $(SIGNATURES)
 The filtered prompt of the most recently completed predetection
 integration.
 """
-get_last_fully_integrated_filtered_prompt(t::TrackedSignal) =
+get_last_filtered_prompt(t::TrackedSignal) =
     get_prompt(t.post_correlation_state.last_filtered_correlator_bank)
 
 """
@@ -178,23 +178,19 @@ $(SIGNATURES)
 The number of primary code periods the most recently completed predetection
 integration spanned.
 """
-get_last_fully_integrated_num_code_blocks(t::TrackedSignal) =
+get_last_num_code_periods(t::TrackedSignal) =
     get_last_num_code_periods(t.post_correlation_state)
 
 """
 $(SIGNATURES)
 
-The coherent integration time `T` of the latest integration, its samples over the
-sampling frequency, which
-[`estimate_cn0`](@extref TrackingLoops.estimate_cn0-Tuple{PostCorrelationState}) divides by; the post-integration SNR
-is `C/N₀ · T`. `NaN` before the first integration.
+The coherent integration time `T` of the latest integration, in seconds; the
+post-integration SNR is `C/N₀ · T`. `NaN` s before the first integration.
 
 Not to be confused with `get_num_integrated_samples`, the integration in progress.
 """
-function get_last_fully_integrated_integration_time(t::TrackedSignal)
-    state = t.post_correlation_state
-    state.last_num_integrated_samples / state.sampling_frequency
-end
+get_last_coherent_integration_time(t::TrackedSignal) =
+    get_last_coherent_integration_time(t.post_correlation_state)
 
 """
 $(SIGNATURES)
@@ -688,14 +684,14 @@ end
 get_signal(sat::TrackedSat, sel...) = get_signal(_find_signal(sat.signals, sel...))
 get_correlator_bank(sat::TrackedSat, sel...) =
     get_correlator_bank(_find_signal(sat.signals, sel...))
-get_last_fully_integrated_correlator(sat::TrackedSat, sel...) =
-    get_last_fully_integrated_correlator(_find_signal(sat.signals, sel...))
-get_last_fully_integrated_filtered_prompt(sat::TrackedSat, sel...) =
-    get_last_fully_integrated_filtered_prompt(_find_signal(sat.signals, sel...))
-get_last_fully_integrated_num_code_blocks(sat::TrackedSat, sel...) =
-    get_last_fully_integrated_num_code_blocks(_find_signal(sat.signals, sel...))
-get_last_fully_integrated_integration_time(sat::TrackedSat, sel...) =
-    get_last_fully_integrated_integration_time(_find_signal(sat.signals, sel...))
+get_last_correlator_bank(sat::TrackedSat, sel...) =
+    get_last_correlator_bank(_find_signal(sat.signals, sel...))
+get_last_filtered_prompt(sat::TrackedSat, sel...) =
+    get_last_filtered_prompt(_find_signal(sat.signals, sel...))
+get_last_num_code_periods(sat::TrackedSat, sel...) =
+    get_last_num_code_periods(_find_signal(sat.signals, sel...))
+get_last_coherent_integration_time(sat::TrackedSat, sel...) =
+    get_last_coherent_integration_time(_find_signal(sat.signals, sel...))
 get_filtered_prompts(sat::TrackedSat, sel...) =
     get_filtered_prompts(_find_signal(sat.signals, sel...))
 get_post_corr_filter(sat::TrackedSat, sel...) =

@@ -461,10 +461,10 @@ The trailing `sig` selector is either:
 | Accessor | Returns |
 |----------|---------|
 | `get_correlator_bank` | The working correlator bank (in-flight correlator outputs). |
-| `get_last_fully_integrated_correlator` | Correlator value from the last completed integration. |
-| `get_last_fully_integrated_filtered_prompt` | Filtered prompt value from the last completed integration. |
-| `get_last_fully_integrated_num_code_blocks` | Primary code periods of the last completed integration. |
-| `get_last_fully_integrated_integration_time` | Integration time `T` of the last completed integration; the post-integration SNR is C/N₀ × `T`. |
+| `get_last_correlator_bank` | Correlator bank of the last completed predetection integration. |
+| `get_last_filtered_prompt` | Filtered prompt of the last completed predetection integration. |
+| `get_last_num_code_periods` | Primary code periods of the last completed predetection integration. |
+| `get_last_coherent_integration_time` | Predetection integration time `T` of the last completed integration; the post-integration SNR is C/N₀ × `T`. |
 | `get_post_corr_filter` | The post-correlation filter. |
 | `get_cn0_estimator` | The CN0 estimator. |
 | `estimate_cn0` | CN0 estimate in dB-Hz. |
@@ -530,10 +530,10 @@ get_loop_state(::TrackedSat)
 ```@docs
 TrackedSignal
 get_correlator_bank(::TrackedSignal)
-get_last_fully_integrated_correlator(::TrackedSignal)
-get_last_fully_integrated_filtered_prompt(::TrackedSignal)
-get_last_fully_integrated_num_code_blocks(::TrackedSignal)
-get_last_fully_integrated_integration_time(::TrackedSignal)
+get_last_correlator_bank(::TrackedSignal)
+get_last_filtered_prompt(::TrackedSignal)
+TrackingLoops.get_last_num_code_periods(::TrackedSignal)
+TrackingLoops.get_last_coherent_integration_time(::TrackedSignal)
 get_filtered_prompts(::TrackedSignal)
 get_bit_synchronizer(::TrackedSignal)
 get_num_bits(::TrackedSignal)
