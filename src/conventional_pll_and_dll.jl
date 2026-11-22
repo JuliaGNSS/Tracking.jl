@@ -71,8 +71,11 @@ function _update_tracked_sat_doppler(
 end
 
 # Drop an in-flight partial integration (at the sync phase snap).
-@inline _reset_inflight_integration(s::TrackedSignal) =
-    TrackedSignal(s; correlator_bank = zero(s.correlator_bank), integrated_samples = 0)
+@inline _reset_inflight_integration(tsig::TrackedSignal) = TrackedSignal(
+    tsig;
+    correlator_bank = zero(tsig.correlator_bank),
+    integrated_samples = 0,
+)
 
 # Process one completed correlator output of a signal into its predetection
 # integration, shared by the driver and passenger folds (#133): TrackingLoops'
