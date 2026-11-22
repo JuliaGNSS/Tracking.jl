@@ -28,7 +28,7 @@ using Tracking:
     add_satellite!,
     get_code_phase,
     get_carrier_phase,
-    get_carrier_phase_correction,
+    calc_carrier_phase_correction,
     get_code_doppler,
     get_carrier_doppler,
     get_next_sample_index,
@@ -186,8 +186,8 @@ end
         push!(history, (get_carrier_doppler(sat_state), get_code_phase(sat_state)))
         # A scalar loop's replica is its carrier estimate; so is a satellite's
         # out of the vector loop.
-        @test get_carrier_phase_correction(track_state, 1, fs) == 0.0
-        @test get_carrier_phase_correction(track_state, :default, 1, fs) == 0.0
+        @test calc_carrier_phase_correction(track_state, 1) == 0.0
+        @test calc_carrier_phase_correction(track_state, :default, 1) == 0.0
         history, track_state
     end
     conventional, _ = run(ScalarTrackingLoop(ThirdOrderAssistedBilinearLF))

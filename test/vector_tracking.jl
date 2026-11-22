@@ -37,7 +37,7 @@ using Tracking:
     track!,
     add_satellite!,
     get_carrier_phase,
-    get_carrier_phase_correction,
+    calc_carrier_phase_correction,
     get_carrier_doppler,
     get_code_doppler,
     get_loop_state,
@@ -215,7 +215,7 @@ end
                     continue
                 estimate =
                     get_carrier_phase(track_state, decoder.prn) +
-                    get_carrier_phase_correction(track_state, decoder.prn, FS * Hz)
+                    calc_carrier_phase_correction(track_state, decoder.prn)
                 push!(offsets, rem(estimate - sat.carrier_phase, 1.0, RoundNearest))
                 # The residual frequency here is too small for the truth to tell the
                 # sample the correction is read at, so pin it to the end of this chunk
@@ -226,7 +226,7 @@ end
                     get_code_doppler(sat_state),
                 )
                 corrections_at_chunk_end &=
-                    get_carrier_phase_correction(track_state, decoder.prn, FS * Hz) ==
+                    calc_carrier_phase_correction(track_state, decoder.prn) ==
                     calc_carrier_phase_correction(
                         get_loop_state(sat_state),
                         words,

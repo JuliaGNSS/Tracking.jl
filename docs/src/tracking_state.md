@@ -452,7 +452,7 @@ The trailing `sig` selector is either:
 | `get_code_phase` | Shared code phase (wraps at [`current_code_phase_period`](@ref Tracking.current_code_phase_period)). |
 | `get_code_doppler` | Shared code Doppler. |
 | `get_carrier_phase` | Shared carrier phase in cycles. |
-| [`get_carrier_phase_correction`](@ref) | What the estimator adds to `get_carrier_phase` for the carrier-phase measurement (vector loop only; takes the band's sampling frequency). |
+| [`calc_carrier_phase_correction`](@ref TrackingLoops.calc_carrier_phase_correction(::TrackState, ::Union{Integer, Symbol, Val}, ::Any)) | What the tracking loop adds to `get_carrier_phase` for the carrier-phase measurement (vector loop only). |
 | `get_carrier_doppler` | Shared carrier Doppler. |
 | `get_next_sample_index` | Index of the next sample to process in the current samples. |
 
@@ -503,7 +503,7 @@ Tracking.SatelliteDicts
 get_sat_states
 get_sat_state
 get_signal
-get_carrier_phase_correction
+TrackingLoops.calc_carrier_phase_correction(::TrackState, ::Union{Integer, Symbol, Val}, ::Any)
 ```
 
 ## TrackedSat

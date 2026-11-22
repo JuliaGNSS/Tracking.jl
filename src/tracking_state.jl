@@ -845,8 +845,8 @@ NCO, and the residual PLL follows the carrier without steering it, so the
 replica drifts off the carrier by whole cycles; this is the residual PLL's
 prediction at the end of the latest [`track`](@ref)/[`track!`](@ref) call, every
 cycle counted (see `TrackingLoops.calc_carrier_phase_correction`, which also names
-where it steps). `sampling_frequency` is the band's. The group can be omitted on
-a single-group `TrackState`.
+where it steps), at the band's sampling frequency the latest integration stored.
+The group can be omitted on a single-group `TrackState`.
 
 The whole cycles only count against a replica phase that counts them too:
 `get_carrier_phase` wraps, so a RINEX host builds `L` from its own accumulated
@@ -856,17 +856,20 @@ Only valid right after `track`/`track!`: a host feeding records through
 [`append_correlator_bank_output!`](@ref) calls `TrackingLoops.calc_carrier_phase_correction`
 with its own NCO words and sample instead.
 """
-function get_carrier_phase_correction(
-    track_state::TrackState{<:SignalGroups{N}},
+function calc_carrier_phase_correction(
+    track_state::TrackState,
     group_key::Union{Symbol,Integer,Val},
     prn,
-    sampling_frequency,
-) where {N}
+)
     group = _index_group(track_state.groups, group_key)
     sat = get_sat_state(group.satellites, prn)
     # `track!` leaves the replica at the end of the measurement, the band's sample
     # offset, having run on the satellite's Doppler since its latest record.
     band_grid_index = get(track_state.sample_index_offsets, get_band_id(group.band), 0)
+    # Every integration stores its band's sampling frequency in the post-correlation
+    # state; before the first it is still NaN, but TrackingLoops returns a correction of
+    # 0 then without reading it.
+    sampling_frequency = first(sat.signals).post_correlation_state.sampling_frequency
     calc_carrier_phase_correction(
         sat.loop_state,
         _software_nco_command(sat),
@@ -875,11 +878,8 @@ function get_carrier_phase_correction(
     )
 end
 
-get_carrier_phase_correction(
-    track_state::TrackState{<:SignalGroups{1}},
-    prn,
-    sampling_frequency,
-) = get_carrier_phase_correction(track_state, 1, prn, sampling_frequency)
+calc_carrier_phase_correction(track_state::TrackState{<:SignalGroups{1}}, prn) =
+    calc_carrier_phase_correction(track_state, 1, prn)
 
 # Per-signal accessors, addressed as (using `get_correlator_bank`):
 #   * `get_correlator_bank(track_state)` — 1 group, 1 sat, 1 signal.

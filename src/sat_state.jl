@@ -611,7 +611,8 @@ $(SIGNATURES)
 
 Get the carrier phase of the replica in cycles, folded to [-0.5, 0.5): not the
 accumulated carrier-phase measurement, for which a host adds
-[`get_carrier_phase_correction`](@ref) and counts the cycles itself.
+[`calc_carrier_phase_correction`](@ref TrackingLoops.calc_carrier_phase_correction(::TrackState, ::Union{Integer, Symbol, Val}, ::Any))
+and counts the cycles itself.
 """
 get_carrier_phase(sat::TrackedSat) = sat.carrier_phase
 
