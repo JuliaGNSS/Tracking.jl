@@ -435,8 +435,8 @@ end
 # secondary chip into the replica and wipes the overlay at every integration
 # length (#125); before sync only the primary phase is known. At one code period the
 # boundary is unchanged, as `calc_num_chips_left_to_integrate` re-mods by the primary
-# length. `num_code_periods` is unused.
-@inline _replica_code_phase_period(tsig::TrackedSignal, num_code_periods::Integer) =
+# length.
+@inline _replica_code_phase_period(tsig::TrackedSignal) =
     is_bit_or_secondary_code_synced(tsig) ? _post_sync_code_phase_period(tsig) :
     get_code_length(get_signal(tsig))
 
@@ -462,7 +462,7 @@ end
         tsig.preferred_num_code_periods_to_integrate,
         is_bit_or_secondary_code_synced(tsig),
     )
-    signal_code_phase = mod(code_phase, _replica_code_phase_period(tsig, num_code_periods))
+    signal_code_phase = mod(code_phase, _replica_code_phase_period(tsig))
     (;
         code_frequency,
         sample_shifts,

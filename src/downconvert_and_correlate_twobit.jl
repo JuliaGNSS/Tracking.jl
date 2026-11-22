@@ -352,7 +352,6 @@ end
     colbase::Int,
     base::Int,
     len::Int,
-    nwb::Int,
     r::Int,
     thr::Int16,
 )
@@ -925,7 +924,6 @@ end
                                 $(j - 1) * num_rows,
                                 base,
                                 len,
-                                nwb,
                                 r,
                                 thr,
                             )
@@ -1098,7 +1096,6 @@ function _twobit_hybrid_blocked!(
                     (j - 1) * num_rows,
                     base,
                     len,
-                    nwb,
                     r,
                     thr,
                 )
@@ -1275,7 +1272,6 @@ end
                     $(j - 1) * num_rows,
                     base,
                     len,
-                    nwb,
                     r,
                     thr,
                 )

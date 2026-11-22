@@ -189,7 +189,6 @@ end
     colbase::Int,
     base::Int,
     len::Int,
-    nwb::Int,
     r::Int,
 )
     full = fld(len, 64)
@@ -558,7 +557,6 @@ OneBitDownconvertAndCorrelator(;
                                 $(j - 1) * num_rows,
                                 base,
                                 len,
-                                nwb,
                                 r,
                             )
                             _ob_finish!(mrb, $(j - 1) * wpbv, nwb, nwv, r)
@@ -720,7 +718,6 @@ function _onebit_hybrid_blocked!(
                     (j - 1) * num_rows,
                     base,
                     len,
-                    nwb,
                     r,
                 )
                 _ob_finish!(mrb, (j - 1) * wpbv, nwb, nwv, r)
@@ -895,7 +892,6 @@ end
                     $(j - 1) * num_rows,
                     base,
                     len,
-                    nwb,
                     r,
                 )
                 _ob_finish!(mrb, $(j - 1) * wpbv, nwb, nwv, r)
