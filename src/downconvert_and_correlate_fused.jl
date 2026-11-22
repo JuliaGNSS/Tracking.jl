@@ -422,7 +422,7 @@ function downconvert_and_correlate_fused!(
     T = Float32
     num_taps = length(correlator_sample_offsets)
     min_shift = minimum(correlator_sample_offsets)
-    CHUNK = 512  # block-accumulation length; see issue #152
+    BLOCK_LENGTH = 512  # block-accumulation length; see issue #152
 
     _downconvert_into_tile!(
         tile_re,
@@ -442,13 +442,17 @@ function downconvert_and_correlate_fused!(
     @inbounds for k = 1:num_taps
         shift_offset = start_index - 1 + correlator_sample_offsets[k] - min_shift
         for j = 1:M
-            # Float32 blocks of CHUNK samples flushed into Float64 (#152).
+            # Float32 blocks of BLOCK_LENGTH samples flushed into Float64 (#152).
             acc_r = zero(Float64)
             acc_i = zero(Float64)
             ant_off = (j - 1) * num_samples
             n0 = 1
             while n0 <= num_samples
-                n1 = ifelse(n0 + CHUNK - 1 < num_samples, n0 + CHUNK - 1, num_samples)
+                n1 = ifelse(
+                    n0 + BLOCK_LENGTH - 1 < num_samples,
+                    n0 + BLOCK_LENGTH - 1,
+                    num_samples,
+                )
                 fr = zero(Float32)
                 fi = zero(Float32)
                 @simd for n = n0:n1
@@ -492,7 +496,7 @@ end
     NC_per_signal = Int[length(all_correlator_sample_offsets.parameters[i]) for i = 1:N]
 
     # Float32 block length before flushing into Float64 (#152, see the kernel above).
-    CHUNK = 512
+    BLOCK_LENGTH = 512
 
     # One pass per antenna, each keeping only N·NC accumulators live: no register
     # spilling on 16-ymm AVX2, 15-31% faster at M=2..4 than one pass over M·N·NC.
@@ -567,8 +571,11 @@ end
                 $pass_locals
                 n0 = 1
                 @inbounds while n0 <= num_samples
-                    n1 =
-                        ifelse(n0 + $CHUNK - 1 < num_samples, n0 + $CHUNK - 1, num_samples)
+                    n1 = ifelse(
+                        n0 + $BLOCK_LENGTH - 1 < num_samples,
+                        n0 + $BLOCK_LENGTH - 1,
+                        num_samples,
+                    )
                     $block_init
                     @simd for n = n0:n1
                         $pass_body
