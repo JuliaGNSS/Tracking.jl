@@ -947,6 +947,9 @@ end
     ),)
 end
 
+# A signal type's band id, folded to a literal symbol (bands are singletons).
+@inline _signal_band_id(::Type{S}) where {S<:AbstractGNSSSignal} = get_band_id(get_band(S))
+
 # Builds the `NoiseUpdateContext` here, as the loop already captures the backend.
 @inline _apply_noise_item!(item::Tuple, dc) =
     (update_noise!(item[1], item[2], item[3], NoiseUpdateContext(item[4], dc)); nothing)

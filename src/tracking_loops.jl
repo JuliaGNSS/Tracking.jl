@@ -76,6 +76,65 @@ end
     num_integrated_samples = 0,
 )
 
+# Did any signal go from unsynced to synced? Gates the code-phase snap, valid only at
+# the sync transition (#117).
+@inline _any_signal_just_synced(::Tuple{}, ::Tuple{}) = false
+@inline _any_signal_just_synced(old::Tuple, new::Tuple) =
+    (
+        !is_bit_or_secondary_code_synced(first(old)) &&
+        is_bit_or_secondary_code_synced(first(new))
+    ) || _any_signal_just_synced(Base.tail(old), Base.tail(new))
+
+# Snap `code_phase` into the secondary-code window of the synced signal with the
+# longest `primary × secondary` length, whose `get_secondary_code_phase` pins the
+# position. Unchanged if no synced signal has a secondary code.
+@inline function _snap_code_phase_from_synced_signal(
+    signals::Tuple{Vararg{TrackedSignal}},
+    code_phase::Float64,
+)
+    best_len, best_phase_chips, best_prim = _find_best_secondary_anchor(signals, 0, 0, 1)
+    if best_len == 0
+        return code_phase
+    end
+    # Align the low `best_len` chips to the synced window, keeping the higher multiple of it and
+    # the phase within the primary code period; dropping it would inject a phase error
+    # at sync (#117).
+    base = floor(Int, code_phase / best_len) * best_len
+    within_primary = code_phase - floor(code_phase / best_prim) * best_prim
+    Float64(base + best_phase_chips) + within_primary
+end
+
+# `(length, secondary_code_phase_in_chips, primary_length)` of that signal, or
+# `(0, 0, 1)`.
+@inline _find_best_secondary_anchor(
+    ::Tuple{},
+    best_len::Int,
+    best_chips::Int,
+    best_prim::Int,
+) = (best_len, best_chips, best_prim)
+@inline function _find_best_secondary_anchor(
+    t::Tuple,
+    best_len::Int,
+    best_chips::Int,
+    best_prim::Int,
+)
+    head = first(t)
+    sig = get_signal(head)
+    post_correlation_state = head.post_correlation_state
+    if is_bit_or_secondary_code_synced(post_correlation_state)
+        prim = get_code_length(sig)
+        sec = get_secondary_code_length(sig)
+        total = prim * sec
+        # Without a secondary code (e.g. GPS L1 C/A) nothing is pinned.
+        if sec > 1 && total > best_len
+            best_len = total
+            best_chips = get_secondary_code_phase(post_correlation_state) * prim
+            best_prim = prim
+        end
+    end
+    _find_best_secondary_anchor(Base.tail(t), best_len, best_chips, best_prim)
+end
+
 # Process one completed correlator output of a signal into its post-correlation state,
 # for driver and passengers alike (#133): TrackingLoops'
 # `process_correlator_bank_output!`, plus pushing the filtered prompt and keeping the
