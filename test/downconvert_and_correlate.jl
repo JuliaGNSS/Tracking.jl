@@ -92,7 +92,7 @@ end
           [2919, 4947, 2915] rtol = 1e-3
 end
 
-@testset "Early return when signal_start_sample past end with $DC" for DC in [
+@testset "Early return when next_sample_index past end with $DC" for DC in [
     CPUDownconvertAndCorrelator,
     CPUThreadedDownconvertAndCorrelator,
 ]
@@ -105,7 +105,7 @@ end
     samples = ones(ComplexF64, num_samples)
     sat_past_end = TrackedSat(
         TrackedSat(gpsl1, 1, code_phase, 1000.0Hz);
-        signal_start_sample = num_samples + 1,
+        next_sample_index = num_samples + 1,
     )
     ts_skip = TrackState(gpsl1, [sat_past_end])
     downconvert_and_correlator = DC()
@@ -153,8 +153,7 @@ end
         code_frequency,
         sampling_frequency,
         code_phase,
-        1,
-        num_samples,
+        1:num_samples,
         sample_shifts,
         prn,
     )
@@ -182,8 +181,7 @@ end
         carrier_frequency,
         sampling_frequency,
         0.0,
-        1,
-        num_samples,
+        1:num_samples,
     )
 
     @test get_correlator_outputs(fused_static) ≈ ref_accumulators rtol = 1e-4
@@ -200,8 +198,7 @@ end
         carrier_frequency,
         sampling_frequency,
         0.0,
-        1,
-        num_samples,
+        1:num_samples,
         tile_re,
         tile_im,
     )
@@ -245,8 +242,7 @@ end
         code_frequency,
         sampling_frequency,
         code_phase,
-        1,
-        num_samples,
+        1:num_samples,
         sample_shifts,
         prn,
     )
@@ -276,8 +272,7 @@ end
         carrier_frequency,
         sampling_frequency,
         0.0,
-        1,
-        num_samples,
+        1:num_samples,
     )
     for tap = 1:NC
         @test collect(get_correlator_outputs(fused_static)[tap]) ≈ ref_accumulators[tap] rtol =
@@ -296,8 +291,7 @@ end
         carrier_frequency,
         sampling_frequency,
         0.0,
-        1,
-        num_samples,
+        1:num_samples,
         tile_re,
         tile_im,
     )
@@ -334,8 +328,7 @@ end
         code_frequency,
         sampling_frequency,
         code_phase,
-        1,
-        num_samples_odd,
+        1:num_samples_odd,
         sample_shifts,
         prn,
     )
@@ -360,8 +353,7 @@ end
         carrier_frequency,
         sampling_frequency,
         0.0,
-        1,
-        num_samples_odd,
+        1:num_samples_odd,
         tile_re_odd,
         tile_im_odd,
     )
@@ -410,8 +402,7 @@ end
         code_frequency,
         sampling_frequency,
         code_phase,
-        1,
-        num_samples,
+        1:num_samples,
         static_shifts,
         prn,
     )
@@ -441,8 +432,7 @@ end
         carrier_frequency,
         sampling_frequency,
         0.0,
-        1,
-        num_samples,
+        1:num_samples,
         tile_re,
         tile_im,
     )
@@ -450,14 +440,14 @@ end
     @test get_correlator_outputs(fused_dynamic) ≈ ref_accumulators rtol = 1e-4
 end
 
-@testset "Fused dynamic-shifts kernel with start_sample > 1" begin
+@testset "Fused dynamic-shifts kernel with start_index > 1" begin
     # Issue #126 (a): the AbstractVector-shifts kernel must read the code replica at
-    # the absolute window offset `start_sample`, like the static kernels.
+    # the absolute window offset `start_index`, like the static kernels.
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     code_phase = 10.5
     num_buffer_samples = 5000
-    start_sample = 3001
+    start_index = 3001
     num_samples = 2000
     carrier_doppler = 1000.0Hz
     prn = 1
@@ -480,11 +470,11 @@ end
             code_phase,
         ) .* cis.(2π * (0:(num_buffer_samples-1)) * carrier_doppler / sampling_frequency)
 
-    # Code phase of the first sample of the window at start_sample
+    # Code phase of the first sample of the window at start_index
     window_code_phase =
-        code_phase + (start_sample - 1) * Float64(code_frequency / sampling_frequency)
+        code_phase + (start_index - 1) * Float64(code_frequency / sampling_frequency)
     code_replica_length =
-        start_sample - 1 + num_samples + maximum(sample_shifts) - minimum(sample_shifts)
+        start_index - 1 + num_samples + maximum(sample_shifts) - minimum(sample_shifts)
     code_replica = zeros(Int8, code_replica_length)
     Tracking.gen_code_replica!(
         code_replica,
@@ -492,8 +482,7 @@ end
         code_frequency,
         sampling_frequency,
         window_code_phase,
-        start_sample,
-        num_samples,
+        range(start_index; length = num_samples),
         sample_shifts,
         prn,
     )
@@ -505,9 +494,9 @@ end
     carrier_step = 2π * Float64(carrier_frequency / sampling_frequency)
     for i = 1:num_samples
         carrier = cis(-carrier_step * (i - 1))
-        dc_sample = samples[start_sample-1+i] * carrier
+        dc_sample = samples[start_index-1+i] * carrier
         for tap = 1:NC
-            code_idx = start_sample - 1 + i + sample_shifts[tap] - min_shift
+            code_idx = start_index - 1 + i + sample_shifts[tap] - min_shift
             ref_accumulators[tap] += dc_sample * code_replica[code_idx]
         end
     end
@@ -524,8 +513,7 @@ end
         carrier_frequency,
         sampling_frequency,
         0.0,
-        start_sample,
-        num_samples,
+        range(start_index; length = num_samples),
         tile_re,
         tile_im,
     )
@@ -540,8 +528,7 @@ end
         carrier_frequency,
         sampling_frequency,
         0.0,
-        start_sample,
-        num_samples,
+        range(start_index; length = num_samples),
     )
     @test get_correlator_outputs(fused_dynamic) ≈ get_correlator_outputs(fused_static) rtol =
         1e-4
@@ -570,7 +557,7 @@ TrackingLoops.calc_correlator_sample_offsets(
     sampling_frequency = 5e6Hz
     code_phase = 10.5
     num_buffer_samples = 5000
-    start_sample = 3001
+    start_index = 3001
     num_samples = 2000
     carrier_doppler = 1000.0Hz
     prn = 1
@@ -595,9 +582,9 @@ TrackingLoops.calc_correlator_sample_offsets(
         ) .* cis.(2π * (0:(num_buffer_samples-1)) * carrier_doppler / sampling_frequency)
 
     window_code_phase =
-        code_phase + (start_sample - 1) * Float64(code_frequency / sampling_frequency)
+        code_phase + (start_index - 1) * Float64(code_frequency / sampling_frequency)
     code_replica_length =
-        start_sample - 1 + num_samples + maximum(dynamic_shifts) - minimum(dynamic_shifts)
+        start_index - 1 + num_samples + maximum(dynamic_shifts) - minimum(dynamic_shifts)
 
     # Scalar reference over the window
     ref_code_replica = zeros(Int8, code_replica_length)
@@ -607,8 +594,7 @@ TrackingLoops.calc_correlator_sample_offsets(
         code_frequency,
         sampling_frequency,
         window_code_phase,
-        start_sample,
-        num_samples,
+        range(start_index; length = num_samples),
         dynamic_shifts,
         prn,
     )
@@ -618,9 +604,9 @@ TrackingLoops.calc_correlator_sample_offsets(
     carrier_step = 2π * Float64(carrier_frequency / sampling_frequency)
     for i = 1:num_samples
         carrier = cis(-carrier_step * (i - 1))
-        dc_sample = samples[start_sample-1+i] * carrier
+        dc_sample = samples[start_index-1+i] * carrier
         for tap = 1:NC
-            code_idx = start_sample - 1 + i + dynamic_shifts[tap] - min_shift
+            code_idx = start_index - 1 + i + dynamic_shifts[tap] - min_shift
             ref_accumulators[tap] += dc_sample * ref_code_replica[code_idx]
         end
     end
@@ -637,8 +623,7 @@ TrackingLoops.calc_correlator_sample_offsets(
         code_frequency,
         carrier_frequency,
         sampling_frequency,
-        start_sample,
-        num_samples,
+        range(start_index; length = num_samples),
         prn,
     )
     @test get_correlator_outputs(public_result) ≈ ref_accumulators rtol = 1e-4
@@ -657,8 +642,7 @@ TrackingLoops.calc_correlator_sample_offsets(
             code_frequency,
             carrier_frequency,
             sampling_frequency,
-            start_sample,
-            num_samples,
+            range(start_index; length = num_samples),
             code_replica_length,
         )
         @test get_correlator_outputs(backend_result) ≈ ref_accumulators rtol = 1e-4
@@ -677,8 +661,7 @@ TrackingLoops.calc_correlator_sample_offsets(
         code_frequency,
         carrier_frequency,
         sampling_frequency,
-        start_sample,
-        num_samples,
+        range(start_index; length = num_samples),
         prn,
     )
     @test get_correlator_outputs(static_result) ≈ ref_accumulators rtol = 1e-4
@@ -726,8 +709,7 @@ end
                 code_frequency,
                 sampling_frequency,
                 code_phase,
-                1,
-                num_samples,
+                1:num_samples,
                 sample_shifts_each,
                 prn,
             )
@@ -758,8 +740,7 @@ end
             carrier_frequency,
             sampling_frequency,
             0.0,
-            1,
-            num_samples,
+            1:num_samples,
             tile_re,
             tile_im,
         )
@@ -805,8 +786,7 @@ end
                 code_frequency,
                 sampling_frequency,
                 code_phase,
-                1,
-                num_samples,
+                1:num_samples,
                 sample_shifts_each,
                 prn,
             )
@@ -839,8 +819,7 @@ end
             carrier_frequency,
             sampling_frequency,
             0.0,
-            1,
-            num_samples,
+            1:num_samples,
             tile_re,
             tile_im,
         )

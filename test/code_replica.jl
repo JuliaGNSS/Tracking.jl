@@ -21,7 +21,7 @@ end
 @testset "Code replica" begin
     code = zeros(Int8, 2502)
     gpsl1 = GPSL1CA()
-    gen_code_replica!(code, gpsl1, 1023e3Hz, 2.5e6Hz, 2.0, 11, 2480, -1:1, 1)
+    gen_code_replica!(code, gpsl1, 1023e3Hz, 2.5e6Hz, 2.0, 11:2490, -1:1, 1)
 
     # samples_per_period = sampling_frequency / code_frequency * code_length
     #                    = 2.5e6 / 1023e3 * 1023 = 2500
@@ -33,7 +33,7 @@ end
     @testset "More than 1ms" begin
         code = zeros(Int8, 6502)
         gpsl1 = GPSL1CA()
-        gen_code_replica!(code, gpsl1, 1023e3Hz, 2.5e6Hz, 2.0, 11, 6480, -1:1, 1)
+        gen_code_replica!(code, gpsl1, 1023e3Hz, 2.5e6Hz, 2.0, 11:6490, -1:1, 1)
 
         @test agrees_except_chip_boundaries(
             code[13:6492],
@@ -45,7 +45,7 @@ end
     @testset "code_length is less than 1ms" begin
         code = zeros(Int8, 2502)
         gpsl1 = GPSL1CA()
-        gen_code_replica!(code, gpsl1, 1023e3Hz + 1000Hz, 7.5e6Hz, 2.0, 11, 2480, -1:1, 1)
+        gen_code_replica!(code, gpsl1, 1023e3Hz + 1000Hz, 7.5e6Hz, 2.0, 11:2490, -1:1, 1)
 
         # samples_per_period = 7.5e6 / (1023e3 + 1000) * 1023 ≈ 7493
         @test agrees_except_chip_boundaries(
