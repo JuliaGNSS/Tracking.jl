@@ -246,7 +246,7 @@ update their own filters, C/N₀ and bit synchronizers on theirs. A custom
 [`AbstractTrackingLoop`](@extref TrackingLoops.AbstractTrackingLoop) may
 use any signal.
 
-The shared `code_phase` wraps at [`max_code_length`](@ref).
+The shared `code_phase` wraps at [`current_code_phase_period`](@ref).
 """
 struct TrackedSat{Signals<:Tuple{Vararg{TrackedSignal}},D}
     prn::Int
@@ -259,58 +259,40 @@ struct TrackedSat{Signals<:Tuple{Vararg{TrackedSignal}},D}
     doppler_estimator_state::D
 end
 
-# A signal's post-sync wrap in chips: the secondary-code period for a pilot, and
+# A signal's post-sync period in chips: the secondary-code period for a pilot, and
 # the longer of secondary-code and data-bit period otherwise (GPS L1 C/A:
 # 1023 × 20, no secondary code).
-@inline function _post_sync_code_length(tsig::TrackedSignal)
+@inline function _post_sync_code_phase_period(tsig::TrackedSignal)
     sig = get_signal(tsig)
     get_code_length(sig) *
     max(get_secondary_code_length(sig), get_code_periods_per_bit(sig))
 end
 
-# `lcm`, not `max`: per-signal phases are `mod(code_phase, _replica_code_wrap(...))`,
-# correct only if the shared wrap is a multiple of every signal's (#129).
-@inline _max_code_length(::Tuple{}) = 1
-@inline _max_code_length(t::Tuple) =
-    lcm(_post_sync_code_length(first(t)), _max_code_length(Base.tail(t)))
-
-"""
-$(SIGNATURES)
-
-Upper bound on the shared `sat.code_phase` wrap period, in chips: the least
-common multiple of the per-signal wraps once *every* signal has synced (GPS
-L1 C/A: 1023 × 20 = 20460, one data bit; L1C-P: 10230 × 1800, one
-secondary-code cycle). Folds to a literal for a concrete `signals` type.
-
-The runtime wrap, [`current_code_wrap`](@ref), is shorter for unsynced signals.
-"""
-@inline max_code_length(signals::Tuple{Vararg{TrackedSignal}}) = _max_code_length(signals)
-
-# Primary code length until synced, then `_post_sync_code_length`.
-@inline function _current_code_length(tsig::TrackedSignal)
+# Primary code length until synced, then `_post_sync_code_phase_period`.
+@inline function _signal_code_phase_period(tsig::TrackedSignal)
     if is_bit_or_secondary_code_synced(tsig)
-        _post_sync_code_length(tsig)
+        _post_sync_code_phase_period(tsig)
     else
         get_code_length(get_signal(tsig))
     end
 end
 
-# `lcm` for the same reason as `_max_code_length`.
-@inline _current_code_wrap(::Tuple{}) = 1
-@inline _current_code_wrap(t::Tuple) =
-    lcm(_current_code_length(first(t)), _current_code_wrap(Base.tail(t)))
-
 """
 $(SIGNATURES)
 
-The runtime wrap period of the shared `sat.code_phase`, in chips: like
-[`max_code_length`](@ref), but a signal not yet synced
-(`is_bit_or_secondary_code_synced` false) contributes only its primary code length, since its bit or secondary
-chip is unknown. The least common multiple keeps the wrap a multiple of every
-signal's replica wrap (#129).
+The period of the shared `sat.code_phase`, in chips: the least common multiple of the
+signals' periods. A signal not yet synced (`is_bit_or_secondary_code_synced` false)
+contributes its primary code length, since its bit or secondary chip is unknown; a
+synced one its secondary-code period for a pilot, else the longer of secondary-code
+and data-bit period (GPS L1 C/A: 1023 × 20 = 20460, one data bit). The least common
+multiple, not the maximum, keeps the period a multiple of every signal's replica period
+(#129).
 """
-@inline current_code_wrap(signals::Tuple{Vararg{TrackedSignal}}) =
-    _current_code_wrap(signals)
+@inline current_code_phase_period(::Tuple{}) = 1
+@inline current_code_phase_period(signals::Tuple{Vararg{TrackedSignal}}) = lcm(
+    _signal_code_phase_period(first(signals)),
+    current_code_phase_period(Base.tail(signals)),
+)
 
 # Did any signal go from unsynced to synced? Gates the one-time
 # code-phase snap, valid only at the sync transition (#117).
@@ -578,8 +560,8 @@ get_num_ants(
 $(SIGNATURES)
 
 Get the satellite's shared code phase in chips, wrapping at
-[`max_code_length`](@ref). Mod by a signal's primary code length for its replica
-phase.
+[`current_code_phase_period`](@ref). Mod by a signal's primary code length
+for its replica phase.
 """
 get_code_phase(s::TrackedSat) = s.code_phase
 
