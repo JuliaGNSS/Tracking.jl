@@ -30,6 +30,7 @@ makedocs(
         "correlator.md",
         "cn0_estimator.md",
         "noise_estimator.md",
+        "glossary.md",
     ]
 )
 
