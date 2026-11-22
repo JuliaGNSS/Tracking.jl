@@ -4,8 +4,8 @@ The tracking state nests as **TrackState → SignalGroup → TrackedSat → Trac
 
 - [`TrackState`](@ref): a `NamedTuple` of [`SignalGroup`](@ref)s and the tracking loop.
 - [`SignalGroup`](@ref): satellites with the same signal tuple, and so one concrete `TrackedSat` type (the hot loop's type stability), on one RF band and antenna array.
-- [`TrackedSat`](@ref): the carrier/code Doppler and phase its signals share, a tuple of [`TrackedSignal`](@ref)s, and the Doppler-estimator state.
-- [`TrackedSignal`](@ref): correlator bank, post_corr_filter, C/N₀ estimator, bit buffer and integration progress.
+- [`TrackedSat`](@ref): the carrier/code Doppler and phase its signals share, a tuple of [`TrackedSignal`](@ref)s, and the tracking loop's per-satellite state (`loop_state`).
+- [`TrackedSignal`](@ref): correlator bank, post-correlation filter, C/N₀ estimator, bit synchronizer and integration progress.
 
 ### Driver signal
 
@@ -215,7 +215,7 @@ julia> get_carrier_doppler(track_state, :modern_gps, 11)
 1234.0 Hz
 ```
 
-Put a pilot first where there is one: without data bits the PLL can integrate longer. The data signals still decode their bits, each with its own `bit_buffer`.
+Put a pilot first where there is one: without data bits the PLL can integrate longer. The data signals still decode their bits, each with its own `bit_synchronizer`.
 
 Signals with different code periods (L1 C/A 1 ms, L1C-P 10 ms) each complete records on their own boundaries; the scalar tracking loops update the Doppler from the driver's records (see [Chunked Doppler updates](track.md#Chunked-Doppler-updates)).
 
@@ -468,7 +468,7 @@ The trailing `sig` selector is either:
 | `get_post_corr_filter` | The post-correlation filter. |
 | `get_cn0_estimator` | The CN0 estimator. |
 | `estimate_cn0` | CN0 estimate in dB-Hz. |
-| `get_bit_buffer` / `get_soft_bits` / `get_num_bits` | Bit buffer, decoded soft bits (sign = the hard bit), bit count. |
+| `get_bit_synchronizer` / `get_soft_bits` / `get_num_bits` | Bit synchronizer, decoded soft bits (sign = the hard bit), bit count. |
 | `get_integrated_samples` | Number of samples accumulated into the current integration so far. |
 | `is_bit_or_secondary_code_synced` | `true` once bit/secondary-code synchronization has been achieved. |
 
@@ -535,7 +535,7 @@ get_last_fully_integrated_filtered_prompt(::TrackedSignal)
 get_last_fully_integrated_num_code_blocks(::TrackedSignal)
 get_last_fully_integrated_integration_time(::TrackedSignal)
 get_filtered_prompts(::TrackedSignal)
-get_bit_buffer(::TrackedSignal)
+get_bit_synchronizer(::TrackedSignal)
 get_num_bits(::TrackedSignal)
 get_integrated_samples(::TrackedSignal)
 get_preferred_num_code_blocks_to_integrate(::TrackedSignal)

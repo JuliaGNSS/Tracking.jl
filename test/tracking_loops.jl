@@ -18,7 +18,7 @@ using TrackingLoopFilters:
     ThirdOrderAssistedBilinearLF, ThirdOrderBilinearLF, SecondOrderBilinearLF
 using StaticArrays: SVector
 using Tracking:
-    get_bit_buffer,
+    get_bit_synchronizer,
     TrackedSignal,
     TrackedSat,
     TrackState,
@@ -197,7 +197,7 @@ end
         sat = TrackedSat(gpsl1, 1, code_phase, carrier_doppler; tracking_loop)
         base = only(sat.signals)
         sig = TrackedSignal(
-            found ? _with_bit_synchronizer(base, synced(get_bit_buffer(base))) : base;
+            found ? _with_bit_synchronizer(base, synced(get_bit_synchronizer(base))) : base;
             preferred_num_code_blocks_to_integrate = preferred,
         )
         append_correlator_bank_output!(
@@ -431,7 +431,7 @@ end
         sats[1] = TrackedSat(
             sat;
             signals = map(
-                s -> _with_bit_synchronizer(s, synced(get_bit_buffer(s))),
+                s -> _with_bit_synchronizer(s, synced(get_bit_synchronizer(s))),
                 sat.signals,
             ),
         )
@@ -462,7 +462,7 @@ end
         tracking_loop.records, prompts
     end
 
-    # A bit buffer synced at polarity -1, on the first block of a bit.
+    # A bit synchronizer synced at polarity -1, on the first block of a bit.
     synced(::TrackingLoops.BitSynchronizer{B}) where {B} = TrackingLoops.BitSynchronizer{B}(
         zero(B),
         0,

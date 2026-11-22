@@ -1,8 +1,8 @@
-module BitBufferTest
+module BitSynchronizerTest
 
 # The warning Tracking logs when a correlator record carries the bit accumulator past
 # the navigation-bit boundary. TrackingLoops' `process_correlator_bank_output!` reports the overshoot
-# and its bit buffer drops sync (tested there); the record path through `track!` is in
+# and its bit synchronizer drops sync (tested there); the record path through `track!` is in
 # `test/external_correlator_producer.jl`.
 
 using Test: @test, @testset, @test_logs

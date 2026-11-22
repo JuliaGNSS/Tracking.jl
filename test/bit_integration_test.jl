@@ -95,7 +95,7 @@ end
     set_preferred_num_code_blocks_to_integrate!(multi_state, 1, 4)
     single_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0, 0.0Hz)])
 
-    # The bit buffer is flushed on every `track` call.
+    # The bit synchronizer is flushed on every `track` call.
     multi_bits = Bool[]
     single_bits = Bool[]
     multi_soft = Float32[]

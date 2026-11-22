@@ -141,7 +141,7 @@ end
     )
     dc = DC()
 
-    # Warm up: compile, and settle the bit buffer and `filtered_prompts`.
+    # Warm up: compile, and settle the bit synchronizer and `filtered_prompts`.
     for _ = 1:8
         track!(samples, track_state, sampling_frequency; downconvert_and_correlator = dc)
     end

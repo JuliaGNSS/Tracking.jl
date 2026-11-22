@@ -237,17 +237,17 @@ $(SIGNATURES)
 The signal's [`BitSynchronizer`](@extref TrackingLoops.BitSynchronizer): bit or secondary-code
 sync and the soft bits for the decoder.
 """
-get_bit_buffer(t::TrackedSignal) = t.post_correlation_state.bit_synchronizer
-get_soft_bits(t::TrackedSignal) = get_soft_bits(get_bit_buffer(t))
+get_bit_synchronizer(t::TrackedSignal) = t.post_correlation_state.bit_synchronizer
+get_soft_bits(t::TrackedSignal) = get_soft_bits(get_bit_synchronizer(t))
 
 """
 $(SIGNATURES)
 
 The number of soft bits in the bit synchronizer (see `get_soft_bits`).
 """
-get_num_bits(t::TrackedSignal) = length(get_bit_buffer(t))
+get_num_bits(t::TrackedSignal) = length(get_bit_synchronizer(t))
 is_bit_or_secondary_code_synced(t::TrackedSignal) =
-    is_bit_or_secondary_code_synced(get_bit_buffer(t))
+    is_bit_or_secondary_code_synced(get_bit_synchronizer(t))
 
 """
 $(SIGNATURES)
@@ -701,7 +701,8 @@ get_post_corr_filter(sat::TrackedSat, sel...) =
     get_post_corr_filter(_find_signal(sat.signals, sel...))
 get_cn0_estimator(sat::TrackedSat, sel...) =
     get_cn0_estimator(_find_signal(sat.signals, sel...))
-get_bit_buffer(sat::TrackedSat, sel...) = get_bit_buffer(_find_signal(sat.signals, sel...))
+get_bit_synchronizer(sat::TrackedSat, sel...) =
+    get_bit_synchronizer(_find_signal(sat.signals, sel...))
 get_soft_bits(sat::TrackedSat, sel...) = get_soft_bits(_find_signal(sat.signals, sel...))
 get_num_bits(sat::TrackedSat, sel...) = get_num_bits(_find_signal(sat.signals, sel...))
 is_bit_or_secondary_code_synced(sat::TrackedSat, sel...) =
@@ -718,7 +719,7 @@ append_correlator_bank_output!(sat::TrackedSat, output::CorrelatorBankOutput, se
     (append_correlator_bank_output!(_find_signal(sat.signals, sel...), output); sat)
 
 # Between `track` calls: next sample index back to 1, per-signal prompts and
-# outputs emptied in place, bit buffers `reset`.
+# outputs emptied in place, soft bits drained.
 function _prepare_for_new_buffer(sat::TrackedSat)
     new_signals = map(s -> _reset_signal(s), sat.signals)
     TrackedSat(sat; next_sample_index = 1, signals = new_signals)
@@ -727,7 +728,7 @@ end
 @inline function _reset_signal(t::TrackedSignal)
     empty!(t.filtered_prompts)
     empty!(t.correlator_bank_outputs)
-    drain_soft_bits!(get_bit_buffer(t))
+    drain_soft_bits!(get_bit_synchronizer(t))
     t
 end
 

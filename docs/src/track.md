@@ -142,7 +142,7 @@ the `downconvert_and_correlator` keyword:
   [`OneBitDownconvertAndCorrelator`](@ref): measurement, carrier and code
   hard-limited to a sign bit, so downconversion is XOR and accumulation popcount;
   ~1.5–5.6× faster than Float32 (more at higher rates) for ≈2–3 dB of SNR. The
-  ratio-normalised discriminators, C/N₀ and bit buffer do not mind the coarse
+  ratio-normalised discriminators, C/N₀ and bit synchronizer do not mind the coarse
   amplitude. BPSK only.
 - [`TwoBitThreadedDownconvertAndCorrelator`](@ref) /
   [`TwoBitDownconvertAndCorrelator`](@ref): adds a **magnitude** bit to

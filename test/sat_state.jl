@@ -34,7 +34,7 @@ using Tracking:
     get_signal,
     get_signals,
     get_sat_state,
-    get_bit_buffer,
+    get_bit_synchronizer,
     to_dictionary
 import TrackingLoops
 using TrackingLoops: is_bit_or_secondary_code_synced
@@ -56,7 +56,7 @@ include("acquisition_test_helpers.jl")
     @test get_correlator_bank(sat_state).correlator_outputs == zeros(3)
     @test get_last_fully_integrated_correlator(sat_state).correlator_outputs == zeros(3)
     @test is_bit_or_secondary_code_synced(sat_state) == false
-    @test length(get_bit_buffer(sat_state)) == 0
+    @test length(get_bit_synchronizer(sat_state)) == 0
 
     acq = _make_acq(gpsl1, 5, 524.6, 100.0Hz)
     sat_state = @inferred TrackedSat(acq)
@@ -71,7 +71,7 @@ include("acquisition_test_helpers.jl")
     @test get_last_fully_integrated_correlator(sat_state).correlator_outputs == zeros(3)
     @test get_last_fully_integrated_filtered_prompt(sat_state) == complex(0.0, 0.0)
     @test is_bit_or_secondary_code_synced(sat_state) == false
-    @test length(get_bit_buffer(sat_state)) == 0
+    @test length(get_bit_synchronizer(sat_state)) == 0
 end
 
 @testset "TrackedSat signal/dict helpers" begin

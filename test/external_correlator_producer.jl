@@ -206,7 +206,7 @@ end
 end
 
 @testset "a producer record straddling a bit boundary warns and drops sync" begin
-    # The bit buffer reports the overshoot and this package logs it: 18 blocks
+    # The bit synchronizer reports the overshoot and this package logs it: 18 blocks
     # into a bit, a three-block record from a producer off the bit grid.
     fs = 4e6Hz
     ts = Tracking.add_satellite!(

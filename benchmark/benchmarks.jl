@@ -49,7 +49,7 @@ const _calc_noise_observation_from_samples = getfield(
 const _SyncHypothesisAccumulators =
     getfield(TrackingLoops, _TL7 ? :SyncHypothesisAccumulators : :PhaseAccumulators)
 const _get_bit_synchronizer =
-    getfield(Tracking, _TL7 ? :get_bit_buffer : :get_bit_buffer)
+    getfield(Tracking, _TL7 ? :get_bit_synchronizer : :get_bit_buffer)
 const _CorrelatorNoiseDensityEstimator =
     getfield(Tracking, _TL7 ? :CorrelatorNoiseDensityEstimator : :CorrelatorNoiseEstimator)
 # Keyword arguments, splatted: `f(...; _antennas(1)...)`.
@@ -354,12 +354,12 @@ end
 
 # ── Per-system multi-satellite track / track! benchmarks ─────────────────
 #
-# Full pipeline on realistic per-system workloads, with `bit_buffer.found = true`
+# Full pipeline on realistic per-system workloads, with every bit synchronizer synced
 # so the post-bit-edge path is hit. Variants: {out-of-place, in-place} ×
 # {single-threaded, threaded}.
 
-# A fresh sat's BitBuffer with `found = true` (and a full code-block count).
-function _with_found_bit_buffer(t)
+# A fresh sat's bit synchronizer, synced (and with a full code-block count).
+function _with_synced_bit_synchronizer(t)
     sig = only(t.signals)
     # Positional, in field order, which TrackingLoops 7 kept and renamed.
     old_bit_synchronizer = _get_bit_synchronizer(sig)
@@ -406,10 +406,10 @@ function _make_multi_sat_state(;
     TrackState(NamedTuple{names}(Tuple(all_sss))), rand(ComplexF32, nsamp), total_sats
 end
 
-# `TrackState` for the given system mix with `bit_buffer.found = true` on every sat.
+# `TrackState` for the given system mix with every sat's bit synchronizer synced.
 function _make_steady_state_track_state(; signals, nsats_list, nsamp, prn_max, code_dop)
     ts, samples, _ = _make_multi_sat_state(; signals, nsats_list, nsamp, prn_max, code_dop)
-    new_mss = map(sats -> map(_with_found_bit_buffer, sats), _get_group_sats(ts))
+    new_mss = map(sats -> map(_with_synced_bit_synchronizer, sats), _get_group_sats(ts))
     _track_state_with_group_sats(ts, new_mss), samples
 end
 

@@ -26,7 +26,7 @@ using Tracking:
     get_filtered_prompts,
     get_post_corr_filter,
     get_cn0_estimator,
-    get_bit_buffer,
+    get_bit_synchronizer,
     get_num_bits,
     get_sat_state,
     get_sat_states,
@@ -96,7 +96,7 @@ end
           zeros(3)
     @test get_post_corr_filter(track_state, 1) isa DefaultPostCorrFilter
     @test get_cn0_estimator(track_state, 1) isa NoiseReferencedCN0Estimator
-    @test get_bit_buffer(track_state, 1) isa BitSynchronizer
+    @test get_bit_synchronizer(track_state, 1) isa BitSynchronizer
 
     @test get_sat_states(track_state)[1].loop_state.initial_carrier_doppler == 10.0Hz
     @test get_sat_states(track_state)[2].loop_state.initial_carrier_doppler == 20.0Hz
@@ -545,7 +545,7 @@ end
     @inferred get_last_fully_integrated_filtered_prompt(track_state, 1)
     @inferred get_post_corr_filter(track_state, 1)
     @inferred get_cn0_estimator(track_state, 1)
-    @inferred get_bit_buffer(track_state, 1)
+    @inferred get_bit_synchronizer(track_state, 1)
     @inferred get_soft_bits(track_state, 1)
     @inferred get_num_bits(track_state, 1)
     @inferred is_bit_or_secondary_code_synced(track_state, 1)

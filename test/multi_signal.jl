@@ -21,7 +21,7 @@ using Tracking:
     get_last_fully_integrated_correlator,
     get_post_corr_filter,
     get_cn0_estimator,
-    get_bit_buffer,
+    get_bit_synchronizer,
     get_num_bits,
     get_integrated_samples,
     get_carrier_doppler,
@@ -203,7 +203,7 @@ end
         @test get_integrated_samples(sat, 1) == 0
         @test is_bit_or_secondary_code_synced(sat, 1) == false
         @test get_cn0_estimator(sat, 1) isa NoiseReferencedCN0Estimator
-        @test get_bit_buffer(sat, 1) isa BitSynchronizer
+        @test get_bit_synchronizer(sat, 1) isa BitSynchronizer
         @test get_post_corr_filter(sat, 1) isa DefaultPostCorrFilter
     end
 
@@ -251,7 +251,7 @@ end
               NoiseReferencedCN0Estimator
         @test get_cn0_estimator(track_state, :modern_gps, 11, GPSL1C_D) isa
               NoiseReferencedCN0Estimator
-        @test get_bit_buffer(track_state, :modern_gps, 11, 3) isa BitSynchronizer
+        @test get_bit_synchronizer(track_state, :modern_gps, 11, 3) isa BitSynchronizer
         @test isempty(get_soft_bits(track_state, :modern_gps, 11, GPSL1CA))
         @test estimate_cn0(track_state, :modern_gps, 11, 1) == -Inf * dBHz
         @test estimate_cn0(track_state, :modern_gps, 11, GPSL1CA) == -Inf * dBHz

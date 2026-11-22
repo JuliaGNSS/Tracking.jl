@@ -900,7 +900,7 @@ for fn in (
     :get_filtered_prompts,
     :get_post_corr_filter,
     :get_cn0_estimator,
-    :get_bit_buffer,
+    :get_bit_synchronizer,
     :get_soft_bits,
     :get_num_bits,
     :is_bit_or_secondary_code_synced,
