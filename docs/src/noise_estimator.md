@@ -1,31 +1,26 @@
 # Noise Estimator
 
-[`NoiseReferencedCN0Estimator`](@extref TrackingLoops.NoiseReferencedCN0Estimator), the default C/N₀
-estimator, divides each integration's prompt power by a **measured noise floor**. This page
-is about where that floor comes from.
+[`NoiseReferencedCN0Estimator`](@extref TrackingLoops.NoiseReferencedCN0Estimator), the
+default C/N₀ estimator, divides each integration's prompt power by a **measured noise
+floor**. This page is about where that floor comes from.
 
-The floor is estimated **once per signal**, shared by every satellite on it, which
+The floor is estimated **once per signal** and shared by every satellite on it, which
 makes the reference's own variance negligible. The estimators live in
 [`TrackState`](@ref)'s `noise_estimators` field, a NamedTuple keyed by signal id
-(`GNSSSignals.get_signal_id`: `:GPSL1CA`, `:GalileoE1B`, …).
-
-On the sample-driven path nothing needs configuring: `TrackState` provisions a
-[`CorrelatorNoiseDensityEstimator`](@extref TrackingLoops.CorrelatorNoiseDensityEstimator) for every
-signal asking for a density, and `track!` fills it. Read on if you feed correlator
-outputs from hardware.
-
-In the TrackingLoops manual:
-
-- [`AbstractNoiseDensityEstimator`](@extref TrackingLoops.AbstractNoiseDensityEstimator)
+(`GNSSSignals.get_signal_id`: `:GPSL1CA`, `:GalileoE1B`, …). On the sample-driven path
+nothing needs configuring: `TrackState` provisions a
+[`CorrelatorNoiseDensityEstimator`](@extref TrackingLoops.CorrelatorNoiseDensityEstimator)
+for every signal asking for a density, and `track!` fills it. The rest of this page is
+for hosts feeding correlator outputs from hardware.
 
 ## Why per signal and not per RF band
 
-What an integration divides by is the **post-correlation** floor, weighted by the
-despreading modulation's own spectrum, so two signals on one front end see different
-floors as soon as the interference is not white (see
-[`AbstractNoiseDensityEstimator`](@extref TrackingLoops.AbstractNoiseDensityEstimator)). Measured
-through `track!` on one shared set of samples, 13 dB J/N tone, densities relative to
-the thermal floor (4 MHz, pure BOC(1,1) E1B):
+An integration divides by the **post-correlation** floor, weighted by the despreading
+modulation's spectrum, so two signals on one front end see different floors as soon as
+the interference is not white (see
+[`AbstractNoiseDensityEstimator`](@extref TrackingLoops.AbstractNoiseDensityEstimator)).
+Through `track!` on one set of samples with a 13 dB J/N tone, densities relative to the
+thermal floor (4 MHz, pure BOC(1,1) E1B):
 
 | tone      | GPS L1 C/A | Galileo E1B | E1B / C/A |
 |-----------|-----------:|------------:|----------:|
@@ -33,46 +28,28 @@ the thermal floor (4 MHz, pure BOC(1,1) E1B):
 | 1.023 MHz | 1.4        | 39          | **28×**   |
 | 0.4 MHz   | 35         | 26          | **0.75×** |
 
-Reporting C/A's figure to E1B in the middle row overstates E1B's C/N₀ by ≈14.5 dB;
-the **reversal** in the last row makes this a spectral effect, not a scale factor.
-The real CBOC E1B shows the same reversal about four times larger. Despreading with
-the consumer's own code measures this weighting rather than modelling it.
+C/A's figure would overstate E1B's C/N₀ by ≈14.5 dB in the middle row, and the
+reversal in the last row makes this a spectral effect, not a scale factor. The real
+CBOC E1B shows the same reversal about four times larger. The *samples* remain a band
+property; only the despread, and so the floor, is per signal.
 
-The *samples* remain a band property (`SamplesByBand` is keyed by band id); only
-the despread, and so the floor, is per signal.
-
-## Why a density and not a power
-
-With Tracking's normalisation, white noise gives `E|P|² = N₀/T`, so `N₀ = σ²/f_s` is
-**independent of the integration time** (see
-[`AbstractNoiseDensityEstimator`](@extref TrackingLoops.AbstractNoiseDensityEstimator)). One
-per-signal figure therefore serves a satellite on 1-code-period pre-sync integrations and one on
-20-code-period post-sync integrations alike, and the reference needs no alignment to correlator
-integrations: it runs on any grid and averages over a much longer window than any prompt
-buffer. `N₀` carries Unitful dimensions of `1/Hz`, so the arithmetic is
-dimension-checked.
+The floor is a **density**: white noise gives `E|P|² = N₀/T`, so `N₀ = σ²/f_s` does not
+depend on the integration time, and one figure serves 1- and 20-code-period
+integrations alike. It carries the unit `1/Hz`.
 
 ## The two fill paths
 
 |                                 | software                                            | hardware                              |
 |:------------------------------- |:--------------------------------------------------- |:------------------------------------- |
 | fills the window via            | `track!` → `downconvert_and_correlate!` → [`update_noise!`](@extref TrackingLoops.update_noise!-Tuple{TrackingLoops.AbstractNoiseDensityEstimator, Any, Any, Any}) | [`append_noise_observation!`](@ref)   |
-| enters `downconvert_and_correlate!`? | yes                                            | **no**                                |
-| needs sample buffers?           | yes                                                  | no                                    |
+| needs sample buffers?           | yes                                                 | no                                    |
 
-The paths never meet (a hardware producer never calls `downconvert_and_correlate!`),
-so you configure
-[`CorrelatorNoiseDensityEstimator`](@extref TrackingLoops.CorrelatorNoiseDensityEstimator) either way
-and only fill it differently.
+Both fill the same
+[`CorrelatorNoiseDensityEstimator`](@extref TrackingLoops.CorrelatorNoiseDensityEstimator).
 
 ```@docs
 TrackingLoops.append_noise_observation!(::TrackState, ::TrackingLoops.NoiseObservation, ::Symbol)
 ```
-
-In the TrackingLoops manual:
-
-- [`update_noise!`](@extref TrackingLoops.update_noise!-Tuple{TrackingLoops.AbstractNoiseDensityEstimator, Any, Any, Any})
-- [`get_noise_density`](@extref TrackingLoops.get_noise_density-Tuple{TrackingLoops.AbstractNoiseDensityEstimator})
 
 ## The software source
 
@@ -80,78 +57,38 @@ In the TrackingLoops manual:
 TrackingLoops.despread_noise!
 ```
 
-In the TrackingLoops manual:
-
-- [`CorrelatorNoiseDensityEstimator`](@extref TrackingLoops.CorrelatorNoiseDensityEstimator)
-- [`CorrelatorNoiseDensityEstimator()`](@extref TrackingLoops.CorrelatorNoiseDensityEstimator-Tuple{})
-- [`update_noise!(::CorrelatorNoiseDensityEstimator, …)`](@extref TrackingLoops.update_noise!-Tuple{CorrelatorNoiseDensityEstimator, Any, AbstractUnitRange{<:Integer}, TrackingLoops.NoiseUpdateContext})
-
-Its design is documented on
-[`CorrelatorNoiseDensityEstimator`](@extref TrackingLoops.CorrelatorNoiseDensityEstimator): it is
-**open-loop** and reads no satellite state, so it works with zero satellites tracked;
-its code phase and carrier are **randomised** per sub-integration, so a chance
-alignment with an untracked signal is a one-observation outlier rather than a standing
-bias, which also lets the PRN rotate over the whole family; its sub-integration length
-is the primary code period, **derived, not configured**, with the variance bought back
-by `window_duration`.
-
-It is **model-free**: the reference runs the prompt's own quantise → downconvert →
-despread → accumulate path on the same kernel, so `N̂₀` already contains that chain's
-losses with no per-backend correction. The same 45 dB-Hz sky reports ≈45 dB-Hz on the
-float and Int16 backends, ≈44 on two-bit and ≈43 on one-bit: each backend's own
-quantisation loss.
+The reference is open-loop, with a randomised code phase, carrier and PRN per
+sub-integration (see
+[`CorrelatorNoiseDensityEstimator`](@extref TrackingLoops.CorrelatorNoiseDensityEstimator)).
+It runs the prompt's own quantise → downconvert → despread → accumulate path on the
+same kernel, so `N̂₀` already contains that chain's losses: the same 45 dB-Hz sky reads
+≈45 dB-Hz on the float and Int16 backends, ≈44 on two-bit and ≈43 on one-bit, each
+backend's own quantisation loss.
 
 ## Hardware producers (FPGA / ASIC)
 
-**Reuse the downconvert-and-correlate datapath: allocate a channel.** On the
-architectures FPGA correlators use, that is also the cheaper option:
+Allocate a correlator channel as the noise channel rather than building a separate
+power meter: it is one more slot on a time-multiplexed engine and cheaper than a
+tracking channel on a parallel array, being open-loop. Reuse also keeps the
+measurement model-free, with the same quantisation, input scaling and code generator
+as the prompt; a path tapping at another point (before a decimation filter, at
+another bit width) breaks that silently. The producer must:
 
-- On a **time-multiplexed engine** (one datapath across N channels, per-channel
-  state in BRAM) a noise channel is one more slot in the schedule; a dedicated path
-  is a second datapath.
-- On a **fully parallel array** it costs less than a tracking channel, being
-  open-loop: fixed NCO increments, no discriminator, no loop-filter interface, no
-  dump-on-command synchronisation. A dedicated path would re-implement the carrier
-  NCO, code generator and complex multiplier.
-- **No divider and no float on chip.** Report the raw integer accumulation with its
-  weight and sample count; all division, `A_c²` and `f_s` scaling and averaging
-  happen in Tracking.
+1. **Report raw integer accumulations** with their weight and sample count, through
+   one of the builders below; all division and scaling happen on the host.
+2. **Randomise the code phase per dump and rotate the PRN** (a free-running code
+   generator does this); dithering the carrier a few kHz strengthens it.
 
-Reuse is also what makes the measurement model-free: identical quantisation (the
-1-bit/2-bit loss cancels in the ratio), identical input scaling (an AGC step moves
-numerator and denominator together), identical code generator (`A_c` matches). A
-path tapping at a different point, before a decimation filter or at a different bit
-width, breaks all three silently.
-
-### What the producer must match
-
-1. **Report raw accumulations** through one of the builders below, on the
-   correlator outputs' return path: `append_noise_observation!` sits beside
-   [`append_correlator_bank_output!`](@ref) on the host.
-2. **Randomise the code phase per dump, and rotate the PRN** (a free-running code
-   generator does this; phase 0 would need a reset). Dithering the carrier a few kHz
-   around the nominal IF strengthens it further. The noise channel then needs no
-   input from the tracking channels.
-
-A producer that dumps on the code epoch matches the software default exactly. One
-that differs still lands in the same `M`-weighted, time-bounded window, on the same
-scale; only the precision differs, and `K_n ≈ 1000` squared magnitudes per second per correlator is
-indistinguishable from anything finer below 40 dB-Hz.
-
-### The observation and its builders
-
-In the TrackingLoops manual:
+The weight `M` is the number of independent squared magnitudes, not the sample count:
+`M` of them give a relative variance of `1/M`, which makes observations from different
+producers combinable. A producer dumping on the code epoch matches the software
+default; `≈1000` squared magnitudes per second per correlator is as good as finer below
+40 dB-Hz.
 
 - [`NoiseObservation`](@extref TrackingLoops.NoiseObservation)
-- [`noise_observation`](@extref TrackingLoops.calc_noise_observation-Tuple{Complex, Any, Any})
+- [`calc_noise_observation`](@extref TrackingLoops.calc_noise_observation-Tuple{Complex, Any, Any})
 - [`calc_noise_observation_from_correlator_powers`](@extref TrackingLoops.calc_noise_observation_from_correlator_powers-NTuple{4, Any})
 - [`calc_noise_observation_from_samples`](@extref TrackingLoops.calc_noise_observation_from_samples-Tuple{Any, Any, Any})
-
-All three reduce to the same `N₀` on the same white input. The weight is `M`, **the
-number of independent squared magnitudes, not the sample count**: `M` of them give a
-relative variance of `1/M`, so one 1 ms despread and 64 16-chip despreads cover the
-same samples at very different precision. Weighting by `M` makes observations from
-different producers combinable.
 
 A worked ingest, per loop update:
 
@@ -181,24 +118,12 @@ step_tracking_loops!(track_state, (L1 = sampling_frequency,))
 If a signal's noise estimator is never filled, the loop update **warns once per signal**
 and every C/N₀ on it reads `-Inf dB-Hz`.
 
-### How `append_noise_observation!` differs from `append_correlator_bank_output!`
-
-|            | [`append_correlator_bank_output!`](@ref)                                    | [`append_noise_observation!`](@ref)                    |
-|:---------- |:---------------------------------------------------------------------- |:------------------------------------------------------ |
-| scope      | one **signal** of one satellite                                        | one **signal**, across every satellite tracking it     |
-| payload    | the whole correlator bank: every correlator output kept **separate**, complex, per antenna | the correlator outputs **pooled** — into one power sum, or into one spatial covariance for an array — plus `M`, the span and the PRN |
-| drives     | discriminators, both loop filters, bit sync, the NCO update, the C/N₀ prompt | the noise floor only                              |
-| timing     | `end_sample_index` is load-bearing — vector tracking needs a common grid | none: `N₀` is slowly varying, so only "recent" matters |
-| lifetime   | **drained** by the loop update each NCO update span, buffer reused     | **sliding window** bounded in time, never drained      |
-| count      | one per completed coherent integration per signal                      | any granularity; `M` carries the weight                |
-
-The prompt path keeps the correlator outputs apart because their *differences* are the
-discriminants; the reference pools them, as at ≥1 chip spacing they are independent
-samples of the same noise.
-
-It keeps the **antenna** dimension: with `num_ants > 1` the payload is the `M×M`
-spatial covariance `R̂ = Σ_k b_k·b_kᴴ`, since a beamformer's floor is `wᴴR̂w` under its
-own weights. Every builder takes the per-antenna form of its input.
+Unlike [`append_correlator_bank_output!`](@ref), which carries one satellite's whole
+correlator bank with a load-bearing `end_sample_index` and is drained every NCO update
+span, [`append_noise_observation!`](@ref) serves every satellite on the signal, pools
+the correlator outputs into one power sum (one spatial covariance `R̂ = Σ_k b_k·b_kᴴ`
+for an array, as a beamformer's floor is `wᴴR̂w`), needs no timing beyond "recent" and
+lands in a sliding window bounded in time.
 
 ## Writing your own source
 
@@ -223,14 +148,8 @@ Pass it in through `TrackState`'s `noise_estimators` keyword:
 TrackState(; signal = GPSL1CA(), noise_estimators = (GPSL1CA = MyPowerMonitor(...),))
 ```
 
-Two contracts: mutate the window **in place** and return the struct (`TrackState` is
-never rebuilt for a noise update), and have
-[`TrackingLoops.noise_density_type`](@extref TrackingLoops.noise_density_type-Tuple{TrackingLoops.AbstractNoiseDensityEstimator}) name the
-concrete type `get_noise_density` returns (default `typeof(1.0/1.0Hz)`), so the loop
-update stays monomorphic.
-
-In the TrackingLoops manual:
-
-- [`noise_density_type`](@extref TrackingLoops.noise_density_type-Tuple{TrackingLoops.AbstractNoiseDensityEstimator})
-- [`NoiseUpdateContext`](@extref TrackingLoops.NoiseUpdateContext)
-- [`requires_noise_density`](@extref TrackingLoops.requires_noise_density-Tuple{Type{<:TrackingLoops.AbstractCN0Estimator}})
+Mutate the window **in place** and return the struct (`TrackState` is never rebuilt for
+a noise update), and have
+[`TrackingLoops.noise_density_type`](@extref TrackingLoops.noise_density_type-Tuple{TrackingLoops.AbstractNoiseDensityEstimator})
+name the concrete type `get_noise_density` returns (default `typeof(1.0/1.0Hz)`), so
+the loop update stays monomorphic.

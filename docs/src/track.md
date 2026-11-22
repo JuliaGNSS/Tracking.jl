@@ -15,7 +15,7 @@ track!
 
 - `downconvert_and_correlator`: the backend, by default `CPUThreadedDownconvertAndCorrelator()`. **Hoist it outside real-time loops** (see below).
 - `intermediate_frequency`: the intermediate frequency, by default `0.0Hz` (complex baseband). Bare-buffer form only; otherwise it is a keyword of each [`BandSamples`](@ref).
-- `nco_update_interval`: the NCO-update interval, a time (e.g. `1u"ms"`). `nothing` means the smallest primary-code period of the tracked signals (1 ms for GPS L1 C/A); see [Chunked NCO updates](#Chunked-NCO-updates). Longer intervals cost fewer loop updates at a lower update rate.
+- `nco_update_interval`: the NCO-update interval, a time (e.g. `1u"ms"`). `nothing` means the smallest primary-code period of the tracked signals (1 ms for GPS L1 C/A); see [NCO updates](#NCO-updates). Longer intervals mean fewer loop updates at a lower update rate.
 
 The **coherent-integration length** is set per signal with [`set_preferred_num_code_periods_to_integrate!`](@ref). It starts at [`default_num_code_periods_to_integrate`](@extref TrackingLoops.default_num_code_periods_to_integrate-Tuple{AbstractGNSSSignal}) (`1`, except a 31-period, 2 ms code cycle for Galileo E5a-QP, whose 64.5 µs code period is too short to run a loop on), is capped by [`max_num_code_periods_to_integrate`](@extref TrackingLoops.max_num_code_periods_to_integrate-Tuple{AbstractGNSSSignal}) (one bit or secondary-code period), and takes effect only after bit or secondary-code sync.
 
@@ -33,30 +33,13 @@ In the TrackingLoops manual:
 `track` / `track!` walk each band's samples in **NCO update spans** of `nco_update_interval`, each with one correlate pass and one loop update:
 
 1. **Correlate** each satellite up to its last completed integration boundary in the span, collecting every completed integration into the signal's `correlator_bank_outputs` as a [`CorrelatorBankOutput`](@extref TrackingLoops.CorrelatorBankOutput) tagged with its end sample. A 1 ms code in a 1 ms span yields 0, 1 or 2 outputs.
-2. **Loop update**: [`step_tracking_loops!`](@ref Tracking.step_tracking_loops!) steps the tracking loop with the outputs' predetection integrations in order and writes every satellite's NCO **once per span**, at a common epoch.
+2. **Loop update**: [`step_tracking_loops!`](@ref Tracking.step_tracking_loops!) steps the tracking loop with the outputs' integrations in order and writes every satellite's NCO **once per span**, at a common epoch.
 
-The next span's pass starts at that boundary, so every integration runs at one NCO Doppler and each correction takes effect at the boundary where its integration completed, as with a per-code-period update. A final pass drains each satellite's trailing partial into its correlator bank, carried into the next `track!` call. [`get_correlator_bank_outputs`](@ref) reads a span's outputs before the loop update clears them.
+The next span's pass starts at that boundary, so every integration runs at one NCO Doppler and each correction takes effect where its integration completed, as with a per-code-period update. A final pass drains each satellite's trailing partial into its correlator bank, carried into the next `track!` call. [`get_correlator_bank_outputs`](@ref) reads a span's outputs before the loop update clears them.
 
 ## Real-time loops
 
-A typical receiver loop builds the `TrackState` once, hoists the backend outside the loop, and calls `track!` per chunk:
-
-```julia
-track_state = TrackState(; signal = GPSL1CA())
-track_state = add_satellite!(track_state; prn = 1, code_phase = 0.0, carrier_doppler = 1000.0Hz)
-# ... more sats ...
-
-dc = CPUThreadedDownconvertAndCorrelator()  # hoist outside the loop
-
-while got_signal_chunk(rx)
-    chunk = read_chunk!(rx)
-    track!(chunk, track_state, sampling_frequency;
-           downconvert_and_correlator = dc)
-    # ... read per-sat state e.g. via get_tracked_sat(track_state, group_key, prn) ...
-end
-```
-
-The backends hold per-thread scratch buffers that grow on first use; the keyword's default rebuilds them on every call, for `track` and `track!` alike. `track!` writes into the existing satellite slots, and from its second call on the buffers' capacity is settled.
+Build the `TrackState` once, construct the backend once outside the loop and call [`track!`](@ref) per chunk, as in its docstring above. The backends hold per-thread scratch buffers that grow on first use, and the keyword's default rebuilds them on every call; from the second `track!` call on, their capacity is settled.
 
 ## External correlator producers
 

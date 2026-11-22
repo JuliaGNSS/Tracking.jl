@@ -1,12 +1,12 @@
 """
 $(SIGNATURES)
 
-Construct a fresh `TrackState` from a declaration of which signals each
-group tracks. A *group* is a set of satellites with the same signal tuple, and
-so the same concrete `TrackedSat` type (type stability of the hot loop). The
-first signal of each tuple is the driver signal: its integrations close the tracking
-loop, which updates the satellite-shared carrier and code Doppler. The group key (`:modern_gps`, …) is
-what `add_satellite!` refers to.
+Construct a fresh `TrackState` from a declaration of which signals each group
+tracks. A *group* is a set of satellites with the same signal tuple, hence the
+same concrete `TrackedSat` type (type stability of the hot loop). The first signal
+of each tuple is the driver signal: its integrations close the tracking loop,
+which updates the satellite-shared carrier and code Doppler. `add_satellite!`
+refers to a group by its key (`:modern_gps`, …).
 
 ```julia
 track_state = TrackState(;
@@ -27,10 +27,10 @@ track_state = TrackState(; signal = GPSL1CA())
 This is `TrackState(; signals = (default = (GPSL1CA(),),))`; `add_satellite!`
 may then omit `group_key=`.
 
-The per-group `TrackedSat` type (correlator, post-correlation filter and
-loop-state types) is frozen at construction, so `add_satellite!`
-cannot change it. For non-default correlator bank or post-correlation filter *types*, build the
-`TrackedSat`s yourself and construct from them (e.g. `TrackState(signal, sats)`).
+The per-group `TrackedSat` type (correlator bank, post-correlation filter and loop-state
+types) is frozen at construction. For non-default correlator bank or post-correlation filter *types*,
+build the `TrackedSat`s yourself and construct from them (e.g.
+`TrackState(signal, sats)`).
 
 `noise_estimators` declares the per-signal noise sources
 ([`AbstractNoiseDensityEstimator`](@extref TrackingLoops.AbstractNoiseDensityEstimator)s keyed by
@@ -108,10 +108,9 @@ end
     )
 end
 
-# An explicitly passed estimator must despread as many antennas as its signal's
-# group, or the floor and the prompt describe different arrays. Checked here,
-# where both are known, rather than as a shape error deep in the loop update;
-# `NumAnts(estimator)` reads the count of any `AbstractNoiseDensityEstimator`.
+# An explicit estimator must despread as many antennas as its signal's group, or
+# the floor and the prompt describe different arrays. Checked here, where both are
+# known, rather than as a shape error deep in the loop update.
 @inline function _validate_noise_estimator_num_ants(
     noise_estimators::NamedTuple,
     groups::SignalGroups,
@@ -146,9 +145,9 @@ end
 @inline _num_ants_count(::NumAnts{M}) where {M} = M
 
 # `(signal id, num_ants)` for the signals that need a noise density, deduplicated
-# (one despread per signal per NCO update span) in first-encounter order. The pairing is
-# unambiguous: a signal fixes its band, and `_validate_same_band_num_ants` makes
-# groups on one band agree on `num_ants`. Folds at compile time.
+# (one despread per signal per NCO update span) in first-encounter order. A signal fixes its
+# band and `_validate_same_band_num_ants` makes groups on one band agree on
+# `num_ants`, so the pairing is unambiguous. Folds at compile time.
 @inline _noise_reference_signal_entries(::Tuple{}, acc::Tuple) = acc
 @inline _noise_reference_signal_entries(t::Tuple, acc::Tuple) =
     _noise_reference_signal_entries(
@@ -570,8 +569,7 @@ $(SIGNATURES)
 In-place add (or replace) with a pre-built [`TrackedSat`](@ref). Its type must
 match the group's slot type fixed at [`TrackState`](@ref) construction, so
 non-default correlator bank or post-corr-filter types need a state built from such
-sats. Keep using the
-return value, as for the keyword form.
+sats. Keep using the return value, as for the keyword form.
 """
 function add_satellite!(
     track_state::TrackState{G,TL,NE},
@@ -654,9 +652,8 @@ end
 """
 $(SIGNATURES)
 
-Immutable variant of [`add_satellite!`](@ref). Returns a new
-[`TrackState`](@ref) with the satellite added; the input is left
-unchanged.
+Immutable variant of [`add_satellite!`](@ref): returns a new
+[`TrackState`](@ref) with the satellite added, the input unchanged.
 """
 function add_satellite(
     track_state::TrackState;
@@ -713,8 +710,8 @@ function remove_satellite!(
     dict = _dict_for_group(track_state, _resolve_group(track_state, group_key))
     haskey(dict, prn) || throw(KeyError(prn))
     delete!(dict, prn)
-    # `delete!` may leave a `#undef` hole (see `_satellites_without`); rebuild in
-    # place (the `SignalGroup.satellites` field is immutable) only when it did.
+    # `delete!` may leave a `#undef` hole (see `_satellites_without`); only then
+    # rebuild in place (the `SignalGroup.satellites` field is immutable).
     if length(dict) != length(dict.values)
         keys_kept, sats_kept = _satellites_without(dict, prn)
         empty!(dict)
@@ -728,9 +725,9 @@ end
 """
 $(SIGNATURES)
 
-Immutable variant of [`remove_satellite!`](@ref). Returns a new
-[`TrackState`](@ref) with the satellite removed; the input is left
-unchanged. Errors if no satellite with the given `prn` exists.
+Immutable variant of [`remove_satellite!`](@ref): returns a new
+[`TrackState`](@ref) with the satellite removed, the input unchanged. Errors if no
+satellite with the given `prn` exists.
 """
 function remove_satellite(
     track_state::TrackState{G,TL,NE};
@@ -755,9 +752,8 @@ function remove_satellite(
 end
 
 # `(keys, values)` of every satellite except `prn`, in concretely typed vectors.
-# Removal must be hole-free (#182): `Dictionaries.delete!` can leave a `#undef`
-# slot in `values` that the hot paths, which iterate `values`, hit as an
-# `UndefRefError`.
+# Removal must be hole-free (#182): `Dictionaries.delete!` can leave a `#undef` slot
+# in `values`, which the hot paths iterate and hit as an `UndefRefError`.
 function _satellites_without(dict::Dictionary{I,T}, prn) where {I,T}
     keys_kept = Vector{I}(undef, 0)
     sats_kept = Vector{T}(undef, 0)
@@ -774,8 +770,8 @@ end
 @inline _dict_for_group(track_state::TrackState, group_key::Symbol) =
     track_state.groups[group_key].satellites
 
-# Resolve `group_key=`: `nothing` means the only group of a single-group state
-# (folds to a constant), and errors with the candidates otherwise.
+# Resolve `group_key=`: `nothing` is the only group of a single-group state (folds to
+# a constant), else an error naming the candidates.
 @inline _resolve_group(::TrackState, group_key::Symbol) = group_key
 @inline function _resolve_group(track_state::TrackState, ::Nothing)
     g = keys(track_state.groups)
@@ -835,18 +831,18 @@ get_next_sample_index(track_state::TrackState, id...) =
 """
 $(SIGNATURES)
 
-The carrier phase (cycles, not wrapped) the tracking loop adds to the
-replica's [`get_carrier_phase`](@ref) for its estimate of the incoming carrier
-phase, the carrier-phase measurement (RINEX `L`); `0.0` for the scalar loops and
-for a satellite out of the vector loop.
+The carrier phase (cycles, not wrapped) the tracking loop adds to the replica's
+[`get_carrier_phase`](@ref) for its estimate of the incoming carrier phase, the
+carrier-phase measurement (RINEX `L`); `0.0` for the scalar loops and for a
+satellite out of the vector loop.
 
-In TrackingLoops' `VectorTrackingLoop` loop the navigation filter sets the carrier
-NCO, and the residual PLL follows the carrier without steering it, so the
-replica drifts off the carrier by whole cycles; this is the residual PLL's
-prediction at the end of the latest [`track`](@ref)/[`track!`](@ref) call, every
-cycle counted (see `TrackingLoops.calc_carrier_phase_correction`, which also names
-where it steps), at the band's sampling frequency the latest integration stored.
-The group can be omitted on a single-group `TrackState`.
+In TrackingLoops' `VectorTrackingLoop` the navigation filter sets the carrier NCO
+and the residual PLL follows the carrier without steering it, so the replica drifts
+off the carrier by whole cycles. This is the residual PLL's prediction at the end of
+the latest [`track`](@ref)/[`track!`](@ref) call, every cycle counted (see
+`TrackingLoops.calc_carrier_phase_correction`, which also names where it steps), at the
+band's sampling frequency the latest integration stored. The group can be omitted on a
+single-group `TrackState`.
 
 The whole cycles only count against a replica phase that counts them too:
 `get_carrier_phase` wraps, so a RINEX host builds `L` from its own accumulated
@@ -863,8 +859,8 @@ function calc_carrier_phase_correction(
 )
     group = _index_group(track_state.groups, group_key)
     sat = get_tracked_sat(group.satellites, prn)
-    # `track!` leaves the replica at the end of the samples, the band's sample
-    # offset, having run on the satellite's Doppler since its latest integration.
+    # `track!` leaves the replica at the band's sample offset (the end of the
+    # samples), having run on the satellite's Doppler since its latest integration.
     band_grid_index = get(track_state.sample_index_offsets, get_band_id(group.band), 0)
     # Every integration stores its band's sampling frequency in the post-correlation
     # state; before the first it is still NaN, but TrackingLoops returns a correction of
@@ -932,8 +928,9 @@ signal's buffer and return `track_state`. Addressed like the per-signal accessor
   - `append_correlator_bank_output!(track_state, output, group_key, prn)` — multi-group, one signal.
   - `append_correlator_bank_output!(track_state, output, group_key, prn, sig)` — per-signal.
 
-The signal-level method (`append_correlator_bank_output!(::TrackedSignal, output)`)
-carries the contract; see it and [External correlator producers](@ref).
+The contract is on the signal-level method
+(`append_correlator_bank_output!(::TrackedSignal, output)`); see it and
+[External correlator producers](@ref).
 """
 append_correlator_bank_output!(
     track_state::TrackState,
@@ -971,11 +968,10 @@ Append an externally built [`NoiseObservation`](@extref TrackingLoops.NoiseObser
 
 The hardware/FPGA fill path: [`append_correlator_bank_output!`](@ref) and
 `append_noise_observation!` per signal, then
-[`step_tracking_loops!`](@ref) to step the loops (deliberately separate
-mechanisms; see the estimator-level `append_noise_observation!` for how they
-differ). Per signal, not per band, because the post-correlation floor depends on
-the despreading modulation: a noise channel is a tracking channel with a wrong
-PRN (see [`AbstractNoiseDensityEstimator`](@extref TrackingLoops.AbstractNoiseDensityEstimator)).
+[`step_tracking_loops!`](@ref) to step the loops (separate mechanisms; see the
+estimator-level `append_noise_observation!` for how they differ). Per signal, not
+per band, because the post-correlation floor depends on the despreading modulation:
+a noise channel is a tracking channel with a wrong PRN (see [`AbstractNoiseDensityEstimator`](@extref TrackingLoops.AbstractNoiseDensityEstimator)).
 
 The signal must have a noise estimator: provisioned when its C/N₀ estimator reads
 a density (see
@@ -1075,8 +1071,8 @@ Set the preferred coherent-integration length, in primary code periods, of one
 signal on one satellite (the addressed [`TrackedSignal`](@ref)'s
 `preferred_num_code_periods_to_integrate`). The actual length is capped by the
 bit/secondary-code period and held at 1 until sync (see
-`calc_num_code_periods_to_integrate`); the scalar tracking loops cap their loop
-bandwidths against the integration time, so the loop stays stable.
+`calc_num_code_periods_to_integrate`); the scalar tracking loops cap their
+bandwidths against the integration time to stay stable.
 
 For data-bearing signals the length must divide the code periods per bit (20 for
 GPS L1 C/A, 10 for GPS L5I), or an `ArgumentError` is thrown (#128). Pilots accept

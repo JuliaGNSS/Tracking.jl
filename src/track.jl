@@ -2,8 +2,7 @@
 $(SIGNATURES)
 
 Track the samples of one or more bands: downconvert, correlate and step the
-tracking loops of every satellite, and return the updated `TrackState` with new
-phase/Doppler estimates and decoded bits.
+tracking loops of every satellite. Returns the updated `TrackState`.
 
 The first argument is one of:
 
@@ -37,30 +36,11 @@ first):
     advanced by `track` as by [`track!`](@ref), and two branches would mix their
     integrations in one navigation filter.
 
-For real-time loops, **construct the backend once outside the loop**:
+For real-time loops, construct the backend once outside the loop and pass it as
+`downconvert_and_correlator` (see [`track!`](@ref)).
 
-```julia
-dc = CPUThreadedDownconvertAndCorrelator()
-while got_chunk(rx)
-    chunk = read_chunk!(rx)
-    track_state =
-        track(chunk, track_state, sampling_frequency; downconvert_and_correlator = dc)
-end
-```
-
-The default builds fresh per-thread scratch buffers on every call. See
-[`track!`](@ref) for the in-place variant.
-
-The coherent-integration length is set **per signal** with
-[`set_preferred_num_code_periods_to_integrate!`](@ref), not passed to `track`:
-
-```julia
-set_preferred_num_code_periods_to_integrate!(track_state, :gps_l5, 1, GPSL5I, 10)  # PRN 1 L5I: 10 ms
-```
-
-The scalar tracking loops cap the carrier loop bandwidth at `0.09 / T_int` and
-the code loop's at `0.018 / T_int`, so longer integration stays stable (see
-[`ScalarTrackingLoop`](@extref TrackingLoops.ScalarTrackingLoop)).
+The coherent-integration length is set per signal with
+[`set_preferred_num_code_periods_to_integrate!`](@ref), not passed to `track`.
 """
 function track(
     samples_by_band::SamplesByBand,
@@ -94,7 +74,7 @@ function track(
     track(_as_samples_by_band(band_samples, track_state), track_state; kwargs...)
 end
 
-# Single-BandSamples convenience: still a single-band path.
+# Single-band convenience.
 function track(band_samples::BandSamples, track_state::TrackState; kwargs...)
     track(_as_samples_by_band(band_samples, track_state), track_state; kwargs...)
 end
@@ -124,8 +104,8 @@ while got_chunk(rx)
 end
 ```
 
-Its per-thread scratch buffers grow on first use; the default would regrow them
-every call.
+The per-thread scratch buffers grow on first use; the default regrows them every
+call.
 """
 function track!(
     samples_by_band::SamplesByBand,
@@ -138,12 +118,10 @@ function track!(
     nco_update_interval = _resolve_nco_update_interval(nco_update_interval, track_state)
     _validate_nco_update_interval(nco_update_interval, samples_by_band)
     # Per NCO update span, one correlate pass at fixed NCO Doppler, then one estimate that
-    # updates every satellite at a common epoch. The pass stops at each
-    # satellite's last completed code-period boundary (`stop_before_partial`), so
-    # the next pass covers boundary to boundary at the updated Doppler: every
-    # integration sees one Doppler, and each correction takes effect at its
-    # completing boundary.
-    #
+    # updates every satellite at a common epoch. The pass stops at each satellite's
+    # last completed integration boundary (`stop_before_partial`), so the next pass
+    # covers boundary to boundary at the updated Doppler: every integration sees
+    # one Doppler, and each correction takes effect at its completing boundary.
     # The buffers are fixed for the call, so sample-derived caches (the bit
     # backends' band pack) are built on the first pass only.
     nco_update_index = 0
@@ -217,7 +195,7 @@ function track!(
     track!(_as_samples_by_band(band_samples, track_state), track_state; kwargs...)
 end
 
-# Single-BandSamples convenience: still a single-band path.
+# Single-band convenience.
 function track!(band_samples::BandSamples, track_state::TrackState; kwargs...)
     track!(_as_samples_by_band(band_samples, track_state), track_state; kwargs...)
 end

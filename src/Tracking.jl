@@ -12,10 +12,10 @@ using Polyester
 
 # The device-independent loop core (post-correlation processing, discriminators,
 # bit synchronization, C/N₀ and noise estimation, loop filters, the tracking
-# loops' `step_loop!`) lives in TrackingLoops.jl, so a hardware correlator's
-# loop runs the same code. Users load it next to Tracking; it is not re-exported,
-# except the result readers below the export list. Imported by name so a binding
-# TrackingLoops renames or drops fails at precompile.
+# loops' `step_loop!`) lives in TrackingLoops.jl, so a hardware correlator's loop
+# runs the same code. Users load it next to Tracking; only the result readers below
+# the export list are re-exported. Imported by name so a binding TrackingLoops
+# renames or drops fails at precompile.
 import TrackingLoops
 import TrackingLoops:
     AbstractCN0Estimator,
@@ -75,8 +75,7 @@ import TrackingLoops:
 
 # `dBHz` serves the manual: its custom C/N₀ estimator doctest reads `Tracking.dBHz`.
 using Unitful: upreferred, uconvert, ustrip, dimension, NoUnits, Hz, dBHz, s
-# Extended with the methods that hand tracked satellites over for a PVT solve; see
-# `position_velocity_time.jl`.
+# Extended in `position_velocity_time.jl` to hand tracked satellites over for a PVT solve.
 import PositionVelocityTime
 using GNSSDecoder: GNSSDecoderState
 import Base.zero, Base.length, Base.resize!
@@ -127,8 +126,7 @@ export get_prn,
     get_band_ids,
     get_signal_observations
 
-# TrackingLoops functions that read this package's results, re-exported so
-# reading them needs no second package.
+# TrackingLoops functions that read this package's results, re-exported.
 export estimate_cn0,
     get_last_num_code_periods,
     get_last_coherent_integration_time,
@@ -199,22 +197,22 @@ noise density (see
 get one, so the others pay nothing. They average **in place**.
 
 `noise_descriptor` is per-call **scratch**: a heap cell where the correlate step
-parks the NCO update span's noise descriptors, so a threaded backend reaches them through
-one pointer (see `_park_noise_items!`). Shared by every derived `TrackState`.
+parks the NCO update span's noise descriptors, so a threaded backend reaches them through one
+pointer (see `_park_noise_items!`). Every derived `TrackState` shares it.
 
 `sample_index_offsets` counts, per band (keyed by `get_band_id`), the samples earlier
-[`track!`](@ref) calls consumed: the origin of the current samples on a
-sample grid that runs on across calls. [`step_tracking_loops!`](@ref) adds it to
-an integration's sample index, so a tracking loop with shared state of its own (TrackingLoops'
+[`track!`](@ref) calls consumed: the origin of the current samples on a sample grid
+that runs on across calls. [`step_tracking_loops!`](@ref) adds it to an integration's
+sample index, so a tracking loop with shared state of its own (TrackingLoops'
 `VectorTrackingLoop`) sees every satellite on one time grid. The in-place mutators
 share it; [`track`](@ref), [`merge_sats`](@ref), [`add_satellite`](@ref) and
 [`remove_satellite`](@ref) give their result a copy.
 
-A fresh `TrackState` starts every band at `0`. To carry such a tracking loop over
-into a rebuilt `TrackState` (e.g. to add a band), pass the old state's offsets
-as the `sample_index_offsets` keyword, or the tracking loop receives integrations
-from its past. A band the old state did not track starts at
-`elapsed_time * sampling_frequency` samples of the new band.
+A fresh `TrackState` starts every band at `0`. To carry such a tracking loop over into
+a rebuilt `TrackState` (e.g. to add a band), pass the old state's offsets as the
+`sample_index_offsets` keyword, or the tracking loop receives integrations from its
+past. A band the old state did not track starts at `elapsed_time * sampling_frequency`
+samples of the new band.
 """
 struct TrackState{G<:SignalGroups,TL<:AbstractTrackingLoop,NE<:NoiseDensityEstimators}
     groups::G
@@ -224,8 +222,8 @@ struct TrackState{G<:SignalGroups,TL<:AbstractTrackingLoop,NE<:NoiseDensityEstim
     sample_index_offsets::Dict{Symbol,Int}
 end
 
-# A fresh state gets an empty descriptor cell; derived states pass theirs on,
-# which keeps the steady state allocation-free.
+# A fresh state gets an empty descriptor cell; derived states pass theirs on
+# (allocation-free steady state).
 TrackState(
     groups::SignalGroups,
     tracking_loop::AbstractTrackingLoop,
@@ -239,7 +237,7 @@ TrackState(
     _initial_sample_index_offsets(groups, sample_index_offsets),
 )
 
-# Every band at `0`, overridden by the caller's `sample_index_offsets`, in a fresh `Dict`.
+# A fresh `Dict` with every band at `0`, overridden by the caller's offsets.
 function _initial_sample_index_offsets(groups::SignalGroups, sample_index_offsets)
     offsets = Dict{Symbol,Int}(get_band_id(group.band) => 0 for group in groups)
     isnothing(sample_index_offsets) && return offsets

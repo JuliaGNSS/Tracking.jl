@@ -7,7 +7,7 @@ Tracking.jl tracks GNSS satellites as part of a receiver in two blocks:
 
 Both can be replaced through multiple dispatch.
 
-Each predetection integration spans whole code periods: `N` primary code periods (e.g. `N`·1023
+Each coherent integration spans whole code periods: `N` primary code periods (e.g. `N`·1023
 chips for GPS L1 C/A), with `N = 1` until the bit edge or secondary code is
 found. Antenna-array samples are correlated with one replica, preserving their
 phase relationships. One satellite can be tracked on several signals at once
@@ -32,11 +32,11 @@ using Tracking, TrackingLoops, GNSSSignals
 
 ## Supported signals
 
-Tracking.jl tracks **every** concrete signal type GNSSSignals.jl defines: GPS
+Tracking.jl tracks every concrete signal GNSSSignals.jl defines: GPS
 L1 C/A, L1C, L2C and L5, Galileo E1, E5a (including the E5a-QP acquisition aid),
 E5b and E6, and BeiDou B1I, B3I, B1C, B2a and B2b. The
-[signal support matrix](signals.md) lists each one's integration length, sync
-feature, navigation data, PRNs and known limitations.
+[signal support matrix](signals.md) lists integration length, sync feature,
+navigation data, PRNs and limitations per signal.
 
 ```@contents
 Pages = [
@@ -96,7 +96,7 @@ julia> get_code_phase(track_state, 1)
 
 `estimate_cn0(track_state, prn)` returns the C/N₀ in dB-Hz: `Inf dB-Hz` for a noise-free test signal, typically 30–50 dB-Hz for real ones.
 
-Multiple satellites, constellations, signals and bands, antenna arrays, acquisition handoff and the accessors are covered in [Tracking State](tracking_state.md); real-time loops in [Track](track.md).
+[Tracking State](tracking_state.md) covers multiple satellites, constellations, signals and bands, antenna arrays, acquisition handoff and the accessors; [Track](track.md) covers real-time loops.
 
 !!! tip "Real-time loops: hoist the backend"
     Construct [`CPUThreadedDownconvertAndCorrelator`](@ref) (or
@@ -107,6 +107,4 @@ Multiple satellites, constellations, signals and bands, antenna arrays, acquisit
 
 - Why are the correlator outputs zero?
 
-`get_last_correlator_bank` returns the last *completed* integration,
-one that reached the end of its code periods. Before the first one completes it
-is zero.
+`get_last_correlator_bank` returns the last *completed* integration (one that reached the end of its code periods); it is zero until the first one completes.

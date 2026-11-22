@@ -1,6 +1,6 @@
-# The software fill path of the noise reference: TrackingLoops' `despread_noise!`
-# hook, running the despreads TrackingLoops plans through this package's kernels.
-# The sampling policy, the window and the observations are TrackingLoops'.
+# Software fill path of the noise reference: TrackingLoops' `despread_noise!` hook,
+# running the despreads TrackingLoops plans through this package's kernels. The
+# sampling policy, the window and the observations are TrackingLoops'.
 
 """
 $(SIGNATURES)

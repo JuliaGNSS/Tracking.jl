@@ -164,8 +164,8 @@ end
 @testset "Through track, the delay-compensated and the vector loops are the FLL-assisted scalar loop" begin
     # `track` hands over the chunk's own NCO command and no application sample, so
     # the delay-compensated loop must equal the FLL-assisted scalar one at the same
-    # bandwidths (it pulls in at 18 Hz by default), also after a reset. Outside
-    # a vector loop the vector tracking loop is the scalar loop it wraps, bit for bit.
+    # bandwidths (it pulls in at 18 Hz by default), also after a reset; outside a
+    # vector loop the vector loop is the scalar loop it wraps, bit for bit.
     gpsl1, fs, carrier_doppler, chunks = _noisy_gpsl1_chunks(200)
     function run(tracking_loop)
         track_state = TrackState(; signal = gpsl1, tracking_loop)
@@ -270,8 +270,8 @@ TrackingLoops.reinit_loop_state(
 )
 
 @testset "reset_loop_filters! keeps the stage the carrier loop has reached" begin
-    # A reset is a handoff, not a re-acquisition. A new satellite starts
-    # FLL-assisted.
+    # A reset re-seeds the loop filters but keeps the carrier loop stage; only a
+    # newly added satellite starts afresh, in the FLL-assisted stage.
     gpsl1, fs, carrier_doppler, chunks = _noisy_gpsl1_chunks(800)
     track_state = TrackState(; signal = gpsl1)
     track_state =

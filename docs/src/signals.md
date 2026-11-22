@@ -31,7 +31,7 @@ are tracked in
 
 ## The matrix
 
-*Code periods per integration* is the coherent (predetection) integration length in
+*Code periods per integration* is the coherent integration length in
 primary code periods a fresh [`TrackedSignal`](@ref) starts at
 ([`default_num_code_periods_to_integrate`](@extref TrackingLoops.default_num_code_periods_to_integrate-Tuple{AbstractGNSSSignal})),
 and in brackets the ceiling
