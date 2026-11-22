@@ -62,7 +62,7 @@ while running
 end
 ```
 
-The `TrackState`'s concrete type stays fixed as satellites come and go. `signal = GPSL1CA()` is short for `signals = (default = (GPSL1CA(),),)`; with one group, [`add_satellite!`](@ref) may omit `group =`.
+The `TrackState`'s concrete type stays fixed as satellites come and go. `signal = GPSL1CA()` is short for `signals = (default = (GPSL1CA(),),)`; with one group, [`add_satellite!`](@ref) may omit `group_key =`.
 
 ### Power-user: pre-built `TrackedSat`s
 
@@ -180,9 +180,9 @@ julia> track_state = TrackState(;
            ),
        );
 
-julia> track_state = add_satellite!(track_state; prn = 1,  group = :gps,     code_phase = 50.0,  carrier_doppler = 1000.0Hz);
+julia> track_state = add_satellite!(track_state; prn = 1,  group_key = :gps,     code_phase = 50.0,  carrier_doppler = 1000.0Hz);
 
-julia> track_state = add_satellite!(track_state; prn = 11, group = :galileo, code_phase = 200.0, carrier_doppler = -300.0Hz);
+julia> track_state = add_satellite!(track_state; prn = 11, group_key = :galileo, code_phase = 200.0, carrier_doppler = -300.0Hz);
 
 julia> get_carrier_doppler(track_state, :gps, 1)
 1000.0 Hz
@@ -207,7 +207,7 @@ julia> track_state = TrackState(;
        );
 
 julia> track_state = add_satellite!(track_state;
-           prn = 11, group = :modern_gps,
+           prn = 11, group_key = :modern_gps,
            code_phase = 0.0, carrier_doppler = 1234.0Hz,
        );
 
@@ -270,14 +270,14 @@ julia> get_num_ants(track_state, 1)
 
 ### Acquisition handoff
 
-With `using Acquisition`, [`add_satellite!`](@ref) / [`add_satellite`](@ref) accept `AcquisitionResults` (or a vector of them, each routed independently). Without `group =`, an acq goes to the group whose longest-primary-code signal matches `acq.signal`.
+With `using Acquisition`, [`add_satellite!`](@ref) / [`add_satellite`](@ref) accept `AcquisitionResults` (or a vector of them, each routed independently). Without `group_key =`, an acq goes to the group whose longest-primary-code signal matches `acq.signal`.
 
 ```julia
 using Acquisition  # loads the extension
 
 # Single acq
 ts = add_satellite!(ts, acq)                       # auto-route
-ts = add_satellite!(ts, acq; group = :legacy_gps)  # explicit group, asserts match
+ts = add_satellite!(ts, acq; group_key = :legacy_gps)  # explicit group, asserts match
 
 # Vector of acqs (mixed constellations OK)
 ts = add_satellite!(ts, filter(is_detected, acqs))
@@ -365,9 +365,9 @@ julia> track_state = TrackState(;
            signals = (legacy_gps_l1 = (GPSL1CA(),), gps_l5 = (GPSL5I(),)),
        );
 
-julia> track_state = add_satellite!(track_state; prn = 1, group = :legacy_gps_l1, code_phase = 0.0, carrier_doppler = 200Hz);
+julia> track_state = add_satellite!(track_state; prn = 1, group_key = :legacy_gps_l1, code_phase = 0.0, carrier_doppler = 200Hz);
 
-julia> track_state = add_satellite!(track_state; prn = 1, group = :gps_l5, code_phase = 0.0, carrier_doppler = -150Hz);
+julia> track_state = add_satellite!(track_state; prn = 1, group_key = :gps_l5, code_phase = 0.0, carrier_doppler = -150Hz);
 
 julia> buf_l1 = make_signal(GPSL1CA(),  1, 200Hz,  4000,  4e6Hz);  # 1 ms at 4 MHz
 
@@ -433,8 +433,8 @@ get_band_ids
 |------|---------|
 | `f(track_state)` | Single-group, single-sat — folds via `only(...)` at each level. |
 | `f(track_state, prn)` | Single-group, multi-sat — picks the sat by PRN. |
-| `f(track_state, group, prn)` | Multi-group — picks the sat in the named group. |
-| `f(track_state, group, prn, sig)` | Per-signal — picks one [`TrackedSignal`](@ref) within a multi-signal sat. |
+| `f(track_state, group_key, prn)` | Multi-group — picks the sat in the named group. |
+| `f(track_state, group_key, prn, sig)` | Per-signal — picks one [`TrackedSignal`](@ref) within a multi-signal sat. |
 
 The trailing `sig` selector is either:
 
@@ -483,7 +483,7 @@ julia> track_state = TrackState(;
            signals = (modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),),
        );
 
-julia> track_state = add_satellite!(track_state; prn = 11, group = :modern_gps,
+julia> track_state = add_satellite!(track_state; prn = 11, group_key = :modern_gps,
                                    code_phase = 0.0, carrier_doppler = 1234.0Hz);
 
 julia> get_carrier_doppler(track_state, :modern_gps, 11)  # sat-level: same for all signals
