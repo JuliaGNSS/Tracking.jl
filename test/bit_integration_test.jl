@@ -141,13 +141,13 @@ end
     @test all(x -> abs(x) ≈ 20, single_soft[4:end])
 end
 
-# Mid-fold bit sync: the accumulation window must stay on the bit grid.
+# Mid-update bit sync: the accumulation window must stay on the bit grid.
 #
-# With a fold of several records, sync usually lands on a record that is not
-# the last of its fold. The `k` records behind it still cover real code blocks;
+# With a loop update over several records, sync usually lands on a record that is not
+# the last of its update. The `k` records behind it still cover real code blocks;
 # leaving them out of the block count shifts every later bit window `k` blocks
 # off the grid (#219), which reads as a soft-bit magnitude of 20 − 2k, not 20.
-@testset "mid-fold bit sync keeps the accumulation on the bit grid" begin
+@testset "mid-update bit sync keeps the accumulation on the bit grid" begin
     gpsl1 = GPSL1CA()
     sampling_frequency = 5e6Hz
     num_samples = 5000
@@ -174,8 +174,8 @@ end
         )
     end
 
-    # 1 ms is the baseline (one record per fold). The lock at block 60 is the
-    # 4th of the 57..63 fold at 7 ms and the 8th of the 53..65 fold at 13 ms, so
+    # 1 ms is the baseline (one record per loop update). The lock at block 60 is the
+    # 4th of the 57..63 update at 7 ms and the 8th of the 53..65 update at 13 ms, so
     # 3 and 5 records trail it.
     for doppler_update_interval in (1e-3s, 3e-3s, 7e-3s, 13e-3s)
         track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0, 0.0Hz)])
@@ -351,13 +351,13 @@ end
     end
 end
 
-# Mid-fold secondary-code sync: the overlay anchor must travel with the fold.
+# Mid-update secondary-code sync: the overlay anchor must travel with the loop update.
 #
 # The secondary-code side of #219: the records trailing the syncing one in its
-# fold also advance the secondary-chip anchor, since the code-phase snap runs
-# after the fold. A stale anchor wipes the wrong NH chip from every block and the
+# loop update also advance the secondary-chip anchor, since the code-phase snap runs
+# after the update. A stale anchor wipes the wrong NH chip from every block and the
 # NH10 sum collapses from ~10 to ~0–2.
-@testset "mid-fold secondary-code sync keeps the overlay anchor aligned" begin
+@testset "mid-update secondary-code sync keeps the overlay anchor aligned" begin
     gpsl5 = GPSL5I()
     prn = 1
     sampling_frequency = 25e6Hz
@@ -394,7 +394,7 @@ end
     end
 
     @testset "start chip $start_secondary_chip" for start_secondary_chip in (0, 3)
-        # Reference: one record per fold. The code-amplitude normalisation puts
+        # Reference: one record per loop update. The code-amplitude normalisation puts
         # magnitudes a few 1e-4 below nominal, hence the 0.99 floors.
         full_bit = 0.99 * secondary_code_length
         reference = copy(decode(1e-3s, start_secondary_chip))
@@ -411,13 +411,13 @@ end
     end
 end
 
-# Mid-fold secondary-code sync on a *pilot* (GPS L5Q, NH20).
+# Mid-update secondary-code sync on a *pilot* (GPS L5Q, NH20).
 #
 # A pilot has no bit accumulator, but the stale overlay anchor of #219 hits it
 # harder: the 20-block coherent sum cancels toward zero, the discriminators see
 # 0/0 and the Doppler goes NaN, so this testset *errors* (an `InexactError` in
 # the correlator) rather than fails when the anchor is wrong.
-@testset "mid-fold pilot overlay anchor keeps coherent integration intact" begin
+@testset "mid-update pilot overlay anchor keeps coherent integration intact" begin
     gpsl5q = GPSL5Q()
     prn = 1
     sampling_frequency = 25e6Hz

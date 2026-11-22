@@ -93,10 +93,10 @@ end
     tsig = only(sat.signals)
     synced_sig = Tracking.TrackedSignal(
         tsig;
-        loop_state = TrackingLoops.PostCorrelationState(
-            tsig.loop_state;
+        post_correlation_state = TrackingLoops.PostCorrelationState(
+            tsig.post_correlation_state;
             bit_synchronizer = TrackingLoops.BitSynchronizer(
-                tsig.loop_state.bit_synchronizer;
+                tsig.post_correlation_state.bit_synchronizer;
                 bit_or_secondary_code_synced = true,
                 bit_polarity = 1,
             ),
@@ -156,7 +156,7 @@ GNSSSignals.get_bit_rate(::Type{FakeWrapSignal}) = 0Hz
         )
     # `base`'s post-correlation state on a fake signal, its other fields kept.
     function fake_tracked_signal(code_length, secondary_length, found)
-        state = base.loop_state
+        state = base.post_correlation_state
         bit_synchronizer =
             found ? synced_buffer(state.bit_synchronizer) : state.bit_synchronizer
         state = TrackingLoops.PostCorrelationState(state; bit_synchronizer)
@@ -201,13 +201,13 @@ end
     @test get_signal(sigs_on_sat[1]) isa GPSL1C_P
     @test get_signal(sigs_on_sat[2]) isa GPSL1C_D
     @test get_signal(sigs_on_sat[3]) isa GPSL1CA
-    @test sat.doppler_estimator_state isa TrackingLoops.ScalarLoopState
+    @test sat.loop_state isa TrackingLoops.ScalarLoopState
 
     sat_tuple = @inferred TrackedSat((GPSL1CA(),), 1, 10.0, 500.0Hz)
     sat_scalar = @inferred TrackedSat(GPSL1CA(), 1, 10.0, 500.0Hz)
     @test typeof(sat_tuple) === typeof(sat_scalar)
 
-    # The auto-bandwidth estimator sizes the loop from the driver, GPS L1C-P.
+    # The auto-bandwidth tracking loop sizes the loop from the driver, GPS L1C-P.
     estimator = TrackingLoops.ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)
     sat_kw = TrackedSat(
         sigs,
@@ -216,13 +216,13 @@ end
         -250.0Hz;
         carrier_phase = 0.5,
         code_doppler = -0.3Hz,
-        doppler_estimator = estimator,
+        tracking_loop = estimator,
     )
     # Stored and reported in cycles, as given.
     @test sat_kw.carrier_phase == 0.5
     @test get_carrier_phase(sat_kw) == 0.5
     @test get_code_doppler(sat_kw) == -0.3Hz
-    @test sat_kw.doppler_estimator_state.bandwidths.wide_carrier ==
+    @test sat_kw.loop_state.bandwidths.wide_carrier ==
           TrackingLoops.default_wide_carrier_loop_bandwidth(GPSL1C_P(TMBOC))
 end
 
@@ -242,8 +242,8 @@ end
     # `tsig` as if its latest integration spanned `num_code_periods` code periods.
     with_last_integration(num_code_periods) = Tracking.TrackedSignal(
         tsig;
-        loop_state = TrackingLoops.PostCorrelationState(
-            tsig.loop_state;
+        post_correlation_state = TrackingLoops.PostCorrelationState(
+            tsig.post_correlation_state;
             sampling_frequency = fs,
             last_num_code_periods = num_code_periods,
             last_num_integrated_samples = num_code_periods * 4000,

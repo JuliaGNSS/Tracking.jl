@@ -31,7 +31,7 @@ first):
     states divide by one noise reference, and advancing two concurrently races,
     so build one `TrackState` per thread (see `downconvert_and_correlate` for why
     the window is not copied);
-  - the `doppler_estimator` itself, so results can be read off the instance you
+  - the `tracking_loop` itself, so results can be read off the instance you
     passed in. One with state of its own (TrackingLoops' `VectorTrackingLoop`) is
     advanced by `track` as by [`track!`](@ref), and two branches would mix their
     records in one navigation filter.
@@ -57,7 +57,7 @@ The coherent-integration length is set **per signal** with
 set_preferred_num_code_blocks_to_integrate!(track_state, :gps_l5, 1, GPSL5I, 10)  # PRN 1 L5I: 10 ms
 ```
 
-The conventional estimator caps the carrier loop bandwidth at `0.09 / T_int` and
+The scalar tracking loops cap the carrier loop bandwidth at `0.09 / T_int` and
 the code loop's at `0.018 / T_int`, so longer integration stays stable (see
 [`ScalarTrackingLoop`](@extref TrackingLoops.ScalarTrackingLoop)).
 """
@@ -159,12 +159,12 @@ function track!(
             stop_before_partial = true,
             samples_unchanged = chunk_index > 0,
         )
-        estimate_dopplers_and_filter_prompt!(track_state, measurements)
+        step_tracking_loops!(track_state, measurements)
         chunk_index += 1
     end
     # Drain each satellite's trailing partial into its correlator bank, carried into
     # the next call; a boundary exactly at the buffer end completes here, hence
-    # the fold. Noise is measured here only if no chunk ran, or every sample
+    # the loop update. Noise is measured here only if no chunk ran, or every sample
     # would enter the noise window twice.
     downconvert_and_correlate!(
         downconvert_and_correlator,
@@ -173,7 +173,7 @@ function track!(
         samples_unchanged = chunk_index > 0,
         measure_noise = chunk_index == 0,
     )
-    estimate_dopplers_and_filter_prompt!(track_state, measurements)
+    step_tracking_loops!(track_state, measurements)
     _advance_sample_offsets!(track_state.sample_offsets, measurements)
     return track_state
 end

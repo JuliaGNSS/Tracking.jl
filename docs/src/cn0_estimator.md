@@ -7,7 +7,7 @@ multi-signal satellite reports one CN0 per signal.
 !!! note "Every signal of a satellite is estimated, not just the driver"
 
     Each signal's estimator is fed its own prompt once per completed record; the
-    [estimator-driver signal](tracking_state.md#Estimator-driver-signal) has no
+    [driver signal](tracking_state.md#Driver-signal) has no
     special role, and the values differ: on GPS L1C the pilot carries ~75 % of the
     power and the data component ~25 %, 4.8 dB apart.
 
@@ -45,7 +45,7 @@ pools every buffered window and range-checks the pooled ratio once.
     [`CorrelatorNoiseDensityEstimator`](@extref TrackingLoops.CorrelatorNoiseDensityEstimator) that
     `track!` fills.
  2. **Correlator outputs from hardware, *with* a noise observation** → the same, plus
-    one [`append_noise_observation!`](@ref) per signal per fold (see
+    one [`append_noise_observation!`](@ref) per signal per loop update (see
     [Noise Estimator](noise_estimator.md)).
  3. **Correlator outputs from hardware, *without* one** → `NWPRCN0Estimator(signal)`,
     accepting its fallback on the signals it cannot serve.

@@ -10,7 +10,7 @@ using Tracking:
     TrackState,
     TrackedSat,
     append_correlator_bank_output!,
-    estimate_dopplers_and_filter_prompt!,
+    step_tracking_loops!,
     get_cn0_estimator
 using TrackingLoops: get_correlator_outputs, get_default_correlator_bank, get_prompt_index
 using TrackingLoops:
@@ -81,7 +81,7 @@ end
     # `-Inf dB-Hz` with no clue why.
     ts, fs = _ingested_state(NoiseReferencedCN0Estimator())
     @test keys(ts.noise_estimators) == (:GPSL1CA,)
-    @test_logs (:warn,) estimate_dopplers_and_filter_prompt!(ts, (L1 = fs,))
+    @test_logs (:warn,) step_tracking_loops!(ts, (L1 = fs,))
     @test estimate_cn0(ts, 1) == -Inf * dBHz
     @test Base.length(get_cn0_estimator(ts, 1)) == 0
 end
@@ -115,7 +115,7 @@ end
     ))
     @test Set(keys(multi.noise_estimators)) == Set((:GPSL1CA, :GPSL5I))
     logs, _ = collect_test_logs() do
-        estimate_dopplers_and_filter_prompt!(multi, (L1 = 4e6Hz, L5 = 4e6Hz))
+        step_tracking_loops!(multi, (L1 = 4e6Hz, L5 = 4e6Hz))
     end
     warnings = filter(r -> r.level == Warn, logs)
     @test length(warnings) == 2
@@ -134,7 +134,7 @@ end
 
     function run(cn0_estimator)
         ts, fs = _ingested_state(cn0_estimator; signals)
-        estimate_dopplers_and_filter_prompt!(ts, (L1 = fs,))
+        step_tracking_loops!(ts, (L1 = fs,))
         ts
     end
 
@@ -172,7 +172,7 @@ end
         calc_noise_observation_from_samples(n * 1e-6 * ustrip(Hz, fs), n, fs),
         :GPSL1CA,
     )
-    estimate_dopplers_and_filter_prompt!(ts, (L1 = fs,))
+    step_tracking_loops!(ts, (L1 = fs,))
     @test Base.length(get_cn0_estimator(ts, 1)) == 20
     @test _db(estimate_cn0(ts, 1)) ≈ 10log10(1 / 1e-6 - 1 / 1e-3) atol = 1e-6
 end

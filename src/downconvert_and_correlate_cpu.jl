@@ -330,7 +330,7 @@ function _update_tracked_sat_correlator_bank(
     # the chunk end carries in the correlator bank. The NCO Doppler is untouched here.
     #
     # `stop_before_partial = true` leaves the trailing partial to the next chunk's
-    # pass, which then integrates boundary to boundary at the Doppler the estimator
+    # pass, which then integrates boundary to boundary at the Doppler the tracking loop
     # wrote in between: every completed integration sees a single Doppler. A final
     # pass without the flag drains the buffer's trailing partial.
     while sat.next_sample_index <= last(chunk_sample_range)
@@ -691,7 +691,7 @@ trailing partial stays in the live correlator.
 
 `stop_before_partial = true` stops each satellite at its last code-block boundary
 inside the chunk, leaving the trailing partial to the next chunk's pass at the
-Doppler the estimator writes in between (as `track!` does). Default `false`.
+Doppler the tracking loop writes in between (as `track!` does). Default `false`.
 
 `samples_unchanged = true` promises every band's buffer holds the same content as on
 the previous call with this `dc`, so backends may reuse sample-derived caches (the

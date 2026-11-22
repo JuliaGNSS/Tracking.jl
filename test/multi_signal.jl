@@ -49,7 +49,7 @@ using GNSSSignals: GPSL1C_P, GPSL1C_D, GalileoE1B
     prn = 1
     num_samples = 20_000  # 4 ms at 5 MHz: four L1 C/A code periods, one E1B
 
-    estimator = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)
+    tracking_loop = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)
     signal_a = TrackedSignal(
         gpsl1;
         num_ants = NumAnts(1),
@@ -67,10 +67,10 @@ using GNSSSignals: GPSL1C_P, GPSL1C_D, GalileoE1B
         prn,
         start_code_phase,
         carrier_doppler;
-        doppler_estimator = estimator,
+        tracking_loop,
     )
 
-    track_state = TrackState(gpsl1, sat; doppler_estimator = estimator)
+    track_state = TrackState(gpsl1, sat; tracking_loop)
 
     range_ = 0:(num_samples-1)
     signal_buf =
@@ -240,7 +240,7 @@ end
             1,
             0.0,
             0.0Hz;
-            doppler_estimator = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF),
+            tracking_loop = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF),
         )
     end
 

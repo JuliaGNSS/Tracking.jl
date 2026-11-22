@@ -23,8 +23,8 @@ using Tracking:
     TrackedSat,
     TrackState,
     BandMeasurement,
-    estimate_dopplers_and_filter_prompt,
-    estimate_dopplers_and_filter_prompt!,
+    step_tracking_loops,
+    step_tracking_loops!,
     is_bit_or_secondary_code_synced,
     add_satellite!,
     append_correlator_bank_output!,
@@ -39,7 +39,6 @@ import TrackingLoops
 using TrackingLoops:
     ScalarLoopState,
     init_loop_state,
-    ScalarTrackingLoop,
     ScalarTrackingLoop,
     LoopBandwidths,
     set_correlator_outputs,
@@ -59,7 +58,10 @@ _completed_signal(sig, correlator_bank, num_samples) = append_correlator_bank_ou
 # `tsig` with its post-correlation state's bit synchronizer replaced.
 _with_bit_synchronizer(tsig, bit_synchronizer) = TrackedSignal(
     tsig;
-    loop_state = PostCorrelationState(tsig.loop_state; bit_synchronizer),
+    post_correlation_state = PostCorrelationState(
+        tsig.post_correlation_state;
+        bit_synchronizer,
+    ),
 )
 
 @testset "Satellite Conventional PLL and DLL" begin
@@ -105,9 +107,9 @@ end
     prn = 1
     code_phase = 0.5
 
-    doppler_estimator = ScalarTrackingLoop()
+    tracking_loop = ScalarTrackingLoop()
 
-    sat_state = TrackedSat(gpsl1, prn, code_phase, carrier_doppler; doppler_estimator)
+    sat_state = TrackedSat(gpsl1, prn, code_phase, carrier_doppler; tracking_loop)
 
     # No completed integration: nothing changes.
     num_samples = 2000
@@ -126,12 +128,10 @@ end
         ),
     )
 
-    track_state = TrackState(gpsl1, sat_state_after_small_integration; doppler_estimator)
+    track_state = TrackState(gpsl1, sat_state_after_small_integration; tracking_loop)
 
-    new_track_state = @inferred estimate_dopplers_and_filter_prompt(
-        track_state,
-        _meas_l1(sampling_frequency),
-    )
+    new_track_state =
+        @inferred step_tracking_loops(track_state, _meas_l1(sampling_frequency))
 
     @test get_carrier_doppler(new_track_state) == carrier_doppler
     @test get_code_doppler(new_track_state) ==
@@ -147,12 +147,10 @@ end
             _completed_signal(only(sat_state.signals), correlator_bank, num_samples),
         ),
     )
-    track_state = TrackState(gpsl1, sat_state_after_full_integration; doppler_estimator)
+    track_state = TrackState(gpsl1, sat_state_after_full_integration; tracking_loop)
 
-    new_track_state_after_full_integration = @inferred estimate_dopplers_and_filter_prompt(
-        track_state,
-        _meas_l1(sampling_frequency),
-    )
+    new_track_state_after_full_integration =
+        @inferred step_tracking_loops(track_state, _meas_l1(sampling_frequency))
 
     @test get_carrier_doppler(new_track_state_after_full_integration) ==
           100.24709981691564Hz
@@ -170,7 +168,7 @@ end
 @testset "loop bandwidth follows the record's actual integration length" begin
     # The carrier cap pairs with the time the record covered (from its sample
     # count), not the intended length: a single-block record after sync (a
-    # mid-fold sync, or the truncated first post-sync integration) gets the full
+    # mid-update sync, or the truncated first post-sync integration) gets the full
     # single-period bandwidth.
     sampling_frequency = 5e6Hz
     gpsl1 = GPSL1CA()
@@ -180,7 +178,7 @@ end
         get_default_correlator_bank(gpsl1),
         SVector(1000.0 + 10im, 2000.0 + 20im, 750.0 + 10im),
     )
-    doppler_estimator = ScalarTrackingLoop()
+    tracking_loop = ScalarTrackingLoop()
 
     # Synced at secondary phase 0, polarity +1.
     synced(::TrackingLoops.BitSynchronizer{B}) where {B} = TrackingLoops.BitSynchronizer{B}(
@@ -196,7 +194,7 @@ end
     )
 
     doppler_after(preferred, found, integrated_samples) = begin
-        sat = TrackedSat(gpsl1, 1, code_phase, carrier_doppler; doppler_estimator)
+        sat = TrackedSat(gpsl1, 1, code_phase, carrier_doppler; tracking_loop)
         base = only(sat.signals)
         sig = TrackedSignal(
             found ? _with_bit_synchronizer(base, synced(get_bit_buffer(base))) : base;
@@ -206,10 +204,8 @@ end
             sig,
             CorrelatorBankOutput(correlator_bank, integrated_samples, integrated_samples),
         )
-        ts = TrackState(gpsl1, TrackedSat(sat; signals = (sig,)); doppler_estimator)
-        get_carrier_doppler(
-            estimate_dopplers_and_filter_prompt(ts, _meas_l1(sampling_frequency)),
-        )
+        ts = TrackState(gpsl1, TrackedSat(sat; signals = (sig,)); tracking_loop)
+        get_carrier_doppler(step_tracking_loops(ts, _meas_l1(sampling_frequency)))
     end
 
     one_block = 5000                      # one 1 ms L1 C/A code period at 5 MHz
@@ -242,7 +238,7 @@ end
     @test TrackingLoops.calc_effective_code_loop_bandwidth(0.25Hz, 20 * l1ca_period) ==
           0.25Hz
 
-    # Through the estimator at 4 ms, where the cap is 4.5 Hz: 5 and 10 Hz both
+    # Through the tracking loop at 4 ms, where the cap is 4.5 Hz: 5 and 10 Hz both
     # saturate (a `1/N` scaling would make them differ).
     sampling_frequency = 5e6Hz
     gpsl1 = GPSL1CA()
@@ -251,16 +247,14 @@ end
         SVector(1000.0 + 10im, 2000.0 + 20im, 750.0 + 10im),
     )
     code_doppler_after(integrated_samples, code_bandwidth) = begin
-        doppler_estimator = ScalarTrackingLoop(; code_loop_bandwidth = code_bandwidth)
-        sat = TrackedSat(gpsl1, 1, 0.5, 100.0Hz; doppler_estimator)
+        tracking_loop = ScalarTrackingLoop(; code_loop_bandwidth = code_bandwidth)
+        sat = TrackedSat(gpsl1, 1, 0.5, 100.0Hz; tracking_loop)
         sig = append_correlator_bank_output!(
             only(sat.signals),
             CorrelatorBankOutput(correlator_bank, integrated_samples, integrated_samples),
         )
-        ts = TrackState(gpsl1, TrackedSat(sat; signals = (sig,)); doppler_estimator)
-        get_code_doppler(
-            estimate_dopplers_and_filter_prompt(ts, _meas_l1(sampling_frequency)),
-        )
+        ts = TrackState(gpsl1, TrackedSat(sat; signals = (sig,)); tracking_loop)
+        get_code_doppler(step_tracking_loops(ts, _meas_l1(sampling_frequency)))
     end
     one_block = 5000
     @test code_doppler_after(4 * one_block, 5.0Hz) ==
@@ -281,9 +275,9 @@ end
     )
 
     # Same correlator for both: only the bandwidths differ.
-    doppler_estimator = ScalarTrackingLoop()
-    sat1_initial = TrackedSat(gpsl1, 1, code_phase, carrier_doppler; doppler_estimator)
-    sat2_initial = TrackedSat(gpsl1, 2, code_phase, carrier_doppler; doppler_estimator)
+    tracking_loop = ScalarTrackingLoop()
+    sat1_initial = TrackedSat(gpsl1, 1, code_phase, carrier_doppler; tracking_loop)
+    sat2_initial = TrackedSat(gpsl1, 2, code_phase, carrier_doppler; tracking_loop)
     sat1 = TrackedSat(
         sat1_initial;
         signals = (
@@ -296,9 +290,9 @@ end
             _completed_signal(only(sat2_initial.signals), correlator_bank, num_samples),
         ),
     )
-    sat1_de = sat1.doppler_estimator_state
+    sat1_de = sat1.loop_state
     sat2_de = ScalarLoopState(
-        sat2_pre.doppler_estimator_state;
+        sat2_pre.loop_state;
         bandwidths = LoopBandwidths(; wide_carrier = 36.0Hz, code = 2.0Hz),
     )
     sat2 = TrackedSat(
@@ -317,11 +311,9 @@ end
     @test sat2_de.bandwidths.wide_carrier == 36.0Hz
     @test sat2_de.bandwidths.code == 2.0Hz
 
-    track_state = TrackState(gpsl1, tracked; doppler_estimator)
-    new_track_state = @inferred estimate_dopplers_and_filter_prompt(
-        track_state,
-        _meas_l1(sampling_frequency),
-    )
+    track_state = TrackState(gpsl1, tracked; tracking_loop)
+    new_track_state =
+        @inferred step_tracking_loops(track_state, _meas_l1(sampling_frequency))
 
     # Sat 1 matches the testset above.
     @test get_carrier_doppler(new_track_state, 1) == 100.24709981691564Hz
@@ -334,47 +326,47 @@ end
 @testset "Bandwidths propagate through ScalarTrackingLoop constructor" begin
     gpsl1 = GPSL1CA()
     sat_state = TrackedSat(gpsl1, 1, 0.5, 100.0Hz)
-    estimator = ScalarTrackingLoop(;
+    tracking_loop = ScalarTrackingLoop(;
         wide_carrier_loop_bandwidth = 22.0Hz,
         code_loop_bandwidth = 1.5Hz,
     )
-    de_state = init_loop_state(estimator, sat_state)
+    de_state = init_loop_state(tracking_loop, sat_state)
     @test de_state.bandwidths.wide_carrier == 22.0Hz
     @test de_state.bandwidths.code == 1.5Hz
 
-    bumped = ScalarTrackingLoop(estimator; wide_carrier_loop_bandwidth = 30.0Hz)
+    bumped = ScalarTrackingLoop(tracking_loop; wide_carrier_loop_bandwidth = 30.0Hz)
     @test init_loop_state(bumped, sat_state).bandwidths.wide_carrier == 30.0Hz
     @test init_loop_state(bumped, sat_state).bandwidths.code == 1.5Hz  # unchanged
-    preserved = ScalarTrackingLoop(estimator)
+    preserved = ScalarTrackingLoop(tracking_loop)
     @test init_loop_state(preserved, sat_state).bandwidths == de_state.bandwidths
 end
 
-@testset "merge_sats with matching estimator carries through bandwidths" begin
+@testset "merge_sats with matching tracking loop carries through bandwidths" begin
     gpsl1 = GPSL1CA()
-    estimator = ScalarTrackingLoop(;
+    tracking_loop = ScalarTrackingLoop(;
         wide_carrier_loop_bandwidth = 22.0Hz,
         code_loop_bandwidth = 1.5Hz,
     )
-    sat1 = TrackedSat(gpsl1, 1, 0.5, 100.0Hz; doppler_estimator = estimator)
-    track_state = TrackState(gpsl1, sat1; doppler_estimator = estimator)
+    sat1 = TrackedSat(gpsl1, 1, 0.5, 100.0Hz; tracking_loop)
+    track_state = TrackState(gpsl1, sat1; tracking_loop)
 
-    # The slot type pins the estimator-state type.
-    sat2 = TrackedSat(gpsl1, 2, 0.25, 200.0Hz; doppler_estimator = estimator)
+    # The slot type pins the loop-state type.
+    sat2 = TrackedSat(gpsl1, 2, 0.25, 200.0Hz; tracking_loop)
     merged = merge_sats(track_state, sat2)
 
-    de_state = get_sat_states(merged)[2].doppler_estimator_state
+    de_state = get_sat_states(merged)[2].loop_state
     @test de_state.bandwidths.wide_carrier == 22.0Hz
     @test de_state.bandwidths.code == 1.5Hz
 end
 
-@testset "merge_sats errors on mismatched doppler estimator type" begin
+@testset "merge_sats errors on mismatched tracking loop type" begin
     gpsl1 = GPSL1CA()
-    estimator = ScalarTrackingLoop(;
+    tracking_loop = ScalarTrackingLoop(;
         wide_carrier_loop_bandwidth = 22.0Hz,
         code_loop_bandwidth = 1.5Hz,
     )
-    sat1 = TrackedSat(gpsl1, 1, 0.5, 100.0Hz; doppler_estimator = estimator)
-    track_state = TrackState(gpsl1, sat1; doppler_estimator = estimator)
+    sat1 = TrackedSat(gpsl1, 1, 0.5, 100.0Hz; tracking_loop)
+    track_state = TrackState(gpsl1, sat1; tracking_loop)
 
     # A PLL-only carrier filter has another state type.
     bad_sat = TrackedSat(
@@ -382,39 +374,42 @@ end
         2,
         0.25,
         200.0Hz;
-        doppler_estimator = ScalarTrackingLoop(ThirdOrderBilinearLF),
+        tracking_loop = ScalarTrackingLoop(ThirdOrderBilinearLF),
     )
     @test_throws ArgumentError merge_sats(track_state, bad_sat)
 end
 
-# An estimator that keeps what each record hands the carrier discriminators,
+# A tracking loop that keeps what each record hands the carrier discriminators,
 # around the loop it wraps.
-struct PromptRecordingEstimator{E<:TrackingLoops.AbstractTrackingLoop} <:
+struct PromptRecordingTrackingLoop{E<:TrackingLoops.AbstractTrackingLoop} <:
        TrackingLoops.AbstractTrackingLoop
     inner::E
     records::Vector{Tuple{ComplexF64,Int8}}
 end
 TrackingLoops.init_loop_state(
-    e::PromptRecordingEstimator,
+    e::PromptRecordingTrackingLoop,
     driver_signal,
     carrier_doppler,
     code_doppler,
 ) = TrackingLoops.init_loop_state(e.inner, driver_signal, carrier_doppler, code_doppler)
 function TrackingLoops.step_loop!(
-    e::PromptRecordingEstimator,
+    e::PromptRecordingTrackingLoop,
     state,
-    loop_state::PostCorrelationState,
+    post_correlation_state::PostCorrelationState,
     nco_history,
     application_sample_index::Union{Nothing,Integer},
 )
     push!(
         e.records,
-        (loop_state.previous_filtered_prompt, loop_state.last_carrier_phase_polarity),
+        (
+            post_correlation_state.previous_filtered_prompt,
+            post_correlation_state.last_carrier_phase_polarity,
+        ),
     )
     TrackingLoops.step_loop!(
         e.inner,
         state,
-        loop_state,
+        post_correlation_state,
         nco_history,
         application_sample_index,
     )
@@ -425,11 +420,11 @@ end
     # One record per call; returns the records' (previous prompt, polarity)
     # and the prompts left on the signal.
     function step_records(signal, synced, num_blocks_per_record)
-        estimator = PromptRecordingEstimator(
+        tracking_loop = PromptRecordingTrackingLoop(
             ScalarTrackingLoop(ThirdOrderAssistedBilinearLF),
             Tuple{ComplexF64,Int8}[],
         )
-        track_state = TrackState(; signal, doppler_estimator = estimator)
+        track_state = TrackState(; signal, tracking_loop)
         track_state = add_satellite!(track_state; prn = 1, carrier_doppler = 100.0Hz)
         sats = get_sat_states(track_state)
         sat = sats[1]
@@ -458,13 +453,13 @@ end
                 only(sat.signals),
                 CorrelatorBankOutput(correlator_bank, samples, end_sample_index),
             )
-            estimate_dopplers_and_filter_prompt!(track_state, _meas_l1(sampling_frequency))
+            step_tracking_loops!(track_state, _meas_l1(sampling_frequency))
             push!(
                 prompts,
                 get_last_fully_integrated_filtered_prompt(get_sat_states(track_state)[1]),
             )
         end
-        estimator.records, prompts
+        tracking_loop.records, prompts
     end
 
     # A bit buffer synced at polarity -1, on the first block of a bit.
@@ -496,36 +491,36 @@ end
     @test records[2] == (prompts[1], -1)
 end
 
-# An estimator that keeps each record's carrier phase polarity and prompt.
-struct PolarityRecordingEstimator{E<:TrackingLoops.AbstractTrackingLoop} <:
+# A tracking loop that keeps each record's carrier phase polarity and prompt.
+struct PolarityRecordingTrackingLoop{E<:TrackingLoops.AbstractTrackingLoop} <:
        TrackingLoops.AbstractTrackingLoop
     inner::E
     records::Vector{Tuple{Int8,ComplexF64}}
 end
 TrackingLoops.init_loop_state(
-    e::PolarityRecordingEstimator,
+    e::PolarityRecordingTrackingLoop,
     driver_signal,
     carrier_doppler,
     code_doppler,
 ) = TrackingLoops.init_loop_state(e.inner, driver_signal, carrier_doppler, code_doppler)
 function TrackingLoops.step_loop!(
-    e::PolarityRecordingEstimator,
+    e::PolarityRecordingTrackingLoop,
     state,
-    loop_state::PostCorrelationState,
+    post_correlation_state::PostCorrelationState,
     nco_history,
     application_sample_index::Union{Nothing,Integer},
 )
     push!(
         e.records,
         (
-            loop_state.last_carrier_phase_polarity,
-            TrackingLoops.get_prompt(loop_state.last_filtered_correlator_bank),
+            post_correlation_state.last_carrier_phase_polarity,
+            TrackingLoops.get_prompt(post_correlation_state.last_filtered_correlator_bank),
         ),
     )
     TrackingLoops.step_loop!(
         e.inner,
         state,
-        loop_state,
+        post_correlation_state,
         nco_history,
         application_sample_index,
     )
@@ -552,17 +547,17 @@ end
     )
     rng = Random.Xoshiro(1)
     for sign in (1, -1)
-        estimator = PolarityRecordingEstimator(
+        tracking_loop = PolarityRecordingTrackingLoop(
             ScalarTrackingLoop(ThirdOrderAssistedBilinearLF),
             Tuple{Int8,ComplexF64}[],
         )
-        track_state = TrackState(; signal = e1c, doppler_estimator = estimator)
+        track_state = TrackState(; signal = e1c, tracking_loop)
         track_state = add_satellite!(track_state; prn, carrier_doppler = 0.0Hz)
         noisy(prompt) = prompt + 0.05 * randn(rng, ComplexF64)
         step!(prompt, k) = begin
             append_correlator_bank_output!(get_sat_state(track_state, prn), record(prompt, k))
             with_logger(NullLogger()) do
-                estimate_dopplers_and_filter_prompt!(track_state, _meas_l1(sampling_frequency))
+                step_tracking_loops!(track_state, _meas_l1(sampling_frequency))
             end
         end
         k = 0
@@ -570,12 +565,12 @@ end
             step!(noisy(sign * chip(k) * chip(0)), (k += 1) * num_samples)
         end
         @test is_bit_or_secondary_code_synced(get_sat_state(track_state, prn))
-        num_pre_sync = length(estimator.records)
-        @test all(r -> r[1] == 0, estimator.records)
+        num_pre_sync = length(tracking_loop.records)
+        @test all(r -> r[1] == 0, tracking_loop.records)
         for _ = 1:10
             step!(noisy(sign), (k += 1) * num_samples)
         end
-        post_sync = estimator.records[(num_pre_sync+1):end]
+        post_sync = tracking_loop.records[(num_pre_sync+1):end]
         @test all(r -> r[1] == sign, post_sync)
         @test all(r -> Base.sign(real(r[2])) == sign, post_sync)
     end

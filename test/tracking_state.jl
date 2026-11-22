@@ -36,7 +36,7 @@ using Tracking:
     get_preferred_num_code_blocks_to_integrate,
     set_preferred_num_code_blocks_to_integrate!,
     reset_loop_filters!,
-    get_doppler_estimator_state,
+    get_loop_state,
     SignalGroup
 import TrackingLoops
 using TrackingLoops:
@@ -98,10 +98,8 @@ end
     @test get_cn0_estimator(track_state, 1) isa NoiseReferencedCN0Estimator
     @test get_bit_buffer(track_state, 1) isa BitSynchronizer
 
-    @test get_sat_states(track_state)[1].doppler_estimator_state.initial_carrier_doppler ==
-          10.0Hz
-    @test get_sat_states(track_state)[2].doppler_estimator_state.initial_carrier_doppler ==
-          20.0Hz
+    @test get_sat_states(track_state)[1].loop_state.initial_carrier_doppler == 10.0Hz
+    @test get_sat_states(track_state)[2].loop_state.initial_carrier_doppler == 20.0Hz
 
     track_state2 = @inferred TrackState(
         gpsl1,
@@ -112,10 +110,8 @@ end
     @test @inferred(get_sat_state(track_state2, 1)).prn == 1
     @test @inferred(get_sat_state(track_state2, 2)).prn == 2
 
-    @test get_sat_states(track_state2)[1].doppler_estimator_state.initial_carrier_doppler ==
-          10.0Hz
-    @test get_sat_states(track_state2)[2].doppler_estimator_state.initial_carrier_doppler ==
-          20.0Hz
+    @test get_sat_states(track_state2)[1].loop_state.initial_carrier_doppler == 10.0Hz
+    @test get_sat_states(track_state2)[2].loop_state.initial_carrier_doppler == 20.0Hz
 
     sat_states_num_antennas2 = [
         TrackedSat(gpsl1, 1, 10.5, 10.0Hz; num_ants = NumAnts(2)),
@@ -123,56 +119,48 @@ end
     ]
 end
 
-@testset "Positional TrackState(satellites::SatelliteDicts) infers default estimator" begin
-    # One shared auto-bandwidth estimator seeds each group's sats from that
+@testset "Positional TrackState(satellites::SatelliteDicts) infers default tracking loop" begin
+    # One shared auto-bandwidth tracking loop seeds each group's sats from that
     # group's own driver signal.
     gpsl1 = GPSL1CA()
     galileo = GalileoE1B(CBOC)
-    estimator = ScalarTrackingLoop()
+    tracking_loop = ScalarTrackingLoop()
     sats = (
-        gps = dictionary([
-            1 => TrackedSat(gpsl1, 1, 10.5, 10.0Hz; doppler_estimator = estimator),
-        ]),
-        gal = dictionary([
-            2 => TrackedSat(galileo, 2, 11.5, 20.0Hz; doppler_estimator = estimator),
-        ]),
+        gps = dictionary([1 => TrackedSat(gpsl1, 1, 10.5, 10.0Hz; tracking_loop)]),
+        gal = dictionary([2 => TrackedSat(galileo, 2, 11.5, 20.0Hz; tracking_loop)]),
     )
     ts = TrackState(sats)
     @test length(get_sat_states(ts, :gps)) == 1
     @test length(get_sat_states(ts, :gal)) == 1
-    @test get_sat_states(ts, :gps)[1].doppler_estimator_state.bandwidths.wide_carrier ==
+    @test get_sat_states(ts, :gps)[1].loop_state.bandwidths.wide_carrier ==
           default_wide_carrier_loop_bandwidth(gpsl1)
-    @test get_sat_states(ts, :gal)[2].doppler_estimator_state.bandwidths.wide_carrier ==
+    @test get_sat_states(ts, :gal)[2].loop_state.bandwidths.wide_carrier ==
           default_wide_carrier_loop_bandwidth(galileo)
 end
 
-@testset "Positional TrackState(dict) default estimator inference" begin
+@testset "Positional TrackState(dict) default tracking loop inference" begin
     gpsl1 = GPSL1CA()
-    estimator = ScalarTrackingLoop()
-    sat = TrackedSat(gpsl1, 1, 10.5, 10.0Hz; doppler_estimator = estimator)
+    tracking_loop = ScalarTrackingLoop()
+    sat = TrackedSat(gpsl1, 1, 10.5, 10.0Hz; tracking_loop)
     ts = TrackState(dictionary([1 => sat]))
     @test length(get_sat_states(ts)) == 1
 end
 
-@testset "Positional TrackState constructor rejects sats with a different estimator" begin
+@testset "Positional TrackState constructor rejects sats with a different tracking loop" begin
     gpsl1 = GPSL1CA()
-    sat_default = TrackedSat(gpsl1, 1, 10.5, 10.0Hz)  # default estimator
+    sat_default = TrackedSat(gpsl1, 1, 10.5, 10.0Hz)  # default tracking loop
     different = ScalarTrackingLoop(
         ThirdOrderBilinearLF;
         wide_carrier_loop_bandwidth = 22.0Hz,
         code_loop_bandwidth = 1.5Hz,
     )
-    @test_throws ArgumentError TrackState(
-        gpsl1,
-        [sat_default];
-        doppler_estimator = different,
-    )
+    @test_throws ArgumentError TrackState(gpsl1, [sat_default]; tracking_loop = different)
 end
 
 @testset "Slot-vector copy helpers share vs detach Dictionary Indices (#123)" begin
     gpsl1 = GPSL1CA()
-    estimator = ScalarTrackingLoop()
-    a = TrackedSat(gpsl1, 1, 10.5, 10.0Hz; doppler_estimator = estimator)
+    tracking_loop = ScalarTrackingLoop()
+    a = TrackedSat(gpsl1, 1, 10.5, 10.0Hz; tracking_loop)
     sats = dictionary([1 => a])
 
     # The per-iteration copy inside `track` shares the key set; the boundary
@@ -324,18 +312,18 @@ end
     gpsl1 = GPSL1CA()
     galileo_e1b = GalileoE1B(CBOC)
 
-    estimator = ScalarTrackingLoop()
+    tracking_loop = ScalarTrackingLoop()
     gps_sats = dictionary([
-        1 => TrackedSat(gpsl1, 1, 10.5, 10.0Hz; doppler_estimator = estimator),
-        2 => TrackedSat(gpsl1, 2, 11.5, 20.0Hz; doppler_estimator = estimator),
+        1 => TrackedSat(gpsl1, 1, 10.5, 10.0Hz; tracking_loop),
+        2 => TrackedSat(gpsl1, 2, 11.5, 20.0Hz; tracking_loop),
     ])
     gal_sats = dictionary([
-        2 => TrackedSat(galileo_e1b, 2, 10.5, 10.0Hz; doppler_estimator = estimator),
-        3 => TrackedSat(galileo_e1b, 3, 11.5, 20.0Hz; doppler_estimator = estimator),
+        2 => TrackedSat(galileo_e1b, 2, 10.5, 10.0Hz; tracking_loop),
+        3 => TrackedSat(galileo_e1b, 3, 11.5, 20.0Hz; tracking_loop),
     ])
     satellites = (gps = gps_sats, gal = gal_sats)
 
-    track_state = @inferred TrackState(satellites; doppler_estimator = estimator)
+    track_state = @inferred TrackState(satellites; tracking_loop)
 
     new_track_state =
         @inferred merge_sats(track_state, 1, TrackedSat(gpsl1, 3, 5.5, 80.0Hz))
@@ -400,27 +388,26 @@ end
 end
 
 @testset "TrackedSat helpers" begin
-    using Tracking: TrackedSat, get_doppler_estimator_state, _prepare_for_new_buffer!
+    using Tracking: TrackedSat, get_loop_state, _prepare_for_new_buffer!
     using TrackingLoops: ScalarLoopState
 
     gpsl1 = GPSL1CA()
-    estimator = ScalarTrackingLoop()
+    tracking_loop = ScalarTrackingLoop()
 
-    sat = TrackedSat(gpsl1, 1, 10.5, 10.0Hz; doppler_estimator = estimator)
-    sat2 = TrackedSat(gpsl1, 2, 11.5, 20.0Hz; doppler_estimator = estimator)
+    sat = TrackedSat(gpsl1, 1, 10.5, 10.0Hz; tracking_loop)
+    sat2 = TrackedSat(gpsl1, 2, 11.5, 20.0Hz; tracking_loop)
 
-    ts_from_vec = TrackState(gpsl1, [sat, sat2]; doppler_estimator = estimator)
+    ts_from_vec = TrackState(gpsl1, [sat, sat2]; tracking_loop)
     @test length(get_sat_states(ts_from_vec)) == 2
-    ts_from_one = TrackState(gpsl1, sat; doppler_estimator = estimator)
+    ts_from_one = TrackState(gpsl1, sat; tracking_loop)
     @test length(get_sat_states(ts_from_one)) == 1
-    ts_from_dict =
-        TrackState(dictionary([1 => sat, 2 => sat2]); doppler_estimator = estimator)
+    ts_from_dict = TrackState(dictionary([1 => sat, 2 => sat2]); tracking_loop)
     @test length(get_sat_states(ts_from_dict)) == 2
 
     @test sat.prn == 1
-    @test get_doppler_estimator_state(sat) isa ScalarLoopState
+    @test get_loop_state(sat) isa ScalarLoopState
 
-    track_state = TrackState(gpsl1, [sat, sat2]; doppler_estimator = estimator)
+    track_state = TrackState(gpsl1, [sat, sat2]; tracking_loop)
     track_state2 = _prepare_for_new_buffer!(track_state)
     @test track_state2 === track_state
     for tsat in get_sat_states(track_state).values
@@ -428,95 +415,92 @@ end
     end
 end
 
-@testset "merge_sats invokes update_estimator_on_handoff" begin
+@testset "merge_sats invokes update_tracking_loop_on_new_sats" begin
     import Tracking
     using TrackingLoops: AbstractTrackingLoop
 
     # Immutable, with its state in vectors the hook mutates in place.
-    struct CountingEstimator <: AbstractTrackingLoop
+    struct CountingTrackingLoop <: AbstractTrackingLoop
         sats_added::Vector{Int}
         last_batch_prns::Vector{Int}
     end
-    CountingEstimator() = CountingEstimator(Int[0], Int[])
+    CountingTrackingLoop() = CountingTrackingLoop(Int[0], Int[])
 
-    struct SatCountingEstimator end
+    struct CountingLoopState end
 
-    TrackingLoops.init_loop_state(::CountingEstimator, ::TrackedSat) =
-        SatCountingEstimator()
+    TrackingLoops.init_loop_state(::CountingTrackingLoop, ::TrackedSat) =
+        CountingLoopState()
 
-    function Tracking.update_estimator_on_handoff(est::CountingEstimator, new_sats)
-        est.sats_added[1] += length(new_sats)
-        empty!(est.last_batch_prns)
+    function Tracking.update_tracking_loop_on_new_sats(loop::CountingTrackingLoop, new_sats)
+        loop.sats_added[1] += length(new_sats)
+        empty!(loop.last_batch_prns)
         for s in new_sats
-            push!(est.last_batch_prns, s.prn)
+            push!(loop.last_batch_prns, s.prn)
         end
-        return est
+        return loop
     end
 
     gpsl1 = GPSL1CA()
-    estimator = CountingEstimator()
+    tracking_loop = CountingTrackingLoop()
     track_state = TrackState(
         gpsl1,
-        [TrackedSat(gpsl1, 1, 10.5, 10.0Hz; doppler_estimator = estimator)];
-        doppler_estimator = estimator,
+        [TrackedSat(gpsl1, 1, 10.5, 10.0Hz; tracking_loop)];
+        tracking_loop,
     )
-    @test track_state.doppler_estimator.sats_added[1] == 0
+    @test track_state.tracking_loop.sats_added[1] == 0
 
-    track_state2 = merge_sats(
-        track_state,
-        1,
-        TrackedSat(gpsl1, 2, 11.5, 20.0Hz; doppler_estimator = estimator),
-    )
-    @test track_state2.doppler_estimator === estimator  # same object, mutated in place
-    @test track_state2.doppler_estimator.sats_added[1] == 1
-    @test track_state2.doppler_estimator.last_batch_prns == [2]
+    track_state2 =
+        merge_sats(track_state, 1, TrackedSat(gpsl1, 2, 11.5, 20.0Hz; tracking_loop))
+    @test track_state2.tracking_loop === tracking_loop  # same object, mutated in place
+    @test track_state2.tracking_loop.sats_added[1] == 1
+    @test track_state2.tracking_loop.last_batch_prns == [2]
 
     track_state3 = merge_sats(
         track_state2,
         [
-            TrackedSat(gpsl1, 3, 5.5, 80.0Hz; doppler_estimator = estimator),
-            TrackedSat(gpsl1, 4, 6.5, 90.0Hz; doppler_estimator = estimator),
+            TrackedSat(gpsl1, 3, 5.5, 80.0Hz; tracking_loop),
+            TrackedSat(gpsl1, 4, 6.5, 90.0Hz; tracking_loop),
         ],
     )
-    @test track_state3.doppler_estimator.sats_added[1] == 3
-    @test sort(track_state3.doppler_estimator.last_batch_prns) == [3, 4]
+    @test track_state3.tracking_loop.sats_added[1] == 3
+    @test sort(track_state3.tracking_loop.last_batch_prns) == [3, 4]
 
-    # Without an override the estimator is unchanged.
+    # Without an override the tracking loop is unchanged.
     default_estimator = ScalarTrackingLoop()
     default_track_state = TrackState(
         gpsl1,
-        [TrackedSat(gpsl1, 1, 10.5, 10.0Hz; doppler_estimator = default_estimator)];
-        doppler_estimator = default_estimator,
+        [TrackedSat(gpsl1, 1, 10.5, 10.0Hz; tracking_loop = default_estimator)];
+        tracking_loop = default_estimator,
     )
     merged_default = merge_sats(
         default_track_state,
         1,
-        TrackedSat(gpsl1, 2, 11.5, 20.0Hz; doppler_estimator = default_estimator),
+        TrackedSat(gpsl1, 2, 11.5, 20.0Hz; tracking_loop = default_estimator),
     )
-    @test merged_default.doppler_estimator === default_estimator
+    @test merged_default.tracking_loop === default_estimator
 end
 
-@testset "add_satellite! honors a rebuilt estimator on handoff" begin
+@testset "add_satellite! honors a tracking loop rebuilt for new sats" begin
     import Tracking
     using TrackingLoops: AbstractTrackingLoop
 
-    # Rebuilds itself on handoff, same concrete type, as the
-    # `update_estimator_on_handoff` docstring allows.
-    struct RebuildingEstimator <: AbstractTrackingLoop
+    # Rebuilds itself for new sats, same concrete type, as the
+    # `update_tracking_loop_on_new_sats` docstring allows.
+    struct RebuildingTrackingLoop <: AbstractTrackingLoop
         num_registered::Int
     end
 
     struct SatRebuildingState end
 
-    TrackingLoops.init_loop_state(::RebuildingEstimator, ::TrackedSat) =
+    TrackingLoops.init_loop_state(::RebuildingTrackingLoop, ::TrackedSat) =
         SatRebuildingState()
 
-    Tracking.update_estimator_on_handoff(est::RebuildingEstimator, new_sats) =
-        RebuildingEstimator(est.num_registered + length(new_sats))
+    Tracking.update_tracking_loop_on_new_sats(loop::RebuildingTrackingLoop, new_sats) =
+        RebuildingTrackingLoop(loop.num_registered + length(new_sats))
 
-    ts = TrackState(; signal = GPSL1CA(), doppler_estimator = RebuildingEstimator(0))
+    ts = TrackState(; signal = GPSL1CA(), tracking_loop = RebuildingTrackingLoop(0))
     ts2 = add_satellite!(ts; prn = 1, carrier_doppler = 100.0Hz)
-    @test ts2.doppler_estimator.num_registered == 1
+    @test ts2.tracking_loop.num_registered == 1
     # The dictionary is still mutated in place.
     @test length(get_sat_states(ts, :default)) == 1
     @test get_sat_states(ts2, :default) === get_sat_states(ts, :default)
@@ -530,10 +514,10 @@ end
         sat.carrier_doppler,
         sat.next_sample_index,
         sat.signals,
-        sat.doppler_estimator_state,
+        sat.loop_state,
     )
     ts3 = add_satellite!(ts2, :default, sat2)
-    @test ts3.doppler_estimator.num_registered == 2
+    @test ts3.tracking_loop.num_registered == 2
     @test length(get_sat_states(ts3, :default)) == 2
 
     # Otherwise the identical TrackState comes back.
@@ -655,9 +639,9 @@ end
     @test_throws ArgumentError TrackState((gps = empty_dict,))
 end
 
-@testset "TrackState(satellites::SatelliteDicts) validates estimator state types (issue #134)" begin
+@testset "TrackState(satellites::SatelliteDicts) validates loop state types (issue #134)" begin
     gpsl1 = GPSL1CA()
-    sat_default = TrackedSat(gpsl1, 1, 10.5, 10.0Hz)  # default estimator
+    sat_default = TrackedSat(gpsl1, 1, 10.5, 10.0Hz)  # default tracking loop
     different = ScalarTrackingLoop(
         ThirdOrderBilinearLF;
         wide_carrier_loop_bandwidth = 22.0Hz,
@@ -665,11 +649,11 @@ end
     )
     @test_throws ArgumentError TrackState(
         (gps = dictionary([1 => sat_default]),);
-        doppler_estimator = different,
+        tracking_loop = different,
     )
 end
 
-@testset "TrackState(; signals = SignalGroup) validates pre-populated sats' estimator (issue #134)" begin
+@testset "TrackState(; signals = SignalGroup) validates pre-populated sats' tracking loop (issue #134)" begin
     ts0 = TrackState(; signal = GPSL1CA())
     ts0 = add_satellite!(ts0; prn = 1)
     populated_group = ts0.groups.default
@@ -680,14 +664,14 @@ end
     )
     @test_throws ArgumentError TrackState(;
         signals = (gps = populated_group,),
-        doppler_estimator = different,
+        tracking_loop = different,
     )
 end
 
 @testset "merge_sats rejects sats whose full slot type mismatches (issue #134)" begin
     gpsl1 = GPSL1CA()
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 10.5, 10.0Hz)])
-    # Same estimator state, different correlator: an ArgumentError, not a
+    # Same tracking loop state, different correlator: an ArgumentError, not a
     # MethodError downstream.
     odd = TrackedSat(
         gpsl1,
@@ -705,7 +689,7 @@ end
     sats = get_sat_states(ts)
     old = sats[1]
     overridden_state = TrackingLoops.ScalarLoopState(
-        get_doppler_estimator_state(old);
+        get_loop_state(old);
         bandwidths = TrackingLoops.LoopBandwidths(;
             wide_carrier = 5.0Hz,
             narrow_carrier = 4.0Hz,
@@ -713,11 +697,11 @@ end
         ),
     )
     fake_prompt_signals = map(old.signals) do s
-        state = s.loop_state
+        state = s.post_correlation_state
         bank = state.last_filtered_correlator_bank
         Tracking.TrackedSignal(
             s;
-            loop_state = TrackingLoops.PostCorrelationState(
+            post_correlation_state = TrackingLoops.PostCorrelationState(
                 state;
                 last_filtered_correlator_bank = TrackingLoops.set_correlator_outputs(
                     bank,
@@ -726,14 +710,10 @@ end
             ),
         )
     end
-    sats[1] = TrackedSat(
-        old;
-        signals = fake_prompt_signals,
-        doppler_estimator_state = overridden_state,
-    )
+    sats[1] = TrackedSat(old; signals = fake_prompt_signals, loop_state = overridden_state)
 
     reset_loop_filters!(ts, 1)
-    state = get_doppler_estimator_state(get_sat_state(ts, 1))
+    state = get_loop_state(get_sat_state(ts, 1))
     @test state.bandwidths.wide_carrier == 5.0Hz
     @test state.bandwidths.narrow_carrier == 4.0Hz
     @test state.bandwidths.code == 0.25Hz
@@ -756,30 +736,25 @@ end
     set_preferred_num_code_blocks_to_integrate!(track_state, 10)
     @test get_preferred_num_code_blocks_to_integrate(track_state) == 10
 
-    @test get_doppler_estimator_state(get_sat_state(track_state, 1)).initial_carrier_doppler ==
-          100.0Hz
+    @test get_loop_state(get_sat_state(track_state, 1)).initial_carrier_doppler == 100.0Hz
 
     # As if the loop had converged elsewhere.
     sats = get_sat_states(track_state)
     sats[1] = TrackedSat(sats[1]; carrier_doppler = 137.0Hz, code_doppler = 0.5Hz)
     @test get_carrier_doppler(track_state, 1) == 137.0Hz
-    @test get_doppler_estimator_state(get_sat_state(track_state, 1)).initial_carrier_doppler ==
-          100.0Hz
+    @test get_loop_state(get_sat_state(track_state, 1)).initial_carrier_doppler == 100.0Hz
 
     reset_loop_filters!(track_state, 1)
-    # The reset keeps the Doppler and re-seeds the estimator from it.
+    # The reset keeps the Doppler and re-seeds the tracking loop from it.
     @test get_carrier_doppler(track_state, 1) == 137.0Hz
     @test get_code_doppler(track_state, 1) == 0.5Hz
-    @test get_doppler_estimator_state(get_sat_state(track_state, 1)).initial_carrier_doppler ==
-          137.0Hz
-    @test get_doppler_estimator_state(get_sat_state(track_state, 1)).initial_code_doppler ==
-          0.5Hz
+    @test get_loop_state(get_sat_state(track_state, 1)).initial_carrier_doppler == 137.0Hz
+    @test get_loop_state(get_sat_state(track_state, 1)).initial_code_doppler == 0.5Hz
 
     sats[1] = TrackedSat(sats[1]; carrier_doppler = 201.0Hz)
     reset_loop_filters!(track_state)
     @test get_carrier_doppler(track_state, 1) == 201.0Hz
-    @test get_doppler_estimator_state(get_sat_state(track_state, 1)).initial_carrier_doppler ==
-          201.0Hz
+    @test get_loop_state(get_sat_state(track_state, 1)).initial_carrier_doppler == 201.0Hz
 end
 
 @testset "non-mutating constructors give their result its own sample offsets" begin
@@ -814,7 +789,7 @@ end
     old = TrackState(; signal = gpsl1, sample_offsets = (; l1 => 8000))
     rebuilt = TrackState(;
         signals = (l1 = (gpsl1,), l5 = (GPSL5I(),)),
-        doppler_estimator = old.doppler_estimator,
+        tracking_loop = old.tracking_loop,
         sample_offsets = old.sample_offsets,
     )
     @test rebuilt.sample_offsets == Dict(l1 => 8000, l5 => 0)

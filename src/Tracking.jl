@@ -107,7 +107,7 @@ export get_prn,
     TrackedSat,
     get_signal,
     get_signals,
-    get_doppler_estimator_state,
+    get_loop_state,
     CPUDownconvertAndCorrelator,
     CPUThreadedDownconvertAndCorrelator,
     Int16DownconvertAndCorrelator,
@@ -185,8 +185,7 @@ include("sat_state.jl")
 """
 $(SIGNATURES)
 
-The tracking state: the satellites of every signal group and the Doppler
-estimator.
+The tracking state: the satellites of every signal group and the tracking loop.
 
 `groups` is a NamedTuple of [`SignalGroup`](@ref)s.
 
@@ -204,21 +203,21 @@ one pointer (see `_park_noise_items!`). Shared by every derived `TrackState`.
 
 `sample_offsets` counts, per band (keyed by `get_band_id`), the samples earlier
 [`track!`](@ref) calls consumed: the origin of the current measurement on a
-sample grid that runs on across calls. The estimate phase adds it to a record's
-index, so an estimator with per-satellite state of its own (TrackingLoops'
+sample grid that runs on across calls. [`step_tracking_loops!`](@ref) adds it to
+a record's index, so a tracking loop with shared state of its own (TrackingLoops'
 `VectorTrackingLoop`) sees every satellite on one time grid. The in-place mutators
 share it; [`track`](@ref), [`merge_sats`](@ref), [`add_satellite`](@ref) and
 [`remove_satellite`](@ref) give their result a copy.
 
-A fresh `TrackState` starts every band at `0`. To carry such an estimator over
+A fresh `TrackState` starts every band at `0`. To carry such a tracking loop over
 into a rebuilt `TrackState` (e.g. to add a band), pass the old state's offsets
 as the `sample_offsets` keyword, or the estimator receives records from its
 past. A band the old state did not track starts at
 `elapsed_time * sampling_frequency` samples of the new band.
 """
-struct TrackState{G<:SignalGroups,DE<:AbstractTrackingLoop,NE<:NoiseDensityEstimators}
+struct TrackState{G<:SignalGroups,TL<:AbstractTrackingLoop,NE<:NoiseDensityEstimators}
     groups::G
-    doppler_estimator::DE
+    tracking_loop::TL
     noise_estimators::NE
     noise_descriptor::Base.RefValue{Any}
     sample_offsets::Dict{Symbol,Int}
@@ -228,12 +227,12 @@ end
 # which keeps the steady state allocation-free.
 TrackState(
     groups::SignalGroups,
-    doppler_estimator::AbstractTrackingLoop,
+    tracking_loop::AbstractTrackingLoop,
     noise_estimators::NoiseDensityEstimators;
     sample_offsets = nothing,
 ) = TrackState(
     groups,
-    doppler_estimator,
+    tracking_loop,
     noise_estimators,
     Base.RefValue{Any}(nothing),
     _initial_sample_offsets(groups, sample_offsets),
@@ -270,7 +269,7 @@ include("downconvert_and_correlate_cpu.jl")
 include("downconvert_and_correlate_int16.jl")
 include("downconvert_and_correlate_onebit.jl")
 include("downconvert_and_correlate_twobit.jl")
-include("conventional_pll_and_dll.jl")
+include("tracking_loops.jl")
 include("tracking_state.jl")
 include("track.jl")
 include("position_velocity_time.jl")

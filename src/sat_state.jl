@@ -16,10 +16,10 @@ struct TrackedSignal{
     correlator_bank::C
     last_fully_integrated_correlator::C
     # Advanced per integration by TrackingLoops' `process_correlator_bank_output!`.
-    loop_state::P
+    post_correlation_state::P
     filtered_prompts::Vector{ComplexF64}
-    # Records completed in the current chunk: pushed by the correlate phase,
-    # folded and emptied by the Doppler estimator.
+    # Integrations completed in the current chunk: pushed by the correlate phase,
+    # stepped through the tracking loop and emptied by `step_tracking_loops!`.
     correlator_bank_outputs::Vector{CorrelatorBankOutput{C}}
     # In primary code blocks; see `set_preferred_num_code_blocks_to_integrate!`.
     preferred_num_code_blocks_to_integrate::Int
@@ -120,7 +120,7 @@ function TrackedSignal(
     integrated_samples = nothing,
     correlator_bank::Maybe{C} = nothing,
     last_fully_integrated_correlator::Maybe{C} = nothing,
-    loop_state::Maybe{PostCorrelationState{S}} = nothing,
+    post_correlation_state::Maybe{PostCorrelationState{S}} = nothing,
     cn0_estimator::Maybe{AbstractCN0Estimator} = nothing,
     preferred_num_code_blocks_to_integrate = nothing,
 ) where {S<:AbstractGNSSSignal,C<:AbstractCorrelatorBank}
@@ -129,13 +129,15 @@ function TrackedSignal(
             get_signal(t),
             preferred_num_code_blocks_to_integrate,
         )
-    new_loop_state =
-        PostCorrelationState(something(loop_state, t.loop_state); cn0_estimator)
-    TrackedSignal{S,C,typeof(new_loop_state)}(
+    new_post_correlation_state = PostCorrelationState(
+        something(post_correlation_state, t.post_correlation_state);
+        cn0_estimator,
+    )
+    TrackedSignal{S,C,typeof(new_post_correlation_state)}(
         something(integrated_samples, t.integrated_samples),
         something(correlator_bank, t.correlator_bank),
         something(last_fully_integrated_correlator, t.last_fully_integrated_correlator),
-        new_loop_state,
+        new_post_correlation_state,
         t.filtered_prompts,
         t.correlator_bank_outputs,
         something(
@@ -145,7 +147,7 @@ function TrackedSignal(
     )
 end
 
-get_signal(t::TrackedSignal) = t.loop_state.signal
+get_signal(t::TrackedSignal) = t.post_correlation_state.signal
 
 """
 $(SIGNATURES)
@@ -168,7 +170,7 @@ The filtered prompt of the most recently completed predetection
 integration.
 """
 get_last_fully_integrated_filtered_prompt(t::TrackedSignal) =
-    get_prompt(t.loop_state.last_filtered_correlator_bank)
+    get_prompt(t.post_correlation_state.last_filtered_correlator_bank)
 
 """
 $(SIGNATURES)
@@ -177,7 +179,7 @@ The number of primary code periods the most recently completed predetection
 integration spanned.
 """
 get_last_fully_integrated_num_code_blocks(t::TrackedSignal) =
-    get_last_num_code_periods(t.loop_state)
+    get_last_num_code_periods(t.post_correlation_state)
 
 """
 $(SIGNATURES)
@@ -190,7 +192,7 @@ is `C/N₀ · T`. `NaN` before the first integration.
 Not to be confused with `get_integrated_samples`, the record in progress.
 """
 function get_last_fully_integrated_integration_time(t::TrackedSignal)
-    state = t.loop_state
+    state = t.post_correlation_state
     state.last_num_integrated_samples / state.sampling_frequency
 end
 
@@ -206,8 +208,8 @@ get_filtered_prompts(t::TrackedSignal) = t.filtered_prompts
 $(SIGNATURES)
 
 The [`CorrelatorBankOutput`](@extref TrackingLoops.CorrelatorBankOutput)s this signal
-completed in the current chunk, in order. The Doppler estimator consumes and
-clears them, so read them inside a custom estimator or right after a bare
+completed in the current chunk, in order. [`step_tracking_loops!`](@ref) consumes
+and clears them, so read them inside a custom tracking loop or right after a bare
 `downconvert_and_correlate!`. See [Chunked Doppler updates](@ref).
 """
 get_correlator_bank_outputs(t::TrackedSignal) = t.correlator_bank_outputs
@@ -219,15 +221,15 @@ Append an externally built
 [`CorrelatorBankOutput`](@extref TrackingLoops.CorrelatorBankOutput) to `signal`'s per-chunk
 buffer and return `signal`: the ingest path for an **external correlator
 producer** (e.g. FPGA dumps). Append per signal in `end_sample_index` order, then run
-[`estimate_dopplers_and_filter_prompt!`](@ref), which folds and clears the buffer.
+[`step_tracking_loops!`](@ref), which steps the tracking loop with them and clears the buffer.
 Type-checked against the signal's correlator bank, unlike pushing to
 [`get_correlator_bank_outputs`](@ref). See [External correlator producers](@ref).
 """
 append_correlator_bank_output!(t::TrackedSignal, output::CorrelatorBankOutput) =
     (push!(t.correlator_bank_outputs, output); t)
 
-get_post_corr_filter(t::TrackedSignal) = t.loop_state.post_corr_filter
-get_cn0_estimator(t::TrackedSignal) = t.loop_state.cn0_estimator
+get_post_corr_filter(t::TrackedSignal) = t.post_correlation_state.post_corr_filter
+get_cn0_estimator(t::TrackedSignal) = t.post_correlation_state.cn0_estimator
 
 """
 $(SIGNATURES)
@@ -235,7 +237,7 @@ $(SIGNATURES)
 The signal's [`BitSynchronizer`](@extref TrackingLoops.BitSynchronizer): bit or secondary-code
 sync and the soft bits for the decoder.
 """
-get_bit_buffer(t::TrackedSignal) = t.loop_state.bit_synchronizer
+get_bit_buffer(t::TrackedSignal) = t.post_correlation_state.bit_synchronizer
 get_soft_bits(t::TrackedSignal) = get_soft_bits(get_bit_buffer(t))
 
 """
@@ -268,10 +270,10 @@ get_preferred_num_code_blocks_to_integrate(t::TrackedSignal) =
 $(SIGNATURES)
 
 The state of one tracked satellite: the carrier/code Doppler and phase shared by
-its signals, the per-signal state in `signals`, and the Doppler-estimator state
-in `doppler_estimator_state`.
+its signals, the per-signal state in `signals`, and the tracking loop's
+per-satellite state in `loop_state`.
 
-`signals[1]` is the **estimator-driver signal**. The scalar tracking loops
+`signals[1]` is the **driver signal**. The scalar tracking loops
 ([`ScalarTrackingLoop`](@extref TrackingLoops.ScalarTrackingLoop),
 [`DelayCompensatedTrackingLoop`](@extref TrackingLoops.DelayCompensatedTrackingLoop))
 run their discriminators on it, at its integration boundaries; the other signals
@@ -289,7 +291,7 @@ struct TrackedSat{Signals<:Tuple{Vararg{TrackedSignal}},D}
     carrier_doppler::typeof(1.0Hz)
     next_sample_index::Int
     signals::Signals
-    doppler_estimator_state::D
+    loop_state::D
 end
 
 # A signal's post-sync period in chips: the secondary-code period for a pilot, and
@@ -371,15 +373,15 @@ end
 )
     head = first(t)
     sig = get_signal(head)
-    loop_state = head.loop_state
-    if is_bit_or_secondary_code_synced(loop_state)
+    post_correlation_state = head.post_correlation_state
+    if is_bit_or_secondary_code_synced(post_correlation_state)
         prim = get_code_length(sig)
         sec = get_secondary_code_length(sig)
         total = prim * sec
         # Without a secondary code (e.g. GPS L1 C/A) nothing is pinned.
         if sec > 1 && total > best_len
             best_len = total
-            best_chips = get_secondary_code_phase(loop_state) * prim
+            best_chips = get_secondary_code_phase(post_correlation_state) * prim
             best_prim = prim
         end
     end
@@ -401,7 +403,7 @@ function TrackedSat(
     prn::Int,
     code_phase,
     carrier_doppler;
-    doppler_estimator::AbstractTrackingLoop = _default_tracking_loop(),
+    tracking_loop::AbstractTrackingLoop = _default_tracking_loop(),
     carrier_phase = 0.0,
     code_doppler = nothing,
 )
@@ -426,7 +428,7 @@ function TrackedSat(
         map(s -> _join_satellite(s, prn, driver_carrier_phase_offset), tracked_signals),
         nothing,
     )
-    doppler_estimator_state = init_loop_state(doppler_estimator, bare)
+    loop_state = init_loop_state(tracking_loop, bare)
     TrackedSat(
         bare.prn,
         bare.code_phase,
@@ -435,7 +437,7 @@ function TrackedSat(
         bare.carrier_doppler,
         bare.next_sample_index,
         bare.signals,
-        doppler_estimator_state,
+        loop_state,
     )
 end
 
@@ -445,8 +447,8 @@ end
 _join_satellite(tsig::TrackedSignal, prn::Int, driver_carrier_phase_offset::Real) =
     TrackedSignal(
         tsig;
-        loop_state = PostCorrelationState(
-            tsig.loop_state;
+        post_correlation_state = PostCorrelationState(
+            tsig.post_correlation_state;
             prn,
             driver_carrier_phase_offset,
         ),
@@ -457,8 +459,8 @@ $(SIGNATURES)
 
 Build a [`TrackedSat`](@ref) tracking a tuple of signals, e.g.
 `TrackedSat((GPSL1C_P(), GPSL1C_D(), GPSL1CA()), prn, code_phase, carrier_doppler)`,
-each with its default correlator bank; the first is the estimator driver.
-`doppler_estimator`, `carrier_phase` and `code_doppler` forward to the
+each with its default correlator bank; the first is the driver signal.
+`tracking_loop`, `carrier_phase` and `code_doppler` forward to the
 `TrackedSignal`-tuple constructor.
 
 `cn0_estimator` is a **tuple**, one per signal in order (each signal needs its
@@ -555,7 +557,7 @@ function TrackedSat(
     TrackedSat((tracked_signal,), prn, code_phase, carrier_doppler; kwargs...)
 end
 
-# Kwarg-update constructor; `signals` and `doppler_estimator_state` keep their types.
+# Kwarg-update constructor; `signals` and `loop_state` keep their types.
 function TrackedSat(
     sat::TrackedSat{Signals,D};
     code_phase = nothing,
@@ -564,7 +566,7 @@ function TrackedSat(
     carrier_doppler = nothing,
     next_sample_index = nothing,
     signals::Maybe{Signals} = nothing,
-    doppler_estimator_state::Maybe{D} = nothing,
+    loop_state::Maybe{D} = nothing,
 ) where {Signals<:Tuple{Vararg{TrackedSignal}},D}
     TrackedSat{Signals,D}(
         sat.prn,
@@ -574,8 +576,7 @@ function TrackedSat(
         isnothing(carrier_doppler) ? sat.carrier_doppler : carrier_doppler,
         isnothing(next_sample_index) ? sat.next_sample_index : next_sample_index,
         isnothing(signals) ? sat.signals : signals,
-        isnothing(doppler_estimator_state) ? sat.doppler_estimator_state :
-        doppler_estimator_state,
+        isnothing(loop_state) ? sat.loop_state : loop_state,
     )
 end
 
@@ -640,10 +641,10 @@ get_signals(sat::TrackedSat) = sat.signals
 """
 $(SIGNATURES)
 
-Get the per-satellite Doppler estimator state (e.g. the loop-filter state
-for the conventional PLL/DLL).
+Get the tracking loop's per-satellite state (e.g. the loop-filter state of a
+scalar tracking loop, a `TrackingLoops.ScalarLoopState`).
 """
-get_doppler_estimator_state(sat::TrackedSat) = sat.doppler_estimator_state
+get_loop_state(sat::TrackedSat) = sat.loop_state
 
 # Per-signal accessors on a TrackedSat, through `_find_signal`: no selector
 # (single-signal sats only), an `Integer` index, or a signal type (must match
@@ -731,20 +732,20 @@ end
 end
 
 """
-    init_loop_state(estimator, sat::TrackedSat)
+    init_loop_state(tracking_loop, sat::TrackedSat)
 
-Build the per-satellite Doppler-estimator state for `sat`: TrackingLoops'
-[`init_loop_state`](@ref) on the satellite's estimator-driver signal
-(`signals[1]`) and its handover Dopplers. A custom estimator defines either
-this form or TrackingLoops' four-argument one.
+Build the tracking loop's per-satellite state for `sat`: TrackingLoops'
+[`init_loop_state`](@ref) on the satellite's driver signal (`signals[1]`) and its
+handover Dopplers. A custom tracking loop defines either this form or
+TrackingLoops' four-argument one.
 
 It must be **pure**: it also builds the PRN-0 template sat that fixes a group's
 slot type, probes types when validating pre-built sats, and re-seeds in
 [`reset_loop_filters!`](@ref). Register satellites in shared state in
-[`update_estimator_on_handoff`](@ref Tracking.update_estimator_on_handoff) instead.
+[`update_tracking_loop_on_new_sats`](@ref Tracking.update_tracking_loop_on_new_sats) instead.
 """
-init_loop_state(doppler_estimator::AbstractTrackingLoop, sat::TrackedSat) = init_loop_state(
-    doppler_estimator,
+init_loop_state(tracking_loop::AbstractTrackingLoop, sat::TrackedSat) = init_loop_state(
+    tracking_loop,
     get_signal(first(sat.signals)),
     sat.carrier_doppler,
     sat.code_doppler,
@@ -753,10 +754,10 @@ init_loop_state(doppler_estimator::AbstractTrackingLoop, sat::TrackedSat) = init
 """
 $(SIGNATURES)
 
-Update an estimator's cross-satellite shared state when satellites enter the
-track set. Called once per handoff ([`merge_sats`](@ref),
+Update a tracking loop's cross-satellite shared state when satellites enter the
+track set. Called once per batch ([`merge_sats`](@ref),
 [`add_satellite`](@ref), [`add_satellite!`](@ref)) with the incoming satellites,
-after [`init_loop_state`](@ref). The default returns `estimator` unchanged.
+after [`init_loop_state`](@ref). The default returns `tracking_loop` unchanged.
 
 The result must have the input's concrete type ([`TrackState`](@ref) is
 parameterized on it): grow resizable containers in place, or rebuild with
@@ -764,7 +765,8 @@ parameterized on it): grow resizable containers in place, or rebuild with
 constructor. The returned `TrackState` carries the result, so callers of the
 in-place [`add_satellite!`](@ref) too must keep using the returned state.
 """
-update_estimator_on_handoff(estimator::AbstractTrackingLoop, _new_sats) = estimator
+update_tracking_loop_on_new_sats(tracking_loop::AbstractTrackingLoop, _new_sats) =
+    tracking_loop
 
 """
 A tuple or named tuple of per-group satellite dictionaries, each a
@@ -894,9 +896,9 @@ Build an empty `SignalGroup` from a signal tuple; populate it with
 `get_band(first(signals))`, `num_ants` to `NumAnts(1)`. All signals must be on
 `band`, share one chip rate and differ in signal id (`ArgumentError` otherwise).
 
-`doppler_estimator` only shapes the slot type; the estimator that runs is the
+`tracking_loop` only shapes the slot type; the tracking loop that runs is the
 `TrackState`'s, which rebuilds a mismatched empty slot. Leave it at its default
-and configure the estimator on `TrackState`.
+and configure the tracking loop on `TrackState`.
 
 ```julia
 SignalGroup((GPSL1CA(),))                              # band L1(), 1 antenna
@@ -907,10 +909,10 @@ function SignalGroup(
     signals::Tuple{Vararg{AbstractGNSSSignal}};
     band = get_band(first(signals)),
     num_ants::NumAnts = NumAnts(1),
-    doppler_estimator::AbstractTrackingLoop = _default_tracking_loop(),
+    tracking_loop::AbstractTrackingLoop = _default_tracking_loop(),
 )
     _validate_signal_group(signals, band)
-    template = _make_template_tracked_sat(signals, doppler_estimator, num_ants)
+    template = _make_template_tracked_sat(signals, tracking_loop, num_ants)
     sats = Dictionary{Int,typeof(template)}(Int[], typeof(template)[])
     SignalGroup(band, sats, signals, num_ants)
 end
@@ -989,6 +991,6 @@ Get the satellite state for a specific satellite identifier.
 get_sat_state(sats::Dictionary{<:Any,<:TrackedSat}, prn) = sats[prn]
 get_sat_state(sats::Dictionary{<:Any,<:TrackedSat}) = only(sats)
 
-estimate_cn0(tsig::TrackedSignal) = estimate_cn0(tsig.loop_state)
+estimate_cn0(tsig::TrackedSignal) = estimate_cn0(tsig.post_correlation_state)
 
 estimate_cn0(sat::TrackedSat, sel...) = estimate_cn0(_find_signal(sat.signals, sel...))

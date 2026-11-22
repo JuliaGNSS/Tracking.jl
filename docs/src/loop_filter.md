@@ -11,21 +11,21 @@ The loop filters are provided by
 
 ## Default Configuration
 
-The default Doppler estimator is TrackingLoops' `ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)`, a
+The default tracking loop is `ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)`, a
 scalar PLL/DLL which uses:
 - `ThirdOrderAssistedBilinearLF` for the carrier loop (FLL-assisted PLL for improved dynamics)
 - `SecondOrderBilinearLF` for the code loop
 
-When [`TrackState`](@ref) builds the default estimator from a signal-tuple
-declaration, the carrier loop is **staged** (see
+The carrier loop is **staged** (see
 [`CarrierLoopStage`](@extref TrackingLoops.CarrierLoopStage)): it pulls in as an
 FLL-assisted PLL at a **wide** 50 Hz with a 5 Hz **FLL-assist** bandwidth, drops the
 FLL once a phase-lock indicator reads lock, and later narrows to a **narrow** 18 Hz.
-The **code** bandwidth is a flat 1 Hz. All are one-sided noise bandwidths `BL`
-(Kaplan & Hegarty), for every signal. The stages only advance, and
+`ScalarTrackingLoop(ThirdOrderBilinearLF)` drops the FLL and pulls in at the wide
+PLL. The **code** bandwidth is a flat 1 Hz. All are one-sided noise bandwidths `BL` (Kaplan &
+Hegarty), for every signal. The stages only advance, and
 [`reset_loop_filters!`](@ref) keeps the stage reached; a satellite added anew starts
 over. Read a satellite's stage with
-`get_carrier_loop_stage(get_doppler_estimator_state(sat))`.
+`get_carrier_loop_stage(get_loop_state(sat))`.
 
 Where the replica wipes every sign modulation off the prompt (a dataless signal
 synced to its secondary code) the carrier discriminators turn four-quadrant.
@@ -59,9 +59,9 @@ Override per signal by defining methods of
 [`default_narrow_carrier_loop_bandwidth`](@extref TrackingLoops.default_narrow_carrier_loop_bandwidth-Tuple{AbstractGNSSSignal}),
 [`default_fll_assist_loop_bandwidth`](@extref TrackingLoops.default_fll_assist_loop_bandwidth-Tuple{AbstractGNSSSignal}) /
 [`default_code_loop_bandwidth`](@extref TrackingLoops.default_code_loop_bandwidth-Tuple{AbstractGNSSSignal}), or override at construction
-time by passing your own `doppler_estimator =` to `TrackState`.
+time by passing your own `tracking_loop =` to `TrackState`.
 
-## Doppler Estimators
+## Tracking Loops
 
 In the TrackingLoops manual:
 
@@ -91,7 +91,7 @@ reset_loop_filters!
 
 ## Custom Configuration
 
-You can customize the loop filters and bandwidths when creating the Doppler estimator:
+You can customize the loop filters and bandwidths when creating the tracking loop:
 
 ```jldoctest custom_loop
 julia> using Tracking, TrackingLoops, GNSSSignals, TrackingLoopFilters
@@ -99,7 +99,7 @@ julia> using Tracking, TrackingLoops, GNSSSignals, TrackingLoopFilters
 julia> using Tracking: Hz
 
 julia> # FLL-assisted PLL during pull-in, with custom loop filter types
-       doppler_estimator = ScalarTrackingLoop(
+       tracking_loop = ScalarTrackingLoop(
            ThirdOrderAssistedBilinearLF,  # carrier loop filter type
            SecondOrderBilinearLF;         # code loop filter type
            wide_carrier_loop_bandwidth = 30.0Hz,
@@ -107,7 +107,7 @@ julia> # FLL-assisted PLL during pull-in, with custom loop filter types
            code_loop_bandwidth = 0.5Hz
        );
 
-julia> track_state = TrackState(; signal = GPSL1CA(), doppler_estimator);
+julia> track_state = TrackState(; signal = GPSL1CA(), tracking_loop);
 
 julia> track_state = add_satellite!(track_state; prn = 1, code_phase = 50.0, carrier_doppler = 1000.0Hz);
 ```
@@ -118,8 +118,8 @@ You can implement a custom loop filter `MyLoopFilter <: AbstractLoopFilter`. In 
 case, a specialized `filter_loop` function is needed. For more information
 refer to [TrackingLoopFilters.jl](https://github.com/JuliaGNSS/TrackingLoopFilters.jl).
 
-## Custom Doppler Estimator
+## Custom Tracking Loop
 
-To replace the loop-filter-based estimator with a different algorithm
-(Kalman filter, joint-channel estimator, …), see the dedicated guide
-in [`custom_doppler_estimator.md`](custom_doppler_estimator.md).
+To replace the loop-filter-based tracking loop with a different algorithm
+(Kalman filter, joint-channel loop, …), see the dedicated guide
+in [`custom_tracking_loop.md`](custom_tracking_loop.md).

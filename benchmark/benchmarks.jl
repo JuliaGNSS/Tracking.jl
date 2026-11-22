@@ -56,7 +56,7 @@ const _CorrelatorNoiseDensityEstimator =
 _antennas(n) = (; num_ants = _num_ants(n))
 _num_ants(n::Integer) = NumAnts(n)
 _num_ants(n) = n
-_with_tracking_loop(loop) = _TL7 ? (; doppler_estimator = loop) : (; doppler_estimator = loop)
+_with_tracking_loop(loop) = _TL7 ? (; tracking_loop = loop) : (; doppler_estimator = loop)
 _with_correlator_bank(c) = _TL7 ? (; correlator_bank = c) : (; correlator = c)
 _with_post_corr_filter() = (; post_corr_filter = TrackingLoops.DefaultPostCorrFilter())
 # `signal` with its bit synchronizer replaced; TrackingLoops 7 keeps it in the signal's
@@ -65,8 +65,8 @@ _with_bit_synchronizer(signal, b) =
     _TL7 ?
     Tracking.TrackedSignal(
         signal;
-        loop_state = TrackingLoops.PostCorrelationState(
-            signal.loop_state;
+        post_correlation_state = TrackingLoops.PostCorrelationState(
+            signal.post_correlation_state;
             bit_synchronizer = b,
         ),
     ) : Tracking.TrackedSignal(signal; bit_buffer = b)
@@ -113,7 +113,7 @@ function _make_initial_sat(
         prn,
         code_phase,
         carrier_doppler;
-        doppler_estimator = _default_tracking_loop(),
+        _with_tracking_loop(_default_tracking_loop())...,
         _antennas(num_ants)...,
         cn0_kw...,
     )
@@ -495,7 +495,7 @@ const _MULTI_SIGNALS = (
 )
 function _make_multi_signal_track_state(; n_signals, nsamp)
     gpsl1 = GPSL1CA()
-    estimator = _default_tracking_loop()
+    tracking_loop = _default_tracking_loop()
     signals = ntuple(
         i -> Tracking.TrackedSignal(
             _MULTI_SIGNALS[i];
@@ -505,8 +505,8 @@ function _make_multi_signal_track_state(; n_signals, nsamp)
         ),
         n_signals,
     )
-    sat = Tracking.TrackedSat(signals, 1, 10.5, 1000.0Hz; doppler_estimator = estimator)
-    ts = TrackState(gpsl1, sat; doppler_estimator = estimator)
+    sat = Tracking.TrackedSat(signals, 1, 10.5, 1000.0Hz; _with_tracking_loop(tracking_loop)...)
+    ts = TrackState(gpsl1, sat; _with_tracking_loop(tracking_loop)...)
     ts, rand(Complex{Float32}, nsamp)
 end
 
@@ -725,7 +725,7 @@ _int16_capture_mat(nsamp, M) = repeat(_int16_capture(nsamp); outer = (1, M))
 
 # A multi-signal sat: the first N of `_MULTI_SIGNALS`, sharing one carrier and samples.
 function _axes_multisignal_state(n_signals)
-    est = _default_tracking_loop()
+    tracking_loop = _default_tracking_loop()
     signals = ntuple(
         i -> Tracking.TrackedSignal(
             _MULTI_SIGNALS[i];
@@ -735,8 +735,8 @@ function _axes_multisignal_state(n_signals)
         ),
         n_signals,
     )
-    sat = Tracking.TrackedSat(signals, 1, 10.5, 1000.0Hz; doppler_estimator = est)
-    TrackState(_AXES_SIG, sat; doppler_estimator = est)
+    sat = Tracking.TrackedSat(signals, 1, 10.5, 1000.0Hz; _with_tracking_loop(tracking_loop)...)
+    TrackState(_AXES_SIG, sat; _with_tracking_loop(tracking_loop)...)
 end
 
 # A single-signal sat with M antenna channels.

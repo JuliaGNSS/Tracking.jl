@@ -40,7 +40,8 @@ TrackingLoops.estimate_cn0(estimator::CountingCN0Estimator, integration_time) =
     # stored as is instead of being converted to the default estimator's type.
     tracked_signal = @inferred TrackedSignal(gpsl1; cn0_estimator = CountingCN0Estimator(0))
     @test get_cn0_estimator(tracked_signal) isa CountingCN0Estimator
-    @test typeof(tracked_signal.loop_state).parameters[5] === CountingCN0Estimator
+    @test typeof(tracked_signal.post_correlation_state).parameters[5] ===
+          CountingCN0Estimator
 
     # ... including when swapped onto an existing signal via the kwarg-update
     # constructor, which is why that kwarg is not pinned to the old type.
@@ -126,8 +127,8 @@ end
     # `tsig` as if its latest integration spanned `num_code_periods` code periods.
     _with_last_integration(tsig, num_code_periods; cn0_estimator) = Tracking.TrackedSignal(
         tsig;
-        loop_state = TrackingLoops.PostCorrelationState(
-            tsig.loop_state;
+        post_correlation_state = TrackingLoops.PostCorrelationState(
+            tsig.post_correlation_state;
             cn0_estimator,
             sampling_frequency = fs,
             last_num_code_periods = num_code_periods,

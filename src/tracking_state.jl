@@ -4,8 +4,8 @@ $(SIGNATURES)
 Construct a fresh `TrackState` from a declaration of which signals each
 group tracks. A *group* is a set of satellites with the same signal tuple, and
 so the same concrete `TrackedSat` type (type stability of the hot loop). The
-first signal of each tuple drives the Doppler estimator, which updates the
-satellite-shared carrier and code Doppler. The group key (`:modern_gps`, …) is
+first signal of each tuple is the driver signal: its integrations close the tracking
+loop, which updates the satellite-shared carrier and code Doppler. The group key (`:modern_gps`, …) is
 what `add_satellite!` refers to.
 
 ```julia
@@ -45,13 +45,13 @@ NamedTuple to configure the window, or to declare a source you fill with
 
 `sample_offsets` sets where each band's sample grid starts, keyed by `get_band_id`
 (`NamedTuple` or `AbstractDict`; missing bands start at `0`). Pass the old state's
-when rebuilding around a Doppler estimator that keeps state of its own; see the
+when rebuilding around a tracking loop that keeps state of its own; see the
 [`TrackState`](@ref) struct. The other constructors take the same keyword.
 """
 function TrackState(;
     signal::Maybe{AbstractGNSSSignal} = nothing,
     signals = nothing,
-    doppler_estimator::Maybe{AbstractTrackingLoop} = nothing,
+    tracking_loop::Maybe{AbstractTrackingLoop} = nothing,
     num_ants::NumAnts = NumAnts(1),
     noise_estimators::Maybe{NamedTuple} = nothing,
     sample_offsets = nothing,
@@ -76,16 +76,16 @@ function TrackState(;
         isnothing(signal) ? _normalize_signal_groups(signals) : (default = (signal,),)
     # Each satellite's loop bandwidth is seeded from its own group's driver
     # signal (`init_loop_state`), so groups need no shared compromise.
-    estimator = isnothing(doppler_estimator) ? _default_tracking_loop() : doppler_estimator
+    tracking_loop = something(tracking_loop, _default_tracking_loop())
     # An entry is a bare signal tuple (takes `num_ants`) or a pre-built
     # `SignalGroup` (carries its own band and `num_ants`).
     groups = map(sig_groups_nt) do entry
-        _normalize_group_entry(entry, estimator, num_ants)
+        _normalize_group_entry(entry, tracking_loop, num_ants)
     end
     _validate_same_band_num_ants(groups)
     TrackState(
         groups,
-        estimator,
+        tracking_loop,
         _resolve_noise_estimators(noise_estimators, groups);
         sample_offsets,
     )
@@ -110,7 +110,7 @@ end
 
 # An explicitly passed estimator must despread as many antennas as its signal's
 # group, or the floor and the prompt describe different arrays. Checked here,
-# where both are known, rather than as a shape error deep in the fold;
+# where both are known, rather than as a shape error deep in the loop update;
 # `NumAnts(estimator)` reads the count of any `AbstractNoiseDensityEstimator`.
 @inline function _validate_noise_estimator_num_ants(
     noise_estimators::NamedTuple,
@@ -203,31 +203,31 @@ end
 # Build a freshly-templated SignalGroup from a bare signal tuple.
 @inline function _normalize_group_entry(
     sig_tuple::Tuple{Vararg{AbstractGNSSSignal}},
-    doppler_estimator::AbstractTrackingLoop,
+    tracking_loop::AbstractTrackingLoop,
     num_ants::NumAnts,
 )
     band = get_band(first(sig_tuple))
     _validate_signal_group(sig_tuple, band)
-    template = _make_template_tracked_sat(sig_tuple, doppler_estimator, num_ants)
+    template = _make_template_tracked_sat(sig_tuple, tracking_loop, num_ants)
     sats = Dictionary{Int,typeof(template)}(Int[], typeof(template)[])
     SignalGroup(band, sats, sig_tuple, num_ants)
 end
 
 # Pre-built SignalGroup: passes through, except that an empty one whose slot
-# type does not fit `doppler_estimator` is rebuilt from a fresh template. Its own
+# type does not fit `tracking_loop` is rebuilt from a fresh template. Its own
 # `num_ants` wins over the `TrackState` keyword.
 @inline function _normalize_group_entry(
     g::SignalGroup,
-    doppler_estimator::AbstractTrackingLoop,
+    tracking_loop::AbstractTrackingLoop,
     _num_ants::NumAnts,
 )
     sats = g.satellites
     if !isempty(sats)
         # The existing sats fix the slot type; it must already match.
-        _assert_doppler_estimator_types_match(sats, doppler_estimator)
+        _assert_tracking_loop_types_match(sats, tracking_loop)
         return g
     end
-    template = _make_template_tracked_sat(g.signals, doppler_estimator, g.num_ants)
+    template = _make_template_tracked_sat(g.signals, tracking_loop, g.num_ants)
     if typeof(template) === eltype(sats)
         return g
     end
@@ -273,26 +273,26 @@ group's dictionary value type; its data (PRN 0, zero Doppler) is meaningless.
 """
 function _make_template_tracked_sat(
     signal_tuple::Tuple{Vararg{AbstractGNSSSignal}},
-    doppler_estimator::AbstractTrackingLoop,
+    tracking_loop::AbstractTrackingLoop,
     num_ants::NumAnts,
 )
-    TrackedSat(signal_tuple, 0, 0.0, 0.0Hz; doppler_estimator, num_ants)
+    TrackedSat(signal_tuple, 0, 0.0, 0.0Hz; tracking_loop, num_ants)
 end
 
 function TrackState(
     signal::AbstractGNSSSignal,
     tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}};
-    doppler_estimator::AbstractTrackingLoop = _default_tracking_loop(),
+    tracking_loop::AbstractTrackingLoop = _default_tracking_loop(),
     noise_estimators::Maybe{NamedTuple} = nothing,
     sample_offsets = nothing,
 )
     # `signal` is unused (each sat carries its signals); kept for compatibility.
     sats_dict = to_dictionary(tracked_sats)
-    _assert_doppler_estimator_types_match(sats_dict, doppler_estimator)
+    _assert_tracking_loop_types_match(sats_dict, tracking_loop)
     groups = (default = _signal_group_from_dict(sats_dict),)
     TrackState(
         groups,
-        doppler_estimator,
+        tracking_loop,
         _resolve_noise_estimators(noise_estimators, groups);
         sample_offsets,
     )
@@ -300,41 +300,41 @@ end
 
 function TrackState(
     tracked_sats::Dictionary{<:Any,<:TrackedSat};
-    doppler_estimator::AbstractTrackingLoop = _default_tracking_loop(),
+    tracking_loop::AbstractTrackingLoop = _default_tracking_loop(),
     noise_estimators::Maybe{NamedTuple} = nothing,
     sample_offsets = nothing,
 )
-    _assert_doppler_estimator_types_match(tracked_sats, doppler_estimator)
+    _assert_tracking_loop_types_match(tracked_sats, tracking_loop)
     groups = (default = _signal_group_from_dict(tracked_sats),)
     TrackState(
         groups,
-        doppler_estimator,
+        tracking_loop,
         _resolve_noise_estimators(noise_estimators, groups);
         sample_offsets,
     )
 end
 
-# Type-only check that the sats' `doppler_estimator_state` is what `estimator`
+# Type-only check that the sats' `loop_state` is what `tracking_loop`
 # would produce, with an error naming both types.
-@inline function _assert_doppler_estimator_types_match(
+@inline function _assert_tracking_loop_types_match(
     dict::Dictionary{<:Any,<:TrackedSat},
-    estimator::AbstractTrackingLoop,
+    tracking_loop::AbstractTrackingLoop,
 )
     isempty(dict) && return nothing
     sat = first(dict.values)
-    expected_state_type = typeof(init_loop_state(estimator, sat))
-    actual_state_type = typeof(sat.doppler_estimator_state)
+    expected_state_type = typeof(init_loop_state(tracking_loop, sat))
+    actual_state_type = typeof(sat.loop_state)
     expected_state_type === actual_state_type && return nothing
     throw(
         ArgumentError(
             string(
-                "TrackedSat has doppler_estimator_state of type ",
+                "TrackedSat has loop_state of type ",
                 actual_state_type,
-                ", but the configured doppler_estimator (",
-                typeof(estimator),
+                ", but the configured tracking_loop (",
+                typeof(tracking_loop),
                 ") would produce ",
                 expected_state_type,
-                ". Construct each TrackedSat with `doppler_estimator = <same instance>` ",
+                ". Construct each TrackedSat with `tracking_loop = <same instance>` ",
                 "as the one passed here.",
             ),
         ),
@@ -343,18 +343,15 @@ end
 
 function TrackState(
     satellites::SatelliteDicts;
-    doppler_estimator::AbstractTrackingLoop = _default_tracking_loop(),
+    tracking_loop::AbstractTrackingLoop = _default_tracking_loop(),
     noise_estimators::Maybe{NamedTuple} = nothing,
     sample_offsets = nothing,
 )
-    foreach(
-        d -> _assert_doppler_estimator_types_match(d, doppler_estimator),
-        Tuple(satellites),
-    )
+    foreach(d -> _assert_tracking_loop_types_match(d, tracking_loop), Tuple(satellites))
     groups = map(_signal_group_from_dict, satellites)
     TrackState(
         groups,
-        doppler_estimator,
+        tracking_loop,
         _resolve_noise_estimators(noise_estimators, groups);
         sample_offsets,
     )
@@ -362,15 +359,15 @@ end
 
 # Copy with overrides; the overrides keep the input's concrete type parameters.
 function TrackState(
-    track_state::TrackState{G,DE,NE};
+    track_state::TrackState{G,TL,NE};
     groups::Maybe{G} = nothing,
-    doppler_estimator::Maybe{DE} = nothing,
+    tracking_loop::Maybe{TL} = nothing,
     noise_estimators::Maybe{NE} = nothing,
     sample_offsets::Maybe{Dict{Symbol,Int}} = nothing,
-) where {G<:SignalGroups,DE<:AbstractTrackingLoop,NE<:NoiseDensityEstimators}
-    TrackState{G,DE,NE}(
+) where {G<:SignalGroups,TL<:AbstractTrackingLoop,NE<:NoiseDensityEstimators}
+    TrackState{G,TL,NE}(
         isnothing(groups) ? track_state.groups : groups,
-        isnothing(doppler_estimator) ? track_state.doppler_estimator : doppler_estimator,
+        isnothing(tracking_loop) ? track_state.tracking_loop : tracking_loop,
         isnothing(noise_estimators) ? track_state.noise_estimators : noise_estimators,
         track_state.noise_descriptor,
         isnothing(sample_offsets) ? track_state.sample_offsets : sample_offsets,
@@ -489,28 +486,28 @@ unchanged). `tracked_sats` may be a single `TrackedSat`, a `Vector`, or a
 `Dictionary` keyed by PRN; existing PRNs in the group are overwritten.
 
 Each sat's type must match the group's slot type, including the
-`doppler_estimator_state` the configured estimator produces. The estimator's
-[`update_estimator_on_handoff`](@ref Tracking.update_estimator_on_handoff) hook is called once with the incoming sats.
+`loop_state` the configured tracking loop produces. The tracking loop's
+[`update_tracking_loop_on_new_sats`](@ref Tracking.update_tracking_loop_on_new_sats) hook is called once with the incoming sats.
 
 For a single-group `TrackState` the `group_key` may be omitted.
 """
 function merge_sats(
-    track_state::TrackState{G,DE,NE},
+    track_state::TrackState{G,TL,NE},
     group_key::Union{Symbol,Integer},
     tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}},
-) where {G<:SignalGroups,DE<:AbstractTrackingLoop,NE<:NoiseDensityEstimators}
+) where {G<:SignalGroups,TL<:AbstractTrackingLoop,NE<:NoiseDensityEstimators}
     new_sats_dict = to_dictionary(tracked_sats)
-    _assert_doppler_estimator_types_match(new_sats_dict, track_state.doppler_estimator)
-    new_estimator =
-        update_estimator_on_handoff(track_state.doppler_estimator, new_sats_dict)
+    _assert_tracking_loop_types_match(new_sats_dict, track_state.tracking_loop)
+    new_tracking_loop =
+        update_tracking_loop_on_new_sats(track_state.tracking_loop, new_sats_dict)
     groups = track_state.groups
     g = groups[group_key]
     _assert_sats_match_slot_type(g, new_sats_dict, group_key)
     new_group = SignalGroup(g; satellites = merge(g.satellites, new_sats_dict))
     new_groups = @set groups[group_key] = new_group
-    TrackState{G,DE,NE}(
+    TrackState{G,TL,NE}(
         new_groups,
-        new_estimator,
+        new_tracking_loop,
         track_state.noise_estimators,
         track_state.noise_descriptor,
         copy(track_state.sample_offsets),
@@ -535,10 +532,10 @@ Add (or replace, by `prn`) a satellite in `track_state` in place. Builds a
 `group_key` may be omitted on a single-group `TrackState`; otherwise an
 `ArgumentError` names the available groups.
 
-Keep using the *returned* `TrackState`: an estimator whose
-[`update_estimator_on_handoff`](@ref Tracking.update_estimator_on_handoff) returns a rebuilt estimator can only hand
-it back there (`TrackState` is immutable). Estimators that update in place,
-the conventional ones included, return the same `track_state`.
+Keep using the *returned* `TrackState`: a tracking loop whose
+[`update_tracking_loop_on_new_sats`](@ref Tracking.update_tracking_loop_on_new_sats) returns a rebuilt tracking loop can only hand
+it back there (`TrackState` is immutable). Tracking loops that update in place,
+the scalar ones included, return the same `track_state`.
 
 ```julia
 track_state = TrackState(; signals = (modern_gps = (GPSL1C_P(), GPSL1C_D(), GPSL1CA()),))
@@ -576,20 +573,20 @@ sats. Keep using the
 return value, as for the keyword form.
 """
 function add_satellite!(
-    track_state::TrackState{G,DE,NE},
+    track_state::TrackState{G,TL,NE},
     group_key::Symbol,
     sat::TrackedSat,
-) where {G<:SignalGroups,DE<:AbstractTrackingLoop,NE<:NoiseDensityEstimators}
+) where {G<:SignalGroups,TL<:AbstractTrackingLoop,NE<:NoiseDensityEstimators}
     _assert_sat_matches_slot_type(track_state, group_key, sat)
     insert_or_set!(_dict_for_group(track_state, group_key), sat.prn, sat)
-    new_estimator = update_estimator_on_handoff(
-        track_state.doppler_estimator,
+    new_tracking_loop = update_tracking_loop_on_new_sats(
+        track_state.tracking_loop,
         dictionary((sat.prn => sat,)),
     )
-    new_estimator === track_state.doppler_estimator && return track_state
-    TrackState{G,DE,NE}(
+    new_tracking_loop === track_state.tracking_loop && return track_state
+    TrackState{G,TL,NE}(
         track_state.groups,
-        new_estimator,
+        new_tracking_loop,
         track_state.noise_estimators,
         track_state.noise_descriptor,
         track_state.sample_offsets,
@@ -617,7 +614,7 @@ end
                 SlotT,
                 ". The slot type is fixed at TrackState construction; rebuild the ",
                 "sat with the matching correlator bank, post_corr_filter, and ",
-                "doppler_estimator types.",
+                "tracking_loop types.",
             ),
         ),
     )
@@ -644,7 +641,7 @@ end
                 SlotT,
                 ". The slot type is fixed at TrackState construction; rebuild the ",
                 "sats with the matching signals, correlator bank, post_corr_filter, and ",
-                "doppler_estimator types.",
+                "tracking_loop types.",
             ),
         ),
     )
@@ -672,13 +669,13 @@ function add_satellite(
 end
 
 function add_satellite(
-    track_state::TrackState{G,DE,NE},
+    track_state::TrackState{G,TL,NE},
     group_key::Symbol,
     sat::TrackedSat,
-) where {G<:SignalGroups,DE<:AbstractTrackingLoop,NE<:NoiseDensityEstimators}
+) where {G<:SignalGroups,TL<:AbstractTrackingLoop,NE<:NoiseDensityEstimators}
     _assert_sat_matches_slot_type(track_state, group_key, sat)
-    new_estimator = update_estimator_on_handoff(
-        track_state.doppler_estimator,
+    new_tracking_loop = update_tracking_loop_on_new_sats(
+        track_state.tracking_loop,
         dictionary((sat.prn => sat,)),
     )
     groups = track_state.groups
@@ -686,9 +683,9 @@ function add_satellite(
     new_dict = merge(g.satellites, dictionary((sat.prn => sat,)))
     new_group = SignalGroup(g; satellites = new_dict)
     new_groups = @set groups[group_key] = new_group
-    TrackState{G,DE,NE}(
+    TrackState{G,TL,NE}(
         new_groups,
-        new_estimator,
+        new_tracking_loop,
         track_state.noise_estimators,
         track_state.noise_descriptor,
         copy(track_state.sample_offsets),
@@ -735,10 +732,10 @@ Immutable variant of [`remove_satellite!`](@ref). Returns a new
 unchanged. Errors if no satellite with the given `prn` exists.
 """
 function remove_satellite(
-    track_state::TrackState{G,DE,NE};
+    track_state::TrackState{G,TL,NE};
     prn::Int,
     group_key::Union{Symbol,Nothing} = nothing,
-) where {G<:SignalGroups,DE<:AbstractTrackingLoop,NE<:NoiseDensityEstimators}
+) where {G<:SignalGroups,TL<:AbstractTrackingLoop,NE<:NoiseDensityEstimators}
     resolved = _resolve_group(track_state, group_key)
     dict = _dict_for_group(track_state, resolved)
     haskey(dict, prn) || throw(KeyError(prn))
@@ -747,9 +744,9 @@ function remove_satellite(
     g = groups[resolved]
     new_group = SignalGroup(g; satellites = new_dict)
     new_groups = @set groups[resolved] = new_group
-    TrackState{G,DE,NE}(
+    TrackState{G,TL,NE}(
         new_groups,
-        track_state.doppler_estimator,
+        track_state.tracking_loop,
         track_state.noise_estimators,
         track_state.noise_descriptor,
         copy(track_state.sample_offsets),
@@ -812,7 +809,7 @@ function _make_default_tracked_sat_for_group(
         prn,
         code_phase,
         carrier_doppler;
-        doppler_estimator = track_state.doppler_estimator,
+        tracking_loop = track_state.tracking_loop,
         num_ants = g.num_ants,
         carrier_phase,
         code_doppler,
@@ -837,7 +834,7 @@ get_next_sample_index(track_state::TrackState, id...) =
 """
 $(SIGNATURES)
 
-The carrier phase (cycles, not wrapped) the Doppler estimator adds to the
+The carrier phase (cycles, not wrapped) the tracking loop adds to the
 replica's [`get_carrier_phase`](@ref) for its estimate of the incoming carrier
 phase, the carrier-phase measurement (RINEX `L`); `0.0` for the scalar loops and
 for a satellite out of the vector loop.
@@ -870,7 +867,7 @@ function get_carrier_phase_correction(
     # offset, having run on the satellite's Doppler since its latest record.
     band_grid_index = get(track_state.sample_offsets, get_band_id(group.band), 0)
     calc_carrier_phase_correction(
-        sat.doppler_estimator_state,
+        sat.loop_state,
         _software_nco_command(sat),
         band_grid_index,
         sampling_frequency,
@@ -966,7 +963,7 @@ Append an externally built [`NoiseObservation`](@extref TrackingLoops.NoiseObser
 
 The hardware/FPGA fill path: [`append_correlator_bank_output!`](@ref) and
 `append_noise_observation!` per signal, then
-[`estimate_dopplers_and_filter_prompt!`](@ref) to fold (deliberately separate
+[`step_tracking_loops!`](@ref) to step the loops (deliberately separate
 mechanisms; see the estimator-level `append_noise_observation!` for how they
 differ). Per signal, not per band, because the post-correlation floor depends on
 the despreading modulation: a noise channel is a tracking channel with a wrong
@@ -1070,7 +1067,7 @@ Set the preferred coherent-integration length, in primary code blocks, of one
 signal on one satellite (the addressed [`TrackedSignal`](@ref)'s
 `preferred_num_code_blocks_to_integrate`). The actual length is capped by the
 bit/secondary-code period and held at 1 until sync (see
-`calc_num_code_periods_to_integrate`); the conventional estimator caps its loop
+`calc_num_code_periods_to_integrate`); the scalar tracking loops cap their loop
 bandwidths against the integration time, so the loop stays stable.
 
 For data-bearing signals the length must divide the code blocks per bit (20 for
@@ -1149,15 +1146,15 @@ function set_preferred_num_code_blocks_to_integrate!(
     track_state
 end
 
-# Re-seed one satellite's estimator state (`reinit_loop_state`) and zero
-# each signal's previous prompt, for which `fll_disc` returns 0 (see
-# `reset_loop_filters!`).
+# Re-initialise one satellite's loop state (`reinit_loop_state`) and zero each signal's
+# latest filtered correlator bank, so the next integration's previous prompt is 0, for
+# which `fll_disc` returns 0 (see `reset_loop_filters!`).
 @inline function _reset_sat_loop_filters(track_state::TrackState, sat::TrackedSat)
     new_signals = map(sat.signals) do s
-        state = s.loop_state
+        state = s.post_correlation_state
         TrackedSignal(
             s;
-            loop_state = PostCorrelationState(
+            post_correlation_state = PostCorrelationState(
                 state;
                 last_filtered_correlator_bank = zero(state.last_filtered_correlator_bank),
             ),
@@ -1166,9 +1163,9 @@ end
     TrackedSat(
         sat;
         signals = new_signals,
-        doppler_estimator_state = reinit_loop_state(
-            track_state.doppler_estimator,
-            sat.doppler_estimator_state,
+        loop_state = reinit_loop_state(
+            track_state.tracking_loop,
+            sat.loop_state,
             sat.carrier_doppler,
             sat.code_doppler,
         ),
@@ -1367,23 +1364,23 @@ end
     return nothing
 end
 
-# TrackingLoops' navigation-solution interface, forwarded to the estimator (the
+# TrackingLoops' navigation-solution interface, forwarded to the tracking loop (the
 # scalar loops answer `nothing`).
 TrackingLoops.get_navigation_solution(track_state::TrackState) =
-    TrackingLoops.get_navigation_solution(track_state.doppler_estimator)
+    TrackingLoops.get_navigation_solution(track_state.tracking_loop)
 TrackingLoops.get_navigation_status(track_state::TrackState) =
-    TrackingLoops.get_navigation_status(track_state.doppler_estimator)
+    TrackingLoops.get_navigation_status(track_state.tracking_loop)
 TrackingLoops.get_navigation_update_index(track_state::TrackState) =
-    TrackingLoops.get_navigation_update_index(track_state.doppler_estimator)
+    TrackingLoops.get_navigation_update_index(track_state.tracking_loop)
 TrackingLoops.get_navigation_elapsed_time(track_state::TrackState) =
-    TrackingLoops.get_navigation_elapsed_time(track_state.doppler_estimator)
+    TrackingLoops.get_navigation_elapsed_time(track_state.tracking_loop)
 TrackingLoops.get_satellite_report(
     track_state::TrackState,
     signal::AbstractGNSSSignal,
     prn::Integer,
-) = TrackingLoops.get_satellite_report(track_state.doppler_estimator, signal, prn)
+) = TrackingLoops.get_satellite_report(track_state.tracking_loop, signal, prn)
 TrackingLoops.get_decoder(
     track_state::TrackState,
     signal::AbstractGNSSSignal,
     prn::Integer,
-) = TrackingLoops.get_decoder(track_state.doppler_estimator, signal, prn)
+) = TrackingLoops.get_decoder(track_state.tracking_loop, signal, prn)

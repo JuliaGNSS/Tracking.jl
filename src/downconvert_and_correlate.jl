@@ -48,8 +48,9 @@ end
 
 # Rebuilds each TrackedSignal by tuple recursion (allocation-free, inferable). A
 # completed integration pushes its raw correlator bank, tagged with its end sample
-# and code phase, onto the reused `correlator_bank_outputs` (which the Doppler
-# estimator folds over) and resets it; a partial one carries it.
+# and code phase, onto the reused `correlator_bank_outputs` (which
+# `step_tracking_loops!` steps the tracking loop with) and resets it; a partial
+# one carries it.
 @inline _build_new_signals(::Tuple{}, ::Tuple{}, ::Int, ::Int, ::Float64) = ()
 @inline function _build_new_signals(
     signals::Tuple,

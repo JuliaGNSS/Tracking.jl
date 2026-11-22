@@ -2,14 +2,14 @@
 
 The tracking state nests as **TrackState → SignalGroup → TrackedSat → TrackedSignal**:
 
-- [`TrackState`](@ref): a `NamedTuple` of [`SignalGroup`](@ref)s and the Doppler estimator.
+- [`TrackState`](@ref): a `NamedTuple` of [`SignalGroup`](@ref)s and the tracking loop.
 - [`SignalGroup`](@ref): satellites with the same signal tuple, and so one concrete `TrackedSat` type (the hot loop's type stability), on one RF band and antenna array.
 - [`TrackedSat`](@ref): the carrier/code Doppler and phase its signals share, a tuple of [`TrackedSignal`](@ref)s, and the Doppler-estimator state.
 - [`TrackedSignal`](@ref): correlator bank, post_corr_filter, C/N₀ estimator, bit buffer and integration progress.
 
-### Estimator-driver signal
+### Driver signal
 
-The first signal of each group's tuple is the **estimator-driver signal**, the one the Doppler estimator updates the shared carrier and code Doppler from. The scalar tracking loops ([`ScalarTrackingLoop`](@extref TrackingLoops.ScalarTrackingLoop), [`DelayCompensatedTrackingLoop`](@extref TrackingLoops.DelayCompensatedTrackingLoop)) run their discriminators on it and take its default loop bandwidths (a carrier loop pulling in at 50 Hz and narrowing to 18 Hz, 1 Hz code). A custom [`AbstractTrackingLoop`](@extref TrackingLoops.AbstractTrackingLoop) may use any signal.
+The first signal of each group's tuple is the **driver signal**, the one whose predetection integrations close the tracking loop that updates the shared carrier and code Doppler. The scalar tracking loops ([`ScalarTrackingLoop`](@extref TrackingLoops.ScalarTrackingLoop), [`DelayCompensatedTrackingLoop`](@extref TrackingLoops.DelayCompensatedTrackingLoop)) run their discriminators on it and take its default loop bandwidths (a carrier loop pulling in at 50 Hz and narrowing to 18 Hz, 1 Hz code). A custom [`AbstractTrackingLoop`](@extref TrackingLoops.AbstractTrackingLoop) may use any signal.
 
 Bit sync, the post-correlation filter and the **C/N₀ estimator** run per signal, so a multi-signal satellite has one C/N₀ per signal; see [CN0 Estimator](cn0_estimator.md) and [`NoCN0Estimator`](@extref TrackingLoops.NoCN0Estimator), the per-signal opt-out.
 
@@ -75,8 +75,8 @@ TrackedSat(
     code_phase,
     carrier_doppler;
     # all kwargs below are optional and have signal-derived defaults
-    doppler_estimator              = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF),
-    num_ants                   = NumAnts(1),
+    tracking_loop                       = ScalarTrackingLoop(),
+    num_ants                            = NumAnts(1),
     correlator_bank                     = get_default_correlator_bank(signal, num_ants),
     carrier_phase                  = 0.0,
     code_doppler                   = carrier_doppler * get_chip_rate_to_center_frequency_ratio(signal),
@@ -217,7 +217,7 @@ julia> get_carrier_doppler(track_state, :modern_gps, 11)
 
 Put a pilot first where there is one: without data bits the PLL can integrate longer. The data signals still decode their bits, each with its own `bit_buffer`.
 
-Signals with different code periods (L1 C/A 1 ms, L1C-P 10 ms) each complete records on their own boundaries; the conventional estimators update the Doppler from the driver's records (see [Chunked Doppler updates](track.md#Chunked-Doppler-updates)).
+Signals with different code periods (L1 C/A 1 ms, L1C-P 10 ms) each complete records on their own boundaries; the scalar tracking loops update the Doppler from the driver's records (see [Chunked Doppler updates](track.md#Chunked-Doppler-updates)).
 
 ### Phased-array tracking
 
@@ -319,7 +319,7 @@ merge_sats
 
 Satellites broadcast on several RF bands (GPS L1 and L5, Galileo E1 and E5a), which arrive from separate front ends, generally at different sample rates. Each group of a multi-band `TrackState` sits on one band. Two bands give near-independent observations of one path: for ionosphere-free combinations, wider code bandwidth, and cross-band aiding, as the L1/L5 Doppler ratio is that of the carrier frequencies.
 
-Tracking.jl provides per-band groups, measurement routing and an estimate phase that sees every band's records at once; joint cross-band estimation is up to the Doppler estimator, which receives them (see [Custom Doppler Estimator](custom_doppler_estimator.md)).
+Tracking.jl provides per-band groups, measurement routing and a loop update that sees every band's records at once; joint cross-band estimation is up to the tracking loop, which receives them (see [Custom Tracking Loop](custom_tracking_loop.md)).
 
 ### Declaring bands
 
@@ -438,7 +438,7 @@ get_band_ids
 
 The trailing `sig` selector is either:
 
-- an **`Integer`** index into `signals` (`1` is the [estimator-driver signal](#Estimator-driver-signal)), or
+- an **`Integer`** index into `signals` (`1` is the [driver signal](#Driver-signal)), or
 - a **signal type** like `GPSL1CA` (not `GPSL1CA()`), which must match exactly one signal.
 
 ### What you can read
@@ -489,7 +489,7 @@ julia> track_state = add_satellite!(track_state; prn = 11, group_key = :modern_g
 julia> get_carrier_doppler(track_state, :modern_gps, 11)  # sat-level: same for all signals
 1234.0 Hz
 
-julia> get_num_bits(track_state, :modern_gps, 11, 1)  # per-signal by index (estimator-driver signal)
+julia> get_num_bits(track_state, :modern_gps, 11, 1)  # per-signal by index (driver signal)
 0
 
 julia> get_num_bits(track_state, :modern_gps, 11, GPSL1CA)  # per-signal by type
@@ -522,7 +522,7 @@ get_carrier_phase(::TrackedSat)
 get_carrier_doppler(::TrackedSat)
 get_next_sample_index(::TrackedSat)
 get_signals(::TrackedSat)
-get_doppler_estimator_state(::TrackedSat)
+get_loop_state(::TrackedSat)
 ```
 
 ## TrackedSignal

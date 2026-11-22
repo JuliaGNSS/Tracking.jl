@@ -312,7 +312,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
         meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
         dc = OneBitThreadedDownconvertAndCorrelator()
-        est = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)
+        loop = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)
         mksig(sig) = TrackedSignal(
             sig;
             num_ants = NumAnts(1),
@@ -326,8 +326,8 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
                     meas,
                     TrackState(
                         sig,
-                        TrackedSat((mksig(sig),), 1, 100.0, 200Hz; doppler_estimator = est);
-                        doppler_estimator = est,
+                        TrackedSat((mksig(sig),), 1, 100.0, 200Hz; tracking_loop = loop);
+                        tracking_loop = loop,
                     ),
                 ),
                 1,
@@ -338,13 +338,10 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             1,
             100.0,
             200Hz;
-            doppler_estimator = est,
+            tracking_loop = loop,
         )
-        tsN = downconvert_and_correlate(
-            dc,
-            meas,
-            TrackState(sig, satN; doppler_estimator = est),
-        )
+        tsN =
+            downconvert_and_correlate(dc, meas, TrackState(sig, satN; tracking_loop = loop))
         for (s, signal) in zip(get_sat_state(tsN, 1).signals, signals)
             cs = single(signal)
             @test get_prompt(s.correlator_bank) == get_prompt(cs)
@@ -364,7 +361,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         dc = OneBitThreadedDownconvertAndCorrelator()
         cap = make_capture_mat(sig, fs, nsamp, 200Hz, 100.0, M)
         meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
-        est = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)
+        loop = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)
         mksig(sig) = TrackedSignal(
             sig;
             num_ants = NumAnts(M),
@@ -385,9 +382,9 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
                                 1,
                                 100.0,
                                 200Hz;
-                                doppler_estimator = est,
+                                tracking_loop = loop,
                             );
-                            doppler_estimator = est,
+                            tracking_loop = loop,
                         ),
                     ),
                     1,
@@ -399,13 +396,10 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             1,
             100.0,
             200Hz;
-            doppler_estimator = est,
+            tracking_loop = loop,
         )
-        tsN = downconvert_and_correlate(
-            dc,
-            meas,
-            TrackState(sig, satN; doppler_estimator = est),
-        )
+        tsN =
+            downconvert_and_correlate(dc, meas, TrackState(sig, satN; tracking_loop = loop))
         for (s, signal) in zip(get_sat_state(tsN, 1).signals, signals)
             cs = single(signal)
             c = _completed_or_partial_correlator(s)

@@ -7,8 +7,8 @@
 # Tracking.jl
 
 GNSS satellite tracking, as part of a GNSS receiver: signal downconversion and
-correlation (SIMD-optimized CPU kernels), and code and carrier estimation that
-closes the loop (by default FLL-assisted PLL and DLL). Both can be replaced
+correlation (SIMD-optimized CPU kernels), and the code and carrier tracking loops
+(by default a PLL and a DLL). Both can be replaced
 through multiple dispatch.
 
 The per-integration loop arithmetic (correlators, discriminators, bit

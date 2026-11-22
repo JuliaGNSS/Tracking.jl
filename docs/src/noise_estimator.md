@@ -153,7 +153,7 @@ relative variance of `1/M`, so one 1 ms despread and 64 16-chip despreads cover 
 same samples at very different precision. Weighting by `M` makes observations from
 different producers combinable.
 
-A worked ingest, per fold:
+A worked ingest, per loop update:
 
 ```julia
 # correlator bank outputs, per signal, exactly as before
@@ -175,10 +175,10 @@ append_noise_observation!(
     :GPSL1CA,
 )
 
-estimate_dopplers_and_filter_prompt!(track_state, (L1 = sampling_frequency,))
+step_tracking_loops!(track_state, (L1 = sampling_frequency,))
 ```
 
-If a signal's noise estimator is never filled, the fold **warns once per signal**
+If a signal's noise estimator is never filled, the loop update **warns once per signal**
 and every C/N₀ on it reads `-Inf dB-Hz`.
 
 ### How `append_noise_observation!` differs from `append_correlator_bank_output!`
@@ -188,8 +188,8 @@ and every C/N₀ on it reads `-Inf dB-Hz`.
 | scope      | one **signal** of one satellite                                        | one **signal**, across every satellite tracking it     |
 | payload    | the whole correlator bank: every correlator output kept **separate**, complex, per antenna | the correlator outputs **pooled** — into one power sum, or into one spatial covariance for an array — plus `M`, the span and the PRN |
 | drives     | discriminators, both loop filters, bit sync, the NCO update, the C/N₀ prompt | the noise floor only                              |
-| timing     | `sample_index` is load-bearing — vector tracking needs a common grid    | none: `N₀` is slowly varying, so only "recent" matters |
-| lifetime   | **drained** by the fold each chunk, buffer reused                      | **sliding window** bounded in time, never drained      |
+| timing     | `end_sample_index` is load-bearing — vector tracking needs a common grid | none: `N₀` is slowly varying, so only "recent" matters |
+| lifetime   | **drained** by the loop update each chunk, buffer reused               | **sliding window** bounded in time, never drained      |
 | count      | one per completed coherent integration per signal                      | any granularity; `M` carries the weight                |
 
 The prompt path keeps the correlator outputs apart because their *differences* are the
@@ -226,8 +226,8 @@ TrackState(; signal = GPSL1CA(), noise_estimators = (GPSL1CA = MyPowerMonitor(..
 Two contracts: mutate the window **in place** and return the struct (`TrackState` is
 never rebuilt for a noise update), and have
 [`TrackingLoops.noise_density_type`](@extref TrackingLoops.noise_density_type-Tuple{TrackingLoops.AbstractNoiseDensityEstimator}) name the
-concrete type `get_noise_density` returns (default `typeof(1.0/1.0Hz)`), so the fold
-stays monomorphic.
+concrete type `get_noise_density` returns (default `typeof(1.0/1.0Hz)`), so the loop
+update stays monomorphic.
 
 In the TrackingLoops manual:
 

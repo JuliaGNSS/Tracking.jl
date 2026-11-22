@@ -47,27 +47,27 @@ end
     @test isempty(get_sat_states(ts, :default))
 end
 
-@testset "TrackState rebuilds SignalGroup slot when estimator types differ" begin
-    # An empty pre-built `SignalGroup` is rebuilt for another estimator.
+@testset "TrackState rebuilds SignalGroup slot when tracking loop types differ" begin
+    # An empty pre-built `SignalGroup` is rebuilt for another tracking loop.
     custom = ScalarTrackingLoop(;
         wide_carrier_loop_bandwidth = 22.0Hz,
         code_loop_bandwidth = 1.5Hz,
     )
-    sg = SignalGroup((GPSL1CA(),); num_ants = NumAnts(1))  # default estimator
-    ts = TrackState(; signals = (legacy = sg,), doppler_estimator = custom)
+    sg = SignalGroup((GPSL1CA(),); num_ants = NumAnts(1))  # default tracking loop
+    ts = TrackState(; signals = (legacy = sg,), tracking_loop = custom)
     ts = add_satellite!(ts; prn = 1, group_key = :legacy, carrier_doppler = 0.0Hz)
-    de_state = get_sat_state(ts, :legacy, 1).doppler_estimator_state
+    de_state = get_sat_state(ts, :legacy, 1).loop_state
     @test de_state.bandwidths.wide_carrier == 22.0Hz
 end
 
 @testset "TrackState passes through pre-populated SignalGroup unchanged" begin
     # A populated pre-built `SignalGroup` is taken as is.
     using Dictionaries: insert!
-    doppler_estimator = ScalarTrackingLoop()
-    sat = TrackedSat(GPSL1CA(), 1, 10.5, 10.0Hz; doppler_estimator)
-    sg_template = SignalGroup((GPSL1CA(),); num_ants = NumAnts(1), doppler_estimator)
+    tracking_loop = ScalarTrackingLoop()
+    sat = TrackedSat(GPSL1CA(), 1, 10.5, 10.0Hz; tracking_loop)
+    sg_template = SignalGroup((GPSL1CA(),); num_ants = NumAnts(1), tracking_loop)
     insert!(sg_template.satellites, 1, sat)
-    ts = TrackState(; signals = (legacy = sg_template,), doppler_estimator)
+    ts = TrackState(; signals = (legacy = sg_template,), tracking_loop)
     @test length(get_sat_states(ts, :legacy)) == 1
 end
 
@@ -139,7 +139,7 @@ end
 
 @testset "add_satellite!(track_state, group, sat) — escape hatch" begin
     track_state = TrackState(; signal = GPSL1CA())
-    sat = TrackedSat(GPSL1CA(), 9, 5.0, 300.0Hz; doppler_estimator = ScalarTrackingLoop())
+    sat = TrackedSat(GPSL1CA(), 9, 5.0, 300.0Hz; tracking_loop = ScalarTrackingLoop())
     track_state = add_satellite!(track_state, :default, sat)
     @test get_prn(track_state, :default, 9) == 9
     @test get_carrier_doppler(track_state, :default, 9) == 300.0Hz
@@ -151,14 +151,14 @@ end
     @test_throws ArgumentError add_satellite!(track_state, :default, galileo_sat)
 end
 
-@testset "Custom doppler estimator config seeds per-sat state correctly" begin
+@testset "Custom tracking loop config seeds per-sat state correctly" begin
     custom = ScalarTrackingLoop(;
         wide_carrier_loop_bandwidth = 22.0Hz,
         code_loop_bandwidth = 1.5Hz,
     )
-    track_state = TrackState(; signal = GPSL1CA(), doppler_estimator = custom)
+    track_state = TrackState(; signal = GPSL1CA(), tracking_loop = custom)
     track_state = add_satellite!(track_state; prn = 4, carrier_doppler = 0.0Hz)
-    de_state = get_sat_state(track_state, :default, 4).doppler_estimator_state
+    de_state = get_sat_state(track_state, :default, 4).loop_state
     @test de_state isa ScalarLoopState
     @test de_state.bandwidths.wide_carrier == 22.0Hz
     @test de_state.bandwidths.code == 1.5Hz
@@ -357,14 +357,14 @@ end
     @test_throws ArgumentError TrackState(acqs; signals = (gps = (GPSL1CA(),),))
 end
 
-@testset "TrackState(acq; doppler_estimator) forwards kwargs" begin
+@testset "TrackState(acq; tracking_loop) forwards kwargs" begin
     custom = ScalarTrackingLoop(;
         wide_carrier_loop_bandwidth = 22.0Hz,
         code_loop_bandwidth = 1.5Hz,
     )
     acq = _make_acq(GPSL1CA(), 9, 5.0, 80.0Hz)
-    ts = TrackState(acq; doppler_estimator = custom)
-    de_state = get_sat_state(ts, :default, 9).doppler_estimator_state
+    ts = TrackState(acq; tracking_loop = custom)
+    de_state = get_sat_state(ts, :default, 9).loop_state
     @test de_state isa ScalarLoopState
     @test de_state.bandwidths.wide_carrier == 22.0Hz
 end

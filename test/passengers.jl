@@ -1,8 +1,8 @@
 module PassengersTest
 
-# Every record of a satellite goes through the estimator's `step_loop!`, the
+# Every record of a satellite goes through the tracking loop's `step_loop!`, the
 # passengers' (`signals[2:end]`) as well as the driver's, each built from its
-# signal's state: Tracking never asks which estimator it drives. With
+# signal's state: Tracking never asks which tracking loop it drives. With
 # TrackingLoops' `VectorTrackingLoop(pilot => data)` that is what lets the vector
 # loop range on the pilot and decode the data component.
 
@@ -18,9 +18,9 @@ using Tracking:
     TrackState,
     add_satellite!,
     append_correlator_bank_output!,
-    estimate_dopplers_and_filter_prompt!,
+    step_tracking_loops!,
     get_carrier_doppler,
-    get_doppler_estimator_state,
+    get_loop_state,
     get_sat_state
 using TrackingLoops:
     AbstractTrackingLoop,
@@ -48,38 +48,38 @@ _record(p, sample_index) = CorrelatorBankOutput(
     sample_index,
 )
 
-# An estimator that remembers the signal and summary of every record it is
+# A tracking loop that remembers the signal and summary of every record it is
 # stepped with, then runs the conventional loop.
-struct RecordingEstimator{E} <: AbstractTrackingLoop
+struct RecordingTrackingLoop{E} <: AbstractTrackingLoop
     inner::E
     seen::Vector{Tuple{Symbol,Int,Bool,Int}}
 end
-RecordingEstimator() = RecordingEstimator(
+RecordingTrackingLoop() = RecordingTrackingLoop(
     ScalarTrackingLoop(ThirdOrderAssistedBilinearLF),
     Tuple{Symbol,Int,Bool,Int}[],
 )
-TrackingLoops.init_loop_state(e::RecordingEstimator, signal, carrier, code) =
+TrackingLoops.init_loop_state(e::RecordingTrackingLoop, signal, carrier, code) =
     TrackingLoops.init_loop_state(e.inner, signal, carrier, code)
 function TrackingLoops.step_loop!(
-    e::RecordingEstimator,
+    e::RecordingTrackingLoop,
     state,
-    loop_state::PostCorrelationState,
+    post_correlation_state::PostCorrelationState,
     nco_history,
     application_sample_index::Union{Nothing,Integer},
 )
     push!(
         e.seen,
         (
-            get_signal_id(loop_state.signal),
-            loop_state.last_end_sample_index,
-            is_bit_or_secondary_code_synced(loop_state),
-            loop_state.last_num_new_soft_bits,
+            get_signal_id(post_correlation_state.signal),
+            post_correlation_state.last_end_sample_index,
+            is_bit_or_secondary_code_synced(post_correlation_state),
+            post_correlation_state.last_num_new_soft_bits,
         ),
     )
     TrackingLoops.step_loop!(
         e.inner,
         state,
-        loop_state,
+        post_correlation_state,
         nco_history,
         application_sample_index,
     )
@@ -116,15 +116,13 @@ function feed!(track_state, k; data_first = true, carrier = 0.0)
     # No noise observations are fed, so the noise-referenced C/N₀ warns once;
     # nothing here reads it.
     with_logger(NullLogger()) do
-        estimate_dopplers_and_filter_prompt!(track_state, (L1 = FS,))
+        step_tracking_loops!(track_state, (L1 = FS,))
     end
 end
 
-function e1_state(estimator)
-    track_state = TrackState(;
-        signals = (e1 = (GalileoE1C(CBOC), GalileoE1B(CBOC)),),
-        doppler_estimator = estimator,
-    )
+function e1_state(tracking_loop)
+    track_state =
+        TrackState(; signals = (e1 = (GalileoE1C(CBOC), GalileoE1B(CBOC)),), tracking_loop)
     add_satellite!(
         track_state;
         group_key = :e1,
@@ -136,22 +134,22 @@ function e1_state(estimator)
 end
 
 @testset "Every record of a satellite is stepped, each with its signal's state" begin
-    estimator = RecordingEstimator()
-    track_state = e1_state(estimator)
+    tracking_loop = RecordingTrackingLoop()
+    track_state = e1_state(tracking_loop)
     for k = 1:20
         feed!(track_state, k)
     end
-    signals = first.(estimator.seen)
+    signals = first.(tracking_loop.seen)
     @test count(==(:GalileoE1C), signals) == 20
     @test count(==(:GalileoE1B), signals) == 20
     # The driver's records first, then the passenger's, each signal's in order.
     @test signals[1:2] == [:GalileoE1C, :GalileoE1B]
     for id in (:GalileoE1C, :GalileoE1B)
-        @test issorted(getindex.(filter(s -> s[1] == id, estimator.seen), 2))
+        @test issorted(getindex.(filter(s -> s[1] == id, tracking_loop.seen), 2))
     end
     # E1B, one symbol per code period, syncs on its first record and appends one
     # soft bit per record, which its record hands on exactly once.
-    data = filter(s -> s[1] == :GalileoE1B, estimator.seen)
+    data = filter(s -> s[1] == :GalileoE1B, tracking_loop.seen)
     @test all(s -> s[3], data)
     @test sum(s -> s[4], data) == 20
 end
@@ -162,7 +160,7 @@ end
     dopplers(signals) = begin
         track_state = TrackState(;
             signals = (e1 = signals,),
-            doppler_estimator = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF),
+            tracking_loop = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF),
         )
         add_satellite!(
             track_state;
@@ -182,7 +180,7 @@ end
                     GalileoE1C,
                 )
                 with_logger(NullLogger()) do
-                    estimate_dopplers_and_filter_prompt!(track_state, (L1 = FS,))
+                    step_tracking_loops!(track_state, (L1 = FS,))
                 end
             else
                 feed!(track_state, k; carrier = 0.05)
@@ -195,22 +193,22 @@ end
 
 @testset "A vector loop ranges on E1C and decodes E1B, in either record order" begin
     for data_first in (true, false)
-        estimator = VectorTrackingLoop(
+        tracking_loop = VectorTrackingLoop(
             GalileoE1C(CBOC) => GalileoE1B(CBOC);
             approximate_year = 2021,
         )
-        track_state = e1_state(estimator)
+        track_state = e1_state(tracking_loop)
         for k = 1:60
             feed!(track_state, k; data_first)
         end
-        report = get_satellite_report(estimator, GalileoE1C(CBOC), 11)
+        report = get_satellite_report(tracking_loop, GalileoE1C(CBOC), 11)
         @test report.bit_or_secondary_code_synced
-        decoder = get_decoder(estimator, GalileoE1C(CBOC), 11)
+        decoder = get_decoder(tracking_loop, GalileoE1C(CBOC), 11)
         @test decoder.prn == 11
         @test decoder isa typeof(GNSSDecoderState(GalileoE1B(CBOC), 11))
-        @test isnothing(get_satellite_report(estimator, GalileoE1B(CBOC), 11))
-        @test estimator.navigation_processor.next_slot_generation == 1
-        state = get_doppler_estimator_state(get_sat_state(track_state, :e1, 11))
+        @test isnothing(get_satellite_report(tracking_loop, GalileoE1B(CBOC), 11))
+        @test tracking_loop.navigation_processor.next_slot_generation == 1
+        state = get_loop_state(get_sat_state(track_state, :e1, 11))
         @test state.slot_index == 1
     end
 end

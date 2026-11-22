@@ -20,7 +20,7 @@ using Tracking:
     track!,
     _prepare_for_new_buffer!,
     downconvert_and_correlate!,
-    estimate_dopplers_and_filter_prompt!,
+    step_tracking_loops!,
     get_code_phase,
     get_carrier_phase,
     get_code_doppler,
@@ -113,9 +113,9 @@ function measure_est!(track_state, sampling_frequency)
     # Only `sampling_frequency` is read.
     measurements = (L1 = BandMeasurement(ComplexF64[], sampling_frequency),)
     for _ = 1:8
-        estimate_dopplers_and_filter_prompt!(track_state, measurements)
+        step_tracking_loops!(track_state, measurements)
     end
-    @allocated estimate_dopplers_and_filter_prompt!(track_state, measurements)
+    @allocated step_tracking_loops!(track_state, measurements)
 end
 
 @testset "track! per-stage is allocation-free in steady state ($DC)" for DC in (
@@ -274,7 +274,7 @@ end
 end
 
 # Pre-sync allocation guard (#198). The per-stage test above measures its
-# estimate step with no records to fold, so never TrackingLoops' pre-sync bit-edge
+# loop update with no records to process, so never TrackingLoops' pre-sync bit-edge
 # search. Noise never locks, so the search runs on every block, and a warm call
 # must allocate nothing at any length: a per-block leak grows with the chunk.
 #
@@ -339,7 +339,7 @@ if VERSION >= v"1.11"
 
     # And for a pilot whose secondary code starts with a negative chip (Galileo
     # E1C, CS25): its pre-sync prompts are multiplied by that chip before the
-    # fold. Both lengths are past `2 × 25` blocks.
+    # loop update. Both lengths are past `2 × 25` blocks.
     @testset "track! is allocation-free during acquisition (pre-sync pilot)" begin
         sampling_frequency = 16.368e6Hz
         samples_per_block = 65472              # 4 ms Galileo E1C code period

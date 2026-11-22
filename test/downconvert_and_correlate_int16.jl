@@ -366,7 +366,7 @@ end
         cap = make_capture(sig, 1, fs, nsamp, 200Hz, 100.0)
         meas = (L1 = BandMeasurement(cap, fs, 0.0Hz),)
         dc = Int16ThreadedDownconvertAndCorrelator(TEST_MAX_MEAS)
-        est = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)
+        loop = ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)
         mksig(sig) = TrackedSignal(
             sig;
             num_ants = NumAnts(1),
@@ -381,8 +381,8 @@ end
                     meas,
                     TrackState(
                         sig,
-                        TrackedSat((mksig(sig),), 1, 100.0, 200Hz; doppler_estimator = est);
-                        doppler_estimator = est,
+                        TrackedSat((mksig(sig),), 1, 100.0, 200Hz; tracking_loop = loop);
+                        tracking_loop = loop,
                     ),
                 ),
                 1,
@@ -394,13 +394,10 @@ end
             1,
             100.0,
             200Hz;
-            doppler_estimator = est,
+            tracking_loop = loop,
         )
-        tsN = downconvert_and_correlate(
-            dc,
-            meas,
-            TrackState(sig, satN; doppler_estimator = est),
-        )
+        tsN =
+            downconvert_and_correlate(dc, meas, TrackState(sig, satN; tracking_loop = loop))
         # Int16 wipes a passenger's carrier off a little differently from the signal
         # alone, as v11.2 did: within 1 % of the driver's prompt.
         tol = 0.01 * abs(get_prompt(first(get_sat_state(tsN, 1).signals).correlator_bank))

@@ -52,17 +52,8 @@ function _track_noisy(
     amplitude = 10^(cn0_db / 20)
     track_state = TrackState(
         gpsl1,
-        [
-            TrackedSat(
-                gpsl1,
-                1,
-                0.0,
-                0.0Hz;
-                cn0_estimator,
-                doppler_estimator = tracking_loop,
-            ),
-        ];
-        doppler_estimator = tracking_loop,
+        [TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator, tracking_loop)];
+        tracking_loop,
     )
     dc = CPUDownconvertAndCorrelator()
     data_bits = rand(rng, (-1.0, 1.0), div(num_blocks, 20) + 2)

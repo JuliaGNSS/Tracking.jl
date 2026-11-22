@@ -80,7 +80,7 @@ end
 
 @testset "the software path needs no `append_noise_observation!` and never warns" begin
     # Counterpart of the never-fed warning in `test/cn0_estimators/noise_ref.jl`:
-    # the sample-driven path measures before the fold reads, so no warning.
+    # the sample-driven path measures before the loop update reads, so no warning.
     ts = TrackState(
         GPSL1,
         [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator())],
@@ -668,7 +668,7 @@ end
 end
 
 @testset "an explicitly-passed estimator must match its group's antenna count" begin
-    # Caught at construction rather than as a shape error inside the fold.
+    # Caught at construction rather than as a shape error inside the loop update.
     err = try
         TrackState(
             GPSL1,

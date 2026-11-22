@@ -3,8 +3,7 @@
 Tracking.jl tracks GNSS satellites as part of a receiver in two blocks:
 
 1. downconversion and correlation, with SIMD-optimized CPU kernels;
-2. code and carrier estimation, closing the loop (by default FLL-assisted PLL
-   and DLL).
+2. the code and carrier tracking loops (by default a PLL and a DLL).
 
 Both can be replaced through multiple dispatch.
 
@@ -46,7 +45,7 @@ Pages = [
   "tracking_state.md",
   "bit_sync.md",
   "loop_filter.md",
-  "custom_doppler_estimator.md",
+  "custom_tracking_loop.md",
   "correlator.md",
   "cn0_estimator.md"
 ]
