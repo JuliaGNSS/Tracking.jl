@@ -15,7 +15,7 @@ The first argument is one of:
 
 The bare buffer takes `sampling_frequency` as the next positional argument and
 an `intermediate_frequency` keyword (default `0`). Every form runs the same
-per-chunk loop: downconvert and correlate all groups, then estimate.
+loop over its NCO update spans: downconvert and correlate all groups, then estimate.
 
 The returned `TrackState` is *structurally* detached from the input: each
 group's key set and slot vector are copied, so adding, removing or tracking
@@ -109,7 +109,7 @@ In-place version of [`track`](@ref): overwrites the satellite slots of
 
 After one warmup call the single-threaded path is allocation-free. The threaded
 path (`CPUThreadedDownconvertAndCorrelator`) keeps a residual of about 96 B per
-group per correlate pass (one per `doppler_update_interval` chunk, so it scales
+group per correlate pass (one per `nco_update_interval` span, so it scales
 with the buffer length), when running on more than one thread with more than one
 work item in the group (the noise despreads count, riding the first group); see
 [`CPUThreadedDownconvertAndCorrelator`](@ref) for why.
@@ -133,13 +133,13 @@ function track!(
     measurements::BandMeasurements,
     track_state::TrackState;
     downconvert_and_correlator::AbstractDownconvertAndCorrelator = CPUThreadedDownconvertAndCorrelator(),
-    doppler_update_interval = nothing,
+    nco_update_interval = nothing,
 )
     _validate_measurements(track_state, measurements)
     _prepare_for_new_buffer!(track_state)
-    chunk_duration = _resolve_doppler_update_interval(doppler_update_interval, track_state)
-    _validate_doppler_update_interval(chunk_duration, measurements)
-    # Per chunk, one correlate pass at fixed NCO Doppler, then one estimate that
+    nco_update_interval = _resolve_nco_update_interval(nco_update_interval, track_state)
+    _validate_nco_update_interval(nco_update_interval, measurements)
+    # Per NCO update span, one correlate pass at fixed NCO Doppler, then one estimate that
     # updates every satellite at a common epoch. The pass stops at each
     # satellite's last completed code-period boundary (`stop_before_partial`), so
     # the next pass covers boundary to boundary at the updated Doppler: every
@@ -148,30 +148,30 @@ function track!(
     #
     # The buffers are fixed for the call, so sample-derived caches (the bit
     # backends' band pack) are built on the first pass only.
-    chunk_index = 0
-    while _chunks_left(chunk_duration, chunk_index, measurements)
+    nco_update_index = 0
+    while _nco_updates_left(nco_update_interval, nco_update_index, measurements)
         downconvert_and_correlate!(
             downconvert_and_correlator,
             measurements,
             track_state;
-            chunk_index,
-            chunk_duration,
+            nco_update_index,
+            nco_update_interval,
             stop_before_partial = true,
-            samples_unchanged = chunk_index > 0,
+            samples_unchanged = nco_update_index > 0,
         )
         step_tracking_loops!(track_state, measurements)
-        chunk_index += 1
+        nco_update_index += 1
     end
     # Drain each satellite's trailing partial into its correlator bank, carried into
     # the next call; a boundary exactly at the buffer end completes here, hence
-    # the loop update. Noise is measured here only if no chunk ran, or every sample
+    # the loop update. Noise is measured here only if no span ran, or every sample
     # would enter the noise window twice.
     downconvert_and_correlate!(
         downconvert_and_correlator,
         measurements,
         track_state;
-        samples_unchanged = chunk_index > 0,
-        measure_noise = chunk_index == 0,
+        samples_unchanged = nco_update_index > 0,
+        measure_noise = nco_update_index == 0,
     )
     step_tracking_loops!(track_state, measurements)
     _advance_sample_index_offsets!(track_state.sample_index_offsets, measurements)
@@ -224,22 +224,27 @@ function track!(measurement::BandMeasurement, track_state::TrackState; kwargs...
     track!(_single_band_measurements(measurement, track_state), track_state; kwargs...)
 end
 
-# True until the previous chunk reached the buffer end on every band, independent
-# of per-satellite progress. For `chunk_index == 0`: is any buffer non-empty.
-@inline function _chunks_left(chunk_duration, chunk_index::Int, measurements)
+# True until the previous NCO update span reached the buffer end on every band, independent
+# of per-satellite progress. For `nco_update_index == 0`: is any buffer non-empty.
+@inline function _nco_updates_left(nco_update_interval, nco_update_index::Int, measurements)
     for m in measurements
         n = get_num_samples(m)
         last(
-            _chunk_sample_range(chunk_duration, chunk_index - 1, m.sampling_frequency, n),
+            _nco_update_sample_range(
+                nco_update_interval,
+                nco_update_index - 1,
+                m.sampling_frequency,
+                n,
+            ),
         ) < n && return true
     end
     false
 end
 
 # `nothing` => the smallest primary-code period of any tracked signal.
-@inline _resolve_doppler_update_interval(doppler_update_interval, ::TrackState) =
-    doppler_update_interval
-@inline function _resolve_doppler_update_interval(::Nothing, track_state::TrackState)
+@inline _resolve_nco_update_interval(nco_update_interval, ::TrackState) =
+    nco_update_interval
+@inline function _resolve_nco_update_interval(::Nothing, track_state::TrackState)
     _smallest_code_period(track_state)
 end
 
@@ -264,20 +269,21 @@ function _smallest_code_period(track_state::TrackState)
     _min_group_code_period(groups, init)
 end
 
-# A chunk must cover a sample on every band, or `track!` would not terminate. A
+# An NCO update span must cover a sample on every band, or `track!` would not terminate. A
 # plain number gets a clear error rather than a Unitful one.
-function _validate_doppler_update_interval(chunk_duration, measurements::BandMeasurements)
-    dimension(chunk_duration) == dimension(1.0s) || throw(
+function _validate_nco_update_interval(nco_update_interval, measurements::BandMeasurements)
+    dimension(nco_update_interval) == dimension(1.0s) || throw(
         ArgumentError(
-            "doppler_update_interval must be a time quantity, e.g. `1u\"ms\"` or `1e-3u\"s\"` " *
-            "(with `using Unitful`); got $chunk_duration.",
+            "nco_update_interval must be a time quantity, e.g. `1u\"ms\"` or `1e-3u\"s\"` " *
+            "(with `using Unitful`); got $nco_update_interval.",
         ),
     )
     for m in measurements
-        samples_per_chunk = uconvert(NoUnits, chunk_duration * m.sampling_frequency)
-        samples_per_chunk >= 1 || throw(
+        samples_per_nco_update =
+            uconvert(NoUnits, nco_update_interval * m.sampling_frequency)
+        samples_per_nco_update >= 1 || throw(
             ArgumentError(
-                "doppler_update_interval $chunk_duration is shorter than one sample period " *
+                "nco_update_interval $nco_update_interval is shorter than one sample period " *
                 "at sampling frequency $(m.sampling_frequency); pick a longer interval.",
             ),
         )

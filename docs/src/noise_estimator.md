@@ -189,7 +189,7 @@ and every C/N₀ on it reads `-Inf dB-Hz`.
 | payload    | the whole correlator bank: every correlator output kept **separate**, complex, per antenna | the correlator outputs **pooled** — into one power sum, or into one spatial covariance for an array — plus `M`, the span and the PRN |
 | drives     | discriminators, both loop filters, bit sync, the NCO update, the C/N₀ prompt | the noise floor only                              |
 | timing     | `end_sample_index` is load-bearing — vector tracking needs a common grid | none: `N₀` is slowly varying, so only "recent" matters |
-| lifetime   | **drained** by the loop update each chunk, buffer reused               | **sliding window** bounded in time, never drained      |
+| lifetime   | **drained** by the loop update each NCO update span, buffer reused     | **sliding window** bounded in time, never drained      |
 | count      | one per completed coherent integration per signal                      | any granularity; `M` carries the weight                |
 
 The prompt path keeps the correlator outputs apart because their *differences* are the

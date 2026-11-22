@@ -18,7 +18,7 @@ struct TrackedSignal{
     # Advanced per integration by TrackingLoops' `process_correlator_bank_output!`.
     post_correlation_state::P
     filtered_prompts::Vector{ComplexF64}
-    # Integrations completed in the current chunk: pushed by the correlate phase,
+    # Integrations completed in the current NCO update span: pushed by the correlate phase,
     # stepped through the tracking loop and emptied by `step_tracking_loops!`.
     correlator_bank_outputs::Vector{CorrelatorBankOutput{C}}
     # In primary code periods; see `set_preferred_num_code_periods_to_integrate!`.
@@ -96,8 +96,8 @@ function TrackedSignal(
         signal,
         preferred_num_code_periods_to_integrate,
     )
-    # A default chunk yields at most one integration; the hint covers a moderately
-    # enlarged `doppler_update_interval` without regrowing.
+    # A default NCO update span yields at most one integration; the hint covers a moderately
+    # enlarged `nco_update_interval` without regrowing.
     correlator_bank_outputs = CorrelatorBankOutput{typeof(correlator_bank)}[]
     sizehint!(correlator_bank_outputs, 4)
     TrackedSignal(
@@ -208,9 +208,9 @@ get_filtered_prompts(t::TrackedSignal) = t.filtered_prompts
 $(SIGNATURES)
 
 The [`CorrelatorBankOutput`](@extref TrackingLoops.CorrelatorBankOutput)s this signal
-completed in the current chunk, in order. [`step_tracking_loops!`](@ref) consumes
+completed in the current NCO update span, in order. [`step_tracking_loops!`](@ref) consumes
 and clears them, so read them inside a custom tracking loop or right after a bare
-`downconvert_and_correlate!`. See [Chunked Doppler updates](@ref).
+`downconvert_and_correlate!`. See [NCO updates](@ref).
 """
 get_correlator_bank_outputs(t::TrackedSignal) = t.correlator_bank_outputs
 
@@ -218,7 +218,7 @@ get_correlator_bank_outputs(t::TrackedSignal) = t.correlator_bank_outputs
 $(SIGNATURES)
 
 Append an externally built
-[`CorrelatorBankOutput`](@extref TrackingLoops.CorrelatorBankOutput) to `signal`'s per-chunk
+[`CorrelatorBankOutput`](@extref TrackingLoops.CorrelatorBankOutput) to `signal`'s per-span
 buffer and return `signal`: the ingest path for an **external correlator
 producer** (e.g. FPGA dumps). Append per signal in `end_sample_index` order, then run
 [`step_tracking_loops!`](@ref), which steps the tracking loop with them and clears the buffer.

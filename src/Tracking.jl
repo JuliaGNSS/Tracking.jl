@@ -198,7 +198,7 @@ noise density (see
 get one, so the others pay nothing. They average **in place**.
 
 `noise_descriptor` is per-call **scratch**: a heap cell where the correlate step
-parks the chunk's noise descriptors, so a threaded backend reaches them through
+parks the NCO update span's noise descriptors, so a threaded backend reaches them through
 one pointer (see `_park_noise_items!`). Shared by every derived `TrackState`.
 
 `sample_index_offsets` counts, per band (keyed by `get_band_id`), the samples earlier

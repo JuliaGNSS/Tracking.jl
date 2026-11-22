@@ -1188,8 +1188,8 @@ end
     g::SignalGroup,
     dc::_OneBitDC,
     measurements::BandMeasurements,
-    chunk_index::Int,
-    chunk_duration,
+    nco_update_index::Int,
+    nco_update_interval,
     stop_before_partial::Bool,
     samples_unchanged::Bool,
     noise_items::_NoiseWork,
@@ -1222,9 +1222,9 @@ end
         resize!(dc.band.miband, 0)
     end
     num_buffer_samples = get_num_samples(m)
-    chunk_sample_range = _chunk_sample_range(
-        chunk_duration,
-        chunk_index,
+    nco_update_sample_range = _nco_update_sample_range(
+        nco_update_interval,
+        nco_update_index,
         m.sampling_frequency,
         num_buffer_samples,
     )
@@ -1235,7 +1235,7 @@ end
         n_noise,
         m.samples,
         num_buffer_samples,
-        chunk_sample_range,
+        nco_update_sample_range,
         m.sampling_frequency,
         m.intermediate_frequency,
         stop_before_partial,

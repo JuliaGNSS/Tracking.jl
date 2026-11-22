@@ -47,8 +47,8 @@ function correlated_state(; fs = 4e6Hz, prn = 1, num_samples = 12_000)
         dc,
         measurements,
         ts;
-        chunk_index = 0,
-        chunk_duration = (num_samples / (fs / Hz)) * s,
+        nco_update_index = 0,
+        nco_update_interval = (num_samples / (fs / Hz)) * s,
     )
     return ts, measurements
 end

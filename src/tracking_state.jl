@@ -146,7 +146,7 @@ end
 @inline _num_ants_count(::NumAnts{M}) where {M} = M
 
 # `(signal id, num_ants)` for the signals that need a noise density, deduplicated
-# (one despread per signal per chunk) in first-encounter order. The pairing is
+# (one despread per signal per NCO update span) in first-encounter order. The pairing is
 # unambiguous: a signal fixes its band, and `_validate_same_band_num_ants` makes
 # groups on one band agree on `num_ants`. Folds at compile time.
 @inline _noise_reference_signal_entries(::Tuple{}, acc::Tuple) = acc

@@ -126,7 +126,7 @@ end
 end
 
 @testset "observation cadence follows the chunk, not the buffer" begin
-    # `num_sub = max(1, round(chunk_duration / code_period))` per chunk, and none
+    # `num_sub = max(1, round(nco_update_interval / code_period))` per chunk, and none
     # from the drain pass — gating on `samples_unchanged` would freeze the window
     # after chunk 0.
     samples = _sky(-Inf; seed = 11)
@@ -146,7 +146,7 @@ end
         # 40 ms of buffer: 40 / 20 / 2 chunks at the three intervals.
         long = repeat(samples, 4)
         num_chunks = ceil(Int, 40 / ustrip(ms, interval))
-        track!((L1 = BandMeasurement(long, FS),), ts; doppler_update_interval = interval)
+        track!((L1 = BandMeasurement(long, FS),), ts; nco_update_interval = interval)
         @test Base.length(ts.noise_estimators.GPSL1CA.observations) ==
               num_chunks * expected_num_sub
     end
@@ -157,7 +157,7 @@ end
         [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator())],
     )
     fast = _sky(-Inf; seed = 12, num_samples = 100_000, fs = 10e6Hz)
-    track!((L1 = BandMeasurement(fast, 10e6Hz),), ts; doppler_update_interval = 4ms)
+    track!((L1 = BandMeasurement(fast, 10e6Hz),), ts; nco_update_interval = 4ms)
     # 10 ms at a 4 ms chunk: 4 + 4, then a 2 ms trailing chunk measured at its
     # true length.
     @test Base.length(ts.noise_estimators.GPSL1CA.observations) == 4 + 4 + 2
@@ -165,7 +165,7 @@ end
 
 @testset "a code period longer than the chunk still yields one observation" begin
     # The `max(1, …)`: GPS L1C-P (10 ms code) at 1 ms chunks, reachable when
-    # another signal forces a shorter `doppler_update_interval`.
+    # another signal forces a shorter `nco_update_interval`.
     fs = 20e6Hz
     l1cp = GPSL1C_P(TMBOC)
     num_samples = 200_000                       # 10 ms — one L1C-P code period
@@ -175,7 +175,7 @@ end
         l1cp,
         [TrackedSat(l1cp, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator())],
     )
-    track!((L1 = BandMeasurement(samples, fs),), ts; doppler_update_interval = 1ms)
+    track!((L1 = BandMeasurement(samples, fs),), ts; nco_update_interval = 1ms)
     # Ten 1 ms chunks, each a tenth of a code period — one slice apiece, not zero.
     @test Base.length(ts.noise_estimators.GPSL1C_P.observations) == 10
     # 30 looks ⇒ σ ≈ 18 %: a sanity check, not a precision claim.
@@ -477,9 +477,14 @@ if VERSION >= v"1.11"
     )
         function measure(dc, measurements, ts)
             for _ = 1:8
-                downconvert_and_correlate!(dc, measurements, ts; chunk_index = 0)
+                downconvert_and_correlate!(dc, measurements, ts; nco_update_index = 0)
             end
-            @allocated downconvert_and_correlate!(dc, measurements, ts; chunk_index = 0)
+            @allocated downconvert_and_correlate!(
+                dc,
+                measurements,
+                ts;
+                nco_update_index = 0,
+            )
         end
         raw = _sky(45.0; seed = 8)
         samples = quantise ? _to_int16(raw) : ComplexF32.(raw)
@@ -514,7 +519,7 @@ end
             noise_estimators = (GPSL1CA = CorrelatorNoiseDensityEstimator(),),
         )
         add_satellite!(ts; prn = 1, carrier_doppler = 0.0Hz)
-        track!((L1 = BandMeasurement(samples, fs),), ts; doppler_update_interval = interval)
+        track!((L1 = BandMeasurement(samples, fs),), ts; nco_update_interval = interval)
         ustrip(Hz^-1, get_noise_density(ts.noise_estimators.GPSL1CA))
     end
 
@@ -806,9 +811,14 @@ if VERSION >= v"1.11"
     @testset "an array's software measurement is allocation-free in steady state" begin
         function measure(dc, measurements, ts)
             for _ = 1:8
-                downconvert_and_correlate!(dc, measurements, ts; chunk_index = 0)
+                downconvert_and_correlate!(dc, measurements, ts; nco_update_index = 0)
             end
-            @allocated downconvert_and_correlate!(dc, measurements, ts; chunk_index = 0)
+            @allocated downconvert_and_correlate!(
+                dc,
+                measurements,
+                ts;
+                nco_update_index = 0,
+            )
         end
         samples = ComplexF32.(_sky_array(45.0, (1.0, 1.5, 2.0); seed = 13))
         measurements = (L1 = BandMeasurement(samples, FS),)

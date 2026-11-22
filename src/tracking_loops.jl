@@ -50,7 +50,7 @@ function _step_sat_tracking_loop(
     # On the batch a signal first syncs, anchor `sat.code_phase` to the secondary
     # chip of the synced signal with the longest full code, keeping the
     # within-primary phase. Only then (#117); afterwards the replica's wrap keeps it.
-    # Sync is found after the chunk was correlated, so the in-flight partial
+    # Sync is found after the span was correlated, so the in-flight partial
     # integrations, accumulated at the old phase, are dropped too.
     new_signals = (new_head, new_tail...)
     just_synced = _any_signal_just_synced(sat.signals, new_signals)
@@ -140,9 +140,9 @@ end
     output.code_phase,
 )
 
-# Step a signal's integrations of this chunk through the tracking loop; return the
-# signal, the loop state and the last integration's Dopplers (the NCO is written once
-# per chunk). With no integrations the command in force holds. The batch's command is
+# Step a signal's integrations of this NCO update span through the tracking loop;
+# return the signal, the loop state and the last integration's Dopplers (the NCO is
+# written once per span). With no integrations the command in force holds. The batch's command is
 # issued after its last integration; a delay-compensated loop maps each integration
 # onto the delay-free loop's one as far ahead.
 @inline function _step_signal_integrations(

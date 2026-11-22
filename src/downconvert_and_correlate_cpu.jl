@@ -320,30 +320,30 @@ function _update_tracked_sat_correlator_bank(
     dc::AbstractDownconvertAndCorrelator,
     samples,
     num_buffer_samples,
-    chunk_sample_range,
+    nco_update_sample_range,
     sampling_frequency,
     intermediate_frequency,
     stop_before_partial::Bool = false,
 )
     # Each sub-step runs to the nearest code-period boundary of any signal (or the
-    # chunk end), so a chunk yields 0, 1 or several outputs per signal; a partial at
-    # the chunk end carries in the correlator bank. The NCO Doppler is untouched here.
+    # span's end), so an NCO update span yields 0, 1 or several outputs per signal; a
+    # partial at its end carries in the correlator bank. The NCO Doppler is untouched here.
     #
-    # `stop_before_partial = true` leaves the trailing partial to the next chunk's
+    # `stop_before_partial = true` leaves the trailing partial to the next span's
     # pass, which then integrates boundary to boundary at the Doppler the tracking loop
     # wrote in between: every completed integration sees a single Doppler. A final
     # pass without the flag drains the buffer's trailing partial.
-    while sat.next_sample_index <= last(chunk_sample_range)
+    while sat.next_sample_index <= last(nco_update_sample_range)
         samples_to_integrate, per_signal_completed = _calc_min_samples_and_completed(
             sat.signals,
-            sat.next_sample_index:last(chunk_sample_range),
+            sat.next_sample_index:last(nco_update_sample_range),
             sampling_frequency,
             sat.code_doppler,
             sat.code_phase,
             num_buffer_samples,
         )
         samples_to_integrate == 0 && break
-        # A sub-step that completes no signal is the chunk-clamped trailing partial.
+        # A sub-step that completes no signal is the span-clamped trailing partial.
         stop_before_partial && !_any_of_tuple(per_signal_completed) && break
         carrier_frequency = sat.carrier_doppler + intermediate_frequency
         new_signals_data = _correlate_signals(
@@ -372,7 +372,7 @@ function _update_tracked_sat_correlator_bank(
 end
 
 # The MIN over all signals' samples-to-next-boundary, clamped to `sample_range`,
-# the rest of the chunk (boundaries and replica sizing still see the whole buffer),
+# the rest of the NCO update span (boundaries and replica sizing still see the whole buffer),
 # and which signals that completes.
 @inline function _calc_min_samples_and_completed(
     signals::Tuple,
@@ -687,22 +687,22 @@ In-place version: writes the new `TrackedSat` values into each group's existing
 storage (threaded `@batch` iterations write disjoint slots) and returns
 `track_state`. Allocation-free in steady state, see [`track!`](@ref).
 
-`chunk_duration` and `chunk_index` restrict the pass to one chunk of a fixed per-band
-time grid: each satellite integrates up to sample
-`min(round((chunk_index + 1) * chunk_duration * sampling_frequency), num_samples)`,
-re-anchored to the absolute `chunk_index` so rounding never drifts and bands stay
-aligned. `chunk_duration = nothing` (the default) consumes the whole buffer. Every
+`nco_update_interval` and `nco_update_index` restrict the pass to one NCO update span of a
+fixed per-band time grid: each satellite integrates up to sample
+`min(round((nco_update_index + 1) * nco_update_interval * sampling_frequency), num_samples)`,
+re-anchored to the absolute `nco_update_index` so rounding never drifts and bands stay
+aligned. `nco_update_interval = nothing` (the default) consumes the whole buffer. Every
 completed integration is snapshotted into its signal's `correlator_bank_outputs`; only the
 trailing partial stays in the live correlator.
 
 `stop_before_partial = true` stops each satellite at its last code-period boundary
-inside the chunk, leaving the trailing partial to the next chunk's pass at the
+inside the span, leaving the trailing partial to the next span's pass at the
 Doppler the tracking loop writes in between (as `track!` does). Default `false`.
 
 `samples_unchanged = true` promises every band's buffer holds the same content as on
 the previous call with this `dc`, so backends may reuse sample-derived caches (the
 bit-wise backends skip re-packing their band sign planes). `track!` passes it on every
-chunk after the first; keep the default `false` whenever a buffer may have been
+NCO update span after the first; keep the default `false` whenever a buffer may have been
 refilled.
 
 `measure_noise = false` (default `true`) leaves every
@@ -721,8 +721,8 @@ function downconvert_and_correlate!(
     dc::AbstractDownconvertAndCorrelator,
     measurements::BandMeasurements,
     track_state::TrackState;
-    chunk_index::Int = 0,
-    chunk_duration = nothing,
+    nco_update_index::Int = 0,
+    nco_update_interval = nothing,
     stop_before_partial::Bool = false,
     samples_unchanged::Bool = false,
     measure_noise::Bool = true,
@@ -732,16 +732,21 @@ function downconvert_and_correlate!(
     # typed; the empty arm is the `()` specialisation the group tail compiles anyway.
     groups = Tuple(track_state.groups)
     if measure_noise
-        noise_items =
-            _noise_items(dc, track_state, measurements, chunk_index, chunk_duration)
+        noise_items = _noise_items(
+            dc,
+            track_state,
+            measurements,
+            nco_update_index,
+            nco_update_interval,
+        )
         _dc_groups!(
             groups,
             noise_items,
             _num_noise_items(noise_items),
             dc,
             measurements,
-            chunk_index,
-            chunk_duration,
+            nco_update_index,
+            nco_update_interval,
             stop_before_partial,
             samples_unchanged,
         )
@@ -752,8 +757,8 @@ function downconvert_and_correlate!(
             0,
             dc,
             measurements,
-            chunk_index,
-            chunk_duration,
+            nco_update_index,
+            nco_update_interval,
             stop_before_partial,
             samples_unchanged,
         )
@@ -761,7 +766,7 @@ function downconvert_and_correlate!(
     return track_state
 end
 
-# Walk the groups, handing the chunk's noise work to the first. The items carry
+# Walk the groups, handing the span's noise work to the first. The items carry
 # their own band measurement and signal; they only ride that group's loop, so on a
 # threaded backend the despread runs alongside the satellite correlations. Handing
 # them to one group (not every `_dc_one_group!`) despreads each signal exactly once
@@ -773,8 +778,8 @@ end
     n_noise::Int,
     dc,
     measurements,
-    chunk_index,
-    chunk_duration,
+    nco_update_index,
+    nco_update_interval,
     stop_before_partial,
     samples_unchanged,
 )
@@ -782,8 +787,8 @@ end
         first(groups),
         dc,
         measurements,
-        chunk_index,
-        chunk_duration,
+        nco_update_index,
+        nco_update_interval,
         stop_before_partial,
         samples_unchanged,
         noise_items,
@@ -795,14 +800,14 @@ end
         0,
         dc,
         measurements,
-        chunk_index,
-        chunk_duration,
+        nco_update_index,
+        nco_update_interval,
         stop_before_partial,
         samples_unchanged,
     )
 end
 
-# The chunk's noise work: one descriptor per measured signal, keyed off
+# The span's noise work: one descriptor per measured signal, keyed off
 # `noise_estimators`, so a signal two groups carry is measured once. Resolved on the
 # caller's thread, so `_check_sample_type` still throws its `ArgumentError` before
 # any kernel, and parked behind one pointer for the `@batch` closure (see
@@ -811,13 +816,13 @@ end
 # Walked by tuple recursion, as estimator types differ per signal and a runtime loop
 # would allocate. Only type-domain decisions are made here (a signal no group tracks,
 # a band without samples), so the tuple's length depends on types alone; an
-# out-of-range chunk is left to `update_noise!`'s `num_samples > 0` guard.
+# out-of-range span is left to `update_noise!`'s `num_samples > 0` guard.
 @inline function _noise_items(
     dc::AbstractDownconvertAndCorrelator,
     track_state::TrackState,
     measurements::BandMeasurements,
-    chunk_index::Int,
-    chunk_duration,
+    nco_update_index::Int,
+    nco_update_interval,
 )
     noise_estimators = track_state.noise_estimators
     _park_noise_items!(
@@ -828,8 +833,8 @@ end
             dc,
             track_state.groups,
             measurements,
-            chunk_index,
-            chunk_duration,
+            nco_update_index,
+            nco_update_interval,
         ),
     )
 end
@@ -888,8 +893,8 @@ const _NoiseWork = Union{Tuple{},Base.RefValue{<:Tuple}}
     dc::AbstractDownconvertAndCorrelator,
     groups::SignalGroups,
     measurements::BandMeasurements,
-    chunk_index::Int,
-    chunk_duration,
+    nco_update_index::Int,
+    nco_update_interval,
 ) where {K}
     (
         _noise_item(
@@ -898,8 +903,8 @@ const _NoiseWork = Union{Tuple{},Base.RefValue{<:Tuple}}
             dc,
             groups,
             measurements,
-            chunk_index,
-            chunk_duration,
+            nco_update_index,
+            nco_update_interval,
         )...,
         _noise_items_walk(
             Val(Base.tail(K)),
@@ -907,8 +912,8 @@ const _NoiseWork = Union{Tuple{},Base.RefValue{<:Tuple}}
             dc,
             groups,
             measurements,
-            chunk_index,
-            chunk_duration,
+            nco_update_index,
+            nco_update_interval,
         )...,
     )
 end
@@ -921,8 +926,8 @@ end
     dc::AbstractDownconvertAndCorrelator,
     groups::SignalGroups,
     measurements::BandMeasurements,
-    chunk_index::Int,
-    chunk_duration,
+    nco_update_index::Int,
+    nco_update_interval,
 ) where {K}
     # A signal no group tracks measures nothing: the correlator-ingest case, whose
     # window `append_noise_observation!` fills.
@@ -942,9 +947,9 @@ end
     ((
         estimator,
         m,
-        _chunk_sample_range(
-            chunk_duration,
-            chunk_index,
+        _nco_update_sample_range(
+            nco_update_interval,
+            nco_update_index,
             m.sampling_frequency,
             num_buffer_samples,
         ),
@@ -995,26 +1000,41 @@ end
     _first_signal_with_id(Base.tail(signals), Val(K))
 end
 
-# The chunk's samples on the per-band time grid; `nothing` is the whole buffer.
-@inline _chunk_sample_range(::Nothing, chunk_index, sampling_frequency, num_samples) =
-    1:num_samples
-@inline _chunk_sample_range(chunk_duration, chunk_index, sampling_frequency, num_samples) =
-    (_chunk_end_index(
-        chunk_duration,
-        chunk_index-1,
+# The NCO update span's samples on the per-band time grid; `nothing` is the whole buffer.
+@inline _nco_update_sample_range(
+    ::Nothing,
+    nco_update_index,
+    sampling_frequency,
+    num_samples,
+) = 1:num_samples
+@inline _nco_update_sample_range(
+    nco_update_interval,
+    nco_update_index,
+    sampling_frequency,
+    num_samples,
+) =
+    (_nco_update_end_index(
+        nco_update_interval,
+        nco_update_index-1,
         sampling_frequency,
         num_samples,
-    )+1):_chunk_end_index(chunk_duration, chunk_index, sampling_frequency, num_samples)
+    )+1):_nco_update_end_index(
+        nco_update_interval,
+        nco_update_index,
+        sampling_frequency,
+        num_samples,
+    )
 
-# Last index of the chunk, anchored to the absolute `chunk_index` so rounding never
+# Last index of the NCO update span, anchored to the absolute `nco_update_index` so rounding never
 # drifts.
-@inline function _chunk_end_index(
-    chunk_duration,
-    chunk_index,
+@inline function _nco_update_end_index(
+    nco_update_interval,
+    nco_update_index,
     sampling_frequency,
     num_samples,
 )
-    grid = uconvert(NoUnits, (chunk_index + 1) * chunk_duration * sampling_frequency)
+    grid =
+        uconvert(NoUnits, (nco_update_index + 1) * nco_update_interval * sampling_frequency)
     min(round(Int, grid), num_samples)
 end
 
@@ -1022,15 +1042,15 @@ end
 # non-`Complex{Int16}` buffers with an `ArgumentError`.
 @inline _check_sample_type(::AbstractDownconvertAndCorrelator, m) = nothing
 
-# Per-group body shared by every backend. `noise_items` / `n_noise` are the chunk's
+# Per-group body shared by every backend. `noise_items` / `n_noise` are the span's
 # noise despreads, non-empty for one group (see `_dc_groups!`); they carry their own
 # band measurement, and an empty group still runs to carry them.
 @inline function _dc_one_group!(
     g::SignalGroup,
     dc::AbstractDownconvertAndCorrelator,
     measurements::BandMeasurements,
-    chunk_index::Int,
-    chunk_duration,
+    nco_update_index::Int,
+    nco_update_interval,
     stop_before_partial::Bool,
     # Only the bit-wise backends act on it.
     samples_unchanged::Bool,
@@ -1042,9 +1062,9 @@ end
     m = measurements[get_band_id(g.band)]
     _check_sample_type(dc, m)
     num_buffer_samples = get_num_samples(m)
-    chunk_sample_range = _chunk_sample_range(
-        chunk_duration,
-        chunk_index,
+    nco_update_sample_range = _nco_update_sample_range(
+        nco_update_interval,
+        nco_update_index,
         m.sampling_frequency,
         num_buffer_samples,
     )
@@ -1055,7 +1075,7 @@ end
         n_noise,
         m.samples,
         num_buffer_samples,
-        chunk_sample_range,
+        nco_update_sample_range,
         m.sampling_frequency,
         m.intermediate_frequency,
         stop_before_partial,

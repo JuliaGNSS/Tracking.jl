@@ -31,7 +31,7 @@ multi-signal satellite reports one CN0 per signal.
 | High-C/N₀ σ                                                | keeps improving, until the row above dominates          | saturates at `√(M/((M−1)K))` ≈0.5 dB                                                                                                                                       | —                             | n/a                      |
 | Degenerate outputs                                         | none                                                    | `-Inf`/`Inf` outside `1 < μ̂ < M` — 5.6 % of *estimates* at 20 dB-Hz                                                                                                       | none                          | always `-Inf`            |
 | Phase-noise / residual-Doppler sensitivity                 | immune (non-coherent)                                   | sensitive — the coherent sum loses power; **−12 dB at 120 Hz of handoff Doppler**, see [Residual Doppler at acquisition handoff](#Residual-Doppler-at-acquisition-handoff) | immune                        | n/a                      |
-| Cost                                                       | per-integration arithmetic + one despread per signal per chunk | per-integration arithmetic                                                                                                                                                      | per-integration arithmetic         | none                     |
+| Cost                                                       | per-integration arithmetic + one despread per signal per NCO update span | per-integration arithmetic                                                                                                                                                      | per-integration arithmetic         | none                     |
 
 The "degenerate" row counts unusable *outputs*:
 [`estimate_cn0`](@extref TrackingLoops.estimate_cn0-Tuple{NoiseReferencedCN0Estimator, Any})
@@ -263,10 +263,10 @@ TrackedSat(
 ```
 
 Only a signal whose estimator reads a density is provisioned a noise source, so the
-case above runs one despread per chunk, for the noise-referenced signal; a signal on
+case above runs one despread per NCO update span, for the noise-referenced signal; a signal on
 NWPR runs none. The floor is per signal, not per band (see
 [Why per signal and not per RF band](noise_estimator.md#Why-per-signal-and-not-per-RF-band)),
-so the cost is one despread per noise-referenced signal per chunk, against `n_sats`
+so the cost is one despread per noise-referenced signal per span, against `n_sats`
 tracking correlations apiece.
 
 ### Not measuring a signal at all

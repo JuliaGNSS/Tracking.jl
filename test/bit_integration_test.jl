@@ -177,10 +177,9 @@ end
     # 1 ms is the baseline (one integration per loop update). The lock at code period 60 is the
     # 4th of the 57..63 update at 7 ms and the 8th of the 53..65 update at 13 ms, so
     # 3 and 5 integrations trail it.
-    for doppler_update_interval in (1e-3s, 3e-3s, 7e-3s, 13e-3s)
+    for nco_update_interval in (1e-3s, 3e-3s, 7e-3s, 13e-3s)
         track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0, 0.0Hz)])
-        track_state =
-            track(samples, track_state, sampling_frequency; doppler_update_interval)
+        track_state = track(samples, track_state, sampling_frequency; nco_update_interval)
         soft_bits = get_soft_bits(track_state, 1)
         # 3 replayed at the lock at code period 60, then one per 20 code periods.
         @test length(soft_bits) == 3 + div(num_code_periods - 60, 20)
@@ -375,7 +374,7 @@ end
     num_samples = round(Int, 25e6 / 1000)                      # 1 ms = one primary code period
     data_bits = [1, 1, 0, 1, 0, 0, 1, 1, 0, 1]
 
-    function decode(doppler_update_interval, start_secondary_chip)
+    function decode(nco_update_interval, start_secondary_chip)
         total_code_periods =
             secondary_code_length * length(data_bits) - start_secondary_chip
         samples = ComplexF32.(
@@ -397,9 +396,7 @@ end
             gpsl5,
             [TrackedSat(gpsl5, prn, start_secondary_chip * primary_code_length, 0.0Hz)],
         )
-        get_soft_bits(
-            track(samples, track_state, sampling_frequency; doppler_update_interval),
-        )
+        get_soft_bits(track(samples, track_state, sampling_frequency; nco_update_interval))
     end
 
     @testset "start chip $start_secondary_chip" for start_secondary_chip in (0, 3)
@@ -409,8 +406,8 @@ end
         reference = copy(decode(1e-3s, start_secondary_chip))
         @test all(>(full_bit), abs.(reference))
 
-        for doppler_update_interval in (3e-3s, 7e-3s)
-            soft_bits = decode(doppler_update_interval, start_secondary_chip)
+        for nco_update_interval in (3e-3s, 7e-3s)
+            soft_bits = decode(nco_update_interval, start_secondary_chip)
             @test length(soft_bits) == length(reference)
             @test sign.(soft_bits) == sign.(reference)
             # Only the sync bit is short, by the one dropped prompt.
@@ -446,15 +443,14 @@ end
         ),
     )
 
-    for doppler_update_interval in (1e-3s, 3e-3s, 7e-3s)
+    for nco_update_interval in (1e-3s, 3e-3s, 7e-3s)
         track_state = TrackState(gpsl5q, [TrackedSat(gpsl5q, prn, 0.0, 0.0Hz)])
         set_preferred_num_code_periods_to_integrate!(
             track_state,
             prn,
             secondary_code_length,
         )
-        track_state =
-            track(samples, track_state, sampling_frequency; doppler_update_interval)
+        track_state = track(samples, track_state, sampling_frequency; nco_update_interval)
 
         @test is_bit_or_secondary_code_synced(track_state)
         @test get_last_fully_integrated_num_code_blocks(track_state, prn) ==

@@ -88,19 +88,19 @@ satellites. The signal path (downconvert, correlate) is loop-agnostic and passes
    **A `step_tracking_loops` method** on
    `TrackState{<:Any, <:MyTrackingLoop}` instead replaces the whole loop update, for
    a tracking loop that does not fit a per-integration step (e.g. one stepping all satellites
-   jointly). It runs once per **chunk** (see
-   [Chunked Doppler updates](track.md#Chunked-Doppler-updates)), walks
+   jointly). It runs once per **NCO update span** (see
+   [NCO updates](track.md#NCO-updates)), walks
    `track_state.groups`, reads each band's `BandMeasurement` via
    `get_band_id(group.band)`, and produces `TrackedSat`s with new
    `carrier_doppler`/`code_doppler` and per-sat state.
 
-   Each signal's predetection integrations of the chunk are in its
+   Each signal's predetection integrations of the span are in its
    `correlator_bank_outputs::Vector{`[`CorrelatorBankOutput`](@extref TrackingLoops.CorrelatorBankOutput)`}`
    (zero, one or several), each with the raw correlator bank, its sample count, its end
    sample index (from the current measurement's first sample) and the replica's code
    phase there. Step through them in order, write the NCO Doppler once (typically from
    the last), and empty `correlator_bank_outputs`. The NCO Doppler is fixed across the
-   chunk, so a discriminator needing the replica's Doppler reads the satellite's
+   span, so a discriminator needing the replica's Doppler reads the satellite's
    `code_doppler`/`carrier_doppler`.
 
    [`track!`](@ref) calls the mutating
@@ -209,7 +209,7 @@ In the TrackingLoops manual:
 
 The device-independent step lives in TrackingLoops, so the software receiver and a
 hardware correlator's loop process run the same arithmetic. `track!` passes the
-chunk's own NCO command (a `ConstantNCOCommand`) and no application sample: the
+NCO update span's own command (a `ConstantNCOCommand`) and no application sample: the
 command takes effect at the end of each integration.
 
 In the TrackingLoops manual:
