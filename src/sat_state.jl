@@ -361,7 +361,7 @@ acquisition handoff values, e.g. for a non-default correlator or post-correlatio
 driver signal. The loop state comes from [`init_loop_state`](@ref).
 
 `code_doppler = nothing` derives it from `carrier_doppler` and the driver's
-code/center frequency ratio. `carrier_phase` is in radians.
+code/center frequency ratio. `carrier_phase` is in cycles.
 """
 function TrackedSat(
     tracked_signals::Tuple{TrackedSignal,Vararg{TrackedSignal}},
@@ -387,7 +387,7 @@ function TrackedSat(
         prn,
         float(code_phase),
         cd,
-        float(carrier_phase) / 2π,
+        float(carrier_phase),
         cdop,
         1,
         map(s -> _join_satellite(s, prn, driver_carrier_phase_offset), tracked_signals),
@@ -575,9 +575,11 @@ get_code_doppler(s::TrackedSat) = s.code_doppler
 """
 $(SIGNATURES)
 
-Get the current carrier phase in radians.
+Get the carrier phase of the replica in cycles, folded to [-0.5, 0.5): not the
+accumulated carrier-phase measurement, for which a host adds
+[`get_carrier_phase_correction`](@ref) and counts the cycles itself.
 """
-get_carrier_phase(s::TrackedSat) = s.carrier_phase * 2π
+get_carrier_phase(s::TrackedSat) = s.carrier_phase
 
 """
 $(SIGNATURES)
