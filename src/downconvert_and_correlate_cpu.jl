@@ -335,7 +335,7 @@ function _update_tracked_sat_correlator_bank(
         )
         num_samples_to_integrate == 0 && break
         # A sub-step that completes no signal is the span-clamped trailing partial.
-        stop_before_partial && !_any_of_tuple(per_signal_completed) && break
+        stop_before_partial && !any(per_signal_completed) && break
         carrier_frequency = sat.carrier_doppler + intermediate_frequency
         new_signals_data = _correlate_signals(
             sat.signals,
@@ -380,8 +380,8 @@ end
         code_phase,
         num_buffer_samples,
     )
-    num_samples_to_integrate = _min_of_tuple(per_signal_num_samples_to_boundary)
-    num_samples_to_integrate = min(num_samples_to_integrate, length(sample_range))
+    num_samples_to_integrate =
+        min(minimum(per_signal_num_samples_to_boundary), length(sample_range))
     per_signal_completed =
         _flag_completed(per_signal_num_samples_to_boundary, num_samples_to_integrate)
     return num_samples_to_integrate, per_signal_completed
@@ -424,12 +424,6 @@ end
         )...,
     )
 end
-
-@inline _min_of_tuple(t::Tuple{Any}) = first(t)
-@inline _min_of_tuple(t::Tuple) = min(first(t), _min_of_tuple(Base.tail(t)))
-
-@inline _any_of_tuple(::Tuple{}) = false
-@inline _any_of_tuple(t::Tuple) = first(t) || _any_of_tuple(Base.tail(t))
 
 # For each signal, `is_completed = (chosen_samples == num_samples_to_boundary)`.
 @inline _flag_completed(::Tuple{}, _) = ()
