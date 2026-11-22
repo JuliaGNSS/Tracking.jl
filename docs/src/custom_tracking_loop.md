@@ -259,13 +259,13 @@ get_navigation_solution(tracking_loop)
 Each predetection integration gives it the satellite (`prn`), the replica's code
 phase at the integration's end, and a time grid shared by a band's satellites:
 [`step_tracking_loops!`](@ref Tracking.step_tracking_loops!) adds
-the band's running offset (`TrackState`'s `sample_offsets`, advanced by every
+the band's running offset (`TrackState`'s `sample_index_offsets`, advanced by every
 `track!`). Step every satellite at least every half `navigation_update_interval` (50 ms by
 default), which any `track!` on a shorter buffer does.
 
-The engine and the offsets belong together: a `TrackState` built afresh around an
-estimator that has run starts every band at `0`, so pass it the old state's
-`sample_offsets` (see [`TrackState`](@ref)). To branch a state, `deepcopy` it; [`track`](@ref) shares the
+The navigation processor and the offsets belong together: a `TrackState` built afresh around a
+tracking loop that has run starts every band at `0`, so pass it the old state's
+`sample_index_offsets` (see [`TrackState`](@ref)). To branch a state, `deepcopy` it; [`track`](@ref) shares the
 tracking loop with its input.
 
 In the vector loop the navigation filter alone sets a satellite's carrier NCO; a

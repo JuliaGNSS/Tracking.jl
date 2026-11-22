@@ -83,10 +83,9 @@ Per batch of correlator dumps:
 
 ### Caller contract
 
-- `CorrelatorBankOutput.correlator_bank`: the **raw** correlator bank (sum of products over `integrated_samples`, as `normalize` expects), e.g. built with [`EarlyPromptLateCorrelatorBank`](@extref TrackingLoops.EarlyPromptLateCorrelatorBank) / `set_correlator_outputs`.
-- `CorrelatorBankOutput.integrated_samples`: the producer's true sample count.
-- `CorrelatorBankOutput.sample_index`: the end sample relative to the start of the current measurement, as the software path writes it (`next_sample_index` returns to 1 each `track!`). A producer with a free-running **global** counter subtracts the measurement's origin; the estimate phase adds the band's [`TrackState`](@ref) `sample_offsets` before handing the record to the Doppler estimator.
-
+- `CorrelatorBankOutput.correlator_bank`: the **raw** correlator bank (sum of products over `num_integrated_samples`, as `normalize` expects), e.g. built with [`EarlyPromptLateCorrelatorBank`](@extref TrackingLoops.EarlyPromptLateCorrelatorBank) / `set_correlator_outputs`.
+- `CorrelatorBankOutput.num_integrated_samples`: the producer's true sample count.
+- `CorrelatorBankOutput.end_sample_index`: the end sample relative to the start of the current measurement, as the software path writes it (`next_sample_index` returns to 1 each `track!`). A producer with
 ### Transport delay
 
 The DLL discriminator takes the **pre-update** `code_doppler` as the one in effect during the integration, right for a feedback pipeline one batch deep. With a deeper delay, tag outputs with their epoch and schedule each NCO update for a known future epoch.

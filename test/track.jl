@@ -391,13 +391,13 @@ end
     # One code period per record: each ends within a sample of a block boundary.
     code_rate = ustrip(Hz, get_chip_rate(gpsl1)) / ustrip(Hz, fs)
     @test all(r -> abs(rem(r[4], 1023, RoundNearest)) <= code_rate, records)
-    @test track_state.sample_offsets[get_band_id(get_band(gpsl1))] == 4000 * 20
+    @test track_state.sample_index_offsets[get_band_id(get_band(gpsl1))] == 4000 * 20
     # `track` leaves its input's sample grid where it was.
-    before = copy(track_state.sample_offsets)
+    before = copy(track_state.sample_index_offsets)
     track(first(chunks), track_state, fs)
-    @test track_state.sample_offsets == before
+    @test track_state.sample_index_offsets == before
     track!(first(chunks), track_state, fs)
-    @test track_state.sample_offsets[get_band_id(get_band(gpsl1))] == 4000 * 21
+    @test track_state.sample_index_offsets[get_band_id(get_band(gpsl1))] == 4000 * 21
     # `track` shares the tracking loop with its input; a `deepcopy` branches it.
     num_integrations = length(tracking_loop.records)
     branch = track(first(chunks), deepcopy(track_state), fs)

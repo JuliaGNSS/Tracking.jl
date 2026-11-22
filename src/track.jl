@@ -70,7 +70,7 @@ function track(
     detached = TrackState(
         track_state;
         groups = _detach_groups_slot_vectors(track_state.groups),
-        sample_offsets = copy(track_state.sample_offsets),
+        sample_index_offsets = copy(track_state.sample_index_offsets),
     )
     track!(measurements, detached; kwargs...)::TS
 end
@@ -174,26 +174,37 @@ function track!(
         measure_noise = chunk_index == 0,
     )
     step_tracking_loops!(track_state, measurements)
-    _advance_sample_offsets!(track_state.sample_offsets, measurements)
+    _advance_sample_index_offsets!(track_state.sample_index_offsets, measurements)
     return track_state
 end
 
 # The next measurement of every band starts where this one ended.
-@inline _advance_sample_offsets!(
-    sample_offsets::Dict{Symbol,Int},
+@inline _advance_sample_index_offsets!(
+    sample_index_offsets::Dict{Symbol,Int},
     measurements::BandMeasurements,
-) = _advance_sample_offsets!(sample_offsets, keys(measurements), values(measurements))
-@inline _advance_sample_offsets!(sample_offsets::Dict{Symbol,Int}, ::Tuple{}, ::Tuple{}) =
-    sample_offsets
-@inline function _advance_sample_offsets!(
-    sample_offsets::Dict{Symbol,Int},
+) = _advance_sample_index_offsets!(
+    sample_index_offsets,
+    keys(measurements),
+    values(measurements),
+)
+@inline _advance_sample_index_offsets!(
+    sample_index_offsets::Dict{Symbol,Int},
+    ::Tuple{},
+    ::Tuple{},
+) = sample_index_offsets
+@inline function _advance_sample_index_offsets!(
+    sample_index_offsets::Dict{Symbol,Int},
     bands::Tuple,
     measurements::Tuple,
 )
     band = first(bands)
-    sample_offsets[band] =
-        get(sample_offsets, band, 0) + get_num_samples(first(measurements))
-    _advance_sample_offsets!(sample_offsets, Base.tail(bands), Base.tail(measurements))
+    sample_index_offsets[band] =
+        get(sample_index_offsets, band, 0) + get_num_samples(first(measurements))
+    _advance_sample_index_offsets!(
+        sample_index_offsets,
+        Base.tail(bands),
+        Base.tail(measurements),
+    )
 end
 
 # Bare-buffer convenience wrapper. Single-band TrackStates only.

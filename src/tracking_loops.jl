@@ -14,15 +14,15 @@
 # `_signal_noise_densities`). Each integration ran on the satellite's own Doppler
 # and its command takes effect at the integration's end (application sample
 # `nothing`): a hardware correlator's loop, which needs another NCO history and an
-# application sample, calls TrackingLoops' `step_loop!` itself. `sample_offset`
-# moves the integrations onto the band's running sample grid (`TrackState`'s
-# `sample_offsets`).
+# application sample, calls TrackingLoops' `step_loop!` itself.
+# `sample_index_offset` moves the integrations onto the band's running sample grid
+# (`TrackState`'s `sample_index_offsets`).
 function _step_sat_tracking_loop(
     sat::TrackedSat,
     tracking_loop::AbstractTrackingLoop,
     sampling_frequency,
     noise::Tuple,
-    sample_offset::Int = 0,
+    sample_index_offset::Int = 0,
 )
     # Driver (`signals[1]`) first, then the passengers, all through the one loop
     # state. Only the driver's integrations close the loops: the satellite's Doppler
@@ -35,7 +35,7 @@ function _step_sat_tracking_loop(
         nco_command,
         sampling_frequency,
         first(noise),
-        sample_offset,
+        sample_index_offset,
     )
     new_tail, loop_state = _step_passenger_integrations(
         Base.tail(sat.signals),
@@ -44,7 +44,7 @@ function _step_sat_tracking_loop(
         nco_command,
         sampling_frequency,
         Base.tail(noise),
-        sample_offset,
+        sample_index_offset,
     )
 
     # On the batch a signal first syncs, anchor `sat.code_phase` to the secondary
@@ -96,7 +96,7 @@ end
     (noise_density, noise_density_status);
     secondary_code_wiped::Bool,
     command_issue_sample_index::Integer,
-    sample_offset::Integer,
+    sample_index_offset::Integer,
 )
     state = tracked_signal.post_correlation_state
     if !secondary_code_wiped && _pre_sync_replica_chip(state.signal, state.prn) < 0
@@ -111,7 +111,7 @@ end
         noise_density_status == NOISE_DENSITY_READY;
         secondary_code_wiped,
         command_issue_sample_index,
-        sample_index_offset = sample_offset,
+        sample_index_offset,
     )
     state.last_sync_event == TrackingLoops.SYNC_LOST && _warn_bit_boundary_overshoot(
         get_signal_id(state.signal),
@@ -152,7 +152,7 @@ end
     nco_command,
     sampling_frequency,
     noise::Tuple,
-    sample_offset::Int,
+    sample_index_offset::Int,
 )
     (; carrier_doppler, code_doppler) = get_nco_command(nco_command, 0)
     outputs = tracked_signal.correlator_bank_outputs
@@ -169,7 +169,7 @@ end
             noise;
             secondary_code_wiped,
             command_issue_sample_index,
-            sample_offset,
+            sample_index_offset,
         )
         loop_state, carrier_doppler, code_doppler = step_loop!(
             tracking_loop,
@@ -203,7 +203,7 @@ end
     nco_command,
     sampling_frequency,
     noise::Tuple,
-    sample_offset::Int,
+    sample_index_offset::Int,
 )
     new_head, loop_state, _, _ = _step_signal_integrations(
         first(signals),
@@ -212,7 +212,7 @@ end
         nco_command,
         sampling_frequency,
         first(noise),
-        sample_offset,
+        sample_index_offset,
     )
     new_tail, loop_state = _step_passenger_integrations(
         Base.tail(signals),
@@ -221,7 +221,7 @@ end
         nco_command,
         sampling_frequency,
         Base.tail(noise),
-        sample_offset,
+        sample_index_offset,
     )
     (new_head, new_tail...), loop_state
 end
@@ -281,13 +281,13 @@ end
     tracking_loop::AbstractTrackingLoop,
     sampling_frequencies::Union{BandMeasurements,NamedTuple,AbstractDict},
     noise_estimators::NamedTuple,
-    sample_offsets::Dict{Symbol,Int},
+    sample_index_offsets::Dict{Symbol,Int},
 )
     vals = g.satellites.values
     isempty(vals) && return nothing
     band_id = get_band_id(g.band)
     sampling_frequency = _band_sampling_frequency(sampling_frequencies, band_id)
-    sample_offset = get(sample_offsets, band_id, 0)
+    sample_index_offset = get(sample_index_offsets, band_id, 0)
     noise = _signal_noise_densities(noise_estimators, eltype(g.satellites))
     _warn_noise_density_missing(eltype(g.satellites), noise)
     @inbounds for i in eachindex(vals)
@@ -297,7 +297,7 @@ end
             tracking_loop,
             sampling_frequency,
             noise,
-            sample_offset,
+            sample_index_offset,
         )
     end
     return nothing
@@ -355,7 +355,7 @@ function step_tracking_loops!(
         track_state.tracking_loop,
         sampling_frequencies,
         track_state.noise_estimators,
-        track_state.sample_offsets,
+        track_state.sample_index_offsets,
     )
     return track_state
 end

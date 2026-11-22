@@ -201,18 +201,18 @@ get one, so the others pay nothing. They average **in place**.
 parks the chunk's noise descriptors, so a threaded backend reaches them through
 one pointer (see `_park_noise_items!`). Shared by every derived `TrackState`.
 
-`sample_offsets` counts, per band (keyed by `get_band_id`), the samples earlier
+`sample_index_offsets` counts, per band (keyed by `get_band_id`), the samples earlier
 [`track!`](@ref) calls consumed: the origin of the current measurement on a
 sample grid that runs on across calls. [`step_tracking_loops!`](@ref) adds it to
-a record's index, so a tracking loop with shared state of its own (TrackingLoops'
+a record's sample index, so a tracking loop with shared state of its own (TrackingLoops'
 `VectorTrackingLoop`) sees every satellite on one time grid. The in-place mutators
 share it; [`track`](@ref), [`merge_sats`](@ref), [`add_satellite`](@ref) and
 [`remove_satellite`](@ref) give their result a copy.
 
 A fresh `TrackState` starts every band at `0`. To carry such a tracking loop over
 into a rebuilt `TrackState` (e.g. to add a band), pass the old state's offsets
-as the `sample_offsets` keyword, or the estimator receives records from its
-past. A band the old state did not track starts at
+as the `sample_index_offsets` keyword, or the tracking loop receives integrations
+from its past. A band the old state did not track starts at
 `elapsed_time * sampling_frequency` samples of the new band.
 """
 struct TrackState{G<:SignalGroups,TL<:AbstractTrackingLoop,NE<:NoiseDensityEstimators}
@@ -220,7 +220,7 @@ struct TrackState{G<:SignalGroups,TL<:AbstractTrackingLoop,NE<:NoiseDensityEstim
     tracking_loop::TL
     noise_estimators::NE
     noise_descriptor::Base.RefValue{Any}
-    sample_offsets::Dict{Symbol,Int}
+    sample_index_offsets::Dict{Symbol,Int}
 end
 
 # A fresh state gets an empty descriptor cell; derived states pass theirs on,
@@ -229,24 +229,24 @@ TrackState(
     groups::SignalGroups,
     tracking_loop::AbstractTrackingLoop,
     noise_estimators::NoiseDensityEstimators;
-    sample_offsets = nothing,
+    sample_index_offsets = nothing,
 ) = TrackState(
     groups,
     tracking_loop,
     noise_estimators,
     Base.RefValue{Any}(nothing),
-    _initial_sample_offsets(groups, sample_offsets),
+    _initial_sample_index_offsets(groups, sample_index_offsets),
 )
 
-# Every band at `0`, overridden by the caller's `sample_offsets`, in a fresh `Dict`.
-function _initial_sample_offsets(groups::SignalGroups, sample_offsets)
+# Every band at `0`, overridden by the caller's `sample_index_offsets`, in a fresh `Dict`.
+function _initial_sample_index_offsets(groups::SignalGroups, sample_index_offsets)
     offsets = Dict{Symbol,Int}(get_band_id(group.band) => 0 for group in groups)
-    isnothing(sample_offsets) && return offsets
-    for (band, offset) in pairs(sample_offsets)
+    isnothing(sample_index_offsets) && return offsets
+    for (band, offset) in pairs(sample_index_offsets)
         haskey(offsets, band) || throw(
             ArgumentError(
                 string(
-                    "`sample_offsets` names band `",
+                    "`sample_index_offsets` names band `",
                     band,
                     "`, which no group of this TrackState tracks (bands: ",
                     join(keys(offsets), ", "),
@@ -255,7 +255,9 @@ function _initial_sample_offsets(groups::SignalGroups, sample_offsets)
             ),
         )
         offset >= 0 || throw(
-            ArgumentError("`sample_offsets` must be non-negative, got $band => $offset."),
+            ArgumentError(
+                "`sample_index_offsets` must be non-negative, got $band => $offset.",
+            ),
         )
         offsets[band] = offset
     end

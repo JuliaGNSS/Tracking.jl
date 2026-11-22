@@ -43,7 +43,7 @@ and every other signal none, so a state on
 NamedTuple to configure the window, or to declare a source you fill with
 [`append_noise_observation!`](@ref) on a correlator-ingest path.
 
-`sample_offsets` sets where each band's sample grid starts, keyed by `get_band_id`
+`sample_index_offsets` sets where each band's sample grid starts, keyed by `get_band_id`
 (`NamedTuple` or `AbstractDict`; missing bands start at `0`). Pass the old state's
 when rebuilding around a tracking loop that keeps state of its own; see the
 [`TrackState`](@ref) struct. The other constructors take the same keyword.
@@ -54,7 +54,7 @@ function TrackState(;
     tracking_loop::Maybe{AbstractTrackingLoop} = nothing,
     num_ants::NumAnts = NumAnts(1),
     noise_estimators::Maybe{NamedTuple} = nothing,
-    sample_offsets = nothing,
+    sample_index_offsets = nothing,
 )
     if isnothing(signal) && isnothing(signals)
         throw(
@@ -87,7 +87,7 @@ function TrackState(;
         groups,
         tracking_loop,
         _resolve_noise_estimators(noise_estimators, groups);
-        sample_offsets,
+        sample_index_offsets,
     )
 end
 
@@ -284,7 +284,7 @@ function TrackState(
     tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}};
     tracking_loop::AbstractTrackingLoop = _default_tracking_loop(),
     noise_estimators::Maybe{NamedTuple} = nothing,
-    sample_offsets = nothing,
+    sample_index_offsets = nothing,
 )
     # `signal` is unused (each sat carries its signals); kept for compatibility.
     sats_dict = to_dictionary(tracked_sats)
@@ -294,7 +294,7 @@ function TrackState(
         groups,
         tracking_loop,
         _resolve_noise_estimators(noise_estimators, groups);
-        sample_offsets,
+        sample_index_offsets,
     )
 end
 
@@ -302,7 +302,7 @@ function TrackState(
     tracked_sats::Dictionary{<:Any,<:TrackedSat};
     tracking_loop::AbstractTrackingLoop = _default_tracking_loop(),
     noise_estimators::Maybe{NamedTuple} = nothing,
-    sample_offsets = nothing,
+    sample_index_offsets = nothing,
 )
     _assert_tracking_loop_types_match(tracked_sats, tracking_loop)
     groups = (default = _signal_group_from_dict(tracked_sats),)
@@ -310,7 +310,7 @@ function TrackState(
         groups,
         tracking_loop,
         _resolve_noise_estimators(noise_estimators, groups);
-        sample_offsets,
+        sample_index_offsets,
     )
 end
 
@@ -345,7 +345,7 @@ function TrackState(
     satellites::SatelliteDicts;
     tracking_loop::AbstractTrackingLoop = _default_tracking_loop(),
     noise_estimators::Maybe{NamedTuple} = nothing,
-    sample_offsets = nothing,
+    sample_index_offsets = nothing,
 )
     foreach(d -> _assert_tracking_loop_types_match(d, tracking_loop), Tuple(satellites))
     groups = map(_signal_group_from_dict, satellites)
@@ -353,7 +353,7 @@ function TrackState(
         groups,
         tracking_loop,
         _resolve_noise_estimators(noise_estimators, groups);
-        sample_offsets,
+        sample_index_offsets,
     )
 end
 
@@ -363,14 +363,15 @@ function TrackState(
     groups::Maybe{G} = nothing,
     tracking_loop::Maybe{TL} = nothing,
     noise_estimators::Maybe{NE} = nothing,
-    sample_offsets::Maybe{Dict{Symbol,Int}} = nothing,
+    sample_index_offsets::Maybe{Dict{Symbol,Int}} = nothing,
 ) where {G<:SignalGroups,TL<:AbstractTrackingLoop,NE<:NoiseDensityEstimators}
     TrackState{G,TL,NE}(
         isnothing(groups) ? track_state.groups : groups,
         isnothing(tracking_loop) ? track_state.tracking_loop : tracking_loop,
         isnothing(noise_estimators) ? track_state.noise_estimators : noise_estimators,
         track_state.noise_descriptor,
-        isnothing(sample_offsets) ? track_state.sample_offsets : sample_offsets,
+        isnothing(sample_index_offsets) ? track_state.sample_index_offsets :
+        sample_index_offsets,
     )
 end
 
@@ -401,7 +402,7 @@ function _prepare_for_new_buffer(track_state::TrackState)
     TrackState(
         track_state;
         groups = new_groups,
-        sample_offsets = copy(track_state.sample_offsets),
+        sample_index_offsets = copy(track_state.sample_index_offsets),
     )
 end
 
@@ -510,7 +511,7 @@ function merge_sats(
         new_tracking_loop,
         track_state.noise_estimators,
         track_state.noise_descriptor,
-        copy(track_state.sample_offsets),
+        copy(track_state.sample_index_offsets),
     )
 end
 
@@ -589,7 +590,7 @@ function add_satellite!(
         new_tracking_loop,
         track_state.noise_estimators,
         track_state.noise_descriptor,
-        track_state.sample_offsets,
+        track_state.sample_index_offsets,
     )
 end
 
@@ -688,7 +689,7 @@ function add_satellite(
         new_tracking_loop,
         track_state.noise_estimators,
         track_state.noise_descriptor,
-        copy(track_state.sample_offsets),
+        copy(track_state.sample_index_offsets),
     )
 end
 
@@ -749,7 +750,7 @@ function remove_satellite(
         track_state.tracking_loop,
         track_state.noise_estimators,
         track_state.noise_descriptor,
-        copy(track_state.sample_offsets),
+        copy(track_state.sample_index_offsets),
     )
 end
 
@@ -865,7 +866,7 @@ function get_carrier_phase_correction(
     sat = get_sat_state(group.satellites, prn)
     # `track!` leaves the replica at the end of the measurement, the band's sample
     # offset, having run on the satellite's Doppler since its latest record.
-    band_grid_index = get(track_state.sample_offsets, get_band_id(group.band), 0)
+    band_grid_index = get(track_state.sample_index_offsets, get_band_id(group.band), 0)
     calc_carrier_phase_correction(
         sat.loop_state,
         _software_nco_command(sat),
