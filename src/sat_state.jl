@@ -967,7 +967,7 @@ $(SIGNATURES)
 
 Get the satellite state for a specific satellite identifier.
 """
-get_sat_state(sats::Dictionary{<:Any,<:TrackedSat}, identifier) = sats[identifier]
+get_sat_state(sats::Dictionary{<:Any,<:TrackedSat}, prn) = sats[prn]
 get_sat_state(sats::Dictionary{<:Any,<:TrackedSat}) = only(sats)
 
 estimate_cn0(tsig::TrackedSignal) = estimate_cn0(tsig.loop_state)
