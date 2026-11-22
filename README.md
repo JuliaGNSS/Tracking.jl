@@ -28,7 +28,7 @@ estimator or a post-correlation filter (`using Tracking, TrackingLoops, GNSSSign
 * Secondary code detection
 * Bit detection
 * Phased array tracking
-* Multi-satellite and multi-system tracking
+* Multi-satellite and multi-constellation tracking
 
 ## Installation
 

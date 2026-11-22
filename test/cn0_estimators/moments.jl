@@ -28,7 +28,7 @@ using TrackingLoops:
     gpsl1 = GPSL1CA()
 
     for i = 1:100
-        signal =
+        samples =
             get_code.(
                 gpsl1,
                 code_frequency .* range ./ sampling_frequency .+ start_code_phase,
@@ -47,7 +47,7 @@ using TrackingLoops:
         )
         correlator_bank = Tracking.downconvert_and_correlate_fused!(
             correlator_bank,
-            signal,
+            samples,
             code,
             sample_shifts,
             0.0Hz,

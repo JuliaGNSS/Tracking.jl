@@ -164,11 +164,11 @@ julia> get_code_phase(track_state, 17)
 890.0
 ```
 
-### Multi-system tracking (different signals on different sats)
+### Multi-constellation tracking (different signals on different sats)
 
 Satellites with different signals go into different named groups:
 
-```jldoctest multi_system
+```jldoctest multi_constellation
 julia> using Tracking, GNSSSignals
 
 julia> using Tracking: Hz
@@ -354,11 +354,11 @@ julia> using Tracking: Hz
 
 julia> using GNSSSignals: gen_code, get_chip_rate, get_chip_rate_to_center_frequency_ratio
 
-julia> function make_signal(sys, prn, carrier_doppler, num_samples, fs)
-           code_freq = carrier_doppler * get_chip_rate_to_center_frequency_ratio(sys) + get_chip_rate(sys)
+julia> function gen_samples(signal, prn, carrier_doppler, num_samples, fs)
+           code_freq = carrier_doppler * get_chip_rate_to_center_frequency_ratio(signal) + get_chip_rate(signal)
            range = 0:num_samples-1
            cis.(2π .* carrier_doppler .* range ./ fs) .*
-               gen_code(num_samples, sys, prn, fs, code_freq, 0.0)
+               gen_code(num_samples, signal, prn, fs, code_freq, 0.0)
        end;
 
 julia> track_state = TrackState(;
@@ -369,12 +369,12 @@ julia> track_state = add_satellite!(track_state; prn = 1, group_key = :legacy_gp
 
 julia> track_state = add_satellite!(track_state; prn = 1, group_key = :gps_l5, code_phase = 0.0, carrier_doppler = -150Hz);
 
-julia> buf_l1 = make_signal(GPSL1CA(),  1, 200Hz,  4000,  4e6Hz);  # 1 ms at 4 MHz
+julia> samples_l1 = gen_samples(GPSL1CA(),  1, 200Hz,  4000,  4e6Hz);  # 1 ms at 4 MHz
 
-julia> buf_l5 = make_signal(GPSL5I(),   1, -150Hz, 25000, 25e6Hz); # 1 ms at 25 MHz
+julia> samples_l5 = gen_samples(GPSL5I(),   1, -150Hz, 25000, 25e6Hz); # 1 ms at 25 MHz
 
-julia> track!((L1 = BandMeasurement(buf_l1, 4e6Hz),
-               L5 = BandMeasurement(buf_l5, 25e6Hz)), track_state);
+julia> track!((L1 = BandMeasurement(samples_l1, 4e6Hz),
+               L5 = BandMeasurement(samples_l5, 25e6Hz)), track_state);
 
 julia> get_carrier_doppler(track_state, :legacy_gps_l1, 1)
 200.00000359633913 Hz
