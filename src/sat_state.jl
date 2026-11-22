@@ -153,6 +153,12 @@ $(SIGNATURES)
 The working correlator bank: the correlator outputs of the predetection integration in progress.
 """
 get_correlator_bank(t::TrackedSignal) = t.correlator_bank
+
+"""
+$(SIGNATURES)
+
+The correlator bank of the most recently completed predetection integration.
+"""
 get_last_fully_integrated_correlator(t::TrackedSignal) = t.last_fully_integrated_correlator
 
 """
@@ -222,12 +228,39 @@ append_correlator_bank_output!(t::TrackedSignal, output::CorrelatorBankOutput) =
 
 get_post_corr_filter(t::TrackedSignal) = t.loop_state.post_corr_filter
 get_cn0_estimator(t::TrackedSignal) = t.loop_state.cn0_estimator
+
+"""
+$(SIGNATURES)
+
+The signal's [`BitSynchronizer`](@extref TrackingLoops.BitSynchronizer): bit or secondary-code
+sync and the soft bits for the decoder.
+"""
 get_bit_buffer(t::TrackedSignal) = t.loop_state.bit_synchronizer
 get_soft_bits(t::TrackedSignal) = get_soft_bits(get_bit_buffer(t))
+
+"""
+$(SIGNATURES)
+
+The number of soft bits in the bit synchronizer (see `get_soft_bits`).
+"""
 get_num_bits(t::TrackedSignal) = length(get_bit_buffer(t))
 is_bit_or_secondary_code_synced(t::TrackedSignal) =
     is_bit_or_secondary_code_synced(get_bit_buffer(t))
+
+"""
+$(SIGNATURES)
+
+The number of samples accumulated into the predetection integration in progress.
+"""
 get_integrated_samples(t::TrackedSignal) = t.integrated_samples
+
+"""
+$(SIGNATURES)
+
+The number of primary code periods the signal integrates coherently per predetection
+integration once synced (see
+[`set_preferred_num_code_blocks_to_integrate!`](@ref)).
+"""
 get_preferred_num_code_blocks_to_integrate(t::TrackedSignal) =
     t.preferred_num_code_blocks_to_integrate
 
@@ -246,7 +279,7 @@ update their own filters, C/N₀ and bit synchronizers on theirs. A custom
 [`AbstractTrackingLoop`](@extref TrackingLoops.AbstractTrackingLoop) may
 use any signal.
 
-The shared `code_phase` wraps at [`current_code_phase_period`](@ref).
+The shared `code_phase` wraps at [`current_code_phase_period`](@ref Tracking.current_code_phase_period).
 """
 struct TrackedSat{Signals<:Tuple{Vararg{TrackedSignal}},D}
     prn::Int
@@ -560,7 +593,7 @@ get_num_ants(
 $(SIGNATURES)
 
 Get the satellite's shared code phase in chips, wrapping at
-[`current_code_phase_period`](@ref). Mod by a signal's primary code length
+[`current_code_phase_period`](@ref Tracking.current_code_phase_period). Mod by a signal's primary code length
 for its replica phase.
 """
 get_code_phase(sat::TrackedSat) = sat.code_phase
@@ -708,7 +741,7 @@ this form or TrackingLoops' four-argument one.
 It must be **pure**: it also builds the PRN-0 template sat that fixes a group's
 slot type, probes types when validating pre-built sats, and re-seeds in
 [`reset_loop_filters!`](@ref). Register satellites in shared state in
-[`update_estimator_on_handoff`](@ref) instead.
+[`update_estimator_on_handoff`](@ref Tracking.update_estimator_on_handoff) instead.
 """
 init_loop_state(doppler_estimator::AbstractTrackingLoop, sat::TrackedSat) = init_loop_state(
     doppler_estimator,
