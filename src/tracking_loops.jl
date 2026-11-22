@@ -234,14 +234,14 @@ satellite, through TrackingLoops' `process_correlator_bank_output!` and the trac
 loop's `step_loop!` (any `AbstractTrackingLoop` implementing it works), giving the
 Dopplers for the next replicas and the filtered prompts.
 
-The second argument is a [`BandMeasurements`](@ref Tracking.BandMeasurements) NamedTuple (the `track` path) or a
+The second argument is a [`SamplesByBand`](@ref Tracking.SamplesByBand) NamedTuple (the `track` path) or a
 `NamedTuple`/`Dict` mapping each `get_band_id` to its sampling frequency: the entry
 point for an **external correlator producer** (e.g. an FPGA), which needs no sample
 buffer. See [External correlator producers](@ref).
 """
 function step_tracking_loops(
     track_state::TrackState{<:Any,<:AbstractTrackingLoop},
-    sampling_frequencies::Union{BandMeasurements,NamedTuple,AbstractDict},
+    sampling_frequencies::Union{SamplesByBand,NamedTuple,AbstractDict},
 )
     # Detach the slot values (sharing the key set), then run in place.
     new_track_state =
@@ -249,7 +249,8 @@ function step_tracking_loops(
     step_tracking_loops!(new_track_state, sampling_frequencies)
 end
 
-@inline _band_sampling_frequency(m::BandMeasurements, key) = m[key].sampling_frequency
+@inline _band_sampling_frequency(band_samples::SamplesByBand, key) =
+    band_samples[key].sampling_frequency
 @inline _band_sampling_frequency(fs::NamedTuple, key) = fs[key]
 @inline _band_sampling_frequency(fs::AbstractDict, key) = fs[key]
 
@@ -279,7 +280,7 @@ end
 @inline function _step_group_tracking_loops!(
     g::SignalGroup,
     tracking_loop::AbstractTrackingLoop,
-    sampling_frequencies::Union{BandMeasurements,NamedTuple,AbstractDict},
+    sampling_frequencies::Union{SamplesByBand,NamedTuple,AbstractDict},
     noise_estimators::NamedTuple,
     sample_index_offsets::Dict{Symbol,Int},
 )
@@ -347,7 +348,7 @@ signal's `correlator_bank_outputs`, whether from the software correlate phase or
 """
 function step_tracking_loops!(
     track_state::TrackState{<:Any,<:AbstractTrackingLoop},
-    sampling_frequencies::Union{BandMeasurements,NamedTuple,AbstractDict},
+    sampling_frequencies::Union{SamplesByBand,NamedTuple,AbstractDict},
 )
     _foreach_group!(
         _step_group_tracking_loops!,

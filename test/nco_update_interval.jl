@@ -14,7 +14,7 @@ using GNSSSignals:
 using Tracking:
     TrackedSat,
     TrackState,
-    BandMeasurement,
+    BandSamples,
     track,
     track!,
     CPUDownconvertAndCorrelator,
@@ -81,12 +81,12 @@ end
     )
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, prn, start_code_phase, 0.0Hz)])
     dc = CPUDownconvertAndCorrelator()
-    measurements = (L1 = BandMeasurement(samples, fs),)
+    samples_by_band = (L1 = BandSamples(samples, fs),)
 
     # Correlate only, so the outputs survive.
     downconvert_and_correlate!(
         dc,
-        measurements,
+        samples_by_band,
         ts;
         nco_update_index = 0,
         nco_update_interval = n_periods * 1e-3 * s,

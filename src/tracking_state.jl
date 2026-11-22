@@ -863,7 +863,7 @@ function calc_carrier_phase_correction(
 )
     group = _index_group(track_state.groups, group_key)
     sat = get_tracked_sat(group.satellites, prn)
-    # `track!` leaves the replica at the end of the measurement, the band's sample
+    # `track!` leaves the replica at the end of the samples, the band's sample
     # offset, having run on the satellite's Doppler since its latest integration.
     band_grid_index = get(track_state.sample_index_offsets, get_band_id(group.band), 0)
     # Every integration stores its band's sampling frequency in the post-correlation
@@ -1247,7 +1247,7 @@ end
 $(SIGNATURES)
 
 The distinct band ids (`GNSSSignals.get_band_id`) of `track_state`'s groups, in
-first-encounter order: the keys a multi-band measurements NamedTuple must use.
+first-encounter order: the keys a [`SamplesByBand`](@ref Tracking.SamplesByBand) NamedTuple must use.
 
 ```julia
 ts = TrackState(; signals = (legacy_gps = (GPSL1CA(),), gps_l5 = (GPSL5I(),)))
@@ -1267,7 +1267,7 @@ get_band_ids(ts) == (:L1, :L5)
                     "Bare-buffer `track`/`track!` requires a single-band TrackState, ",
                     "but this TrackState spans bands ",
                     keys_tuple,
-                    ". Pass a NamedTuple of `BandMeasurement`s instead, ",
+                    ". Pass a NamedTuple of `BandSamples` instead, ",
                     "one per band.",
                 ),
             ),
@@ -1282,19 +1282,19 @@ end
     all(x -> x in b, a) && all(y -> y in a, b)
 end
 
-# Measurements must match the band keys and antenna shapes and have exactly equal
+# The bands' samples must match the band keys and antenna shapes and have exactly equal
 # durations.
-@inline function _validate_measurements(
+@inline function _validate_samples_by_band(
     track_state::TrackState,
-    measurements::BandMeasurements,
+    samples_by_band::SamplesByBand,
 )
     expected_keys = get_band_ids(track_state)
-    got_keys = keys(measurements)
+    got_keys = keys(samples_by_band)
     if !_tuple_sets_equal(expected_keys, got_keys)
         throw(
             ArgumentError(
                 string(
-                    "BandMeasurement keys do not match the TrackState's band set. ",
+                    "BandSamples keys do not match the TrackState's band set. ",
                     "Expected: ",
                     expected_keys,
                     ". Got: ",
@@ -1304,8 +1304,8 @@ end
             ),
         )
     end
-    _validate_antenna_shapes(track_state, measurements)
-    _validate_equal_durations(measurements)
+    _validate_antenna_shapes(track_state, samples_by_band)
+    _validate_equal_durations(samples_by_band)
     return nothing
 end
 
@@ -1313,27 +1313,27 @@ end
 # loop over heterogeneous groups boxes.
 @inline function _validate_antenna_shapes(
     track_state::TrackState,
-    measurements::BandMeasurements,
+    samples_by_band::SamplesByBand,
 )
-    _validate_antenna_shapes_walk(Tuple(track_state.groups), measurements)
+    _validate_antenna_shapes_walk(Tuple(track_state.groups), samples_by_band)
 end
 
-@inline _validate_antenna_shapes_walk(::Tuple{}, ::BandMeasurements) = nothing
+@inline _validate_antenna_shapes_walk(::Tuple{}, ::SamplesByBand) = nothing
 @inline function _validate_antenna_shapes_walk(
     groups::Tuple,
-    measurements::BandMeasurements,
+    samples_by_band::SamplesByBand,
 )
     g = first(groups)
-    m = measurements[get_band_id(g.band)]
-    _assert_antenna_shape(g, m)
-    _validate_antenna_shapes_walk(Base.tail(groups), measurements)
+    band_samples = samples_by_band[get_band_id(g.band)]
+    _assert_antenna_shape(g, band_samples)
+    _validate_antenna_shapes_walk(Base.tail(groups), samples_by_band)
 end
 
 @inline function _assert_antenna_shape(
     g::SignalGroup{B,S,Sigs,NumAnts{M}},
-    m::BandMeasurement,
+    band_samples::BandSamples,
 ) where {B,S,Sigs,M}
-    cols = m.samples isa AbstractMatrix ? size(m.samples, 2) : 1
+    cols = band_samples.samples isa AbstractMatrix ? size(band_samples.samples, 2) : 1
     cols == M && return nothing
     throw(
         ArgumentError(
@@ -1342,7 +1342,7 @@ end
                 get_band_id(g.band),
                 "`. Group declares NumAnts(",
                 M,
-                ") but the measurement's ",
+                ") but the band's ",
                 "`samples` has ",
                 cols,
                 " column(s).",
@@ -1353,22 +1353,26 @@ end
 
 # Cross-multiplied with promoted rates, so mixed-precision sampling rates with
 # identical durations compare equal.
-@inline function _validate_equal_durations(measurements::BandMeasurements)
-    ms = Tuple(measurements)
-    isempty(ms) && return nothing
-    first_m = first(ms)
-    ref_num_samples = get_num_samples(first_m)
-    for m in Base.tail(ms)
-        ref_fs, fs = promote(first_m.sampling_frequency, m.sampling_frequency)
-        get_num_samples(m) * ref_fs == ref_num_samples * fs && continue
+@inline function _validate_equal_durations(samples_by_band::SamplesByBand)
+    samples_by_band = Tuple(samples_by_band)
+    isempty(samples_by_band) && return nothing
+    first_band_samples = first(samples_by_band)
+    ref_num_samples = get_num_samples(first_band_samples)
+    for band_samples in Base.tail(samples_by_band)
+        ref_fs, fs =
+            promote(first_band_samples.sampling_frequency, band_samples.sampling_frequency)
+        get_num_samples(band_samples) * ref_fs == ref_num_samples * fs && continue
         throw(
             ArgumentError(
                 string(
-                    "BandMeasurement durations must be exactly equal across bands. ",
+                    "BandSamples durations must be exactly equal across bands. ",
                     "Got ",
-                    uconvert(s, get_num_samples(m) / m.sampling_frequency),
+                    uconvert(
+                        s,
+                        get_num_samples(band_samples) / band_samples.sampling_frequency,
+                    ),
                     " and ",
-                    uconvert(s, ref_num_samples / first_m.sampling_frequency),
+                    uconvert(s, ref_num_samples / first_band_samples.sampling_frequency),
                     ". ",
                     "Check `num_samples / sampling_frequency` for each band.",
                 ),

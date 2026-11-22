@@ -671,13 +671,13 @@ and reset the reference's PRN rotation. Hence:
 """
 function downconvert_and_correlate(
     dc::AbstractDownconvertAndCorrelator,
-    measurements::BandMeasurements,
+    samples_by_band::SamplesByBand,
     track_state::TrackState;
     kwargs...,
 )
     new_track_state =
         TrackState(track_state; groups = _copy_groups_slot_vectors(track_state.groups))
-    downconvert_and_correlate!(dc, measurements, new_track_state; kwargs...)
+    downconvert_and_correlate!(dc, samples_by_band, new_track_state; kwargs...)
 end
 
 """
@@ -710,16 +710,16 @@ refilled.
 untouched. Pass it on a call that re-covers samples already measured, as `track!`'s
 final drain pass does, so they do not enter the window twice.
 
-A band **absent** from `measurements` is not measured and does not throw, so a
+A band **absent** from `samples_by_band` is not correlated and does not throw, so a
 multi-band `TrackState` may be advanced one band at a time; groups with satellites on
-that band still require its measurement.
+that band still require its samples.
 
 The noise estimators are mutable state shared with the input on the out-of-place
 `downconvert_and_correlate` and [`track`](@ref), see there.
 """
 function downconvert_and_correlate!(
     dc::AbstractDownconvertAndCorrelator,
-    measurements::BandMeasurements,
+    samples_by_band::SamplesByBand,
     track_state::TrackState;
     nco_update_index::Int = 0,
     nco_update_interval = nothing,
@@ -735,7 +735,7 @@ function downconvert_and_correlate!(
         noise_items = _noise_items(
             dc,
             track_state,
-            measurements,
+            samples_by_band,
             nco_update_index,
             nco_update_interval,
         )
@@ -744,7 +744,7 @@ function downconvert_and_correlate!(
             noise_items,
             _num_noise_items(noise_items),
             dc,
-            measurements,
+            samples_by_band,
             nco_update_index,
             nco_update_interval,
             stop_before_partial,
@@ -756,7 +756,7 @@ function downconvert_and_correlate!(
             (),
             0,
             dc,
-            measurements,
+            samples_by_band,
             nco_update_index,
             nco_update_interval,
             stop_before_partial,
@@ -767,7 +767,7 @@ function downconvert_and_correlate!(
 end
 
 # Walk the groups, handing the span's noise work to the first. The items carry
-# their own band measurement and signal; they only ride that group's loop, so on a
+# their own band samples and signal; they only ride that group's loop, so on a
 # threaded backend the despread runs alongside the satellite correlations. Handing
 # them to one group (not every `_dc_one_group!`) despreads each signal exactly once
 # however the satellites are grouped. A state with no groups has no noise estimators.
@@ -777,7 +777,7 @@ end
     noise_items,
     n_noise::Int,
     dc,
-    measurements,
+    samples_by_band,
     nco_update_index,
     nco_update_interval,
     stop_before_partial,
@@ -786,7 +786,7 @@ end
     _dc_one_group!(
         first(groups),
         dc,
-        measurements,
+        samples_by_band,
         nco_update_index,
         nco_update_interval,
         stop_before_partial,
@@ -799,7 +799,7 @@ end
         (),
         0,
         dc,
-        measurements,
+        samples_by_band,
         nco_update_index,
         nco_update_interval,
         stop_before_partial,
@@ -820,7 +820,7 @@ end
 @inline function _noise_items(
     dc::AbstractDownconvertAndCorrelator,
     track_state::TrackState,
-    measurements::BandMeasurements,
+    samples_by_band::SamplesByBand,
     nco_update_index::Int,
     nco_update_interval,
 )
@@ -832,7 +832,7 @@ end
             Tuple(noise_estimators),
             dc,
             track_state.groups,
-            measurements,
+            samples_by_band,
             nco_update_index,
             nco_update_interval,
         ),
@@ -841,10 +841,10 @@ end
 
 # Park the descriptors in the `TrackState`'s reusable cell and return the box. The
 # `@batch` argument tuple copies an immutable descriptor by value (152 B for a
-# `CorrelatorNoiseDensityEstimator`, a `BandMeasurement` and a `GPSL1CA`, which raised a
+# `CorrelatorNoiseDensityEstimator`, a `BandSamples` and a `GPSL1CA`, which raised a
 # launch from ~96 B to 240 B) but a mutable box as one 8 B pointer.
 #
-# The box is reused across launches. Its type names the caller's `BandMeasurement`,
+# The box is reused across launches. Its type names the caller's `BandSamples`,
 # unknown until the first call, so the cell is a `Base.RefValue{Any}` holding a
 # concretely typed box, replaced only when the sample type changes. The box roots
 # the descriptors, and so keeps the last call's sample buffer reachable until the
@@ -883,7 +883,7 @@ const _NoiseWork = Union{Tuple{},Base.RefValue{<:Tuple}}
     ::Tuple{},
     ::AbstractDownconvertAndCorrelator,
     ::SignalGroups,
-    ::BandMeasurements,
+    ::SamplesByBand,
     ::Int,
     _,
 ) = ()
@@ -892,7 +892,7 @@ const _NoiseWork = Union{Tuple{},Base.RefValue{<:Tuple}}
     estimators::Tuple,
     dc::AbstractDownconvertAndCorrelator,
     groups::SignalGroups,
-    measurements::BandMeasurements,
+    samples_by_band::SamplesByBand,
     nco_update_index::Int,
     nco_update_interval,
 ) where {K}
@@ -902,7 +902,7 @@ const _NoiseWork = Union{Tuple{},Base.RefValue{<:Tuple}}
             Val(first(K)),
             dc,
             groups,
-            measurements,
+            samples_by_band,
             nco_update_index,
             nco_update_interval,
         )...,
@@ -911,7 +911,7 @@ const _NoiseWork = Union{Tuple{},Base.RefValue{<:Tuple}}
             Base.tail(estimators),
             dc,
             groups,
-            measurements,
+            samples_by_band,
             nco_update_index,
             nco_update_interval,
         )...,
@@ -925,7 +925,7 @@ end
     ::Val{K},
     dc::AbstractDownconvertAndCorrelator,
     groups::SignalGroups,
-    measurements::BandMeasurements,
+    samples_by_band::SamplesByBand,
     nco_update_index::Int,
     nco_update_interval,
 ) where {K}
@@ -938,19 +938,19 @@ end
     # this call brings no samples for measures nothing, as a multi-band state may be
     # advanced one band at a time; a group with satellites there still throws in
     # `_dc_one_group!`.
-    found_m =
-        _band_measurement_if_present(measurements, Val(_signal_band_id(typeof(signal))))
-    isempty(found_m) && return ()
-    m = first(found_m)
-    _check_sample_type(dc, m)
-    num_buffer_samples = get_num_samples(m)
+    found_band_samples =
+        _band_samples_if_present(samples_by_band, Val(_signal_band_id(typeof(signal))))
+    isempty(found_band_samples) && return ()
+    band_samples = first(found_band_samples)
+    _check_sample_type(dc, band_samples)
+    num_buffer_samples = get_num_samples(band_samples)
     ((
         estimator,
-        m,
+        band_samples,
         _nco_update_sample_range(
             nco_update_interval,
             nco_update_index,
-            m.sampling_frequency,
+            band_samples.sampling_frequency,
             num_buffer_samples,
         ),
         signal,
@@ -975,11 +975,11 @@ end
 @inline _run_noise_items!(items::Tuple, dc) =
     (_apply_noise_item!(first(items), dc); _run_noise_items!(Base.tail(items), dc))
 
-# Band `B`'s measurement as a 0- or 1-tuple; folds at compile time.
-@inline _band_measurement_if_present(
-    measurements::NamedTuple{K,<:Tuple{Vararg{BandMeasurement}}},
+# Band `B`'s samples as a 0- or 1-tuple; folds at compile time.
+@inline _band_samples_if_present(
+    samples_by_band::NamedTuple{K,<:Tuple{Vararg{BandSamples}}},
     ::Val{B},
-) where {K,B} = B in K ? (measurements[B],) : ()
+) where {K,B} = B in K ? (samples_by_band[B],) : ()
 
 # An instance of signal `K` from any group, as a 0- or 1-tuple; folds at compile
 # time.
@@ -1040,15 +1040,15 @@ end
 
 # Per-backend sample-type check before any kernel runs; the integer backends reject
 # non-`Complex{Int16}` buffers with an `ArgumentError`.
-@inline _check_sample_type(::AbstractDownconvertAndCorrelator, m) = nothing
+@inline _check_sample_type(::AbstractDownconvertAndCorrelator, band_samples) = nothing
 
 # Per-group body shared by every backend. `noise_items` / `n_noise` are the span's
 # noise despreads, non-empty for one group (see `_dc_groups!`); they carry their own
-# band measurement, and an empty group still runs to carry them.
+# band samples, and an empty group still runs to carry them.
 @inline function _dc_one_group!(
     g::SignalGroup,
     dc::AbstractDownconvertAndCorrelator,
-    measurements::BandMeasurements,
+    samples_by_band::SamplesByBand,
     nco_update_index::Int,
     nco_update_interval,
     stop_before_partial::Bool,
@@ -1059,13 +1059,13 @@ end
 )
     vals = g.satellites.values
     isempty(vals) && n_noise == 0 && return nothing
-    m = measurements[get_band_id(g.band)]
-    _check_sample_type(dc, m)
-    num_buffer_samples = get_num_samples(m)
+    band_samples = samples_by_band[get_band_id(g.band)]
+    _check_sample_type(dc, band_samples)
+    num_buffer_samples = get_num_samples(band_samples)
     nco_update_sample_range = _nco_update_sample_range(
         nco_update_interval,
         nco_update_index,
-        m.sampling_frequency,
+        band_samples.sampling_frequency,
         num_buffer_samples,
     )
     _dc_group_loop!(
@@ -1073,11 +1073,11 @@ end
         vals,
         noise_items,
         n_noise,
-        m.samples,
+        band_samples.samples,
         num_buffer_samples,
         nco_update_sample_range,
-        m.sampling_frequency,
-        m.intermediate_frequency,
+        band_samples.sampling_frequency,
+        band_samples.intermediate_frequency,
         stop_before_partial,
     )
 end

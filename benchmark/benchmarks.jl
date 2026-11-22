@@ -82,6 +82,13 @@ _moments_cn0_estimator(n) =
 # TrackingLoops 7 takes a noise despread's samples as one range.
 _noise_span(first, last) = _TL7 ? (first:last,) : (first, last)
 
+# Tracking 12 calls a band's samples `BandSamples` and takes the intermediate
+# frequency as a keyword.
+_band_samples(samples, sampling_frequency, intermediate_frequency = 0.0Hz) =
+    isdefined(Tracking, :BandSamples) ?
+    getfield(Tracking, :BandSamples)(samples, sampling_frequency; intermediate_frequency) :
+    getfield(Tracking, :BandMeasurement)(samples, sampling_frequency, intermediate_frequency)
+
 # GNSSSignals 5 replicates Galileo E1B as BOC(1,1) unless asked for CBOC.
 const _GALILEO_E1B_CBOC =
     isdefined(GNSSSignals, :GalileoE1B_BOC11) ? GalileoE1B() :
@@ -201,12 +208,12 @@ function bench_downconvert_and_correlate(;
     samples =
         num_ants == 1 ? rand(Complex{sample_type}, num_samples) :
         rand(Complex{sample_type}, num_samples, num_ants)
-    measurements = NamedTuple{(get_band_id(get_band(gnss_signal)),)}((
-        Tracking.BandMeasurement(samples, sampling_frequency, 0.0Hz),
+    samples_by_band = NamedTuple{(get_band_id(get_band(gnss_signal)),)}((
+        _band_samples(samples, sampling_frequency),
     ))
     @benchmarkable Tracking.downconvert_and_correlate(
         $downconvert_and_correlator,
-        $measurements,
+        $samples_by_band,
         $track_state,
     )
 end
@@ -748,7 +755,7 @@ _axes_multiantenna_state(num_ants) = TrackState(
 # Bands are keyed by `GNSSSignals.get_band_id` (`:L1`).
 _axes_dc(dc, cap, ts) =
     let meas = NamedTuple{(get_band_id(_AXES_SIG),)}((
-            Tracking.BandMeasurement(cap, _AXES_FS, 0.0Hz),
+            _band_samples(cap, _AXES_FS),
         ))
         @benchmarkable Tracking.downconvert_and_correlate($dc, $meas, $ts)
     end
@@ -977,13 +984,13 @@ end
 function bench_update_noise(; num_samples = 4000, sampling_frequency = 4e6Hz)
     gnss_signal = GPSL1CA()
     estimator = _CorrelatorNoiseDensityEstimator()
-    measurement =
-        Tracking.BandMeasurement(rand(ComplexF32, num_samples), sampling_frequency)
+    band_samples =
+        _band_samples(rand(ComplexF32, num_samples), sampling_frequency)
     context =
         _noise_update_context(gnss_signal, Tracking.CPUDownconvertAndCorrelator())
     @benchmarkable Tracking.update_noise!(
         $estimator,
-        $measurement,
+        $band_samples,
         _noise_span(1, $num_samples)...,
         $context,
     )
@@ -1004,7 +1011,7 @@ function bench_update_noise_array(;
 )
     gnss_signal = GPSL1CA()
     estimator = _CorrelatorNoiseDensityEstimator(; _antennas(num_ants)...)
-    measurement = Tracking.BandMeasurement(
+    band_samples = _band_samples(
         rand(ComplexF32, num_samples, num_ants),
         sampling_frequency,
     )
@@ -1012,7 +1019,7 @@ function bench_update_noise_array(;
         _noise_update_context(gnss_signal, Tracking.CPUDownconvertAndCorrelator())
     @benchmarkable Tracking.update_noise!(
         $estimator,
-        $measurement,
+        $band_samples,
         _noise_span(1, $num_samples)...,
         $context,
     )

@@ -162,7 +162,7 @@ struct Int16ScratchBuffers{TI}
     extb::Vector{Int8}
     csb::Vector{Int8}
     ccb::Vector{Int8}
-    # Shared DI/DQ tile (the carrier-wiped measurement) of the tile-share and dynamic paths.
+    # Shared DI/DQ tile (the carrier-wiped samples) of the tile-share and dynamic paths.
     dib::Vector{TI}
     dqb::Vector{TI}
     # Int64 correlator totals (`M·NC`) of the runtime-correlator-count fallback.
@@ -1078,19 +1078,19 @@ end
     ),
 )
 
-# ── Group/measurement plumbing ────────────────────────────────────────────────
+# ── Group/sample plumbing ────────────────────────────────────────────────
 # The per-sat loop, group body and `downconvert_and_correlate(!)` entry points are the
 # backend-agnostic ones of downconvert_and_correlate_cpu.jl; beyond the kernel hooks above
 # this backend adds only the sample-type check and the threading trait.
 
 # Reject non-`Complex{Int16}` sample buffers up front (12-bit ADC contract).
-@inline _check_sample_type(::_Int16DC, m) =
-    eltype(m.samples) === Complex{Int16} || throw(
+@inline _check_sample_type(::_Int16DC, band_samples) =
+    eltype(band_samples.samples) === Complex{Int16} || throw(
         ArgumentError(
             string(
-                "Int16DownconvertAndCorrelator requires `Complex{Int16}` measurement ",
+                "Int16DownconvertAndCorrelator requires `Complex{Int16}` ",
                 "samples (12-bit ADC); got element type ",
-                eltype(m.samples),
+                eltype(band_samples.samples),
                 ". Use a CPU(Threaded)DownconvertAndCorrelator for floating-point samples.",
             ),
         ),
