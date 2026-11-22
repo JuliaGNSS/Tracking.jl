@@ -392,7 +392,7 @@ $(SIGNATURES)
 Build a [`TrackedSat`](@ref) from pre-built [`TrackedSignal`](@ref)s and acquisition
 handoff values, e.g. for a non-default correlator bank or post-correlation filter; otherwise use
 the signal-instance forms. The first signal is the driver signal. The loop state comes
-from [`init_loop_state`](@ref).
+from TrackingLoops' `init_loop_state(tracking_loop, driver_signal, carrier_doppler, code_doppler)`.
 
 `code_doppler = nothing` derives it from `carrier_doppler` and the driver's
 code/center frequency ratio. `carrier_phase` is in cycles.
@@ -414,10 +414,11 @@ function TrackedSat(
         carrier_doppler *
         get_chip_rate_to_center_frequency_ratio(get_signal(first(tracked_signals))) :
         float(code_doppler)
-    driver_carrier_phase_offset =
-        get_carrier_phase_offset(get_signal(first(tracked_signals)))
-    # Built twice so `init_loop_state` sees a real `TrackedSat`.
-    bare = TrackedSat(
+    driver_signal = get_signal(first(tracked_signals))
+    loop_state =
+        init_loop_state(tracking_loop, driver_signal, carrier_doppler, code_doppler)
+    driver_carrier_phase_offset = get_carrier_phase_offset(driver_signal)
+    TrackedSat(
         prn,
         float(code_phase),
         code_doppler,
@@ -425,17 +426,6 @@ function TrackedSat(
         carrier_doppler,
         1,
         map(s -> _join_satellite(s, prn, driver_carrier_phase_offset), tracked_signals),
-        nothing,
-    )
-    loop_state = init_loop_state(tracking_loop, bare)
-    TrackedSat(
-        bare.prn,
-        bare.code_phase,
-        bare.code_doppler,
-        bare.carrier_phase,
-        bare.carrier_doppler,
-        bare.next_sample_index,
-        bare.signals,
         loop_state,
     )
 end
@@ -732,21 +722,8 @@ end
     t
 end
 
-"""
-    init_loop_state(tracking_loop, sat::TrackedSat)
-
-Build the tracking loop's per-satellite state for `sat`: TrackingLoops'
-[`init_loop_state`](@ref) on the satellite's driver signal (`signals[1]`) and its
-handoff Dopplers. A custom tracking loop defines either this form or
-TrackingLoops' four-argument one.
-
-It must be **pure**: it also builds the PRN-0 template sat that fixes a group's
-slot type, probes types when validating pre-built sats, and re-seeds in
-[`reset_loop_filters!`](@ref). Register satellites in shared state in
-[`update_tracking_loop_on_new_sats`](@ref Tracking.update_tracking_loop_on_new_sats)
-instead.
-"""
-init_loop_state(tracking_loop::AbstractTrackingLoop, sat::TrackedSat) = init_loop_state(
+# The tracking loop's state for `sat` from its driver signal (`signals[1]`) and Dopplers.
+_init_loop_state(tracking_loop::AbstractTrackingLoop, sat::TrackedSat) = init_loop_state(
     tracking_loop,
     get_signal(first(sat.signals)),
     sat.carrier_doppler,
@@ -759,7 +736,7 @@ $(SIGNATURES)
 Update a tracking loop's cross-satellite shared state when satellites enter the
 track set. Called once per batch ([`merge_sats`](@ref),
 [`add_satellite`](@ref), [`add_satellite!`](@ref)) with the incoming satellites,
-after [`init_loop_state`](@ref). The default returns `tracking_loop` unchanged.
+after `init_loop_state`. The default returns `tracking_loop` unchanged.
 
 The result must have the input's concrete type ([`TrackState`](@ref) is
 parameterized on it): grow resizable containers in place, or rebuild with

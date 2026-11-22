@@ -321,7 +321,7 @@ end
 )
     isempty(dict) && return nothing
     sat = first(dict.values)
-    expected_state_type = typeof(init_loop_state(tracking_loop, sat))
+    expected_state_type = typeof(_init_loop_state(tracking_loop, sat))
     actual_state_type = typeof(sat.loop_state)
     expected_state_type === actual_state_type && return nothing
     throw(
@@ -526,8 +526,8 @@ $(SIGNATURES)
 
 Add (or replace, by `prn`) a satellite in `track_state` in place. Builds a
 [`TrackedSat`](@ref) for the group with the default correlator bank and post-correlation filter from the acquisition handoff (`prn`, `code_phase`, `code_doppler`,
-`carrier_phase` in cycles, `carrier_doppler`), its loop state from
-[`init_loop_state`](@ref).
+`carrier_phase` in cycles, `carrier_doppler`), its loop state from TrackingLoops'
+`init_loop_state`.
 
 `group_key` may be omitted on a single-group `TrackState`; otherwise an
 `ArgumentError` names the available groups.
