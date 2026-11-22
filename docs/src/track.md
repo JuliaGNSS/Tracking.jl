@@ -117,7 +117,7 @@ the `downconvert_and_correlator` keyword:
 
 - [`Int16ThreadedDownconvertAndCorrelator`](@ref) /
   [`Int16DownconvertAndCorrelator`](@ref): integer arithmetic, typically
-  ~1.3–2.9× faster. Its **required** `max_meas` is the front end's full scale
+  ~1.3–2.9× faster. Its **required** `max_sample_amplitude` is the front end's full scale
   (the largest `|real|`/`|imag|`, e.g. `2^11` for a 12-bit ADC), which sizes the
   carrier replica against overflow; see [`Int16DownconvertAndCorrelator`](@ref)
   for why under-declaring it is catastrophic.
@@ -130,7 +130,7 @@ the `downconvert_and_correlator` keyword:
 - [`TwoBitThreadedDownconvertAndCorrelator`](@ref) /
   [`TwoBitDownconvertAndCorrelator`](@ref): adds a **magnitude** bit to
   samples and carrier (`{±1, ±3}`), recovering ≈2 dB of the one-bit loss
-  (≈0.8 dB short of Float32) at about Int16 speed. `threshold` is the magnitude
+  (≈0.8 dB short of Float32) at about Int16 speed. `magnitude_threshold` is the magnitude
   split in ADC counts (≈1σ of the input is near-optimal; the default 512 suits an
   AGC'd 12-bit capture). BPSK only.
 

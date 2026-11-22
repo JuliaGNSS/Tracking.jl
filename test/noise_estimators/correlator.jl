@@ -105,7 +105,11 @@ end
         () -> CPUThreadedDownconvertAndCorrelator(),
         false,
     ),
-    (Int16DownconvertAndCorrelator, () -> Int16DownconvertAndCorrelator(NUM_SAMPLES), true),
+    (
+        Int16DownconvertAndCorrelator,
+        () -> Int16DownconvertAndCorrelator(; max_sample_amplitude = NUM_SAMPLES),
+        true,
+    ),
     (OneBitDownconvertAndCorrelator, () -> OneBitDownconvertAndCorrelator(), true),
     (TwoBitDownconvertAndCorrelator, () -> TwoBitDownconvertAndCorrelator(), true),
 )
@@ -469,7 +473,7 @@ if VERSION >= v"1.11"
         (CPUDownconvertAndCorrelator, () -> CPUDownconvertAndCorrelator(), false),
         (
             Int16DownconvertAndCorrelator,
-            () -> Int16DownconvertAndCorrelator(NUM_SAMPLES),
+            () -> Int16DownconvertAndCorrelator(; max_sample_amplitude = NUM_SAMPLES),
             true,
         ),
         (OneBitDownconvertAndCorrelator, () -> OneBitDownconvertAndCorrelator(), true),
@@ -584,7 +588,11 @@ end
     quantise,
 ) in (
     (CPUDownconvertAndCorrelator, () -> CPUDownconvertAndCorrelator(), false),
-    (Int16DownconvertAndCorrelator, () -> Int16DownconvertAndCorrelator(NUM_SAMPLES), true),
+    (
+        Int16DownconvertAndCorrelator,
+        () -> Int16DownconvertAndCorrelator(; max_sample_amplitude = NUM_SAMPLES),
+        true,
+    ),
     (OneBitDownconvertAndCorrelator, () -> OneBitDownconvertAndCorrelator(), true),
     (TwoBitDownconvertAndCorrelator, () -> TwoBitDownconvertAndCorrelator(), true),
 )

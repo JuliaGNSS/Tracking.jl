@@ -87,6 +87,14 @@ _band_samples(samples, sampling_frequency, intermediate_frequency = 0.0Hz) =
     getfield(Tracking, :BandSamples)(samples, sampling_frequency; intermediate_frequency) :
     getfield(Tracking, :BandMeasurement)(samples, sampling_frequency, intermediate_frequency)
 
+# Tracking 12 takes the Int16 backend's peak sample amplitude as a keyword.
+_int16_downconvert_and_correlator(max_sample_amplitude) =
+    _RANGE_SPANS ? Tracking.Int16DownconvertAndCorrelator(; max_sample_amplitude) :
+    Tracking.Int16DownconvertAndCorrelator(max_sample_amplitude)
+_int16_threaded_downconvert_and_correlator(max_sample_amplitude) =
+    _RANGE_SPANS ? Tracking.Int16ThreadedDownconvertAndCorrelator(; max_sample_amplitude) :
+    Tracking.Int16ThreadedDownconvertAndCorrelator(max_sample_amplitude)
+
 # GNSSSignals 5 replicates Galileo E1B as BOC(1,1) unless asked for CBOC.
 const _GALILEO_E1B_CBOC =
     isdefined(GNSSSignals, :GalileoE1B_BOC11) ? GalileoE1B() :
@@ -640,8 +648,8 @@ for (name, signals, nsats_list, sfreq, nsamp, prn_max, capture) in (
 )
     sig16 = capture(nsamp)
     dc_f = Tracking.CPUThreadedDownconvertAndCorrelator()
-    # max_meas = 2^11 matches the ±2048 full-scale of `_int16_capture` above.
-    dc_i = Tracking.Int16ThreadedDownconvertAndCorrelator(2^11)
+    # 2^11 is the ±2048 full scale of `_int16_capture` above.
+    dc_i = _int16_threaded_downconvert_and_correlator(2^11)
     g = SUITE["track! Int16 vs Float32"][name]
     # Tracking random samples drifts the loop filter to a NaN Doppler
     # (`InexactError`) over many evals, so `setup` rebuilds a fresh synced state
@@ -768,7 +776,7 @@ for n_signals in (3,)
         _axes_multisignal_state(n_signals),
     )
     g["Int16"] = _axes_dc(
-        Tracking.Int16ThreadedDownconvertAndCorrelator(2^11),
+        _int16_threaded_downconvert_and_correlator(2^11),
         cap,
         _axes_multisignal_state(n_signals),
     )
@@ -792,7 +800,7 @@ for num_ants in (4,)
         _axes_multiantenna_state(num_ants),
     )
     g["Int16"] = _axes_dc(
-        Tracking.Int16ThreadedDownconvertAndCorrelator(2^11),
+        _int16_threaded_downconvert_and_correlator(2^11),
         cap,
         _axes_multiantenna_state(num_ants),
     )
@@ -837,7 +845,7 @@ let g = SUITE["track! Int16 vs Float32"]["dynamic taps @ 5 MHz (kernel)"]
         $tile_re,
         $tile_im)
     # Int16 hybrid-blocked kernel, dynamic-shifts (AbstractVector) fallback.
-    dc_i = Tracking.Int16DownconvertAndCorrelator(2^11)
+    dc_i = _int16_downconvert_and_correlator(2^11)
     g["Int16"] = @benchmarkable Tracking._int16_hybrid_blocked!($dc_i,
         $cap,
         NumAnts{1}(),
@@ -920,7 +928,7 @@ for (key, signals, nsats_list, sfreq, nsamp, prn_max, onebit, twobit, capture) i
     ),
 )
     sig16 = capture(nsamp)
-    dc_i = Tracking.Int16DownconvertAndCorrelator(2^11)   # max_meas = 2^11 matches _int16_capture's ±2048
+    dc_i = _int16_downconvert_and_correlator(2^11)   # _int16_capture's peak amplitude
     SUITE["track"]["$key – in-place, Int16"] = @benchmarkable(
         Tracking.track!($sig16, ts, $sfreq; downconvert_and_correlator = $dc_i),
         setup = (

@@ -5,7 +5,7 @@
 #
 #   value = s·(1 + 2·b)     s = sign bit;  b = magnitude bit    ∈ {±1, ±3}
 #
-#   samples:      b ⇔ |component| ≥ `threshold` (ADC counts; ≈1σ is the near-optimal
+#   samples:      b ⇔ |component| ≥ `magnitude_threshold` (ADC counts; ≈1σ is the near-optimal
 #                 4-level quantiser, ≈0.55 dB loss vs float against ≈1.96 dB for 1-bit)
 #   carrier:      SinCosLUT's `generate_carrier_signs_mags!`, sign + magnitude planes off
 #                 the NCO with the magnitude split at |sin| ≥ √2/2. There ±1/±3 and ±1/±2
@@ -47,7 +47,7 @@ import VectorizationBase
 using SinCosLUT: generate_carrier_signs_mags!
 
 # Default strip-mine block length (samples), a multiple of 64 (whole UInt64 words).
-const _TWOBIT_BLK = 8192
+const _TWOBIT_BLOCK_LENGTH = 8192
 
 # UInt64 lanes per SIMD popcount step (see the one-bit backend's `_OB_VW`).
 const _TB_VW = 8
@@ -611,14 +611,14 @@ over the one-bit backend (≈0.8 dB total quantisation loss vs Float32) at bit-w
 Construct it **once outside** the `track!` loop and pass it via the
 `downconvert_and_correlator` keyword for an allocation-free steady state.
 
-`threshold` is the sample magnitude split in ADC counts (`|component| ≥ threshold`
+`magnitude_threshold` is the sample magnitude split in ADC counts (`|component| ≥ magnitude_threshold`
 ⇒ `±3`); near 1σ of the front end's input is the near-optimal 4-level quantiser.
 """
 struct TwoBitDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator
     buffers::TwoBitScratchBuffers
     band::TwoBitBandBuffers
-    blk::Int
-    threshold::Int16
+    block_length::Int
+    magnitude_threshold::Int16
 end
 
 """
@@ -630,35 +630,37 @@ thread.
 struct TwoBitThreadedDownconvertAndCorrelator <: AbstractDownconvertAndCorrelator
     buffers::Vector{TwoBitScratchBuffers}
     band::TwoBitBandBuffers
-    blk::Int
-    threshold::Int16
+    block_length::Int
+    magnitude_threshold::Int16
 end
 
-function _tb_check_threshold(threshold::Integer)
-    (1 <= threshold <= typemax(Int16)) || throw(
+function _tb_check_magnitude_threshold(magnitude_threshold::Integer)
+    (1 <= magnitude_threshold <= typemax(Int16)) || throw(
         ArgumentError(
-            "threshold must be in [1, $(typemax(Int16))] ADC counts; got $threshold",
+            "magnitude_threshold must be in [1, $(typemax(Int16))] ADC counts; got $magnitude_threshold",
         ),
     )
-    Int16(threshold)
+    Int16(magnitude_threshold)
 end
 
-TwoBitDownconvertAndCorrelator(; threshold::Integer = 512, blk::Integer = _TWOBIT_BLK) =
-    TwoBitDownconvertAndCorrelator(
-        TwoBitScratchBuffers(),
-        TwoBitBandBuffers(),
-        Int(blk),
-        _tb_check_threshold(threshold),
-    )
+TwoBitDownconvertAndCorrelator(;
+    magnitude_threshold::Integer = 512,
+    block_length::Integer = _TWOBIT_BLOCK_LENGTH,
+) = TwoBitDownconvertAndCorrelator(
+    TwoBitScratchBuffers(),
+    TwoBitBandBuffers(),
+    Int(block_length),
+    _tb_check_magnitude_threshold(magnitude_threshold),
+)
 
 TwoBitThreadedDownconvertAndCorrelator(;
-    threshold::Integer = 512,
-    blk::Integer = _TWOBIT_BLK,
+    magnitude_threshold::Integer = 512,
+    block_length::Integer = _TWOBIT_BLOCK_LENGTH,
 ) = TwoBitThreadedDownconvertAndCorrelator(
     [TwoBitScratchBuffers() for _ = 1:Threads.maxthreadid()],
     TwoBitBandBuffers(),
-    Int(blk),
-    _tb_check_threshold(threshold),
+    Int(block_length),
+    _tb_check_magnitude_threshold(magnitude_threshold),
 )
 
 const _TwoBitDC =
@@ -811,7 +813,7 @@ end
         N = Int(num_samples)
         min_shift = minimum(sample_shifts)
         span = maximum(sample_shifts) - min_shift
-        thr = dc.threshold
+        thr = dc.magnitude_threshold
         $init
 
         sampling_freq = Float64(upreferred(sampling_frequency / Hz))
@@ -827,12 +829,14 @@ end
         bandstride = cld(num_rows, 64) + 2          # per-antenna plane stride in `band`
 
         bufs = _tb_scratch(dc)
-        blk = dc.blk
-        wpb = cld(blk, 64)                          # words per block plane
+        block_length = dc.block_length
+        wpb = cld(block_length, 64)                          # words per block plane
         wpbv = cld(wpb, _TB_VW) * _TB_VW            # …padded to a whole number of VW chunks
         pepad = (span >> 6) + 1                     # zero pad words the funnel shift reads past nwe
-        pewords = cld(blk + span, 64) + pepad + _TB_VW   # extended prompt plane + funnel pad
-        length(bufs.extb) < blk + span + 64 && resize!(bufs.extb, blk + span + 64)
+        # Extended prompt plane + funnel pad.
+        pewords = cld(block_length + span, 64) + pepad + _TB_VW
+        length(bufs.extb) < block_length + span + 64 &&
+            resize!(bufs.extb, block_length + span + 64)
         length(bufs.peb) < pewords && resize!(bufs.peb, pewords)
         length(bufs.sinw) < wpbv && resize!(bufs.sinw, wpbv)
         length(bufs.cosw) < wpbv && resize!(bufs.cosw, wpbv)
@@ -855,9 +859,9 @@ end
         gmrb = bufs.gmrb;
         gmib = bufs.gmib
 
-        blk_off = 0
-        @inbounds while blk_off < N
-            len = min(blk, N - blk_off)
+        block_offset = 0
+        @inbounds while block_offset < N
+            len = min(block_length, N - block_offset)
             nwb = cld(len, 64)
             nwv = cld(nwb, _TB_VW) * _TB_VW
             r = len & 63
@@ -868,7 +872,7 @@ end
                 prn,
                 sampling_frequency,
                 code_frequency,
-                code_phase0 + cps_code * blk_off,
+                code_phase0 + cps_code * block_offset,
                 min_shift,
             )
             nwe = cld(len + span, 64)
@@ -899,14 +903,14 @@ end
                 hcosw,
                 len,
                 cps_car;
-                phase = carphase + cps_car * blk_off,
+                phase = carphase + cps_car * block_offset,
             )
             _tb_zeropad!(sinw, 0, nwb, nwv)
             _tb_zeropad!(cosw, 0, nwb, nwv)
             _tb_zeropad!(hsinw, 0, nwb, nwv)
             _tb_zeropad!(hcosw, 0, nwb, nwv)
             # sample planes per antenna: band realign (>1 sat) or direct pack (1 sat)
-            base = start_index + blk_off
+            base = start_index + block_offset
             if band_shared
                 $(Expr(
                     :block,
@@ -969,7 +973,7 @@ end
                 $body
                 i += _TB_VW
             end
-            blk_off += len
+            block_offset += len
         end
         $ret
     end
@@ -1000,7 +1004,7 @@ function _twobit_hybrid_blocked!(
     min_shift = Int(minimum(sample_shifts))
     span = Int(maximum(sample_shifts)) - min_shift
     offs = [Int(sample_shifts[k]) - min_shift for k = 1:NC]
-    thr = dc.threshold
+    thr = dc.magnitude_threshold
 
     sampling_freq = Float64(upreferred(sampling_frequency / Hz))
     carrier_freq = Float64(upreferred(carrier_frequency / Hz))
@@ -1015,12 +1019,13 @@ function _twobit_hybrid_blocked!(
     bandstride = cld(num_rows, 64) + 2
 
     bufs = _tb_scratch(dc)
-    blk = dc.blk
-    wpb = cld(blk, 64)
+    block_length = dc.block_length
+    wpb = cld(block_length, 64)
     wpbv = cld(wpb, _TB_VW) * _TB_VW
     pepad = (span >> 6) + 1
-    pewords = cld(blk + span, 64) + pepad + _TB_VW
-    length(bufs.extb) < blk + span + 64 && resize!(bufs.extb, blk + span + 64)
+    pewords = cld(block_length + span, 64) + pepad + _TB_VW
+    length(bufs.extb) < block_length + span + 64 &&
+        resize!(bufs.extb, block_length + span + 64)
     length(bufs.peb) < pewords && resize!(bufs.peb, pewords)
     length(bufs.sinw) < wpbv && resize!(bufs.sinw, wpbv)
     length(bufs.cosw) < wpbv && resize!(bufs.cosw, wpbv)
@@ -1049,9 +1054,9 @@ function _twobit_hybrid_blocked!(
     QF = zeros(Int64, M, NC)
     GXA = zeros(Int64, M, 4)                       # combos: 1 = ac, 2 = bs, 3 = cc, 4 = es
 
-    blk_off = 0
-    @inbounds while blk_off < N
-        len = min(blk, N - blk_off)
+    block_offset = 0
+    @inbounds while block_offset < N
+        len = min(block_length, N - block_offset)
         nwb = cld(len, 64)
         nwv = cld(nwb, _TB_VW) * _TB_VW
         r = len & 63
@@ -1061,7 +1066,7 @@ function _twobit_hybrid_blocked!(
             prn,
             sampling_frequency,
             code_frequency,
-            code_phase0 + cps_code * blk_off,
+            code_phase0 + cps_code * block_offset,
             min_shift,
         )
         nwe = cld(len + span, 64)
@@ -1080,13 +1085,13 @@ function _twobit_hybrid_blocked!(
             hcosw,
             len,
             cps_car;
-            phase = carphase + cps_car * blk_off,
+            phase = carphase + cps_car * block_offset,
         )
         _tb_zeropad!(sinw, 0, nwb, nwv)
         _tb_zeropad!(cosw, 0, nwb, nwv)
         _tb_zeropad!(hsinw, 0, nwb, nwv)
         _tb_zeropad!(hcosw, 0, nwb, nwv)
-        base = start_index + blk_off
+        base = start_index + block_offset
         if band_shared
             for j = 1:M
                 _tb_realign_meas!(
@@ -1176,7 +1181,7 @@ function _twobit_hybrid_blocked!(
             end
             ci += _TB_VW
         end
-        blk_off += len
+        block_offset += len
     end
 
     tap(j, k) = complex(
@@ -1321,7 +1326,7 @@ end
                 prn,
                 sampling_frequency,
                 code_freqs[$i],
-                $(Symbol("cph0_$i")) + $(Symbol("cpsc_$i")) * blk_off,
+                $(Symbol("cph0_$i")) + $(Symbol("cpsc_$i")) * block_offset,
                 $(Symbol("mins_$i")),
             )),
         )
@@ -1479,7 +1484,7 @@ end
         num_samples = length(sample_range)
         $gates
         N_samp = Int(num_samples)
-        thr = dc.threshold
+        thr = dc.magnitude_threshold
         sampling_freq = Float64(upreferred(sampling_frequency / Hz))
         carrier_freq = Float64(upreferred(carrier_frequency / Hz))
         cps_car = carrier_freq / sampling_freq
@@ -1493,11 +1498,13 @@ end
         maxspan_v = $maxspan
 
         bufs = _tb_scratch(dc)
-        blk = dc.blk
-        wpb = cld(blk, 64)
+        block_length = dc.block_length
+        wpb = cld(block_length, 64)
         wpbv = cld(wpb, _TB_VW) * _TB_VW
-        pewords = cld(blk + maxspan_v, 64) + (maxspan_v >> 6) + 1 + _TB_VW   # + funnel-shift pad
-        length(bufs.extb) < blk + maxspan_v + 64 && resize!(bufs.extb, blk + maxspan_v + 64)
+        # + funnel-shift pad
+        pewords = cld(block_length + maxspan_v, 64) + (maxspan_v >> 6) + 1 + _TB_VW
+        length(bufs.extb) < block_length + maxspan_v + 64 &&
+            resize!(bufs.extb, block_length + maxspan_v + 64)
         length(bufs.peb) < pewords && resize!(bufs.peb, pewords)
         length(bufs.sinw) < wpbv && resize!(bufs.sinw, wpbv)
         length(bufs.cosw) < wpbv && resize!(bufs.cosw, wpbv)
@@ -1520,9 +1527,9 @@ end
         gmrb = bufs.gmrb;
         gmib = bufs.gmib
 
-        blk_off = 0
-        @inbounds while blk_off < N_samp
-            len = min(blk, N_samp - blk_off)
+        block_offset = 0
+        @inbounds while block_offset < N_samp
+            len = min(block_length, N_samp - block_offset)
             nwb = cld(len, 64)
             nwv = cld(nwb, _TB_VW) * _TB_VW
             r = len & 63
@@ -1534,14 +1541,14 @@ end
                 hcosw,
                 len,
                 cps_car;
-                phase = carphase + cps_car * blk_off,
+                phase = carphase + cps_car * block_offset,
             )
             _tb_zeropad!(sinw, 0, nwb, nwv)
             _tb_zeropad!(cosw, 0, nwb, nwv)
             _tb_zeropad!(hsinw, 0, nwb, nwv)
             _tb_zeropad!(hcosw, 0, nwb, nwv)
             # sample planes — one pack per sat/block, shared across signals
-            base = start_index + blk_off
+            base = start_index + block_offset
             if band_shared
                 $realign
             else
@@ -1549,7 +1556,7 @@ end
             end
             # each signal: its own code, correlated against the shared planes
             $sigs
-            blk_off += len
+            block_offset += len
         end
         $finals
     end
@@ -1676,7 +1683,7 @@ end
             M,
             Ptr{Int16}(pointer(samples)),
             num_rows,
-            dc.threshold,
+            dc.magnitude_threshold,
             dc isa TwoBitThreadedDownconvertAndCorrelator,
         )
     else
