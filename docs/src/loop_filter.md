@@ -82,7 +82,7 @@ In the TrackingLoops manual:
 ## Resetting loop filters
 
 After changing a signal's integration length with
-[`set_preferred_num_code_blocks_to_integrate!`](@ref), reset the affected loop
+[`set_preferred_num_code_periods_to_integrate!`](@ref), reset the affected loop
 filters so the old integration length's filter state does not leak into the new one.
 
 ```@docs

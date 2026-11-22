@@ -75,14 +75,14 @@ TrackedSat(
     code_phase,
     carrier_doppler;
     # all kwargs below are optional and have signal-derived defaults
-    tracking_loop                       = ScalarTrackingLoop(),
-    num_ants                            = NumAnts(1),
-    correlator_bank                     = get_default_correlator_bank(signal, num_ants),
-    carrier_phase                  = 0.0,
-    code_doppler                   = carrier_doppler * get_chip_rate_to_center_frequency_ratio(signal),
-    num_prompts_for_cn0_estimation = 100,
-    cn0_estimator                  = TrackingLoops.default_cn0_estimator(signal, num_prompts_for_cn0_estimation),
-    post_corr_filter               = DefaultPostCorrFilter(),
+    tracking_loop             = ScalarTrackingLoop(),
+    num_ants                  = NumAnts(1),
+    correlator_bank           = get_default_correlator_bank(signal, num_ants),
+    carrier_phase             = 0.0,
+    code_doppler              = carrier_doppler * get_chip_rate_to_center_frequency_ratio(signal),
+    num_averaged_integrations = 100,
+    cn0_estimator             = TrackingLoops.default_cn0_estimator(signal, num_averaged_integrations),
+    post_corr_filter          = DefaultPostCorrFilter(),
 )
 ```
 
@@ -113,13 +113,13 @@ julia> TrackingLoops.get_weights(::MyBeamformer, ::NumAnts{M}) where {M} =
            SVector{M,ComplexF64}(ntuple(_ -> 1 / M + 0.0im, M));
 
 julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
-           num_ants                            = NumAnts(4),
-           correlator_bank                     = EarlyPromptLateCorrelatorBank(
+           num_ants                  = NumAnts(4),
+           correlator_bank           = EarlyPromptLateCorrelatorBank(
                num_ants = NumAnts(4),
                preferred_early_late_to_prompt_spacing = 0.1,
            ),
-           post_corr_filter                    = MyBeamformer(),
-           num_prompts_for_cn0_estimation = 200,
+           post_corr_filter          = MyBeamformer(),
+           num_averaged_integrations = 200,
        );
 
 julia> track_state = TrackState(GPSL1CA(), sat);
@@ -217,7 +217,7 @@ julia> get_carrier_doppler(track_state, :modern_gps, 11)
 
 Put a pilot first where there is one: without data bits the PLL can integrate longer. The data signals still decode their bits, each with its own `bit_synchronizer`.
 
-Signals with different code periods (L1 C/A 1 ms, L1C-P 10 ms) each complete records on their own boundaries; the scalar tracking loops update the Doppler from the driver's records (see [Chunked Doppler updates](track.md#Chunked-Doppler-updates)).
+Signals with different code periods (L1 C/A 1 ms, L1C-P 10 ms) each complete predetection integrations on their own boundaries; the scalar tracking loops update the Doppler from the driver's integrations (see [Chunked Doppler updates](track.md#Chunked-Doppler-updates)).
 
 ### Phased-array tracking
 
@@ -319,7 +319,7 @@ merge_sats
 
 Satellites broadcast on several RF bands (GPS L1 and L5, Galileo E1 and E5a), which arrive from separate front ends, generally at different sample rates. Each group of a multi-band `TrackState` sits on one band. Two bands give near-independent observations of one path: for ionosphere-free combinations, wider code bandwidth, and cross-band aiding, as the L1/L5 Doppler ratio is that of the carrier frequencies.
 
-Tracking.jl provides per-band groups, measurement routing and a loop update that sees every band's records at once; joint cross-band estimation is up to the tracking loop, which receives them (see [Custom Tracking Loop](custom_tracking_loop.md)).
+Tracking.jl provides per-band groups, measurement routing and a loop update that sees every band's integrations at once; joint cross-band estimation is up to the tracking loop, which receives them (see [Custom Tracking Loop](custom_tracking_loop.md)).
 
 ### Declaring bands
 
@@ -463,13 +463,13 @@ The trailing `sig` selector is either:
 | `get_correlator_bank` | The working correlator bank (in-flight correlator outputs). |
 | `get_last_fully_integrated_correlator` | Correlator value from the last completed integration. |
 | `get_last_fully_integrated_filtered_prompt` | Filtered prompt value from the last completed integration. |
-| `get_last_fully_integrated_num_code_blocks` | Primary-code block count of the last completed integration. |
+| `get_last_fully_integrated_num_code_blocks` | Primary code periods of the last completed integration. |
 | `get_last_fully_integrated_integration_time` | Integration time `T` of the last completed integration; the post-integration SNR is C/N₀ × `T`. |
 | `get_post_corr_filter` | The post-correlation filter. |
 | `get_cn0_estimator` | The CN0 estimator. |
 | `estimate_cn0` | CN0 estimate in dB-Hz. |
-| `get_bit_synchronizer` / `get_soft_bits` / `get_num_bits` | Bit synchronizer, decoded soft bits (sign = the hard bit), bit count. |
-| `get_integrated_samples` | Number of samples accumulated into the current integration so far. |
+| `get_bit_synchronizer` / `get_soft_bits` / `get_num_bits` | Bit synchronizer, demodulated soft bits (sign = the hard bit), bit count. |
+| `get_num_integrated_samples` | Number of samples accumulated into the current integration so far. |
 | `is_bit_or_secondary_code_synced` | `true` once bit/secondary-code synchronization has been achieved. |
 
 The per-signal form always names the group, `:default` on a single-group `TrackState`: `estimate_cn0(track_state, :default, 11, GPSL1C_P)`.
@@ -537,8 +537,8 @@ get_last_fully_integrated_integration_time(::TrackedSignal)
 get_filtered_prompts(::TrackedSignal)
 get_bit_synchronizer(::TrackedSignal)
 get_num_bits(::TrackedSignal)
-get_integrated_samples(::TrackedSignal)
-get_preferred_num_code_blocks_to_integrate(::TrackedSignal)
+get_num_integrated_samples(::TrackedSignal)
+get_preferred_num_code_periods_to_integrate(::TrackedSignal)
 ```
 
 The other per-signal accessors also take a `TrackedSignal`, as does `get_signal(tsig)`, the signal instance.

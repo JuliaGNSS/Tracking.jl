@@ -28,11 +28,11 @@ using TrackingLoops:
 # the other CN0 tests use.
 _db(x) = ustrip(uconvert(dBHz, x))
 
-# A pure **correlator-ingest** state (the hardware path): records come through
+# A pure **correlator-ingest** state (the hardware path): integrations come through
 # `append_correlator_bank_output!` with no samples, so the software noise measurement
 # never runs — the only way to reach "configured but never fed".
 #
-# The records are noiseless: a raw accumulator `a = √power · N` normalises to a
+# The integrations are noiseless: a raw accumulator `a = √power · N` normalises to a
 # prompt of `√power`, so the reported C/N₀ follows exactly from the appended density.
 function _ingested_state(
     cn0_estimator;
@@ -127,7 +127,7 @@ end
 @testset "the warm-up skip is per estimator, not per satellite" begin
     # See "the warm-up skip" in `requires_noise_density`. GPS L1 C/A and Galileo
     # E1B on one satellite (synthetic, but the shortest setup with two different
-    # estimators side by side); records are ingested, so the density stays
+    # estimators side by side); integrations are ingested, so the density stays
     # unavailable for the whole run.
     gpsl1 = GPSL1CA()
     signals = (gpsl1, GalileoE1B())
@@ -162,7 +162,7 @@ end
 @testset "the externally fed path reports a real C/N₀" begin
     # End to end on the hardware ingest path, with no sample buffer anywhere: a
     # producer that appends correlator outputs *and* its noise observations gets a
-    # C/N₀ out. The records are noiseless with a normalised prompt power of 1, so
+    # C/N₀ out. The integrations are noiseless with a normalised prompt power of 1, so
     # a density of `1e-6 Hz⁻¹` puts the answer at exactly
     # `10log10(1/1e-6 − 1/1e-3)`.
     ts, fs = _ingested_state(NoiseReferencedCN0Estimator())

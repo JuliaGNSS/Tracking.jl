@@ -852,9 +852,9 @@ The whole cycles only count against a replica phase that counts them too:
 `get_carrier_phase` wraps, so a RINEX host builds `L` from its own accumulated
 replica phase (e.g. the integrated carrier Doppler) plus this.
 
-Only valid right after `track`/`track!`: a host feeding records through
+Only valid right after `track`/`track!`: a host feeding correlator outputs through
 [`append_correlator_bank_output!`](@ref) calls `TrackingLoops.calc_carrier_phase_correction`
-with its own NCO words and sample instead.
+with its own NCO history and sample index instead.
 """
 function calc_carrier_phase_correction(
     track_state::TrackState,
@@ -864,7 +864,7 @@ function calc_carrier_phase_correction(
     group = _index_group(track_state.groups, group_key)
     sat = get_sat_state(group.satellites, prn)
     # `track!` leaves the replica at the end of the measurement, the band's sample
-    # offset, having run on the satellite's Doppler since its latest record.
+    # offset, having run on the satellite's Doppler since its latest integration.
     band_grid_index = get(track_state.sample_index_offsets, get_band_id(group.band), 0)
     # Every integration stores its band's sampling frequency in the post-correlation
     # state; before the first it is still NaN, but TrackingLoops returns a correction of
@@ -891,7 +891,7 @@ calc_carrier_phase_correction(track_state::TrackState{<:SignalGroups{1}}, prn) =
 const _SignalSelector = Union{Integer,Type{<:AbstractGNSSSignal}}
 
 for fn in (
-    :get_integrated_samples,
+    :get_num_integrated_samples,
     :get_correlator_bank,
     :get_correlator_bank_outputs,
     :get_last_fully_integrated_correlator,
@@ -906,7 +906,7 @@ for fn in (
     :get_num_bits,
     :is_bit_or_secondary_code_synced,
     :estimate_cn0,
-    :get_preferred_num_code_blocks_to_integrate,
+    :get_preferred_num_code_periods_to_integrate,
 )
     @eval begin
         $fn(track_state::TrackState, id...) = $fn(get_sat_state(track_state, id...))
@@ -1052,11 +1052,11 @@ function _signal_index(signals::Tuple, ::Type{T}) where {T<:AbstractGNSSSignal}
 end
 
 # Rebuild `sat` with the addressed signal's integration length set to `N`.
-function _set_sat_signal_preferred_blocks(sat::TrackedSat, N::Int, sel...)
+function _set_sat_signal_preferred_code_periods(sat::TrackedSat, N::Int, sel...)
     idx = _signal_index(sat.signals, sel...)
     idx_tuple = ntuple(identity, length(sat.signals))
     new_signals = map(sat.signals, idx_tuple) do s, i
-        i == idx ? TrackedSignal(s; preferred_num_code_blocks_to_integrate = N) : s
+        i == idx ? TrackedSignal(s; preferred_num_code_periods_to_integrate = N) : s
     end
     TrackedSat(sat; signals = new_signals)
 end
@@ -1064,86 +1064,92 @@ end
 """
 $(SIGNATURES)
 
-Set the preferred coherent-integration length, in primary code blocks, of one
+Set the preferred coherent-integration length, in primary code periods, of one
 signal on one satellite (the addressed [`TrackedSignal`](@ref)'s
-`preferred_num_code_blocks_to_integrate`). The actual length is capped by the
+`preferred_num_code_periods_to_integrate`). The actual length is capped by the
 bit/secondary-code period and held at 1 until sync (see
 `calc_num_code_periods_to_integrate`); the scalar tracking loops cap their loop
 bandwidths against the integration time, so the loop stays stable.
 
-For data-bearing signals the length must divide the code blocks per bit (20 for
+For data-bearing signals the length must divide the code periods per bit (20 for
 GPS L1 C/A, 10 for GPS L5I), or an `ArgumentError` is thrown (#128). Pilots accept
-any length of at least one block.
+any length of at least one code period.
 
 Addressed like the per-signal accessors; the per-signal form names the group even
 on a single-group `TrackState`:
 
 ```julia
-set_preferred_num_code_blocks_to_integrate!(ts, :gps_l5, 1, GPSL5I, 10)  # (group_key, prn, signal)
-set_preferred_num_code_blocks_to_integrate!(ts, :gps_l5, 1, 10)          # single-signal sat
-set_preferred_num_code_blocks_to_integrate!(ts, 1, 10)                   # single-group state
-set_preferred_num_code_blocks_to_integrate!(ts, 10)                      # 1 group, 1 sat, 1 signal
+set_preferred_num_code_periods_to_integrate!(ts, :gps_l5, 1, GPSL5I, 10)  # (group_key, prn, signal)
+set_preferred_num_code_periods_to_integrate!(ts, :gps_l5, 1, 10)          # single-signal sat
+set_preferred_num_code_periods_to_integrate!(ts, 1, 10)                   # single-group state
+set_preferred_num_code_periods_to_integrate!(ts, 10)                      # 1 group, 1 sat, 1 signal
 ```
 
 Mutates `track_state` in place and returns it.
 """
-function set_preferred_num_code_blocks_to_integrate!(
+function set_preferred_num_code_periods_to_integrate!(
     track_state::TrackState{<:SignalGroups},
     group_key::Union{Symbol,Integer,Val},
     prn::Integer,
     sig::_SignalSelector,
-    num_code_blocks::Integer,
+    num_code_periods::Integer,
 )
-    _set_preferred_blocks!(
+    _set_preferred_code_periods!(
         track_state,
         get_sat_states(track_state, group_key),
         prn,
-        num_code_blocks,
+        num_code_periods,
         sig,
     )
 end
 
-function set_preferred_num_code_blocks_to_integrate!(
+function set_preferred_num_code_periods_to_integrate!(
     track_state::TrackState{<:SignalGroups},
     group_key::Union{Symbol,Integer,Val},
     prn::Integer,
-    num_code_blocks::Integer,
+    num_code_periods::Integer,
 )
-    _set_preferred_blocks!(
+    _set_preferred_code_periods!(
         track_state,
         get_sat_states(track_state, group_key),
         prn,
-        num_code_blocks,
+        num_code_periods,
     )
 end
 
-function set_preferred_num_code_blocks_to_integrate!(
+function set_preferred_num_code_periods_to_integrate!(
     track_state::TrackState{<:SignalGroups{1}},
     prn::Integer,
-    num_code_blocks::Integer,
+    num_code_periods::Integer,
 )
-    _set_preferred_blocks!(track_state, get_sat_states(track_state), prn, num_code_blocks)
+    _set_preferred_code_periods!(
+        track_state,
+        get_sat_states(track_state),
+        prn,
+        num_code_periods,
+    )
 end
 
 # Shared body for the three addressing overloads above.
-@inline function _set_preferred_blocks!(
+@inline function _set_preferred_code_periods!(
     track_state::TrackState,
     sats,
     prn,
-    num_code_blocks::Integer,
+    num_code_periods::Integer,
     sel...,
 )
-    sats[prn] = _set_sat_signal_preferred_blocks(sats[prn], Int(num_code_blocks), sel...)
+    sats[prn] =
+        _set_sat_signal_preferred_code_periods(sats[prn], Int(num_code_periods), sel...)
     track_state
 end
 
-function set_preferred_num_code_blocks_to_integrate!(
+function set_preferred_num_code_periods_to_integrate!(
     track_state::TrackState{<:SignalGroups{1}},
-    num_code_blocks::Integer,
+    num_code_periods::Integer,
 )
     sats = get_sat_states(track_state)
     prn = only(keys(sats))
-    sats[prn] = _set_sat_signal_preferred_blocks(sats[prn], Int(num_code_blocks))
+    sats[prn] = _set_sat_signal_preferred_code_periods(sats[prn], Int(num_code_periods))
     track_state
 end
 
@@ -1184,7 +1190,7 @@ latest filtered prompt is cleared, so the first FLL update does not measure a ro
 spanning the old integration interval.
 
 Use it when a signal's integration length changes mid-track, e.g. GPS L5I from
-1 ms to 10 ms via [`set_preferred_num_code_blocks_to_integrate!`](@ref): the
+1 ms to 10 ms via [`set_preferred_num_code_periods_to_integrate!`](@ref): the
 integrator state does not carry over to the new update interval, and the
 transient can drag the loop out of lock.
 
@@ -1194,7 +1200,7 @@ resets one. Mutates `track_state` and returns it. Works for any
 through its `reinit_loop_state` method.
 
 ```julia
-set_preferred_num_code_blocks_to_integrate!(track_state, 1, GPSL5I, 10)
+set_preferred_num_code_periods_to_integrate!(track_state, 1, GPSL5I, 10)
 reset_loop_filters!(track_state, 1)          # clean handoff for PRN 1
 reset_loop_filters!(track_state)             # …or reset every satellite
 ```

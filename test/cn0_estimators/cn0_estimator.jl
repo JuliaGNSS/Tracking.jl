@@ -84,7 +84,7 @@ TrackingLoops.estimate_cn0(estimator::CountingCN0Estimator, integration_time) =
         cn0_estimator = (MomentsCN0Estimator(; num_averaged_integrations = 10),),
     )
 
-    # The custom estimator is actually the one `track` feeds: 5 records in.
+    # The custom estimator is actually the one `track` feeds: 5 integrations in.
     samples = complex.(float.(gen_code(4000, gpsl1, 1, 4e6Hz, get_chip_rate(gpsl1), 0.0)))
     track_state = TrackState(
         gpsl1,
@@ -95,9 +95,9 @@ TrackingLoops.estimate_cn0(estimator::CountingCN0Estimator, integration_time) =
     end
     @test estimate_cn0(track_state, 1) == 5dBHz
 
-    # `num_prompts_for_cn0_estimation` still sizes the default estimator's
+    # `num_averaged_integrations` still sizes the default estimator's
     # averaging span.
-    default = get_cn0_estimator(TrackedSignal(gpsl1; num_prompts_for_cn0_estimation = 40))
+    default = get_cn0_estimator(TrackedSignal(gpsl1; num_averaged_integrations = 40))
     @test default isa NoiseReferencedCN0Estimator
     @test length(default.buffered_cn0) == 40
     @test Base.length(default.buffered_cn0) == 40
@@ -116,9 +116,9 @@ end
     @test estimate_cn0(ts, 1) == -Inf * dBHz
 end
 
-@testset "estimate_cn0 divides by the record's real integration time" begin
-    # A record spanning N code blocks carries N times the SNR of a one-block
-    # record, so `estimate_cn0` must divide by N × the code period; dividing by
+@testset "estimate_cn0 divides by the real integration time" begin
+    # An integration spanning N code periods carries N times the SNR of a one-code-period
+    # integration, so `estimate_cn0` must divide by N × the code period; dividing by
     # the code period alone over-reports by 10·log₁₀(N).
     gpsl1 = GPSL1CA()
     prn = 1
@@ -137,11 +137,11 @@ end
     )
 
     # Fixed amplitude with noise shrinking as √N is what a longer coherent
-    # integration delivers, so both block counts must report the same C/N₀.
+    # integration delivers, so both code-period counts must report the same C/N₀.
     # Pinned to `MomentsCN0Estimator`, which takes one `T` at `estimate_cn0`
-    # time; `NoiseReferencedCN0Estimator` applies `T` per record (tested in
+    # time; `NoiseReferencedCN0Estimator` applies `T` per integration (tested in
     # TrackingLoops).
-    function cn0_at(num_blocks, prompts)
+    function cn0_at(num_code_periods, prompts)
         tsig = Tracking.TrackedSignal(
             gpsl1;
             cn0_estimator = MomentsCN0Estimator(; num_averaged_integrations = 100),
@@ -150,34 +150,35 @@ end
         for p in prompts
             estimator = update!(estimator, p)
         end
-        tsig = _with_last_integration(tsig, num_blocks; cn0_estimator = estimator)
+        tsig = _with_last_integration(tsig, num_code_periods; cn0_estimator = estimator)
         estimate_cn0(tsig)
     end
 
     Random.seed!(4321)
     amplitude = 1.0
     noise_1 = 0.2
-    one_block = [amplitude + noise_1 * randn(ComplexF64) for _ = 1:100]
-    # 20 blocks: same signal amplitude, noise down by √20.
-    twenty_blocks = [amplitude + noise_1 / sqrt(20) * randn(ComplexF64) for _ = 1:100]
+    one_period_prompts = [amplitude + noise_1 * randn(ComplexF64) for _ = 1:100]
+    # 20 code periods: same signal amplitude, noise down by √20.
+    twenty_period_prompts =
+        [amplitude + noise_1 / sqrt(20) * randn(ComplexF64) for _ = 1:100]
 
-    cn0_1 = cn0_at(1, one_block)
-    cn0_20 = cn0_at(20, twenty_blocks)
-    # The 20-block record's SNR is 20× (13 dB) better and it spans 20× the time,
+    cn0_1 = cn0_at(1, one_period_prompts)
+    cn0_20 = cn0_at(20, twenty_period_prompts)
+    # The 20-code-period integration's SNR is 20× (13 dB) better and it spans 20× the time,
     # so the C/N₀ must come out the same.
     @test cn0_20 ≈ cn0_1 atol = 1.5dBHz
 
     # And the divisor is actually used: the same buffered prompts reported at a
-    # different block count must move by exactly 10·log₁₀(N). Compared on the
+    # different code-period count must move by exactly 10·log₁₀(N). Compared on the
     # linear values, since subtracting two logarithmic `Level`s is awkward.
     linear_cn0(x) = ustrip(Hz, Unitful.linear(x))
-    same_prompts_1 = linear_cn0(cn0_at(1, one_block))
-    same_prompts_20 = linear_cn0(cn0_at(20, one_block))
+    same_prompts_1 = linear_cn0(cn0_at(1, one_period_prompts))
+    same_prompts_20 = linear_cn0(cn0_at(20, one_period_prompts))
     @test 10 * log10(same_prompts_1 / same_prompts_20) ≈ 10 * log10(20) atol = 0.01
 
     # C/N₀ × `get_last_fully_integrated_integration_time` is the
-    # post-integration SNR, so it must not depend on the block count.
-    function snr_at(num_blocks, prompts)
+    # post-integration SNR, so it must not depend on the code-period count.
+    function snr_at(num_code_periods, prompts)
         tsig = Tracking.TrackedSignal(
             gpsl1;
             cn0_estimator = MomentsCN0Estimator(; num_averaged_integrations = 100),
@@ -186,11 +187,11 @@ end
         for p in prompts
             estimator = update!(estimator, p)
         end
-        tsig = _with_last_integration(tsig, num_blocks; cn0_estimator = estimator)
+        tsig = _with_last_integration(tsig, num_code_periods; cn0_estimator = estimator)
         cn0 = ustrip(Hz, Unitful.linear(estimate_cn0(tsig)))
         cn0 * ustrip(Unitful.s, get_last_fully_integrated_integration_time(tsig))
     end
-    @test snr_at(20, one_block) ≈ snr_at(1, one_block) rtol = 1e-9
+    @test snr_at(20, one_period_prompts) ≈ snr_at(1, one_period_prompts) rtol = 1e-9
 end
 
 end

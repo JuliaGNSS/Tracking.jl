@@ -18,7 +18,7 @@ using Tracking:
     get_code_doppler,
     get_carrier_phase,
     get_carrier_doppler,
-    get_integrated_samples,
+    get_num_integrated_samples,
     get_next_sample_index,
     get_correlator_bank,
     get_last_fully_integrated_correlator,
@@ -33,8 +33,8 @@ using Tracking:
     merge_sats,
     remove_satellite!,
     remove_satellite,
-    get_preferred_num_code_blocks_to_integrate,
-    set_preferred_num_code_blocks_to_integrate!,
+    get_preferred_num_code_periods_to_integrate,
+    set_preferred_num_code_periods_to_integrate!,
     reset_loop_filters!,
     get_loop_state,
     SignalGroup
@@ -89,7 +89,7 @@ end
     @test get_prn(track_state, 1) == 1
     @test get_prn(track_state, 2) == 2
     @test get_num_ants(track_state, 1) == 1
-    @test get_integrated_samples(track_state, 1) == 0
+    @test get_num_integrated_samples(track_state, 1) == 0
     @test get_next_sample_index(track_state, 1) == 1
     @test get_correlator_bank(track_state, 1).correlator_outputs == zeros(3)
     @test get_last_fully_integrated_correlator(track_state, 1).correlator_outputs ==
@@ -539,7 +539,7 @@ end
     @inferred get_carrier_phase(track_state, 1)
     @inferred get_carrier_doppler(track_state, 1)
     @inferred get_next_sample_index(track_state, 1)
-    @inferred get_integrated_samples(track_state, 1)
+    @inferred get_num_integrated_samples(track_state, 1)
     @inferred get_correlator_bank(track_state, 1)
     @inferred get_last_fully_integrated_correlator(track_state, 1)
     @inferred get_last_fully_integrated_filtered_prompt(track_state, 1)
@@ -555,48 +555,48 @@ end
     @test true
 end
 
-@testset "preferred_num_code_blocks_to_integrate validation (issue #128)" begin
+@testset "preferred_num_code_periods_to_integrate validation (issue #128)" begin
     gpsl1 = GPSL1CA()
     track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 0.0Hz)])
 
-    # Only divisors of the 20 blocks per bit keep integrations on the bit grid.
+    # Only divisors of the 20 code periods per bit keep integrations on the bit grid.
     for valid in (1, 2, 4, 5, 10, 20)
-        set_preferred_num_code_blocks_to_integrate!(track_state, 1, valid)
-        @test get_preferred_num_code_blocks_to_integrate(track_state, 1) == valid
+        set_preferred_num_code_periods_to_integrate!(track_state, 1, valid)
+        @test get_preferred_num_code_periods_to_integrate(track_state, 1) == valid
     end
     for invalid in (0, -1, 3, 7, 21, 40)
-        @test_throws ArgumentError set_preferred_num_code_blocks_to_integrate!(
+        @test_throws ArgumentError set_preferred_num_code_periods_to_integrate!(
             track_state,
             1,
             invalid,
         )
     end
     # A rejected value leaves the previous one untouched.
-    @test get_preferred_num_code_blocks_to_integrate(track_state, 1) == 20
+    @test get_preferred_num_code_periods_to_integrate(track_state, 1) == 20
 
     # Validated at construction, too.
     @test_throws ArgumentError Tracking.TrackedSignal(
         gpsl1;
-        preferred_num_code_blocks_to_integrate = 3,
+        preferred_num_code_periods_to_integrate = 3,
     )
-    @test Tracking.get_preferred_num_code_blocks_to_integrate(
-        Tracking.TrackedSignal(gpsl1; preferred_num_code_blocks_to_integrate = 10),
+    @test Tracking.get_preferred_num_code_periods_to_integrate(
+        Tracking.TrackedSignal(gpsl1; preferred_num_code_periods_to_integrate = 10),
     ) == 10
 
-    # GPS L5I has 10 blocks per bit.
+    # GPS L5I has 10 code periods per bit.
     gpsl5 = GPSL5I()
     l5_state = TrackState(gpsl5, [TrackedSat(gpsl5, 1, 0.0, 0.0Hz)])
-    @test_throws ArgumentError set_preferred_num_code_blocks_to_integrate!(l5_state, 1, 4)
-    set_preferred_num_code_blocks_to_integrate!(l5_state, 1, 10)
-    @test get_preferred_num_code_blocks_to_integrate(l5_state, 1) == 10
+    @test_throws ArgumentError set_preferred_num_code_periods_to_integrate!(l5_state, 1, 4)
+    set_preferred_num_code_periods_to_integrate!(l5_state, 1, 10)
+    @test get_preferred_num_code_periods_to_integrate(l5_state, 1) == 10
 
     # A pilot has no bit grid, so any length ≥ 1 is accepted; at runtime it is
     # clamped to a divisor of the secondary-code period (#134).
     gpsl1c_p = GPSL1C_P(TMBOC)
     p_state = TrackState(gpsl1c_p, [TrackedSat(gpsl1c_p, 1, 0.0, 0.0Hz)])
-    set_preferred_num_code_blocks_to_integrate!(p_state, 1, 7)
-    @test get_preferred_num_code_blocks_to_integrate(p_state, 1) == 7
-    @test_throws ArgumentError set_preferred_num_code_blocks_to_integrate!(p_state, 1, 0)
+    set_preferred_num_code_periods_to_integrate!(p_state, 1, 7)
+    @test get_preferred_num_code_periods_to_integrate(p_state, 1) == 7
+    @test_throws ArgumentError set_preferred_num_code_periods_to_integrate!(p_state, 1, 0)
 end
 
 @testset "get_filtered_prompts TrackState accessor (issue #134)" begin
@@ -722,19 +722,19 @@ end
     @test get_last_fully_integrated_filtered_prompt(ts, 1) == 0.0 + 0.0im
 end
 
-@testset "per-signal preferred_num_code_blocks_to_integrate + reset_loop_filters!" begin
+@testset "per-signal preferred_num_code_periods_to_integrate + reset_loop_filters!" begin
     gpsl1 = GPSL1CA()
     track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 100.0Hz)])
 
-    @test get_preferred_num_code_blocks_to_integrate(track_state, 1) == 1
-    set_preferred_num_code_blocks_to_integrate!(track_state, 1, 20)
-    @test get_preferred_num_code_blocks_to_integrate(track_state, 1) == 20
-    set_preferred_num_code_blocks_to_integrate!(track_state, :default, 1, GPSL1CA, 5)   # by signal type
-    @test get_preferred_num_code_blocks_to_integrate(track_state, 1) == 5
-    set_preferred_num_code_blocks_to_integrate!(track_state, :default, 1, 4)
-    @test get_preferred_num_code_blocks_to_integrate(track_state, :default, 1) == 4
-    set_preferred_num_code_blocks_to_integrate!(track_state, 10)
-    @test get_preferred_num_code_blocks_to_integrate(track_state) == 10
+    @test get_preferred_num_code_periods_to_integrate(track_state, 1) == 1
+    set_preferred_num_code_periods_to_integrate!(track_state, 1, 20)
+    @test get_preferred_num_code_periods_to_integrate(track_state, 1) == 20
+    set_preferred_num_code_periods_to_integrate!(track_state, :default, 1, GPSL1CA, 5)   # by signal type
+    @test get_preferred_num_code_periods_to_integrate(track_state, 1) == 5
+    set_preferred_num_code_periods_to_integrate!(track_state, :default, 1, 4)
+    @test get_preferred_num_code_periods_to_integrate(track_state, :default, 1) == 4
+    set_preferred_num_code_periods_to_integrate!(track_state, 10)
+    @test get_preferred_num_code_periods_to_integrate(track_state) == 10
 
     @test get_loop_state(get_sat_state(track_state, 1)).initial_carrier_doppler == 100.0Hz
 

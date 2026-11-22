@@ -12,8 +12,8 @@ replicate BOC(1,1) by default; construct `GalileoE1B(CBOC)`, `GalileoE1C(CBOC)` 
 
 **Tracking is not navigation decoding, and neither is PVT.**
 
-- *Sync feature* is what the tracker locks onto to leave its one-block pre-sync
-  integration: a data-bit edge, a secondary-code phase, or nothing where the
+- *Sync feature* is what the tracker locks onto to leave its one-code-period
+  pre-sync integration: a data-bit edge, a secondary-code phase, or nothing where the
   primary code period already is the integration unit.
 - *Navigation data* is what the signal carries. A pilot or acquisition aid
   carries none: it yields code phase, carrier phase, Doppler and C/N₀, and
@@ -31,15 +31,15 @@ are tracked in
 
 ## The matrix
 
-*Blocks per integration* is the coherent integration length in primary code
-blocks a fresh [`TrackedSignal`](@ref) starts at
+*Code periods per integration* is the coherent (predetection) integration length in
+primary code periods a fresh [`TrackedSignal`](@ref) starts at
 ([`default_num_code_periods_to_integrate`](@extref TrackingLoops.default_num_code_periods_to_integrate-Tuple{AbstractGNSSSignal})),
 and in brackets the ceiling
 ([`max_num_code_periods_to_integrate`](@extref TrackingLoops.max_num_code_periods_to_integrate-Tuple{AbstractGNSSSignal}))
-[`set_preferred_num_code_blocks_to_integrate!`](@ref) may raise it to: one data
-bit, overlay period or code cycle. Until sync, one block is integrated regardless.
+[`set_preferred_num_code_periods_to_integrate!`](@ref) may raise it to: one data
+bit, overlay period or code cycle. Until sync, one code period is integrated regardless.
 
-| Signal | Band | Primary code | Blocks per integration | Sync feature | Navigation data | PRNs |
+| Signal | Band | Primary code | Code periods per integration | Sync feature | Navigation data | PRNs |
 |:--|:--|:--|:--|:--|:--|:--|
 | `GPSL1CA` | `L1` | 1023 chips, 1 ms | 1 (max 20) | soft CFAR bit-edge search | LNAV, 50 sym/s | 1-37 |
 | `GPSL1C_D` | `L1` | 10230 chips, 10 ms | 1 (max 1) | none needed — 1 symbol per code period | CNAV-2, 100 sym/s | 1-63 |
@@ -87,8 +87,8 @@ than E5a-I's.
   share their [`SignalGroup`](@ref)
   ([#151](https://github.com/JuliaGNSS/Tracking.jl/issues/151)); track it in its
   own group and hand over.
-- **As a tracked signal** it yields the usual observables. One 64.5 µs block
-  would run the loop at 15.5 kHz, so it integrates a whole 31-block, 2 ms code
+- **As a tracked signal** it yields the usual observables. One 64.5 µs code period
+  would run the loop at 15.5 kHz, so it integrates a whole 31-period, 2 ms code
   cycle by default: a 500 Hz loop, where the carrier loop pulls in at 45 Hz and
   narrows to 18 Hz.
 - **It never provides navigation data**, for itself or for E5a.

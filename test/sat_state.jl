@@ -23,7 +23,7 @@ using Tracking:
     get_code_doppler,
     get_carrier_phase,
     get_carrier_doppler,
-    get_integrated_samples,
+    get_num_integrated_samples,
     get_next_sample_index,
     get_correlator_bank,
     get_last_fully_integrated_correlator,
@@ -51,7 +51,7 @@ include("acquisition_test_helpers.jl")
           500.0Hz * get_chip_rate_to_center_frequency_ratio(gpsl1)
     @test get_carrier_phase(sat_state) == 0.0
     @test get_carrier_doppler(sat_state) == 500.0Hz
-    @test get_integrated_samples(sat_state) == 0
+    @test get_num_integrated_samples(sat_state) == 0
     @test get_next_sample_index(sat_state) == 1
     @test get_correlator_bank(sat_state).correlator_outputs == zeros(3)
     @test get_last_fully_integrated_correlator(sat_state).correlator_outputs == zeros(3)
@@ -66,7 +66,7 @@ include("acquisition_test_helpers.jl")
           100.0Hz * get_chip_rate_to_center_frequency_ratio(gpsl1)
     @test get_carrier_phase(sat_state) == 0.0
     @test get_carrier_doppler(sat_state) == 100.0Hz
-    @test get_integrated_samples(sat_state) == 0.0
+    @test get_num_integrated_samples(sat_state) == 0.0
     @test get_correlator_bank(sat_state).correlator_outputs == zeros(3)
     @test get_last_fully_integrated_correlator(sat_state).correlator_outputs == zeros(3)
     @test get_last_fully_integrated_filtered_prompt(sat_state) == complex(0.0, 0.0)
@@ -115,7 +115,7 @@ end
               1023 * 20
         @test Tracking._post_sync_code_phase_period(
             Tracking.TrackedSignal(GalileoE1B(CBOC)),
-        ) == 4092 * 1   # 1 block per symbol
+        ) == 4092 * 1   # 1 code period per symbol
         @test Tracking._post_sync_code_phase_period(Tracking.TrackedSignal(GalileoE1B())) ==
               4092 * 1
         @test Tracking._post_sync_code_phase_period(Tracking.TrackedSignal(GPSL5I())) ==
@@ -165,13 +165,13 @@ GNSSSignals.get_bit_rate(::Type{FakeWrapSignal}) = 0Hz
             (getfield(state, f) for f in Base.tail(fieldnames(typeof(state))))...,
         )
         Tracking.TrackedSignal(
-            base.integrated_samples,
+            base.num_integrated_samples,
             base.correlator_bank,
             base.last_fully_integrated_correlator,
             fake_state,
             base.filtered_prompts,
             base.correlator_bank_outputs,
-            base.preferred_num_code_blocks_to_integrate,
+            base.preferred_num_code_periods_to_integrate,
         )
     end
 
@@ -227,7 +227,7 @@ end
 end
 
 @testset "Last fully integrated integration time" begin
-    # Post-integration SNR is C/N₀ · T, so judging the last record needs its
+    # Post-integration SNR is C/N₀ · T, so judging the last integration needs its
     # own integration time.
     gpsl1 = GPSL1CA()
     code_period = get_code_length(gpsl1) / get_chip_rate(gpsl1)
@@ -235,7 +235,7 @@ end
 
     fs = 4e6Hz
     tsig = Tracking.TrackedSignal(gpsl1)
-    # Nothing completed yet: one block.
+    # Nothing completed yet: one code period, and no integration time.
     @test get_last_fully_integrated_num_code_blocks(tsig) == 1
     @test isnan(get_last_fully_integrated_integration_time(tsig))
 
@@ -258,8 +258,8 @@ end
     twenty = with_last_integration(20)
     @test upreferred(get_last_fully_integrated_integration_time(twenty)) ≈ 20ms
 
-    # Not `get_integrated_samples`, which counts the record in progress.
-    @test get_integrated_samples(twenty) == 0
+    # Not `get_num_integrated_samples`, which counts the integration in progress.
+    @test get_num_integrated_samples(twenty) == 0
 
     sat = TrackedSat(gpsl1, 1, 10.0, 500.0Hz)
     @test get_last_fully_integrated_num_code_blocks(sat) == 1

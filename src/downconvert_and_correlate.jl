@@ -1,10 +1,10 @@
-# Advances a sat by one downconvert + correlate sub-step of `integrated_samples`
+# Advances a sat by one downconvert + correlate sub-step of `num_integrated_samples`
 # samples: the shared carrier and code phase, `next_sample_index`, and each
 # signal's correlator bank. `new_signals_data` holds one `(new_correlator_bank, completed)`
 # pair per element of `sat.signals`; see `_build_new_signals` for completion.
 function _advance_sat(
     sat::TrackedSat,
-    integrated_samples::Int,
+    num_integrated_samples::Int,
     intermediate_frequency,
     sampling_frequency,
     new_signals_data::Tuple,
@@ -14,7 +14,7 @@ function _advance_sat(
     carrier_frequency = sat.carrier_doppler + intermediate_frequency
     code_frequency = sat.code_doppler + get_chip_rate(driver)
     carrier_phase = update_carrier_phase(
-        integrated_samples,
+        num_integrated_samples,
         carrier_frequency,
         sampling_frequency,
         sat.carrier_phase,
@@ -24,15 +24,15 @@ function _advance_sat(
     # PositionVelocityTime.jl know the code period; see `current_code_phase_period`.
     code_phase_period = current_code_phase_period(sat.signals)
     code_phase = mod(
-        code_frequency * integrated_samples / sampling_frequency + sat.code_phase,
+        code_frequency * num_integrated_samples / sampling_frequency + sat.code_phase,
         code_phase_period,
     )
-    new_next_sample_index = sat.next_sample_index + integrated_samples
+    new_next_sample_index = sat.next_sample_index + num_integrated_samples
 
     new_signals = _build_new_signals(
         sat.signals,
         new_signals_data,
-        integrated_samples,
+        num_integrated_samples,
         new_next_sample_index,
         Float64(code_phase),
     )
@@ -55,23 +55,24 @@ end
 @inline function _build_new_signals(
     signals::Tuple,
     new_data::Tuple,
-    integrated_samples::Int,
+    num_integrated_samples::Int,
     next_sample_index::Int,
     code_phase::Float64,
 )
     tsig = first(signals)
     (corr, completed) = first(new_data)
-    total_integrated = tsig.integrated_samples + integrated_samples
+    total_integrated = tsig.num_integrated_samples + num_integrated_samples
     if completed
         push!(
             tsig.correlator_bank_outputs,
             CorrelatorBankOutput(corr, total_integrated, next_sample_index - 1, code_phase),
         )
-        new_tsig = TrackedSignal(tsig; integrated_samples = 0, correlator_bank = zero(corr))
+        new_tsig =
+            TrackedSignal(tsig; num_integrated_samples = 0, correlator_bank = zero(corr))
     else
         new_tsig = TrackedSignal(
             tsig;
-            integrated_samples = total_integrated,
+            num_integrated_samples = total_integrated,
             correlator_bank = corr,
         )
     end
@@ -80,7 +81,7 @@ end
         _build_new_signals(
             Base.tail(signals),
             Base.tail(new_data),
-            integrated_samples,
+            num_integrated_samples,
             next_sample_index,
             code_phase,
         )...,

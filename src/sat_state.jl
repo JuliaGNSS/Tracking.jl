@@ -12,7 +12,7 @@ struct TrackedSignal{
     C<:AbstractCorrelatorBank,
     P<:PostCorrelationState{S},
 }
-    integrated_samples::Int
+    num_integrated_samples::Int
     correlator_bank::C
     last_fully_integrated_correlator::C
     # Advanced per integration by TrackingLoops' `process_correlator_bank_output!`.
@@ -21,29 +21,29 @@ struct TrackedSignal{
     # Integrations completed in the current chunk: pushed by the correlate phase,
     # stepped through the tracking loop and emptied by `step_tracking_loops!`.
     correlator_bank_outputs::Vector{CorrelatorBankOutput{C}}
-    # In primary code blocks; see `set_preferred_num_code_blocks_to_integrate!`.
-    preferred_num_code_blocks_to_integrate::Int
+    # In primary code periods; see `set_preferred_num_code_periods_to_integrate!`.
+    preferred_num_code_periods_to_integrate::Int
 end
 
-# For data-bearing signals the length must divide the code blocks per bit, or
+# For data-bearing signals the length must divide the code periods per bit, or
 # integrations straddle bit boundaries and no bit is ever emitted again (#128).
-function validate_preferred_num_code_blocks_to_integrate(
+function validate_preferred_num_code_periods_to_integrate(
     signal::AbstractGNSSSignal,
-    preferred_num_code_blocks::Integer,
+    preferred_num_code_periods::Integer,
 )
-    preferred_num_code_blocks >= 1 || throw(
+    preferred_num_code_periods >= 1 || throw(
         ArgumentError(
-            "preferred_num_code_blocks_to_integrate must be at least 1, got " *
-            "$preferred_num_code_blocks",
+            "preferred_num_code_periods_to_integrate must be at least 1, got " *
+            "$preferred_num_code_periods",
         ),
     )
     num_code_periods_per_bit = get_code_periods_per_bit(signal)
     num_code_periods_per_bit == 0 && return nothing
-    if num_code_periods_per_bit % preferred_num_code_blocks != 0
+    if num_code_periods_per_bit % preferred_num_code_periods != 0
         valid = filter(d -> num_code_periods_per_bit % d == 0, 1:num_code_periods_per_bit)
         throw(
             ArgumentError(
-                "preferred_num_code_blocks_to_integrate = $preferred_num_code_blocks " *
+                "preferred_num_code_periods_to_integrate = $preferred_num_code_periods " *
                 "must evenly divide the $num_code_periods_per_bit code periods " *
                 "of one bit of $(get_signal_name(signal)) — an integration " *
                 "straddling a bit boundary would never emit a bit. Valid values: " *
@@ -65,38 +65,38 @@ The [`TrackedSat`](@ref) it joins sets its PRN and its driver's carrier-phase of
 [`AbstractCN0Estimator`](@extref TrackingLoops.AbstractCN0Estimator). The default,
 [`default_cn0_estimator`](@extref TrackingLoops.default_cn0_estimator-Tuple{AbstractGNSSSignal, Int64}), is a
 [`NoiseReferencedCN0Estimator`](@extref TrackingLoops.NoiseReferencedCN0Estimator) over
-`num_prompts_for_cn0_estimation` integrations against the signal's **measured**
+`num_averaged_integrations` integrations against the signal's **measured**
 noise density: `track!` fills that on the sample-driven path, but a
 **correlator-ingest** path must feed [`append_noise_observation!`](@ref) per signal, or
 C/N₀ stays at `-Inf dB-Hz`. `NWPRCN0Estimator()` needs no noise observation;
-`MomentsCN0Estimator(; num_averaged_integrations = num_prompts_for_cn0_estimation)` is the
+`MomentsCN0Estimator(; num_averaged_integrations)` is the
 plain moment-ratio estimator. Each signal needs its **own** estimator instance: they
 buffer into a vector, so sharing one corrupts both.
 
-`preferred_num_code_blocks_to_integrate` defaults to
+`preferred_num_code_periods_to_integrate` defaults to
 [`default_num_code_periods_to_integrate`](@extref TrackingLoops.default_num_code_periods_to_integrate-Tuple{AbstractGNSSSignal})
 and must be valid for `signal` (see
-[`set_preferred_num_code_blocks_to_integrate!`](@ref)).
+[`set_preferred_num_code_periods_to_integrate!`](@ref)).
 """
 function TrackedSignal(
     signal::AbstractGNSSSignal;
     num_ants::NumAnts = NumAnts(1),
     correlator_bank::AbstractCorrelatorBank = get_default_correlator_bank(signal, num_ants),
-    num_prompts_for_cn0_estimation::Int = 100,
+    num_averaged_integrations::Int = 100,
     cn0_estimator::AbstractCN0Estimator = default_cn0_estimator(
         signal,
-        num_prompts_for_cn0_estimation,
+        num_averaged_integrations,
     ),
     post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),
-    preferred_num_code_blocks_to_integrate::Int = default_num_code_periods_to_integrate(
+    preferred_num_code_periods_to_integrate::Int = default_num_code_periods_to_integrate(
         signal,
     ),
 )
-    validate_preferred_num_code_blocks_to_integrate(
+    validate_preferred_num_code_periods_to_integrate(
         signal,
-        preferred_num_code_blocks_to_integrate,
+        preferred_num_code_periods_to_integrate,
     )
-    # A default chunk yields at most one record; the hint covers a moderately
+    # A default chunk yields at most one integration; the hint covers a moderately
     # enlarged `doppler_update_interval` without regrowing.
     correlator_bank_outputs = CorrelatorBankOutput{typeof(correlator_bank)}[]
     sizehint!(correlator_bank_outputs, 4)
@@ -107,7 +107,7 @@ function TrackedSignal(
         PostCorrelationState(signal, 0; correlator_bank, cn0_estimator, post_corr_filter),
         ComplexF64[],
         correlator_bank_outputs,
-        preferred_num_code_blocks_to_integrate,
+        preferred_num_code_periods_to_integrate,
     )
 end
 
@@ -117,32 +117,32 @@ end
 # allocation-free.
 function TrackedSignal(
     t::TrackedSignal{S,C};
-    integrated_samples = nothing,
+    num_integrated_samples = nothing,
     correlator_bank::Maybe{C} = nothing,
     last_fully_integrated_correlator::Maybe{C} = nothing,
     post_correlation_state::Maybe{PostCorrelationState{S}} = nothing,
     cn0_estimator::Maybe{AbstractCN0Estimator} = nothing,
-    preferred_num_code_blocks_to_integrate = nothing,
+    preferred_num_code_periods_to_integrate = nothing,
 ) where {S<:AbstractGNSSSignal,C<:AbstractCorrelatorBank}
-    isnothing(preferred_num_code_blocks_to_integrate) ||
-        validate_preferred_num_code_blocks_to_integrate(
+    isnothing(preferred_num_code_periods_to_integrate) ||
+        validate_preferred_num_code_periods_to_integrate(
             get_signal(t),
-            preferred_num_code_blocks_to_integrate,
+            preferred_num_code_periods_to_integrate,
         )
     new_post_correlation_state = PostCorrelationState(
         something(post_correlation_state, t.post_correlation_state);
         cn0_estimator,
     )
     TrackedSignal{S,C,typeof(new_post_correlation_state)}(
-        something(integrated_samples, t.integrated_samples),
+        something(num_integrated_samples, t.num_integrated_samples),
         something(correlator_bank, t.correlator_bank),
         something(last_fully_integrated_correlator, t.last_fully_integrated_correlator),
         new_post_correlation_state,
         t.filtered_prompts,
         t.correlator_bank_outputs,
         something(
-            preferred_num_code_blocks_to_integrate,
-            t.preferred_num_code_blocks_to_integrate,
+            preferred_num_code_periods_to_integrate,
+            t.preferred_num_code_periods_to_integrate,
         ),
     )
 end
@@ -189,7 +189,7 @@ sampling frequency, which
 [`estimate_cn0`](@extref TrackingLoops.estimate_cn0-Tuple{PostCorrelationState}) divides by; the post-integration SNR
 is `C/N₀ · T`. `NaN` before the first integration.
 
-Not to be confused with `get_integrated_samples`, the record in progress.
+Not to be confused with `get_num_integrated_samples`, the integration in progress.
 """
 function get_last_fully_integrated_integration_time(t::TrackedSignal)
     state = t.post_correlation_state
@@ -254,17 +254,17 @@ $(SIGNATURES)
 
 The number of samples accumulated into the predetection integration in progress.
 """
-get_integrated_samples(t::TrackedSignal) = t.integrated_samples
+get_num_integrated_samples(t::TrackedSignal) = t.num_integrated_samples
 
 """
 $(SIGNATURES)
 
 The number of primary code periods the signal integrates coherently per predetection
 integration once synced (see
-[`set_preferred_num_code_blocks_to_integrate!`](@ref)).
+[`set_preferred_num_code_periods_to_integrate!`](@ref)).
 """
-get_preferred_num_code_blocks_to_integrate(t::TrackedSignal) =
-    t.preferred_num_code_blocks_to_integrate
+get_preferred_num_code_periods_to_integrate(t::TrackedSignal) =
+    t.preferred_num_code_periods_to_integrate
 
 """
 $(SIGNATURES)
@@ -350,7 +350,7 @@ multiple, not the maximum, keeps the period a multiple of every signal's replica
         return code_phase
     end
     # Align the low `best_len` chips to the synced window, keeping the higher
-    # wrap and the phase within the primary block: dropping that would inject a
+    # wrap and the phase within the primary code period: dropping that would inject a
     # phase error at sync (#117).
     base = floor(Int, code_phase / best_len) * best_len
     within_primary = code_phase - floor(code_phase / best_prim) * best_prim
@@ -409,8 +409,8 @@ function TrackedSat(
 )
     _assert_unique_signal_ids(map(get_signal, tracked_signals))
     # Accept integer Dopplers such as `200Hz`.
-    cdop = float(carrier_doppler)
-    cd =
+    carrier_doppler = float(carrier_doppler)
+    code_doppler =
         isnothing(code_doppler) ?
         carrier_doppler *
         get_chip_rate_to_center_frequency_ratio(get_signal(first(tracked_signals))) :
@@ -421,9 +421,9 @@ function TrackedSat(
     bare = TrackedSat(
         prn,
         float(code_phase),
-        cd,
+        code_doppler,
         float(carrier_phase),
-        cdop,
+        carrier_doppler,
         1,
         map(s -> _join_satellite(s, prn, driver_carrier_phase_offset), tracked_signals),
         nothing,
@@ -472,13 +472,13 @@ function TrackedSat(
     code_phase,
     carrier_doppler;
     num_ants::NumAnts = NumAnts(1),
-    num_prompts_for_cn0_estimation::Int = 100,
+    num_averaged_integrations::Int = 100,
     cn0_estimator = nothing,
     post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),
     kwargs...,
 )
     cn0_estimators =
-        _per_signal_cn0_estimators(signals, cn0_estimator, num_prompts_for_cn0_estimation)
+        _per_signal_cn0_estimators(signals, cn0_estimator, num_averaged_integrations)
     tracked_signals = map(signals, cn0_estimators) do sig, estimator
         TrackedSignal(
             sig;
@@ -496,8 +496,8 @@ end
 @inline _per_signal_cn0_estimators(
     signals::Tuple{Vararg{AbstractGNSSSignal}},
     ::Nothing,
-    num_prompts_for_cn0_estimation::Int,
-) = map(sig -> default_cn0_estimator(sig, num_prompts_for_cn0_estimation), signals)
+    num_averaged_integrations::Int,
+) = map(sig -> default_cn0_estimator(sig, num_averaged_integrations), signals)
 
 @inline _per_signal_cn0_estimators(
     ::Tuple{AbstractGNSSSignal},
@@ -544,10 +544,10 @@ function TrackedSat(
     carrier_doppler;
     num_ants::NumAnts = NumAnts(1),
     correlator_bank::AbstractCorrelatorBank = get_default_correlator_bank(signal, num_ants),
-    num_prompts_for_cn0_estimation::Int = 100,
+    num_averaged_integrations::Int = 100,
     cn0_estimator::AbstractCN0Estimator = default_cn0_estimator(
         signal,
-        num_prompts_for_cn0_estimation,
+        num_averaged_integrations,
     ),
     post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),
     kwargs...,
@@ -708,12 +708,12 @@ get_soft_bits(sat::TrackedSat, sel...) = get_soft_bits(_find_signal(sat.signals,
 get_num_bits(sat::TrackedSat, sel...) = get_num_bits(_find_signal(sat.signals, sel...))
 is_bit_or_secondary_code_synced(sat::TrackedSat, sel...) =
     is_bit_or_secondary_code_synced(_find_signal(sat.signals, sel...))
-get_integrated_samples(sat::TrackedSat, sel...) =
-    get_integrated_samples(_find_signal(sat.signals, sel...))
+get_num_integrated_samples(sat::TrackedSat, sel...) =
+    get_num_integrated_samples(_find_signal(sat.signals, sel...))
 get_correlator_bank_outputs(sat::TrackedSat, sel...) =
     get_correlator_bank_outputs(_find_signal(sat.signals, sel...))
-get_preferred_num_code_blocks_to_integrate(sat::TrackedSat, sel...) =
-    get_preferred_num_code_blocks_to_integrate(_find_signal(sat.signals, sel...))
+get_preferred_num_code_periods_to_integrate(sat::TrackedSat, sel...) =
+    get_preferred_num_code_periods_to_integrate(_find_signal(sat.signals, sel...))
 
 # `output` first, so a trailing signal selector works as for the accessors.
 append_correlator_bank_output!(sat::TrackedSat, output::CorrelatorBankOutput, sel...) =
@@ -904,7 +904,7 @@ and configure the tracking loop on `TrackState`.
 
 ```julia
 SignalGroup((GPSL1CA(),))                              # band L1(), 1 antenna
-SignalGroup((GPSL5I(),); num_ants = NumAnts(2))        # 2-antenna L5
+SignalGroup((GPSL5I(),); num_ants = NumAnts(2))  # 2-antenna L5
 ```
 """
 function SignalGroup(

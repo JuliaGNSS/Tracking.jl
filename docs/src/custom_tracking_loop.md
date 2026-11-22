@@ -98,7 +98,7 @@ satellites. The signal path (downconvert, correlate) is loop-agnostic and passes
    `correlator_bank_outputs::Vector{`[`CorrelatorBankOutput`](@extref TrackingLoops.CorrelatorBankOutput)`}`
    (zero, one or several), each with the raw correlator bank, its sample count, its end
    sample index (from the current measurement's first sample) and the replica's code
-   phase there. Fold over them in order, write the NCO Doppler once (typically from
+   phase there. Step through them in order, write the NCO Doppler once (typically from
    the last), and empty `correlator_bank_outputs`. The NCO Doppler is fixed across the
    chunk, so a discriminator needing the replica's Doppler reads the satellite's
    `code_doppler`/`carrier_doppler`.

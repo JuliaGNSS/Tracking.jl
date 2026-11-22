@@ -358,7 +358,7 @@ end
 # so the post-bit-edge path is hit. Variants: {out-of-place, in-place} ×
 # {single-threaded, threaded}.
 
-# A fresh sat's bit synchronizer, synced (and with a full code-block count).
+# A fresh sat's bit synchronizer, synced (and with a full prompt-sign count).
 function _with_synced_bit_synchronizer(t)
     sig = only(t.signals)
     # Positional, in field order, which TrackingLoops 7 kept and renamed.
@@ -523,9 +523,9 @@ end
 
 # ── Multi-code-period allocation guard (track!) ───────────────────────────────
 # A warm `track!` must be allocation-free per iteration, so `memory` must stay flat
-# as the block count grows; a per-iteration leak shows as a jump between lengths.
-# Pre-sync runs to 200 blocks because the CFAR detector only scores (and evaluates
-# its Student-t threshold) from `2 * blocks_per_bit` = 40 blocks; the hard
+# as the code-period count grows; a per-iteration leak shows as a jump between lengths.
+# Pre-sync runs to 200 code periods because the CFAR detector only scores (and evaluates
+# its Student-t threshold) from `2 * code_periods_per_bit` = 40 code periods; the hard
 # assertion is the pre-sync guard in test/track_in_place.jl. `setup` builds a fresh
 # state and warms it with one call, so the measured call is the second; with
 # `evals = 1` every measured call gets a fresh state, which keeps the loop filter

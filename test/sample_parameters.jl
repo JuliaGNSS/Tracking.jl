@@ -19,11 +19,11 @@ end
     sampling_frequency = 4MHz
     code_doppler = -0.00022901219179036268Hz
     code_phase = 0.0
-    preferred_num_code_blocks_to_integrate = 1
+    preferred_num_code_periods_to_integrate = 1
 
     num_samples_left_to_integrate = calc_num_samples_left_to_integrate(
         gpsl1,
-        preferred_num_code_blocks_to_integrate,
+        preferred_num_code_periods_to_integrate,
         sampling_frequency,
         code_doppler,
         code_phase,

@@ -1,6 +1,6 @@
 module PassengersTest
 
-# Every record of a satellite goes through the tracking loop's `step_loop!`, the
+# Every integration of a satellite goes through the tracking loop's `step_loop!`, the
 # passengers' (`signals[2:end]`) as well as the driver's, each built from its
 # signal's state: Tracking never asks which tracking loop it drives. With
 # TrackingLoops' `VectorTrackingLoop(pilot => data)` that is what lets the vector
@@ -38,8 +38,8 @@ import TrackingLoops
 const FS = 16.368e6Hz
 const N = 65472 # 4 ms, one Galileo E1 code period
 
-# An E1 record ending at `sample_index`, its prompt `p` on the VEML taps.
-_record(p, sample_index) = CorrelatorBankOutput(
+# An E1 correlator output ending at `sample_index`, its prompt `p` on the VEML taps.
+_correlator_output(p, sample_index) = CorrelatorBankOutput(
     set_correlator_outputs(
         get_default_correlator_bank(GalileoE1B(CBOC)),
         ComplexF64(p * N) .* SVector(0.2, 0.7, 1.0, 0.7, 0.2),
@@ -48,7 +48,7 @@ _record(p, sample_index) = CorrelatorBankOutput(
     sample_index,
 )
 
-# A tracking loop that remembers the signal and summary of every record it is
+# A tracking loop that remembers the signal and summary of every integration it is
 # stepped with, then runs the conventional loop.
 struct RecordingTrackingLoop{E} <: AbstractTrackingLoop
     inner::E
@@ -85,7 +85,7 @@ function TrackingLoops.step_loop!(
     )
 end
 
-# One chunk's records of satellite 11: E1B's (data, a sign per 4 ms symbol, in its
+# One chunk's integrations of satellite 11: E1B's (data, a sign per 4 ms symbol, in its
 # carrier-phase frame) and E1C's (pilot), in the given order.
 function feed!(track_state, k; data_first = true, carrier = 0.0)
     bit = isodd(hash(k) >> 3) ? 1.0 : -1.0
@@ -99,7 +99,7 @@ function feed!(track_state, k; data_first = true, carrier = 0.0)
     data =
         () -> append_correlator_bank_output!(
             track_state,
-            _record(rotation * bit * pilot_prompt, k * N),
+            _correlator_output(rotation * bit * pilot_prompt, k * N),
             :e1,
             11,
             GalileoE1B,
@@ -107,7 +107,7 @@ function feed!(track_state, k; data_first = true, carrier = 0.0)
     pilot =
         () -> append_correlator_bank_output!(
             track_state,
-            _record(pilot_prompt, k * N),
+            _correlator_output(pilot_prompt, k * N),
             :e1,
             11,
             GalileoE1C,
@@ -133,7 +133,7 @@ function e1_state(tracking_loop)
     track_state
 end
 
-@testset "Every record of a satellite is stepped, each with its signal's state" begin
+@testset "Every integration of a satellite is stepped, each with its signal's state" begin
     tracking_loop = RecordingTrackingLoop()
     track_state = e1_state(tracking_loop)
     for k = 1:20
@@ -142,20 +142,20 @@ end
     signals = first.(tracking_loop.seen)
     @test count(==(:GalileoE1C), signals) == 20
     @test count(==(:GalileoE1B), signals) == 20
-    # The driver's records first, then the passenger's, each signal's in order.
+    # The driver's integrations first, then the passenger's, each signal's in order.
     @test signals[1:2] == [:GalileoE1C, :GalileoE1B]
     for id in (:GalileoE1C, :GalileoE1B)
         @test issorted(getindex.(filter(s -> s[1] == id, tracking_loop.seen), 2))
     end
-    # E1B, one symbol per code period, syncs on its first record and appends one
-    # soft bit per record, which its record hands on exactly once.
+    # E1B, one symbol per code period, syncs on its first integration and appends one
+    # soft bit per integration, which its integration hands on exactly once.
     data = filter(s -> s[1] == :GalileoE1B, tracking_loop.seen)
     @test all(s -> s[3], data)
     @test sum(s -> s[4], data) == 20
 end
 
-@testset "A passenger's records leave the driver's loop as it is" begin
-    # The same pilot records, with and without the data component's records next to
+@testset "A passenger's integrations leave the driver's loop as it is" begin
+    # The same pilot integrations, with and without the data component's integrations next to
     # them: the Dopplers the loop commands are identical.
     dopplers(signals) = begin
         track_state = TrackState(;
@@ -174,7 +174,7 @@ end
             if feed_pilot_only
                 append_correlator_bank_output!(
                     track_state,
-                    _record(cis(0.05k), k * N),
+                    _correlator_output(cis(0.05k), k * N),
                     :e1,
                     11,
                     GalileoE1C,
@@ -191,7 +191,7 @@ end
     @test dopplers((GalileoE1C(CBOC),)) == dopplers((GalileoE1C(CBOC), GalileoE1B(CBOC)))
 end
 
-@testset "A vector loop ranges on E1C and decodes E1B, in either record order" begin
+@testset "A vector loop ranges on E1C and decodes E1B, in either order" begin
     for data_first in (true, false)
         tracking_loop = VectorTrackingLoop(
             GalileoE1C(CBOC) => GalileoE1B(CBOC);

@@ -1,7 +1,7 @@
 # Noise Estimator
 
 [`NoiseReferencedCN0Estimator`](@extref TrackingLoops.NoiseReferencedCN0Estimator), the default C/N₀
-estimator, divides each record's prompt power by a **measured noise floor**. This page
+estimator, divides each integration's prompt power by a **measured noise floor**. This page
 is about where that floor comes from.
 
 The floor is estimated **once per signal**, shared by every satellite on it, which
@@ -20,7 +20,7 @@ In the TrackingLoops manual:
 
 ## Why per signal and not per RF band
 
-What a record divides by is the **post-correlation** floor, weighted by the
+What an integration divides by is the **post-correlation** floor, weighted by the
 despreading modulation's own spectrum, so two signals on one front end see different
 floors as soon as the interference is not white (see
 [`AbstractNoiseDensityEstimator`](@extref TrackingLoops.AbstractNoiseDensityEstimator)). Measured
@@ -46,9 +46,9 @@ the despread, and so the floor, is per signal.
 With Tracking's normalisation, white noise gives `E|P|² = N₀/T`, so `N₀ = σ²/f_s` is
 **independent of the integration time** (see
 [`AbstractNoiseDensityEstimator`](@extref TrackingLoops.AbstractNoiseDensityEstimator)). One
-per-signal figure therefore serves a satellite on 1-block pre-sync records and one on
-20-block post-sync records alike, and the reference needs no alignment to correlator
-records: it runs on any grid and averages over a much longer window than any prompt
+per-signal figure therefore serves a satellite on 1-code-period pre-sync integrations and one on
+20-code-period post-sync integrations alike, and the reference needs no alignment to correlator
+integrations: it runs on any grid and averages over a much longer window than any prompt
 buffer. `N₀` carries Unitful dimensions of `1/Hz`, so the arithmetic is
 dimension-checked.
 

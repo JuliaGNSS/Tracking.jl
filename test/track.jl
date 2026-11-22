@@ -35,7 +35,7 @@ using Tracking:
     get_last_fully_integrated_filtered_prompt,
     get_last_fully_integrated_correlator,
     get_filtered_prompts,
-    get_integrated_samples,
+    get_num_integrated_samples,
     get_sat_state,
     get_loop_state,
     reset_loop_filters!
@@ -214,7 +214,7 @@ end
     end
 end
 
-# A tracking loop implementing only TrackingLoops' interface, counting the records
+# A tracking loop implementing only TrackingLoops' interface, counting the integrations
 # it hands to the loop it wraps.
 struct CountingTrackingLoop{E<:TrackingLoops.AbstractTrackingLoop} <:
        TrackingLoops.AbstractTrackingLoop
@@ -325,11 +325,11 @@ end
     @test TrackingLoops.get_navigation_update_index(vector) == 0
 end
 
-# A tracking loop that keeps every record it is handed, around the loop it wraps.
+# A tracking loop that keeps every integration it is handed, around the loop it wraps.
 struct RecordingTrackingLoop{E<:TrackingLoops.AbstractTrackingLoop} <:
        TrackingLoops.AbstractTrackingLoop
     inner::E
-    records::Vector{Tuple{Int,Int,Int,Float64}}
+    integrations::Vector{Tuple{Int,Int,Int,Float64}}
 end
 TrackingLoops.init_loop_state(
     tracking_loop::RecordingTrackingLoop,
@@ -350,7 +350,7 @@ function TrackingLoops.step_loop!(
     application_sample_index::Union{Nothing,Integer},
 )
     push!(
-        tracking_loop.records,
+        tracking_loop.integrations,
         (
             post_correlation_state.prn,
             post_correlation_state.last_end_sample_index,
@@ -367,9 +367,9 @@ function TrackingLoops.step_loop!(
     )
 end
 
-@testset "Through track, the records name their satellite and share one sample grid" begin
+@testset "Through track, the integrations name their satellite and share one sample grid" begin
     # What the vector loop needs: the satellite, the replica's code phase at the
-    # record's end, and a sample index that runs on across `track` calls.
+    # integration's end, and a sample index that runs on across `track` calls.
     gpsl1, fs, carrier_doppler, chunks = _noisy_gpsl1_chunks(20)
     tracking_loop = RecordingTrackingLoop(
         ScalarTrackingLoop(ThirdOrderAssistedBilinearLF),
@@ -381,16 +381,16 @@ end
     for chunk in chunks
         track_state = track(chunk, track_state, fs)
     end
-    records = tracking_loop.records
-    @test length(records) >= 18
-    @test all(r -> r[1] == 7, records)
-    sample_indices = [r[2] for r in records]
+    integrations = tracking_loop.integrations
+    @test length(integrations) >= 18
+    @test all(r -> r[1] == 7, integrations)
+    sample_indices = [r[2] for r in integrations]
     @test issorted(sample_indices) && allunique(sample_indices)
     @test last(sample_indices) > 4000 * 18
-    @test all(r -> r[3] >= r[2], records)
-    # One code period per record: each ends within a sample of a block boundary.
+    @test all(r -> r[3] >= r[2], integrations)
+    # One code period per integration: each ends within a sample of a code-period boundary.
     code_rate = ustrip(Hz, get_chip_rate(gpsl1)) / ustrip(Hz, fs)
-    @test all(r -> abs(rem(r[4], 1023, RoundNearest)) <= code_rate, records)
+    @test all(r -> abs(rem(r[4], 1023, RoundNearest)) <= code_rate, integrations)
     @test track_state.sample_index_offsets[get_band_id(get_band(gpsl1))] == 4000 * 20
     # `track` leaves its input's sample grid where it was.
     before = copy(track_state.sample_index_offsets)
@@ -399,12 +399,12 @@ end
     track!(first(chunks), track_state, fs)
     @test track_state.sample_index_offsets[get_band_id(get_band(gpsl1))] == 4000 * 21
     # `track` shares the tracking loop with its input; a `deepcopy` branches it.
-    num_integrations = length(tracking_loop.records)
+    num_integrations = length(tracking_loop.integrations)
     branch = track(first(chunks), deepcopy(track_state), fs)
-    @test length(tracking_loop.records) == num_integrations
-    @test length(branch.tracking_loop.records) > num_integrations
+    @test length(tracking_loop.integrations) == num_integrations
+    @test length(branch.tracking_loop.integrations) > num_integrations
     track(first(chunks), track_state, fs)
-    @test length(tracking_loop.records) > num_integrations
+    @test length(tracking_loop.integrations) > num_integrations
 end
 
 @testset "Tracking with large initial Doppler offset" begin
@@ -1212,9 +1212,9 @@ end
 end
 
 # A continuous signal in one-code-period chunks with a negative code Doppler: a
-# block spans 20001 > 20000 samples, so it always carries into the next chunk.
+# code period spans 20001 > 20000 samples, so it always carries into the next chunk.
 # A code-phase snap on every call after the NH10 sync would discard that partial
-# block and wedge the satellite (#117).
+# code period and wedge the satellite (#117).
 @testset "Does not deadlock on one-code-period chunks (issue #117)" begin
     signal = GPSL5I()
     carrier_doppler = -200Hz                 # negative ⇒ negative code Doppler
@@ -1224,7 +1224,7 @@ end
     sampling_frequency = 20e6Hz
     prn = 1
     chunk = 20000                            # 1 ms = one L5I code period at 20 MHz
-    num_calls = 60                           # well past the 10-block NH10 sync
+    num_calls = 60                           # well past the 10-code-period NH10 sync
 
     total_samples = chunk * (num_calls + 1)
     t = 0:(total_samples-1)
@@ -1251,9 +1251,9 @@ end
     sat = get_sat_state(track_state, prn)
 
     @test is_bit_or_secondary_code_synced(sat)
-    # A wedged satellite grows `integrated_samples` without bound and freezes
+    # A wedged satellite grows `num_integrated_samples` without bound and freezes
     # its prompt.
-    @test get_integrated_samples(track_state, prn) <= 2 * chunk
+    @test get_num_integrated_samples(track_state, prn) <= 2 * chunk
     @test length(unique(prompts[(end-9):end])) > 1
     @test abs(get_carrier_doppler(track_state, prn) - carrier_doppler) < 5.0Hz
 end

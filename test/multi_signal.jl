@@ -23,7 +23,7 @@ using Tracking:
     get_cn0_estimator,
     get_bit_synchronizer,
     get_num_bits,
-    get_integrated_samples,
+    get_num_integrated_samples,
     get_carrier_doppler,
     get_code_doppler
 using TrackingLoops:
@@ -200,7 +200,7 @@ end
         @test get_num_bits(sat, 1) == 0
         @test get_num_bits(sat, 2) == 0
         @test get_num_bits(sat, 3) == 0
-        @test get_integrated_samples(sat, 1) == 0
+        @test get_num_integrated_samples(sat, 1) == 0
         @test is_bit_or_secondary_code_synced(sat, 1) == false
         @test get_cn0_estimator(sat, 1) isa NoiseReferencedCN0Estimator
         @test get_bit_synchronizer(sat, 1) isa BitSynchronizer

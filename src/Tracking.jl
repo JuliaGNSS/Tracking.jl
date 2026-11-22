@@ -85,9 +85,9 @@ export get_prn,
     get_code_doppler,
     get_carrier_phase,
     get_carrier_doppler,
-    get_integrated_samples,
-    get_preferred_num_code_blocks_to_integrate,
-    set_preferred_num_code_blocks_to_integrate!,
+    get_num_integrated_samples,
+    get_preferred_num_code_periods_to_integrate,
+    set_preferred_num_code_periods_to_integrate!,
     reset_loop_filters!,
     get_next_sample_index,
     get_correlator_bank,
@@ -204,7 +204,7 @@ one pointer (see `_park_noise_items!`). Shared by every derived `TrackState`.
 `sample_index_offsets` counts, per band (keyed by `get_band_id`), the samples earlier
 [`track!`](@ref) calls consumed: the origin of the current measurement on a
 sample grid that runs on across calls. [`step_tracking_loops!`](@ref) adds it to
-a record's sample index, so a tracking loop with shared state of its own (TrackingLoops'
+an integration's sample index, so a tracking loop with shared state of its own (TrackingLoops'
 `VectorTrackingLoop`) sees every satellite on one time grid. The in-place mutators
 share it; [`track`](@ref), [`merge_sats`](@ref), [`add_satellite`](@ref) and
 [`remove_satellite`](@ref) give their result a copy.

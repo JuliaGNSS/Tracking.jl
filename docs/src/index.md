@@ -7,7 +7,7 @@ Tracking.jl tracks GNSS satellites as part of a receiver in two blocks:
 
 Both can be replaced through multiple dispatch.
 
-Correlation runs over whole code blocks: `N` primary code periods (e.g. `N`·1023
+Each predetection integration spans whole code periods: `N` primary code periods (e.g. `N`·1023
 chips for GPS L1 C/A), with `N = 1` until the bit edge or secondary code is
 found. Antenna-array samples are correlated with one replica, preserving their
 phase relationships. One satellite can be tracked on several signals at once
@@ -108,5 +108,5 @@ Multiple satellites, constellations, signals and bands, antenna arrays, acquisit
 - Why are the correlator outputs zero?
 
 `get_last_fully_integrated_correlator` returns the last *completed* integration,
-one that reached the end of its code blocks. Before the first one completes it
+one that reached the end of its code periods. Before the first one completes it
 is zero.

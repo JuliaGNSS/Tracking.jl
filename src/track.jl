@@ -34,7 +34,7 @@ first):
   - the `tracking_loop` itself, so results can be read off the instance you
     passed in. One with state of its own (TrackingLoops' `VectorTrackingLoop`) is
     advanced by `track` as by [`track!`](@ref), and two branches would mix their
-    records in one navigation filter.
+    integrations in one navigation filter.
 
 For real-time loops, **construct the backend once outside the loop**:
 
@@ -51,10 +51,10 @@ The default builds fresh per-thread scratch buffers on every call. See
 [`track!`](@ref) for the in-place variant.
 
 The coherent-integration length is set **per signal** with
-[`set_preferred_num_code_blocks_to_integrate!`](@ref), not passed to `track`:
+[`set_preferred_num_code_periods_to_integrate!`](@ref), not passed to `track`:
 
 ```julia
-set_preferred_num_code_blocks_to_integrate!(track_state, :gps_l5, 1, GPSL5I, 10)  # PRN 1 L5I: 10 ms
+set_preferred_num_code_periods_to_integrate!(track_state, :gps_l5, 1, GPSL5I, 10)  # PRN 1 L5I: 10 ms
 ```
 
 The scalar tracking loops cap the carrier loop bandwidth at `0.09 / T_int` and
@@ -141,7 +141,7 @@ function track!(
     _validate_doppler_update_interval(chunk_duration, measurements)
     # Per chunk, one correlate pass at fixed NCO Doppler, then one estimate that
     # updates every satellite at a common epoch. The pass stops at each
-    # satellite's last completed code-block boundary (`stop_before_partial`), so
+    # satellite's last completed code-period boundary (`stop_before_partial`), so
     # the next pass covers boundary to boundary at the updated Doppler: every
     # integration sees one Doppler, and each correction takes effect at its
     # completing boundary.

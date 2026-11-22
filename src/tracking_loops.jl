@@ -74,7 +74,7 @@ end
 @inline _reset_inflight_integration(tsig::TrackedSignal) = TrackedSignal(
     tsig;
     correlator_bank = zero(tsig.correlator_bank),
-    integrated_samples = 0,
+    num_integrated_samples = 0,
 )
 
 # Process one completed correlator output of a signal into its predetection
@@ -360,19 +360,19 @@ function step_tracking_loops!(
     return track_state
 end
 
-# The integration's `SYNC_LOST` reports the overshoot; the logging lives here. The
+# TrackingLoops' `process_correlator_bank_output!` detects the overshoot; the logging lives here. The
 # `_id` is per signal and PRN so `maxlog` shows how many satellites a producer's
 # integration-sizing bug hits. Warn, not throw: it costs a bit sync, not the receiver.
 @noinline function _warn_bit_boundary_overshoot(
     signal_id::Symbol,
     prn::Integer,
-    accumulated_blocks::Integer,
-    blocks_per_bit::Integer,
+    accumulated_code_periods::Integer,
+    code_periods_per_bit::Integer,
 )
     @warn """
           Signal `:$signal_id` PRN $prn: a correlator output carried the bit \
-          accumulator past the navigation-bit boundary ($accumulated_blocks of \
-          $blocks_per_bit code periods), which only an integration not aligned to that \
+          correlator bank past the navigation-bit boundary ($accumulated_code_periods of \
+          $code_periods_per_bit code periods), which only an integration not aligned to that \
           boundary can do. Dropping bit sync and re-running the detector; the \
           partial bit is discarded, the bits decoded so far are kept. Check the \
           integration sizing of the external `CorrelatorBankOutput` producer — it must \

@@ -205,9 +205,9 @@ end
           10log10((3000 / 4000)^2 / 1e-6 - 1 / 1e-3) atol = 1e-6
 end
 
-@testset "a producer record straddling a bit boundary warns and drops sync" begin
-    # The bit synchronizer reports the overshoot and this package logs it: 18 blocks
-    # into a bit, a three-block record from a producer off the bit grid.
+@testset "a producer's integration straddling a bit boundary warns and drops sync" begin
+    # The bit synchronizer reports the overshoot and this package logs it: 18 code periods
+    # into a bit, a three-code-period integration from a producer off the bit grid.
     fs = 4e6Hz
     ts = Tracking.add_satellite!(
         TrackState(; signal = GPSL1CA());

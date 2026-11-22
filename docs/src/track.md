@@ -15,12 +15,12 @@ track!
 
 - `downconvert_and_correlator`: the backend, by default `CPUThreadedDownconvertAndCorrelator()`. **Hoist it outside real-time loops** (see below).
 - `intermediate_frequency`: the IF, by default `0.0Hz`. Bare-buffer form only; otherwise it lives on each [`BandMeasurement`](@ref).
-- `doppler_update_interval`: the NCO-update interval, a time (e.g. `1u"ms"`). `nothing` means the smallest primary-code period of the tracked signals (1 ms for GPS L1 C/A); see [Chunked Doppler updates](#Chunked-Doppler-updates). Longer intervals cost less estimation at a lower update rate.
+- `doppler_update_interval`: the NCO-update interval, a time (e.g. `1u"ms"`). `nothing` means the smallest primary-code period of the tracked signals (1 ms for GPS L1 C/A); see [Chunked Doppler updates](#Chunked-Doppler-updates). Longer intervals cost fewer loop updates at a lower update rate.
 
-The **coherent-integration length** is set per signal with [`set_preferred_num_code_blocks_to_integrate!`](@ref). It starts at [`default_num_code_periods_to_integrate`](@extref TrackingLoops.default_num_code_periods_to_integrate-Tuple{AbstractGNSSSignal}) (`1`, except a 31-block, 2 ms code cycle for Galileo E5a-QP, whose 64.5 µs code period is too short to run a loop on), is capped by [`max_num_code_periods_to_integrate`](@extref TrackingLoops.max_num_code_periods_to_integrate-Tuple{AbstractGNSSSignal}) (one bit or secondary-code period), and takes effect only after bit or secondary-code sync.
+The **coherent-integration length** is set per signal with [`set_preferred_num_code_periods_to_integrate!`](@ref). It starts at [`default_num_code_periods_to_integrate`](@extref TrackingLoops.default_num_code_periods_to_integrate-Tuple{AbstractGNSSSignal}) (`1`, except a 31-period, 2 ms code cycle for Galileo E5a-QP, whose 64.5 µs code period is too short to run a loop on), is capped by [`max_num_code_periods_to_integrate`](@extref TrackingLoops.max_num_code_periods_to_integrate-Tuple{AbstractGNSSSignal}) (one bit or secondary-code period), and takes effect only after bit or secondary-code sync.
 
 ```@docs
-set_preferred_num_code_blocks_to_integrate!
+set_preferred_num_code_periods_to_integrate!
 ```
 
 In the TrackingLoops manual:
@@ -30,12 +30,12 @@ In the TrackingLoops manual:
 
 ## Chunked Doppler updates
 
-`track` / `track!` walk each measurement in chunks of `doppler_update_interval`, each with one correlate pass and one estimate:
+`track` / `track!` walk each measurement in chunks of `doppler_update_interval`, each with one correlate pass and one loop update:
 
 1. **Correlate** each satellite up to its last completed integration boundary in the chunk, collecting every completed integration into the signal's `correlator_bank_outputs` as a [`CorrelatorBankOutput`](@extref TrackingLoops.CorrelatorBankOutput) tagged with its end sample. A 1 ms code in a 1 ms chunk yields 0, 1 or 2 outputs.
 2. **Loop update**: [`step_tracking_loops!`](@ref Tracking.step_tracking_loops!) steps the tracking loop with the outputs' predetection integrations in order and writes every satellite's NCO **once per chunk**, at a common epoch.
 
-The next chunk's pass starts at that boundary, so every integration runs at one NCO Doppler and each correction takes effect at the boundary where its integration completed, as with a per-code-period update. A final pass drains each satellite's trailing partial into its correlator bank, carried into the next `track!` call. [`get_correlator_bank_outputs`](@ref) reads a chunk's outputs before the estimate clears them.
+The next chunk's pass starts at that boundary, so every integration runs at one NCO Doppler and each correction takes effect at the boundary where its integration completed, as with a per-code-period update. A final pass drains each satellite's trailing partial into its correlator bank, carried into the next `track!` call. [`get_correlator_bank_outputs`](@ref) reads a chunk's outputs before the loop update clears them.
 
 ## Real-time loops
 
