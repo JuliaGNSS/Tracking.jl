@@ -23,7 +23,7 @@ using Tracking:
     track,
     downconvert_and_correlate,
     BandMeasurement,
-    get_sat_state,
+    get_tracked_sat,
     get_carrier_doppler,
     TrackedSignal,
     CPUThreadedDownconvertAndCorrelator,
@@ -96,7 +96,7 @@ function correlate_once(
         TrackedSat(sig, 1, cphase, cdopp; correlator_bank)
     ts = TrackState(sig, [sat])
     ts2 = downconvert_and_correlate(dc, meas, ts)
-    _completed_or_partial_correlator(first(get_sat_state(ts2, 1).signals))
+    _completed_or_partial_correlator(first(get_tracked_sat(ts2, 1).signals))
 end
 
 # First completed integration, or the live partial correlator if none completed
@@ -495,7 +495,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             post_corr_filter = DefaultPostCorrFilter(),
         )
         single(sig) = first(
-            get_sat_state(
+            get_tracked_sat(
                 downconvert_and_correlate(
                     dc,
                     meas,
@@ -517,7 +517,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         )
         tsN =
             downconvert_and_correlate(dc, meas, TrackState(sig, satN; tracking_loop = loop))
-        for (s, signal) in zip(get_sat_state(tsN, 1).signals, signals)
+        for (s, signal) in zip(get_tracked_sat(tsN, 1).signals, signals)
             cs = single(signal)
             @test get_prompt(s.correlator_bank) == get_prompt(cs)
             @test get_early(s.correlator_bank) == get_early(cs)
@@ -545,7 +545,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         # The signal alone, on the same capture.
         single(sig) = _completed_or_partial_correlator(
             first(
-                get_sat_state(
+                get_tracked_sat(
                     downconvert_and_correlate(
                         dc,
                         meas,
@@ -574,7 +574,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         )
         tsN =
             downconvert_and_correlate(dc, meas, TrackState(sig, satN; tracking_loop = loop))
-        for (s, signal) in zip(get_sat_state(tsN, 1).signals, signals)
+        for (s, signal) in zip(get_tracked_sat(tsN, 1).signals, signals)
             cs = single(signal)
             c = _completed_or_partial_correlator(s)
             @test length(get_prompt(c)) == M
@@ -660,7 +660,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         )
         for prn in prns
             alone = first(
-                get_sat_state(
+                get_tracked_sat(
                     downconvert_and_correlate(
                         dc,
                         meas,
@@ -680,7 +680,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
                     prn,
                 ).signals,
             ).correlator_bank
-            shared = first(get_sat_state(tsN, prn).signals).correlator_bank
+            shared = first(get_tracked_sat(tsN, prn).signals).correlator_bank
             @test get_correlator_outputs(shared) == get_correlator_outputs(alone)
         end
     end
@@ -707,7 +707,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         )
         for prn in prns
             alone = first(
-                get_sat_state(
+                get_tracked_sat(
                     downconvert_and_correlate(
                         dc,
                         meas,
@@ -716,7 +716,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
                     prn,
                 ).signals,
             ).correlator_bank
-            shared = first(get_sat_state(tsN, prn).signals).correlator_bank
+            shared = first(get_tracked_sat(tsN, prn).signals).correlator_bank
             @test get_prompt(shared) == get_prompt(alone)
             @test get_early(shared) == get_early(alone)
             @test get_late(shared) == get_late(alone)
@@ -787,10 +787,10 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             ts1 = TrackState(sig, [TrackedSat(sig, prn, cphase, cdopp)])
             ts2 = TrackState(sig, [TrackedSat(sig, prn, cphase, cdopp)])
             c1 = _completed_or_partial_correlator(
-                first(get_sat_state(downconvert_and_correlate(d1, meas, ts1), 1).signals),
+                first(get_tracked_sat(downconvert_and_correlate(d1, meas, ts1), 1).signals),
             )
             c2 = _completed_or_partial_correlator(
-                first(get_sat_state(downconvert_and_correlate(d2, meas, ts2), 1).signals),
+                first(get_tracked_sat(downconvert_and_correlate(d2, meas, ts2), 1).signals),
             )
             push!(err1, angle(get_prompt(c1)) - ref)
             push!(err2, angle(get_prompt(c2)) - ref)
@@ -837,7 +837,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             fs;
             downconvert_and_correlator = TwoBitThreadedDownconvertAndCorrelator(),
         )
-        @test get_carrier_doppler(get_sat_state(ts, 1)) ≈ cdopp atol = 15Hz
+        @test get_carrier_doppler(get_tracked_sat(ts, 1)) ≈ cdopp atol = 15Hz
     end
 end
 

@@ -16,7 +16,7 @@ using Tracking:
     step_tracking_loops,
     get_correlator_bank_outputs,
     append_correlator_bank_output!,
-    get_sat_state,
+    get_tracked_sat,
     get_signals,
     get_carrier_doppler,
     get_code_doppler,
@@ -58,8 +58,8 @@ end
     ts_meas, measurements = correlated_state(; fs)
     ts_fs, _ = correlated_state(; fs)
     @test length(
-        get_correlator_bank_outputs(only(get_signals(get_sat_state(ts_meas, 1)))),
-    ) == length(get_correlator_bank_outputs(only(get_signals(get_sat_state(ts_fs, 1)))))
+        get_correlator_bank_outputs(only(get_signals(get_tracked_sat(ts_meas, 1)))),
+    ) == length(get_correlator_bank_outputs(only(get_signals(get_tracked_sat(ts_fs, 1)))))
 
     step_tracking_loops!(ts_meas, measurements)          # BandMeasurements
     step_tracking_loops!(ts_fs, (L1 = fs,))              # per-band NamedTuple
@@ -68,8 +68,10 @@ end
     @test get_code_doppler(ts_fs, 1) == get_code_doppler(ts_meas, 1)
     @test get_last_fully_integrated_filtered_prompt(ts_fs, 1) ==
           get_last_fully_integrated_filtered_prompt(ts_meas, 1)
-    @test isempty(get_correlator_bank_outputs(only(get_signals(get_sat_state(ts_fs, 1)))))
-    @test isempty(get_correlator_bank_outputs(only(get_signals(get_sat_state(ts_meas, 1)))))
+    @test isempty(get_correlator_bank_outputs(only(get_signals(get_tracked_sat(ts_fs, 1)))))
+    @test isempty(
+        get_correlator_bank_outputs(only(get_signals(get_tracked_sat(ts_meas, 1)))),
+    )
 end
 
 @testset "Dict fs source matches the NamedTuple fs source" begin
@@ -110,7 +112,7 @@ end
     @test length(get_correlator_bank_outputs(ts, 1)) == 2
     append_correlator_bank_output!(ts, out, :default, 1, 1)
     @test length(get_correlator_bank_outputs(ts, :default, 1, 1)) == 3
-    sat = get_sat_state(ts, 1)
+    sat = get_tracked_sat(ts, 1)
     append_correlator_bank_output!(sat, out)
     @test length(get_correlator_bank_outputs(sat)) == 4
     sig = only(get_signals(sat))

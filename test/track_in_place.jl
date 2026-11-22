@@ -27,7 +27,7 @@ using Tracking:
     get_carrier_doppler,
     get_last_fully_integrated_filtered_prompt,
     get_filtered_prompts,
-    get_sat_state,
+    get_tracked_sat,
     CPUDownconvertAndCorrelator,
     CPUThreadedDownconvertAndCorrelator
 using TrackingLoops:
@@ -77,8 +77,8 @@ end
     @test get_carrier_doppler(ts_immutable) == get_carrier_doppler(ts_mutable)
     @test get_last_fully_integrated_filtered_prompt(ts_immutable) ==
           get_last_fully_integrated_filtered_prompt(ts_mutable)
-    @test get_filtered_prompts(get_sat_state(ts_immutable)) ==
-          get_filtered_prompts(get_sat_state(ts_mutable))
+    @test get_filtered_prompts(get_tracked_sat(ts_immutable)) ==
+          get_filtered_prompts(get_tracked_sat(ts_mutable))
 end
 
 @testset "track! returns same TrackState identity" begin

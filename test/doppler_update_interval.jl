@@ -20,7 +20,7 @@ using Tracking:
     CPUDownconvertAndCorrelator,
     downconvert_and_correlate!,
     get_correlator_bank_outputs,
-    get_sat_state,
+    get_tracked_sat,
     get_carrier_doppler
 using TrackingLoops: CorrelatorBankOutput
 
@@ -91,7 +91,7 @@ end
         chunk_index = 0,
         chunk_duration = n_periods * 1e-3 * s,
     )
-    outputs = get_correlator_bank_outputs(only(get_sat_state(ts, prn).signals))
+    outputs = get_correlator_bank_outputs(only(get_tracked_sat(ts, prn).signals))
 
     @test length(outputs) == n_periods
     @test all(o -> o isa CorrelatorBankOutput, outputs)
@@ -109,7 +109,7 @@ end
     samples = ComplexF32.(gen_code(num_samples, gpsl1, prn, fs, get_chip_rate(gpsl1), 0.0))
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, prn, 0.0, 0.0Hz)])
     track!(samples, ts, fs)
-    @test isempty(get_correlator_bank_outputs(only(get_sat_state(ts, prn).signals)))
+    @test isempty(get_correlator_bank_outputs(only(get_tracked_sat(ts, prn).signals)))
 end
 
 @testset "enlarged doppler_update_interval still converges" begin
