@@ -1,87 +1,55 @@
-# The TrackState-level walk of the Doppler estimators over groups, satellites and
-# signals. The estimators themselves are TrackingLoops'; any
-# `AbstractDopplerEstimator` implementing `init_estimator_state`,
-# `reset_estimator_state` and `step_loop` is driven by `track!` as it is.
+# The TrackState-level walk of the tracking loops over groups, satellites and
+# signals. The tracking loops themselves are TrackingLoops'; any
+# `AbstractTrackingLoop` implementing `init_loop_state` and `step_loop!` is driven by
+# `track!` as it is.
 
-# Re-seed hook for `reset_loop_filters!`: the estimator's `reset_estimator_state`
-# (which keeps what it chooses, e.g. bandwidths and carrier-loop stage), else a
-# fresh `init_estimator_state`.
-function _reset_estimator_state(estimator::AbstractDopplerEstimator, sat::TrackedSat)
-    state = sat.doppler_estimator_state
-    applicable(
-        reset_estimator_state,
-        estimator,
-        state,
-        sat.carrier_doppler,
-        sat.code_doppler,
-    ) || return init_estimator_state(estimator, sat)
-    reset_estimator_state(estimator, state, sat.carrier_doppler, sat.code_doppler)
-end
+# The NCO command a software correlator ran on: the satellite's own Dopplers.
+@inline _software_nco_command(sat::TrackedSat) =
+    ConstantNCOCommand(sat.carrier_doppler, sat.code_doppler)
 
-# The NCO words a software correlator ran on: the satellite's own Dopplers.
-@inline _software_words(sat::TrackedSat) = FixedNCOWord(
-    ustrip(Hz, uconvert(Hz, sat.carrier_doppler)),
-    ustrip(Hz, uconvert(Hz, sat.code_doppler)),
-)
-
-# Pure per-satellite update: folds every completed record of every signal through
-# the estimator and returns the updated `TrackedSat`.
+# Pure per-satellite update: steps every completed predetection integration of
+# every signal through the estimator and returns the updated `TrackedSat`.
 #
-# `noise` is one `(density, ready)` pair per signal, in `sat.signals` order (see
-# `_signal_noise_densities`). Each record ran on the satellite's own Doppler and
-# its command acts at the record's end (`NO_LANDING_SAMPLE`): a hardware
-# correlator's loop, which needs other words and a landing sample, calls
-# TrackingLoops' `step_loop` itself. `sample_offset` moves records onto the band's
-# running sample grid (`TrackState`'s `sample_offsets`).
+# `noise` is one `(density, status)` pair per signal, in `sat.signals` order (see
+# `_signal_noise_densities`). Each integration ran on the satellite's own Doppler
+# and its command takes effect at the integration's end (application sample
+# `nothing`): a hardware correlator's loop, which needs another NCO history and an
+# application sample, calls TrackingLoops' `step_loop!` itself. `sample_offset`
+# moves the integrations onto the band's running sample grid (`TrackState`'s
+# `sample_offsets`).
 function _update_tracked_sat_doppler(
     sat::TrackedSat,
-    estimator::AbstractDopplerEstimator,
+    estimator::AbstractTrackingLoop,
     sampling_frequency,
     noise::Tuple,
     sample_offset::Int = 0,
 )
-    # Driver (`signals[1]`) first, then the passengers, all through the one
-    # estimator state; the satellite's Doppler is the driver's command.
-    pll_and_dll_state = sat.doppler_estimator_state
-    head = first(sat.signals)
-    tail_signals = Base.tail(sat.signals)
-
-    # The loops lock the driver onto the real axis; each signal's bit-buffer
-    # prompt is de-rotated by its phase offset from it, so a quadrature component
-    # (e.g. GPS L5, Galileo E5a) decodes off the right axis.
-    driver_carrier_phase = get_carrier_phase_offset(head.signal)
-    words = _software_words(sat)
-
-    driver_noise_density, driver_noise_density_ready = first(noise)
-    new_head, new_doppler_estimator_state, new_carrier_doppler, new_code_doppler =
-        _process_estimator_driver_signal(
-            head,
-            sat,
-            estimator,
-            pll_and_dll_state,
-            sampling_frequency,
-            driver_noise_density,
-            driver_noise_density_ready,
-            driver_carrier_phase,
-            words,
-            sample_offset,
-        )
-
-    new_tail, new_doppler_estimator_state = _process_passenger_signals(
-        tail_signals,
-        sat.prn,
+    # Driver (`signals[1]`) first, then the passengers, all through the one loop
+    # state. Only the driver's integrations close the loops: the satellite's Doppler
+    # is the driver's last command, and a passenger's, the command in force, is dropped.
+    nco_command = _software_nco_command(sat)
+    new_head, estimator_state, carrier_doppler, code_doppler = _step_signal_integrations(
+        first(sat.signals),
+        estimator,
+        sat.doppler_estimator_state,
+        nco_command,
+        sampling_frequency,
+        first(noise),
+        sample_offset,
+    )
+    new_tail, estimator_state = _step_passenger_integrations(
+        Base.tail(sat.signals),
+        estimator,
+        estimator_state,
+        nco_command,
         sampling_frequency,
         Base.tail(noise),
-        driver_carrier_phase,
-        estimator,
-        new_doppler_estimator_state,
-        words,
         sample_offset,
     )
 
     # On the fold a signal first syncs, anchor `sat.code_phase` to the secondary
     # chip of the synced signal with the longest full code, keeping the
-    # within-primary phase. Only then (#117); afterwards `update`'s wrap keeps it.
+    # within-primary phase. Only then (#117); afterwards the replica's wrap keeps it.
     # Sync is found after the chunk was correlated, so the in-flight partial
     # integrations, accumulated at the old phase, are dropped too.
     new_signals = (new_head, new_tail...)
@@ -95,245 +63,173 @@ function _update_tracked_sat_doppler(
     TrackedSat(
         sat;
         code_phase = snapped_code_phase,
-        carrier_doppler = new_carrier_doppler,
-        code_doppler = new_code_doppler,
+        carrier_doppler,
+        code_doppler,
         signals = final_signals,
-        doppler_estimator_state = new_doppler_estimator_state,
+        doppler_estimator_state = estimator_state,
     )
 end
 
 # Drop an in-flight partial integration (at the sync phase snap).
 @inline _reset_inflight_integration(s::TrackedSignal) =
-    TrackedSignal(s; correlator = zero(s.correlator), integrated_samples = 0)
+    TrackedSignal(s; correlator_bank = zero(s.correlator_bank), integrated_samples = 0)
 
-# Apply one completed record to a signal, shared by the driver and passenger
-# folds (#133): TrackingLoops' `apply_record` on the signal's `loop_state`, plus
-# pushing the filtered prompt and keeping the record as
-# `last_fully_integrated_correlator`. The live accumulator is left alone; the
-# correlate phase already reset it.
+# Process one completed correlator output of a signal into its predetection
+# integration, shared by the driver and passenger folds (#133): TrackingLoops'
+# `process_correlator_bank_output!` on the signal's `loop_state`, plus pushing the
+# filtered prompt and keeping the output as `last_fully_integrated_correlator`. The
+# live accumulator is left alone; the correlate phase already reset it.
 #
-# Without `overlay_wiped` the record came from the pre-sync replica, which
-# GNSSSignals overlays with secondary chip 0 on every block. TrackingLoops reads a
-# dataless, secondary-coded signal's pre-sync prompts as primary-only, so such a
-# record is multiplied by chip 0 first; otherwise a PRN with a negative chip 0
-# gives the four-quadrant PLL a half-cycle error.
-@inline function _apply_correlator_output(
+# Without `secondary_code_wiped` the output came from the pre-sync replica, which
+# GNSSSignals overlays with secondary chip 0 on every code period. TrackingLoops
+# reads a dataless, secondary-coded signal's pre-sync prompts as primary-only, so
+# such an output is multiplied by chip 0 first; otherwise a PRN with a negative
+# chip 0 gives the four-quadrant PLL a half-cycle error.
+@inline function _process_correlator_bank_output(
     tracked_signal::TrackedSignal,
-    output::CorrelatorOutput,
-    prn::Integer,
+    output::CorrelatorBankOutput,
     sampling_frequency,
-    noise_density,
-    noise_density_ready::Bool,
-    driver_carrier_phase::Real;
-    overlay_wiped::Bool,
+    (noise_density, noise_density_status);
+    secondary_code_wiped::Bool,
+    command_issue_sample_index::Integer,
+    sample_offset::Integer,
 )
-    if !overlay_wiped && _pre_sync_replica_chip(tracked_signal.signal, prn) < 0
+    state = tracked_signal.loop_state
+    if !secondary_code_wiped && _pre_sync_replica_chip(state.signal, state.prn) < 0
         output = _negated(output)
     end
-    loop_state, prompt, filtered_correlator, integrated_code_blocks, overshoot =
-        apply_record(
-            tracked_signal.loop_state,
-            tracked_signal.signal,
-            prn,
-            output,
-            sampling_frequency,
-            noise_density,
-            noise_density_ready,
-            driver_carrier_phase;
-            overlay_wiped,
-        )
-    overshoot && _warn_bit_boundary_overshoot(
-        get_signal_id(tracked_signal.signal),
-        prn,
-        get_bit_buffer(tracked_signal).prompt_accumulator_integrated_code_blocks +
-        integrated_code_blocks,
-        _calc_num_code_blocks_that_form_a_bit(tracked_signal.signal),
+    num_code_periods_into_bit_before = get_num_code_periods_into_bit(state)
+    state = process_correlator_bank_output!(
+        state,
+        output,
+        sampling_frequency,
+        noise_density,
+        noise_density_status == NOISE_DENSITY_READY;
+        secondary_code_wiped,
+        command_issue_sample_index,
+        sample_index_offset = sample_offset,
     )
-    push!(tracked_signal.filtered_prompts, prompt)
-    new_signal = TrackedSignal(
+    state.last_sync_event == TrackingLoops.SYNC_LOST && _warn_bit_boundary_overshoot(
+        get_signal_id(state.signal),
+        state.prn,
+        num_code_periods_into_bit_before + get_last_num_code_periods(state),
+        get_code_periods_per_bit(state.signal),
+    )
+    push!(tracked_signal.filtered_prompts, get_prompt(state.last_filtered_correlator_bank))
+    TrackedSignal(
         tracked_signal;
-        loop_state,
-        last_fully_integrated_correlator = output.correlator,
+        loop_state = state,
+        last_fully_integrated_correlator = output.correlator_bank,
     )
-    return new_signal, filtered_correlator, integrated_code_blocks
 end
 
 # Secondary chip 0 for a dataless, secondary-coded signal (TrackingLoops'
-# predicate), else `1`; see `_apply_correlator_output`.
+# predicate), else `1`; see `_process_correlator_bank_output`.
 @inline _pre_sync_replica_chip(signal::AbstractGNSSSignal, prn::Integer) =
     is_dataless_with_secondary_code(signal) ?
     Int(GNSSSignals.secondary_value(get_secondary_code(signal), prn, 0)) : 1
 
-@inline _negated(output::CorrelatorOutput) = CorrelatorOutput(
-    TrackingLoops.apply(-, output.correlator),
-    output.integrated_samples,
-    output.sample_index,
+@inline _negated(output::CorrelatorBankOutput) = CorrelatorBankOutput(
+    map_correlator_outputs(-, output.correlator_bank),
+    output.num_integrated_samples,
+    output.end_sample_index,
     output.code_phase,
 )
 
-# Fold the driver's records of this chunk through the estimator; return the new
-# state and the last record's Dopplers (the NCO is written once per chunk). With
-# no records the Doppler holds.
-@inline function _process_estimator_driver_signal(
+# Step a signal's integrations of this chunk through the tracking loop; return the
+# signal, the loop state and the last integration's Dopplers (the NCO is written once
+# per chunk). With no integrations the command in force holds. The batch's command is
+# issued after its last integration; a delay-compensated loop maps each integration
+# onto the delay-free loop's one as far ahead.
+@inline function _step_signal_integrations(
     tracked_signal::TrackedSignal,
-    sat::TrackedSat,
-    estimator::AbstractDopplerEstimator,
-    pll_and_dll_state,
-    sampling_frequency,
-    noise_density,
-    noise_density_ready::Bool,
-    driver_carrier_phase::Real,
-    words,
-    sample_offset::Int = 0,
-)
-    outputs = tracked_signal.correlator_outputs
-    if isempty(outputs)
-        return tracked_signal, pll_and_dll_state, sat.carrier_doppler, sat.code_doppler
-    end
-    signal = tracked_signal.signal
-    ts = tracked_signal
-    state = pll_and_dll_state
-    carrier_doppler = sat.carrier_doppler
-    code_doppler = sat.code_doppler
-    found_before_fold = has_bit_or_secondary_code_been_found(ts)
-    # The fold's command is computed after its last record; a delay-aware
-    # estimator maps each record onto the delay-free loop's one as far ahead.
-    fold_end = last(outputs).sample_index
-    @inbounds for k in eachindex(outputs)
-        output = outputs[k]
-        # A fold that started unsynced was correlated with the pre-sync replica
-        # throughout, even past a sync found in it (see `apply_record`).
-        ts, filtered_correlator, _ = _apply_correlator_output(
-            ts,
-            output,
-            sat.prn,
-            sampling_frequency,
-            noise_density,
-            noise_density_ready,
-            driver_carrier_phase;
-            overlay_wiped = found_before_fold,
-        )
-        record = LoopRecord(
-            signal,
-            filtered_correlator,
-            output,
-            ts.loop_state,
-            sampling_frequency;
-            fold_end,
-            prn = sat.prn,
-            sample_offset,
-        )
-        state, carrier_doppler, code_doppler =
-            step_loop(estimator, state, record, words, NO_LANDING_SAMPLE)
-    end
-    empty!(outputs)
-    return ts, state, carrier_doppler, code_doppler
-end
-
-# The passengers (`signals[2:end]`): records are stepped through the estimator
-# for its state (the vector loop decodes bits from them) and the returned command
-# is dropped. Recursive over the tuple for type stability, with `noise` in lockstep.
-@inline _process_passenger_signals(
-    ::Tuple{},
-    ::Integer,
-    _,
-    ::Tuple{},
-    ::Real,
-    ::AbstractDopplerEstimator,
-    state,
-    words,
-    ::Int,
-) = (), state
-@inline function _process_passenger_signals(
-    signals::Tuple,
-    prn::Integer,
+    estimator::AbstractTrackingLoop,
+    estimator_state,
+    nco_command,
     sampling_frequency,
     noise::Tuple,
-    driver_carrier_phase::Real,
-    estimator::AbstractDopplerEstimator,
-    state,
-    words,
     sample_offset::Int,
 )
-    noise_density, noise_density_ready = first(noise)
-    new_head, state = _process_one_passenger_signal(
-        first(signals),
-        prn,
-        sampling_frequency,
-        noise_density,
-        noise_density_ready,
-        driver_carrier_phase,
-        estimator,
-        state,
-        words,
-        sample_offset,
-    )
-    new_tail, state = _process_passenger_signals(
-        Base.tail(signals),
-        prn,
-        sampling_frequency,
-        Base.tail(noise),
-        driver_carrier_phase,
-        estimator,
-        state,
-        words,
-        sample_offset,
-    )
-    (new_head, new_tail...), state
-end
-
-@inline function _process_one_passenger_signal(
-    tracked_signal::TrackedSignal,
-    prn::Integer,
-    sampling_frequency,
-    noise_density,
-    noise_density_ready::Bool,
-    driver_carrier_phase::Real,
-    estimator::AbstractDopplerEstimator,
-    state,
-    words,
-    sample_offset::Int,
-)
-    outputs = tracked_signal.correlator_outputs
-    isempty(outputs) && return tracked_signal, state
-    ts = tracked_signal
-    found_before_fold = has_bit_or_secondary_code_been_found(ts)
-    fold_end = last(outputs).sample_index
-    @inbounds for k in eachindex(outputs)
-        output = outputs[k]
-        # Same rule as the driver fold.
-        ts, filtered_correlator, _ = _apply_correlator_output(
-            ts,
+    (; carrier_doppler, code_doppler) = get_nco_command(nco_command, 0)
+    outputs = tracked_signal.correlator_bank_outputs
+    isempty(outputs) &&
+        return tracked_signal, estimator_state, carrier_doppler, code_doppler
+    # A batch that started unsynced was correlated with the pre-sync replica
+    # throughout, even past a sync found in it (see `process_correlator_bank_output!`).
+    secondary_code_wiped = is_bit_or_secondary_code_synced(tracked_signal)
+    command_issue_sample_index = last(outputs).end_sample_index
+    @inbounds for output in outputs
+        tracked_signal = _process_correlator_bank_output(
+            tracked_signal,
             output,
-            prn,
             sampling_frequency,
-            noise_density,
-            noise_density_ready,
-            driver_carrier_phase;
-            overlay_wiped = found_before_fold,
-        )
-        record = LoopRecord(
-            ts.signal,
-            filtered_correlator,
-            output,
-            ts.loop_state,
-            sampling_frequency;
-            fold_end,
-            prn,
+            noise;
+            secondary_code_wiped,
+            command_issue_sample_index,
             sample_offset,
         )
-        state, _, _ = step_loop(estimator, state, record, words, NO_LANDING_SAMPLE)
+        estimator_state, carrier_doppler, code_doppler = step_loop!(
+            estimator,
+            estimator_state,
+            tracked_signal.loop_state,
+            nco_command,
+            nothing,
+        )
     end
     empty!(outputs)
-    ts, state
+    tracked_signal, estimator_state, carrier_doppler, code_doppler
+end
+
+# The passengers (`signals[2:end]`): their integrations go through the tracking loop
+# for its state (the vector loop decodes bits from them) and the command it returns,
+# the one in force, is dropped. Recursive over the tuple for type stability, with
+# `noise` in lockstep.
+@inline _step_passenger_integrations(
+    ::Tuple{},
+    ::AbstractTrackingLoop,
+    estimator_state,
+    nco_command,
+    sampling_frequency,
+    ::Tuple{},
+    ::Int,
+) = (), estimator_state
+@inline function _step_passenger_integrations(
+    signals::Tuple,
+    estimator::AbstractTrackingLoop,
+    estimator_state,
+    nco_command,
+    sampling_frequency,
+    noise::Tuple,
+    sample_offset::Int,
+)
+    new_head, estimator_state, _, _ = _step_signal_integrations(
+        first(signals),
+        estimator,
+        estimator_state,
+        nco_command,
+        sampling_frequency,
+        first(noise),
+        sample_offset,
+    )
+    new_tail, estimator_state = _step_passenger_integrations(
+        Base.tail(signals),
+        estimator,
+        estimator_state,
+        nco_command,
+        sampling_frequency,
+        Base.tail(noise),
+        sample_offset,
+    )
+    (new_head, new_tail...), estimator_state
 end
 
 """
 $(SIGNATURES)
 
-Fold every completed correlator record of every satellite through the estimator's
-TrackingLoops `step_loop` (any estimator implementing it works), giving the Dopplers for
-the next replicas and the post-correlation-filtered prompts.
+Step the tracking loop with every completed predetection integration of every
+satellite, through TrackingLoops' `process_correlator_bank_output!` and the tracking
+loop's `step_loop!` (any `AbstractTrackingLoop` implementing it works), giving the
+Dopplers for the next replicas and the filtered prompts.
 
 The second argument is a [`BandMeasurements`](@ref) NamedTuple (the `track` path) or a
 `NamedTuple`/`Dict` mapping each `get_band_id` to its sampling frequency: the entry
@@ -341,7 +237,7 @@ point for an **external correlator producer** (e.g. an FPGA), which needs no sam
 buffer. See [External correlator producers](@ref).
 """
 function estimate_dopplers_and_filter_prompt(
-    track_state::TrackState{<:Any,<:AbstractDopplerEstimator},
+    track_state::TrackState{<:Any,<:AbstractTrackingLoop},
     sampling_frequencies::Union{BandMeasurements,NamedTuple,AbstractDict},
 )
     # Detach the slot values (sharing the key set), then run in place.
@@ -354,14 +250,14 @@ end
 @inline _band_sampling_frequency(fs::NamedTuple, key) = fs[key]
 @inline _band_sampling_frequency(fs::AbstractDict, key) = fs[key]
 
-# Per-signal noise density as a union-free `(density, ready)` pair, keyed by signal
+# Per-signal noise density and its TrackingLoops `NoiseDensityStatus`, keyed by signal
 # id (see the noise estimator manual page for why per signal). No estimator gives
-# `(nothing, true)`, so the wiring mistake surfaces at the first record.
+# `(nothing, NOISE_DENSITY_READY)`, so the wiring mistake surfaces at the first integration.
 @inline _signal_noise_density(noise_estimators::NamedTuple, ::Val{K}) where {K} =
-    haskey(noise_estimators, K) ? _noise_density_and_ready(noise_estimators[K]) :
-    (nothing, true)
+    haskey(noise_estimators, K) ? get_noise_density_and_status(noise_estimators[K]) :
+    (nothing, NOISE_DENSITY_READY)
 
-# One `(density, ready)` pair per signal, in `signals` tuple order.
+# One `(density, status)` pair per signal, in `signals` tuple order.
 @inline _signal_noise_densities(
     noise_estimators::NamedTuple,
     ::Type{<:TrackedSat{Signals}},
@@ -379,7 +275,7 @@ end
 # Per-group body, a function so `_foreach_group!` does not box.
 @inline function _est_one_group!(
     g::SignalGroup,
-    estimator::AbstractDopplerEstimator,
+    estimator::AbstractTrackingLoop,
     sampling_frequencies::Union{BandMeasurements,NamedTuple,AbstractDict},
     noise_estimators::NamedTuple,
     sample_offsets::Dict{Symbol,Int},
@@ -390,7 +286,7 @@ end
     sampling_frequency = _band_sampling_frequency(sampling_frequencies, band_id)
     sample_offset = get(sample_offsets, band_id, 0)
     noise = _signal_noise_densities(noise_estimators, eltype(g.satellites))
-    _warn_noise_density_missing(eltype(g.satellites), noise, noise_estimators)
+    _warn_noise_density_missing(eltype(g.satellites), noise)
     @inbounds for i in eachindex(vals)
         sat = vals[i]
         vals[i] = _update_tracked_sat_doppler(
@@ -405,36 +301,27 @@ end
 end
 
 # A configured noise estimator with no usable density shows only as `-Inf dB-Hz`,
-# so name the causes: an empty window or a zero floor. Warn, not throw: it can be
-# transient.
+# so name the causes: an empty window or a zero floor. A multi-antenna window still
+# filling is a normal start-up. Warn, not throw: it can be transient.
 @inline _warn_noise_density_missing(
     ::Type{<:TrackedSat{Signals}},
     noise::Tuple,
-    noise_estimators::NamedTuple,
-) where {Signals} = _warn_noise_density_missing(Signals, noise, noise_estimators)
-@inline _warn_noise_density_missing(::Type{Tuple{}}, ::Tuple{}, ::NamedTuple) = nothing
-@inline function _warn_noise_density_missing(
-    ::Type{T},
-    noise::Tuple,
-    noise_estimators::NamedTuple,
-) where {T<:Tuple}
+) where {Signals} = _warn_noise_density_missing(Signals, noise)
+@inline _warn_noise_density_missing(::Type{Tuple{}}, ::Tuple{}) = nothing
+@inline function _warn_noise_density_missing(::Type{T}, noise::Tuple) where {T<:Tuple}
     head = Base.tuple_type_head(T)
-    if !last(first(noise)) && requires_noise_density(_cn0_estimator_type(head))
-        signal_id = get_signal_id(_signal_type(head))
-        _noise_window_still_filling(noise_estimators, Val(signal_id)) ||
-            _emit_noise_density_warning(signal_id)
+    status = last(first(noise))
+    if status in (NOISE_WINDOW_EMPTY, NOISE_DENSITY_INVALID) &&
+       requires_noise_density(_cn0_estimator_type(head))
+        _emit_noise_density_warning(get_signal_id(_signal_type(head)))
     end
-    _warn_noise_density_missing(Base.tuple_type_tail(T), Base.tail(noise), noise_estimators)
+    _warn_noise_density_missing(Base.tuple_type_tail(T), Base.tail(noise))
 end
-
-# `haskey` on a NamedTuple folds at compile time.
-@inline _noise_window_still_filling(noise_estimators::NamedTuple, ::Val{K}) where {K} =
-    haskey(noise_estimators, K) ? _noise_window_filling(noise_estimators[K]) : false
 
 @noinline function _emit_noise_density_warning(signal_id::Symbol)
     @warn """
           Signal `:$signal_id` has a noise estimator but no usable noise density, so \
-          `NoiseRefCN0Estimator` will not update and C/N₀ stays at `-Inf dB-Hz`. \
+          `NoiseReferencedCN0Estimator` will not update and C/N₀ stays at `-Inf dB-Hz`. \
           Either its window is still empty — call `append_noise_observation!` before \
           `estimate_dopplers_and_filter_prompt!`, or use a noise estimator that \
           measures from the band's samples — or the measured floor is zero, which \
@@ -450,13 +337,13 @@ In-place version of [`estimate_dopplers_and_filter_prompt`](@ref), taking the sa
 second argument: overwrites each group's `TrackedSat` slots and returns `track_state`,
 allocation-free in steady state under [`track!`](@ref)'s preconditions.
 
-It reads only the per-band sampling frequency (turning `integrated_samples` into an
+It reads only the per-band sampling frequency (turning `num_integrated_samples` into an
 integration time), and consumes and **clears** each
-signal's `correlator_outputs`, whether from the software correlate phase or from
-[`append_correlator_output!`](@ref).
+signal's `correlator_bank_outputs`, whether from the software correlate phase or from
+[`append_correlator_bank_output!`](@ref).
 """
 function estimate_dopplers_and_filter_prompt!(
-    track_state::TrackState{<:Any,<:AbstractDopplerEstimator},
+    track_state::TrackState{<:Any,<:AbstractTrackingLoop},
     sampling_frequencies::Union{BandMeasurements,NamedTuple,AbstractDict},
 )
     _foreach_group!(
@@ -470,9 +357,9 @@ function estimate_dopplers_and_filter_prompt!(
     return track_state
 end
 
-# TrackingLoops' `apply_record` detects the overshoot; the logging lives here. The
+# The integration's `SYNC_LOST` reports the overshoot; the logging lives here. The
 # `_id` is per signal and PRN so `maxlog` shows how many satellites a producer's
-# record-sizing bug hits. Warn, not throw: it costs a bit sync, not the receiver.
+# integration-sizing bug hits. Warn, not throw: it costs a bit sync, not the receiver.
 @noinline function _warn_bit_boundary_overshoot(
     signal_id::Symbol,
     prn::Integer,
@@ -480,12 +367,12 @@ end
     blocks_per_bit::Integer,
 )
     @warn """
-          Signal `:$signal_id` PRN $prn: a correlator record carried the bit \
+          Signal `:$signal_id` PRN $prn: a correlator output carried the bit \
           accumulator past the navigation-bit boundary ($accumulated_blocks of \
-          $blocks_per_bit code blocks), which only a record not aligned to that \
+          $blocks_per_bit code periods), which only an integration not aligned to that \
           boundary can do. Dropping bit sync and re-running the detector; the \
           partial bit is discarded, the bits decoded so far are kept. Check the \
-          record sizing of the external `CorrelatorOutput` producer — it must \
+          integration sizing of the external `CorrelatorBankOutput` producer — it must \
           not straddle a bit boundary.""" _id =
         Symbol(:bit_boundary_overshoot_, signal_id, :_, prn) maxlog = 1
     nothing

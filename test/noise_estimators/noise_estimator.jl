@@ -1,32 +1,33 @@
 module NoiseEstimatorTest
 
 using Test: @test, @testset, @inferred, @test_throws
+using GNSSSignals: CBOC, TMBOC
 using Unitful: Hz
 using GNSSSignals: GPSL1CA, GPSL1C_P, GPSL5I, GalileoE1B
 import Tracking
 using Tracking: TrackState, TrackedSat
 import TrackingLoops
 using TrackingLoops:
-    CorrelatorNoiseEstimator,
+    CorrelatorNoiseDensityEstimator,
     NoiseObservation,
-    NoiseRefCN0Estimator,
+    NoiseReferencedCN0Estimator,
     NWPRCN0Estimator,
     append_noise_observation!,
     get_noise_density,
-    noise_observation_from_samples
+    calc_noise_observation_from_samples
 
 @testset "append_noise_observation! addresses a signal on TrackState" begin
     gpsl1 = GPSL1CA()
-    obs = noise_observation_from_samples(4000.0, 4000, 4e6Hz)
+    obs = calc_noise_observation_from_samples(4000.0, 4000, 4e6Hz)
 
     # Provisioned automatically, because the sat's estimator reads a density.
     single = TrackState(
         gpsl1,
-        [TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseRefCN0Estimator())],
+        [TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator())],
     )
     @test keys(single.noise_estimators) == (:GPSL1CA,)
     @test append_noise_observation!(single, obs) === single
-    @test !isnothing(get_noise_density(single.noise_estimators.GPSL1CA))
+    @test !iszero(get_noise_density(single.noise_estimators.GPSL1CA))
     @test append_noise_observation!(single, obs, :GPSL1CA) === single
     # The signal type and an instance address the same window as the symbol.
     @test append_noise_observation!(single, obs, GPSL1CA) === single
@@ -46,18 +47,18 @@ using TrackingLoops:
     multi = TrackState(;
         signals = (l1 = (gpsl1,), l5 = (GPSL5I(),)),
         noise_estimators = (
-            GPSL1CA = CorrelatorNoiseEstimator(),
-            GPSL5I = CorrelatorNoiseEstimator(),
+            GPSL1CA = CorrelatorNoiseDensityEstimator(),
+            GPSL5I = CorrelatorNoiseDensityEstimator(),
         ),
     )
     @test_throws ArgumentError append_noise_observation!(multi, obs)
     append_noise_observation!(multi, obs, :GPSL1CA)
-    @test !isnothing(get_noise_density(multi.noise_estimators.GPSL1CA))
-    @test isnothing(get_noise_density(multi.noise_estimators.GPSL5I))
+    @test !iszero(get_noise_density(multi.noise_estimators.GPSL1CA))
+    @test iszero(get_noise_density(multi.noise_estimators.GPSL5I))
     # ... including at different sampling rates (a density, not a power).
     append_noise_observation!(
         multi,
-        noise_observation_from_samples(20_000.0, 20_000, 20e6Hz),
+        calc_noise_observation_from_samples(20_000.0, 20_000, 20e6Hz),
         :GPSL5I,
     )
     @test get_noise_density(multi.noise_estimators.GPSL1CA) !=
@@ -65,19 +66,23 @@ using TrackingLoops:
 end
 
 @testset "two signals on one band keep separate windows" begin
-    # Same band, different post-correlation floors (see `AbstractNoiseEstimator`),
+    # Same band, different post-correlation floors (see `AbstractNoiseDensityEstimator`),
     # so a producer reports one density per signal.
     gpsl1 = GPSL1CA()
-    e1b = GalileoE1B()
+    e1b = GalileoE1B(CBOC)
     ts = TrackState(; signals = (gps = (gpsl1,), galileo = (e1b,)))
     @test keys(ts.noise_estimators) == (:GPSL1CA, :GalileoE1B)
 
     append_noise_observation!(
         ts,
-        noise_observation_from_samples(4000.0, 4000, 4e6Hz),
+        calc_noise_observation_from_samples(4000.0, 4000, 4e6Hz),
         gpsl1,
     )
-    append_noise_observation!(ts, noise_observation_from_samples(8000.0, 4000, 4e6Hz), e1b)
+    append_noise_observation!(
+        ts,
+        calc_noise_observation_from_samples(8000.0, 4000, 4e6Hz),
+        e1b,
+    )
     l1ca_density = get_noise_density(ts.noise_estimators.GPSL1CA)
     e1b_density = get_noise_density(ts.noise_estimators.GalileoE1B)
     @test !isnothing(l1ca_density)
@@ -90,7 +95,7 @@ end
     # `_signal_noise_densities` must return a concrete tuple: a `Union` would box
     # the density and break the allocation contracts in `test/track_in_place.jl`.
     ts = TrackState(;
-        signals = (modern = (GPSL1C_P(), GPSL1CA()), galileo = (GalileoE1B(),)),
+        signals = (modern = (GPSL1C_P(TMBOC), GPSL1CA()), galileo = (GalileoE1B(CBOC),)),
     )
     @test keys(ts.noise_estimators) == (:GPSL1C_P, :GPSL1CA, :GalileoE1B)
     for group in Tuple(ts.groups)
@@ -109,7 +114,7 @@ end
 
     # Pairing is positional against the slot type: a non-requiring signal gets
     # `nothing` beside the requiring one's real slot, never the other's floor.
-    gpsl1, e1b = GPSL1CA(), GalileoE1B()
+    gpsl1, e1b = GPSL1CA(), GalileoE1B(CBOC)
     mixed = TrackState(
         gpsl1,
         TrackedSat(
@@ -117,7 +122,7 @@ end
             1,
             0.0,
             0.0Hz;
-            cn0_estimator = (NoiseRefCN0Estimator(), NWPRCN0Estimator(e1b)),
+            cn0_estimator = (NoiseReferencedCN0Estimator(), NWPRCN0Estimator(e1b)),
         ),
     )
     @test keys(mixed.noise_estimators) == (:GPSL1CA,)
@@ -126,9 +131,9 @@ end
         eltype(only(Tuple(mixed.groups)).satellites),
     )
     @test length(noise) == 2
-    @test last(noise[1]) == false           # provisioned, window still empty
+    @test last(noise[1]) == TrackingLoops.NOISE_WINDOW_EMPTY   # provisioned, still empty
     @test isnothing(first(noise[2]))        # no source, and none is wanted
-    @test last(noise[2]) == true
+    @test last(noise[2]) == TrackingLoops.NOISE_DENSITY_READY
 end
 
 @testset "nothing in this design is a mutable struct" begin
@@ -144,9 +149,9 @@ end
     end
     @test isempty(mutable_lines)
     for T in (
-        CorrelatorNoiseEstimator,
+        CorrelatorNoiseDensityEstimator,
         NoiseObservation,
-        NoiseRefCN0Estimator,
+        NoiseReferencedCN0Estimator,
         TrackingLoops.NoiseUpdateContext,
     )
         @test !ismutabletype(T)

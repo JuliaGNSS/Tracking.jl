@@ -7,9 +7,6 @@ using Tracking
 # Tracking's own dependency (benchmark/Project.toml does not list it).
 using Tracking: TrackingLoops
 using Tracking:
-    EarlyPromptLateCorrelator,
-    get_correlator_sample_shifts,
-    NumAnts,
     gen_code_replica!,
     TrackState,
     downconvert_and_correlate
@@ -17,6 +14,73 @@ using StaticArrays
 
 # AirspeedVelocity benches the PR base (latest release) and head with HEAD's copy
 # of this file (`--bench-on`), so it must load against both.
+
+# GNSSSignals 5 (Tracking 12) calls the code frequency the chip rate.
+const _chip_rate =
+    isdefined(GNSSSignals, :get_chip_rate) ? getfield(GNSSSignals, :get_chip_rate) :
+    getfield(GNSSSignals, :get_code_frequency)
+const _chip_rate_to_center_frequency_ratio =
+    isdefined(GNSSSignals, :get_chip_rate_to_center_frequency_ratio) ?
+    getfield(GNSSSignals, :get_chip_rate_to_center_frequency_ratio) :
+    getfield(GNSSSignals, :get_code_center_frequency_ratio)
+
+# Tracking 12 builds on TrackingLoops 7, which names its API after the tracking-loop
+# vocabulary: a Doppler estimator is a tracking loop, `NumAnts` is `NumAnts`, a
+# bit buffer is a bit synchronizer, and so on.
+const _TL7 = isdefined(TrackingLoops, :ScalarTrackingLoop)
+const NumAnts = TrackingLoops.NumAnts
+const EarlyPromptLateCorrelatorBank = getfield(
+    TrackingLoops,
+    _TL7 ? :EarlyPromptLateCorrelatorBank : :EarlyPromptLateCorrelator,
+)
+const _calc_correlator_sample_offsets =
+    getfield(TrackingLoops, _TL7 ? :calc_correlator_sample_offsets : :get_correlator_sample_shifts)
+const _NoiseReferencedCN0Estimator =
+    getfield(TrackingLoops, _TL7 ? :NoiseReferencedCN0Estimator : :NoiseRefCN0Estimator)
+const _calc_noise_observation_from_samples = getfield(
+    TrackingLoops,
+    _TL7 ? :calc_noise_observation_from_samples : :noise_observation_from_samples,
+)
+const _SyncHypothesisAccumulators =
+    getfield(TrackingLoops, _TL7 ? :SyncHypothesisAccumulators : :PhaseAccumulators)
+const _get_bit_synchronizer =
+    getfield(Tracking, _TL7 ? :get_bit_buffer : :get_bit_buffer)
+const _CorrelatorNoiseDensityEstimator =
+    getfield(Tracking, _TL7 ? :CorrelatorNoiseDensityEstimator : :CorrelatorNoiseEstimator)
+# Keyword arguments, splatted: `f(...; _antennas(1)...)`.
+_antennas(n) = (; num_ants = _num_ants(n))
+_num_ants(n::Integer) = NumAnts(n)
+_num_ants(n) = n
+_with_tracking_loop(loop) = _TL7 ? (; doppler_estimator = loop) : (; doppler_estimator = loop)
+_with_correlator_bank(c) = _TL7 ? (; correlator_bank = c) : (; correlator = c)
+_with_post_corr_filter() = (; post_corr_filter = TrackingLoops.DefaultPostCorrFilter())
+# `signal` with its bit synchronizer replaced; TrackingLoops 7 keeps it in the signal's
+# post-correlation state.
+_with_bit_synchronizer(signal, b) =
+    _TL7 ?
+    Tracking.TrackedSignal(
+        signal;
+        loop_state = TrackingLoops.PostCorrelationState(
+            signal.loop_state;
+            bit_synchronizer = b,
+        ),
+    ) : Tracking.TrackedSignal(signal; bit_buffer = b)
+# TrackingLoops 7 drops the noise context's chunk index.
+_noise_update_context(signal, dc) =
+    _TL7 ? Tracking.NoiseUpdateContext(signal, dc) : Tracking.NoiseUpdateContext(signal, 0, dc)
+# Each version's default tracking loop, as `TrackState` builds it.
+_default_tracking_loop() =
+    _TL7 ? TrackingLoops.ScalarTrackingLoop() : TrackingLoops.ConventionalAssistedPLLAndDLL()
+_moments_cn0_estimator(n) =
+    _TL7 ? TrackingLoops.MomentsCN0Estimator(; num_averaged_integrations = n) :
+    TrackingLoops.MomentsCN0Estimator(n)
+# TrackingLoops 7 takes a noise despread's samples as one range.
+_noise_span(first, last) = _TL7 ? (first:last,) : (first, last)
+
+# GNSSSignals 5 replicates Galileo E1B as BOC(1,1) unless asked for CBOC.
+const _GALILEO_E1B_CBOC =
+    isdefined(GNSSSignals, :GalileoE1B_BOC11) ? GalileoE1B() :
+    GalileoE1B(getfield(GNSSSignals, :CBOC))
 
 # Per-system storage is a `Dictionary{Int, TrackedSat}` inside the `groups` of
 # `SignalGroup`s, mapped to and from a NamedTuple of dicts.
@@ -44,8 +108,8 @@ function _make_initial_sat(
         prn,
         code_phase,
         carrier_doppler;
-        doppler_estimator = Tracking.ConventionalAssistedPLLAndDLL(),
-        num_ants,
+        doppler_estimator = _default_tracking_loop(),
+        _antennas(num_ants)...,
         cn0_kw...,
     )
 end
@@ -64,12 +128,12 @@ function setup_benchmark(;
     code_phase = 10.5
     carrier_doppler = 1000.0Hz
     code_doppler =
-        carrier_doppler * GNSSSignals.get_code_center_frequency_ratio(gnss_signal)
-    code_frequency = code_doppler + get_code_frequency(gnss_signal)
+        carrier_doppler * _chip_rate_to_center_frequency_ratio(gnss_signal)
+    code_frequency = code_doppler + _chip_rate(gnss_signal)
 
-    correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(num_ants))
+    correlator_bank = EarlyPromptLateCorrelatorBank(; _antennas(num_ants)...)
     static_shifts =
-        get_correlator_sample_shifts(correlator, sampling_frequency, code_frequency)
+        _calc_correlator_sample_offsets(correlator_bank, sampling_frequency, code_frequency)
     dynamic_shifts = collect(static_shifts)
 
     signal =
@@ -91,7 +155,7 @@ function setup_benchmark(;
     )
 
     return (;
-        correlator,
+        correlator_bank,
         signal,
         code_replica,
         static_shifts,
@@ -109,7 +173,7 @@ end
 # The per-satellite pipeline (quantise, downconvert, despread, accumulate) for one
 # PRN, between the `fused kernel` and `track` rows. The sat uses
 # `MomentsCN0Estimator` so no noise reference is provisioned: the default
-# `NoiseRefCN0Estimator` would despread a second correlator channel here, roughly
+# `NoiseReferencedCN0Estimator` would despread a second correlator channel here, roughly
 # doubling these rows. That cost is measured by the `noise estimation` group and
 # the `track` rows.
 function bench_downconvert_and_correlate(;
@@ -129,7 +193,7 @@ function bench_downconvert_and_correlate(;
                 10.5,
                 1000.0Hz;
                 num_ants = NumAnts(num_ants),
-                cn0_estimator = TrackingLoops.MomentsCN0Estimator(100),
+                cn0_estimator = _moments_cn0_estimator(100),
             ),
         ],
     )
@@ -160,7 +224,7 @@ function bench_fused_kernel(;
         tile_re = Vector{Float32}(undef, num_samples * num_ants)
         tile_im = Vector{Float32}(undef, num_samples * num_ants)
         return @benchmarkable Tracking.downconvert_and_correlate_fused!(
-            $(s.correlator),
+            $(s.correlator_bank),
             $(s.signal),
             $(s.code_replica),
             $(s.dynamic_shifts),
@@ -174,7 +238,7 @@ function bench_fused_kernel(;
         )
     end
     @benchmarkable Tracking.downconvert_and_correlate_fused!(
-        $(s.correlator),
+        $(s.correlator_bank),
         $(s.signal),
         $(s.code_replica),
         $(s.static_shifts),
@@ -243,11 +307,11 @@ function bench_fused_tuple_kernel(;
     code_phase = 10.5
     carrier_doppler = 1000.0Hz
     code_doppler =
-        carrier_doppler * GNSSSignals.get_code_center_frequency_ratio(gnss_signal)
-    code_frequency = code_doppler + get_code_frequency(gnss_signal)
+        carrier_doppler * _chip_rate_to_center_frequency_ratio(gnss_signal)
+    code_frequency = code_doppler + _chip_rate(gnss_signal)
 
-    correlator_template = EarlyPromptLateCorrelator(; num_ants = NumAnts(num_ants))
-    sample_shifts = get_correlator_sample_shifts(
+    correlator_template = EarlyPromptLateCorrelatorBank(; _antennas(num_ants)...)
+    sample_shifts = _calc_correlator_sample_offsets(
         correlator_template,
         sampling_frequency,
         code_frequency,
@@ -258,8 +322,8 @@ function bench_fused_tuple_kernel(;
         num_ants == 1 ? rand(Complex{signal_type}, num_samples) :
         rand(Complex{signal_type}, num_samples, num_ants)
 
-    correlators =
-        ntuple(_ -> EarlyPromptLateCorrelator(; num_ants = NumAnts(num_ants)), n_signals)
+    correlator_banks =
+        ntuple(_ -> EarlyPromptLateCorrelatorBank(; _antennas(num_ants)...), n_signals)
     code_replicas = ntuple(n_signals) do _
         cr = Vector{Int8}(undef, code_replica_size)
         gen_code_replica!(
@@ -280,7 +344,7 @@ function bench_fused_tuple_kernel(;
     tile_im = Vector{Float32}(undef, num_samples * num_ants)
 
     @benchmarkable Tracking.downconvert_and_correlate_fused_tuple!(
-        $correlators,
+        $correlator_banks,
         $signal,
         $code_replicas,
         $sample_shifts_tuple,
@@ -312,19 +376,25 @@ end
 # A fresh sat's BitBuffer with `found = true` (and a full code-block count).
 function _with_found_bit_buffer(t)
     sig = only(t.signals)
-    old_bb = Tracking.get_bit_buffer(sig)
-    new_bb = typeof(old_bb)(
-        zero(old_bb.code_block_buffer),    # code_block_buffer
-        20,                                # code_block_buffer_length
-        true,                              # found
-        0,                                 # secondary_phase
-        Int8(0),                           # polarity
-        complex(0.0, 0.0),                 # prompt_accumulator
-        0,                                 # prompt_accumulator_integrated_code_blocks
-        Float32[],                         # soft_bits
-        TrackingLoops.PhaseAccumulators(), # phase_acc
+    # Positional, in field order, which TrackingLoops 7 kept and renamed.
+    old_bit_synchronizer = _get_bit_synchronizer(sig)
+    new_bit_synchronizer = typeof(old_bit_synchronizer)(
+        zero(getfield(old_bit_synchronizer, 1)), # prompt_sign_history
+        20,                                      # num_prompt_signs
+        true,                                    # bit_or_secondary_code_synced
+        0,                                       # secondary_code_phase
+        Int8(0),                                 # bit_polarity
+        complex(0.0, 0.0),                       # bit_prompt_sum
+        0,                                       # num_code_periods_into_bit
+        Float32[],                               # soft_bits
+        _SyncHypothesisAccumulators(),           # hypothesis_accumulators
     )
-    Tracking.TrackedSat(t; signals = (Tracking.TrackedSignal(sig; bit_buffer = new_bb),))
+    Tracking.TrackedSat(
+        t;
+        signals = (
+            _with_bit_synchronizer(sig, new_bit_synchronizer),
+        ),
+    )
 end
 
 function _make_multi_sat_state(;
@@ -388,7 +458,7 @@ end
 # prefixes: the table sorts leaves alphabetically on the "/"-joined path, and this
 # text keeps each scenario's variants (and a backend's Float32 sibling) adjacent.
 # ("500K" sorts before "5K"; left as is.)
-const _TRACK_BENCH_CASES = let gpsl1 = GPSL1CA(), gal = GalileoE1B()
+const _TRACK_BENCH_CASES = let gpsl1 = GPSL1CA(), gal = _GALILEO_E1B_CBOC
     [
         (
             "GPS L1CA, 8 sats, 5K @ 5 MHz",
@@ -431,17 +501,22 @@ for (key, kw) in _TRACK_BENCH_CASES
 end
 
 # ── Multi-signal-per-sat track benchmark ─────────────────────────────────
-# Track cost as N signals stack on one satellite. N identical GPSL1CA copies are
-# not realistic but isolate the per-signal cost of the tuple walk.
+# Track cost as N signals stack on one satellite, each tracked once: GPS L1 C/A,
+# Galileo E1B (BOC(1,1), `GalileoE1B_BOC11` before GNSSSignals 5) and GPS L1C-D.
+const _MULTI_SIGNALS = (
+    GPSL1CA(),
+    isdefined(GNSSSignals, :GalileoE1B_BOC11) ? GNSSSignals.GalileoE1B_BOC11() : GalileoE1B(),
+    GPSL1C_D(),
+)
 function _make_multi_signal_track_state(; n_signals, nsamp)
     gpsl1 = GPSL1CA()
-    estimator = Tracking.ConventionalAssistedPLLAndDLL()
+    estimator = _default_tracking_loop()
     signals = ntuple(
-        _ -> Tracking.TrackedSignal(
-            gpsl1;
-            num_ants = NumAnts(1),
-            correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
-            post_corr_filter = Tracking.DefaultPostCorrFilter(),
+        i -> Tracking.TrackedSignal(
+            _MULTI_SIGNALS[i];
+            _antennas(1)...,
+            _with_correlator_bank(EarlyPromptLateCorrelatorBank(; _antennas(1)...))...,
+            _with_post_corr_filter()...,
         ),
         n_signals,
     )
@@ -540,7 +615,7 @@ function _l1ca_composite_capture(nsamp, sfreq)
             sys,
             i,
             sfreq,
-            get_code_frequency(sys) + (d / 1540)Hz,
+            _chip_rate(sys) + (d / 1540)Hz,
             10.5 + i * 0.1,
         )
         acc .+= 64.0 .* code .* cis.(2π .* d .* (0:(nsamp-1)) ./ fsn)
@@ -565,7 +640,7 @@ for (name, systems, nsats_list, sfreq, nsamp, prn_max, capture) in (
     ("GPS L1CA, 8 sats @ 40 MHz", (GPSL1CA(),), [8], 40e6Hz, 40000, 32, _int16_capture),
     (
         "Galileo E1B, 4 sats @ 25 MHz",
-        (GalileoE1B(),),
+        (_GALILEO_E1B_CBOC,),
         [4],
         25e6Hz,
         25000,
@@ -663,15 +738,15 @@ const _AXES_FS = 5e6Hz
 const _AXES_NSAMP = 5000
 _int16_capture_mat(nsamp, M) = repeat(_int16_capture(nsamp); outer = (1, M))
 
-# A multi-signal sat: N GPS L1CA signals sharing one carrier + measurement.
+# A multi-signal sat: the first N of `_MULTI_SIGNALS`, sharing one carrier and samples.
 function _axes_multisignal_state(n_signals)
-    est = Tracking.ConventionalAssistedPLLAndDLL()
+    est = _default_tracking_loop()
     signals = ntuple(
-        _ -> Tracking.TrackedSignal(
-            _AXES_SIG;
-            num_ants = NumAnts(1),
-            correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(1)),
-            post_corr_filter = Tracking.DefaultPostCorrFilter(),
+        i -> Tracking.TrackedSignal(
+            _MULTI_SIGNALS[i];
+            _antennas(1)...,
+            _with_correlator_bank(EarlyPromptLateCorrelatorBank(; _antennas(1)...))...,
+            _with_post_corr_filter()...,
         ),
         n_signals,
     )
@@ -745,10 +820,10 @@ end
 
 # dynamic (runtime AbstractVector) tap count — kernel level, all three backends.
 let g = SUITE["track! Int16 vs Float32"]["dynamic taps @ 5 MHz (kernel)"]
-    code_doppler = 1000.0Hz * GNSSSignals.get_code_center_frequency_ratio(_AXES_SIG)
-    code_frequency = code_doppler + get_code_frequency(_AXES_SIG)
-    correlator = EarlyPromptLateCorrelator(; num_ants = NumAnts(1))
-    dyn_shifts = collect(get_correlator_sample_shifts(correlator, _AXES_FS, code_frequency))
+    code_doppler = 1000.0Hz * _chip_rate_to_center_frequency_ratio(_AXES_SIG)
+    code_frequency = code_doppler + _chip_rate(_AXES_SIG)
+    correlator_bank = EarlyPromptLateCorrelatorBank(; _antennas(1)...)
+    dyn_shifts = collect(_calc_correlator_sample_offsets(correlator_bank, _AXES_FS, code_frequency))
     cap = _int16_capture(_AXES_NSAMP)
     span = maximum(dyn_shifts) - minimum(dyn_shifts)
     # Float32 fused kernel, dynamic-shifts (11-arg) path with hoisted SoA tiles.
@@ -767,7 +842,7 @@ let g = SUITE["track! Int16 vs Float32"]["dynamic taps @ 5 MHz (kernel)"]
     tile_re = Vector{Float32}(undef, _AXES_NSAMP)
     tile_im = Vector{Float32}(undef, _AXES_NSAMP)
     g["Float32"] = @benchmarkable Tracking.downconvert_and_correlate_fused!(
-        $correlator,
+        $correlator_bank,
         $cap,
         $code_replica_f,
         $dyn_shifts,
@@ -853,7 +928,7 @@ for (key, systems, nsats_list, sfreq, nsamp, prn_max, onebit, twobit, capture) i
     ),
     (
         "Galileo E1B, 4 sats, 25K @ 25 MHz",
-        (GalileoE1B(),),
+        (_GALILEO_E1B_CBOC,),
         [4],
         25e6Hz,
         25000,
@@ -936,16 +1011,15 @@ end
 # include the noise reference on purpose (end-to-end cost).
 function bench_update_noise(; num_samples = 4000, sampling_frequency = 4e6Hz)
     gnss_signal = GPSL1CA()
-    estimator = Tracking.CorrelatorNoiseEstimator()
+    estimator = _CorrelatorNoiseDensityEstimator()
     measurement =
         Tracking.BandMeasurement(rand(ComplexF32, num_samples), sampling_frequency)
     context =
-        Tracking.NoiseUpdateContext(gnss_signal, 0, Tracking.CPUDownconvertAndCorrelator())
+        _noise_update_context(gnss_signal, Tracking.CPUDownconvertAndCorrelator())
     @benchmarkable Tracking.update_noise!(
         $estimator,
         $measurement,
-        1,
-        $num_samples,
+        _noise_span(1, $num_samples)...,
         $context,
     )
 end
@@ -964,18 +1038,17 @@ function bench_update_noise_array(;
     num_ants = 4,
 )
     gnss_signal = GPSL1CA()
-    estimator = Tracking.CorrelatorNoiseEstimator(; num_ants = NumAnts(num_ants))
+    estimator = _CorrelatorNoiseDensityEstimator(; _antennas(num_ants)...)
     measurement = Tracking.BandMeasurement(
         rand(ComplexF32, num_samples, num_ants),
         sampling_frequency,
     )
     context =
-        Tracking.NoiseUpdateContext(gnss_signal, 0, Tracking.CPUDownconvertAndCorrelator())
+        _noise_update_context(gnss_signal, Tracking.CPUDownconvertAndCorrelator())
     @benchmarkable Tracking.update_noise!(
         $estimator,
         $measurement,
-        1,
-        $num_samples,
+        _noise_span(1, $num_samples)...,
         $context,
     )
 end
@@ -983,8 +1056,8 @@ SUITE["noise estimation"]["update_noise! – 1 ms @ 4 MHz, 4 antennas"] =
     bench_update_noise_array()
 
 function bench_append_noise_observation()
-    estimator = Tracking.CorrelatorNoiseEstimator()
-    observation = TrackingLoops.noise_observation_from_samples(4000.0, 4000, 4e6Hz)
+    estimator = _CorrelatorNoiseDensityEstimator()
+    observation = _calc_noise_observation_from_samples(4000.0, 4000, 4e6Hz)
     # Fill the window first: the interesting cost is the steady state, where
     # every push is paired with a `popfirst!`.
     for _ = 1:2000
@@ -1010,7 +1083,7 @@ function bench_track_noise_ref(;
                 1,
                 0.0,
                 1000Hz;
-                cn0_estimator = TrackingLoops.NoiseRefCN0Estimator(),
+                cn0_estimator = _NoiseReferencedCN0Estimator(),
             ),
         ],
     )

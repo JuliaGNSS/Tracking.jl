@@ -35,6 +35,7 @@ module FlexibandIntegrationTest
 # (The XML's L5 translatedfreq, 2.903125e-1, is off by 10×.)
 
 using Test
+using GNSSSignals: CBOC
 using Downloads: Downloads
 using Scratch: get_scratch!
 using ZipFile: ZipFile
@@ -219,20 +220,20 @@ else
                 (@view l1[1:n_acq_l1]),
                 FS_L1,
                 1:32;
-                interm_freq = IF_L1,
+                intermediate_frequency = IF_L1,
                 num_coherently_integrated_code_periods = 4,
-                num_noncoherent_accumulations = 2,
+                num_noncoherent_integrations = 2,
             ),
         )
         acq_e1 = detected(
             acquire(
-                GalileoE1B(),
+                GalileoE1B(CBOC),
                 (@view l1[1:n_acq_l1]),
                 FS_L1,
                 1:36;
-                interm_freq = IF_L1,
+                intermediate_frequency = IF_L1,
                 num_coherently_integrated_code_periods = 1,
-                num_noncoherent_accumulations = 4,
+                num_noncoherent_integrations = 4,
             ),
         )
         acq_l5 = detected(
@@ -241,9 +242,9 @@ else
                 (@view l5[1:n_acq_l5]),
                 FS_L5,
                 1:32;
-                interm_freq = IF_L5,
+                intermediate_frequency = IF_L5,
                 num_coherently_integrated_code_periods = 10,
-                num_noncoherent_accumulations = 1,
+                num_noncoherent_integrations = 1,
             ),
         )
 
@@ -254,18 +255,19 @@ else
             prns_l5
 
         # A fixed set, so a demux, band or acquisition regression shows. In
-        # Oct 2017 only Block IIF carried L5: PRN 6, and PRN 9, which is below
-        # the L1 threshold.
+        # Oct 2017 only Block IIF carried L5: PRN 6, and PRNs 9 and 25, which
+        # are below the L1 threshold and at the L5 one (about 35 dB-Hz), so
+        # either may be detected.
         @test prns_l1 == [2, 5, 6, 12, 17, 19]
         @test prns_e1 == [1, 7, 8, 26]
-        @test prns_l5 == [6, 9]
+        @test 6 in prns_l5 && prns_l5 ⊆ [6, 9, 25]
         # PRN 6 on both bands: both demuxes are right and time-aligned.
         @test 6 in prns_l1 && 6 in prns_l5
 
         track_state = TrackState(;
             signals = (
                 gps_l1 = (GPSL1CA(),),
-                galileo = (GalileoE1B(),),
+                galileo = (GalileoE1B(CBOC),),
                 gps_l5 = (GPSL5I(),),
             ),
         )
@@ -337,20 +339,20 @@ else
                 l1_acq,
                 FS_L1,
                 1:32;
-                interm_freq = IF_L1,
+                intermediate_frequency = IF_L1,
                 num_coherently_integrated_code_periods = 4,
-                num_noncoherent_accumulations = 2,
+                num_noncoherent_integrations = 2,
             ),
         )
         acq_e1 = detected(
             acquire(
-                GalileoE1B(),
+                GalileoE1B(CBOC),
                 l1_acq,
                 FS_L1,
                 1:36;
-                interm_freq = IF_L1,
+                intermediate_frequency = IF_L1,
                 num_coherently_integrated_code_periods = 1,
-                num_noncoherent_accumulations = 4,
+                num_noncoherent_integrations = 4,
             ),
         )
         acq_l5 = detected(
@@ -359,19 +361,19 @@ else
                 l5_acq,
                 FS_L5,
                 1:32;
-                interm_freq = IF_L5,
+                intermediate_frequency = IF_L5,
                 num_coherently_integrated_code_periods = 10,
-                num_noncoherent_accumulations = 1,
+                num_noncoherent_integrations = 1,
             ),
         )
         @test sort!([a.prn for a in acq_l1]) == [2, 5, 6, 12, 17, 19]
         @test sort!([a.prn for a in acq_e1]) == [1, 7, 8, 26]
-        @test sort!([a.prn for a in acq_l5]) == [6, 9]
+        @test 6 in [a.prn for a in acq_l5] && [a.prn for a in acq_l5] ⊆ [6, 9, 25]
 
         track_state = TrackState(;
             signals = (
                 gps_l1 = (GPSL1CA(),),
-                galileo = (GalileoE1B(),),
+                galileo = (GalileoE1B(CBOC),),
                 gps_l5 = (GPSL5I(),),
             ),
         )

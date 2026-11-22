@@ -12,7 +12,7 @@ multi-signal satellite reports one CN0 per signal.
     power and the data component ~25 %, 4.8 dB apart.
 
     Nothing inside Tracking reads
-    [`estimate_cn0`](@extref TrackingLoops.estimate_cn0-Tuple{NoiseRefCN0Estimator, Any});
+    [`estimate_cn0`](@extref TrackingLoops.estimate_cn0-Tuple{NoiseReferencedCN0Estimator, Any});
     the per-record update costs well under a per cent of the record's correlation
     work (~40 ns against ~9 µs for a two-signal satellite over 4000 samples). Switch
     a signal off with [`NoCN0Estimator`](@extref TrackingLoops.NoCN0Estimator) for
@@ -20,13 +20,13 @@ multi-signal satellite reports one CN0 per signal.
 
 ## Choosing an estimator
 
-|                                                            | [`NoiseRefCN0Estimator`](@extref TrackingLoops.NoiseRefCN0Estimator) (default)                | [`NWPRCN0Estimator`](@extref TrackingLoops.NWPRCN0Estimator)                                                                                                                                                 | [`MomentsCN0Estimator`](@extref TrackingLoops.MomentsCN0Estimator) | [`NoCN0Estimator`](@extref TrackingLoops.NoCN0Estimator) |
+|                                                            | [`NoiseReferencedCN0Estimator`](@extref TrackingLoops.NoiseReferencedCN0Estimator) (default)                | [`NWPRCN0Estimator`](@extref TrackingLoops.NWPRCN0Estimator)                                                                                                                                                 | [`MomentsCN0Estimator`](@extref TrackingLoops.MomentsCN0Estimator) | [`NoCN0Estimator`](@extref TrackingLoops.NoCN0Estimator) |
 |:---------------------------------------------------------- |:------------------------------------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |:----------------------------- |:------------------------ |
 | Needs the band's samples (or a noise observation)?         | **yes**                                                 | no                                                                                                                                                                         | no                            | no                       |
 | Needs bit sync / a coherent window?                        | no                                                      | **yes**                                                                                                                                                                    | no                            | no                       |
 | Needs to know the window length `M`?                       | no                                                      | **yes**                                                                                                                                                                    | no                            | no                       |
-| Works on GPS L1C-D, Galileo E1B, pre-sync secondary codes? | **yes**                                                 | no — falls back                                                                                                                                                            | yes, at its floor             | n/a                      |
-| Bias, thermal only                                         | <0.03 dB                                                | ≈+0.05 dB everywhere                                                                                                                                                       | ≈27.6 dB-Hz *floor* on noise  | n/a                      |
+| Works on GPS L1C-D, Galileo E1B, pre-sync secondary codes? | **yes**                                                 | no — falls back                                                                                                                                                            | yes, reading noise as signal  | n/a                      |
+| Bias, thermal only                                         | <0.03 dB                                                | ≈+0.05 dB everywhere                                                                                                                                                       | reads noise as 20–30 dB-Hz half the time | n/a                      |
 | High-C/N₀ bias floor                                       | ≈0.13 dB at 45, ≈0.40 at 50 (self-leakage)              | none                                                                                                                                                                       | none                          | n/a                      |
 | High-C/N₀ σ                                                | keeps improving, until the row above dominates          | saturates at `√(M/((M−1)K))` ≈0.5 dB                                                                                                                                       | —                             | n/a                      |
 | Degenerate outputs                                         | none                                                    | `-Inf`/`Inf` outside `1 < μ̂ < M` — 5.6 % of *estimates* at 20 dB-Hz                                                                                                       | none                          | always `-Inf`            |
@@ -34,15 +34,15 @@ multi-signal satellite reports one CN0 per signal.
 | Cost                                                       | per-record arithmetic + one despread per signal per chunk | per-record arithmetic                                                                                                                                                      | per-record arithmetic         | none                     |
 
 The "degenerate" row counts unusable *outputs*:
-[`estimate_cn0`](@extref TrackingLoops.estimate_cn0-Tuple{NoiseRefCN0Estimator, Any})
+[`estimate_cn0`](@extref TrackingLoops.estimate_cn0-Tuple{NoiseReferencedCN0Estimator, Any})
 pools every buffered window and range-checks the pooled ratio once.
 
 ### Which one do I use?
 
  1. **Sample-driven [`track!`](@ref)** →
-    [`NoiseRefCN0Estimator`](@extref TrackingLoops.NoiseRefCN0Estimator), the default:
+    [`NoiseReferencedCN0Estimator`](@extref TrackingLoops.NoiseReferencedCN0Estimator), the default:
     the signal gets a
-    [`CorrelatorNoiseEstimator`](@extref TrackingLoops.CorrelatorNoiseEstimator) that
+    [`CorrelatorNoiseDensityEstimator`](@extref TrackingLoops.CorrelatorNoiseDensityEstimator) that
     `track!` fills.
  2. **Correlator outputs from hardware, *with* a noise observation** → the same, plus
     one [`append_noise_observation!`](@ref) per signal per fold (see
@@ -58,7 +58,7 @@ pools every buffered window and range-checks the pooled ratio once.
 
 ## The default: C/N₀ against a measured noise floor
 
-[`NoiseRefCN0Estimator`](@extref TrackingLoops.NoiseRefCN0Estimator) computes, per record,
+[`NoiseReferencedCN0Estimator`](@extref TrackingLoops.NoiseReferencedCN0Estimator) computes, per record,
 
 ```
 Ĉ/N₀ = ⟨|P|²⟩ / N̂₀ − 1/T
@@ -71,15 +71,15 @@ signal.
 
 In the TrackingLoops manual:
 
-- [`NoiseRefCN0Estimator`](@extref TrackingLoops.NoiseRefCN0Estimator)
-- [`default_cn0_estimator`](@extref TrackingLoops.default_cn0_estimator)
+- [`NoiseReferencedCN0Estimator`](@extref TrackingLoops.NoiseReferencedCN0Estimator)
+- [`default_cn0_estimator`](@extref TrackingLoops.default_cn0_estimator-Tuple{AbstractGNSSSignal, Int64})
 
 ### Getting the low-C/N₀ variance
 
 Below about 28 dB-Hz a non-coherent estimator is the noisier one at matched record
 length (squaring loss: NWPR sums `M` prompts coherently first, better by `√(M−1)`).
 But a coherent sum of five 1 ms prompts *is* one 5 ms prompt, so take that
-integration in the correlator instead, with
+integration in the correlator bank instead, with
 [`set_preferred_num_code_blocks_to_integrate!`](@ref): the noise reference then beats
 NWPR at every C/N₀. Modelled over 100 ms, 4000 trials × 9 seeds, relative σ in dB:
 
@@ -102,7 +102,7 @@ Despreading with a wrong PRN also collects the tracked satellite's own power,
 0.042 at 40, **0.13 at 45** and **0.40 at 50**; ten times less at 10.23 Mcps (GPS L5,
 Galileo E5a). It is deliberately not corrected, as that would couple every
 satellite's C/N₀ to the others' (see
-[`NoiseRefCN0Estimator`](@extref TrackingLoops.NoiseRefCN0Estimator)).
+[`NoiseReferencedCN0Estimator`](@extref TrackingLoops.NoiseReferencedCN0Estimator)).
 
 ## `NWPRCN0Estimator`: the coherent-window estimator
 
@@ -121,39 +121,29 @@ In the TrackingLoops manual:
 The [Moments Method](https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=4621371&tag=1)
 (M2M4, [`MomentsCN0Estimator`](@extref TrackingLoops.MomentsCN0Estimator)) is a
 moment ratio, and at a finite window its sample moments manufacture signal power out
-of noise. On synthetic prompts (amplitude `√(C/N₀·T)` in unit-variance complex
-noise), 100 one-millisecond records, 400 realizations:
-
-| true C/N₀  | M2M4 median | p10  | p90  | NWPR (`M = 20`) median |
-|:---------- | -----------:| ----:| ----:| ----------------------:|
-| noise only | **27.6**    | 22.6 | 31.1 | **−Inf** ("no signal") |
-| 20 dB-Hz   | 27.7        | 22.5 | 30.9 | 19.9                   |
-| 25 dB-Hz   | 27.9        | 23.4 | 30.9 | 25.0                   |
-| 30 dB-Hz   | 30.5        | 27.3 | 32.6 | 30.0                   |
-| 35 dB-Hz   | 35.3        | 33.9 | 36.4 | 35.0                   |
-| 45 dB-Hz   | 45.1        | 44.3 | 45.9 | 45.0                   |
-
-M2M4 is blind below ~30 dB-Hz: pure noise clears a 30 dB-Hz threshold 19 % of the
-time, 28 dB-Hz 45 % and 25 dB-Hz 76 %, so the usual code-lock hysteresis (lock at 34,
-drop at 25) cannot be built on it. NWPR at `M = 20` has 0 % false alarms from 20 to
-32 dB-Hz (Falletti, Pini & Lo Presti, *IEEE T-AES* 47(1):420–437, 2011;
+of noise: at the default 100-integration window, pure noise reads "no signal" only
+~40 % of the time and otherwise mostly 20–30 dB-Hz (median ~24.5 dB-Hz), so ~48 % of
+noise-only estimates clear a 25 dB-Hz threshold, and a true 20 dB-Hz signal reads the
+same. A code-lock detector cannot be built on that. NWPR reports "no signal" on noise
+and follows the truth from 20 dB-Hz up (see
+[`NWPRCN0Estimator`](@extref TrackingLoops.NWPRCN0Estimator);
 [issue #217](https://github.com/JuliaGNSS/Tracking.jl/issues/217)).
 
 End to end through `track` on a data-modulated GPS L1 C/A signal at the (shorter)
 default windows, 600 ms per run, medians over 16 seeds:
 
-| true C/N₀  | NWPR (default)            | p10  | p90  | M2M4 |
-|:---------- | -------------------------:| ----:| ----:| ----:|
-| noise only | **−Inf** in 12 of 16 runs |      |      | 27.9 |
-| 20 dB-Hz   | 18.3                      | 6.0  | 22.2 | 27.6 |
-| 25 dB-Hz   | 23.9                      | 16.3 | 26.3 | 28.3 |
-| 30 dB-Hz   | 29.0                      | 27.4 | 30.3 | 30.8 |
-| 35 dB-Hz   | 34.1                      | 33.3 | 35.0 | 35.3 |
-| 45 dB-Hz   | 44.3                      | 43.7 | 45.2 | 45.4 |
+| true C/N₀  | NWPR (default)            | p10  | p90  |
+|:---------- | -------------------------:| ----:| ----:|
+| noise only | **−Inf** in 12 of 16 runs |      |      |
+| 20 dB-Hz   | 18.3                      | 6.0  | 22.2 |
+| 25 dB-Hz   | 23.9                      | 16.3 | 26.3 |
+| 30 dB-Hz   | 29.0                      | 27.4 | 30.3 |
+| 35 dB-Hz   | 34.1                      | 33.3 | 35.0 |
+| 45 dB-Hz   | 44.3                      | 43.7 | 45.2 |
 
 On pure noise pre-sync, where a code-lock detector decides, the default clears a
 20 dB-Hz threshold in 4 % of updates and 25 dB-Hz in **0 %** (200 runs, highest value
-22.4); M2M4 on the same runs clears 25 dB-Hz in 67 %. The price is the coherent sum's
+22.4). The price is the coherent sum's
 sensitivity to anything that decorrelates the prompts (see
 [What the estimator returns](#What-the-estimator-returns)).
 
@@ -165,27 +155,25 @@ navigation-bit state in a
 it; the cases are tabulated under
 [`NWPRCN0Estimator`](@extref TrackingLoops.NWPRCN0Estimator). Before sync, a
 data-bearing signal without a secondary code uses an unaligned
-`num_presync_narrowband_code_blocks` window (5), since bit sync takes seconds and
+`num_presync_narrowband_code_periods` window (5), since bit sync takes seconds and
 fails below ~30 dB-Hz; it costs ~0.6 dB below 30 dB-Hz on GPS L1 C/A. Where no window
 is admissible (a secondary code before sync, one symbol per code block, or a record
 as long as its window, e.g. with
 [`set_preferred_num_code_blocks_to_integrate!`](@ref) at a whole bit) the
-[`MomentsCN0Estimator`](@extref TrackingLoops.MomentsCN0Estimator) fallback, and its
-floor, is reported.
+[`MomentsCN0Estimator`](@extref TrackingLoops.MomentsCN0Estimator) fallback is
+reported.
 
-!!! warning "The moment ratio's noise floor is there on data-only signals"
+!!! warning "The moment ratio reads noise as signal on data-only signals"
 
     GPS L1C-D and Galileo E1B carry **one navigation symbol per code block**, so the
     longest coherent window is one record, where `NBP == WBP`. They keep the moment
-    ratio for good: **pure noise reads ~27.6 dB-Hz on L1C-D and E1B**, as does any
-    signal with a secondary code (GPS L5, L2C, Galileo E1C, E5a) before its sync.
+    ratio for good: **pure noise reads 20–30 dB-Hz about half the time on L1C-D and
+    E1B**, as does any signal with a secondary code (GPS L5, L2C, Galileo E1C, E5a) before its sync.
 
     No ~100-record window fixes this: without coherence only the prompt magnitudes
-    carry information. (A phase-blind `(E|z|)²/E|z|²` estimator cuts false alarms,
-    42 % against 76 % at 25 dB-Hz on pure noise, but its median on noise is still
-    ~27.5 dB-Hz.)
+    carry information.
 
-    The default [`NoiseRefCN0Estimator`](@extref TrackingLoops.NoiseRefCN0Estimator)
+    The default [`NoiseReferencedCN0Estimator`](@extref TrackingLoops.NoiseReferencedCN0Estimator)
     has no window, so these are ordinary records to it
     ([issue #217](https://github.com/JuliaGNSS/Tracking.jl/issues/217)). On NWPR,
     take the lock decision from the **pilot** of the pair (L1C-D with L1C-P, E1B
@@ -197,12 +185,12 @@ floor, is reported.
 ### The window is capped by the loop's coherence time
 
 The windows tile the bit from its start but stay shorter than a bit
-(`num_narrowband_code_blocks`, ~5 ms): a longer window buys little, while
+(`num_narrowband_code_periods`, ~5 ms): a longer window buys little, while
 decoherence over it costs a bias averaging cannot remove. The default staged loop
 has narrowed to 18 Hz by the time a locked satellite fades (see
 [Loop Filter](@ref)) and holds phase over a whole bit, so for it the window length
 hardly matters; the short default protects a loop that has not narrowed or runs
-wider. Raise `num_narrowband_code_blocks` for a pilot, a narrow carrier loop or a
+wider. Raise `num_narrowband_code_periods` for a pilot, a narrow carrier loop or a
 signal that is never weak. Measurements are under
 [`NWPRCN0Estimator`](@extref TrackingLoops.NWPRCN0Estimator).
 
@@ -236,7 +224,7 @@ julia> using Tracking, TrackingLoops, GNSSSignals
 
 julia> using Tracking: Hz
 
-julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz; cn0_estimator = MomentsCN0Estimator(100));
+julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz; cn0_estimator = MomentsCN0Estimator(; num_averaged_integrations = 100));
 
 julia> Tracking.get_cn0_estimator(sat) isa MomentsCN0Estimator
 true
@@ -248,12 +236,12 @@ julia> sat = TrackedSat(
            1000.0Hz;
            cn0_estimator = NWPRCN0Estimator(
                GPSL1CA();
-               num_records = 400,                       # ~400 ms of memory
-               num_presync_narrowband_code_blocks = 0,  # M2M4 until bit sync
+               num_averaged_integrations = 400,          # ~400 ms of memory
+               num_presync_narrowband_code_periods = 0,  # M2M4 until bit sync
            ),
        );
 
-julia> Tracking.get_cn0_estimator(sat).num_records
+julia> Tracking.get_cn0_estimator(sat).num_averaged_integrations
 400
 ```
 
@@ -270,7 +258,7 @@ TrackedSat(
     prn,
     code_phase,
     carrier_doppler;
-    cn0_estimator = (NoiseRefCN0Estimator(), MomentsCN0Estimator(100)),
+    cn0_estimator = (NoiseReferencedCN0Estimator(), MomentsCN0Estimator(; num_averaged_integrations = 100)),
 )
 ```
 
@@ -294,16 +282,16 @@ TrackedSat(
     prn,
     code_phase,
     carrier_doppler;
-    cn0_estimator = (NoiseRefCN0Estimator(), NoCN0Estimator()),
+    cn0_estimator = (NoiseReferencedCN0Estimator(), NoCN0Estimator()),
 )
 
-# NWPR with no moment-ratio floor underneath it: "no estimate" until a coherent
-# window exists, instead of the moment ratio's ~27.6 dB-Hz on noise
+# NWPR without the moment ratio underneath it: "no estimate" until a coherent
+# window exists, instead of the moment ratio's reading of noise
 NWPRCN0Estimator(GPSL1C_D(); fallback = NoCN0Estimator())
 ```
 
 The second only matters on NWPR (the default has no fallback): it turns the
-fallback's noise floor into `-Inf` wherever no coherent window exists (see the
+fallback's readings into `-Inf` wherever no coherent window exists (see the
 warning above).
 
 In the TrackingLoops manual:
@@ -327,7 +315,7 @@ In the TrackingLoops manual:
   - **While the loops struggle**: NWPR measures *coherent* C/N₀, so phase noise
     counts against it: at 1 ms records and default windows ~0.9 dB low at a true
     35 dB-Hz, ~1.1 dB at 25 and ~1.7 dB at 20, much worse with
-    `num_narrowband_code_blocks` past the loop's coherence time. The default is
+    `num_narrowband_code_periods` past the loop's coherence time. The default is
     **immune**: through `track!` at a true 45 dB-Hz it reads 44.9 at 1-block and 44.7
     at 20-block records, where NWPR falls to 32.9.
 
@@ -348,8 +336,7 @@ self-leakage differs (see [The one bias it carries](#The-one-bias-it-carries)).
     ```
 
     exact for any fixed `w` since `E[|wᴴn|²] = wᴴRw`. Hence
-    [`get_weights`](@extref TrackingLoops.get_weights) is required of a post-correlation
-    filter, and the contract is **linear in the antennas**.
+    [`get_weights`](@extref TrackingLoops.get_weights) is required of a post_corr_filter, and the contract is **linear in the antennas**.
     [`DefaultPostCorrFilter`](@extref TrackingLoops.DefaultPostCorrFilter) selects
     the `last` antenna, whose diagonal entry `wᴴR̂w` then is, as in a single-antenna
     run on that column.
@@ -387,14 +374,14 @@ residual and its 0.9 dB loss remain.
 On NWPR, a shorter pre-sync window helps, though a two-record window is also the
 noisiest:
 
-| `num_presync_narrowband_code_blocks` | `Δf·M·T` at 120 Hz | reported |
+| `num_presync_narrowband_code_periods` | `Δf·M·T` at 120 Hz | reported |
 |:------------------------------------ | ------------------:| --------:|
 | 5 (default)                          | 0.60 cycles        | 27.6     |
 | 3                                    | 0.36 cycles        | 32.4     |
 | 2                                    | 0.24 cycles        | 34.9     |
 
 ```julia
-NWPRCN0Estimator(GPSL1CA(); num_presync_narrowband_code_blocks = 2)
+NWPRCN0Estimator(GPSL1CA(); num_presync_narrowband_code_periods = 2)
 ```
 
 A noisy L1 C/A signal at a known 45 dB-Hz, through 25 1-ms tracking cycles:
@@ -404,7 +391,7 @@ julia> using Tracking, GNSSSignals, Random
 
 julia> using Tracking: Hz
 
-julia> using GNSSSignals: gen_code, get_code_frequency
+julia> using GNSSSignals: gen_code, get_chip_rate
 
 julia> function run_cn0_demo()
            sys = GPSL1CA()
@@ -413,7 +400,7 @@ julia> function run_cn0_demo()
            prn = 1
            cn0_db_hz = 45.0
            sigma = sqrt((fs/Hz) / 10^(cn0_db_hz/10) / 2)
-           code_freq = get_code_frequency(sys)
+           code_freq = get_chip_rate(sys)
            rng = MersenneTwister(0)
            track_state = TrackState(; signal = GPSL1CA())
            track_state =
@@ -436,7 +423,7 @@ quarter of the default 100-record window, so a few dB of spread is expected.
 
 In the TrackingLoops manual:
 
-- [`estimate_cn0`](@extref TrackingLoops.estimate_cn0-Tuple{NoiseRefCN0Estimator, Any})
+- [`estimate_cn0`](@extref TrackingLoops.estimate_cn0-Tuple{NoiseReferencedCN0Estimator, Any})
 
 ## Custom CN0 Estimators
 
@@ -448,25 +435,24 @@ In the TrackingLoops manual:
 Subtype [`AbstractCN0Estimator`](@extref TrackingLoops.AbstractCN0Estimator) and
 implement:
 
-  - `TrackingLoops.update(cn0_estimator::MyCN0Estimator, prompt)`, returning a new
+  - `TrackingLoops.update!(cn0_estimator::MyCN0Estimator, prompt)`, returning a new
     estimator with the prompt added;
   - `estimate_cn0(cn0_estimator::MyCN0Estimator, integration_time)`, returning
     `dB-Hz`; `integration_time` is the last record's, i.e.
     [`get_last_fully_integrated_integration_time`](@ref).
 
 To use the navigation-bit grid (boundaries, sync, soft bits), implement
-`TrackingLoops.update(cn0_estimator::MyCN0Estimator, prompt, context::CN0UpdateContext)`
-instead; the tracking loop calls this form, whose default drops the context.
+`TrackingLoops.update!(cn0_estimator::MyCN0Estimator, prompt, context::CN0UpdateContext)`
+instead; post-correlation processing calls this form, whose default drops the context.
 
 In the TrackingLoops manual:
 
-- [`update(::MomentsCN0Estimator, ::Any)`](@extref TrackingLoops.update-Tuple{MomentsCN0Estimator, Any})
-- [`update(::AbstractCN0Estimator, ::Any, ::CN0UpdateContext)`](@extref TrackingLoops.update-Tuple{AbstractCN0Estimator, Any, CN0UpdateContext})
-- [`update(::NWPRCN0Estimator, ::Any, ::CN0UpdateContext)`](@extref TrackingLoops.update-Tuple{NWPRCN0Estimator, Any, CN0UpdateContext})
-- [`update(::NWPRCN0Estimator, ::Any)`](@extref TrackingLoops.update-Tuple{NWPRCN0Estimator, Any})
-- [`update(::NoiseRefCN0Estimator, ::Any, ::CN0UpdateContext)`](@extref TrackingLoops.update-Tuple{NoiseRefCN0Estimator, Any, CN0UpdateContext})
-- [`update(::NoiseRefCN0Estimator, ::Any)`](@extref TrackingLoops.update-Tuple{NoiseRefCN0Estimator, Any})
-- [`update(::NoCN0Estimator, ::Any)`](@extref TrackingLoops.update-Tuple{NoCN0Estimator, Any})
+- [`update!(::MomentsCN0Estimator, ::Any)`](@extref TrackingLoops.update!-Tuple{MomentsCN0Estimator, Any})
+- [`update!(::AbstractCN0Estimator, ::Any, ::CN0UpdateContext)`](@extref TrackingLoops.update!-Tuple{TrackingLoops.AbstractCN0Estimator, Any, TrackingLoops.CN0UpdateContext})
+- [`update!(::NWPRCN0Estimator, ::Any, ::CN0UpdateContext)`](@extref TrackingLoops.update!-Tuple{NWPRCN0Estimator, Any, TrackingLoops.CN0UpdateContext})
+- [`update!(::NoiseReferencedCN0Estimator, ::Any, ::CN0UpdateContext)`](@extref TrackingLoops.update!-Tuple{NoiseReferencedCN0Estimator, Any, TrackingLoops.CN0UpdateContext})
+- [`update!(::NoiseReferencedCN0Estimator, ::Any)`](@extref TrackingLoops.update!-Tuple{NoiseReferencedCN0Estimator, Any})
+- [`update!(::NoCN0Estimator, ::Any)`](@extref TrackingLoops.update!-Tuple{NoCN0Estimator, Any})
 
 Plug it in with the `cn0_estimator` keyword of [`TrackedSignal`](@ref) or
 [`TrackedSat`](@ref):
@@ -478,7 +464,7 @@ julia> using Tracking: Hz
 
 julia> struct MyCN0Estimator <: TrackingLoops.AbstractCN0Estimator end
 
-julia> TrackingLoops.update(estimator::MyCN0Estimator, prompt) = estimator;
+julia> TrackingLoops.update!(estimator::MyCN0Estimator, prompt) = estimator;
 
 julia> TrackingLoops.estimate_cn0(::MyCN0Estimator, integration_time) = 42.0 * Tracking.dBHz;
 

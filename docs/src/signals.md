@@ -4,7 +4,9 @@ Every concrete signal type [GNSSSignals.jl](https://github.com/JuliaGNSS/GNSSSig
 defines, and what Tracking.jl does with it.
 [`test/signal_coverage.jl`](https://github.com/JuliaGNSS/Tracking.jl/blob/master/test/signal_coverage.jl)
 checks the table against the live type tree, so a GNSSSignals release that adds
-a signal fails the test suite rather than user code.
+a signal fails the test suite rather than user code. Galileo E1B/E1C and GPS L1C-P
+replicate BOC(1,1) by default; construct `GalileoE1B(CBOC)`, `GalileoE1C(CBOC)` or
+`GPSL1C_P(TMBOC)` for the full modulation.
 
 ## What "supported" means here
 
@@ -31,9 +33,9 @@ are tracked in
 
 *Blocks per integration* is the coherent integration length in primary code
 blocks a fresh [`TrackedSignal`](@ref) starts at
-([`default_num_code_blocks_to_integrate`](@extref TrackingLoops.default_num_code_blocks_to_integrate)),
+([`default_num_code_periods_to_integrate`](@extref TrackingLoops.default_num_code_periods_to_integrate-Tuple{AbstractGNSSSignal})),
 and in brackets the ceiling
-([`max_num_code_blocks_to_integrate`](@extref TrackingLoops.max_num_code_blocks_to_integrate))
+([`max_num_code_periods_to_integrate`](@extref TrackingLoops.max_num_code_periods_to_integrate-Tuple{AbstractGNSSSignal}))
 [`set_preferred_num_code_blocks_to_integrate!`](@ref) may raise it to: one data
 bit, overlay period or code cycle. Until sync, one block is integrated regardless.
 
@@ -47,9 +49,7 @@ bit, overlay period or code cycle. Until sync, one block is integrated regardles
 | `GPSL5I` | `L5` | 10230 chips, 1 ms | 1 (max 10) | soft CFAR overlay search, NH10 | CNAV, 100 sym/s | 1-37 |
 | `GPSL5Q` | `L5` | 10230 chips, 1 ms | 1 (max 20) | soft CFAR overlay search, NH20 | none (pilot) | 1-37 |
 | `GalileoE1B` | `L1` | 4092 chips, 4 ms | 1 (max 1) | none needed — 1 symbol per code period | I/NAV, 250 sym/s | 1-50 |
-| `GalileoE1B_BOC11` | `L1` | 4092 chips, 4 ms | 1 (max 1) | none needed — 1 symbol per code period | I/NAV, 250 sym/s | 1-50 |
 | `GalileoE1C` | `L1` | 4092 chips, 4 ms | 1 (max 25) | soft CFAR overlay search, CS25 | none (pilot) | 1-50 |
-| `GalileoE1C_BOC11` | `L1` | 4092 chips, 4 ms | 1 (max 25) | soft CFAR overlay search, CS25 | none (pilot) | 1-50 |
 | `GalileoE5aI` | `L5` | 10230 chips, 1 ms | 1 (max 20) | soft CFAR overlay search, CS20 | F/NAV, 50 sym/s | 1-50 |
 | `GalileoE5aQ` | `L5` | 10230 chips, 1 ms | 1 (max 100) | soft CFAR overlay search, per-PRN CS100 | none (pilot) | 1-50 |
 | `GalileoE5aQP` | `L5` | 330 chips, 64.5 µs | 31 (max 31) | none — no data, no overlay | none (acquisition aid) | 1-40 |
@@ -58,7 +58,7 @@ bit, overlay period or code cycle. Until sync, one block is integrated regardles
 | `GalileoE6B` | `E6` | 5115 chips, 1 ms | 1 (max 1) | none needed — 1 symbol per code period | C/NAV, 1000 sym/s | 1-50 |
 | `GalileoE6C` | `E6` | 5115 chips, 1 ms | 1 (max 100) | soft CFAR overlay search, per-PRN CS100 | none (pilot) | 1-50 |
 | `BeiDouB1I` | `B1I` | 2046 chips, 1 ms | 1 (max 20) | soft CFAR overlay search, NH20 | D1, 50 sym/s (see GEO note) | 1-63 |
-| `BeiDouB3I` | `B3I` | 10230 chips, 1 ms | 1 (max 20) | soft CFAR overlay search, NH20 | D1, 50 sym/s (see GEO note) | 1-63 |
+| `BeiDouB3I` | `B3` | 10230 chips, 1 ms | 1 (max 20) | soft CFAR overlay search, NH20 | D1, 50 sym/s (see GEO note) | 1-63 |
 | `BeiDouB1C_D` | `L1` | 10230 chips, 10 ms | 1 (max 1) | none needed — 1 symbol per code period | B-CNAV1, 100 sym/s | 1-63 |
 | `BeiDouB1C_P` | `L1` | 10230 chips, 10 ms | 1 (max 1800) | hard rotation sweep, 1800-chip overlay | none (pilot) | 1-63 |
 | `BeiDouB2aI` | `L5` | 10230 chips, 1 ms | 1 (max 5) | soft CFAR overlay search, 5-chip | B-CNAV2, 200 sym/s | 1-63 |
@@ -102,9 +102,9 @@ and the ICD says it will eventually be discontinued.
 - **BeiDou GEO satellites (PRN 1-5, 59-63) never sync on B1I/B3I.** They carry
   no NH20 overlay and broadcast D2 at 500 sym/s instead of D1 at 50 sym/s, so
   the secondary-code detector has nothing to lock onto. They track and can be
-  *ranged* on, but are not decoded: a D2 bit-edge search would need a per-PRN
-  data rate, while `get_data_frequency` reports D1's for every PRN. See
-  TrackingLoops' `src/beidou/b1i.jl`.
+  *ranged* on, but are not decoded: TrackingLoops' sync searches the signal's
+  D1 bit grid, not the per-satellite rate GNSSSignals reports as
+  `get_bit_rate(signal, prn)`. See TrackingLoops' `src/beidou/b1i.jl`.
 - **BeiDou B2b-I** correlates to an all-zero prompt on a clean replica, which
   takes the loop down through a NaN Doppler
   ([#234](https://github.com/JuliaGNSS/Tracking.jl/issues/234)); its defaults

@@ -33,7 +33,7 @@ A breaking change **must** carry both:
 The footer is what triggers the major version bump and becomes the release
 notes — an unmarked breaking change silently ships as a minor/patch release.
 When in doubt: it is breaking if released user code — including custom
-`AbstractDopplerEstimator` implementations and direct
+`AbstractTrackingLoop` implementations and direct
 `downconvert_and_correlate(!)` callers — could stop compiling or change
 behavior after the release.
 

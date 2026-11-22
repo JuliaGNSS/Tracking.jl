@@ -11,7 +11,8 @@ The loop filters are provided by
 
 ## Default Configuration
 
-The default Doppler estimator is `ConventionalAssistedPLLAndDLL` which uses:
+The default Doppler estimator is TrackingLoops' `ScalarTrackingLoop(ThirdOrderAssistedBilinearLF)`, a
+scalar PLL/DLL which uses:
 - `ThirdOrderAssistedBilinearLF` for the carrier loop (FLL-assisted PLL for improved dynamics)
 - `SecondOrderBilinearLF` for the code loop
 
@@ -24,7 +25,7 @@ The **code** bandwidth is a flat 1 Hz. All are one-sided noise bandwidths `BL`
 (Kaplan & Hegarty), for every signal. The stages only advance, and
 [`reset_loop_filters!`](@ref) keeps the stage reached; a satellite added anew starts
 over. Read a satellite's stage with
-`carrier_loop_stage(get_doppler_estimator_state(sat))`.
+`get_carrier_loop_stage(get_doppler_estimator_state(sat))`.
 
 Where the replica wipes every sign modulation off the prompt (a dataless signal
 synced to its secondary code) the carrier discriminators turn four-quadrant.
@@ -32,7 +33,7 @@ synced to its secondary code) the carrier discriminators turn four-quadrant.
 The defaults are not scaled with the integration time; each is capped at filter time
 by its stability product `BL · T_int`: the PLL by `0.09`, the FLL path by `0.02`, the
 code loop by `0.018`
-([`effective_carrier_loop_filter_bandwidth`](@extref TrackingLoops.effective_carrier_loop_filter_bandwidth)
+([`calc_effective_carrier_loop_bandwidth`](@extref TrackingLoops.calc_effective_carrier_loop_bandwidth-Tuple{Any, Any})
 and siblings). The bandwidths that end up in the loop are:
 
 | Integration time                   |  Wide BL | Narrow BL | FLL-assist BL |  Code BL |
@@ -48,35 +49,35 @@ The [TrackingLoops manual](https://juliagnss.github.io/TrackingLoops.jl/stable/)
 
 Before TrackingLoops 4 the carrier filter was fed radians but its output read as Hz,
 making the loop about 5.6× wider than configured (≈ 100 Hz for 18 Hz); to get
-approximately that loop back, set both `wide_carrier_loop_filter_bandwidth` and
-`narrow_carrier_loop_filter_bandwidth` to `85.0Hz`. Before TrackingLoops 5 the loop
+approximately that loop back, set both `wide_carrier_loop_bandwidth` and
+`narrow_carrier_loop_bandwidth` to `85.0Hz`. Before TrackingLoops 5 the loop
 ran FLL-assisted at one carrier bandwidth throughout; pass equal wide and narrow
 bandwidths for one PLL bandwidth.
 
 Override per signal by defining methods of
-[`default_wide_carrier_loop_filter_bandwidth`](@extref TrackingLoops.default_wide_carrier_loop_filter_bandwidth),
-[`default_narrow_carrier_loop_filter_bandwidth`](@extref TrackingLoops.default_narrow_carrier_loop_filter_bandwidth),
-[`default_fll_assist_loop_filter_bandwidth`](@extref TrackingLoops.default_fll_assist_loop_filter_bandwidth) /
-[`default_code_loop_filter_bandwidth`](@extref TrackingLoops.default_code_loop_filter_bandwidth), or override at construction
+[`default_wide_carrier_loop_bandwidth`](@extref TrackingLoops.default_wide_carrier_loop_bandwidth-Tuple{AbstractGNSSSignal}),
+[`default_narrow_carrier_loop_bandwidth`](@extref TrackingLoops.default_narrow_carrier_loop_bandwidth-Tuple{AbstractGNSSSignal}),
+[`default_fll_assist_loop_bandwidth`](@extref TrackingLoops.default_fll_assist_loop_bandwidth-Tuple{AbstractGNSSSignal}) /
+[`default_code_loop_bandwidth`](@extref TrackingLoops.default_code_loop_bandwidth-Tuple{AbstractGNSSSignal}), or override at construction
 time by passing your own `doppler_estimator =` to `TrackState`.
 
 ## Doppler Estimators
 
 In the TrackingLoops manual:
 
-- [`ConventionalPLLAndDLL`](@extref TrackingLoops.ConventionalPLLAndDLL)
-- [`ConventionalAssistedPLLAndDLL`](@extref TrackingLoops.ConventionalAssistedPLLAndDLL)
-- [`default_wide_carrier_loop_filter_bandwidth`](@extref TrackingLoops.default_wide_carrier_loop_filter_bandwidth)
-- [`default_narrow_carrier_loop_filter_bandwidth`](@extref TrackingLoops.default_narrow_carrier_loop_filter_bandwidth)
-- [`default_fll_assist_loop_filter_bandwidth`](@extref TrackingLoops.default_fll_assist_loop_filter_bandwidth)
-- [`default_code_loop_filter_bandwidth`](@extref TrackingLoops.default_code_loop_filter_bandwidth)
-- [`effective_carrier_loop_filter_bandwidth`](@extref TrackingLoops.effective_carrier_loop_filter_bandwidth)
-- [`effective_fll_assist_loop_filter_bandwidth`](@extref TrackingLoops.effective_fll_assist_loop_filter_bandwidth)
-- [`effective_code_loop_filter_bandwidth`](@extref TrackingLoops.effective_code_loop_filter_bandwidth)
+- [`ScalarTrackingLoop`](@extref TrackingLoops.ScalarTrackingLoop)
+- [`DelayCompensatedTrackingLoop`](@extref TrackingLoops.DelayCompensatedTrackingLoop)
+- [`default_wide_carrier_loop_bandwidth`](@extref TrackingLoops.default_wide_carrier_loop_bandwidth-Tuple{AbstractGNSSSignal})
+- [`default_narrow_carrier_loop_bandwidth`](@extref TrackingLoops.default_narrow_carrier_loop_bandwidth-Tuple{AbstractGNSSSignal})
+- [`default_fll_assist_loop_bandwidth`](@extref TrackingLoops.default_fll_assist_loop_bandwidth-Tuple{AbstractGNSSSignal})
+- [`default_code_loop_bandwidth`](@extref TrackingLoops.default_code_loop_bandwidth-Tuple{AbstractGNSSSignal})
+- [`calc_effective_carrier_loop_bandwidth`](@extref TrackingLoops.calc_effective_carrier_loop_bandwidth-Tuple{Any, Any})
+- [`calc_effective_fll_assist_loop_bandwidth`](@extref TrackingLoops.calc_effective_fll_assist_loop_bandwidth-Tuple{Any, Any})
+- [`calc_effective_code_loop_bandwidth`](@extref TrackingLoops.calc_effective_code_loop_bandwidth-Tuple{Any, Any})
 - [`LoopBandwidths`](@extref TrackingLoops.LoopBandwidths)
 - [`CarrierLoopStage`](@extref TrackingLoops.CarrierLoopStage)
-- [`carrier_loop_stage`](@extref TrackingLoops.carrier_loop_stage)
-- [`phase_lock_indicator`](@extref TrackingLoops.phase_lock_indicator)
+- [`get_carrier_loop_stage`](@extref TrackingLoops.get_carrier_loop_stage-Tuple{TrackingLoops.ScalarLoopState})
+- [`get_phase_lock_indicator`](@extref TrackingLoops.get_phase_lock_indicator-Tuple{TrackingLoops.ScalarLoopState})
 
 ## Resetting loop filters
 
@@ -97,13 +98,13 @@ julia> using Tracking, TrackingLoops, GNSSSignals, TrackingLoopFilters
 
 julia> using Tracking: Hz
 
-julia> # Use non-assisted PLL with custom loop filter types
-       doppler_estimator = ConventionalPLLAndDLL(
-           ThirdOrderBilinearLF,      # carrier loop filter type
-           SecondOrderBilinearLF;     # code loop filter type
-           wide_carrier_loop_filter_bandwidth = 30.0Hz,
-           narrow_carrier_loop_filter_bandwidth = 15.0Hz,
-           code_loop_filter_bandwidth = 0.5Hz
+julia> # FLL-assisted PLL during pull-in, with custom loop filter types
+       doppler_estimator = ScalarTrackingLoop(
+           ThirdOrderAssistedBilinearLF,  # carrier loop filter type
+           SecondOrderBilinearLF;         # code loop filter type
+           wide_carrier_loop_bandwidth = 30.0Hz,
+           narrow_carrier_loop_bandwidth = 15.0Hz,
+           code_loop_bandwidth = 0.5Hz
        );
 
 julia> track_state = TrackState(; signal = GPSL1CA(), doppler_estimator);

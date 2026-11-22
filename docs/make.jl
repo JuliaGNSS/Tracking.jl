@@ -3,10 +3,10 @@ using Documenter, DocumenterInterLinks, Tracking, GNSSSignals, TrackingLoopFilte
 const DOCTEST_SETUP = :(using Tracking, TrackingLoops, GNSSSignals, TrackingLoopFilters; using Tracking: Hz; using Unitful: u_str)
 DocMeta.setdocmeta!(Tracking, :DocTestSetup, DOCTEST_SETUP; recursive=true)
 
-# The per-record loop arithmetic — correlators, discriminators, the bit buffer,
-# the C/N0 estimators, the Doppler estimators — is TrackingLoops' API, which
-# users load next to Tracking and which Tracking does not re-export. Its own
-# manual documents it; these pages link there with `@extref` rather than
+# The per-integration loop arithmetic — correlators, discriminators, bit
+# synchronization, the C/N0 estimators, the tracking loops — is TrackingLoops'
+# API, which users load next to Tracking and which Tracking does not re-export.
+# Its own manual documents it; these pages link there with `@extref` rather than
 # repeating its docstrings.
 const LINKS = InterLinks(
     "TrackingLoops" => "https://juliagnss.github.io/TrackingLoops.jl/stable/",

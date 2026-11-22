@@ -10,68 +10,66 @@ using Dictionaries
 using Accessors
 using Polyester
 
-# The device-independent loop core (correlator records, discriminators, bit
-# buffer and sync, C/N₀ and noise estimation, loop filters, the Doppler
-# estimators' `step_loop`) lives in TrackingLoops.jl, so a hardware correlator's
+# The device-independent loop core (post-correlation processing, discriminators,
+# bit synchronization, C/N₀ and noise estimation, loop filters, the tracking
+# loops' `step_loop!`) lives in TrackingLoops.jl, so a hardware correlator's
 # loop runs the same code. Users load it next to Tracking; it is not re-exported,
 # except the result readers below the export list. Imported by name so a binding
 # TrackingLoops renames or drops fails at precompile.
 import TrackingLoops
 import TrackingLoops:
     AbstractCN0Estimator,
-    AbstractCorrelator,
-    AbstractDopplerEstimator,
-    AbstractNoiseEstimator,
+    AbstractCorrelatorBank,
+    AbstractNoiseDensityEstimator,
     AbstractPostCorrFilter,
+    AbstractTrackingLoop,
+    append_despread_noise!,
     append_noise_observation!,
-    BitBuffer,
-    _calc_num_code_blocks_that_form_a_bit,
-    calc_num_code_blocks_to_integrate,
-    carrier_phase_correction,
-    ConventionalAssistedPLLAndDLL,
-    CorrelatorNoiseEstimator,
-    CorrelatorOutput,
+    BitSynchronizer,
+    calc_carrier_phase_correction,
+    calc_correlator_sample_offsets,
+    calc_num_code_periods_to_integrate,
+    ConstantNCOCommand,
+    CorrelatorNoiseDensityEstimator,
+    CorrelatorBankOutput,
     default_cn0_estimator,
-    default_num_code_blocks_to_integrate,
+    default_num_code_periods_to_integrate,
     DefaultPostCorrFilter,
-    EarlyPromptLateCorrelator,
+    drain_soft_bits!,
+    EarlyPromptLateCorrelatorBank,
     estimate_cn0,
-    FixedNCOWord,
-    apply_record,
-    get_accumulators,
-    get_correlator_sample_shifts,
-    get_default_correlator,
+    get_correlator_outputs,
+    get_default_correlator_bank,
     get_early,
     get_late,
+    get_last_num_code_periods,
+    get_noise_correlator_bank,
+    get_noise_density_and_status,
+    get_nco_command,
     get_num_ants,
+    get_num_code_periods_into_bit,
     get_prompt,
+    get_secondary_code_phase,
     get_soft_bits,
-    has_bit_or_secondary_code_been_found,
-    init_estimator_state,
+    init_loop_state,
+    is_bit_or_secondary_code_synced,
     is_dataless_with_secondary_code,
-    LoopRecord,
-    SignalLoopState,
-    Maybe,
-    _next_noise_prn,
-    NO_LANDING_SAMPLE,
-    _noise_density_and_ready,
-    noise_density_type,
-    _noise_observation,
-    _noise_window_filling,
-    NoiseEstimators,
+    map_correlator_outputs,
+    noise_despreads,
+    NoiseDensityEstimators,
+    NOISE_DENSITY_INVALID,
+    NOISE_DENSITY_READY,
+    NOISE_WINDOW_EMPTY,
     NoiseObservation,
     NoiseUpdateContext,
-    _num_ants,
-    _num_ants_of_density_type,
-    _num_ants_val,
     NumAnts,
-    _pool_taps,
+    PostCorrelationState,
+    process_correlator_bank_output!,
     requires_noise_density,
-    reset,
-    reset_estimator_state,
-    step_loop,
-    update,
-    update_accumulator,
+    reinit_loop_state,
+    ScalarTrackingLoop,
+    set_correlator_outputs,
+    step_loop!,
     update_noise!
 
 # `dBHz` serves the manual: its custom C/N₀ estimator doctest reads `Tracking.dBHz`.
@@ -93,14 +91,14 @@ export get_prn,
     set_preferred_num_code_blocks_to_integrate!,
     reset_loop_filters!,
     get_signal_start_sample,
-    get_correlator,
+    get_correlator_bank,
     get_last_fully_integrated_correlator,
     get_last_fully_integrated_filtered_prompt,
     get_last_fully_integrated_num_code_blocks,
     get_last_fully_integrated_integration_time,
     get_filtered_prompts,
-    get_correlator_outputs,
-    append_correlator_output!,
+    get_correlator_bank_outputs,
+    append_correlator_bank_output!,
     get_bit_buffer,
     get_num_bits,
     track,
@@ -136,6 +134,7 @@ export get_prn,
     BandMeasurement,
     BandMeasurements,
     band_keys,
+    get_signal_observations,
     get_samples,
     get_sampling_frequency,
     get_intermediate_frequency
@@ -144,15 +143,18 @@ export get_prn,
 # reading them needs no second package.
 export estimate_cn0,
     get_soft_bits,
-    has_bit_or_secondary_code_been_found,
+    is_bit_or_secondary_code_synced,
     get_num_ants,
     append_noise_observation!,
     get_prompt,
     get_early,
     get_late,
-    get_accumulators
+    get_correlator_outputs
+
+_default_tracking_loop() = ScalarTrackingLoop()
 
 TupleLike{T<:Tuple} = Union{T,NamedTuple{<:Any,T}}
+const Maybe{T} = Union{T,Nothing}
 
 """
 $(SIGNATURES)
@@ -163,8 +165,9 @@ The `downconvert_and_correlate(!)` loops are defined once on this type (see
 `downconvert_and_correlate_cpu.jl`); a subtype implements the hooks:
 `_despread_one_signal!` (the correlation primitive, for satellites and the noise
 reference alike; alone it gives a working single-signal backend),
-`_correlate_signals` / `_scratch_buffers` (multi-signal kernel and scratch),
-`_threading` (default serial) and `_check_sample_type` (default no-op).
+`_correlate_signals` (multi-signal kernel), `_scratch_buffers` (default this thread's
+set of the backend's `buffers`), `_threading` (default serial) and
+`_check_sample_type` (default no-op).
 """
 abstract type AbstractDownconvertAndCorrelator end
 
@@ -198,11 +201,11 @@ estimator.
 `groups` is a NamedTuple of [`SignalGroup`](@ref)s.
 
 `noise_estimators` is a NamedTuple of
-[`AbstractNoiseEstimator`](@extref TrackingLoops.AbstractNoiseEstimator)s keyed by
+[`AbstractNoiseDensityEstimator`](@extref TrackingLoops.AbstractNoiseDensityEstimator)s keyed by
 **signal** id (`GNSSSignals.get_signal_id`), since the post-correlation floor
 depends on the despreading modulation. Only signals whose C/N₀ estimator reads a
 noise density (see
-[`requires_noise_density`](@extref TrackingLoops.requires_noise_density-Tuple{Type{<:AbstractCN0Estimator}}))
+[`requires_noise_density`](@extref TrackingLoops.requires_noise_density-Tuple{Type{<:TrackingLoops.AbstractCN0Estimator}}))
 get one, so the others pay nothing. They average **in place**.
 
 `noise_descriptor` is per-call **scratch**: a heap cell where the correlate step
@@ -213,7 +216,7 @@ one pointer (see `_park_noise_items!`). Shared by every derived `TrackState`.
 [`track!`](@ref) calls consumed: the origin of the current measurement on a
 sample grid that runs on across calls. The estimate phase adds it to a record's
 index, so an estimator with per-satellite state of its own (TrackingLoops'
-`VectorPLLAndDLL`) sees every satellite on one time grid. The in-place mutators
+`VectorTrackingLoop`) sees every satellite on one time grid. The in-place mutators
 share it; [`track`](@ref), [`merge_sats`](@ref), [`add_satellite`](@ref) and
 [`remove_satellite`](@ref) give their result a copy.
 
@@ -223,7 +226,7 @@ as the `sample_offsets` keyword, or the estimator receives records from its
 past. A band the old state did not track starts at
 `elapsed_time * sampling_frequency` samples of the new band.
 """
-struct TrackState{G<:SignalGroups,DE<:AbstractDopplerEstimator,NE<:NoiseEstimators}
+struct TrackState{G<:SignalGroups,DE<:AbstractTrackingLoop,NE<:NoiseDensityEstimators}
     groups::G
     doppler_estimator::DE
     noise_estimators::NE
@@ -235,8 +238,8 @@ end
 # which keeps the steady state allocation-free.
 TrackState(
     groups::SignalGroups,
-    doppler_estimator::AbstractDopplerEstimator,
-    noise_estimators::NoiseEstimators;
+    doppler_estimator::AbstractTrackingLoop,
+    noise_estimators::NoiseDensityEstimators;
     sample_offsets = nothing,
 ) = TrackState(
     groups,

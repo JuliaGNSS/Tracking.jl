@@ -5,10 +5,10 @@ phase**) is found it integrates one primary code period at a time. Sync unlocks
 longer coherent integrations (e.g. 20 ms for GPS L1 C/A), decoded bits, and the
 code phase modulo a whole symbol, which a pseudorange needs.
 
-Users only need `has_bit_or_secondary_code_been_found` per signal (see the
+Users only need `is_bit_or_secondary_code_synced` per signal (see the
 [per-signal accessor table](tracking_state.md#What-you-can-read)) to gate
-`get_soft_bits`. The detectors and the bit buffer are TrackingLoops'; see
-[`BitBuffer`](@extref TrackingLoops.BitBuffer).
+`get_soft_bits`. The detectors and the bit synchronizer are TrackingLoops'; see
+[`BitSynchronizer`](@extref TrackingLoops.BitSynchronizer).
 
 ## Code-phase wrap period
 
@@ -38,16 +38,16 @@ current_code_wrap
 
 ## Sync detection
 
-Each signal's detector (`detect_bit_or_secondary_code_sync`) comes in one of three
+Each signal's detector (`detect_sync`) comes in one of three
 families:
 
 - **Soft, maximum-energy CFAR**: GPS L1 C/A's bit edge and every short secondary
   code (`1 < N ≤ 100`). It locks when the peak hypothesis beats its runner-up at
-  the confidence `get_bit_edge_detection_confidence` (default `0.999`), needs
+  the confidence `get_sync_detection_confidence` (default `0.999`), needs
   two periods first, and fires on a period boundary, so it reports **`phase = 0`**.
 - **Hard rotation sweep**: the 1800-chip overlay pilots GPS L1C-P and BeiDou
   B1C-P. It matches the prompt signs against the overlay at every rotation within
-  `get_bit_edge_or_secondary_code_tolerance`, locks after one period at any
+  `get_secondary_code_error_tolerance`, locks after one period at any
   alignment and reports the recovered chip `phase`.
 - **Trivial**: one symbol per primary period (Galileo E1B, E6-B, GPS L1C-D, L2CM,
   BeiDou B2b-I, B1C-D), and Galileo E5a-QP (no data, no overlay), sync on the first
@@ -92,24 +92,25 @@ overridden per signal; the hard sweep reads its tolerance on every call, so no
 ```jldoctest tolerance_override
 julia> using Tracking, TrackingLoops, GNSSSignals
 
-julia> TrackingLoops.get_bit_edge_or_secondary_code_tolerance(GPSL1C_P())  # default
+julia> TrackingLoops.get_secondary_code_error_tolerance(GPSL1C_P())  # default
 0.025
 
 julia> # Loosen the L1C-P ceiling to 5 % (= 90 errors over 1800 blocks) for low-C/N₀ work.
-       TrackingLoops.get_bit_edge_or_secondary_code_tolerance(::GPSL1C_P) = 0.05;
+       TrackingLoops.get_secondary_code_error_tolerance(::GPSL1C_P) = 0.05;
 
-julia> TrackingLoops.get_bit_edge_or_secondary_code_tolerance(GPSL1C_P())  # after override
+julia> TrackingLoops.get_secondary_code_error_tolerance(GPSL1C_P())  # after override
 0.05
 ```
 
 ### Code-phase seeding
 
-When a signal with a secondary code syncs, its `secondary_phase` snaps
+When a signal with a secondary code syncs, its `secondary_code_phase` snaps
 `TrackedSat.code_phase` into the right secondary-code window, by a multiple of
 the primary length; the within-period phase is kept (#117). Of several synced
 signals, the one with the longest `primary × secondary` length wins.
 
 A signal without secondary code (e.g. GPS L1 C/A) needs no snap: its detector
 locks at a true bit boundary, so the widened wrap starts at the bit's first
-period, and the bit buffer's block counter, which `reset` preserves, keeps the
-bit cadence across `track!` calls.
+period, and the bit synchronizer's code-period counter
+(`num_code_periods_into_bit`), which draining the soft bits between `track!` calls
+preserves, keeps the bit cadence across them.
