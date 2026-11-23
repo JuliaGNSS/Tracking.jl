@@ -189,6 +189,29 @@ You do not override the downconvert/correlate path, which passes
 [`merge_sats`](@ref) call `init_loop_state` with the `TrackState`'s
 tracking loop and the satellite's driver signal and handoff Dopplers.
 
+## When Tracking makes which call
+
+TrackingLoops lists the calls a host makes over a satellite's life
+([A host's lifecycle](https://juliagnss.github.io/TrackingLoops.jl/stable/tracking_loops/#A-host's-lifecycle)).
+Tracking makes them as follows:
+
+  - **Start tracking**: [`add_satellite!`](@ref) builds a fresh post-correlation state
+    per signal and calls `init_loop_state` at the handoff Dopplers. Adding a PRN again
+    replaces the satellite, so it starts over.
+  - **Every coherent integration**: the loop update calls
+    `process_correlator_bank_output!` on the signal's post-correlation state, then
+    `step_loop!` with the result, the driver signal's integrations first, and writes
+    the satellite's NCO Dopplers once per NCO update span.
+  - **A cut in the integrations**: Tracking has no call for one, as it takes the samples
+    of consecutive [`track!`](@ref) calls to be contiguous. After a gap, add the
+    satellite again from a fresh handoff.
+  - **A handover**: [`reset_loop_filters!`](@ref) calls `reinit_loop_state` at the
+    current Dopplers and clears each signal's latest filtered prompt. Call it after a
+    Doppler correction from outside or a change of integration length. A length set
+    with [`set_preferred_num_code_periods_to_integrate!`](@ref) takes effect at bit or
+    secondary-code sync, where Tracking does not re-initialise the loop state itself.
+  - **Release**: [`remove_satellite!`](@ref) drops the satellite; nothing else to call.
+
 ## API reference
 
 ```@docs
