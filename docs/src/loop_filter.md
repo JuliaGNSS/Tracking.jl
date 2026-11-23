@@ -21,7 +21,7 @@ The carrier loop is **staged** (see
 FLL-assisted PLL at a **wide** 50 Hz with a 5 Hz **FLL-assist** bandwidth, drops the
 FLL once a phase-lock indicator reads lock, and later narrows to a **narrow** 18 Hz.
 `ScalarTrackingLoop(ThirdOrderBilinearLF)` drops the FLL and pulls in at the wide
-PLL. The **code** bandwidth is a flat 1 Hz. All are one-sided noise bandwidths `BL` (Kaplan &
+PLL. The **code** bandwidth is a flat 1 Hz. All are one-sided loop noise bandwidths `B_n` (Kaplan &
 Hegarty), for every signal. The stages only advance, and
 [`reset_loop_filters!`](@ref) keeps the stage reached; a satellite added anew starts
 over. Read a satellite's stage with
@@ -31,12 +31,12 @@ Where the replica wipes every sign modulation off the prompt (a dataless signal
 synced to its secondary code) the carrier discriminators turn four-quadrant.
 
 The defaults are not scaled with the integration time; each is capped by its
-stability product `BL · T_int` at filter time: the PLL by `0.09`, the FLL path by `0.02`, the
+stability product `B_n T` at filter time: the PLL by `0.09`, the FLL path by `0.02`, the
 code loop by `0.018`
 ([`calc_effective_carrier_loop_bandwidth`](@extref TrackingLoops.calc_effective_carrier_loop_bandwidth-Tuple{Any, Any})
 and siblings). The bandwidths that end up in the loop are:
 
-| Integration time                   |  Wide BL | Narrow BL | FLL-assist BL |  Code BL |
+| Integration time                   | Wide B_n | Narrow B_n | FLL-assist B_n | Code B_n |
 |------------------------------------|---------:|----------:|--------------:|---------:|
 | 1 ms (L1 C/A, L5I, …)              |    50 Hz |     18 Hz |          5 Hz |     1 Hz |
 | 4 ms (E1B / E1C)                   |  22.5 Hz |     18 Hz |          5 Hz |     1 Hz |

@@ -19,19 +19,23 @@ for GPS L1 C/A) and `Fs` the sampling frequency.
 - **Thermal-noise jitter** decreases as `d` shrinks, because the noise on E and L is
   correlated and partially cancels in their difference (Van Dierendonck, Fenton &
   Ford, "Theory and Performance of Narrow Correlator Spacing in a GPS Receiver",
-  NAVIGATION 39(3), 1992). A wider spacing only smooths a time-multiplexed
-  (dither) DLL; Tracking.jl computes E, P and L simultaneously from the same samples.
+  NAVIGATION 39(3):265–283, 1992). That needs E and L correlated simultaneously, as
+  Tracking.jl does from the same samples; a time-shared (τ-dither) DLL does not get it.
 - **Multipath error** also decreases as `d` shrinks, as the discriminator samples
   the correlation function nearer the peak (same paper).
-- **Robustness to dynamics decreases as `d` shrinks.** The discriminator is linear
-  only over `|ε| < d/2` (the pull-in range `T_DLL`, Springer Handbook of GNSS,
-  §14.4.4); beyond it the slope drops to zero with the sign still correct. The lock
-  rule of thumb `3σ_DLL + ε_D ≤ T_DLL ≈ d/2` (eq. 14.57) leaves a narrow `d` less
-  budget for dynamic stress error `ε_D`, which is why NovAtel's narrow-correlator
-  design widens `d` during acquisition and narrows it once locked.
-- **Front-end bandwidth** caps the gains: below roughly `d ≈ 1 / (B_fe · T_chip)`
-  the band-limited peak is rounded, the slope flattens and jitter grows again. Van
-  Dierendonck reports `d ≈ 0.1` as optimal at 8 MHz on L1 C/A.
+- **Robustness to dynamics decreases as `d` shrinks.** With unlimited bandwidth the
+  discriminator is linear only over `|ε| < d/2`; beyond it the slope drops to zero
+  with the sign still correct. The rule of thumb that keeps `3σ_DLL + ε_D` within
+  that range (Won & Pany, "Signal Processing", ch. 14 of the *Springer Handbook of
+  Global Navigation Satellite Systems*, 2017, §14.4) leaves a narrow `d` less budget
+  for the dynamic stress error `ε_D`, which is why NovAtel's narrow correlator widens
+  `d` (to about one chip) during acquisition and narrows it once locked (US patent
+  5,390,207).
+- **Front-end bandwidth** caps the gains: below roughly `d ≈ 1 / (B_fe · T_chip)`,
+  with `B_fe` the two-sided bandwidth (a rule of thumb), the band-limited peak is
+  rounded, the slope flattens and jitter grows again. Van Dierendonck et al. ran
+  `d = 0.1` at an 8 MHz precorrelation bandwidth on L1 C/A and found `d = 0.2` as good
+  or better there; `d = 0.05` paid off at 20 MHz.
 
 ### The sample rate sets the minimum `d`
 
