@@ -104,7 +104,8 @@ and the ICD says it will eventually be discontinued.
   the secondary-code detector has nothing to lock onto. They track and can be
   *ranged* on, but are not decoded: TrackingLoops' sync searches the signal's
   D1 bit grid, not the per-satellite rate GNSSSignals reports as
-  `get_bit_rate(signal, prn)`. See TrackingLoops' `src/beidou/b1i.jl`.
+  `get_bit_rate(signal, prn)`. See TrackingLoops'
+  [BeiDou GEO satellites](https://juliagnss.github.io/TrackingLoops.jl/stable/bit_sync/#BeiDou-GEO-satellites).
 - **BeiDou B2b-I** correlates to an all-zero prompt on a clean replica, which
   takes the loop down through a NaN Doppler
   ([#234](https://github.com/JuliaGNSS/Tracking.jl/issues/234)); its defaults
