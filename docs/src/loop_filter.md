@@ -23,7 +23,7 @@ FLL once a phase-lock indicator reads lock, and later narrows to a **narrow** 18
 `ScalarTrackingLoop(ThirdOrderBilinearLF)` drops the FLL and pulls in at the wide
 PLL. The **code** bandwidth is a flat 1 Hz. All are one-sided loop noise bandwidths `B_n` (Kaplan &
 Hegarty), for every signal. The stages only advance, and
-[`reset_loop_filters!`](@ref) keeps the stage reached; a satellite added anew starts
+[`reinit_loop_states!`](@ref) keeps the stage reached; a satellite added anew starts
 over. Read a satellite's stage with
 `get_carrier_loop_stage(get_loop_state(sat))`.
 
@@ -72,14 +72,15 @@ In the TrackingLoops manual:
 - [`get_carrier_loop_stage`](@extref TrackingLoops.get_carrier_loop_stage-Tuple{TrackingLoops.ScalarLoopState})
 - [`get_phase_lock_indicator`](@extref TrackingLoops.get_phase_lock_indicator-Tuple{TrackingLoops.ScalarLoopState})
 
-## Resetting loop filters
+## Re-initialising the loop states
 
 After changing a signal's integration length with
-[`set_preferred_num_code_periods_to_integrate!`](@ref), reset the affected loop
-filters so the old integration length's filter state does not leak into the new one.
+[`set_preferred_num_code_periods_to_integrate!`](@ref), re-initialise the affected
+loop states so the old integration length's filter state does not leak into the new
+one.
 
 ```@docs
-reset_loop_filters!
+reinit_loop_states!
 ```
 
 ## Custom Configuration

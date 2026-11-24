@@ -38,7 +38,7 @@ using Tracking:
     get_num_integrated_samples,
     get_tracked_sat,
     get_loop_state,
-    reset_loop_filters!
+    reinit_loop_states!
 import TrackingLoops
 using TrackingLoops:
     get_prompt,
@@ -164,7 +164,7 @@ end
 @testset "Through track, the delay-compensated and the vector loops are the FLL-assisted scalar loop" begin
     # `track` hands over the chunk's own NCO command and no application sample, so
     # the delay-compensated loop must equal the FLL-assisted scalar one at the same
-    # bandwidths (it pulls in at 18 Hz by default), also after a reset; outside a
+    # bandwidths (it pulls in at 18 Hz by default), also after a re-initialisation; outside a
     # vector loop the vector loop is the scalar loop it wraps, bit for bit.
     gpsl1, fs, carrier_doppler, chunks = _noisy_gpsl1_chunks(200)
     function run(tracking_loop)
@@ -181,7 +181,7 @@ end
             tracked_sat = get_tracked_sat(track_state, 1)
             push!(history, (get_carrier_doppler(tracked_sat), get_code_phase(tracked_sat)))
         end
-        track_state = track(first(chunks), reset_loop_filters!(track_state), fs)
+        track_state = track(first(chunks), reinit_loop_states!(track_state), fs)
         tracked_sat = get_tracked_sat(track_state, 1)
         push!(history, (get_carrier_doppler(tracked_sat), get_code_phase(tracked_sat)))
         # A scalar loop's replica is its carrier estimate; so is a satellite's
@@ -269,8 +269,8 @@ TrackingLoops.reinit_loop_state(
     0,
 )
 
-@testset "reset_loop_filters! keeps the stage the carrier loop has reached" begin
-    # A reset re-seeds the loop filters but keeps the carrier loop stage; only a
+@testset "reinit_loop_states! keeps the stage the carrier loop has reached" begin
+    # A re-initialisation re-seeds the loop filters but keeps the carrier loop stage; only a
     # newly added satellite starts afresh, in the FLL-assisted stage.
     gpsl1, fs, carrier_doppler, chunks = _noisy_gpsl1_chunks(800)
     track_state = TrackState(; signal = gpsl1)
@@ -284,7 +284,7 @@ TrackingLoops.reinit_loop_state(
         track!(chunk, track_state, fs)
     end
     @test stage(1) == TrackingLoops.NARROW_PLL
-    reset_loop_filters!(track_state)
+    reinit_loop_states!(track_state)
     @test stage(1) == TrackingLoops.NARROW_PLL
     track_state = add_satellite!(track_state; prn = 2, carrier_doppler = 0.0Hz)
     @test stage(2) == TrackingLoops.FLL_ASSISTED_PLL
@@ -304,7 +304,7 @@ end
             track!(chunk, track_state, fs)
         end
         # Its `reinit_loop_state` restarts the count.
-        reset_loop_filters!(track_state)
+        reinit_loop_states!(track_state)
         get_tracked_sat(track_state, 1)
     end
     reference = run(ScalarTrackingLoop(ThirdOrderAssistedBilinearLF))

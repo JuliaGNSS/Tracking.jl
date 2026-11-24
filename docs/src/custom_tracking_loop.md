@@ -40,7 +40,7 @@ satellites.
 
 4. **A TrackingLoops `reinit_loop_state` method** re-initialising a satellite's
    loop state at its current Dopplers, keeping what the tracking loop chooses (e.g.
-   bandwidths); [`reset_loop_filters!`](@ref) calls it:
+   bandwidths); [`reinit_loop_states!`](@ref) calls it:
 
    ```julia
    TrackingLoops.reinit_loop_state(::MyTrackingLoop, loop_state, carrier_doppler, code_doppler) =
@@ -205,7 +205,7 @@ Tracking makes them as follows:
   - **A cut in the integrations**: Tracking has no call for one, as it takes the samples
     of consecutive [`track!`](@ref) calls to be contiguous. After a gap, add the
     satellite again from a fresh handoff.
-  - **A handover**: [`reset_loop_filters!`](@ref) calls `reinit_loop_state` at the
+  - **A handover**: [`reinit_loop_states!`](@ref) calls `reinit_loop_state` at the
     current Dopplers and clears each signal's latest filtered prompt. Call it after a
     Doppler correction from outside or a change of integration length. A length set
     with [`set_preferred_num_code_periods_to_integrate!`](@ref) takes effect at bit or
@@ -290,7 +290,7 @@ tracking loop that has run starts every band at `0`, so pass it the old state's
 
 In the vector loop the navigation filter alone sets a satellite's carrier NCO; a
 residual PLL follows the carrier on the prompts without steering it, and
-`get_carrier_loop_stage` reports `VECTOR_LOOP`. [`reset_loop_filters!`](@ref)
+`get_carrier_loop_stage` reports `VECTOR_LOOP`. [`reinit_loop_states!`](@ref)
 re-initialises the inner loop and keeps the satellite in the vector loop: it drops the
 code correction (the converged Dopplers contain it) until the filter's next update,
 and keeps the carrier command (they do not).

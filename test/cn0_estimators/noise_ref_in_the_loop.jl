@@ -17,7 +17,7 @@ using Tracking:
     CPUDownconvertAndCorrelator,
     TrackState,
     TrackedSat,
-    reset_loop_filters!,
+    reinit_loop_states!,
     set_preferred_num_code_periods_to_integrate!,
     track!
 using TrackingLoopFilters: ThirdOrderBilinearLF
@@ -67,7 +67,7 @@ function _track_noisy(
         track!(clean .+ noise, track_state, fs; downconvert_and_correlator = dc)
         if code_periods > 1 && !promoted && is_bit_or_secondary_code_synced(track_state, 1)
             set_preferred_num_code_periods_to_integrate!(track_state, 1, code_periods)
-            reset_loop_filters!(track_state, 1)
+            reinit_loop_states!(track_state, 1)
             promoted = true
         end
     end

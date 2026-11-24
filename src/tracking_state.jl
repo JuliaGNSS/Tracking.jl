@@ -1155,8 +1155,8 @@ end
 
 # Re-initialise one satellite's loop state (`reinit_loop_state`) and zero each signal's
 # latest filtered correlator bank, so the next integration's previous prompt is 0, for
-# which `fll_disc` returns 0 (see `reset_loop_filters!`).
-@inline function _reset_sat_loop_filters(track_state::TrackState, sat::TrackedSat)
+# which `fll_disc` returns 0 (see `reinit_loop_states!`).
+@inline function _reinit_sat_loop_states(track_state::TrackState, sat::TrackedSat)
     new_signals = map(sat.signals) do s
         state = s.post_correlation_state
         TrackedSignal(
@@ -1194,39 +1194,39 @@ Use it when a signal's integration length changes mid-track, e.g. GPS L5I from
 integrator state does not carry over to the new update interval, and the
 transient can drag the loop out of lock.
 
-No satellite id resets every satellite; `(group_key, prn)` or (single-group) `prn`
-resets one. Mutates `track_state` and returns it. Works for any
+No satellite id re-initialises every satellite; `(group_key, prn)` or (single-group) `prn`
+re-initialises one. Mutates `track_state` and returns it. Works for any
 [`AbstractTrackingLoop`](@extref TrackingLoops.AbstractTrackingLoop)
 through its `reinit_loop_state` method.
 
 ```julia
 set_preferred_num_code_periods_to_integrate!(track_state, 1, GPSL5I, 10)
-reset_loop_filters!(track_state, 1)          # clean handoff for PRN 1
-reset_loop_filters!(track_state)             # …or reset every satellite
+reinit_loop_states!(track_state, 1)          # clean handoff for PRN 1
+reinit_loop_states!(track_state)             # …or every satellite
 ```
 """
-function reset_loop_filters!(track_state::TrackState)
+function reinit_loop_states!(track_state::TrackState)
     for g in Tuple(track_state.groups)
         vals = g.satellites.values
         @inbounds for i in eachindex(vals)
-            vals[i] = _reset_sat_loop_filters(track_state, vals[i])
+            vals[i] = _reinit_sat_loop_states(track_state, vals[i])
         end
     end
     track_state
 end
 
-function reset_loop_filters!(
+function reinit_loop_states!(
     track_state::TrackState{<:SignalGroups},
     group_key::Union{Symbol,Integer,Val},
     prn,
 )
     sats = get_tracked_sats(track_state, group_key)
-    sats[prn] = _reset_sat_loop_filters(track_state, sats[prn])
+    sats[prn] = _reinit_sat_loop_states(track_state, sats[prn])
     track_state
 end
 
-reset_loop_filters!(track_state::TrackState{<:SignalGroups{1}}, prn) =
-    reset_loop_filters!(track_state, 1, prn)
+reinit_loop_states!(track_state::TrackState{<:SignalGroups{1}}, prn) =
+    reinit_loop_states!(track_state, 1, prn)
 
 # Distinct band ids across `groups`, in first-encounter order; folds at compile time.
 @inline _band_ids_in_groups(::Tuple{}, acc::Tuple{Vararg{Symbol}}) = acc

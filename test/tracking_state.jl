@@ -35,7 +35,7 @@ using Tracking:
     remove_satellite,
     get_preferred_num_code_periods_to_integrate,
     set_preferred_num_code_periods_to_integrate!,
-    reset_loop_filters!,
+    reinit_loop_states!,
     get_loop_state,
     SignalGroup
 import TrackingLoops
@@ -682,7 +682,7 @@ end
     @test_throws ArgumentError merge_sats(ts, 1, odd)
 end
 
-@testset "reset_loop_filters! keeps per-sat bandwidth override and clears FLL history (issue #134)" begin
+@testset "reinit_loop_states! keeps per-sat bandwidth override and clears FLL history (issue #134)" begin
     gpsl1 = GPSL1CA()
     ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 100.0Hz)])
     sats = get_tracked_sats(ts)
@@ -711,17 +711,17 @@ end
     end
     sats[1] = TrackedSat(old; signals = fake_prompt_signals, loop_state = overridden_state)
 
-    reset_loop_filters!(ts, 1)
+    reinit_loop_states!(ts, 1)
     state = get_loop_state(get_tracked_sat(ts, 1))
     @test state.bandwidths.wide_carrier == 5.0Hz
     @test state.bandwidths.narrow_carrier == 4.0Hz
     @test state.bandwidths.code == 0.25Hz
     # The FLL's previous prompt is cleared, so the first discriminator after
-    # the reset does not span the old integration.
+    # the re-initialisation does not span the old integration.
     @test get_last_filtered_prompt(ts, 1) == 0.0 + 0.0im
 end
 
-@testset "per-signal preferred_num_code_periods_to_integrate + reset_loop_filters!" begin
+@testset "per-signal preferred_num_code_periods_to_integrate + reinit_loop_states!" begin
     gpsl1 = GPSL1CA()
     track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 100.0Hz)])
 
@@ -743,15 +743,15 @@ end
     @test get_carrier_doppler(track_state, 1) == 137.0Hz
     @test get_loop_state(get_tracked_sat(track_state, 1)).initial_carrier_doppler == 100.0Hz
 
-    reset_loop_filters!(track_state, 1)
-    # The reset keeps the Doppler and re-seeds the tracking loop from it.
+    reinit_loop_states!(track_state, 1)
+    # The re-initialisation keeps the Doppler and re-seeds the tracking loop from it.
     @test get_carrier_doppler(track_state, 1) == 137.0Hz
     @test get_code_doppler(track_state, 1) == 0.5Hz
     @test get_loop_state(get_tracked_sat(track_state, 1)).initial_carrier_doppler == 137.0Hz
     @test get_loop_state(get_tracked_sat(track_state, 1)).initial_code_doppler == 0.5Hz
 
     sats[1] = TrackedSat(sats[1]; carrier_doppler = 201.0Hz)
-    reset_loop_filters!(track_state)
+    reinit_loop_states!(track_state)
     @test get_carrier_doppler(track_state, 1) == 201.0Hz
     @test get_loop_state(get_tracked_sat(track_state, 1)).initial_carrier_doppler == 201.0Hz
 end
