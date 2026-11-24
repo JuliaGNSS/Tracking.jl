@@ -24,7 +24,7 @@ _prompts(λ, num_integrations, rng) =
     sqrt(λ) .+
     (randn(rng, num_integrations) .+ im .* randn(rng, num_integrations)) ./ sqrt(2)
 
-# Non-coherent noise reference: λ̂ = ⟨|P|²⟩ − 1 (known noise power).
+# Noncoherent noise reference: λ̂ = ⟨|P|²⟩ − 1 (known noise power).
 _noise_ref_noncoherent(prompts) = mean(abs2, prompts) - 1
 
 # Coherent noise reference: sum `M` prompts, subtract the sum's known noise power.
@@ -167,7 +167,7 @@ end
     end
 end
 
-@testset "Non-coherent squaring loss is real below ~28 dB-Hz" begin
+@testset "Noncoherent squaring loss is real below ~28 dB-Hz" begin
     # At 1 ms integrations, dropping NWPR's coherent window costs variance at low C/N₀
     # (ratio √(M−1) = 2) and pays off only above the crossover — why a longer
     # `preferred_num_code_periods_to_integrate` is the remedy instead.

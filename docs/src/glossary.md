@@ -6,7 +6,8 @@ which ties them to the textbooks (Kaplan & Hegarty, *Understanding GPS: Principl
 Applications*, 2nd ed., 2006; Misra & Enge, *Global Positioning System*; Parkinson &
 Spilker (eds.), *Global Positioning System: Theory and Applications*, 1996): an **integration** is a coherent integration (Kaplan and Hegarty's
 predetection integration) over whole primary code periods, its length `T` the
-*coherent integration time*; the **prompt** is the on-time correlator; the
+*coherent integration time*, and where noncoherent averaging occurs too, as in the
+C/N₀ estimators, the text says *coherent* and *noncoherent*; the **prompt** is the on-time correlator; the
 **post-correlation filter** combines an antenna array's correlator outputs into the
 *filtered* ones the discriminators read; the **driver** is the signal whose
 integrations close a satellite's carrier and code loops, a **passenger** a signal

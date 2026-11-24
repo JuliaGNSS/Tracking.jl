@@ -213,7 +213,7 @@ julia> get_carrier_doppler(track_state, :modern_gps, 11)
 1234.0 Hz
 ```
 
-Put a pilot first where there is one: without data bits the PLL can integrate longer. The data signals still decode their bits, each with its own `bit_synchronizer`.
+Put a pilot first where there is one: without data bits the PLL can integrate coherently for longer. The data signals still decode their bits, each with its own `bit_synchronizer`.
 
 Signals with different code periods (L1 C/A 1 ms, L1C-P 10 ms) each complete integrations on their own boundaries; the scalar tracking loops update the Doppler from the driver's integrations (see [NCO updates](track.md#NCO-updates)).
 

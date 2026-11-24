@@ -37,23 +37,23 @@ over 4000 samples, so switch a signal off with
 | bias                                | ≈0.13 dB at 45, ≈0.40 at 50 dB-Hz (self-leakage) | ≈+0.05 dB                                       | 20–30 dB-Hz on noise half the time |
 | high-C/N₀ σ                         | keeps improving                           | saturates at `√(M/((M−1)K))` ≈0.5 dB                  | —                        |
 | degenerate outputs                  | none                                      | `-Inf`/`Inf` outside `1 < μ̂ < M`: 5.6 % at 20 dB-Hz  | none                     |
-| residual Doppler                    | immune (non-coherent)                     | **−12 dB at 120 Hz** (see [below](#Residual-Doppler-at-acquisition-handoff)) | immune |
+| residual Doppler                    | immune (noncoherent)                     | **−12 dB at 120 Hz** (see [below](#Residual-Doppler-at-acquisition-handoff)) | immune |
 | extra cost                          | one despread per signal per NCO update span | none                                                | none                     |
 
 ## The default: C/N₀ against a measured noise floor
 
 [`NoiseReferencedCN0Estimator`](@extref TrackingLoops.NoiseReferencedCN0Estimator)
 averages `|P|²/N̂₀ − 1/T` over the integrations, with `N̂₀` the measured noise density
-(see [Noise Estimator](noise_estimator.md)). It is non-coherent: no bit sync, no
-window, no fallback, the same on every signal.
+(see [Noise Estimator](noise_estimator.md)). It averages the prompt powers
+noncoherently: no bit sync, no window, no fallback, the same on every signal.
 
-Below about 28 dB-Hz a non-coherent estimator is the noisier one at matched
-integration length (NWPR sums `M` prompts coherently first). A coherent sum of five
-1 ms prompts *is* one 5 ms prompt, though, so integrate longer with
+Below about 28 dB-Hz a noncoherent estimator is the noisier one at matched coherent
+integration time (NWPR sums `M` prompts coherently first). A coherent sum of five
+1 ms prompts *is* one 5 ms prompt, though, so lengthen the coherent integration with
 [`set_preferred_num_code_periods_to_integrate!`](@ref) and the noise reference beats
 NWPR at every C/N₀. Relative σ in dB over 100 ms, 4000 trials × 9 seeds:
 
-| C/N₀ | NWPR (M = 5) | NoiseRef, 1 ms integrations | NoiseRef, 5 ms integrations |
+| C/N₀ | NWPR (M = 5) | NoiseRef, 1 ms coherent | NoiseRef, 5 ms coherent |
 |:---- | ------------:| ----------------------:| ----------------------:|
 | 20   | 2.96         | 4.79                   | **2.76**               |
 | 25   | 1.50         | 1.72                   | **1.24**               |
@@ -61,8 +61,8 @@ NWPR at every C/N₀. Relative σ in dB over 100 ms, 4000 trials × 9 seeds:
 | 40   | 0.54         | 0.20                   | **0.20**               |
 | 50   | 0.50         | 0.06                   | **0.06**               |
 
-A longer integration also narrows the loop (the carrier bandwidth is capped at
-`0.09 / T_int`), and before bit or secondary sync integrations are one code period
+A longer coherent integration also narrows the loop (the carrier bandwidth is capped
+at `0.09 / T`), and before bit or secondary sync integrations are one code period
 whatever you configure.
 
 The one bias: despreading with a wrong PRN also collects the satellite's own power,
@@ -258,7 +258,7 @@ of 5 seeds over the first 60 ms:
 
 Across a window the residual turns the prompt by `Δf·M·T` cycles, 0.6 at 120 Hz over
 the default 5 ms, which costs `NBP` ~5.9 dB; past 1.25 cycles `μ̂ ≤ 1` gives `-Inf`. The
-non-coherent estimators see only the within-integration loss `sinc²(Δf·T)`. After
+noncoherent estimators see only the within-integration loss `sinc²(Δf·T)`. After
 300 ms NWPR recovers to 39.2 dB-Hz up to 120 Hz; at 250 Hz the loop never pulls in.
 A shorter pre-sync window helps NWPR, at more noise:
 

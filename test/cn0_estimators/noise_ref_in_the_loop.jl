@@ -114,7 +114,7 @@ end
     @test std(ref_high) < std(nwpr_high)
 
     # 20-code-period integrations (a whole L1 C/A bit): NWPR falls back for good, the
-    # non-coherent reference is unaffected by the loop's phase noise.
+    # noncoherent reference is unaffected by the loop's phase noise.
     nwpr_long = run(45.0, () -> NWPRCN0Estimator(gpsl1); code_periods = 20)
     ref_long = run(45.0, () -> NoiseReferencedCN0Estimator(); code_periods = 20)
     @test _median(ref_long) ≈ 45 atol = 1.5
