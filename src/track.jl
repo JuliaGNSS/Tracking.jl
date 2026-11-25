@@ -95,7 +95,7 @@ group (the noise despreads count, riding the first group); see
 For real-time loops, **construct the backend once outside the loop**:
 
 ```julia
-track_state = TrackState(signal, initial_sats)
+track_state = TrackState(initial_sats)
 dc = CPUDownconvertAndCorrelator(; threaded = true)   # hoist!
 
 while got_chunk(rx)

@@ -50,14 +50,14 @@ end
 
 @testset "nco_update_interval shorter than a sample throws" begin
     gpsl1 = GPSL1CA()
-    ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 100.0Hz)])
+    ts = TrackState([TrackedSat(gpsl1, 1, 0.0, 100.0Hz)])
     samples = zeros(ComplexF32, 4000)
     @test_throws ArgumentError track(samples, ts, 4e6Hz; nco_update_interval = 1e-9 * s)
 end
 
 @testset "nco_update_interval without time units throws a clear error" begin
     gpsl1 = GPSL1CA()
-    ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 100.0Hz)])
+    ts = TrackState([TrackedSat(gpsl1, 1, 0.0, 100.0Hz)])
     samples = zeros(ComplexF32, 4000)
     @test_throws ArgumentError track(samples, ts, 4e6Hz; nco_update_interval = 1e-3)
     err = try
@@ -79,7 +79,7 @@ end
     samples = ComplexF32.(
         gen_code(num_samples, gpsl1, prn, fs, get_chip_rate(gpsl1), start_code_phase),
     )
-    ts = TrackState(gpsl1, [TrackedSat(gpsl1, prn, start_code_phase, 0.0Hz)])
+    ts = TrackState([TrackedSat(gpsl1, prn, start_code_phase, 0.0Hz)])
     dc = CPUDownconvertAndCorrelator()
     samples_by_band = (L1 = BandSamples(samples, fs),)
 
@@ -107,7 +107,7 @@ end
     prn = 1
     num_samples = 15_000
     samples = ComplexF32.(gen_code(num_samples, gpsl1, prn, fs, get_chip_rate(gpsl1), 0.0))
-    ts = TrackState(gpsl1, [TrackedSat(gpsl1, prn, 0.0, 0.0Hz)])
+    ts = TrackState([TrackedSat(gpsl1, prn, 0.0, 0.0Hz)])
     track!(samples, ts, fs)
     @test isempty(get_correlator_bank_outputs(only(get_tracked_sat(ts, prn).signals)))
 end
@@ -129,7 +129,7 @@ end
     )
 
     converged(nco_update_interval) = begin
-        ts = TrackState(gpsl1, [TrackedSat(gpsl1, prn, start_code_phase, true_doppler - 30Hz)])
+        ts = TrackState([TrackedSat(gpsl1, prn, start_code_phase, true_doppler - 30Hz)])
         ts = track(samples, ts, fs; nco_update_interval)
         abs(get_carrier_doppler(ts) / Hz - true_doppler / Hz)
     end

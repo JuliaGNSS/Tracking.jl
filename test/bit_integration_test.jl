@@ -40,7 +40,7 @@ using TrackingLoops:
     # a true boundary (#124). Pre-sync and post-sync bits must match the
     # transmitted ones up to one *global* inversion (#127).
     for data_bits in ([1, 0, 1, 1, 0, 0, 1], [0, 1, 0, 0, 1, 1, 0])
-        track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0, carrier_doppler)];)
+        track_state = TrackState([TrackedSat(gpsl1, 1, 0, carrier_doppler)];)
 
         code_period_bits = repeat(data_bits, inner = 20)  # 20 code periods per bit
         decoded_bits = Bool[]
@@ -97,9 +97,9 @@ end
     num_samples = 5000
     code_frequency = get_chip_rate(gpsl1)
 
-    multi_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0, 0.0Hz)])
+    multi_state = TrackState([TrackedSat(gpsl1, 1, 0, 0.0Hz)])
     set_preferred_num_code_periods_to_integrate!(multi_state, 1, 4)
-    single_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0, 0.0Hz)])
+    single_state = TrackState([TrackedSat(gpsl1, 1, 0, 0.0Hz)])
 
     # The bit synchronizer is flushed on every `track` call.
     multi_bits = Bool[]
@@ -184,7 +184,7 @@ end
     # 4th of the 57..63 update at 7 ms and the 8th of the 53..65 update at 13 ms, so
     # 3 and 5 integrations trail it.
     for nco_update_interval in (1e-3s, 3e-3s, 7e-3s, 13e-3s)
-        track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0, 0.0Hz)])
+        track_state = TrackState([TrackedSat(gpsl1, 1, 0, 0.0Hz)])
         track_state = track(samples, track_state, sampling_frequency; nco_update_interval)
         soft_bits = get_soft_bits(track_state, 1)
         # 3 replayed at the lock at code period 60, then one per 20 code periods.
@@ -208,7 +208,7 @@ end
     num_samples = round(Int, 25e6 / 1000)                  # 1 ms = one primary code period
 
     for start_secondary_chip = 0:(secondary_code_length-1)
-        track_state = TrackState(gpsl5, [TrackedSat(gpsl5, prn, 0.0, 0.0Hz)])
+        track_state = TrackState([TrackedSat(gpsl5, prn, 0.0, 0.0Hz)])
         synced_at_code_period = -1
         synced_code_phase = NaN
         for index = 1:40
@@ -264,7 +264,7 @@ end
                 start_phase,
             ),
         )
-        track_state = TrackState(gpsl5, [TrackedSat(gpsl5, prn, start_phase, 0.0Hz)])
+        track_state = TrackState([TrackedSat(gpsl5, prn, start_phase, 0.0Hz)])
         track_state = track(samples, track_state, sampling_frequency)
         @test is_bit_or_secondary_code_synced(track_state)
         # Up to a floating-point residual (~5e-7 chip) of the code loop.
@@ -320,10 +320,9 @@ end
             @views samples[block_range] .*= ComplexF32(2 * data_bit - 1)
         end
 
-        track_state = TrackState(
-            gpsl5,
-            [TrackedSat(gpsl5, prn, start_secondary_chip * primary_code_length, 0.0Hz)],
-        )
+        track_state = TrackState([
+            TrackedSat(gpsl5, prn, start_secondary_chip * primary_code_length, 0.0Hz),
+        ],)
         set_preferred_num_code_periods_to_integrate!(
             track_state,
             prn,
@@ -398,10 +397,9 @@ end
             @views samples[(b*num_samples+1):((b+1)*num_samples)] .*=
                 ComplexF32(2 * data_bit - 1)
         end
-        track_state = TrackState(
-            gpsl5,
-            [TrackedSat(gpsl5, prn, start_secondary_chip * primary_code_length, 0.0Hz)],
-        )
+        track_state = TrackState([
+            TrackedSat(gpsl5, prn, start_secondary_chip * primary_code_length, 0.0Hz),
+        ],)
         get_soft_bits(track(samples, track_state, sampling_frequency; nco_update_interval))
     end
 
@@ -450,7 +448,7 @@ end
     )
 
     for nco_update_interval in (1e-3s, 3e-3s, 7e-3s)
-        track_state = TrackState(gpsl5q, [TrackedSat(gpsl5q, prn, 0.0, 0.0Hz)])
+        track_state = TrackState([TrackedSat(gpsl5q, prn, 0.0, 0.0Hz)])
         set_preferred_num_code_periods_to_integrate!(
             track_state,
             prn,
@@ -483,20 +481,17 @@ end
     secondary_code_length = get_secondary_code_length(gpsl1c_p)  # 1800
     period_samples = round(Int, 13e6 / 100)                    # 10 ms = one primary period
 
-    track_state = TrackState(
-        gpsl1c_p,
-        [
-            TrackedSat(
-                gpsl1c_p,
-                prn,
-                0.0,
-                0.0Hz;
-                correlator_bank = EarlyPromptLateCorrelatorBank(;
-                    preferred_early_late_to_prompt_spacing = 0.1,
-                ),
+    track_state = TrackState([
+        TrackedSat(
+            gpsl1c_p,
+            prn,
+            0.0,
+            0.0Hz;
+            correlator_bank = EarlyPromptLateCorrelatorBank(;
+                preferred_early_late_to_prompt_spacing = 0.1,
             ),
-        ],
-    )
+        ),
+    ],)
     synced_at_code_period = -1
     synced_code_phase = NaN
     for index = 1:(secondary_code_length+5)

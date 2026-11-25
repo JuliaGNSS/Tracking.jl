@@ -263,7 +263,7 @@ julia> using Tracking: Hz
 julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
                         correlator_bank = SevenCorrelatorBank(correlator_spacing_chips = 0.1));
 
-julia> track_state = TrackState(GPSL1CA(), sat);
+julia> track_state = TrackState(sat);
 
 julia> TrackingLoops.get_num_correlators(get_correlator_bank(track_state, 1))
 7

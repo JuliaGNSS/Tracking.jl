@@ -46,7 +46,7 @@ function _ingested_state(
     sat =
         isnothing(signals) ? TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator) :
         TrackedSat(signals, 1, 0.0, 0.0Hz; cn0_estimator)
-    ts = TrackState(gpsl1, [sat])
+    ts = TrackState([sat])
     a = sqrt(prompt_power) * num_samples
     # Each signal's own correlator bank: the prompt at `a`, the other correlators at half.
     correlator_banks = map(isnothing(signals) ? (gpsl1,) : signals) do signal
@@ -186,8 +186,7 @@ end
         MomentsCN0Estimator(; num_averaged_integrations = 100),
         NoCN0Estimator(),
     )
-        ts =
-            TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = estimator)])
+        ts = TrackState([TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = estimator)])
         @test ts.noise_estimators === NamedTuple()
     end
     # The declared-signals constructor takes its slot type from

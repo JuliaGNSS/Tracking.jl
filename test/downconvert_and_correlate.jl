@@ -54,7 +54,7 @@ end
             code_phase,
         ) .* cis.(2π * (0:(num_samples-1)) * 1000.0Hz / sampling_frequency)
 
-    track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, code_phase, 1000.0Hz)])
+    track_state = TrackState([TrackedSat(gpsl1, 1, code_phase, 1000.0Hz)])
     samples_by_band =
         (L1 = BandSamples(samples, sampling_frequency; intermediate_frequency),)
     next_track_state = @inferred downconvert_and_correlate(
@@ -76,7 +76,7 @@ end
             11.0,
         ) .* cis.(2π * (0:(num_samples-1)) * 500.0Hz / sampling_frequency)
 
-    track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 2, 11.0, 500.0Hz)])
+    track_state = TrackState([TrackedSat(gpsl1, 2, 11.0, 500.0Hz)])
     samples_by_band =
         (L1 = BandSamples(samples, sampling_frequency; intermediate_frequency),)
     next_track_state = @inferred downconvert_and_correlate(
@@ -105,7 +105,7 @@ end
         TrackedSat(gpsl1, 1, code_phase, 1000.0Hz);
         next_sample_index = num_samples + 1,
     )
-    ts_skip = TrackState(gpsl1, [sat_past_end])
+    ts_skip = TrackState([sat_past_end])
     downconvert_and_correlator = CPUDownconvertAndCorrelator(; threaded)
 
     samples_by_band =

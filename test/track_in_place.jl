@@ -59,8 +59,8 @@ end
     sat_immutable = TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)
     sat_mutable = TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)
 
-    ts_immutable = TrackState(gpsl1, [sat_immutable])
-    ts_mutable = TrackState(gpsl1, [sat_mutable])
+    ts_immutable = TrackState([sat_immutable])
+    ts_mutable = TrackState([sat_mutable])
 
     dc = CPUDownconvertAndCorrelator(; threaded)
 
@@ -81,7 +81,7 @@ end
     sampling_frequency = 4e6Hz
     samples, gpsl1, carrier_doppler, start_code_phase = gen_samples(sampling_frequency)
     track_state =
-        TrackState(gpsl1, [TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)])
+        TrackState([TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)])
     returned = track!(samples, track_state, sampling_frequency)
     @test returned === track_state
 end
@@ -124,18 +124,15 @@ end
 
     # An estimator that reads no noise density: the default's per-signal despread
     # has its own test below, gated to Julia >= 1.11.
-    track_state = TrackState(
-        gpsl1,
-        [
-            TrackedSat(
-                gpsl1,
-                1,
-                start_code_phase,
-                carrier_doppler - 20Hz;
-                cn0_estimator = NWPRCN0Estimator(gpsl1),
-            ),
-        ],
-    )
+    track_state = TrackState([
+        TrackedSat(
+            gpsl1,
+            1,
+            start_code_phase,
+            carrier_doppler - 20Hz;
+            cn0_estimator = NWPRCN0Estimator(gpsl1),
+        ),
+    ],)
     dc = CPUDownconvertAndCorrelator(; threaded)
 
     # Warm up: compile, and settle the bit synchronizer and `filtered_prompts`.
@@ -167,18 +164,15 @@ end
     )
         sampling_frequency = 4e6Hz
         samples, gpsl1, carrier_doppler, start_code_phase = gen_samples(sampling_frequency)
-        track_state = TrackState(
-            gpsl1,
-            [
-                TrackedSat(
-                    gpsl1,
-                    1,
-                    start_code_phase,
-                    carrier_doppler - 20Hz;
-                    cn0_estimator = NoiseReferencedCN0Estimator(),
-                ),
-            ],
-        )
+        track_state = TrackState([
+            TrackedSat(
+                gpsl1,
+                1,
+                start_code_phase,
+                carrier_doppler - 20Hz;
+                cn0_estimator = NoiseReferencedCN0Estimator(),
+            ),
+        ],)
         dc = CPUDownconvertAndCorrelator(; threaded)
         @test keys(track_state.noise_estimators) == (:GPSL1CA,)
         observation = calc_noise_observation_from_samples(4000.0, 4000, sampling_frequency)
@@ -211,18 +205,15 @@ end
     @testset "the noise reference adds one pointer to the threaded launch residual" begin
         sampling_frequency = 4e6Hz
         samples, gpsl1, carrier_doppler, start_code_phase = gen_samples(sampling_frequency)
-        make_state(make_cn0_estimator) = TrackState(
-            gpsl1,
-            [
-                TrackedSat(
-                    gpsl1,
-                    prn,
-                    start_code_phase,
-                    carrier_doppler - 20Hz;
-                    cn0_estimator = make_cn0_estimator(),
-                ) for prn = 1:2
-            ],
-        )
+        make_state(make_cn0_estimator) = TrackState([
+            TrackedSat(
+                gpsl1,
+                prn,
+                start_code_phase,
+                carrier_doppler - 20Hz;
+                cn0_estimator = make_cn0_estimator(),
+            ) for prn = 1:2
+        ],)
         plain_state = make_state(() -> NWPRCN0Estimator(gpsl1))
         noise_state = make_state(NoiseReferencedCN0Estimator)
         @test keys(plain_state.noise_estimators) == ()
@@ -290,7 +281,7 @@ if VERSION >= v"1.11"
         samples_per_code_period = 5000               # 1 ms GPS L1CA code period @ 5 MHz
         function measure_track_alloc(num_code_periods)
             gpsl1 = GPSL1CA()
-            track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 10.5, 1000.0Hz)])
+            track_state = TrackState([TrackedSat(gpsl1, 1, 10.5, 1000.0Hz)])
             dc = CPUDownconvertAndCorrelator()
             samples = rand(
                 MersenneTwister(num_code_periods),
@@ -321,7 +312,7 @@ if VERSION >= v"1.11"
         samples_per_code_period = 25000              # 1 ms GPS L5I code period @ 25 MHz
         function measure_track_alloc_l5i(num_code_periods)
             gpsl5i = GPSL5I()
-            track_state = TrackState(gpsl5i, [TrackedSat(gpsl5i, 1, 10.5, 1000.0Hz)])
+            track_state = TrackState([TrackedSat(gpsl5i, 1, 10.5, 1000.0Hz)])
             dc = CPUDownconvertAndCorrelator()
             samples = rand(
                 MersenneTwister(num_code_periods),
@@ -349,7 +340,7 @@ if VERSION >= v"1.11"
         samples_per_code_period = 65472              # 4 ms Galileo E1C code period
         function measure_track_alloc_e1c(num_code_periods)
             e1c = GalileoE1C(CBOC)
-            track_state = TrackState(e1c, [TrackedSat(e1c, 1, 10.5, 1000.0Hz)])
+            track_state = TrackState([TrackedSat(e1c, 1, 10.5, 1000.0Hz)])
             dc = CPUDownconvertAndCorrelator()
             samples = rand(
                 MersenneTwister(num_code_periods),

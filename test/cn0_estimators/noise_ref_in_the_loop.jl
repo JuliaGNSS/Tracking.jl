@@ -51,7 +51,6 @@ function _track_noisy(
     rng = Xoshiro(seed)
     amplitude = 10^(cn0_db / 20)
     track_state = TrackState(
-        gpsl1,
         [TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator, tracking_loop)];
         tracking_loop,
     )
@@ -138,7 +137,6 @@ end
         # A freshly seeded generator per run, so both borrow the same codes in
         # the same order *and* despread them at the same phases and carriers.
         ts = TrackState(
-            gpsl1,
             [TrackedSat(gpsl1, 1, 0.0, 0.0Hz)];
             noise_estimators = (
                 GPSL1CA = CorrelatorNoiseDensityEstimator(; rng = Xoshiro(1)),

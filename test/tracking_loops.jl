@@ -129,7 +129,7 @@ end
         ),
     )
 
-    track_state = TrackState(gpsl1, sat_state_after_small_integration; tracking_loop)
+    track_state = TrackState(sat_state_after_small_integration; tracking_loop)
 
     new_track_state =
         @inferred step_tracking_loops(track_state, _meas_l1(sampling_frequency))
@@ -148,7 +148,7 @@ end
             _completed_signal(only(tracked_sat.signals), correlator_bank, num_samples),
         ),
     )
-    track_state = TrackState(gpsl1, sat_state_after_full_integration; tracking_loop)
+    track_state = TrackState(sat_state_after_full_integration; tracking_loop)
 
     new_track_state_after_full_integration =
         @inferred step_tracking_loops(track_state, _meas_l1(sampling_frequency))
@@ -207,7 +207,7 @@ end
                 num_integrated_samples,
             ),
         )
-        ts = TrackState(gpsl1, TrackedSat(sat; signals = (sig,)); tracking_loop)
+        ts = TrackState(TrackedSat(sat; signals = (sig,)); tracking_loop)
         get_carrier_doppler(step_tracking_loops(ts, _meas_l1(sampling_frequency)))
     end
 
@@ -260,7 +260,7 @@ end
                 num_integrated_samples,
             ),
         )
-        ts = TrackState(gpsl1, TrackedSat(sat; signals = (sig,)); tracking_loop)
+        ts = TrackState(TrackedSat(sat; signals = (sig,)); tracking_loop)
         get_code_doppler(step_tracking_loops(ts, _meas_l1(sampling_frequency)))
     end
     one_code_period = 5000
@@ -318,7 +318,7 @@ end
     @test sat2_de.bandwidths.wide_carrier == 36.0Hz
     @test sat2_de.bandwidths.code == 2.0Hz
 
-    track_state = TrackState(gpsl1, tracked; tracking_loop)
+    track_state = TrackState(tracked; tracking_loop)
     new_track_state =
         @inferred step_tracking_loops(track_state, _meas_l1(sampling_frequency))
 
@@ -354,7 +354,7 @@ end
         code_loop_bandwidth = 1.5Hz,
     )
     sat1 = TrackedSat(gpsl1, 1, 0.5, 100.0Hz; tracking_loop)
-    track_state = TrackState(gpsl1, sat1; tracking_loop)
+    track_state = TrackState(sat1; tracking_loop)
 
     # The slot type pins the loop-state type.
     sat2 = TrackedSat(gpsl1, 2, 0.25, 200.0Hz; tracking_loop)
@@ -372,7 +372,7 @@ end
         code_loop_bandwidth = 1.5Hz,
     )
     sat1 = TrackedSat(gpsl1, 1, 0.5, 100.0Hz; tracking_loop)
-    track_state = TrackState(gpsl1, sat1; tracking_loop)
+    track_state = TrackState(sat1; tracking_loop)
 
     # A PLL-only carrier filter has another state type.
     bad_sat = TrackedSat(

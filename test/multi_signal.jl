@@ -70,7 +70,7 @@ using GNSSSignals: GPSL1C_P, GPSL1C_D, GalileoE1B
         tracking_loop,
     )
 
-    track_state = TrackState(gpsl1, sat; tracking_loop)
+    track_state = TrackState(sat; tracking_loop)
 
     range_ = 0:(num_samples-1)
     signal_buf =

@@ -206,8 +206,7 @@ function bench_downconvert_and_correlate(;
 )
     downconvert_and_correlator = Tracking.CPUDownconvertAndCorrelator()
     track_state = TrackState(
-        gnss_signal,
-        [
+        Tracking.to_dictionary([
             _make_initial_sat(
                 gnss_signal,
                 1,
@@ -216,7 +215,7 @@ function bench_downconvert_and_correlate(;
                 num_ants = NumAnts(num_ants),
                 cn0_estimator = _moments_cn0_estimator(100),
             ),
-        ],
+        ]),
     )
     samples =
         num_ants == 1 ? rand(Complex{sample_type}, num_samples) :
@@ -286,7 +285,8 @@ function bench_track(
 )
     gnss_signal = GPSL1CA()
     downconvert_and_correlator = Tracking.CPUDownconvertAndCorrelator()
-    track_state = TrackState(gnss_signal, [_make_initial_sat(gnss_signal, 1, 0.0, 1000Hz)])
+    track_state =
+        TrackState(Tracking.to_dictionary([_make_initial_sat(gnss_signal, 1, 0.0, 1000Hz)]))
     samples = rand(Complex{sample_type}, num_samples)
     f = inplace ? Tracking.track! : Tracking.track
     @benchmarkable $f(
@@ -526,7 +526,10 @@ function _make_multi_signal_track_state(; n_signals, nsamp)
         n_signals,
     )
     sat = Tracking.TrackedSat(signals, 1, 10.5, 1000.0Hz; _with_tracking_loop(tracking_loop)...)
-    ts = TrackState(gpsl1, sat; _with_tracking_loop(tracking_loop)...)
+    ts = TrackState(
+        Tracking.to_dictionary(sat);
+        _with_tracking_loop(tracking_loop)...,
+    )
     ts, rand(Complex{Float32}, nsamp)
 end
 
@@ -756,13 +759,17 @@ function _axes_multisignal_state(n_signals)
         n_signals,
     )
     sat = Tracking.TrackedSat(signals, 1, 10.5, 1000.0Hz; _with_tracking_loop(tracking_loop)...)
-    TrackState(_AXES_SIG, sat; _with_tracking_loop(tracking_loop)...)
+    TrackState(
+        Tracking.to_dictionary(sat);
+        _with_tracking_loop(tracking_loop)...,
+    )
 end
 
 # A single-signal sat with M antenna channels.
 _axes_multiantenna_state(num_ants) = TrackState(
-    _AXES_SIG,
-    [_make_initial_sat(_AXES_SIG, 1, 10.5, 1000.0Hz; num_ants = NumAnts(num_ants))],
+    Tracking.to_dictionary([
+        _make_initial_sat(_AXES_SIG, 1, 10.5, 1000.0Hz; num_ants = NumAnts(num_ants)),
+    ]),
 )
 
 # Bands are keyed by `GNSSSignals.get_band_id` (`:L1`).
@@ -1061,8 +1068,7 @@ function bench_track_noise_ref(;
     gnss_signal = GPSL1CA()
     downconvert_and_correlator = Tracking.CPUDownconvertAndCorrelator()
     track_state = TrackState(
-        gnss_signal,
-        [
+        Tracking.to_dictionary([
             Tracking.TrackedSat(
                 gnss_signal,
                 1,
@@ -1070,7 +1076,7 @@ function bench_track_noise_ref(;
                 1000Hz;
                 cn0_estimator = _NoiseReferencedCN0Estimator(),
             ),
-        ],
+        ]),
     )
     samples = rand(Complex{sample_type}, num_samples)
     @benchmarkable Tracking.track!(

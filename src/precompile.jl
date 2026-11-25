@@ -56,11 +56,11 @@ end
 # A function, so every call is statically dispatched on the signal type; methods
 # compiled through dynamic dispatch were not all cached.
 function _precompile_track(signal, samples_f32, samples_i16, sampling_frequency, backend16)
-    state = TrackState(signal, [TrackedSat(signal, 1, 0.0, 180.0Hz)])
+    state = TrackState([TrackedSat(signal, 1, 0.0, 180.0Hz)])
     for _ = 1:3
         track!(samples_f32, state, sampling_frequency)
     end
-    state16 = TrackState(signal, [TrackedSat(signal, 1, 0.0, 180.0Hz)])
+    state16 = TrackState([TrackedSat(signal, 1, 0.0, 180.0Hz)])
     for _ = 1:3
         track!(
             samples_i16,

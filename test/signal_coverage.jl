@@ -154,7 +154,7 @@ end
     # Unit peak: CBOC/TMBOC replicas have integer amplitudes (±13/±25).
     samples = ComplexF32.(code ./ maximum(abs, code))
 
-    track_state = TrackState(signal, [TrackedSat(signal, prn, start_code_phase, 0.0Hz)])
+    track_state = TrackState([TrackedSat(signal, prn, start_code_phase, 0.0Hz)])
     track_state = track(samples, track_state, sampling_frequency)
     tracked_sat = get_tracked_sat(track_state, prn)
 

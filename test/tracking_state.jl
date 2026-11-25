@@ -83,7 +83,7 @@ end
     gpsl1 = GPSL1CA()
     tracked_sats = [TrackedSat(gpsl1, 1, 10.5, 10.0Hz), TrackedSat(gpsl1, 2, 11.5, 20.0Hz)]
 
-    track_state = @inferred TrackState(gpsl1, tracked_sats)
+    track_state = @inferred TrackState(tracked_sats)
 
     @test get_signal(track_state) isa GPSL1CA
     @test get_prn(track_state, 1) == 1
@@ -100,10 +100,10 @@ end
     @test get_tracked_sats(track_state)[1].loop_state.initial_carrier_doppler == 10.0Hz
     @test get_tracked_sats(track_state)[2].loop_state.initial_carrier_doppler == 20.0Hz
 
-    track_state2 = @inferred TrackState(
-        gpsl1,
-        [TrackedSat(gpsl1, 1, 10.5, 10.0Hz), TrackedSat(gpsl1, 2, 11.5, 20.0Hz)],
-    )
+    track_state2 = @inferred TrackState([
+        TrackedSat(gpsl1, 1, 10.5, 10.0Hz),
+        TrackedSat(gpsl1, 2, 11.5, 20.0Hz),
+    ],)
 
     @test @inferred(get_signal(track_state2)) isa GPSL1CA
     @test @inferred(get_tracked_sat(track_state2, 1)).prn == 1
@@ -153,7 +153,7 @@ end
         wide_carrier_loop_bandwidth = 22.0Hz,
         code_loop_bandwidth = 1.5Hz,
     )
-    @test_throws ArgumentError TrackState(gpsl1, [sat_default]; tracking_loop = different)
+    @test_throws ArgumentError TrackState([sat_default]; tracking_loop = different)
 end
 
 @testset "Slot-vector copy helpers share vs detach Dictionary Indices (#123)" begin
@@ -195,7 +195,7 @@ end
 @testset "track output is structurally detached from input (#123)" begin
     sampling_frequency = 5e6Hz
     gpsl1 = GPSL1CA()
-    ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 10.5, 10.0Hz)])
+    ts = TrackState([TrackedSat(gpsl1, 1, 10.5, 10.0Hz)])
     samples = rand(ComplexF64, 5000)
 
     ts2 = Tracking.track(samples, ts, sampling_frequency)
@@ -271,7 +271,7 @@ end
     gpsl1 = GPSL1CA()
     tracked_sats = [TrackedSat(gpsl1, 1, 10.5, 10.0Hz), TrackedSat(gpsl1, 2, 11.5, 20.0Hz)]
 
-    track_state = @inferred TrackState(gpsl1, tracked_sats)
+    track_state = @inferred TrackState(tracked_sats)
 
     new_track_state =
         @inferred merge_sats(track_state, 1, TrackedSat(gpsl1, 3, 5.5, 80.0Hz))
@@ -396,9 +396,9 @@ end
     sat = TrackedSat(gpsl1, 1, 10.5, 10.0Hz; tracking_loop)
     sat2 = TrackedSat(gpsl1, 2, 11.5, 20.0Hz; tracking_loop)
 
-    ts_from_vec = TrackState(gpsl1, [sat, sat2]; tracking_loop)
+    ts_from_vec = TrackState([sat, sat2]; tracking_loop)
     @test length(get_tracked_sats(ts_from_vec)) == 2
-    ts_from_one = TrackState(gpsl1, sat; tracking_loop)
+    ts_from_one = TrackState(sat; tracking_loop)
     @test length(get_tracked_sats(ts_from_one)) == 1
     ts_from_dict = TrackState(dictionary([1 => sat, 2 => sat2]); tracking_loop)
     @test length(get_tracked_sats(ts_from_dict)) == 2
@@ -406,7 +406,7 @@ end
     @test sat.prn == 1
     @test get_loop_state(sat) isa ScalarLoopState
 
-    track_state = TrackState(gpsl1, [sat, sat2]; tracking_loop)
+    track_state = TrackState([sat, sat2]; tracking_loop)
     track_state2 = _prepare_for_new_buffer!(track_state)
     @test track_state2 === track_state
     for tsat in get_tracked_sats(track_state).values
@@ -441,11 +441,8 @@ end
 
     gpsl1 = GPSL1CA()
     tracking_loop = CountingTrackingLoop()
-    track_state = TrackState(
-        gpsl1,
-        [TrackedSat(gpsl1, 1, 10.5, 10.0Hz; tracking_loop)];
-        tracking_loop,
-    )
+    track_state =
+        TrackState([TrackedSat(gpsl1, 1, 10.5, 10.0Hz; tracking_loop)]; tracking_loop)
     @test track_state.tracking_loop.sats_added[1] == 0
 
     track_state2 =
@@ -467,7 +464,6 @@ end
     # Without an override the tracking loop is unchanged.
     default_estimator = ScalarTrackingLoop()
     default_track_state = TrackState(
-        gpsl1,
         [TrackedSat(gpsl1, 1, 10.5, 10.0Hz; tracking_loop = default_estimator)];
         tracking_loop = default_estimator,
     )
@@ -556,7 +552,7 @@ end
 
 @testset "preferred_num_code_periods_to_integrate validation (issue #128)" begin
     gpsl1 = GPSL1CA()
-    track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 0.0Hz)])
+    track_state = TrackState([TrackedSat(gpsl1, 1, 0.0, 0.0Hz)])
 
     # Only divisors of the 20 code periods per bit keep integrations on the bit grid.
     for valid in (1, 2, 4, 5, 10, 20)
@@ -584,7 +580,7 @@ end
 
     # GPS L5I has 10 code periods per bit.
     gpsl5 = GPSL5I()
-    l5_state = TrackState(gpsl5, [TrackedSat(gpsl5, 1, 0.0, 0.0Hz)])
+    l5_state = TrackState([TrackedSat(gpsl5, 1, 0.0, 0.0Hz)])
     @test_throws ArgumentError set_preferred_num_code_periods_to_integrate!(l5_state, 1, 4)
     set_preferred_num_code_periods_to_integrate!(l5_state, 1, 10)
     @test get_preferred_num_code_periods_to_integrate(l5_state, 1) == 10
@@ -592,7 +588,7 @@ end
     # A pilot has no bit grid, so any length ≥ 1 is accepted; at runtime it is
     # clamped to a divisor of the secondary-code period (#134).
     gpsl1c_p = GPSL1C_P(TMBOC)
-    p_state = TrackState(gpsl1c_p, [TrackedSat(gpsl1c_p, 1, 0.0, 0.0Hz)])
+    p_state = TrackState([TrackedSat(gpsl1c_p, 1, 0.0, 0.0Hz)])
     set_preferred_num_code_periods_to_integrate!(p_state, 1, 7)
     @test get_preferred_num_code_periods_to_integrate(p_state, 1) == 7
     @test_throws ArgumentError set_preferred_num_code_periods_to_integrate!(p_state, 1, 0)
@@ -669,7 +665,7 @@ end
 
 @testset "merge_sats rejects sats whose full slot type mismatches (issue #134)" begin
     gpsl1 = GPSL1CA()
-    ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 10.5, 10.0Hz)])
+    ts = TrackState([TrackedSat(gpsl1, 1, 10.5, 10.0Hz)])
     # Same tracking loop state, different correlator: an ArgumentError, not a
     # MethodError downstream.
     odd = TrackedSat(
@@ -684,7 +680,7 @@ end
 
 @testset "reinit_loop_states! keeps per-sat bandwidth override and clears FLL history (issue #134)" begin
     gpsl1 = GPSL1CA()
-    ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 100.0Hz)])
+    ts = TrackState([TrackedSat(gpsl1, 1, 0.0, 100.0Hz)])
     sats = get_tracked_sats(ts)
     old = sats[1]
     overridden_state = TrackingLoops.ScalarLoopState(
@@ -723,7 +719,7 @@ end
 
 @testset "per-signal preferred_num_code_periods_to_integrate + reinit_loop_states!" begin
     gpsl1 = GPSL1CA()
-    track_state = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 0.0, 100.0Hz)])
+    track_state = TrackState([TrackedSat(gpsl1, 1, 0.0, 100.0Hz)])
 
     @test get_preferred_num_code_periods_to_integrate(track_state, 1) == 1
     set_preferred_num_code_periods_to_integrate!(track_state, 1, 20)
@@ -759,7 +755,7 @@ end
 @testset "non-mutating constructors give their result its own sample offsets" begin
     gpsl1 = GPSL1CA()
     band = GNSSSignals.get_band_id(GNSSSignals.get_band(gpsl1))
-    ts = TrackState(gpsl1, [TrackedSat(gpsl1, 1, 10.5, 10.0Hz)])
+    ts = TrackState([TrackedSat(gpsl1, 1, 10.5, 10.0Hz)])
     ts.sample_index_offsets[band] = 4000
     derived_states = (
         merge_sats(ts, TrackedSat(gpsl1, 2, 11.5, 20.0Hz)),
@@ -794,7 +790,6 @@ end
     @test rebuilt.sample_index_offsets == Dict(l1 => 8000, l5 => 0)
     @test rebuilt.sample_index_offsets !== old.sample_index_offsets
     @test TrackState(
-        gpsl1,
         [TrackedSat(gpsl1, 1, 10.5, 10.0Hz)];
         sample_index_offsets = (; l1 => 4000),
     ).sample_index_offsets == Dict(l1 => 4000)

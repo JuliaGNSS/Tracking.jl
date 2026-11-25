@@ -52,7 +52,7 @@ TrackingLoops.estimate_cn0(estimator::CountingCN0Estimator, integration_time) =
     # ... and through both `TrackedSat` constructors into a `TrackState`.
     sat = TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = CountingCN0Estimator(3))
     @test estimate_cn0(sat) == 3dBHz
-    track_state = TrackState(gpsl1, [sat])
+    track_state = TrackState([sat])
     @test estimate_cn0(track_state, 1) == 3dBHz
 
     multi = TrackedSat(
@@ -86,10 +86,9 @@ TrackingLoops.estimate_cn0(estimator::CountingCN0Estimator, integration_time) =
 
     # The custom estimator is actually the one `track` feeds: 5 integrations in.
     samples = complex.(float.(gen_code(4000, gpsl1, 1, 4e6Hz, get_chip_rate(gpsl1), 0.0)))
-    track_state = TrackState(
-        gpsl1,
-        [TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = CountingCN0Estimator(0))],
-    )
+    track_state = TrackState([
+        TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = CountingCN0Estimator(0)),
+    ],)
     for _ = 1:5
         track_state = track(samples, track_state, 4e6Hz)
     end

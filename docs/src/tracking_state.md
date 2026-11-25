@@ -66,7 +66,7 @@ The concrete type stays fixed as satellites come and go. `signal = GPSL1CA()` is
 
 ### Power-user: pre-built `TrackedSat`s
 
-To change the correlator bank or post-correlation filter *type*, build the `TrackedSat`s yourself, pass them to `TrackState(signal, sats)`, and add more with `add_satellite!(track_state, group, sat)`. The single-signal constructor:
+To change the correlator bank or post-correlation filter *type*, build the `TrackedSat`s yourself, pass them to `TrackState(sats)`, and add more with `add_satellite!(track_state, group, sat)`. The single-signal constructor:
 
 ```julia
 TrackedSat(
@@ -120,7 +120,7 @@ julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
            num_averaged_integrations = 200,
        );
 
-julia> track_state = TrackState(GPSL1CA(), sat);
+julia> track_state = TrackState(sat);
 
 julia> get_num_ants(track_state, 1)
 4

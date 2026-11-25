@@ -23,18 +23,15 @@ using TrackingLoops:
     start_index = 1
     gpsl1 = GPSL1CA()
 
-    track_state = @inferred TrackState(
-        gpsl1,
-        [
-            TrackedSat(
-                gpsl1,
-                prn,
-                start_code_phase,
-                carrier_doppler;
-                cn0_estimator = NWPRCN0Estimator(gpsl1),
-            ),
-        ],
-    )
+    track_state = @inferred TrackState([
+        TrackedSat(
+            gpsl1,
+            prn,
+            start_code_phase,
+            carrier_doppler;
+            cn0_estimator = NWPRCN0Estimator(gpsl1),
+        ),
+    ],)
 
     for i = 1:100
         samples =
@@ -76,7 +73,7 @@ end
         rng = Xoshiro(seed)
         amplitude(cn0) = isnothing(cn0) ? 0.0 : 10^(cn0 / 20)
         sat = TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator)
-        track_state = TrackState(gpsl1, [sat])
+        track_state = TrackState([sat])
         total_code_periods = num_code_periods + fade_code_periods
         data_bits = rand(rng, (-1.0, 1.0), div(total_code_periods, 20) + 2)
         for code_period_index = 1:total_code_periods

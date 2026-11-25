@@ -83,10 +83,9 @@ _unit_code(c) = (m = maximum(abs, c); m == 0 ? float(c) : c ./ m)
     range = 0:3999
     start_carrier_phase = π / 2
 
-    track_state = @inferred TrackState(
-        gpsl1,
-        [TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)],
-    )
+    track_state = @inferred TrackState([
+        TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz),
+    ],)
 
     samples_temp =
         cis.(2π .* carrier_doppler .* range ./ sampling_frequency .+ start_carrier_phase) .*
@@ -468,7 +467,7 @@ end
                 tracking_loop,
             ),
         ]
-        track_state = TrackState(gpsl1, tracked_sats; tracking_loop)
+        track_state = TrackState(tracked_sats; tracking_loop)
 
         samples =
             cis.(
@@ -694,10 +693,9 @@ end
     range = 0:3999
     start_carrier_phase = π / 2
 
-    track_state = @inferred TrackState(
-        gpsl1,
-        [TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz)];
-    )
+    track_state = @inferred TrackState([
+        TrackedSat(gpsl1, 1, start_code_phase, carrier_doppler - 20Hz),
+    ];)
 
     samples =
         cis.(
@@ -785,18 +783,15 @@ end
     range = 0:3999
     start_carrier_phase = π / 2
 
-    track_state = @inferred TrackState(
-        gpsl1,
-        [
-            TrackedSat(
-                gpsl1,
-                1,
-                start_code_phase,
-                carrier_doppler - 20Hz;
-                num_ants = NumAnts(3),
-            ),
-        ],
-    )
+    track_state = @inferred TrackState([
+        TrackedSat(
+            gpsl1,
+            1,
+            start_code_phase,
+            carrier_doppler - 20Hz;
+            num_ants = NumAnts(3),
+        ),
+    ],)
 
     @test get_num_ants(track_state) == 3
 
@@ -897,11 +892,10 @@ end
     end
 
     # A single-antenna control is fed the array's last column.
-    array_state = @inferred TrackState(
-        gpsl1,
-        [TrackedSat(gpsl1, prn, 0.0, 0.0Hz; num_ants = NumAnts(num_ants))],
-    )
-    single_state = @inferred TrackState(gpsl1, [TrackedSat(gpsl1, prn, 0.0, 0.0Hz)])
+    array_state = @inferred TrackState([
+        TrackedSat(gpsl1, prn, 0.0, 0.0Hz; num_ants = NumAnts(num_ants)),
+    ],)
+    single_state = @inferred TrackState([TrackedSat(gpsl1, prn, 0.0, 0.0Hz)])
     rng_array = Random.MersenneTwister(2718)
     rng_single = Random.MersenneTwister(2718)
     for i = 0:199
@@ -955,19 +949,16 @@ end
     end
 
     function run(filter)
-        state = TrackState(
-            gpsl1,
-            [
-                TrackedSat(
-                    gpsl1,
-                    prn,
-                    0.0,
-                    0.0Hz;
-                    num_ants = NumAnts(num_ants),
-                    post_corr_filter = filter,
-                ),
-            ],
-        )
+        state = TrackState([
+            TrackedSat(
+                gpsl1,
+                prn,
+                0.0,
+                0.0Hz;
+                num_ants = NumAnts(num_ants),
+                post_corr_filter = filter,
+            ),
+        ],)
         rng = Random.MersenneTwister(31415)
         for _ = 1:200
             state = track(make_array_signal(rng), state, sampling_frequency)
@@ -1026,8 +1017,7 @@ end
         samples
     end
 
-    track_state =
-        TrackState(gpsl1, [TrackedSat(gpsl1, prn, start_code_phase, carrier_doppler)])
+    track_state = TrackState([TrackedSat(gpsl1, prn, start_code_phase, carrier_doppler)])
 
     signal1 = make_signal(10, π / 2, start_code_phase)
     track_state = track(signal1, track_state, sampling_frequency)

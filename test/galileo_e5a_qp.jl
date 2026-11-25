@@ -117,7 +117,7 @@ const CODE_PERIODS_PER_CYCLE = 31
         )
         samples = ComplexF32.(code)
 
-        track_state = TrackState(e5a_qp, [TrackedSat(e5a_qp, prn, start_code_phase, 0.0Hz)])
+        track_state = TrackState([TrackedSat(e5a_qp, prn, start_code_phase, 0.0Hz)])
         track_state = track(samples, track_state, sampling_frequency)
         tracked_sat = get_tracked_sat(track_state, prn)
 
@@ -149,7 +149,7 @@ const CODE_PERIODS_PER_CYCLE = 31
             ) .* code,
         )
 
-        track_state = TrackState(e5a_qp, [TrackedSat(e5a_qp, prn, 0.0, 195.0Hz)])
+        track_state = TrackState([TrackedSat(e5a_qp, prn, 0.0, 195.0Hz)])
         for cycle = 1:num_cycles
             track_state = track(
                 view(samples, ((cycle-1)*samples_per_cycle+1):(cycle*samples_per_cycle)),

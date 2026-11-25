@@ -91,7 +91,7 @@ function correlate_once(
     sat =
         correlator_bank === nothing ? TrackedSat(sig, 1, cphase, cdopp) :
         TrackedSat(sig, 1, cphase, cdopp; correlator_bank)
-    ts = TrackState(sig, [sat])
+    ts = TrackState([sat])
     ts2 = downconvert_and_correlate(dc, meas, ts)
     _completed_or_partial_correlator(first(get_tracked_sat(ts2, 1).signals))
 end
@@ -128,18 +128,15 @@ function _track_noisy(
     rng = MersenneTwister(seed)
     # Pin the moment estimator: NWPR also reacts to the quantisation's residual
     # phase noise, which would fold a second effect into the measured C/N0 loss.
-    ts = TrackState(
-        gpsl1,
-        [
-            TrackedSat(
-                gpsl1,
-                prn,
-                start_code_phase,
-                cdopp;
-                cn0_estimator = MomentsCN0Estimator(; num_averaged_integrations = 100),
-            ),
-        ],
-    )
+    ts = TrackState([
+        TrackedSat(
+            gpsl1,
+            prn,
+            start_code_phase,
+            cdopp;
+            cn0_estimator = MomentsCN0Estimator(; num_averaged_integrations = 100),
+        ),
+    ],)
     dopplers = Float64[]
     for i = 0:(nepoch-1)
         carrier_phase = 2π * (cdopp / 1Hz) * nsamp * i / (fs / 1Hz) + start_carrier_phase
@@ -326,7 +323,6 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
                     dc,
                     meas,
                     TrackState(
-                        sig,
                         TrackedSat((mksig(sig),), 1, 100.0, 200Hz; tracking_loop = loop);
                         tracking_loop = loop,
                     ),
@@ -341,8 +337,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             200Hz;
             tracking_loop = loop,
         )
-        tsN =
-            downconvert_and_correlate(dc, meas, TrackState(sig, satN; tracking_loop = loop))
+        tsN = downconvert_and_correlate(dc, meas, TrackState(satN; tracking_loop = loop))
         for (s, signal) in zip(get_tracked_sat(tsN, 1).signals, signals)
             cs = single(signal)
             @test get_prompt(s.correlator_bank) == get_prompt(cs)
@@ -377,7 +372,6 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
                         dc,
                         meas,
                         TrackState(
-                            sig,
                             TrackedSat(
                                 (mksig(sig),),
                                 1,
@@ -399,8 +393,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
             200Hz;
             tracking_loop = loop,
         )
-        tsN =
-            downconvert_and_correlate(dc, meas, TrackState(sig, satN; tracking_loop = loop))
+        tsN = downconvert_and_correlate(dc, meas, TrackState(satN; tracking_loop = loop))
         for (s, signal) in zip(get_tracked_sat(tsN, 1).signals, signals)
             cs = single(signal)
             c = _completed_or_partial_correlator(s)
@@ -481,13 +474,10 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         tsN = downconvert_and_correlate(
             dc,
             meas,
-            TrackState(
-                sig,
-                [
-                    TrackedSat(sig, prn, 100.0, 200Hz; correlator_bank = mkcorr()) for
-                    prn in prns
-                ],
-            ),
+            TrackState([
+                TrackedSat(sig, prn, 100.0, 200Hz; correlator_bank = mkcorr()) for
+                prn in prns
+            ],),
         )
         for prn in prns
             alone = first(
@@ -495,18 +485,9 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
                     downconvert_and_correlate(
                         dc,
                         meas,
-                        TrackState(
-                            sig,
-                            [
-                                TrackedSat(
-                                    sig,
-                                    prn,
-                                    100.0,
-                                    200Hz;
-                                    correlator_bank = mkcorr(),
-                                ),
-                            ],
-                        ),
+                        TrackState([
+                            TrackedSat(sig, prn, 100.0, 200Hz; correlator_bank = mkcorr()),
+                        ],),
                     ),
                     prn,
                 ).signals,
@@ -529,7 +510,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         tsN = downconvert_and_correlate(
             dc,
             meas,
-            TrackState(sig, [TrackedSat(sig, prn, 100.0, 200Hz) for prn in prns]),
+            TrackState([TrackedSat(sig, prn, 100.0, 200Hz) for prn in prns]),
         )
         for prn in prns
             alone = first(
@@ -537,7 +518,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
                     downconvert_and_correlate(
                         dc,
                         meas,
-                        TrackState(sig, [TrackedSat(sig, prn, 100.0, 200Hz)]),
+                        TrackState([TrackedSat(sig, prn, 100.0, 200Hz)]),
                     ),
                     prn,
                 ).signals,
@@ -552,7 +533,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
     @testset "errors on non-Complex{Int16} (Float) measurement" begin
         sig, fs = GPSL1CA(), 5e6Hz
         capf = Complex{Float32}.(make_capture(sig, 1, fs, 5000, 200Hz, 100.0))
-        ts = TrackState(sig, [TrackedSat(sig, 1, 100.0, 200Hz)])
+        ts = TrackState([TrackedSat(sig, 1, 100.0, 200Hz)])
         meas = (L1 = BandSamples(capf, fs; intermediate_frequency = 0.0Hz),)
         @test_throws ArgumentError downconvert_and_correlate(
             OneBitDownconvertAndCorrelator(; threaded = true),
@@ -567,7 +548,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         sig, fs = GalileoE1B(CBOC), 15e6Hz
         cap = make_capture(sig, 1, fs, 5000, 200Hz, 100.0)
         meas = (L1 = BandSamples(cap, fs; intermediate_frequency = 0.0Hz),)
-        ts = TrackState(sig, [TrackedSat(sig, 1, 100.0, 200Hz)])
+        ts = TrackState([TrackedSat(sig, 1, 100.0, 200Hz)])
         @test_throws ArgumentError downconvert_and_correlate(
             OneBitDownconvertAndCorrelator(; threaded = true),
             meas,
@@ -607,7 +588,7 @@ _std(x) = (m = _mean(x); sqrt(sum(v -> abs2(v - m), x) / (length(x) - 1)))
         cdopp, cphase = 300Hz, 230.0
         nsamp = round(Int, (fs / 1Hz) * 1e-3) * 5
         cap = make_capture(sig, 1, fs, nsamp, cdopp, cphase)
-        ts = TrackState(sig, [TrackedSat(sig, 1, cphase, cdopp - 20Hz)])
+        ts = TrackState([TrackedSat(sig, 1, cphase, cdopp - 20Hz)])
         ts = track(
             cap,
             ts,

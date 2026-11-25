@@ -39,7 +39,7 @@ function correlated_state(; fs = 4e6Hz, prn = 1, num_samples = 12_000)
     gpsl1 = GPSL1CA()
     code_frequency = get_chip_rate(gpsl1)
     samples = ComplexF32.(gen_code(num_samples, gpsl1, prn, fs, code_frequency, 0.0))
-    ts = TrackState(gpsl1, [TrackedSat(gpsl1, prn, 0.0, 100.0Hz)])
+    ts = TrackState([TrackedSat(gpsl1, prn, 0.0, 100.0Hz)])
     dc = CPUDownconvertAndCorrelator()
     samples_by_band = (L1 = BandSamples(samples, fs),)
     # Correlate only, so the outputs survive for the estimate calls below.

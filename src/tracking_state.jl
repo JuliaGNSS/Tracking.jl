@@ -30,7 +30,7 @@ may then omit `group_key=`.
 The per-group `TrackedSat` type (correlator bank, post-correlation filter and loop-state
 types) is frozen at construction. For non-default correlator bank or post-correlation filter *types*,
 build the `TrackedSat`s yourself and construct from them (e.g.
-`TrackState(signal, sats)`).
+`TrackState(sats)`).
 
 `noise_estimators` declares the per-signal noise sources
 ([`AbstractNoiseDensityEstimator`](@extref TrackingLoops.AbstractNoiseDensityEstimator)s keyed by
@@ -276,32 +276,14 @@ function _make_template_tracked_sat(
 end
 
 function TrackState(
-    signal::AbstractGNSSSignal,
     tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}};
     tracking_loop::AbstractTrackingLoop = _default_tracking_loop(),
     noise_estimators::Maybe{NamedTuple} = nothing,
     sample_index_offsets = nothing,
 )
-    # `signal` is unused (each sat carries its signals); kept for compatibility.
     sats_dict = to_dictionary(tracked_sats)
     _assert_tracking_loop_types_match(sats_dict, tracking_loop)
     groups = (default = _signal_group_from_dict(sats_dict),)
-    TrackState(
-        groups,
-        tracking_loop,
-        _resolve_noise_estimators(noise_estimators, groups);
-        sample_index_offsets,
-    )
-end
-
-function TrackState(
-    tracked_sats::Dictionary{<:Any,<:TrackedSat};
-    tracking_loop::AbstractTrackingLoop = _default_tracking_loop(),
-    noise_estimators::Maybe{NamedTuple} = nothing,
-    sample_index_offsets = nothing,
-)
-    _assert_tracking_loop_types_match(tracked_sats, tracking_loop)
-    groups = (default = _signal_group_from_dict(tracked_sats),)
     TrackState(
         groups,
         tracking_loop,

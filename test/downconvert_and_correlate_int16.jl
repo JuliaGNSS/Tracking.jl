@@ -82,7 +82,7 @@ function correlate_once(dc, sig, fs, nsamp, cdopp, cphase; correlator_bank = not
     sat =
         correlator_bank === nothing ? TrackedSat(sig, 1, cphase, cdopp) :
         TrackedSat(sig, 1, cphase, cdopp; correlator_bank)
-    ts = TrackState(sig, [sat])
+    ts = TrackState([sat])
     ts2 = downconvert_and_correlate(dc, meas, ts)
     _completed_or_partial_correlator(first(get_tracked_sat(ts2, 1).signals))
 end
@@ -185,7 +185,7 @@ end
         nsamp = round(Int, (fs / 1Hz) * 1e-3)
         cap = make_capture_mat(sig, fs, nsamp, 200Hz, 100.0, M)
         meas = (L1 = BandSamples(cap, fs; intermediate_frequency = 0.0Hz),)
-        mk() = TrackState(sig, [TrackedSat(sig, 1, 100.0, 200Hz; num_ants = NumAnts(M))])
+        mk() = TrackState([TrackedSat(sig, 1, 100.0, 200Hz; num_ants = NumAnts(M))])
         run(dc) = _completed_or_partial_correlator(
             first(get_tracked_sat(downconvert_and_correlate(dc, meas, mk()), 1).signals),
         )
@@ -247,7 +247,7 @@ end
                 downconvert_and_correlate(
                     dc,
                     meas,
-                    TrackState(sig, [TrackedSat(sig, 1, 100.0, 200Hz)]),
+                    TrackState([TrackedSat(sig, 1, 100.0, 200Hz)]),
                 ),
                 1,
             ).signals,
@@ -297,7 +297,7 @@ end
                 downconvert_and_correlate(
                     dc,
                     meas,
-                    TrackState(sig, [TrackedSat(sig, 1, 100.0, 200Hz)]),
+                    TrackState([TrackedSat(sig, 1, 100.0, 200Hz)]),
                 ),
                 1,
             ).signals,
@@ -409,7 +409,6 @@ end
                     dc,
                     meas,
                     TrackState(
-                        sig,
                         TrackedSat((mksig(sig),), 1, 100.0, 200Hz; tracking_loop = loop);
                         tracking_loop = loop,
                     ),
@@ -425,8 +424,7 @@ end
             200Hz;
             tracking_loop = loop,
         )
-        tsN =
-            downconvert_and_correlate(dc, meas, TrackState(sig, satN; tracking_loop = loop))
+        tsN = downconvert_and_correlate(dc, meas, TrackState(satN; tracking_loop = loop))
         # Int16 wipes a passenger's carrier off a little differently from the signal
         # alone, as v11.2 did: within 1 % of the driver's prompt.
         tol = 0.01 * abs(get_prompt(first(get_tracked_sat(tsN, 1).signals).correlator_bank))
@@ -441,7 +439,7 @@ end
     @testset "errors on non-Complex{Int16} (Float) measurement" begin
         sig, fs = GPSL1CA(), 5e6Hz
         capf = Complex{Float32}.(make_capture(sig, 1, fs, 5000, 200Hz, 100.0))
-        ts = TrackState(sig, [TrackedSat(sig, 1, 100.0, 200Hz)])
+        ts = TrackState([TrackedSat(sig, 1, 100.0, 200Hz)])
         meas = (L1 = BandSamples(capf, fs; intermediate_frequency = 0.0Hz),)
         # Both backends share the `_check_sample_type` hook.
         @test_throws ArgumentError downconvert_and_correlate(
@@ -482,7 +480,7 @@ end
                 downconvert_and_correlate(
                     dc,
                     meas,
-                    TrackState(sig, [TrackedSat(sig, 1, cphase, 0.0Hz)]),
+                    TrackState([TrackedSat(sig, 1, cphase, 0.0Hz)]),
                 ),
                 1,
             ).signals,
@@ -599,7 +597,7 @@ end
         # 100 ms: long enough for the 18 Hz carrier loop to settle a 20 Hz step.
         nsamp = round(Int, (fs / 1Hz) * 1e-3) * 100
         cap = make_capture(sig, 1, fs, nsamp, cdopp, cphase)
-        ts = TrackState(sig, [TrackedSat(sig, 1, cphase, cdopp - 20Hz)])
+        ts = TrackState([TrackedSat(sig, 1, cphase, cdopp - 20Hz)])
         ts = track(
             cap,
             ts,

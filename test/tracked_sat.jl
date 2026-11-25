@@ -269,7 +269,7 @@ end
     @test get_last_num_code_periods(sat, 1) == 1
     @test isnan(get_last_coherent_integration_time(sat, 1))
 
-    track_state = TrackState(gpsl1, [sat])
+    track_state = TrackState([sat])
     @test get_last_num_code_periods(track_state, 1) == 1
     @test isnan(get_last_coherent_integration_time(track_state, 1))
 end
@@ -277,7 +277,7 @@ end
 @testset "The bit synchronizer's readers read 0 before sync" begin
     gpsl1 = GPSL1CA()
     sat = TrackedSat(gpsl1, 1, 10.0, 500.0Hz)
-    track_state = TrackState(gpsl1, [sat])
+    track_state = TrackState([sat])
     for reader in (get_bit_polarity, get_num_code_periods_into_bit)
         @test reader(only(get_signals(sat))) == 0
         @test reader(sat) == 0

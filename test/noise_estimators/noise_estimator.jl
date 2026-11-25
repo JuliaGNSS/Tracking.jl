@@ -21,10 +21,9 @@ using TrackingLoops:
     obs = calc_noise_observation_from_samples(4000.0, 4000, 4e6Hz)
 
     # Provisioned automatically, because the sat's estimator reads a density.
-    single = TrackState(
-        gpsl1,
-        [TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator())],
-    )
+    single = TrackState([
+        TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator()),
+    ],)
     @test keys(single.noise_estimators) == (:GPSL1CA,)
     @test append_noise_observation!(single, obs) === single
     @test !iszero(get_noise_density(single.noise_estimators.GPSL1CA))
@@ -35,10 +34,9 @@ using TrackingLoops:
 
     # A signal with no consumer has no estimator: `ArgumentError`, not a bare
     # `KeyError`.
-    nwpr_only = TrackState(
-        gpsl1,
-        [TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = NWPRCN0Estimator(gpsl1))],
-    )
+    nwpr_only = TrackState([
+        TrackedSat(gpsl1, 1, 0.0, 0.0Hz; cn0_estimator = NWPRCN0Estimator(gpsl1)),
+    ],)
     @test nwpr_only.noise_estimators === NamedTuple()
     @test_throws ArgumentError append_noise_observation!(nwpr_only, obs, :GPSL1CA)
     @test_throws ArgumentError append_noise_observation!(nwpr_only, obs)
@@ -116,7 +114,6 @@ end
     # `nothing` beside the requiring one's real slot, never the other's floor.
     gpsl1, e1b = GPSL1CA(), GalileoE1B(CBOC)
     mixed = TrackState(
-        gpsl1,
         TrackedSat(
             (gpsl1, e1b),
             1,

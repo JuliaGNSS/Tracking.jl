@@ -59,7 +59,6 @@ _to_int16(samples) = Complex{Int16}.(
 # and a 1 dB gate is ≈4.5σ for any draw (at `K = 50` it would be ≈0.6 dB).
 function _tracked(samples, dc; fs = FS, num_calls = 20, kwargs...)
     ts = TrackState(
-        GPSL1,
         [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator())];
         kwargs...,
     )
@@ -80,10 +79,9 @@ end
 @testset "the software path needs no `append_noise_observation!` and never warns" begin
     # Counterpart of the never-fed warning in `test/cn0_estimators/noise_ref.jl`:
     # the sample-driven path measures before the loop update reads, so no warning.
-    ts = TrackState(
-        GPSL1,
-        [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator())],
-    )
+    ts = TrackState([
+        TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator()),
+    ],)
     samples = _sky(45.0)
     logs, _ = collect_test_logs() do
         track!((L1 = BandSamples(samples, FS),), ts)
@@ -134,18 +132,9 @@ end
     # after chunk 0.
     samples = _sky(-Inf; seed = 11)
     for (interval, expected_num_sub) in ((1ms, 1), (4ms, 4), (20ms, 20))
-        ts = TrackState(
-            GPSL1,
-            [
-                TrackedSat(
-                    GPSL1,
-                    1,
-                    0.0,
-                    0.0Hz;
-                    cn0_estimator = NoiseReferencedCN0Estimator(),
-                ),
-            ],
-        )
+        ts = TrackState([
+            TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator()),
+        ],)
         # 40 ms of buffer: 40 / 20 / 2 chunks at the three intervals.
         long = repeat(samples, 4)
         num_chunks = ceil(Int, 40 / ustrip(ms, interval))
@@ -155,10 +144,9 @@ end
     end
 
     # Another sampling frequency: the count follows duration, not sample count.
-    ts = TrackState(
-        GPSL1,
-        [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator())],
-    )
+    ts = TrackState([
+        TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator()),
+    ],)
     fast = _sky(-Inf; seed = 12, num_samples = 100_000, fs = 10e6Hz)
     track!((L1 = BandSamples(fast, 10e6Hz),), ts; nco_update_interval = 4ms)
     # 10 ms at a 4 ms chunk: 4 + 4, then a 2 ms trailing chunk measured at its
@@ -174,10 +162,9 @@ end
     num_samples = 200_000                       # 10 ms — one L1C-P code period
     samples =
         ComplexF32.(sqrt(ustrip(Hz, fs)) .* randn(Xoshiro(5), ComplexF64, num_samples))
-    ts = TrackState(
-        l1cp,
-        [TrackedSat(l1cp, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator())],
-    )
+    ts = TrackState([
+        TrackedSat(l1cp, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator()),
+    ],)
     track!((L1 = BandSamples(samples, fs),), ts; nco_update_interval = 1ms)
     # Ten 1 ms chunks, each a tenth of a code period — one slice apiece, not zero.
     @test Base.length(ts.noise_estimators.GPSL1C_P.observations) == 10
@@ -398,10 +385,9 @@ end
     # `measure_noise` decides; `samples_unchanged` (a cache-reuse hint) must not.
     samples = _sky(-Inf; seed = 6)
     samples_by_band = (L1 = BandSamples(samples, FS),)
-    ts = TrackState(
-        GPSL1,
-        [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator())],
-    )
+    ts = TrackState([
+        TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NoiseReferencedCN0Estimator()),
+    ],)
     dc = CPUDownconvertAndCorrelator()
     # Unchunked: 10 ms in 1 ms code-period slices.
     downconvert_and_correlate!(dc, samples_by_band, ts)
@@ -452,10 +438,7 @@ end
 
 @testset "a signal without a consumer is never despread" begin
     # Provisioning is gated on `requires_noise_density`: NWPR users pay nothing.
-    ts = TrackState(
-        GPSL1,
-        [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NWPRCN0Estimator())],
-    )
+    ts = TrackState([TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = NWPRCN0Estimator())],)
     @test ts.noise_estimators === NamedTuple()
     track!((L1 = BandSamples(_sky(45.0), FS),), ts)
     @test ts.noise_estimators === NamedTuple()
@@ -495,8 +478,7 @@ if VERSION >= v"1.11"
         samples = quantise ? _to_int16(raw) : ComplexF32.(raw)
         samples_by_band = (L1 = BandSamples(samples, FS),)
         # Paired with a reference-free state, isolating the measurement.
-        state(cn0) =
-            TrackState(GPSL1, [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = cn0())])
+        state(cn0) = TrackState([TrackedSat(GPSL1, 1, 0.0, 0.0Hz; cn0_estimator = cn0())])
         ts = state(NoiseReferencedCN0Estimator)
         plain_ts = state(() -> NWPRCN0Estimator(GPSL1))
         dc = build()
@@ -647,7 +629,6 @@ end
 
 function _tracked_array(samples, num_ants; fs = FS, num_calls = 20, kwargs...)
     ts = TrackState(
-        GPSL1,
         [
             TrackedSat(
                 GPSL1,
@@ -672,10 +653,10 @@ end
     @test noise_density_type(CorrelatorNoiseDensityEstimator(; num_ants = NumAnts(1))) ===
           NoiseDensity
 
-    single = TrackState(GPSL1, [TrackedSat(GPSL1, 1, 0.0, 0.0Hz)])
+    single = TrackState([TrackedSat(GPSL1, 1, 0.0, 0.0Hz)])
     @test noise_density_type(single.noise_estimators.GPSL1CA) === NoiseDensity
 
-    array = TrackState(GPSL1, [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; num_ants = NumAnts(3))])
+    array = TrackState([TrackedSat(GPSL1, 1, 0.0, 0.0Hz; num_ants = NumAnts(3))])
     D = noise_density_type(array.noise_estimators.GPSL1CA)
     @test D <: SMatrix{3,3}
     @test NumAnts(D) === NumAnts(3)
@@ -685,7 +666,6 @@ end
     # Caught at construction rather than as a shape error inside the loop update.
     err = try
         TrackState(
-            GPSL1,
             [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; num_ants = NumAnts(3))];
             noise_estimators = (GPSL1CA = CorrelatorNoiseDensityEstimator(),),
         )
@@ -699,14 +679,12 @@ end
 
     # Matching counts are accepted.
     @test TrackState(
-        GPSL1,
         [TrackedSat(GPSL1, 1, 0.0, 0.0Hz; num_ants = NumAnts(3))];
         noise_estimators = (
             GPSL1CA = CorrelatorNoiseDensityEstimator(; num_ants = NumAnts(3)),
         ),
     ) isa TrackState
     @test TrackState(
-        GPSL1,
         [TrackedSat(GPSL1, 1, 0.0, 0.0Hz)];
         noise_estimators = (GPSL1CA = CorrelatorNoiseDensityEstimator(),),
     ) isa TrackState
@@ -742,19 +720,16 @@ end
             (sqrt(ustrip(Hz, FS)) .* randn(Xoshiro(seed), ComplexF64, 4000) for _ = 1:M),
         ),
     )
-    array_state(M) = TrackState(
-        GPSL1,
-        [
-            TrackedSat(
-                GPSL1,
-                1,
-                0.0,
-                0.0Hz;
-                num_ants = NumAnts(M),
-                cn0_estimator = NoiseReferencedCN0Estimator(),
-            ),
-        ],
-    )
+    array_state(M) = TrackState([
+        TrackedSat(
+            GPSL1,
+            1,
+            0.0,
+            0.0Hz;
+            num_ants = NumAnts(M),
+            cn0_estimator = NoiseReferencedCN0Estimator(),
+        ),
+    ],)
 
     # No gate at or below the tap count.
     for (M, expected_calls) in ((1, 1), (3, 1), (4, 2), (8, 3))
@@ -831,19 +806,9 @@ if VERSION >= v"1.11"
         end
         samples = ComplexF32.(_sky_array(45.0, (1.0, 1.5, 2.0); seed = 13))
         samples_by_band = (L1 = BandSamples(samples, FS),)
-        state(cn0) = TrackState(
-            GPSL1,
-            [
-                TrackedSat(
-                    GPSL1,
-                    1,
-                    0.0,
-                    0.0Hz;
-                    num_ants = NumAnts(3),
-                    cn0_estimator = cn0(),
-                ),
-            ],
-        )
+        state(cn0) = TrackState([
+            TrackedSat(GPSL1, 1, 0.0, 0.0Hz; num_ants = NumAnts(3), cn0_estimator = cn0()),
+        ],)
         ts = state(NoiseReferencedCN0Estimator)
         plain_ts = state(() -> NWPRCN0Estimator(GPSL1))
         @test keys(ts.noise_estimators) == (:GPSL1CA,)
