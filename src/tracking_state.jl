@@ -1251,7 +1251,7 @@ get_band_ids(ts) == (:L1, :L5)
     _band_ids_in_groups(Tuple(track_state.groups), ())
 
 # TrackingLoops' navigation-solution interface, forwarded to the tracking loop (the
-# scalar loops answer `nothing`).
+# scalar loops answer `nothing`) and re-exported.
 TrackingLoops.get_navigation_solution(track_state::TrackState) =
     TrackingLoops.get_navigation_solution(track_state.tracking_loop)
 TrackingLoops.get_navigation_status(track_state::TrackState) =

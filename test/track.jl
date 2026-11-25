@@ -316,13 +316,25 @@ end
 
 @testset "A scalar loop has no navigation solution to report" begin
     track_state = TrackState(; signal = GPSL1CA())
-    @test TrackingLoops.get_navigation_solution(track_state) === nothing
-    @test TrackingLoops.get_navigation_status(track_state) === nothing
-    @test TrackingLoops.get_navigation_update_index(track_state) === nothing
-    @test TrackingLoops.get_navigation_elapsed_time(track_state) === nothing
-    @test TrackingLoops.get_satellite_report(track_state, GPSL1CA(), 1) === nothing
+    @test Tracking.get_navigation_solution(track_state) === nothing
+    @test Tracking.get_navigation_status(track_state) === nothing
+    @test Tracking.get_navigation_update_index(track_state) === nothing
+    @test Tracking.get_navigation_elapsed_time(track_state) === nothing
+    @test Tracking.get_satellite_report(track_state, GPSL1CA(), 1) === nothing
+    @test Tracking.get_decoder(track_state, GPSL1CA(), 1) === nothing
     vector = TrackState(; signal = GPSL1CA(), tracking_loop = VectorTrackingLoop(GPSL1CA()))
-    @test TrackingLoops.get_navigation_update_index(vector) == 0
+    @test Tracking.get_navigation_update_index(vector) == 0
+    # Re-exported with the TrackState methods, so `using Tracking` reaches them.
+    for name in (
+        :get_navigation_solution,
+        :get_navigation_status,
+        :get_navigation_update_index,
+        :get_navigation_elapsed_time,
+        :get_satellite_report,
+        :get_decoder,
+    )
+        @test Base.isexported(Tracking, name)
+    end
 end
 
 # A tracking loop that keeps every integration it is handed, around the loop it wraps.

@@ -262,10 +262,10 @@ tracking loop. Inside, its navigation processor decodes every satellite's bits (
 signal, or of the data component of a pilot + data pair, e.g.
 `VectorTrackingLoop(GalileoE1C() => GalileoE1B())` with
 `signals = (GalileoE1C(), GalileoE1B())`), solves the PVT, and from its first fix
-closes all loops with a navigation filter. Read `get_navigation_solution(tracking_loop)` and
-`get_navigation_status(tracking_loop)`; a `TrackState` forwards these, and
-`get_navigation_update_index`, `get_navigation_elapsed_time`, `get_satellite_report` and
-`get_decoder`, to its tracking loop.
+closes all loops with a navigation filter. Read `get_navigation_solution` and
+`get_navigation_status`, `get_navigation_update_index`, `get_navigation_elapsed_time`,
+`get_satellite_report` and `get_decoder` of the tracking loop or of the `TrackState`,
+which forwards them to its tracking loop; Tracking re-exports them.
 
 ```julia
 tracking_loop = VectorTrackingLoop(GPSL1CA())
@@ -273,7 +273,7 @@ track_state = TrackState(; signal = GPSL1CA(), tracking_loop)
 for chunk in chunks
     track!(chunk, track_state, sampling_frequency)
 end
-get_navigation_solution(tracking_loop)
+get_navigation_solution(track_state)
 ```
 
 Each integration gives it the satellite (`prn`), the replica's code

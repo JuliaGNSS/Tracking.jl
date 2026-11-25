@@ -39,17 +39,23 @@ import TrackingLoops:
     EarlyPromptLateCorrelatorBank,
     estimate_cn0,
     get_correlator_outputs,
+    get_decoder,
     get_default_correlator_bank,
     get_early,
     get_late,
     get_last_coherent_integration_time,
     get_last_num_code_periods,
+    get_navigation_elapsed_time,
+    get_navigation_solution,
+    get_navigation_status,
+    get_navigation_update_index,
     get_noise_correlator_bank,
     get_noise_density_and_status,
     get_nco_command,
     get_num_ants,
     get_num_code_periods_into_bit,
     get_prompt,
+    get_satellite_report,
     get_secondary_code_phase,
     get_soft_bits,
     init_loop_state,
@@ -135,6 +141,14 @@ export estimate_cn0,
     get_early,
     get_late,
     get_correlator_outputs
+
+# TrackingLoops' navigation readers, forwarded from a `TrackState` to its tracking loop.
+export get_navigation_solution,
+    get_navigation_status,
+    get_navigation_update_index,
+    get_navigation_elapsed_time,
+    get_satellite_report,
+    get_decoder
 
 _default_tracking_loop() = ScalarTrackingLoop()
 
