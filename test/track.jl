@@ -327,7 +327,7 @@ end
     @test get_loop_state(counted).num_integrations == 0
 end
 
-@testset "A scalar loop has no navigation solution to report" begin
+@testset "A TrackState forwards the navigation readers to its tracking loop" begin
     track_state = TrackState(; signal = GPSL1CA())
     @test Tracking.get_navigation_solution(track_state) === nothing
     @test Tracking.get_navigation_status(track_state) === nothing
@@ -335,8 +335,13 @@ end
     @test Tracking.get_navigation_elapsed_time(track_state) === nothing
     @test Tracking.get_satellite_report(track_state, GPSL1CA(), 1) === nothing
     @test Tracking.get_decoder(track_state, GPSL1CA(), 1) === nothing
-    vector = TrackState(; signal = GPSL1CA(), tracking_loop = VectorTrackingLoop(GPSL1CA()))
+    @test Tracking.get_tracking_loop(track_state) isa ScalarTrackingLoop
+    tracking_loop = VectorTrackingLoop(GPSL1CA())
+    vector = TrackState(; signal = GPSL1CA(), tracking_loop)
+    @test Tracking.get_tracking_loop(vector) === tracking_loop
     @test Tracking.get_navigation_update_index(vector) == 0
+    @test Tracking.get_vector_tracking_members(vector) ===
+          TrackingLoops.get_vector_tracking_members(tracking_loop)
     # Re-exported with the TrackState methods, so `using Tracking` reaches them.
     for name in (
         :get_navigation_solution,
@@ -345,6 +350,8 @@ end
         :get_navigation_elapsed_time,
         :get_satellite_report,
         :get_decoder,
+        :get_vector_tracking_members,
+        :get_tracking_loop,
     )
         @test Base.isexported(Tracking, name)
     end

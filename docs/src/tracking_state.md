@@ -136,6 +136,13 @@ kwarg-update constructor `TrackedSat(sat; signals = (...))`.
 TrackState
 ```
 
+[`get_tracking_loop`](@ref) returns the tracking loop a `TrackState` runs, for
+TrackingLoops' readers of its configuration.
+
+```@docs
+get_tracking_loop
+```
+
 ## Adding satellites
 
 [`add_satellite!`](@ref) builds a [`TrackedSat`](@ref) with the default correlator bank and post-correlation filter from the acquisition handoff (`prn`, `code_phase`, `carrier_doppler`, optionally `code_doppler` and `carrier_phase` in cycles). Adding a PRN again overwrites it, as [`merge_sats`](@ref) does.

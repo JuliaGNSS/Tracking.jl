@@ -63,6 +63,7 @@ import TrackingLoops:
     get_satellite_report,
     get_secondary_code_phase,
     get_soft_bits,
+    get_vector_tracking_members,
     init_loop_state,
     is_bit_or_secondary_code_synced,
     is_dataless_with_secondary_code,
@@ -124,6 +125,7 @@ export get_prn,
     OneBitDownconvertAndCorrelator,
     TwoBitDownconvertAndCorrelator,
     TrackState,
+    get_tracking_loop,
     add_satellite!,
     add_satellite,
     remove_satellite!,
@@ -169,7 +171,8 @@ export get_navigation_solution,
     get_navigation_update_index,
     get_navigation_elapsed_time,
     get_satellite_report,
-    get_decoder
+    get_decoder,
+    get_vector_tracking_members
 
 _default_tracking_loop() = ScalarTrackingLoop()
 

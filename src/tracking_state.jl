@@ -1260,8 +1260,17 @@ get_band_ids(ts) == (:L1, :L5)
 @inline get_band_ids(track_state::TrackState) =
     _band_ids_in_groups(Tuple(track_state.groups), ())
 
+"""
+$(SIGNATURES)
+
+The tracking loop `track_state` runs. TrackingLoops' readers of a tracking loop's
+configuration read it, e.g. `get_loop_bandwidths(get_tracking_loop(track_state), signal)` or, of a `VectorTrackingLoop`, `get_signal_pairs`, `get_scalar_loop`,
+`get_navigation_update_interval`, `get_min_tracking_cn0` and `get_nav_filter_config`.
+"""
+get_tracking_loop(track_state::TrackState) = track_state.tracking_loop
+
 # TrackingLoops' navigation-solution interface, forwarded to the tracking loop (the
-# scalar loops answer `nothing`) and re-exported.
+# scalar loops answer `nothing`) and re-exported, with the vector loop's members.
 TrackingLoops.get_navigation_solution(track_state::TrackState) =
     TrackingLoops.get_navigation_solution(track_state.tracking_loop)
 TrackingLoops.get_navigation_status(track_state::TrackState) =
@@ -1280,3 +1289,5 @@ TrackingLoops.get_decoder(
     signal::AbstractGNSSSignal,
     prn::Integer,
 ) = TrackingLoops.get_decoder(track_state.tracking_loop, signal, prn)
+TrackingLoops.get_vector_tracking_members(track_state::TrackState) =
+    TrackingLoops.get_vector_tracking_members(track_state.tracking_loop)

@@ -264,8 +264,10 @@ signal, or of the data component of a pilot + data pair, e.g.
 `signals = (GalileoE1C(), GalileoE1B())`), solves the PVT, and from its first fix
 closes all loops with a navigation filter. Read `get_navigation_solution` and
 `get_navigation_status`, `get_navigation_update_index`, `get_navigation_elapsed_time`,
-`get_satellite_report` and `get_decoder` of the tracking loop or of the `TrackState`,
-which forwards them to its tracking loop; Tracking re-exports them.
+`get_satellite_report`, `get_decoder` and `get_vector_tracking_members` of the
+tracking loop or of the `TrackState`, which forwards them to its tracking loop;
+Tracking re-exports them. Read how the loop is configured off
+[`get_tracking_loop`](@ref)`(track_state)`.
 
 ```julia
 tracking_loop = VectorTrackingLoop(GPSL1CA())
