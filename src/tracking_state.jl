@@ -27,10 +27,13 @@ track_state = TrackState(; signal = GPSL1CA())
 This is `TrackState(; signals = (default = (GPSL1CA(),),))`; `add_satellite!`
 may then omit `group_key=`.
 
-The per-group `TrackedSat` type (correlator bank, post-correlation filter and loop-state
-types) is frozen at construction. For non-default correlator bank or post-correlation filter *types*,
-build the `TrackedSat`s yourself and construct from them (e.g.
-`TrackState(sats)`).
+The per-group `TrackedSat` type (correlator bank, post-correlation filter, C/N₀
+estimator and loop-state types) is frozen at construction. `correlator_bank`,
+`post_corr_filter` and `cn0_estimator` configure the groups given as signal tuples, as
+for [`SignalGroup`](@ref): `nothing` for each signal's default, one value for every
+signal, or a tuple of one per signal; every satellite [`add_satellite!`](@ref) adds
+gets its own copy. A pre-built `SignalGroup` keeps its own. Built from `TrackedSat`s
+(`TrackState(sats)`), a satellite added later starts from the first one's.
 
 `noise_estimators` declares the per-signal noise sources
 ([`AbstractNoiseDensityEstimator`](@extref TrackingLoops.AbstractNoiseDensityEstimator)s keyed by
@@ -53,6 +56,9 @@ function TrackState(;
     signals = nothing,
     tracking_loop::Maybe{AbstractTrackingLoop} = nothing,
     num_ants::NumAnts = NumAnts(1),
+    correlator_bank = nothing,
+    post_corr_filter = nothing,
+    cn0_estimator = nothing,
     noise_estimators::Maybe{NamedTuple} = nothing,
     sample_index_offsets = nothing,
 )
@@ -77,10 +83,17 @@ function TrackState(;
     # Each satellite's loop bandwidth is seeded from its own group's driver
     # signal (`init_loop_state`), so groups need no shared compromise.
     tracking_loop = something(tracking_loop, _default_tracking_loop())
-    # An entry is a bare signal tuple (takes `num_ants`) or a pre-built
-    # `SignalGroup` (carries its own band and `num_ants`).
+    # An entry is a bare signal tuple (takes `num_ants` and the signal configuration)
+    # or a pre-built `SignalGroup` (carries its own band, `num_ants` and configuration).
     groups = map(sig_groups_nt) do entry
-        _normalize_group_entry(entry, tracking_loop, num_ants)
+        _normalize_group_entry(
+            entry,
+            tracking_loop,
+            num_ants;
+            correlator_bank,
+            post_corr_filter,
+            cn0_estimator,
+        )
     end
     _validate_same_band_num_ants(groups)
     TrackState(
@@ -196,26 +209,23 @@ end
 # NamedTuple of signal tuples / SignalGroups → pass through unchanged.
 @inline _normalize_signal_groups(signals::NamedTuple) = signals
 
-# Build a freshly-templated SignalGroup from a bare signal tuple.
-@inline function _normalize_group_entry(
+# Build a freshly-templated SignalGroup from a bare signal tuple, configured by the
+# `TrackState`'s `correlator_bank`, `post_corr_filter` and `cn0_estimator`.
+@inline _normalize_group_entry(
     sig_tuple::Tuple{Vararg{AbstractGNSSSignal}},
     tracking_loop::AbstractTrackingLoop,
-    num_ants::NumAnts,
-)
-    band = get_band(first(sig_tuple))
-    _validate_signal_group(sig_tuple, band)
-    template = _make_template_tracked_sat(sig_tuple, tracking_loop, num_ants)
-    sats = Dictionary{Int,typeof(template)}(Int[], typeof(template)[])
-    SignalGroup(band, sats, sig_tuple, num_ants)
-end
+    num_ants::NumAnts;
+    signal_configuration...,
+) = SignalGroup(sig_tuple; num_ants, tracking_loop, signal_configuration...)
 
 # Pre-built SignalGroup: passes through, except that an empty one whose slot
 # type does not fit `tracking_loop` is rebuilt from a fresh template. Its own
-# `num_ants` wins over the `TrackState` keyword.
+# `num_ants` and signal templates win over the `TrackState` keywords.
 @inline function _normalize_group_entry(
     g::SignalGroup,
     tracking_loop::AbstractTrackingLoop,
-    _num_ants::NumAnts,
+    _num_ants::NumAnts;
+    _signal_configuration...,
 )
     sats = g.satellites
     if !isempty(sats)
@@ -223,12 +233,12 @@ end
         _assert_tracking_loop_types_match(sats, tracking_loop)
         return g
     end
-    template = _make_template_tracked_sat(g.signals, tracking_loop, g.num_ants)
+    template = _make_template_tracked_sat(g.signal_templates, tracking_loop)
     if typeof(template) === eltype(sats)
         return g
     end
     new_sats = Dictionary{Int,typeof(template)}(Int[], typeof(template)[])
-    SignalGroup(g.band, new_sats, g.signals, g.num_ants)
+    SignalGroup(g.band, new_sats, g.signals, g.num_ants, g.signal_templates)
 end
 
 # Groups on one band share a front end, so they must declare the same `num_ants`.
@@ -264,16 +274,13 @@ end
 """
 $(SIGNATURES)
 
-Build a template `TrackedSat` for `signal_tuple` whose concrete type fixes the
-group's dictionary value type; its data (PRN 0, zero Doppler) is meaningless.
+Build a template `TrackedSat` from a group's `signal_templates` whose concrete type
+fixes the group's dictionary value type; its data (PRN 0, zero Doppler) is meaningless.
 """
-function _make_template_tracked_sat(
-    signal_tuple::Tuple{Vararg{AbstractGNSSSignal}},
+_make_template_tracked_sat(
+    signal_templates::Tuple{Vararg{TrackedSignal}},
     tracking_loop::AbstractTrackingLoop,
-    num_ants::NumAnts,
-)
-    TrackedSat(signal_tuple, 0, 0.0, 0.0Hz; tracking_loop, num_ants)
-end
+) = TrackedSat(signal_templates, 0, 0.0, 0.0Hz; tracking_loop)
 
 function TrackState(
     tracked_sats::Union{TrackedSat,Vector{<:TrackedSat},Dictionary{<:Any,<:TrackedSat}};
@@ -367,7 +374,8 @@ end
     sig_tuple = map(s -> get_signal(s), sat.signals)
     band = get_band(first(sig_tuple))
     num_ants = NumAnts(get_num_ants(sat))
-    SignalGroup(band, dict, sig_tuple, num_ants)
+    # A satellite added later starts from the first one's configuration.
+    SignalGroup(band, dict, sig_tuple, num_ants, deepcopy(sat.signals))
 end
 
 # The first copy `track` makes of the caller's state. Detaches the key set as
@@ -781,12 +789,11 @@ function _make_default_tracked_sat_for_group(
 )
     g = track_state.groups[group_key]
     TrackedSat(
-        g.signals,
+        map(t -> _new_tracked_signal(t, prn), g.signal_templates),
         prn,
         code_phase,
         carrier_doppler;
         tracking_loop = track_state.tracking_loop,
-        num_ants = g.num_ants,
         carrier_phase,
         code_doppler,
     )

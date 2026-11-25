@@ -408,13 +408,13 @@ _join_satellite(tsig::TrackedSignal, prn::Int, driver_carrier_phase_offset::Real
 $(SIGNATURES)
 
 Build a [`TrackedSat`](@ref) tracking a tuple of signals, e.g.
-`TrackedSat((GPSL1C_P(), GPSL1C_D(), GPSL1CA()), prn, code_phase, carrier_doppler)`,
-each with its default correlator bank; the first is the driver signal.
-`tracking_loop`, `carrier_phase` and `code_doppler` forward to the
-`TrackedSignal`-tuple constructor.
+`TrackedSat((GPSL1C_P(), GPSL1C_D(), GPSL1CA()), prn, code_phase, carrier_doppler)`;
+the first is the driver signal. `tracking_loop`, `carrier_phase` and `code_doppler`
+forward to the `TrackedSignal`-tuple constructor.
 
-`cn0_estimator` is a **tuple**, one per signal in order (each signal needs its
-own instance); a single estimator only for a single signal.
+`correlator_bank`, `post_corr_filter` and `cn0_estimator` are, as for a
+[`SignalGroup`](@ref), `nothing` for each signal's default, one value for every signal,
+or a tuple of one per signal, in order; each signal gets its own copy.
 """
 function TrackedSat(
     signals::Tuple{AbstractGNSSSignal,Vararg{AbstractGNSSSignal}},
@@ -422,90 +422,31 @@ function TrackedSat(
     code_phase,
     carrier_doppler;
     num_ants::NumAnts = NumAnts(1),
-    num_averaged_integrations::Int = 100,
+    correlator_bank = nothing,
+    post_corr_filter = nothing,
     cn0_estimator = nothing,
-    post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),
+    num_averaged_integrations::Int = 100,
     kwargs...,
 )
-    cn0_estimators =
-        _per_signal_cn0_estimators(signals, cn0_estimator, num_averaged_integrations)
-    tracked_signals = map(signals, cn0_estimators) do sig, estimator
-        TrackedSignal(
-            sig;
-            num_ants,
-            correlator_bank = get_default_correlator_bank(sig, num_ants),
-            cn0_estimator = estimator,
-            post_corr_filter,
-        )
-    end
-    TrackedSat(tracked_signals, prn, code_phase, carrier_doppler; kwargs...)
-end
-
-# One estimator per signal: `nothing` → defaults; a tuple as is; a single
-# estimator only for a single signal.
-@inline _per_signal_cn0_estimators(
-    signals::Tuple{Vararg{AbstractGNSSSignal}},
-    ::Nothing,
-    num_averaged_integrations::Int,
-) = map(sig -> default_cn0_estimator(sig, num_averaged_integrations), signals)
-
-@inline _per_signal_cn0_estimators(
-    ::Tuple{AbstractGNSSSignal},
-    cn0_estimator::AbstractCN0Estimator,
-    ::Int,
-) = (cn0_estimator,)
-
-@noinline _per_signal_cn0_estimators(
-    signals::Tuple{Vararg{AbstractGNSSSignal}},
-    ::AbstractCN0Estimator,
-    ::Int,
-) = throw(
-    ArgumentError(
-        "a single cn0_estimator cannot be shared by the $(length(signals)) signals " *
-        "of this satellite — the estimators buffer into a vector they would then " *
-        "both write to. Pass one estimator per signal as a tuple, e.g. " *
-        "`cn0_estimator = ($(join(fill("MomentsCN0Estimator(; num_averaged_integrations = 100)", length(signals)), ", ")))`.",
-    ),
-)
-
-@inline function _per_signal_cn0_estimators(
-    signals::Tuple{Vararg{AbstractGNSSSignal}},
-    cn0_estimators::Tuple{Vararg{AbstractCN0Estimator}},
-    ::Int,
-)
-    length(cn0_estimators) == length(signals) || throw(
-        ArgumentError(
-            "got $(length(cn0_estimators)) cn0_estimators for $(length(signals)) " *
-            "signals — pass exactly one estimator per signal, in the same order.",
-        ),
+    tracked_signals = _signal_templates(
+        signals,
+        num_ants;
+        correlator_bank,
+        post_corr_filter,
+        cn0_estimator,
+        num_averaged_integrations,
     )
-    cn0_estimators
+    TrackedSat(tracked_signals, prn, code_phase, carrier_doppler; kwargs...)
 end
 
 """
 $(SIGNATURES)
 
-Construct a single-signal [`TrackedSat`](@ref) from acquisition handoff values.
+Construct a single-signal [`TrackedSat`](@ref) from acquisition handoff values; the
+keywords are those of the signal-tuple form.
 """
-function TrackedSat(
-    signal::AbstractGNSSSignal,
-    prn::Int,
-    code_phase,
-    carrier_doppler;
-    num_ants::NumAnts = NumAnts(1),
-    correlator_bank::AbstractCorrelatorBank = get_default_correlator_bank(signal, num_ants),
-    num_averaged_integrations::Int = 100,
-    cn0_estimator::AbstractCN0Estimator = default_cn0_estimator(
-        signal,
-        num_averaged_integrations,
-    ),
-    post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),
-    kwargs...,
-)
-    tracked_signal =
-        TrackedSignal(signal; num_ants, correlator_bank, cn0_estimator, post_corr_filter)
-    TrackedSat((tracked_signal,), prn, code_phase, carrier_doppler; kwargs...)
-end
+TrackedSat(signal::AbstractGNSSSignal, prn::Int, code_phase, carrier_doppler; kwargs...) =
+    TrackedSat((signal,), prn, code_phase, carrier_doppler; kwargs...)
 
 # Kwarg-update constructor; `signals` and `loop_state` keep their types.
 function TrackedSat(
@@ -766,37 +707,45 @@ Fields:
   - `satellites`: `Dictionary{Int, <:TrackedSat}` keyed by PRN
   - `signals`: the signal-instance tuple (e.g. `(GPSL1C_P(), GPSL1C_D(), GPSL1CA())`)
   - `num_ants`: the antenna count for this group's band
+  - `signal_templates`: one [`TrackedSignal`](@ref) per signal, holding the correlator
+    bank, post-correlation filter and C/N₀ estimator a satellite
+    [`add_satellite!`](@ref) builds starts from
 """
 struct SignalGroup{
     B,                                             # GNSSSignals Band instance
     S<:Dictionary{<:Any,<:TrackedSat},
     Sigs<:Tuple{Vararg{AbstractGNSSSignal}},
     NA<:NumAnts,
+    T<:Tuple{Vararg{TrackedSignal}},
 }
     band::B
     satellites::S
     signals::Sigs
     num_ants::NA
+    signal_templates::T
 end
 
 # Kwarg-update constructor keeping `g`'s types.
 function SignalGroup(
-    g::SignalGroup{B,S,Sigs,NA};
+    g::SignalGroup{B,S,Sigs,NA,T};
     band::Maybe{B} = nothing,
     satellites::Maybe{S} = nothing,
     signals::Maybe{Sigs} = nothing,
     num_ants::Maybe{NA} = nothing,
+    signal_templates::Maybe{T} = nothing,
 ) where {
     B,
     S<:Dictionary{<:Any,<:TrackedSat},
     Sigs<:Tuple{Vararg{AbstractGNSSSignal}},
     NA<:NumAnts,
+    T<:Tuple{Vararg{TrackedSignal}},
 }
-    SignalGroup{B,S,Sigs,NA}(
+    SignalGroup{B,S,Sigs,NA,T}(
         isnothing(band) ? g.band : band,
         isnothing(satellites) ? g.satellites : satellites,
         isnothing(signals) ? g.signals : signals,
         isnothing(num_ants) ? g.num_ants : num_ants,
+        isnothing(signal_templates) ? g.signal_templates : signal_templates,
     )
 end
 
@@ -874,6 +823,12 @@ Build an empty `SignalGroup` from a signal tuple; populate it with
 `get_band(first(signals))`, `num_ants` to `NumAnts(1)`. All signals must be on
 `band`, share one chip rate and differ in signal id (`ArgumentError` otherwise).
 
+`correlator_bank`, `post_corr_filter` and `cn0_estimator` configure the satellites
+[`add_satellite!`](@ref) adds to the group, and so the group's `TrackedSat` type: each
+is `nothing` for the signal's default, one value for every signal, or a tuple with one
+value per signal, in order. Every satellite gets its own copy, so a C/N₀ estimator or
+an adaptive post-correlation filter is not shared.
+
 `tracking_loop` only shapes the slot type; the `TrackState`'s tracking loop is the one
 that runs, and it rebuilds a mismatched empty slot. Leave it at its default and
 configure the tracking loop on `TrackState`.
@@ -881,6 +836,7 @@ configure the tracking loop on `TrackState`.
 ```julia
 SignalGroup((GPSL1CA(),))                              # band L1(), 1 antenna
 SignalGroup((GPSL5I(),); num_ants = NumAnts(2))  # 2-antenna L5
+SignalGroup((GPSL1CA(),); num_ants = NumAnts(4), post_corr_filter = MyBeamformer())
 ```
 """
 function SignalGroup(
@@ -888,11 +844,76 @@ function SignalGroup(
     band = get_band(first(signals)),
     num_ants::NumAnts = NumAnts(1),
     tracking_loop::AbstractTrackingLoop = _default_tracking_loop(),
+    correlator_bank = nothing,
+    post_corr_filter = nothing,
+    cn0_estimator = nothing,
 )
     _validate_signal_group(signals, band)
-    template = _make_template_tracked_sat(signals, tracking_loop, num_ants)
+    signal_templates = _signal_templates(
+        signals,
+        num_ants;
+        correlator_bank,
+        post_corr_filter,
+        cn0_estimator,
+    )
+    template = _make_template_tracked_sat(signal_templates, tracking_loop)
     sats = Dictionary{Int,typeof(template)}(Int[], typeof(template)[])
-    SignalGroup(band, sats, signals, num_ants)
+    SignalGroup(band, sats, signals, num_ants, signal_templates)
+end
+
+# A group's `TrackedSignal` per signal from its configuration, each keyword `nothing`
+# (the signal's default), one value for every signal, or a tuple of one per signal.
+function _signal_templates(
+    signals::Tuple{Vararg{AbstractGNSSSignal}},
+    num_ants::NumAnts;
+    correlator_bank,
+    post_corr_filter,
+    cn0_estimator,
+    num_averaged_integrations::Int = 100,
+)
+    correlator_banks = _per_signal(:correlator_bank, correlator_bank, signals)
+    post_corr_filters = _per_signal(:post_corr_filter, post_corr_filter, signals)
+    cn0_estimators = _per_signal(:cn0_estimator, cn0_estimator, signals)
+    map(signals, correlator_banks, post_corr_filters, cn0_estimators) do signal, c, p, e
+        TrackedSignal(
+            signal;
+            num_ants,
+            correlator_bank = something(c, get_default_correlator_bank(signal, num_ants)),
+            post_corr_filter = something(p, DefaultPostCorrFilter()),
+            cn0_estimator = something(
+                e,
+                default_cn0_estimator(signal, num_averaged_integrations),
+            ),
+        )
+    end
+end
+
+_per_signal(::Symbol, ::Nothing, signals::Tuple) = map(_ -> nothing, signals)
+# One value for every signal: each gets its own copy.
+_per_signal(::Symbol, value, signals::Tuple) = map(_ -> deepcopy(value), signals)
+function _per_signal(name::Symbol, values::Tuple, signals::Tuple)
+    length(values) == length(signals) || throw(
+        ArgumentError(
+            "got $(length(values)) values of `$name` for $(length(signals)) signals: " *
+            "pass one value for every signal, or a tuple of one per signal, in order.",
+        ),
+    )
+    values
+end
+
+# A satellite `add_satellite!` builds from a group's `signal_templates`: a copy of each,
+# reset to the state a channel starts tracking `prn` from.
+function _new_tracked_signal(template::TrackedSignal, prn::Int)
+    t = deepcopy(template)
+    empty!(t.filtered_prompts)
+    empty!(t.correlator_bank_outputs)
+    TrackedSignal(
+        t;
+        num_integrated_samples = 0,
+        correlator_bank = zero(t.correlator_bank),
+        last_correlator_bank = zero(t.last_correlator_bank),
+        post_correlation_state = reset_post_correlation!(t.post_correlation_state; prn),
+    )
 end
 
 """

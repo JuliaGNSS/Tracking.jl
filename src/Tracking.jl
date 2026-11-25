@@ -82,6 +82,7 @@ import TrackingLoops:
     process_correlator_bank_output!,
     requires_noise_density,
     reinit_loop_state,
+    reset_post_correlation!,
     ScalarTrackingLoop,
     set_correlator_outputs,
     step_loop!,

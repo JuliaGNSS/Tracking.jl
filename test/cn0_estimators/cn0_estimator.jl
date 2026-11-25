@@ -67,15 +67,14 @@ TrackingLoops.estimate_cn0(estimator::CountingCN0Estimator, integration_time) =
     )
     @test estimate_cn0(multi, GPSL1C_P) == 1dBHz
     @test get_cn0_estimator(multi, GPSL1CA) isa MomentsCN0Estimator
-    # Estimators buffer into a vector, so one instance may not be shared by two
-    # signals of the same satellite — that would corrupt both.
-    @test_throws ArgumentError TrackedSat(
-        (GPSL1C_P(TMBOC), GPSL1CA()),
-        1,
-        0.0,
-        0.0Hz;
-        cn0_estimator = MomentsCN0Estimator(; num_averaged_integrations = 10),
-    )
+    # Estimators buffer into a vector, so one instance given for two signals of the
+    # same satellite becomes a copy for each, rather than being shared.
+    shared = MomentsCN0Estimator(; num_averaged_integrations = 10)
+    copied = TrackedSat((GPSL1C_P(TMBOC), GPSL1CA()), 1, 0.0, 0.0Hz; cn0_estimator = shared)
+    estimators = map(sig -> get_cn0_estimator(copied, sig), (GPSL1C_P, GPSL1CA))
+    @test all(e -> e isa MomentsCN0Estimator, estimators)
+    @test estimators[1] !== estimators[2] !== shared
+    # A tuple needs one estimator per signal.
     @test_throws ArgumentError TrackedSat(
         (GPSL1C_P(TMBOC), GPSL1CA()),
         1,

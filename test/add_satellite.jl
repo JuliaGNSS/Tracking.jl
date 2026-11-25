@@ -26,7 +26,27 @@ using Tracking:
     get_prn,
     get_carrier_doppler,
     get_code_doppler
-using TrackingLoops: NumAnts, ScalarTrackingLoop, ScalarLoopState
+using TrackingLoops:
+    NumAnts,
+    ScalarTrackingLoop,
+    ScalarLoopState,
+    AbstractPostCorrFilter,
+    MomentsCN0Estimator,
+    NWPRCN0Estimator,
+    EarlyPromptLateCorrelatorBank
+import TrackingLoops
+using Tracking: get_post_corr_filter, get_cn0_estimator, get_correlator_bank
+
+using StaticArrays: SVector
+
+# A post-correlation filter of a type of its own, with a state, as an adaptive
+# beamformer has.
+struct WeightedBeamformer <: AbstractPostCorrFilter
+    weights::SVector{2,ComplexF64}
+    prompts::Vector{ComplexF64}
+end
+TrackingLoops.update(f::WeightedBeamformer, prompt) = f
+TrackingLoops.get_weights(f::WeightedBeamformer, ::NumAnts{2}) = f.weights
 
 @testset "TrackState(; signals = ...) — single-group shortcut" begin
     track_state = TrackState(; signal = GPSL1CA())
@@ -69,6 +89,66 @@ end
     insert!(sg_template.satellites, 1, sat)
     ts = TrackState(; signals = (legacy = sg_template,), tracking_loop)
     @test length(get_tracked_sats(ts, :legacy)) == 1
+end
+
+@testset "A group's configuration reaches every satellite add_satellite! adds" begin
+    # The configuration fixes the group's slot type, and each satellite gets its own
+    # copy, so a stateful filter or estimator is not shared.
+    beamformer = WeightedBeamformer(SVector(0.5 + 0.0im, 0.5 + 0.0im), ComplexF64[])
+    track_state = TrackState(;
+        signal = GPSL1CA(),
+        num_ants = NumAnts(2),
+        post_corr_filter = beamformer,
+        cn0_estimator = MomentsCN0Estimator(),
+    )
+    for prn in (3, 7)
+        track_state = add_satellite!(track_state; prn, carrier_doppler = 0.0Hz)
+    end
+    filters = map(prn -> get_post_corr_filter(track_state, prn), (3, 7))
+    @test all(f -> f isa WeightedBeamformer && f.weights == beamformer.weights, filters)
+    @test filters[1].prompts !== filters[2].prompts !== beamformer.prompts
+    @test get_cn0_estimator(track_state, 3) isa MomentsCN0Estimator
+    @test get_cn0_estimator(track_state, 3) !== get_cn0_estimator(track_state, 7)
+    @test get_prn(get_tracked_sat(track_state, 7)) == 7
+
+    # A tuple configures each signal of a multi-signal group, in order.
+    signals = (GPSL1C_P(TMBOC), GPSL1C_D(), GPSL1CA())
+    bank = EarlyPromptLateCorrelatorBank(; preferred_early_late_to_prompt_spacing = 0.25)
+    group = SignalGroup(
+        signals;
+        correlator_bank = bank,
+        cn0_estimator = (MomentsCN0Estimator(), NWPRCN0Estimator(), MomentsCN0Estimator()),
+    )
+    track_state = TrackState(; signals = (modern_gps = group,))
+    track_state = add_satellite!(
+        track_state;
+        group_key = :modern_gps,
+        prn = 11,
+        carrier_doppler = 0.0Hz,
+    )
+    @test get_cn0_estimator(track_state, :modern_gps, 11, 2) isa NWPRCN0Estimator
+    @test get_cn0_estimator(track_state, :modern_gps, 11, 3) isa MomentsCN0Estimator
+    @test all(1:3) do sig
+        get_correlator_bank(track_state, :modern_gps, 11, sig) ==
+        EarlyPromptLateCorrelatorBank(; preferred_early_late_to_prompt_spacing = 0.25)
+    end
+    @test_throws ArgumentError SignalGroup(
+        signals;
+        cn0_estimator = (MomentsCN0Estimator(), MomentsCN0Estimator()),
+    )
+
+    # Built from TrackedSats, a satellite added later starts from the first one's.
+    sat = TrackedSat(
+        GPSL1CA(),
+        1,
+        0.0,
+        0.0Hz;
+        num_ants = NumAnts(2),
+        post_corr_filter = beamformer,
+    )
+    track_state = add_satellite!(TrackState(sat); prn = 2, carrier_doppler = 0.0Hz)
+    @test get_post_corr_filter(track_state, 2) isa WeightedBeamformer
+    @test get_prn(get_tracked_sat(track_state, 2)) == 2
 end
 
 @testset "TrackState(; signals = ...) — multi-group NamedTuple" begin

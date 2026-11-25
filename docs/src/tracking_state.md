@@ -64,9 +64,11 @@ end
 
 The concrete type stays fixed as satellites come and go. `signal = GPSL1CA()` is short for `signals = (default = (GPSL1CA(),),)`; with one group, [`add_satellite!`](@ref) may omit `group_key =`.
 
+`correlator_bank`, `post_corr_filter` and `cn0_estimator` configure the satellites `add_satellite!` adds, e.g. a beamformer for an antenna array: `TrackState(; signal = GPSL1CA(), num_ants = NumAnts(4), post_corr_filter = beamformer)`. Each takes one value for every signal or a tuple of one per signal, and every satellite gets its own copy. To configure groups apart, pass each its own [`SignalGroup`](@ref) with these keywords.
+
 ### Power-user: pre-built `TrackedSat`s
 
-To change the correlator bank or post-correlation filter *type*, build the `TrackedSat`s yourself, pass them to `TrackState(sats)`, and add more with `add_satellite!(track_state, group, sat)`. The single-signal constructor:
+To set a satellite up beyond the group's configuration, build the `TrackedSat`s yourself, pass them to `TrackState(sats)`, and add more with `add_satellite!(track_state, group, sat)`; a satellite added later by its acquisition values starts from the first one's configuration. The single-signal constructor:
 
 ```julia
 TrackedSat(
@@ -85,6 +87,8 @@ TrackedSat(
     post_corr_filter          = DefaultPostCorrFilter(),
 )
 ```
+
+The signal-tuple form `TrackedSat((GPSL1C_P(), GPSL1CA()), prn, code_phase, carrier_doppler; …)` takes the same keywords, each one value for every signal (each gets a copy) or a tuple of one per signal.
 
 `cn0_estimator` takes any [`AbstractCN0Estimator`](@extref TrackingLoops.AbstractCN0Estimator); unlike the correlator bank and filter, it is a type parameter of [`TrackedSignal`](@ref) and may change the satellite's type (see [CN0 Estimator](cn0_estimator.md)).
 
@@ -145,7 +149,7 @@ get_tracking_loop
 
 ## Adding satellites
 
-[`add_satellite!`](@ref) builds a [`TrackedSat`](@ref) with the default correlator bank and post-correlation filter from the acquisition handoff (`prn`, `code_phase`, `carrier_doppler`, optionally `code_doppler` and `carrier_phase` in cycles). Adding a PRN again overwrites it, as [`merge_sats`](@ref) does.
+[`add_satellite!`](@ref) builds a [`TrackedSat`](@ref) with its group's correlator bank, post-correlation filter and C/N₀ estimator (each signal's defaults unless configured) from the acquisition handoff (`prn`, `code_phase`, `carrier_doppler`, optionally `code_doppler` and `carrier_phase` in cycles). Adding a PRN again overwrites it, as [`merge_sats`](@ref) does.
 
 ### Multi-satellite tracking
 
