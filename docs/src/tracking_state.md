@@ -438,7 +438,7 @@ The trailing `sig` selector is either:
 | `get_post_corr_filter` | The post-correlation filter. |
 | `get_cn0_estimator` | The CN0 estimator. |
 | `estimate_cn0` | CN0 estimate in dB-Hz. |
-| `get_bit_synchronizer` / `get_soft_bits` / `get_num_bits` | Bit synchronizer, demodulated soft bits (sign = the hard bit), bit count. |
+| `get_soft_bits` / `get_num_bits` | Demodulated soft bits (sign = the hard bit), bit count. |
 | `get_num_integrated_samples` | Number of samples accumulated into the current integration so far. |
 | `is_bit_or_secondary_code_synced` | `true` once bit/secondary-code synchronization is achieved. |
 | `get_bit_polarity` | Sign the bits were found at: `-1` inverted, `+1` not, `0` before sync. |
@@ -509,7 +509,6 @@ TrackingLoops.get_last_coherent_integration_time(::TrackedSignal)
 TrackingLoops.get_bit_polarity(::TrackedSignal)
 TrackingLoops.get_num_code_periods_into_bit(::TrackedSignal)
 get_filtered_prompts(::TrackedSignal)
-get_bit_synchronizer(::TrackedSignal)
 get_num_bits(::TrackedSignal)
 get_num_integrated_samples(::TrackedSignal)
 get_preferred_num_code_periods_to_integrate(::TrackedSignal)

@@ -233,7 +233,9 @@ get_cn0_estimator(t::TrackedSignal) = t.post_correlation_state.cn0_estimator
 $(SIGNATURES)
 
 The signal's [`BitSynchronizer`](@extref TrackingLoops.BitSynchronizer): bit or
-secondary-code sync and the soft bits for the decoder.
+secondary-code sync and the soft bits for the decoder. Not exported: its readers
+(`get_soft_bits`, `get_num_bits`, `is_bit_or_secondary_code_synced`,
+`get_bit_polarity`, `get_num_code_periods_into_bit`) are.
 """
 get_bit_synchronizer(t::TrackedSignal) = t.post_correlation_state.bit_synchronizer
 get_soft_bits(t::TrackedSignal) = get_soft_bits(get_bit_synchronizer(t))
