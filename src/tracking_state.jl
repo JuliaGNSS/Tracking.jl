@@ -824,6 +824,14 @@ get_carrier_doppler(track_state::TrackState, id...) =
     get_carrier_doppler(get_tracked_sat(track_state, id...))
 get_next_sample_index(track_state::TrackState, id...) =
     get_next_sample_index(get_tracked_sat(track_state, id...))
+get_carrier_loop_stage(track_state::TrackState, id...) =
+    get_carrier_loop_stage(get_tracked_sat(track_state, id...))
+is_phase_locked(track_state::TrackState, id...) =
+    is_phase_locked(get_tracked_sat(track_state, id...))
+get_phase_lock_indicator(track_state::TrackState, id...) =
+    get_phase_lock_indicator(get_tracked_sat(track_state, id...))
+get_loop_bandwidths(track_state::TrackState, id...) =
+    get_loop_bandwidths(get_tracked_sat(track_state, id...))
 
 """
 $(SIGNATURES)

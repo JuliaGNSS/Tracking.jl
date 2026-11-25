@@ -24,8 +24,10 @@ FLL once a phase-lock indicator reads lock, and later narrows to a **narrow** 18
 PLL. The **code** bandwidth is a flat 1 Hz. All are one-sided loop noise bandwidths `B_n` (Kaplan &
 Hegarty), for every signal. The stages only advance, and
 [`reinit_loop_states!`](@ref) keeps the stage reached; a satellite added anew starts
-over. Read a satellite's stage with
-`get_carrier_loop_stage(get_loop_state(sat))`.
+over. Read a satellite's stage with [`get_carrier_loop_stage`](@ref
+TrackingLoops.get_carrier_loop_stage(::TrackedSat)), e.g.
+`get_carrier_loop_stage(track_state, prn)`, and its bandwidths with
+`get_loop_bandwidths`.
 
 Where the replica wipes every sign modulation off the prompt (a dataless signal
 synced to its secondary code) the carrier discriminators turn four-quadrant.

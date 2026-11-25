@@ -38,7 +38,13 @@ using Tracking:
     get_num_integrated_samples,
     get_tracked_sat,
     get_loop_state,
-    reinit_loop_states!
+    reinit_loop_states!,
+    get_carrier_loop_stage,
+    is_phase_locked,
+    get_phase_lock_indicator,
+    get_loop_bandwidths,
+    FLL_ASSISTED_PLL,
+    NARROW_PLL
 import TrackingLoops
 using TrackingLoops:
     get_prompt,
@@ -276,18 +282,25 @@ TrackingLoops.reinit_loop_state(
     track_state = TrackState(; signal = gpsl1)
     track_state =
         add_satellite!(track_state; prn = 1, code_phase = 100.2, carrier_doppler = 1005.0Hz)
-    stage(prn) = TrackingLoops.get_carrier_loop_stage(
-        get_loop_state(get_tracked_sat(track_state, prn)),
-    )
-    @test stage(1) == TrackingLoops.FLL_ASSISTED_PLL
+    @test get_carrier_loop_stage(track_state, 1) == FLL_ASSISTED_PLL
+    @test isnan(get_phase_lock_indicator(track_state, 1))
+    @test !is_phase_locked(track_state, 1)
     for chunk in chunks
         track!(chunk, track_state, fs)
     end
-    @test stage(1) == TrackingLoops.NARROW_PLL
+    sat = get_tracked_sat(track_state, 1)
+    @test get_carrier_loop_stage(sat) == NARROW_PLL
+    @test get_carrier_loop_stage(track_state, 1) == NARROW_PLL
+    @test is_phase_locked(sat) && is_phase_locked(track_state, 1)
+    @test get_phase_lock_indicator(track_state, 1) == get_phase_lock_indicator(sat) >= 0.5
+    # The default loop runs a satellite at the loop's bandwidths for its driver signal.
+    @test get_loop_bandwidths(track_state, 1) ==
+          get_loop_bandwidths(sat) ==
+          get_loop_bandwidths(ScalarTrackingLoop(), gpsl1)
     reinit_loop_states!(track_state)
-    @test stage(1) == TrackingLoops.NARROW_PLL
+    @test get_carrier_loop_stage(track_state, 1) == NARROW_PLL
     track_state = add_satellite!(track_state; prn = 2, carrier_doppler = 0.0Hz)
-    @test stage(2) == TrackingLoops.FLL_ASSISTED_PLL
+    @test get_carrier_loop_stage(track_state, 2) == FLL_ASSISTED_PLL
 end
 
 @testset "Through track, a tracking loop implementing step_loop! runs without adaptation" begin

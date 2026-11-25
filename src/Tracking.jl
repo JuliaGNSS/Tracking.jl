@@ -38,7 +38,9 @@ import TrackingLoops:
     drain_soft_bits!,
     EarlyPromptLateCorrelatorBank,
     estimate_cn0,
+    FLL_ASSISTED_PLL,
     get_bit_polarity,
+    get_carrier_loop_stage,
     get_correlator_outputs,
     get_decoder,
     get_default_correlator_bank,
@@ -46,6 +48,7 @@ import TrackingLoops:
     get_late,
     get_last_coherent_integration_time,
     get_last_num_code_periods,
+    get_loop_bandwidths,
     get_navigation_elapsed_time,
     get_navigation_solution,
     get_navigation_status,
@@ -55,6 +58,7 @@ import TrackingLoops:
     get_nco_command,
     get_num_ants,
     get_num_code_periods_into_bit,
+    get_phase_lock_indicator,
     get_prompt,
     get_satellite_report,
     get_secondary_code_phase,
@@ -62,11 +66,13 @@ import TrackingLoops:
     init_loop_state,
     is_bit_or_secondary_code_synced,
     is_dataless_with_secondary_code,
+    is_phase_locked,
     map_correlator_outputs,
     noise_despreads,
     NoiseDensityEstimators,
     NOISE_DENSITY_INVALID,
     NOISE_DENSITY_READY,
+    NARROW_PLL,
     NOISE_WINDOW_EMPTY,
     NoiseObservation,
     NoiseUpdateContext,
@@ -78,7 +84,9 @@ import TrackingLoops:
     ScalarTrackingLoop,
     set_correlator_outputs,
     step_loop!,
-    update_noise!
+    update_noise!,
+    VECTOR_LOOP,
+    WIDE_PLL
 
 # `dBHz` serves the manual: its custom C/N₀ estimator doctest reads `Tracking.dBHz`.
 using Unitful: upreferred, uconvert, ustrip, dimension, NoUnits, Hz, dBHz, s
@@ -143,6 +151,17 @@ export estimate_cn0,
     get_early,
     get_late,
     get_correlator_outputs
+
+# TrackingLoops' readers of a satellite's loop state, forwarded from a `TrackedSat` and
+# a `TrackState`, and the carrier-loop stages `get_carrier_loop_stage` returns.
+export get_carrier_loop_stage,
+    is_phase_locked,
+    get_phase_lock_indicator,
+    get_loop_bandwidths,
+    FLL_ASSISTED_PLL,
+    WIDE_PLL,
+    NARROW_PLL,
+    VECTOR_LOOP
 
 # TrackingLoops' navigation readers, forwarded from a `TrackState` to its tracking loop.
 export get_navigation_solution,

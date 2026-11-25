@@ -425,6 +425,9 @@ The trailing `sig` selector is either:
 | [`calc_carrier_phase_correction`](@ref TrackingLoops.calc_carrier_phase_correction(::TrackState, ::Union{Integer, Symbol, Val}, ::Any)) | What the tracking loop adds to `get_carrier_phase` for the carrier-phase measurement (vector loop only). |
 | `get_carrier_doppler` | Shared carrier Doppler. |
 | `get_next_sample_index` | Index of the next sample to process in the current samples. |
+| `get_carrier_loop_stage` | Stage the carrier loop has reached (`FLL_ASSISTED_PLL`, `WIDE_PLL`, `NARROW_PLL`, `VECTOR_LOOP`). |
+| `is_phase_locked` / `get_phase_lock_indicator` | Whether the carrier loop is phase-locked; the phase-lock indicator it decides on. |
+| `get_loop_bandwidths` | Loop bandwidths the tracking loop runs the satellite at. |
 
 **Per-signal — pass `sig` (index or type) on multi-signal sats:**
 
@@ -495,6 +498,10 @@ get_carrier_doppler(::TrackedSat)
 get_next_sample_index(::TrackedSat)
 get_signals(::TrackedSat)
 get_loop_state(::TrackedSat)
+TrackingLoops.get_carrier_loop_stage(::TrackedSat)
+TrackingLoops.is_phase_locked(::TrackedSat)
+TrackingLoops.get_phase_lock_indicator(::TrackedSat)
+TrackingLoops.get_loop_bandwidths(::TrackedSat)
 ```
 
 ## TrackedSignal

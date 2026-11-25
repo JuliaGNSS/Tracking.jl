@@ -597,6 +597,39 @@ scalar tracking loop, a `TrackingLoops.ScalarLoopState`).
 """
 get_loop_state(sat::TrackedSat) = sat.loop_state
 
+"""
+$(SIGNATURES)
+
+The stage the satellite's carrier loop has reached:
+[`FLL_ASSISTED_PLL`](@extref TrackingLoops.CarrierLoopStage), `WIDE_PLL`, `NARROW_PLL`,
+or `VECTOR_LOOP` while it is in the vector loop.
+"""
+get_carrier_loop_stage(sat::TrackedSat) = get_carrier_loop_stage(sat.loop_state)
+
+"""
+$(SIGNATURES)
+
+Whether the satellite's carrier loop is phase-locked, as the tracking loop decides it.
+"""
+is_phase_locked(sat::TrackedSat) = is_phase_locked(sat.loop_state)
+
+"""
+$(SIGNATURES)
+
+The satellite's latest phase-lock indicator, an estimate of `cos 2φ` for the carrier
+phase error `φ`: 1 in lock, 0 for a spinning phase, `NaN` until it has averaged enough
+integrations.
+"""
+get_phase_lock_indicator(sat::TrackedSat) = get_phase_lock_indicator(sat.loop_state)
+
+"""
+$(SIGNATURES)
+
+The loop bandwidths the satellite's tracking loop runs at, as a
+`TrackingLoops.LoopBandwidths`.
+"""
+get_loop_bandwidths(sat::TrackedSat) = get_loop_bandwidths(sat.loop_state)
+
 # Per-signal accessors on a TrackedSat, through `_find_signal`: no selector
 # (single-signal sats only), an `Integer` index, or a signal type (must match
 # exactly one signal).
