@@ -250,6 +250,24 @@ is_bit_or_secondary_code_synced(t::TrackedSignal) =
 """
 $(SIGNATURES)
 
+The sign the bits were found at once
+[`is_bit_or_secondary_code_synced`](@extref TrackingLoops.is_bit_or_secondary_code_synced):
+`-1` if they come inverted, `+1` if not, `0` before sync.
+"""
+get_bit_polarity(t::TrackedSignal) = get_bit_polarity(t.post_correlation_state)
+
+"""
+$(SIGNATURES)
+
+The code periods integrated into the current navigation bit since its edge, once
+synced; `0` before sync.
+"""
+get_num_code_periods_into_bit(t::TrackedSignal) =
+    get_num_code_periods_into_bit(t.post_correlation_state)
+
+"""
+$(SIGNATURES)
+
 How many samples the integration in progress has integrated so far; zero
 right after an integration completes.
 """
@@ -638,6 +656,10 @@ get_soft_bits(sat::TrackedSat, sel...) = get_soft_bits(_find_signal(sat.signals,
 get_num_bits(sat::TrackedSat, sel...) = get_num_bits(_find_signal(sat.signals, sel...))
 is_bit_or_secondary_code_synced(sat::TrackedSat, sel...) =
     is_bit_or_secondary_code_synced(_find_signal(sat.signals, sel...))
+get_bit_polarity(sat::TrackedSat, sel...) =
+    get_bit_polarity(_find_signal(sat.signals, sel...))
+get_num_code_periods_into_bit(sat::TrackedSat, sel...) =
+    get_num_code_periods_into_bit(_find_signal(sat.signals, sel...))
 get_num_integrated_samples(sat::TrackedSat, sel...) =
     get_num_integrated_samples(_find_signal(sat.signals, sel...))
 get_correlator_bank_outputs(sat::TrackedSat, sel...) =

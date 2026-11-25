@@ -898,6 +898,8 @@ for fn in (
     :get_soft_bits,
     :get_num_bits,
     :is_bit_or_secondary_code_synced,
+    :get_bit_polarity,
+    :get_num_code_periods_into_bit,
     :estimate_cn0,
     :get_preferred_num_code_periods_to_integrate,
 )

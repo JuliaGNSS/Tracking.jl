@@ -441,6 +441,8 @@ The trailing `sig` selector is either:
 | `get_bit_synchronizer` / `get_soft_bits` / `get_num_bits` | Bit synchronizer, demodulated soft bits (sign = the hard bit), bit count. |
 | `get_num_integrated_samples` | Number of samples accumulated into the current integration so far. |
 | `is_bit_or_secondary_code_synced` | `true` once bit/secondary-code synchronization is achieved. |
+| `get_bit_polarity` | Sign the bits were found at: `-1` inverted, `+1` not, `0` before sync. |
+| `get_num_code_periods_into_bit` | Code periods integrated into the current bit since its edge; `0` before sync. |
 
 The per-signal form always names the group, `:default` on a single-group `TrackState`: `estimate_cn0(track_state, :default, 11, GPSL1C_P)`.
 
@@ -504,6 +506,8 @@ get_last_correlator_bank(::TrackedSignal)
 get_last_filtered_prompt(::TrackedSignal)
 TrackingLoops.get_last_num_code_periods(::TrackedSignal)
 TrackingLoops.get_last_coherent_integration_time(::TrackedSignal)
+TrackingLoops.get_bit_polarity(::TrackedSignal)
+TrackingLoops.get_num_code_periods_into_bit(::TrackedSignal)
 get_filtered_prompts(::TrackedSignal)
 get_bit_synchronizer(::TrackedSignal)
 get_num_bits(::TrackedSignal)

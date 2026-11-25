@@ -21,6 +21,8 @@ using Tracking:
     get_filtered_prompts,
     get_last_filtered_prompt,
     get_last_num_code_periods,
+    get_bit_polarity,
+    get_num_code_periods_into_bit,
     set_preferred_num_code_periods_to_integrate!
 using TrackingLoops:
     get_soft_bits, is_bit_or_secondary_code_synced, EarlyPromptLateCorrelatorBank
@@ -61,6 +63,10 @@ using TrackingLoops:
                 )
             track_state = track(samples, track_state, sampling_frequency)
             @test is_bit_or_secondary_code_synced(track_state) == (index >= 60)
+            # Bit edges every 20 code periods from the first; both read 0 before sync.
+            @test abs(get_bit_polarity(track_state)) == (index >= 60)
+            @test get_num_code_periods_into_bit(track_state) ==
+                  (index >= 60 ? index % 20 : 0)
             # Sync at code period 60 recovers the 3 buffered bits (the UInt64 sign
             # window holds all 60), then one bit per 20 code periods.
             expected_num_bits = index == 60 ? 3 : (index > 60 && index % 20 == 0 ? 1 : 0)
