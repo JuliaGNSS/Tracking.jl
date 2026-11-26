@@ -93,16 +93,14 @@ TrackingLoops.estimate_cn0(estimator::CountingCN0Estimator, integration_time) =
     end
     @test estimate_cn0(track_state, 1) == 5dBHz
 
-    # `num_averaged_integrations` still sizes the default estimator's
-    # averaging span.
-    default = get_cn0_estimator(TrackedSignal(gpsl1; num_averaged_integrations = 40))
+    # The default estimator averages 100 integrations.
+    default = get_cn0_estimator(TrackedSignal(gpsl1))
     @test default isa NoiseReferencedCN0Estimator
-    @test length(default.buffered_cn0) == 40
-    @test Base.length(default.buffered_cn0) == 40
+    @test length(default.buffered_cn0) == 100
     # The default reads a measured noise density, which is what makes the band
     # provision a source for it.
-    @test requires_noise_density(default_cn0_estimator(gpsl1, 100))
-    @test requires_noise_density(default_cn0_estimator(GPSL1C_P(TMBOC), 100))
+    @test requires_noise_density(default_cn0_estimator(gpsl1))
+    @test requires_noise_density(default_cn0_estimator(GPSL1C_P(TMBOC)))
 end
 
 @testset "estimate_cn0 overloads on TrackState" begin

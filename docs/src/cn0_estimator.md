@@ -128,17 +128,26 @@ signal that is never weak.
 
 ## Configuring the estimator
 
-`num_averaged_integrations` (default `100`, ~100 ms for L1 C/A) sets how many
-integrations the estimate averages over (also NWPR's fallback):
+The default estimator averages 100 integrations (~100 ms for L1 C/A). Its
+`num_averaged_integrations` sets another span:
 
 ```jldoctest cn0_buffer
-julia> using Tracking, GNSSSignals
+julia> using Tracking, TrackingLoops, GNSSSignals
 
 julia> using Tracking: Hz
 
-julia> track_state = TrackState(; signal = GPSL1CA());
+julia> track_state = TrackState(;
+           signal = GPSL1CA(),
+           cn0_estimator = NoiseReferencedCN0Estimator(; num_averaged_integrations = 200),
+       );
 
-julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz; num_averaged_integrations = 200);
+julia> sat = TrackedSat(
+           GPSL1CA(),
+           1,
+           50.0,
+           1000.0Hz;
+           cn0_estimator = NoiseReferencedCN0Estimator(; num_averaged_integrations = 200),
+       );
 
 julia> track_state = add_satellite!(track_state, :default, sat);
 

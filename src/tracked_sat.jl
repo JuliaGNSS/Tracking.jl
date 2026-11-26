@@ -63,15 +63,16 @@ The [`TrackedSat`](@ref) it joins sets its PRN and its driver's carrier-phase of
 
 `cn0_estimator` accepts any
 [`AbstractCN0Estimator`](@extref TrackingLoops.AbstractCN0Estimator). The default,
-[`default_cn0_estimator`](@extref TrackingLoops.default_cn0_estimator-Tuple{AbstractGNSSSignal, Int64}),
+[`default_cn0_estimator`](@extref TrackingLoops.default_cn0_estimator-Tuple{AbstractGNSSSignal}),
 is a
-[`NoiseReferencedCN0Estimator`](@extref TrackingLoops.NoiseReferencedCN0Estimator) over
-`num_averaged_integrations` integrations against the signal's **measured**
-noise density: `track!` fills that on the sample-driven path, but a
-**correlator-ingest** path must feed [`append_noise_observation!`](@ref) per signal, or
-C/N₀ stays at `-Inf dB-Hz`. `NWPRCN0Estimator()` needs no noise observation;
-`MomentsCN0Estimator(; num_averaged_integrations)` is the
-plain moment-ratio estimator. Each signal needs its **own** estimator instance: they
+[`NoiseReferencedCN0Estimator`](@extref TrackingLoops.NoiseReferencedCN0Estimator)
+averaging its default of 100 integrations against the signal's **measured** noise
+density (pass `NoiseReferencedCN0Estimator(; num_averaged_integrations)` for another
+span): `track!` fills that on the sample-driven path, but a **correlator-ingest** path
+must feed [`append_noise_observation!`](@ref) per signal, or C/N₀ stays at
+`-Inf dB-Hz`. `NWPRCN0Estimator()` needs no noise observation;
+`MomentsCN0Estimator(; num_averaged_integrations)` is the plain moment-ratio
+estimator. Each signal needs its **own** estimator instance: they
 buffer into a vector, so sharing one corrupts both.
 
 `preferred_num_code_periods_to_integrate` defaults to
@@ -83,11 +84,7 @@ function TrackedSignal(
     signal::AbstractGNSSSignal;
     num_ants::NumAnts = NumAnts(1),
     correlator_bank::AbstractCorrelatorBank = get_default_correlator_bank(signal, num_ants),
-    num_averaged_integrations::Int = 100,
-    cn0_estimator::AbstractCN0Estimator = default_cn0_estimator(
-        signal,
-        num_averaged_integrations,
-    ),
+    cn0_estimator::AbstractCN0Estimator = default_cn0_estimator(signal),
     post_corr_filter::AbstractPostCorrFilter = DefaultPostCorrFilter(),
     preferred_num_code_periods_to_integrate::Int = default_num_code_periods_to_integrate(
         signal,
@@ -425,7 +422,6 @@ function TrackedSat(
     correlator_bank = nothing,
     post_corr_filter = nothing,
     cn0_estimator = nothing,
-    num_averaged_integrations::Int = 100,
     kwargs...,
 )
     tracked_signals = _signal_templates(
@@ -434,7 +430,6 @@ function TrackedSat(
         correlator_bank,
         post_corr_filter,
         cn0_estimator,
-        num_averaged_integrations,
     )
     TrackedSat(tracked_signals, prn, code_phase, carrier_doppler; kwargs...)
 end
@@ -869,7 +864,6 @@ function _signal_templates(
     correlator_bank,
     post_corr_filter,
     cn0_estimator,
-    num_averaged_integrations::Int = 100,
 )
     correlator_banks = _per_signal(:correlator_bank, correlator_bank, signals)
     post_corr_filters = _per_signal(:post_corr_filter, post_corr_filter, signals)
@@ -880,10 +874,7 @@ function _signal_templates(
             num_ants,
             correlator_bank = something(c, get_default_correlator_bank(signal, num_ants)),
             post_corr_filter = something(p, DefaultPostCorrFilter()),
-            cn0_estimator = something(
-                e,
-                default_cn0_estimator(signal, num_averaged_integrations),
-            ),
+            cn0_estimator = something(e, default_cn0_estimator(signal)),
         )
     end
 end

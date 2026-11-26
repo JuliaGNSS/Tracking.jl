@@ -82,8 +82,7 @@ TrackedSat(
     correlator_bank           = get_default_correlator_bank(signal, num_ants),
     carrier_phase             = 0.0,
     code_doppler              = carrier_doppler * get_chip_rate_to_center_frequency_ratio(signal),
-    num_averaged_integrations = 100,
-    cn0_estimator             = TrackingLoops.default_cn0_estimator(signal, num_averaged_integrations),
+    cn0_estimator             = TrackingLoops.default_cn0_estimator(signal),
     post_corr_filter          = DefaultPostCorrFilter(),
 )
 ```
@@ -121,7 +120,7 @@ julia> sat = TrackedSat(GPSL1CA(), 1, 50.0, 1000.0Hz;
                preferred_early_late_to_prompt_spacing = 0.1,
            ),
            post_corr_filter          = MyBeamformer(),
-           num_averaged_integrations = 200,
+           cn0_estimator             = NoiseReferencedCN0Estimator(; num_averaged_integrations = 200),
        );
 
 julia> track_state = TrackState(sat);
