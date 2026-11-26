@@ -216,7 +216,7 @@ end
     tracking_loop::AbstractTrackingLoop,
     num_ants::NumAnts;
     signal_configuration...,
-) = SignalGroup(sig_tuple; num_ants, tracking_loop, signal_configuration...)
+) = _signal_group(sig_tuple, tracking_loop; num_ants, signal_configuration...)
 
 # Pre-built SignalGroup: passes through, except that an empty one whose slot
 # type does not fit `tracking_loop` is rebuilt from a fresh template. Its own

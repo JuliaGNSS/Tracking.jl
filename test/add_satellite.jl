@@ -85,7 +85,7 @@ end
     using Dictionaries: insert!
     tracking_loop = ScalarTrackingLoop()
     sat = TrackedSat(GPSL1CA(), 1, 10.5, 10.0Hz; tracking_loop)
-    sg_template = SignalGroup((GPSL1CA(),); num_ants = NumAnts(1), tracking_loop)
+    sg_template = SignalGroup((GPSL1CA(),); num_ants = NumAnts(1))
     insert!(sg_template.satellites, 1, sat)
     ts = TrackState(; signals = (legacy = sg_template,), tracking_loop)
     @test length(get_tracked_sats(ts, :legacy)) == 1

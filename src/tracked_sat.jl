@@ -824,9 +824,8 @@ is `nothing` for the signal's default, one value for every signal, or a tuple wi
 value per signal, in order. Every satellite gets its own copy, so a C/N₀ estimator or
 an adaptive post-correlation filter is not shared.
 
-`tracking_loop` only shapes the slot type; the `TrackState`'s tracking loop is the one
-that runs, and it rebuilds a mismatched empty slot. Leave it at its default and
-configure the tracking loop on `TrackState`.
+The group's `TrackedSat` type also holds the tracking loop's state; the `TrackState`
+the group goes into fits it to its tracking loop.
 
 ```julia
 SignalGroup((GPSL1CA(),))                              # band L1(), 1 antenna
@@ -834,11 +833,15 @@ SignalGroup((GPSL5I(),); num_ants = NumAnts(2))  # 2-antenna L5
 SignalGroup((GPSL1CA(),); num_ants = NumAnts(4), post_corr_filter = MyBeamformer())
 ```
 """
-function SignalGroup(
-    signals::Tuple{Vararg{AbstractGNSSSignal}};
+SignalGroup(signals::Tuple{Vararg{AbstractGNSSSignal}}; kwargs...) =
+    _signal_group(signals, _default_tracking_loop(); kwargs...)
+
+# A `SignalGroup` whose `TrackedSat` type holds `tracking_loop`'s loop state.
+function _signal_group(
+    signals::Tuple{Vararg{AbstractGNSSSignal}},
+    tracking_loop::AbstractTrackingLoop;
     band = get_band(first(signals)),
     num_ants::NumAnts = NumAnts(1),
-    tracking_loop::AbstractTrackingLoop = _default_tracking_loop(),
     correlator_bank = nothing,
     post_corr_filter = nothing,
     cn0_estimator = nothing,
